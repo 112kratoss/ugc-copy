@@ -185,6 +185,8 @@ describe('HIG toolbars — view titles', () => {
       // Templates and a creator's page are drawn in components the route renders.
       expect(read.filter((words) => words.file === 'components/media-template-screens.tsx').length).toBeGreaterThan(0);
       expect(read.filter((words) => words.kind === 'eyebrow').length).toBeGreaterThan(9);
+      // And the written page headings, so the check below is not passing on an empty read.
+      expect(read.filter((words) => words.kind === 'heading').length).toBeGreaterThan(5);
     });
 
     // AI Data Sharing and Blocked Users were the last two, by the owner's call on A8 (2026-10-21):

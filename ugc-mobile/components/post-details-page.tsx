@@ -18,6 +18,7 @@ import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import {
   buildGenerationStats,
   buildPostDetailsMeta,
+  commentCountLabel,
   getDetailsBackLabel,
   getDetailsPrimaryAction,
   getDetailsTitle,
@@ -216,7 +217,10 @@ export function PostDetailsPage({
   // The slide shows a run's first file, which is all the library sends; a run
   // of several lists every one under its facts.
   const outputCount = details.generationInfo?.outputCount ?? 0;
-  const meta = buildPostDetailsMeta(item, undefined, { commentsOnButton: Boolean(onComments && item.canComment) });
+  // The Comments button, where the post takes comments and the page can open them. It carries
+  // the count, so the line under the title leaves it out.
+  const openComments = item.canComment ? onComments : undefined;
+  const meta = buildPostDetailsMeta(item, undefined, { commentsOnButton: Boolean(openComments) });
   const canOpenCreator = Boolean(onCreatorOpen && item.creatorUsername);
   const commentCount = Math.max(0, item.commentCount ?? 0);
   // A text post derives both `prompt` and `body` from the same paragraph, so
@@ -450,13 +454,16 @@ export function PostDetailsPage({
               icon={<ShareGlyph size={appTheme.icon.compact} color={theme.colors.text} />}
               onPress={() => void onShare(item)}
             />
-            {onComments && item.canComment ? (
+            {openComments ? (
               <DetailActionButton
                 accessibilityLabel="Comments"
+                // The count is the label's text, which the label above replaces for a screen reader. Never
+                // undefined: Android keeps a value set back to undefined (hig-accessibility-label-states).
+                accessibilityValue={{ text: commentCount > 0 ? commentCountLabel(commentCount) : '' }}
                 grow
                 label={commentCount > 0 ? formatCompactCount(commentCount) : 'Comment'}
                 icon={<MessageCircle size={appTheme.icon.compact} color={theme.colors.text} />}
-                onPress={onComments}
+                onPress={openComments}
               />
             ) : null}
           </View>
@@ -661,6 +668,7 @@ function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) =
 
 function DetailActionButton({
   accessibilityLabel,
+  accessibilityValue,
   disabled,
   grow,
   icon,
@@ -670,6 +678,7 @@ function DetailActionButton({
   primary,
 }: {
   accessibilityLabel?: string;
+  accessibilityValue?: { text: string };
   disabled?: boolean;
   /** Share the row equally with its siblings instead of hugging the label. */
   grow?: boolean;
@@ -685,6 +694,7 @@ function DetailActionButton({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityValue={accessibilityValue}
       disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed }) => ({

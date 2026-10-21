@@ -863,7 +863,8 @@ export function validateCatalogCreationDraft(
   const promptLimitError = catalogPromptLimitError(draft, model);
   if (promptLimitError) errors.push(promptLimitError);
   if (draft.tool === 'motion') {
-    // Named as the composer's slots are, so a line under a slot says what the slot says.
+    // Named as the composer's slots are, so the check says what the slot says. The composer draws
+    // no line under an empty slot; its bar asks for what is missing instead.
     const labels = catalogMotionDraftSlotLabels(draft, model);
     if (!draft.characterImage) errors.push(motionInputRequiredMessage(labels.image));
     if (!draft.referenceVideo) errors.push(motionInputRequiredMessage(labels.video));

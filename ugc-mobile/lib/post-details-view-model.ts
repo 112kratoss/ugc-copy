@@ -29,6 +29,11 @@ function countLabel(count: number, singular: string, plural: string) {
   return `${formatCompactCount(count)} ${count === 1 ? singular : plural}`;
 }
 
+/** "3 comments", as the line under the title says it and the Comments button tells a screen reader. */
+export function commentCountLabel(count: number): string {
+  return countLabel(count, 'comment', 'comments');
+}
+
 /**
  * Posts made inside the app record the app as their tool. "Made with
  * Magicbooklet", read inside Magicbooklet, says nothing — only an outside
@@ -60,7 +65,7 @@ export function buildPostDetailsMeta(
   if (remixCount > 0) parts.push(countLabel(remixCount, 'remix', 'remixes'));
 
   const commentCount = Math.max(0, item.commentCount ?? 0);
-  if (commentCount > 0 && !commentsOnButton) parts.push(countLabel(commentCount, 'comment', 'comments'));
+  if (commentCount > 0 && !commentsOnButton) parts.push(commentCountLabel(commentCount));
 
   // The model by the feed card's rule (`homeModelLabel`, decision 13,
   // 2026-10-17): its display name, never a slug, and none for a text post or

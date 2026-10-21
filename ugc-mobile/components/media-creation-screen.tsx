@@ -512,11 +512,16 @@ function unavailableRunInputMessage(
  * character image and a motion clip named neither (2026-10-21). The motion-inputs pair keeps its
  * own line, which says what the clip is for.
  */
-function motionInputsHint(labels: { image: string; video: string }): string {
+function motionInputsHint(labels: { image: string; video: string }, missing: { image: boolean; video: boolean }): string {
+  // Only what is still missing: an empty slot has no line of its own under it.
   if (labels.image === MOTION_INPUT_LABELS.image && labels.video === MOTION_INPUT_LABELS.video) {
-    return 'Add a character image and a motion clip.';
+    if (missing.image && missing.video) return 'Add a character image and a motion clip.';
+    return missing.image ? 'Add a character image.' : 'Add a motion clip.';
   }
-  return `Add ${slotLabelInSentence(labels.image)} and ${slotLabelInSentence(labels.video)}.`;
+  const asked = [missing.image ? labels.image : null, missing.video ? labels.video : null]
+    .filter((label): label is string => label !== null)
+    .map(slotLabelInSentence);
+  return `Add ${asked.join(' and ')}.`;
 }
 
 /** A slot's label mid-sentence: its first letter lowered when it starts a plain word, with an article unless it reads as a plural. */
@@ -2692,7 +2697,9 @@ function IdentityCreationScreen({
       ?? message
       ?? (catalogUnavailable ? catalogQuery.error?.message : null)
       ?? (activeQuote.status === 'error' ? activeQuote.error : null)
-      ?? (motionInputsMissing && !unavailableReference ? motionInputsHint(catalogMotionDraftSlotLabels(motionDraft, selectedCreatorModel)) : null)
+      ?? (motionInputsMissing && !unavailableReference
+        ? motionInputsHint(catalogMotionDraftSlotLabels(motionDraft, selectedCreatorModel), { image: !motionDraft.characterImage, video: !motionDraft.referenceVideo })
+        : null)
       // Through the same mapper the Generate press uses: before this, the
       // blocker stated the condition ("Prompt is required.") and pressing
       // Generate restated it as an instruction ("Add a prompt before
@@ -3669,7 +3676,7 @@ function ImagePromptComposer({
         ) : null}
 
         <View testID="composer-action-grid" style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-          <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
+          <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} />
           <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels(enhanceVerb, isEnhancing)} onPress={onEnhance} disabled={isEnhancing} accent />
         </View>
 
@@ -4468,7 +4475,7 @@ function VideoCreatorComposer({
       ) : null}
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-        <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
+        <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} />
         <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels('Enhance', isEnhancing)} onPress={onEnhance} disabled={isEnhancing || draft.isMultiShot} accent />
       </View>
 
@@ -4811,13 +4818,15 @@ function MotionCreatorComposer({
   // The lines under the slots, found by what the slots are called (`catalogMotionDraftSlotLabels`):
   // the draft's checks open a line about a slot with its label, as the slot itself is titled. A line
   // goes under the slot whose label it opens with, the longer label where both do, so a line about
-  // a "Reference video" is not also the line of a "Reference".
+  // a "Reference video" is not also the line of a "Reference". Only a slot that holds something has
+  // a line: an empty one is asked for by the bar.
   const labels = catalogMotionDraftSlotLabels(draft, model);
   const slotNamedBy = (error: string) => [labels.image, labels.video]
     .filter((label) => error.startsWith(`${label} `))
     .sort((a, b) => b.length - a.length)[0];
-  const characterError = validationErrors.find((error) => slotNamedBy(error) === labels.image);
-  const motionError = validationErrors.find((error) => slotNamedBy(error) === labels.video);
+  const characterError = draft.characterImage ? validationErrors.find((error) => slotNamedBy(error) === labels.image) : undefined;
+  const motionError = draft.referenceVideo ? validationErrors.find((error) => slotNamedBy(error) === labels.video) : undefined;
+  const clipUploading = upload?.target === 'motion-clip' && upload.cancellable;
   // The slots the run sends its picture and its clip in, found by kind: Kling 3.0's are plain
   // reference slots, where Kling 2.6 has the motion-inputs pair.
   const slotKeys = catalogMotionDraftSlotKeys(draft, model);
@@ -4840,18 +4849,21 @@ function MotionCreatorComposer({
           {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
           {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
         </View>
-        <View style={{ gap: 4 }}>
-          {characterError && draft.characterImage ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
-          {motionError && draft.referenceVideo ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{motionError}</Text> : null}
-          {duration ? <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
-          {upload?.target === 'motion-clip' && upload.cancellable ? (
-            <>
-              {/* A replacement uploads behind the attached clip, so its progress is said here too. */}
-              {draft.referenceVideo ? <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] }}>{`Uploading the new clip · ${uploadPercentLabel(upload)}`}</Text> : null}
-              <UploadCancelButton onPress={onCancelUpload} />
-            </>
-          ) : null}
-        </View>
+        {/* Drawn only with something to say, so the panel's gap leaves no band under empty slots. */}
+        {characterError || motionError || duration || clipUploading ? (
+          <View style={{ gap: 4 }}>
+            {characterError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
+            {motionError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{motionError}</Text> : null}
+            {duration ? <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
+            {clipUploading ? (
+              <>
+                {/* A replacement uploads behind the attached clip, so its progress is said here too. */}
+                {draft.referenceVideo ? <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] }}>{`Uploading the new clip · ${uploadPercentLabel(upload)}`}</Text> : null}
+                <UploadCancelButton onPress={onCancelUpload} />
+              </>
+            ) : null}
+          </View>
+        ) : null}
       </View> : null}
 
       <View style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.motion, 0.16), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
@@ -4880,7 +4892,7 @@ function MotionCreatorComposer({
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-        <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
+        <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} />
         <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels('Enhance', isEnhancing)} onPress={onEnhance} disabled={isEnhancing || !draft.prompt.trim()} accent />
       </View>
 
@@ -5076,7 +5088,8 @@ function EnhanceControlsRow({
   );
 }
 
-function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disabled, accent, quiet }: { icon: React.ReactNode; label: string; accessibilityLabel?: string; onPress: () => void; disabled?: boolean; accent?: boolean; quiet?: boolean }) {
+/** A toolbar button under the prompt: Enhance is the accent, Templates the quiet one beside it. */
+function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disabled, accent }: { icon: React.ReactNode; label: string; accessibilityLabel?: string; onPress: () => void; disabled?: boolean; accent?: boolean }) {
   const theme = useAppTheme();
   return (
     <Pressable
@@ -5091,8 +5104,8 @@ function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disab
         borderRadius: 18,
         borderCurve: 'continuous',
         borderWidth: 1,
-        borderColor: accent ? hexWithAlpha(theme.colors.primary, 0.3) : quiet ? hexWithAlpha(theme.colors.text, 0.055) : theme.colors.border,
-        backgroundColor: accent ? hexWithAlpha(theme.colors.primary, 0.11) : pressed ? theme.colors.pressed : quiet ? hexWithAlpha(theme.colors.text, 0.025) : theme.colors.surfaceStrong,
+        borderColor: accent ? hexWithAlpha(theme.colors.primary, 0.3) : hexWithAlpha(theme.colors.text, 0.055),
+        backgroundColor: accent ? hexWithAlpha(theme.colors.primary, 0.11) : pressed ? theme.colors.pressed : hexWithAlpha(theme.colors.text, 0.025),
         alignItems: 'center',
         justifyContent: 'center',
         flexDirection: 'column',
@@ -5101,8 +5114,8 @@ function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disab
       })}
     >
       {icon}
-      {/* Centred, because a priced label ("Enhance · 2 credits") can take two lines in a third of the row. */}
-      <Text style={{ color: accent ? theme.colors.primary : quiet ? theme.colors.muted : theme.colors.textSecondary, fontSize: quiet ? 10 : 11, fontWeight: '800', textAlign: 'center', paddingHorizontal: 4 }}>{label}</Text>
+      {/* Centred, because a priced label ("Enhance · 2 credits") can take two lines in half the row. */}
+      <Text style={{ color: accent ? theme.colors.primary : theme.colors.muted, fontSize: accent ? 11 : 10, fontWeight: '800', textAlign: 'center', paddingHorizontal: 4 }}>{label}</Text>
     </Pressable>
   );
 }
@@ -5880,9 +5893,11 @@ function GenerationWorkspace({
             </Text>
             <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11 }}>{settingsSummary}</Text>
           </View>
-          {/* Over an outcome the ✕ is Close: it keeps the outcome a tap away (the bar's View result),
-              where the panel's "Back to creator" clears it, so the two are not one name (A3, 2026-10-21). */}
-          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed || attemptUnconfirmed ? 'Close' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+          {/* Named by the panel under it, in the order the panels are chosen. Over a finished or failed
+              run the ✕ only hides the outcome, which the panel's "Back to creator" clears, so it is
+              Close there, not a second "Back to creator" (A3, 2026-10-21); over a start it could not
+              confirm, both only hide the view, and share the name. */}
+          <Pressable accessibilityRole="button" accessibilityLabel={succeeded ? 'Close' : pollingInterrupted ? 'Minimize generation' : attemptUnconfirmed ? 'Back to creator' : failed ? 'Close' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
           </Pressable>
         </View>

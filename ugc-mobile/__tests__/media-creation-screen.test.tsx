@@ -4301,6 +4301,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(draftStorage.setItem.mock.invocationCallOrder[savedAt])
       .toBeLessThan(startGeneration.mock.invocationCallOrder[0]);
     expect(collectText(tree!.root)).toContain('Generation not confirmed');
+    // Here the ✕ and the panel's button both only hide the view, so they share one name (A3, 2026-10-21).
+    expect(tree!.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Back to creator')).toHaveLength(2);
 
     await renderer.act(async () => {
       await findPressableByText(tree!.root, 'Check again').props.onPress();
@@ -4678,6 +4680,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     await renderer.act(async () => {
       await findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress();
     });
+    // Over the result the ✕ only hides it, so it is Close, and "Back to creator" is the panel's (A3).
+    expect(tree!.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Close')).toHaveLength(1);
+    expect(tree!.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Back to creator')).toHaveLength(1);
     renderer.act(() => {
       findPressableByText(tree!.root, 'Back to creator').props.onPress();
     });
@@ -6541,6 +6546,19 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(text(tree)).not.toContain('Character image is required.');
         expect(text(tree)).not.toContain('Reference video is required.');
         expect(blocker(tree)).toBe('Add a character image and a motion clip.');
+      });
+
+      // An empty slot has no line of its own, so the bar names what is still missing, not both
+      // inputs again (A2, 2026-10-21).
+      it.each([
+        ['kling-2.6', 'the clip', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) }, 'Add a motion clip.'],
+        ['kling-2.6', 'the picture', { referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }), duration: 6 }, 'Add a character image.'],
+        ['kling-3.0', 'the clip', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) }, 'Add reference videos.'],
+      ] as const)('ask on %s for %s alone when only it is missing', async (model, _missing, motion, hint) => {
+        onMotionModel(model, motion);
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(blocker(tree)).toBe(hint);
       });
 
       it('take a clip on Kling 3.0 beside its picture, and send the picture and the clip in its slots', async () => {
