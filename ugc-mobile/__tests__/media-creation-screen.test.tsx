@@ -278,6 +278,7 @@ import { creationDraftStorageKey, ordinaryDraftScope, remixDraftScope } from '..
 import { activeGenerationRecordStorageKey } from '../lib/active-generation-record';
 import type { ModelCatalogKind, ModelCatalogSummary } from '../lib/model-catalog/protocol';
 import { PrimaryButton, SecondaryButton } from '../components/ui';
+import { registerActionSheetPresenter, type ActionSheetRequest } from '../lib/action-sheet';
 import { ApiError } from '../lib/api-client';
 import whatsNewContract from '../../contracts/whats-new-models-v1.json';
 import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.json';
@@ -1111,15 +1112,19 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree = renderer.create(<MediaCreationScreen initialTool="video" />);
     });
 
-    await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Images 0/5').props.onPress();
-    });
-    await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Video 0/3').props.onPress();
-    });
-    await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Audio 0/3').props.onPress();
-    });
+    // One tile adds all three, asking which (2026-10-21).
+    const sheets: ActionSheetRequest[] = [];
+    const unregister = registerActionSheetPresenter((request) => { sheets.push(request); });
+    try {
+      for (const kind of ['Image', 'Video', 'Audio']) {
+        renderer.act(() => { findPressableByText(tree!.root, 'References').props.onPress(); });
+        await renderer.act(async () => {
+          await sheets.at(-1)!.actions.find((action) => action.label === kind)!.onPress?.();
+        });
+      }
+    } finally {
+      unregister();
+    }
 
     expect(pickMediaList).toHaveBeenCalledTimes(1);
     expect(pickMedia).toHaveBeenCalledTimes(1);
@@ -6347,52 +6352,108 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         } }));
         vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('1000333161.jpg')] as never);
         vi.mocked(uploadPickedMedia).mockImplementation(async (uri) => uploaded(uri.replace('file:///', '')));
-        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        const sheets: ActionSheetRequest[] = [];
+        const unregister = registerActionSheetPresenter((request) => { sheets.push(request); });
+        try {
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
 
-        await renderer.act(async () => { await findPressableByLabelPrefix(tree.root, 'Add Images ').props.onPress(); });
-        await settle();
-        expect(storedDrafts().video.references.map((media: { displayName: string; handle: string }) => [media.displayName, media.handle])).toEqual([
-          ['Hero', '@hero'],
-          ['Bottle', '@bottle'],
-          ['Reference 4', '@reference_4'],
-        ]);
+          renderer.act(() => { labelled(tree.root, 'Add References').props.onPress(); });
+          await renderer.act(async () => { await sheets[0].actions.find((action) => action.label === 'Image')!.onPress?.(); });
+          await settle();
+          expect(storedDrafts().video.references.map((media: { displayName: string; handle: string }) => [media.displayName, media.handle])).toEqual([
+            ['Hero', '@hero'],
+            ['Bottle', '@bottle'],
+            ['Reference 4', '@reference_4'],
+          ]);
+        } finally {
+          unregister();
+        }
       });
 
       // A rail's add tile is the way to add, now the toolbar's button is gone (A1, 2026-10-21). It
-      // leads its rail, so it is in view however many pictures follow it, where at the end it went
-      // past the screen's edge from the fourth reference (the owner's call, 2026-10-21); and its
-      // rail answers the first tap with the keyboard up, as the page around it does: an inner
-      // ScrollView spends that tap on putting the keyboard away by default.
-      it('are added from rails that start with their add tiles and answer the first tap with the keyboard up', async () => {
-        const railOf = (pressable: renderer.ReactTestInstance) => {
-          let node: renderer.ReactTestInstance | null = pressable;
-          while (node && node.props.horizontal !== true) node = node.parent;
-          return node!;
+      // stays fixed at the start of its rail, outside the pictures' scroller, so it is in view
+      // however many pictures follow it and wherever they are scrolled to, where at the end it went
+      // past the screen's edge from the fourth reference (the owner's call, 2026-10-21). The
+      // pictures' scroller answers the first tap with the keyboard up, as the page around it does:
+      // an inner ScrollView spends that tap on putting the keyboard away by default. The subjects
+      // rail holds at most three, which always fit, so its tile stays at its end.
+      it('are added from tiles fixed at the start of their rails, beside pictures that answer the first tap with the keyboard up', async () => {
+        const scrollerOf = (node: renderer.ReactTestInstance) => {
+          let current: renderer.ReactTestInstance | null = node;
+          while (current && current.props.horizontal !== true) current = current.parent;
+          return current;
         };
-        const railLabels = (rail: renderer.ReactTestInstance) => rail
+        const labelsIn = (container: renderer.ReactTestInstance) => container
           .findAll((node) => String(node.type) === 'pressable')
           .map((node) => node.props.accessibilityLabel as string);
+        const railIn = (tree: renderer.ReactTestRenderer, testID: string) => tree.root.find((node) => String(node.type) === 'view' && node.props.testID === testID);
         memory.set(ordinaryKey, savedDrafts({ image: { references: [stagedMedia('alpha'), stagedMedia('bravo')] } }));
         const image = await open(<MediaCreationScreen initialTool="image" />);
-        const imageRail = railOf(labelled(image.root, 'Add reference images'));
-        expect(imageRail.props.keyboardShouldPersistTaps).toBe('handled');
-        expect(railLabels(imageRail)).toEqual(['Add reference images', 'Open details for Alpha', 'Open details for Bravo']);
+        expect(scrollerOf(labelled(image.root, 'Add reference images'))).toBeNull();
+        expect(scrollerOf(labelled(image.root, 'Open details for Alpha'))!.props.keyboardShouldPersistTaps).toBe('handled');
+        expect(labelsIn(railIn(image, 'image-reference-rail'))).toEqual(['Add reference images', 'Open details for Alpha', 'Open details for Bravo']);
 
         catalogState.catalog = parityCatalog([paritySeedanceVideo(), parityKlingO3()]);
         memory.set(ordinaryKey, savedDrafts({ video: { model: 'seedance-2', catalogRevision: 'parity-rev', references: [stagedMedia('hero')] } }));
         const video = await open(<MediaCreationScreen initialTool="video" />);
-        const videoRail = railOf(findPressableByLabelPrefix(video.root, 'Add Images '));
-        expect(videoRail.props.keyboardShouldPersistTaps).toBe('handled');
-        expect(railLabels(videoRail)).toEqual(['Add Images 1/5', 'Add Video 0/3', 'Add Audio 0/3', 'Open details for Hero']);
+        expect(scrollerOf(labelled(video.root, 'Add References'))).toBeNull();
+        expect(scrollerOf(labelled(video.root, 'Open details for Hero'))!.props.keyboardShouldPersistTaps).toBe('handled');
+        expect(labelsIn(railIn(video, 'video-reusable-reference-rail'))).toEqual(['Add References', 'Open details for Hero']);
 
         memory.set(ordinaryKey, savedDrafts({ video: { model: 'kling-o3', catalogRevision: 'parity-rev', subjects: [{
           id: 'subject-1', displayName: 'Subject 1', handle: '@subject_1',
           images: [stagedMedia('one-front', 'image', { handle: '@subject_1' }), stagedMedia('one-side', 'image', { handle: '@subject_1' })],
         }] } }));
         const subjects = await open(<MediaCreationScreen initialTool="video" />);
-        const subjectRail = railOf(findPressableByLabelPrefix(subjects.root, 'Add Subject '));
-        expect(subjectRail.props.keyboardShouldPersistTaps).toBe('handled');
-        expect(railLabels(subjectRail)).toEqual(['Add Subject 1/3', 'Open details for Subject 1, @subject_1']);
+        const subjectScroller = scrollerOf(findPressableByLabelPrefix(subjects.root, 'Add Subject '))!;
+        expect(subjectScroller.props.keyboardShouldPersistTaps).toBe('handled');
+        expect(labelsIn(subjectScroller)).toEqual(['Open details for Subject 1, @subject_1', 'Add Subject 1/3']);
+      });
+
+      // Three tiles ahead of the pictures left about half of the first reference in view on a
+      // phone, so a model that takes pictures, clips and audio has one tile, which asks which;
+      // a kind that is full is offered greyed out. A model that takes one kind opens its picker.
+      it('on a model that takes pictures, clips and audio, are added from one tile that asks which', async () => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo(), parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-2',
+          catalogRevision: 'parity-rev',
+          references: [stagedMedia('hero')],
+          referenceVideos: [stagedMedia('one', 'video'), stagedMedia('two', 'video'), stagedMedia('three', 'video')],
+        } }));
+        vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('bottle.png')] as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('bottle.png'));
+        const sheets: ActionSheetRequest[] = [];
+        const unregister = registerActionSheetPresenter((request) => { sheets.push(request); });
+        try {
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          expect(hasLabel(tree.root, 'Add Images 1/5')).toBe(false);
+
+          renderer.act(() => { labelled(tree.root, 'Add References').props.onPress(); });
+          expect(sheets).toHaveLength(1);
+          expect(pickMediaList).not.toHaveBeenCalled();
+          expect(sheets[0].actions.map((action) => [action.label, action.detail, Boolean(action.disabled)])).toEqual([
+            ['Image', '1 of 5', false],
+            ['Video', '3 of 3', true],
+            ['Audio', '0 of 3', false],
+          ]);
+          await renderer.act(async () => { await sheets[0].actions[0].onPress?.(); });
+          await settle();
+          expect(vi.mocked(pickMediaList).mock.calls[0][0]).toBe('image');
+          expect(storedDrafts().video.references.map((media: { displayName: string }) => media.displayName)).toEqual(['Hero', 'bottle']);
+
+          // Kling 3.0 takes clips alone: its tile is the clip's, and opens the picker at once.
+          memory.set(ordinaryKey, savedDrafts({ video: { model: 'kling-3.0-video', catalogRevision: 'parity-rev' } }));
+          vi.mocked(pickMedia).mockResolvedValueOnce({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 4000 } as never);
+          vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('move.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 4 }));
+          const clips = await open(<MediaCreationScreen initialTool="video" />);
+          await renderer.act(async () => { await labelled(clips.root, 'Add Video 0/3').props.onPress(); });
+          await settle();
+          expect(sheets).toHaveLength(1);
+          expect(pickMedia).toHaveBeenCalledWith('video');
+        } finally {
+          unregister();
+        }
       });
 
       it('made into a subject take the next place no subject answers to, where one before it was removed', async () => {
