@@ -6518,6 +6518,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           ['Video', '3 of 3', true],
           ['Audio', '0 of 3', false],
         ]);
+        // The rows say it all while one kind still has room.
+        expect(sheets[0].message).toBeUndefined();
         await renderer.act(async () => { await sheets[0].actions[0].onPress?.(); });
         await settle();
         expect(vi.mocked(pickMediaList).mock.calls[0][0]).toBe('image');
@@ -6542,7 +6544,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(pickMedia).toHaveBeenCalledWith('video');
       });
 
-      it('with every kind full, leave the one tile dimmed and say why', async () => {
+      // A dimmed tile said nothing of which kinds were full, and the counts were in the sheet it
+      // could not open; a single kind's tile shows its own "3/3", so it still dims at its limit.
+      it('with every kind full, keep the one tile live, and its sheet says why nothing can be added', async () => {
         catalogState.catalog = parityCatalog([paritySeedanceVideo()]);
         memory.set(ordinaryKey, savedDrafts({ video: {
           model: 'seedance-2',
@@ -6551,10 +6555,30 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           referenceVideos: ['a', 'b', 'c'].map((id) => stagedMedia(`clip-${id}`, 'video')),
           referenceAudios: ['a', 'b', 'c'].map((id) => stagedMedia(`voice-${id}`, 'audio')),
         } }));
+        const sheets = captureActionSheets();
         const tree = await open(<MediaCreationScreen initialTool="video" />);
         const tile = labelled(tree.root, 'Add References');
-        expect(tile.props.disabled).toBe(true);
+        expect(tile.props.disabled).toBe(false);
         expect(tile.props.accessibilityValue).toEqual({ text: 'Images 5 of 5, video 3 of 3, audio 3 of 3' });
+
+        renderer.act(() => { tile.props.onPress(); });
+        expect(sheets[0].message).toBe('Every kind is at its limit. Remove a reference to add another.');
+        expect(sheets[0].actions.map((action) => [action.label, action.detail, Boolean(action.disabled)])).toEqual([
+          ['Image', '5 of 5', true],
+          ['Video', '3 of 3', true],
+          ['Audio', '3 of 3', true],
+        ]);
+        expect(pickMediaList).not.toHaveBeenCalled();
+
+        // Kling 3.0's own tile shows its count, and dims when it is full.
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          referenceVideos: ['a', 'b', 'c'].map((id) => stagedMedia(`clip-${id}`, 'video')),
+        } }));
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        const clips = await open(<MediaCreationScreen initialTool="video" />);
+        expect(labelled(clips.root, 'Add Video 3/3').props.disabled).toBe(true);
       });
 
       // The tile is outside the scroller, so the reference added from its sheet can land past the

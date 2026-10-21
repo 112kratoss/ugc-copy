@@ -4242,8 +4242,13 @@ function VideoCreatorComposer({
   const referenceCounts = addableKinds
     .map((kind, index) => `${index === 0 ? kind.railLabel : kind.railLabel.toLowerCase()} ${kind.count} of ${kind.limit}`)
     .join(', ');
+  // With every kind full the tile stays live and its sheet says why: a dimmed tile named no kind,
+  // and the counts were in the sheet it could not open. A single kind's tile shows its own count,
+  // so it still dims at its limit.
+  const everyKindFull = addableKinds.every((kind) => kind.count >= kind.limit);
   const chooseReferenceKind = () => showActionSheet({
     title: 'Add a reference',
+    message: everyKindFull ? 'Every kind is at its limit. Remove a reference to add another.' : undefined,
     actions: addableKinds.map((kind) => ({
       label: kind.name,
       detail: `${kind.count} of ${kind.limit}`,
@@ -4620,7 +4625,7 @@ function VideoCreatorComposer({
                   accessibilityValueText={onlyKind ? '' : referenceCounts}
                   icon={onlyKind?.icon}
                   onPress={onlyKind?.onAdd ?? chooseReferenceKind}
-                  disabled={isUploading || addableKinds.every((kind) => kind.count >= kind.limit)}
+                  disabled={isUploading || (onlyKind !== null && everyKindFull)}
                   progress={uploadingKind ? upload : null}
                 />
               ) : null}
