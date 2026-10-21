@@ -6,12 +6,15 @@ set -u
 S="${ANDROID_SERIAL:?set ANDROID_SERIAL to the serial of the phone}"
 PKG="${PKG:-com.magicbooklet.mobile}"
 STOP="${STOP:-${TMPDIR:-/tmp}/keep-awake-stop}"
+# A stop file left by an earlier run would end this one at once, and the phone would sleep 30 s later.
+rm -f "$STOP"
 end=$(( $(date +%s) + ${1:-15} * 60 ))
 while [ "$(date +%s)" -lt "$end" ]; do
   [ -e "$STOP" ] && { echo "stopped by $STOP"; exit 0; }
   adb -s "$S" shell dumpsys power 2>/dev/null | grep -q 'mWakefulness=Awake' || { echo "screen off; stopping"; exit 0; }
   f=$(adb -s "$S" shell dumpsys window 2>/dev/null | grep -m1 'mCurrentFocus' | sed 's/.* u0 //; s/}.*//; s|/.*||' | tr -d '\r')
-  case "$f" in com.sec.android.app.launcher|"$PKG") ;; *) echo "another app is in front ($f); stopping"; exit 0;; esac
+  # The store build and the dev build alike: PKG is often given to phone.sh alone.
+  case "$f" in com.sec.android.app.launcher|com.magicbooklet.mobile|com.magicbooklet.mobile.dev|"$PKG") ;; *) echo "another app is in front ($f); stopping"; exit 0;; esac
   adb -s "$S" shell input keyevent 0
   sleep 12
 done

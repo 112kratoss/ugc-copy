@@ -17,10 +17,18 @@ PKG="${PKG:-com.magicbooklet.mobile}"
 SHOTS="${SHOTS:-${TMPDIR:-/tmp}/phone-shots}"
 A() { adb -s "$S" "$@"; }
 front() { A shell dumpsys window 2>/dev/null | grep -m1 'mCurrentFocus' | sed 's/.* u0 //; s/}.*//; s|/.*||' | tr -d '\r'; }
-touches() { local since; since=$(A shell "date -d @\$(( \$(date +%s) - 6 )) '+%m-%d %H:%M:%S.000'" | tr -d '\r'); A logcat -d -T "$since" 2>/dev/null | grep -c 'ViewPostIme pointer'; }
-# A call in progress, from telephony's current state (one line per SIM: 1 ringing, 2 in a call). Telecom's dump
-# also keeps an event log of past calls, so its `state=DIALING` lines counted every call since the log began.
-calls() { A shell dumpsys telephony.registry 2>/dev/null | grep -c -E 'mCallState=[12]'; }
+# "unknown" when the phone's clock cannot be read, which `free` treats as a touch: no look is no all-clear.
+touches() { local since; since=$(A shell "date -d @\$(( \$(date +%s) - 6 )) '+%m-%d %H:%M:%S.000'" | tr -d '\r'); [ -n "$since" ] || { echo unknown; return; }; A logcat -d -T "$since" 2>/dev/null | grep -c 'ViewPostIme pointer'; }
+# Calls in progress: the entries of telecom's list of current calls (`mCalls:`, empty when idle), where cellular calls
+# and app calls such as WhatsApp's both appear (telephony's own call state knows only cellular ones). The same dump
+# keeps an event log of past calls, and the `state=DIALING` lines there kept the old check reporting a call long
+# after it ended. A dump with no such list reads "unknown", which `free` treats as busy, as a call it cannot see.
+calls() {
+  A shell dumpsys telecom 2>/dev/null | tr -d '\r' | awk '
+    /^ *mCalls:/ { seen = 1; match($0, /^ */); depth = RLENGTH; inside = 1; next }
+    inside && NF { match($0, /^ */); if (RLENGTH <= depth) inside = 0; else n++ }
+    END { if (seen) print n + 0; else print "unknown" }'
+}
 cmd="${1:?a step}"; shift
 case "$cmd" in
   state)
@@ -28,10 +36,10 @@ case "$cmd" in
     A shell dumpsys power 2>/dev/null | grep -m1 'mWakefulness=' | sed 's/^ */power: /'
     A shell dumpsys window policy 2>/dev/null | grep -m1 -i 'showing=' | sed 's/^ */keyguard: /'
     echo "front: $(front)"
-    echo "calls in progress: $(calls) ($(A shell dumpsys telephony.registry 2>/dev/null | grep -oE 'mCallState=[0-9]' | tr '\n' ' ' | sed 's/ $//'))"
+    echo "calls in progress: $(calls)"
     A shell dumpsys audio 2>/dev/null | grep -m1 'Actual mode' | sed 's/^ */audio: /'
     echo "touches in the last 6 s: $(touches)"
-    echo "app pid: $(A shell pidof "$PKG" 2>/dev/null)";;
+    echo "app pid: $(A shell pidof "$PKG" 2>/dev/null | tr -d '\r')";;
   free)
     awake=$(A shell dumpsys power 2>/dev/null | grep -c 'mWakefulness=Awake')
     locked=$(A shell dumpsys window policy 2>/dev/null | grep -m1 -ic 'showing=true')
@@ -43,7 +51,7 @@ case "$cmd" in
     echo "not free: awake=$awake locked=$locked front=$f call=$call $mode touches=$t"; exit 1;;
   shot)
     name="${1:?a name}"; mkdir -p "$SHOTS"; A exec-out screencap -p > "$SHOTS/$name.png"; echo "$SHOTS/$name.png $(wc -c < "$SHOTS/$name.png" | tr -d ' ') bytes";;
-  now) A shell "date '+%m-%d %H:%M:%S.000'";;
+  now) A shell "date '+%m-%d %H:%M:%S.000'" | tr -d '\r';;
   restart)
     link="${1:-}"; A shell am force-stop "$PKG"
     if [ -n "$link" ]; then A shell "am start -W -a android.intent.action.VIEW -d '$link' $PKG"; else A shell "am start -W -n $PKG/.MainActivity -a android.intent.action.MAIN -c android.intent.category.LAUNCHER"; fi 2>&1 | grep -E 'Status|LaunchState|TotalTime|Error' | tr '\n' ' '; echo;;
