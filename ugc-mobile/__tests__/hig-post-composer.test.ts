@@ -263,11 +263,28 @@ describe('S11 — a removal can be taken back', () => {
     expect(composer.indexOf('<PostComposerFooter', barMount)).toBeGreaterThan(barMount);
   });
 
-  // The bar sits above the footer, which a raised keyboard covers, and the media
-  // row answers its × with the keyboard up, so the offer puts the keyboard away.
-  it('puts the keyboard away, so an offer made mid-typing is seen', () => {
+  // The rows answer their × with the keyboard up, so an offer can be made
+  // mid-typing. On Android the page's keyboard area lifts the bar above the keys
+  // with the footer; on iOS the area leaves the room to the scroll view's insets
+  // and the bar stays under the keys, so there the offer puts the keyboard away.
+  it('is seen when it is made mid-typing', () => {
+    const area = composer.indexOf('<KeyboardAvoidingArea iosScrollViewAdjustsInsets reservedBottomInset={bottomInset} testID="composer-keyboard-area">');
+    const bar = composer.indexOf('<ComposerUndoBar');
+    const footer = composer.indexOf('<PostComposerFooter');
+    expect(area).toBeGreaterThan(-1);
+    expect(composer.slice(area, bar)).toContain('automaticallyAdjustKeyboardInsets');
+    expect(composer.indexOf('</KeyboardAvoidingArea>', footer)).toBeGreaterThan(footer);
+    expect(composer.slice(area, footer)).not.toContain('</KeyboardAvoidingArea>');
+
     const body = composer.slice(composer.indexOf('const offerUndo = ('));
-    expect(body.slice(0, body.indexOf('\n  };'))).toContain('Keyboard.dismiss();');
+    expect(body.slice(0, body.indexOf('\n  };'))).toContain("if (Platform.OS === 'ios') Keyboard.dismiss();");
+  });
+
+  // An offer taken mid-typing must not take the typing with it: Undo puts back
+  // what the removal took onto the draft as it is (lib/composer-undo.ts).
+  it('puts back only what was removed', () => {
+    expect(composer).toContain('setDraft((current) => putBackComposerRemoval(current, removal));');
+    expect(composer).not.toContain('setDraft(snapshot)');
   });
 
   // The consistency rule: a reversal offered on one control and not the next is
@@ -280,13 +297,13 @@ describe('S11 — a removal can be taken back', () => {
   });
 
   it('names the media by the label the row already gives it', () => {
-    expect(composer).toContain("offerUndo(index >= 0 ? getComposerMediaLabel(index) : 'media');");
+    expect(composer).toContain('offerUndo(getComposerMediaLabel(taken.removal.index), taken.removal);');
   });
 
   // Undo and redo: "it's crucial to highlight the result of each undo ... to
   // keep people from thinking that the action had no effect."
   it('returns to where the removal happened, so the result is on screen', () => {
-    expect(composer).toContain('setUndoEntry({ label, snapshot: draft, scrollY: scrollYRef.current });');
+    expect(composer).toContain('setUndoEntry({ label, removal, scrollY: scrollYRef.current });');
     expect(composer).toContain('scrollRef.current?.scrollTo({ y: scrollY, animated: true });');
     expect(composer).toContain('onScroll={(event) => { scrollYRef.current = event.nativeEvent.contentOffset.y; }}');
   });

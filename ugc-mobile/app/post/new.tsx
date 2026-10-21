@@ -94,7 +94,12 @@ import {
   COMPOSER_UNDO_WINDOW_MS,
   describeComposerUndo,
   describeComposerUndoAction,
+  putBackComposerRemoval,
+  takeComposerMadeWithRow,
+  takeComposerMedia,
+  takeComposerResourceCard,
   type ComposerUndoEntry,
+  type PostComposerRemoval,
 } from '@/lib/composer-undo';
 import { env } from '@/lib/env';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -1031,7 +1036,7 @@ function ComposerUndoBar({
   onUndo,
   onDismiss,
 }: {
-  entry: ComposerUndoEntry<PostComposerDraft> | null;
+  entry: ComposerUndoEntry<PostComposerRemoval> | null;
   onUndo: () => void;
   onDismiss: () => void;
 }) {
@@ -1926,9 +1931,9 @@ function NewPostComposer() {
   // other's banner (and its Cancel button) mid-transfer.
   const [recoveryUploadProgress, setRecoveryUploadProgress] = useState<MediaUploadBatchProgress | null>(null);
   const [pendingRetryMedia, setPendingRetryMedia] = useState<ImagePickerAsset[]>([]);
-  // Undo and redo: every removal below is instant, so each one leaves the draft
-  // it replaced here and offers it back for a moment.
-  const [undoEntry, setUndoEntry] = useState<ComposerUndoEntry<PostComposerDraft> | null>(null);
+  // Undo and redo: every removal below is instant, so each one leaves what it
+  // took here and offers it back for a moment.
+  const [undoEntry, setUndoEntry] = useState<ComposerUndoEntry<PostComposerRemoval> | null>(null);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const scrollYRef = useRef(0);
@@ -2905,18 +2910,20 @@ function NewPostComposer() {
   };
 
   /**
-   * Hand the draft that is about to be destroyed to the undo offer, and start
-   * the clock on it. Everything that removes part of the draft goes through
-   * here, so the reversal is the same one everywhere rather than a courtesy on
-   * whichever control someone remembered. The offer is drawn above the footer,
-   * which a raised keyboard covers, so the keyboard goes first: the media row
-   * answers its × with the keyboard up (2026-10-21), so a removal can happen
-   * mid-typing, and an offer under the keys is an offer nobody sees.
+   * Hand what a removal took to the undo offer, and start the clock on it.
+   * Everything that removes part of the draft goes through here, so the
+   * reversal is the same one everywhere rather than a courtesy on whichever
+   * control someone remembered. The rows answer their × with the keyboard up
+   * (2026-10-21), so a removal can happen mid-typing. On Android the page's
+   * keyboard area lifts the offer above the keys with the footer, and the
+   * keyboard stays where the person left it. On iOS the area leaves the room to
+   * the scroll view's own insets and the offer stays under the keys, so the
+   * keyboard goes first there: an offer under the keys is an offer nobody sees.
    */
-  const offerUndo = (label: string) => {
-    Keyboard.dismiss();
+  const offerUndo = (label: string, removal: PostComposerRemoval) => {
+    if (Platform.OS === 'ios') Keyboard.dismiss();
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
-    setUndoEntry({ label, snapshot: draft, scrollY: scrollYRef.current });
+    setUndoEntry({ label, removal, scrollY: scrollYRef.current });
     undoTimerRef.current = setTimeout(() => setUndoEntry(null), COMPOSER_UNDO_WINDOW_MS);
   };
 
@@ -2928,12 +2935,14 @@ function NewPostComposer() {
 
   const applyUndo = () => {
     if (!undoEntry) return;
-    const { snapshot, scrollY } = undoEntry;
+    const { removal, scrollY } = undoEntry;
     dismissUndo();
-    setDraft(snapshot);
+    // Onto the draft as it is now: the offer can be taken mid-typing, and what
+    // was typed since the removal stays.
+    setDraft((current) => putBackComposerRemoval(current, removal));
     setDetailErrors((current) => (
       Object.keys(current).length > 0
-        ? getPostComposerDetailErrors(snapshot, { grandfatheredTitle: initialTitleRef.current })
+        ? getPostComposerDetailErrors(putBackComposerRemoval(draft, removal), { grandfatheredTitle: initialTitleRef.current })
         : current
     ));
     // Undo and redo: "it's crucial to highlight the result of each undo ... to
@@ -2942,38 +2951,17 @@ function NewPostComposer() {
   };
 
   const removeMadeWithRow = (id: string) => {
-    const row = draft.madeWithRows.find((candidate) => candidate.id === id);
-    offerUndo(row?.toolLabel.trim() || 'tool');
-    setDraft((current) => ({
-      ...current,
-      madeWithRows: current.madeWithRows.filter((row) => row.id !== id).length > 0
-        ? current.madeWithRows.filter((row) => row.id !== id)
-        : [createMadeWithRow()],
-    }));
+    const taken = takeComposerMadeWithRow(draft, id);
+    if (!taken) return;
+    offerUndo(taken.removal.row.toolLabel.trim() || 'tool', taken.removal);
+    setDraft((current) => takeComposerMadeWithRow(current, id)?.draft ?? current);
   };
 
   const removeMediaItem = (id: string) => {
-    const index = draft.mediaItems.findIndex((item) => item.id === id);
-    offerUndo(index >= 0 ? getComposerMediaLabel(index) : 'media');
-    setDraft((current) => {
-      const removed = current.mediaItems.find((item) => item.id === id);
-      const mediaItems = current.mediaItems.filter((item) => item.id !== id);
-      return {
-        ...current,
-        mediaItems,
-        upload: mediaItems[0]
-          ? { uri: mediaItems[0].uri, name: mediaItems[0].name, type: mediaItems[0].type }
-          : null,
-        resource: {
-          ...current.resource,
-          cards: current.resource.cards.map((card) => {
-            const removedMediaKey = removed ? removed.mediaKey ?? removed.id : null;
-            const mediaKeys = removedMediaKey ? card.mediaKeys.filter((key) => key !== removedMediaKey) : card.mediaKeys;
-            return { ...card, mediaKeys, appliesToAll: card.appliesToAll || mediaKeys.length === 0 };
-          }),
-        },
-      };
-    });
+    const taken = takeComposerMedia(draft, id);
+    if (!taken) return;
+    offerUndo(getComposerMediaLabel(taken.removal.index), taken.removal);
+    setDraft((current) => takeComposerMedia(current, id)?.draft ?? current);
   };
 
   const reorderMediaItem = (id: string, targetIndex: number) => {
@@ -3116,19 +3104,10 @@ function NewPostComposer() {
 
   const removeResourceCard = (id: string) => {
     if (hasPaidOrders || (isPickingResourceFile && editingResourceId === id)) return;
-    const card = draft.resource.cards.find((candidate) => candidate.id === id);
-    offerUndo(card?.title.trim() || 'resource');
-    setDraft((current) => ({
-      ...current,
-      resource: {
-        ...current.resource,
-        cardAuthoringMode: 'cards',
-        cards: current.resource.cards.filter((card) => card.id !== id),
-        accessMode: current.resource.cards.length === 1 && !current.resource.allowRemix
-          ? 'none'
-          : current.resource.accessMode,
-      },
-    }));
+    const taken = takeComposerResourceCard(draft, id);
+    if (!taken) return;
+    offerUndo(taken.removal.card.title.trim() || 'resource', taken.removal);
+    setDraft((current) => takeComposerResourceCard(current, id)?.draft ?? current);
     if (editingResourceId === id) {
       setEditingResourceId(null);
       setResourceEditorCard(null);
@@ -3284,9 +3263,18 @@ function NewPostComposer() {
           setComposerStep('details');
         }}
       />
+      {/* The page's own fields, its undo offer and its footer give way to the keyboard together. On
+          Android the area shortens by the keyboard, so the scroll view keeps the focused field in view
+          and the offer and the footer ride above the keys; on the Pixel 9a emulator a focused Title,
+          Story, post text, package summary and price all sat under the keys without it (2026-10-22),
+          the resource sheet's area being the only one in this file. On iOS the scroll view's own
+          insets make the room and the offer and the footer stay under the keys. `reservedBottomInset`:
+          the footer already pads that much for the screen's edge, which the keyboard covers. */}
+      <KeyboardAvoidingArea iosScrollViewAdjustsInsets reservedBottomInset={bottomInset} testID="composer-keyboard-area">
       <ScrollView
         ref={scrollRef}
         contentInsetAdjustmentBehavior="never"
+        automaticallyAdjustKeyboardInsets
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
@@ -3401,6 +3389,7 @@ function NewPostComposer() {
         onVisibility={() => setIsVisibilityOpen(true)}
         onPublish={submitPost}
       />
+      </KeyboardAvoidingArea>
 
       <ResourceComposerSheet
         mode={resourceSheetMode}
