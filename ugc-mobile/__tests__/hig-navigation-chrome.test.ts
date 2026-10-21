@@ -161,16 +161,6 @@ describe('HIG toolbars — view titles', () => {
       .filter(({ text, title }) => sameWords(text, title))
       .map(({ kind, text, title, file }) => `${file}: ${kind} "${text}" under the "${title}" header`))];
 
-    /**
-     * Two pages whose heading is their header's words. A page heading is the page's shape
-     * as an eyebrow is not, so these wait for the owner's call (redundant-ui audit,
-     * 2026-10-21, "For the owner to decide"); a new page cannot join them.
-     */
-    const HEADINGS_LEFT_FOR_THE_OWNER = [
-      'app/ai-data-sharing.tsx: heading "AI data sharing." under the "AI Data Sharing" header',
-      'app/blocked-users.tsx: heading "Blocked users." under the "Blocked Users" header',
-    ];
-
     it('reads every form of eyebrow and a written heading', () => {
       expect(pageWords([
         '<SectionTitle eyebrow="Settings" title="Settings." />',
@@ -195,12 +185,14 @@ describe('HIG toolbars — view titles', () => {
       // Templates and a creator's page are drawn in components the route renders.
       expect(read.filter((words) => words.file === 'components/media-template-screens.tsx').length).toBeGreaterThan(0);
       expect(read.filter((words) => words.kind === 'eyebrow').length).toBeGreaterThan(9);
+      // And the written page headings, so the check below is not passing on an empty read.
+      expect(read.filter((words) => words.kind === 'heading').length).toBeGreaterThan(5);
     });
 
+    // AI Data Sharing and Blocked Users were the last two, by the owner's call on A8 (2026-10-21):
+    // a page heading says the page in words of its own, as Settings' "Account settings." does.
     it('never repeats a view title in an eyebrow or a written page heading', () => {
-      expect(repeats.filter((repeat) => !HEADINGS_LEFT_FOR_THE_OWNER.includes(repeat))).toEqual([]);
-      // Taken off as the owner decides; a page whose heading changes leaves the list.
-      expect(HEADINGS_LEFT_FOR_THE_OWNER.filter((repeat) => !repeats.includes(repeat))).toEqual([]);
+      expect(repeats).toEqual([]);
     });
   });
 });

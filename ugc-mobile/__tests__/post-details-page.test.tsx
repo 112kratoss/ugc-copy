@@ -314,7 +314,11 @@ describe('PostDetailsPage', () => {
 
     expect(pressable(tree, 'Remix')).toBeDefined();
     expect(pressable(tree, 'Recreate')).toBeUndefined();
-    expect(textValues(tree)).toContain('Image · 2 comments');
+    // The Comments button carries the count, so the line under the title leaves it out (A5, 2026-10-21),
+    // and a screen reader hears it from the button.
+    expect(textValues(tree)).toContain('Image');
+    expect(textValues(tree).filter((value) => value.includes('comment'))).toEqual([]);
+    expect(pressable(tree, 'Comments').props.accessibilityValue).toEqual({ text: '2 comments' });
 
     renderer.act(() => {
       pressable(tree, 'Remix').props.onPress();
@@ -324,6 +328,22 @@ describe('PostDetailsPage', () => {
     expect(onRecreate).toHaveBeenCalledWith(expect.objectContaining({ id: 'post-1' }));
     expect(onCreatorOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'post-1' }));
     expect(onComments).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives a post without comments an empty value, never none: Android keeps a value set back to undefined', () => {
+    const tree = render(page({ onComments: vi.fn(), item: showcaseItem({ commentCount: 0 }) }));
+
+    expect(pressable(tree, 'Comments').props.accessibilityValue).toEqual({ text: '' });
+  });
+
+  it.each([
+    ['no way to open the comments', {}],
+    ['a post that takes no comments', { onComments: vi.fn(), item: showcaseItem({ canComment: false }) }],
+  ])('keeps the comment count on the line under the title where there is no Comments button: %s', (_case, props) => {
+    const tree = render(page(props));
+
+    expect(pressable(tree, 'Comments')).toBeUndefined();
+    expect(textValues(tree)).toContain('Image · 2 comments');
   });
 
   it('has no page-level primary for a locked paid post', () => {

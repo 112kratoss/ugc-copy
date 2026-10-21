@@ -102,7 +102,7 @@ export default function BlockedUsersScreen() {
     <Screen>
       <SectionTitle
         eyebrow="Privacy"
-        title="Blocked users."
+        title="Your feed, your rules."
         body="Someone you block cannot follow you, and their posts stay out of your feeds. Unblock them to undo that."
       />
 

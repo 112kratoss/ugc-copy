@@ -35,8 +35,8 @@ export default function AiDataSharingScreen() {
     <Screen>
       <SectionTitle
         eyebrow="Privacy"
-        title="AI data sharing."
-        body="What Magicbooklet sends to AI services to make your images and videos, and your choice about it."
+        title="Your data, your choice."
+        body="What Magicbooklet sends to AI services to make your images and videos."
       />
 
       <InfoCard

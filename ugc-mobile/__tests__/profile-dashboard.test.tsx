@@ -133,7 +133,6 @@ vi.mock('lucide-react-native', () => ({
   Play: (props: Record<string, unknown>) => React.createElement('play-icon', props),
   RefreshCw: (props: Record<string, unknown>) => React.createElement('refresh-cw-icon', props),
   Sparkles: (props: Record<string, unknown>) => React.createElement('sparkles-icon', props),
-  Store: (props: Record<string, unknown>) => React.createElement('store-icon', props),
   UserRound: (props: Record<string, unknown>) => React.createElement('user-round-icon', props),
   Wallet: (props: Record<string, unknown>) => React.createElement('wallet-icon', props),
 }));
@@ -1041,23 +1040,13 @@ describe('ProfileDashboard media tiles routing', () => {
     const walletCard = findPressableByText(tree!.root, 'Wallet');
     expect(walletCard.props.accessibilityRole).toBe('button');
     expect(walletCard.findAll((node) => String(node.type) === 'chevron-right-icon')).toHaveLength(1);
+    // The profile's one way to Recipe Sales, so it says where it goes: the row under it that
+    // opened the same screen is gone, and the side menu has the other way (A4, 2026-10-21).
+    expect(walletCard.props.accessibilityHint).toBe('Opens Recipe Sales');
+    expect(tree!.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Open seller dashboard')).toHaveLength(0);
 
     renderer.act(() => {
       walletCard.props.onPress();
-    });
-
-    expect(routerState.push).toHaveBeenCalledWith('/seller-dashboard');
-  });
-
-  it('keeps Your Sales routed to the seller earnings screen', () => {
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(<ProfileDashboard />);
-    });
-
-    const sellerDashboard = findPressableByText(tree!.root, 'Recipe Sales');
-    renderer.act(() => {
-      sellerDashboard.props.onPress();
     });
 
     expect(routerState.push).toHaveBeenCalledWith('/seller-dashboard');

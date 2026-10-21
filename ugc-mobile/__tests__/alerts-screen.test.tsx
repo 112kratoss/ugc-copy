@@ -255,6 +255,15 @@ describe('Alerts, signed out', () => {
     expect(byType(tree, 'refresh-control')).toEqual([]);
     expect(mocks.api.listMobileNotifications).not.toHaveBeenCalled();
   });
+
+  // The block says to sign in, so the line under the title no longer says it first (A6, 2026-10-21).
+  it('says once that signing in comes first', async () => {
+    mocks.user = null;
+    const { tree } = await renderAlerts();
+
+    expect(statusTitles(tree)).toContain('Sign in required');
+    expect(texts(tree)).not.toContain('Sign in to view alerts');
+  });
 });
 
 describe('the push switch (decision D8)', () => {
@@ -309,7 +318,7 @@ describe('older alerts (finding 03-9)', () => {
 
     expect(mocks.api.listMobileNotifications).toHaveBeenCalledWith({ limit: 50, before: null, beforeId: null });
     expect(alertTitles(tree)).toHaveLength(50);
-    expect(header(tree)).toBe('72 unread · 50+ alerts · Mobile');
+    expect(header(tree)).toBe('72 unread · 50+ alerts');
 
     await press(button(tree, 'Load older alerts'));
 
@@ -322,7 +331,7 @@ describe('older alerts (finding 03-9)', () => {
     });
     expect(alertTitles(tree)).toEqual(Array.from({ length: 70 }, (_, index) => `Alert ${index}`));
     // The count from the page read last, for the header and the tab's badge.
-    expect(header(tree)).toBe('71 unread · 70 alerts · Mobile');
+    expect(header(tree)).toBe('71 unread · 70 alerts');
     expect(queryClient.getQueryData(notificationBadgeQueryKey('user-1'))).toBe(71);
     // Twenty is fewer than asked for: that was the end of the list.
     expect(button(tree, 'Load older alerts')).toBeUndefined();
@@ -332,7 +341,7 @@ describe('older alerts (finding 03-9)', () => {
     const { tree } = await renderAlerts();
 
     expect(alertTitles(tree)).toHaveLength(12);
-    expect(header(tree)).toBe('3 unread · 12 alerts · Mobile');
+    expect(header(tree)).toBe('3 unread · 12 alerts');
     expect(button(tree, 'Load older alerts')).toBeUndefined();
   });
 
@@ -401,7 +410,7 @@ describe('pull to refresh (finding 03-10)', () => {
     // The older page was let go, not read again.
     expect(mocks.api.listMobileNotifications).toHaveBeenCalledTimes(1);
     expect(alertTitles(tree)).toHaveLength(50);
-    expect(header(tree)).toBe('60 unread · 50+ alerts · Mobile');
+    expect(header(tree)).toBe('60 unread · 50+ alerts');
     expect(button(tree, 'Load older alerts')).toBeDefined();
   });
 
@@ -423,7 +432,7 @@ describe('pull to refresh (finding 03-10)', () => {
 
     await act(async () => answer(alertsPage(0, 12, 2)));
     await settle();
-    expect(header(tree)).toBe('2 unread · 12 alerts · Mobile');
+    expect(header(tree)).toBe('2 unread · 12 alerts');
   });
 
   it('keeps the list drawn when a refresh fails, and says so', async () => {
