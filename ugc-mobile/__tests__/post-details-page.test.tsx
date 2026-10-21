@@ -330,6 +330,12 @@ describe('PostDetailsPage', () => {
     expect(onComments).toHaveBeenCalledTimes(1);
   });
 
+  it('gives a post without comments an empty value, never none: Android keeps a value set back to undefined', () => {
+    const tree = render(page({ onComments: vi.fn(), item: showcaseItem({ commentCount: 0 }) }));
+
+    expect(pressable(tree, 'Comments').props.accessibilityValue).toEqual({ text: '' });
+  });
+
   it.each([
     ['no way to open the comments', {}],
     ['a post that takes no comments', { onComments: vi.fn(), item: showcaseItem({ canComment: false }) }],

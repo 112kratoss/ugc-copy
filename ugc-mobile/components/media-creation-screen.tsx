@@ -3713,7 +3713,7 @@ function ImagePromptComposer({
                 <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Reference images</Text>
                 <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
               </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingHorizontal: 16, paddingRight: 16 }}>
+              <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingHorizontal: 16, paddingRight: 16 }}>
                 {sentReferences.map((media) => (
                   <Pressable
                     key={media.id}
@@ -4545,7 +4545,7 @@ function VideoCreatorComposer({
             pointerEvents={referencesLockedByFrames || referencesLockedBySubjects ? 'none' : 'auto'}
             style={{ gap: 10, opacity: referencesLockedByFrames || referencesLockedBySubjects ? 0.4 : 1 }}
           >
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
+            <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
               {draft.references.filter(isSent).map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <ReferenceMediaPreview media={media} size={72} />
@@ -4610,7 +4610,7 @@ function VideoCreatorComposer({
               <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>{subjectModeLabel}</Text>
               <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{subjects.length} / {maxSubjects}</Text>
             </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
+            <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
               {subjects.map((subject) => (
                 <Pressable key={subject.id} accessibilityRole="button" accessibilityLabel={`Open details for ${subject.displayName}, ${subject.handle}`} onPress={() => setReferenceId(subject.id)} style={({ pressed }) => ({ width: 72, gap: 4, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <SubjectPreview subject={subject} size={72} />
