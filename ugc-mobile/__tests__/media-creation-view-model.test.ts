@@ -1078,10 +1078,19 @@ describe('nameUnnamedReferences', () => {
     ]);
   });
 
-  it('passes over a place another picture answers to by mention', () => {
+  it('passes over a place another picture answers to by mention, and one it gave a picture picked before it', () => {
     // A remix whose stored picture had no handle brings it back as "@reference_2", under another name.
     const restored = { ...imageReference({ displayName: 'Reference image 2' }), handle: '@reference_2' };
-    expect(named(nameUnnamedReferences([picked('1000333161.jpg')], [restored]))).toEqual([['Reference 3', '@reference_3']]);
+    expect(named(nameUnnamedReferences([picked('1000333161.jpg'), picked('1000333162.jpg')], [restored]))).toEqual([
+      ['Reference 3', '@reference_3'],
+      ['Reference 4', '@reference_4'],
+    ]);
+  });
+
+  it('passes over a place a clip or subject answers to', () => {
+    // A video's clips and subjects take mentions too: a clip renamed "Reference 2" answers to @reference_2.
+    const clip = { displayName: 'Reference 2', handle: '@reference_2' };
+    expect(named(nameUnnamedReferences([picked('1000333161.jpg')], [imageReference()], [clip]))).toEqual([['Reference 3', '@reference_3']]);
   });
 
   it('passes over a place a picture picked with it is named for', () => {

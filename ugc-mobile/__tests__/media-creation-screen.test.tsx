@@ -6311,6 +6311,28 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(labelled(tree.root, 'Open details for Reference 4')).toBeTruthy();
       });
 
+      it('in a video draft are numbered among its pictures, past a place a clip answers to', async () => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo()]);
+        // A clip renamed "Reference 3" answers to @reference_3.
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-2',
+          catalogRevision: 'parity-rev',
+          references: [stagedMedia('hero'), stagedMedia('bottle')],
+          referenceVideos: [stagedMedia('turn', 'video', { displayName: 'Reference 3', handle: '@reference_3' })],
+        } }));
+        vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('1000333161.jpg')] as never);
+        vi.mocked(uploadPickedMedia).mockImplementation(async (uri) => uploaded(uri.replace('file:///', '')));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await renderer.act(async () => { await findPressableByLabelPrefix(tree.root, 'Add Images ').props.onPress(); });
+        await settle();
+        expect(storedDrafts().video.references.map((media: { displayName: string; handle: string }) => [media.displayName, media.handle])).toEqual([
+          ['Hero', '@hero'],
+          ['Bottle', '@bottle'],
+          ['Reference 4', '@reference_4'],
+        ]);
+      });
+
       it('made into a subject take the next place no subject answers to, where one before it was removed', async () => {
         catalogState.catalog = parityCatalog([parityKlingO3()]);
         memory.set(ordinaryKey, savedDrafts({ video: {
