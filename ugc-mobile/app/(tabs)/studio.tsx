@@ -394,7 +394,6 @@ function NotificationHeader({
   canMarkAllRead: boolean;
 }) {
   const alertLabel = hasOlder ? `${totalCount}+ alerts` : totalCount === 1 ? '1 alert' : `${totalCount} alerts`;
-  const deliveryLabel = isRefreshing ? 'Syncing' : 'Mobile';
 
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -406,14 +405,16 @@ function NotificationHeader({
         >
           Alerts
         </AppText>
-        <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>
-          {signedIn
-            // Middle dots, matching the metadata separator used on feed rows
-            // and post details. A pipe reads as a table rule rather than as
-            // punctuation between related facts.
-            ? `${unreadCount} unread · ${alertLabel} · ${deliveryLabel}`
-            : 'Sign in to view alerts'}
-        </AppText>
+        {/* Signed out, the block under the header says to sign in (A6, 2026-10-21). */}
+        {signedIn ? (
+          <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>
+            {/* Middle dots, matching the metadata separator used on feed rows
+                and post details. A pipe reads as a table rule rather than as
+                punctuation between related facts. "Syncing" while a read runs;
+                otherwise nothing, where "Mobile" named nothing. */}
+            {`${unreadCount} unread · ${alertLabel}${isRefreshing ? ' · Syncing' : ''}`}
+          </AppText>
+        ) : null}
       </View>
       {signedIn ? (
         <View style={{ flexDirection: 'row', gap: 9 }}>
