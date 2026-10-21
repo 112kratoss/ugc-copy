@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Animated, Pressable, Text, View } from 'react-native';
+import { Animated, Keyboard, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Overlay } from '@/components/overlay-host';
@@ -36,12 +36,18 @@ import { useHardwareBack } from '@/lib/use-hardware-back';
  * moment a row is chosen or the sheet is cancelled, and the request is cleared
  * once the panel has left the screen. A new request arriving mid-exit simply
  * turns the same surface around.
+ *
+ * The panel rises from the foot of the window, where the keyboard of the page
+ * it opens over would cover its rows, with the keys still typing into the field
+ * behind the scrim. A Modal took the focus by being a window of its own; an
+ * overlay is not one, so the sheet puts that keyboard away as it opens.
  */
 export function ActionSheetHost() {
   const [request, setRequest] = useState<ActionSheetRequest | null>(null);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => registerActionSheetPresenter((next) => {
+    Keyboard.dismiss();
     setRequest(next);
     setVisible(true);
   }), []);

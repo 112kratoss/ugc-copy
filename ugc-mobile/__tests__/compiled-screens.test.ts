@@ -18,6 +18,9 @@ const SCREENS = [
   ['components/home-dashboard.tsx', 'HomeDashboard'],
   ['app/(tabs)/showcase.tsx', 'ShowcaseScreen'],
   ['app/viewer.tsx', 'ImmersivePreviewViewerScreen'],
+  // Re-rendered on every keystroke of the prompt (2026-10-21: a rail's scroll ref read beside
+  // its other fields during render knocked it back to uncompiled).
+  ['components/media-creation-screen.tsx', 'ImagePromptComposer'],
 ] as const;
 
 const metroCaller = {
