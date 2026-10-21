@@ -4591,11 +4591,6 @@ function VideoCreatorComposer({
                 Open a reference to prepare it with Seedance once. Every run then reuses the prepared asset instead of sending the file again.
               </Text>
             ) : null}
-            {model?.inputs.combineFramesWithReferences && supportsStartFrame ? (
-              <View style={{ maxWidth: 170 }}>
-                <CompactReferenceSlot testID="video-optional-first-frame-slot" title="First frame" helper="Optional with reusable refs" media={draft.startFrame} isUploading={isUploading} progress={upload?.target === 'start-frame' ? upload : null} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
-              </View>
-            ) : null}
             {preparedVoiceLimit > 0 ? (
               <PreparedReferenceIds title="Prepared voice IDs" accessibilityLabel="Prepared voice ID" placeholder="Paste prepared voice ID" items={draft.preparedAudioIds} max={preparedVoiceLimit} onChange={(items) => onChange({ ...draft, preparedAudioIds: items })} />
             ) : null}

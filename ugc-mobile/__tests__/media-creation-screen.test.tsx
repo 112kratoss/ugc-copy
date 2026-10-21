@@ -5976,6 +5976,33 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(text(tree)).toContain('Porch was removed from this draft.');
       });
 
+      it('draws a Wan 2.7 start frame once, in the frames group, and sends it beside the references', async () => {
+        catalogState.catalog = parityCatalog([liveWan27()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'wan-2.7',
+          catalogRevision: 'parity-rev',
+          prompt: 'The product from @look turns on the doorstep',
+          references: [stagedMedia('look')],
+          startFrame: stagedMedia('doorstep'),
+        } }));
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        // The frames group's slot is the one place the start frame is drawn: a second tile in the
+        // references area, bound to the same frame, only said it again.
+        expect(tree.root.findByProps({ testID: 'video-start-frame-slot' }).props).toMatchObject({ disabled: false, media: expect.objectContaining({ id: 'doorstep' }) });
+        expect(tree.root.findAllByProps({ testID: 'video-optional-first-frame-slot' })).toHaveLength(0);
+        expect(pressables(tree.root).filter((node) => node.props.accessibilityLabel === 'Open details for Doorstep')).toHaveLength(1);
+
+        await pressGenerate(tree);
+        const inputs = (authState.api.startGeneration.mock.calls[0][0] as { inputs: Array<Record<string, unknown>> }).inputs;
+        expect(inputs).toEqual(expect.arrayContaining([
+          expect.objectContaining({ slot: 'imageReferences', url: 'https://cdn.example.com/look.png', handle: '@look' }),
+          expect.objectContaining({ slot: 'startFrame', url: 'https://cdn.example.com/doorstep.png' }),
+        ]));
+        expect(inputs).toHaveLength(2);
+      });
+
       it('lets a run go without a swept upload it leaves out, and marks that upload where it waits', async () => {
         catalogState.catalog = parityCatalog([paritySeedanceOneFive()]);
         memory.set(ordinaryKey, savedDrafts({ video: {
