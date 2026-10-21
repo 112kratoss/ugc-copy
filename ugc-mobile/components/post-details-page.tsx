@@ -216,7 +216,7 @@ export function PostDetailsPage({
   // The slide shows a run's first file, which is all the library sends; a run
   // of several lists every one under its facts.
   const outputCount = details.generationInfo?.outputCount ?? 0;
-  const meta = buildPostDetailsMeta(item);
+  const meta = buildPostDetailsMeta(item, undefined, { commentsOnButton: Boolean(onComments && item.canComment) });
   const canOpenCreator = Boolean(onCreatorOpen && item.creatorUsername);
   const commentCount = Math.max(0, item.commentCount ?? 0);
   // A text post derives both `prompt` and `body` from the same paragraph, so

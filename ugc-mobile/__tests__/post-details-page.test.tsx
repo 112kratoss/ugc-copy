@@ -314,7 +314,9 @@ describe('PostDetailsPage', () => {
 
     expect(pressable(tree, 'Remix')).toBeDefined();
     expect(pressable(tree, 'Recreate')).toBeUndefined();
-    expect(textValues(tree)).toContain('Image · 2 comments');
+    // The Comments button carries the count, so the line under the title leaves it out (A5, 2026-10-21).
+    expect(textValues(tree)).toContain('Image');
+    expect(textValues(tree).filter((value) => value.includes('comment'))).toEqual([]);
 
     renderer.act(() => {
       pressable(tree, 'Remix').props.onPress();

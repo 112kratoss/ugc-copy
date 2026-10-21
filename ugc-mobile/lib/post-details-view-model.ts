@@ -38,7 +38,15 @@ function isOwnTool(label: string) {
   return label.replace(/[\s-]+/g, '').toLowerCase() === 'magicbooklet';
 }
 
-export function buildPostDetailsMeta(item: ImmersivePreviewItem, now = new Date()): PostDetailsMeta {
+/**
+ * `commentsOnButton`: the page draws a Comments button, which carries the count ("3"), so the
+ * line leaves it out rather than say it twice.
+ */
+export function buildPostDetailsMeta(
+  item: ImmersivePreviewItem,
+  now = new Date(),
+  { commentsOnButton = false }: { commentsOnButton?: boolean } = {},
+): PostDetailsMeta {
   const details = item.details;
   const parts: string[] = [];
 
@@ -52,7 +60,7 @@ export function buildPostDetailsMeta(item: ImmersivePreviewItem, now = new Date(
   if (remixCount > 0) parts.push(countLabel(remixCount, 'remix', 'remixes'));
 
   const commentCount = Math.max(0, item.commentCount ?? 0);
-  if (commentCount > 0) parts.push(countLabel(commentCount, 'comment', 'comments'));
+  if (commentCount > 0 && !commentsOnButton) parts.push(countLabel(commentCount, 'comment', 'comments'));
 
   // The model by the feed card's rule (`homeModelLabel`, decision 13,
   // 2026-10-17): its display name, never a slug, and none for a text post or

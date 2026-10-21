@@ -118,6 +118,15 @@ describe('buildPostDetailsMeta', () => {
     ]);
   });
 
+  // The Comments button carries the count where it is drawn ("3"), so the line under the title
+  // does not say it again (owner's call on A5, 2026-10-21).
+  it('leaves the comment count to the Comments button where the page draws one', () => {
+    const item = showcaseItem({ saveCount: 2, commentCount: 3 });
+
+    expect(buildPostDetailsMeta(item, NOW, { commentsOnButton: true }).metaParts).toEqual(['Image', '2 saves']);
+    expect(buildPostDetailsMeta(item, NOW).metaParts).toEqual(['Image', '2 saves', '3 comments']);
+  });
+
   it('does not credit the app to itself', () => {
     const item = showcaseItem({ details: { ...showcaseItem().details!, toolLabel: 'magicbooklet' } });
 
