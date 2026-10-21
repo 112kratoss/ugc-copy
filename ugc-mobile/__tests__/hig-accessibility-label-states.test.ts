@@ -4,6 +4,8 @@ import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { canBeAbsent, canBeNullish, unwrap } from './fixtures/jsx-syntax';
+
 /**
  * What a screen reader is told has to follow the screen, and on Android it
  * does not when a label or value goes back to `undefined`. React Native 0.83's
@@ -79,63 +81,6 @@ function parse(name: string, source: string): ts.SourceFile {
 
 function lineOf(sourceFile: ts.SourceFile, node: ts.Node): number {
   return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-}
-
-function unwrap(expression: ts.Expression): ts.Expression {
-  let current = expression;
-  while (
-    ts.isParenthesizedExpression(current)
-    || ts.isAsExpression(current)
-    || ts.isSatisfiesExpression(current)
-    || ts.isNonNullExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
-}
-
-/** Whether the expression can come out `undefined`, `null` or `false` by its own syntax. */
-function canBeAbsent(expression: ts.Expression): boolean {
-  const node = unwrap(expression);
-  if (node.kind === ts.SyntaxKind.NullKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return true;
-  if (ts.isIdentifier(node) && node.text === 'undefined') return true;
-  // `item?.title` is undefined whenever `item` is.
-  if (ts.isVoidExpression(node) || ts.isOptionalChain(node)) return true;
-  if (ts.isConditionalExpression(node)) return canBeAbsent(node.whenTrue) || canBeAbsent(node.whenFalse);
-  if (ts.isBinaryExpression(node)) {
-    switch (node.operatorToken.kind) {
-      // `ready && 'Done'` is `false` (or `undefined`, or `0`) whenever it is not 'Done'.
-      case ts.SyntaxKind.AmpersandAmpersandToken:
-        return true;
-      case ts.SyntaxKind.BarBarToken:
-      case ts.SyntaxKind.QuestionQuestionToken:
-        return canBeAbsent(node.right);
-      default:
-        return false;
-    }
-  }
-  return false;
-}
-
-/** Whether the expression can come out `undefined` or `null` by its own syntax: a state's `false` is a value. */
-function canBeNullish(expression: ts.Expression): boolean {
-  const node = unwrap(expression);
-  if (node.kind === ts.SyntaxKind.NullKeyword) return true;
-  if (ts.isIdentifier(node) && node.text === 'undefined') return true;
-  if (ts.isVoidExpression(node) || ts.isOptionalChain(node)) return true;
-  if (ts.isConditionalExpression(node)) return canBeNullish(node.whenTrue) || canBeNullish(node.whenFalse);
-  if (ts.isBinaryExpression(node)) {
-    switch (node.operatorToken.kind) {
-      case ts.SyntaxKind.AmpersandAmpersandToken:
-        return canBeNullish(node.left) || canBeNullish(node.right);
-      case ts.SyntaxKind.BarBarToken:
-      case ts.SyntaxKind.QuestionQuestionToken:
-        return canBeNullish(node.right);
-      default:
-        return false;
-    }
-  }
-  return false;
 }
 
 /** The held attributes in one file, and those of them that can be absent, as `file:line attribute`. */

@@ -4,6 +4,8 @@ import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { canBeAbsent, unwrap } from './fixtures/jsx-syntax';
+
 /**
  * A scroll view decides for itself what a tap does while a field's keyboard is
  * up, and its parent's answer does not reach it. React Native 0.83's ScrollView
@@ -21,9 +23,13 @@ import { describe, expect, it } from 'vitest';
  * A horizontal scroller is nearly always a row inside a page or a sheet, so
  * every one says what a tap does with the keyboard up. 'handled' is the usual
  * answer: a press on a control in the row answers, and the keyboard stays; a
- * touch on nothing in particular still puts it away. 'never' is for a row where
- * spending the first tap on the keyboard is the point, with a comment saying
- * why. The FlatList family renders a ScrollView, so it is read too.
+ * touch on nothing in particular still puts it away. 'never' is for a row that
+ * keeps the default on purpose, or for now, with a comment saying why: the post
+ * page's pager holds the comment field, and answering taps there is a change of
+ * its own (2026-10-21). The FlatList family renders a ScrollView, so it is read
+ * too. A spread cannot be read here: one that supplies `horizontal` is not seen,
+ * and one written after the prop fails the row, since in JSX the later spread
+ * wins.
  */
 const SCROLLER = /(?:ScrollView|FlatList|SectionList|FlashList)$/;
 const DECISIONS = new Set(['always', 'handled', 'never']);
@@ -48,16 +54,27 @@ function isHorizontal(attribute: ts.JsxAttribute | undefined): boolean {
   return !(value && ts.isJsxExpression(value) && value.expression?.kind === ts.SyntaxKind.FalseKeyword);
 }
 
-/** A string the prop takes, or an expression that cannot be `undefined` or `null` by its own syntax. */
+/**
+ * A string the prop takes, or an expression that cannot come out `undefined`, `null` or `false` by
+ * its own syntax: React Native reads each of those as the default. The boolean form is out too,
+ * written bare or in braces: React Native deprecates it and warns at mount.
+ */
 function decides(attribute: ts.JsxAttribute | undefined): boolean {
   const value = attribute?.initializer;
-  // Absent, or bare: the boolean form, which React Native deprecates and warns about.
   if (!value) return false;
   if (ts.isStringLiteral(value)) return DECISIONS.has(value.text);
   const expression = ts.isJsxExpression(value) ? value.expression : undefined;
-  if (!expression) return false;
-  if (expression.kind === ts.SyntaxKind.NullKeyword) return false;
-  return !(ts.isIdentifier(expression) && expression.text === 'undefined');
+  return expression !== undefined && decidesExpression(expression);
+}
+
+function decidesExpression(expression: ts.Expression): boolean {
+  const node = unwrap(expression);
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return DECISIONS.has(node.text);
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return false;
+  // Each arm answers for itself. A value read from elsewhere cannot be read here, so it passes;
+  // React Native's own type allows `undefined` and the booleans, so a forwarded prop is not held.
+  if (ts.isConditionalExpression(node)) return decidesExpression(node.whenTrue) && decidesExpression(node.whenFalse);
+  return !canBeAbsent(node);
 }
 
 /** The horizontal scrollers in one file, and those that leave a tap to the default, as `file:line <Tag>`. */
@@ -67,13 +84,17 @@ function sweep(name: string, source: string) {
   const undecided: string[] = [];
   const visit = (node: ts.Node) => {
     if ((ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) && SCROLLER.test(node.tagName.getText(sourceFile))) {
-      const attributes = node.attributes.properties.filter(ts.isJsxAttribute);
+      const properties = node.attributes.properties;
+      const attributes = properties.filter(ts.isJsxAttribute);
       const named = (wanted: string) => attributes.find((attribute) => attribute.name.getText(sourceFile) === wanted);
       if (isHorizontal(named('horizontal'))) {
         const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
         const where = `${name}:${line} <${node.tagName.getText(sourceFile)}>`;
         horizontal.push(where);
-        if (!decides(named('keyboardShouldPersistTaps'))) undecided.push(where);
+        const persists = named('keyboardShouldPersistTaps');
+        // In JSX the later spread wins, so one written after the prop can take it back unseen.
+        const overridden = persists !== undefined && properties.slice(properties.indexOf(persists) + 1).some(ts.isJsxSpreadAttribute);
+        if (!decides(persists) || overridden) undecided.push(where);
       }
     }
     ts.forEachChild(node, visit);
@@ -103,9 +124,24 @@ describe('keyboard taps — a horizontal scroller says what a tap does while the
       '<ScrollView horizontal keyboardShouldPersistTaps />',
       '<ScrollView horizontal keyboardShouldPersistTaps={undefined} />',
       '<ScrollView horizontal keyboardShouldPersistTaps="sometimes" />',
+      // Expressions that can come out as the default, or as the boolean form.
+      "<ScrollView horizontal keyboardShouldPersistTaps={editing ? 'handled' : undefined} />",
+      "<ScrollView horizontal keyboardShouldPersistTaps={editing ? 'handled' : 'sometimes'} />",
+      "<ScrollView horizontal keyboardShouldPersistTaps={ready && 'handled'} />",
+      '<ScrollView horizontal keyboardShouldPersistTaps={rail?.taps} />',
+      '<ScrollView horizontal keyboardShouldPersistTaps={void 0} />',
+      '<ScrollView horizontal keyboardShouldPersistTaps={(undefined)} />',
+      '<ScrollView horizontal keyboardShouldPersistTaps={true} />',
+      '<ScrollView horizontal keyboardShouldPersistTaps={false} />',
+      // A spread after the prop takes it back.
+      '<ScrollView horizontal keyboardShouldPersistTaps="handled" {...rest} />',
+      // A page that keeps taps, around a row that does not: the shape of the fault.
+      '<ScrollView keyboardShouldPersistTaps="handled">\n  <ScrollView horizontal />\n</ScrollView>',
     ];
     for (const source of undecided) {
-      expect(sweep('case.tsx', source), source).toEqual({ horizontal: ['case.tsx:1 ' + source.match(/<[\w.]+/)![0] + '>'], undecided: [expect.any(String)] });
+      const result = sweep('case.tsx', source);
+      expect(result.horizontal, source).toHaveLength(1);
+      expect(result.undecided, source).toEqual(result.horizontal);
     }
   });
 
@@ -116,6 +152,7 @@ describe('keyboard taps — a horizontal scroller says what a tap does while the
       '<FlatList horizontal keyboardShouldPersistTaps="handled" data={pages} renderItem={renderPage} />',
       '<ScrollView horizontal keyboardShouldPersistTaps="never" />',
       "<ScrollView horizontal keyboardShouldPersistTaps={editing ? 'handled' : 'never'} />",
+      "<ScrollView horizontal keyboardShouldPersistTaps={'handled'} />",
     ];
     for (const source of decided) expect(sweep('case.tsx', source), source).toEqual({ horizontal: [expect.any(String)], undecided: [] });
 
@@ -132,9 +169,9 @@ describe('keyboard taps — a horizontal scroller says what a tap does while the
     // A positive control: a sweep that parsed nothing would pass the last test.
     const horizontal = tree.flatMap((file) => file.horizontal);
     expect(horizontal.length).toBeGreaterThanOrEqual(20);
-    // The creator's rails and chip rows, and the post composer's two rows.
+    // The creator's rails and chip rows, and the post composer's rows.
     expect(horizontal.filter((where) => where.startsWith('components/media-creation-screen.tsx:')).length).toBeGreaterThanOrEqual(7);
-    expect(horizontal.filter((where) => where.startsWith('app/post/new.tsx:')).length).toBe(2);
+    expect(horizontal.filter((where) => where.startsWith('app/post/new.tsx:')).length).toBeGreaterThanOrEqual(2);
   });
 
   it('finds none in app/, components/ or lib/ that leaves it to the default', () => {

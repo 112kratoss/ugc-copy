@@ -263,6 +263,13 @@ describe('S11 — a removal can be taken back', () => {
     expect(composer.indexOf('<PostComposerFooter', barMount)).toBeGreaterThan(barMount);
   });
 
+  // The bar sits above the footer, which a raised keyboard covers, and the media
+  // row answers its × with the keyboard up, so the offer puts the keyboard away.
+  it('puts the keyboard away, so an offer made mid-typing is seen', () => {
+    const body = composer.slice(composer.indexOf('const offerUndo = ('));
+    expect(body.slice(0, body.indexOf('\n  };'))).toContain('Keyboard.dismiss();');
+  });
+
   // The consistency rule: a reversal offered on one control and not the next is
   // a bug, not a choice. Every removal that edits the draft records one.
   it('is offered by every removal that edits the draft', () => {

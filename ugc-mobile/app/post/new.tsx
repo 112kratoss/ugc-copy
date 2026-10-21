@@ -2908,9 +2908,13 @@ function NewPostComposer() {
    * Hand the draft that is about to be destroyed to the undo offer, and start
    * the clock on it. Everything that removes part of the draft goes through
    * here, so the reversal is the same one everywhere rather than a courtesy on
-   * whichever control someone remembered.
+   * whichever control someone remembered. The offer is drawn above the footer,
+   * which a raised keyboard covers, so the keyboard goes first: the media row
+   * answers its × with the keyboard up (2026-10-21), so a removal can happen
+   * mid-typing, and an offer under the keys is an offer nobody sees.
    */
   const offerUndo = (label: string) => {
+    Keyboard.dismiss();
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     setUndoEntry({ label, snapshot: draft, scrollY: scrollYRef.current });
     undoTimerRef.current = setTimeout(() => setUndoEntry(null), COMPOSER_UNDO_WINDOW_MS);
