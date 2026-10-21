@@ -113,6 +113,7 @@ import {
   createMediaDraftFromUpload,
   createSubjectDraft,
   getMotionDuration,
+  nameUnnamedReferences,
   REMIX_RESTORE_WARNING_MESSAGE,
   renameMediaDraft,
   renameSubjectDraft,
@@ -1689,9 +1690,9 @@ function IdentityCreationScreen({
         ? `Added ${remainingSlots} reference${remainingSlots === 1 ? '' : 's'} to stay within this model's ${maxImages}-image limit.`
         : null));
       if (uploaded.length === 0) return;
-      // Named after their files, so the same photo picked twice, or two files named alike, would
-      // otherwise answer to one @mention.
-      const withHandles = (existing: MediaDraft[]) => uploaded.reduce<MediaDraft[]>(
+      // Named after their files (or by their place, where a file name has no words in it), so the same
+      // photo picked twice, or two files named alike, would otherwise answer to one @mention.
+      const withHandles = (existing: MediaDraft[]) => nameUnnamedReferences(uploaded, existing).reduce<MediaDraft[]>(
         (added, media) => [...added, withUniqueReferenceHandle(media, [...existing, ...added])],
         [],
       );

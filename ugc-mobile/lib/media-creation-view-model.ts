@@ -686,6 +686,31 @@ export function createMediaDraftFromUpload(
   };
 }
 
+/**
+ * Picked pictures, named for the draft they join. A picture named after its file is kept so; one
+ * whose file name has no letters in it is named by its place instead, as a subject is ("Subject 1"):
+ * Android's system photo picker names a picture by its media id ("1000333161.jpg"), and a reference
+ * called "1000333161" answered to "@1000333161". The place is the first "Reference N" no reference
+ * in the draft, or picked with it, holds.
+ */
+export function nameUnnamedReferences(
+  added: MediaDraft[],
+  existing: ReadonlyArray<Pick<MediaDraft, 'displayName'>>,
+): MediaDraft[] {
+  const taken = new Set(existing.map((media) => media.displayName.trim().toLowerCase()));
+  return added.map((media) => {
+    if (/\p{L}/u.test(media.displayName)) {
+      taken.add(media.displayName.trim().toLowerCase());
+      return media;
+    }
+    let place = 1;
+    while (taken.has(`reference ${place}`)) place += 1;
+    const displayName = `Reference ${place}`;
+    taken.add(displayName.toLowerCase());
+    return { ...media, displayName, handle: media.handle === undefined ? undefined : `@${toHandleBase(displayName)}` };
+  });
+}
+
 function stringSetting(settings: Record<string, unknown>, key: string) {
   const value = settings[key];
   return typeof value === 'string' && value.trim().length > 0 ? value : null;

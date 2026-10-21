@@ -2585,6 +2585,39 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(collectText(tree!.root).some((item) => item.includes('@logo_sheet'))).toBe(true);
   });
 
+  // Android's system photo picker names a picture by its media id ("1000333161.jpg"), which named the
+  // reference "1000333161" (the owner's S24, 2026-10-21).
+  it('names a picked picture whose file name has no words by its place, and keeps a name with words', async () => {
+    const picked = (fileName: string) => ({ uri: `file:///${fileName}`, fileName, mimeType: 'image/jpeg', fileSize: 2048 } as never);
+    vi.mocked(pickMediaList).mockResolvedValueOnce([picked('1000333161.jpg'), picked('Bottle_shot.jpg')]);
+    vi.mocked(uploadPickedMedia).mockImplementation(async (uri: string) => {
+      const fileName = uri.replace('file:///', '');
+      return { signedUrl: `https://cdn.example.com/${fileName}`, storagePath: `uploads/user/${fileName}`, mimeType: 'image/jpeg', fileName, kind: 'image', durationSeconds: null, sizeBytes: 2048 };
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Reference').props.onPress();
+    });
+
+    const opened = (name: string) => tree!.root.findAllByProps({ accessibilityLabel: `Open details for ${name}` }).length > 0;
+    expect([opened('Reference 1'), opened('Bottle shot'), opened('1000333161')]).toEqual([true, true, false]);
+
+    // The next one takes the next free place, and answers to its own mention.
+    vi.mocked(pickMediaList).mockResolvedValueOnce([picked('1000333162.jpg')]);
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Reference').props.onPress();
+    });
+    expect(opened('Reference 2')).toBe(true);
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Open details for Reference 2' }).props.onPress();
+    });
+    expect(collectText(tree!.root)).toContain('Insert @reference_2');
+  });
+
   it('suggests named references after @ and replaces the active query at the caret', async () => {
     vi.mocked(pickMediaList).mockResolvedValue([
       { uri: 'file:///flowers.png', fileName: 'flowers.png', mimeType: 'image/png', fileSize: 2048 } as never,

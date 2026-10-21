@@ -17,6 +17,7 @@ import {
   getVideoElementSupport,
   getVisibleGenerationCheckMessages,
   hydrateCreationDraftFromRemixSource,
+  nameUnnamedReferences,
   renameMediaDraft,
   replaceMediaDraftMedia,
   replaceShotPrompt,
@@ -1043,5 +1044,38 @@ describe('extractPromptHandles', () => {
 
     expect(server).toBeDefined();
     expect(patternIn(join(repoRoot, 'lib/media-creation-view-model.ts'))).toBe(server);
+  });
+});
+
+// Android's system photo picker names a picture by its media id ("1000333161.jpg"), so a reference
+// picked through it was named "1000333161" and answered to "@1000333161" (the owner's S24, 2026-10-21).
+describe('nameUnnamedReferences', () => {
+  const picked = (fileName: string) => createMediaDraftFromUpload({
+    signedUrl: `https://cdn.example.com/${fileName}`,
+    storagePath: `uploads/user/${fileName}`,
+    mimeType: 'image/jpeg',
+    fileName,
+    kind: 'image',
+  });
+
+  it('names a picture whose file name has no letters by its place, and keeps a name with words', () => {
+    const named = nameUnnamedReferences([picked('1000333161.jpg'), picked('Bottle_shot.jpg'), picked('20261021_103000.jpg')], []);
+    expect(named.map((media) => [media.displayName, media.handle])).toEqual([
+      ['Reference 1', '@reference_1'],
+      ['Bottle shot', '@bottle_shot'],
+      ['Reference 2', '@reference_2'],
+    ]);
+  });
+
+  it('takes the first place no reference in the draft holds', () => {
+    const existing = [{ displayName: 'Reference 1' }, { displayName: 'Reference 3' }, { displayName: 'IMG 1234' }];
+    expect(nameUnnamedReferences([picked('1000333161.jpg'), picked('1000333162.jpg')], existing).map((media) => media.displayName))
+      .toEqual(['Reference 2', 'Reference 4']);
+  });
+
+  it('keeps names with letters in any script, and changes nothing else about the media', () => {
+    const [kept, renamed] = nameUnnamedReferences([picked('Café 2.jpg'), picked('1000333161.jpg')], []);
+    expect(kept.displayName).toBe('Café 2');
+    expect(renamed).toMatchObject({ fileName: '1000333161.jpg', url: 'https://cdn.example.com/1000333161.jpg', storagePath: 'uploads/user/1000333161.jpg' });
   });
 });
