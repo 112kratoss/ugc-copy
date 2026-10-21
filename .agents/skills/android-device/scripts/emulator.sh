@@ -15,6 +15,9 @@ MAIN_WT="$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktre
 LOCK="${LOCK:-${MAIN_WT:-$PWD}/../.claude/emulator-5554.lock}"
 OWNER="${LOCK_OWNER:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}"
 cmd="${1:?a command}"; shift
+# With the phone's serial exported, launch and shot would act on the owner's phone with no check that it is free.
+# lock and unlock touch only the lock file, so a hand-back still works.
+case "$cmd:$S" in lock:*|unlock:*|*:emulator-*) ;; *) echo "emulator.sh drives emulators only, and $S is not one: the phone has phone.sh" >&2; exit 2;; esac
 case "$cmd" in
   lock)
     mins="${1:-20}"
