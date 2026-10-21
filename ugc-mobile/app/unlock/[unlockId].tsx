@@ -106,7 +106,7 @@ export default function ViewerUnlockScreen() {
   if (!user) {
     return (
       <Screen>
-        <SectionTitle eyebrow="Your recipe" title="Sign in to open this recipe." body="Only the buyer account can access retained resources." />
+        <SectionTitle title="Sign in to open this recipe." body="Only the buyer account can access retained resources." />
         <PrimaryButton
           label="Sign in"
           onPress={() => router.push({
@@ -122,7 +122,6 @@ export default function ViewerUnlockScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Your recipe"
         title={activeTitle}
         body={detail
           ? `by ${detail.creatorDisplayName}`

@@ -32,7 +32,6 @@ export default function HelpScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Help & Support"
         title="We can help."
         body="Find quick guidance for creations, recipes, and contacting support."
       />

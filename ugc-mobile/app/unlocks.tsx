@@ -47,7 +47,6 @@ export default function UnlocksScreen() {
     return (
       <Screen>
         <SectionTitle
-          eyebrow="Your recipes"
           title="Sign in to see your recipes."
           body="Prompts, workflows, and files you unlock from other creators live here."
         />
@@ -71,7 +70,6 @@ export default function UnlocksScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Your recipes"
         title="Everything you have unlocked."
         body="These stay yours even if the creator later changes or removes the post."
       />

@@ -106,6 +106,26 @@ describe('HIG toolbars — view titles', () => {
     );
     expect(offenders).toEqual([]);
   });
+
+  /**
+   * A pushed screen's header already names it, so the eyebrow over its page heading
+   * says something else or nothing: "Settings" over "Account settings." under a
+   * Settings header said the screen's name twice (redundant-ui audit, 2026-10-21).
+   */
+  it('never repeats a view title in the eyebrow over its page heading', () => {
+    const screens = [...rootLayout.matchAll(/<Stack\.Screen name="([^"]+)" options=\{\{[^}]*?title: '([^']+)'/g)]
+      .map((match) => ({ name: match[1], title: match[2] }));
+    expect(screens.length).toBeGreaterThan(10);
+    const repeated = screens.flatMap(({ name, title }) => {
+      const file = [`app/${name}.tsx`, `app/${name}/index.tsx`].map((candidate) => path.join(mobileRoot, candidate))
+        .find((candidate) => files.includes(candidate));
+      if (!file) return [];
+      return [...readFileSync(file, 'utf8').matchAll(/eyebrow="([^"]+)"/g)]
+        .filter((match) => match[1].toLowerCase() === title.toLowerCase())
+        .map((match) => `${relative(file)}: "${match[1]}" under the "${title}" header`);
+    });
+    expect(repeated).toEqual([]);
+  });
 });
 
 describe('HIG toolbars — the Back control', () => {
