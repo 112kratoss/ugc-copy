@@ -3669,7 +3669,6 @@ function ImagePromptComposer({
         ) : null}
 
         <View testID="composer-action-grid" style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-          <ComposerToolbarButton icon={<ImageIcon size={16} color={theme.colors.text} />} label="Reference" onPress={onUploadReferences} disabled={isUploading || referenceLimitReached} />
           <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
           <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels(enhanceVerb, isEnhancing)} onPress={onEnhance} disabled={isEnhancing} accent />
         </View>
@@ -4378,14 +4377,6 @@ function VideoCreatorComposer({
     setReferenceId(null);
   };
 
-  const primaryReferenceAction = referenceMode === 'subjects'
-    ? onAddSubject
-    : referenceMode === 'elements'
-    ? imageLimit > 0 ? onUploadImages : videoLimit > 0 ? onUploadVideo : onUploadAudio
-    : draft.isMultiShot
-      ? onUploadStart
-      : !draft.startFrame && supportsStartFrame ? onUploadStart : !draft.endFrame && supportsEndFrame ? onUploadEnd : onUploadStart;
-  const referenceActionDisabled = isUploading || (!supportsFrames && !supportsReusable);
   const frameError = validationErrors.find((error) => /start image|start frame|end frame/i.test(error));
 
   return (
@@ -4477,7 +4468,6 @@ function VideoCreatorComposer({
       ) : null}
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-        <ComposerToolbarButton icon={<ImageIcon size={16} color={theme.colors.text} />} label="Reference" onPress={primaryReferenceAction} disabled={referenceActionDisabled} />
         <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
         <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels('Enhance', isEnhancing)} onPress={onEnhance} disabled={isEnhancing || draft.isMultiShot} accent />
       </View>
@@ -4844,14 +4834,15 @@ function MotionCreatorComposer({
           <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>Choose the character to preserve and the movement to transfer.</Text>
         </View>
         {/* Both are required whatever a slot's min says: a motion run starts with both or not at
-            all, as the checks under them and the server's start say. Kling 3.0's slots have a min of 0. */}
+            all, as the server's start says (Kling 3.0's slots have a min of 0). The panel's title and
+            the bar say so; a slot carries no badge, and an empty slot no line of its own. */}
         <View style={{ flexDirection: 'row', gap: 9 }}>
-          {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} required isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
-          {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} required isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
+          {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
+          {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
         </View>
         <View style={{ gap: 4 }}>
-          {characterError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
-          {motionError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{motionError}</Text> : null}
+          {characterError && draft.characterImage ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
+          {motionError && draft.referenceVideo ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{motionError}</Text> : null}
           {duration ? <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
           {upload?.target === 'motion-clip' && upload.cancellable ? (
             <>
@@ -4889,7 +4880,6 @@ function MotionCreatorComposer({
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-        <ComposerToolbarButton icon={<Layers size={16} color={theme.colors.text} />} label="Inputs" onPress={!draft.characterImage ? onUploadCharacter : onUploadMotion} disabled={isUploading} />
         <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
         <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels('Enhance', isEnhancing)} onPress={onEnhance} disabled={isEnhancing || !draft.prompt.trim()} accent />
       </View>
@@ -5890,7 +5880,9 @@ function GenerationWorkspace({
             </Text>
             <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11 }}>{settingsSummary}</Text>
           </View>
-          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed || attemptUnconfirmed ? 'Back to creator' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+          {/* Over an outcome the ✕ is Close: it keeps the outcome a tap away (the bar's View result),
+              where the panel's "Back to creator" clears it, so the two are not one name (A3, 2026-10-21). */}
+          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed || attemptUnconfirmed ? 'Close' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
           </Pressable>
         </View>
@@ -6039,10 +6031,8 @@ function GenerationWorkspace({
               {startedAt !== null ? (
                 <PushOfferCard key={`creation:${startedAt}`} moment="creation" occasion={`creation:${startedAt}`} />
               ) : null}
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <View style={{ flex: 1 }}><SecondaryButton label="Minimize" onPress={onMinimize} /></View>
-                <View style={{ flex: 1 }}><SecondaryButton label="Open Alerts" onPress={onOpenAlerts} /></View>
-              </View>
+              {/* The header's ✕ minimizes, as the line under the wait says. */}
+              <SecondaryButton label="Open Alerts" onPress={onOpenAlerts} />
             </View>
           )}
         </ScrollView>

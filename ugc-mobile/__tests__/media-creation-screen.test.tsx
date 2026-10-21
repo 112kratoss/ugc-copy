@@ -1197,7 +1197,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(persistentBar.props.style.bottom).toBe(32);
   });
 
-  it('shows the reference rail count and toolbar action', () => {
+  it('shows the reference rail count, and a toolbar of Templates and Enhance', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<MediaCreationScreen initialTool="image" />);
@@ -1206,19 +1206,32 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const text = collectText(tree!.root);
     expect(text).toContain('Reference images');
     expect(text).toContain('0 / 14');
-    expect(text).toContain('Reference');
-    expect(text.indexOf('Reference')).toBeLessThan(text.indexOf('Reference images'));
     const actionGrid = tree!.root.findByProps({ testID: 'composer-action-grid' });
     expect(actionGrid.props.style).toEqual(expect.objectContaining({ flexDirection: 'row', gap: 8 }));
     const actionColumns = actionGrid.findAll(
       (node) =>
         node.props.accessibilityRole === 'button' &&
-        ['Reference', 'Templates', 'Enhance · 2 credits'].includes(node.props.accessibilityLabel) &&
         node.props.style?.minHeight === 60,
     );
-    expect(actionColumns).toHaveLength(3);
+    expect(actionColumns.map((node) => node.props.accessibilityLabel)).toEqual(['Templates', 'Enhance · 2 credits']);
     const referenceRail = tree!.root.findByProps({ testID: 'image-reference-rail' });
     expect(referenceRail.props.style).not.toEqual(expect.objectContaining({ borderTopWidth: expect.any(Number) }));
+  });
+
+  // The toolbar's first button repeated the slots on the page: Image's added references as the
+  // rail's add does, Video's and Motion's could replace an attached frame or clip without asking,
+  // which their slots never do. The slots stay; every tab's toolbar is Templates and Enhance
+  // (owner's call on A1, 2026-10-21).
+  it.each(['image', 'video', 'motion'] as const)('has no toolbar button that adds what the %s slots add', (tool) => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool={tool} />);
+    });
+
+    const labels = tree!.root.findAll((node) => String(node.type) === 'pressable').map((node) => node.props.accessibilityLabel);
+    expect(labels).toContain('Templates');
+    expect(labels).not.toContain('Reference');
+    expect(labels).not.toContain('Inputs');
   });
 
   it('flushes the last keystroke before Close, without waiting for the autosave delay', async () => {
@@ -2417,7 +2430,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Reference').props.onPress();
+      await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
     });
 
     // Drawn from the picker's own copy this session, not the signed link to the whole upload.
@@ -2527,7 +2540,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Reference').props.onPress();
+      await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
     });
     const thumbnail = tree!.root.find((node) => String(node.type) === 'stable-media-image' && node.props.url === 'file:///hero.png');
     expect(thumbnail.props).toEqual(expect.objectContaining({
@@ -2571,7 +2584,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Reference').props.onPress();
+      await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
     });
     renderer.act(() => {
       tree!.root.findByProps({ accessibilityLabel: 'Open details for hero' }).props.onPress();
@@ -2604,7 +2617,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree = renderer.create(<MediaCreationScreen initialTool="image" />);
     });
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Reference').props.onPress();
+      await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
     });
 
     let promptInput = tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' });
@@ -2646,7 +2659,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree = renderer.create(<MediaCreationScreen initialTool="image" />);
     });
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Reference').props.onPress();
+      await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
     });
 
     let promptInput = tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' });
@@ -2685,7 +2698,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree = renderer.create(<MediaCreationScreen initialTool="image" />);
     });
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Reference').props.onPress();
+      await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
     });
     renderer.act(() => {
       tree!.root.findByProps({ accessibilityLabel: 'Open details for hero' }).props.onPress();
@@ -2725,7 +2738,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree = renderer.create(<MediaCreationScreen initialTool="image" />);
     });
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Reference').props.onPress();
+      await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
     });
     renderer.act(() => {
       tree!.root.findByProps({ accessibilityLabel: 'Open details for hero' }).props.onPress();
@@ -2781,7 +2794,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree = renderer.create(<MediaCreationScreen initialTool="image" />);
     });
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Reference').props.onPress();
+      await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
     });
     renderer.act(() => {
       tree!.root.findByProps({ accessibilityLabel: 'Open details for hero' }).props.onPress();
@@ -2817,7 +2830,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         tree = renderer.create(<MediaCreationScreen initialTool="image" />);
       });
       await renderer.act(async () => {
-        await findPressableByText(tree!.root, 'Reference').props.onPress();
+        await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
       });
       // Nothing has been asked of the keyboard or the back key by the page alone.
       expect(keyboardState.dismiss).not.toHaveBeenCalled();
@@ -3290,7 +3303,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         void findPressableByText(tree.root, 'Generate · 8 credits').props.onPress();
         await vi.advanceTimersByTimeAsync(0);
       });
-      renderer.act(() => { findPressableByText(tree.root, 'Minimize').props.onPress(); });
+      renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Minimize generation').props.onPress(); });
       expect(collectText(tree.root)).not.toContain('Creating image');
 
       renderer.act(() => { chip(tree, 'Orbit Max, Video').props.onPress(); });
@@ -3724,7 +3737,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     const text = collectText(tree!.root);
-    expect(text).toContain('Character image is required.');
+    // The bar's blocker asks for both inputs; the empty slots add no line of their own.
+    expect(text).not.toContain('Character image is required.');
     expect(tree!.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'creator-contextual-blocker')).toHaveLength(1);
     expect(text).not.toContain('Ready check');
     expect(text).not.toContain('Generation checks');
@@ -4077,7 +4091,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(collectText(tree.root)).toContain(OFFER_TITLE);
 
       renderer.act(() => {
-        findPressableByText(tree.root, 'Minimize').props.onPress();
+        findPressableByLabelPrefix(tree.root, 'Minimize generation').props.onPress();
       });
       renderer.act(() => {
         findPressableByText(tree.root, 'View progress').props.onPress();
@@ -4525,10 +4539,12 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(collectText(tree!.root)).toContain('Creating image');
-    expect(collectText(tree!.root)).toContain('Minimize');
+    // The header's ✕ minimizes; a Minimize button beside Open Alerts said it again (A3, 2026-10-21).
+    expect(collectText(tree!.root)).not.toContain('Minimize');
+    expect(tree!.root.findByProps({ testID: 'generation-workspace' }).findAll((node) => node.type === SecondaryButton).map((node) => node.props.label)).toEqual(['Open Alerts']);
 
     renderer.act(() => {
-      findPressableByText(tree!.root, 'Minimize').props.onPress();
+      findPressableByLabelPrefix(tree!.root, 'Minimize generation').props.onPress();
     });
     expect(collectText(tree!.root)).not.toContain('Creating image');
     expect(collectText(tree!.root)).toContain('View progress');
@@ -4620,6 +4636,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     // panel's retry is no longer a bare verb.
     expect(collectText(tree!.root)).toContain('Try again · 8 credits');
     expect(collectText(tree!.root)).toContain('Back to creator');
+    // The panel's "Back to creator" clears the failure; the header's ✕ keeps it a tap away, so it is
+    // Close, not a second "Back to creator" (A3, 2026-10-21).
+    expect(tree!.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Back to creator')).toHaveLength(1);
+    expect(findPressableByLabelPrefix(tree!.root.findByProps({ testID: 'generation-workspace' }), 'Close').props.accessibilityLabel).toBe('Close');
 
     authState.api.startGeneration.mockReturnValueOnce(new Promise(() => undefined));
     await renderer.act(async () => {
@@ -6453,18 +6473,14 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(blocker(tree)).toBe('Reference video exceeds 20s. Please choose a shorter clip.');
       });
 
-      it('for motion are replaced in place from the details sheet, and from Inputs, keeping the clip’s name', async () => {
+      it('for motion are replaced in place from the details sheet, keeping the clip’s name', async () => {
         memory.set(ordinaryKey, savedDrafts({ motion: {
           characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
           referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }),
           duration: 6,
         } }));
-        vi.mocked(pickMedia)
-          .mockResolvedValueOnce({ uri: 'file:///twirl.mp4', fileName: 'twirl.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 9000 } as never)
-          .mockResolvedValueOnce({ uri: 'file:///spin.mp4', fileName: 'spin.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 7000 } as never);
-        vi.mocked(uploadPickedMedia)
-          .mockResolvedValueOnce(uploaded('twirl.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 9 }))
-          .mockResolvedValueOnce(uploaded('spin.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 7 }));
+        vi.mocked(pickMedia).mockResolvedValueOnce({ uri: 'file:///twirl.mp4', fileName: 'twirl.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 9000 } as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValueOnce(uploaded('twirl.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 9 }));
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
         renderer.act(() => { labelled(tree.root, 'Open details for Moves').props.onPress(); });
@@ -6472,12 +6488,6 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
         expect(storedDrafts().motion.referenceVideo).toMatchObject({ displayName: 'Moves', url: 'https://cdn.example.com/twirl.mp4', storagePath: 'uploads/user-123/twirl.mp4', durationSeconds: 9 });
         expect(storedDrafts().motion.duration).toBe(9);
-
-        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
-        await renderer.act(async () => { await labelled(tree.root, 'Inputs').props.onPress(); });
-        await settle();
-        expect(text(tree)).not.toContain('This model supports up to 1 reference video.');
-        expect(storedDrafts().motion.referenceVideo).toMatchObject({ displayName: 'Moves', url: 'https://cdn.example.com/spin.mp4', durationSeconds: 7 });
       });
     });
 
@@ -6506,40 +6516,40 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
       });
 
-      it('draw Kling 3.0’s picture and clip slots, each as required, named as its descriptor names them', async () => {
+      // That both inputs are required is said by the panel's title and by the bar: a slot carries no
+      // badge, and an empty slot no line of its own (owner's call on A2, 2026-10-21; #510 drew both).
+      it('draw Kling 3.0’s picture and clip slots named as its descriptor names them, under one "Required inputs"', async () => {
         onMotionModel('kling-3.0');
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
         expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 3.0');
-        expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Required', 'Who should move?']);
-        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference videos', 'Required', 'How should they move?']);
-        // The lines under the slots and the bar's hint name the slots as drawn, not the motion-inputs pair.
-        expect(text(tree)).toContain('Reference images are required.');
-        expect(text(tree)).toContain('Reference videos are required.');
-        expect(text(tree)).not.toContain('Character image is required.');
-        expect(text(tree)).not.toContain('Reference video is required.');
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Who should move?']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference videos', 'How should they move?']);
+        expect(text(tree)).toContain('Required inputs');
+        expect(text(tree)).not.toContain('Reference images are required.');
+        expect(text(tree)).not.toContain('Reference videos are required.');
+        // The bar's hint names the slots as drawn, not the motion-inputs pair.
         expect(blocker(tree)).toBe('Add reference images and reference videos.');
       });
 
-      it('keeps Kling 2.6’s lines, whose slots are the motion-inputs pair: the character image, the reference video, and the clip the bar asks for', async () => {
+      it('name Kling 2.6’s slots as the motion-inputs pair, and the bar asks for the character image and the clip', async () => {
         onMotionModel('kling-2.6');
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
-        expect(slotText(tree, 'motion-character-slot')).toEqual(['Character image', 'Required', 'Who should move?']);
-        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference video', 'Required', 'How should they move?']);
-        expect(text(tree)).toContain('Character image is required.');
-        expect(text(tree)).toContain('Reference video is required.');
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Character image', 'Who should move?']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference video', 'How should they move?']);
+        expect(text(tree)).not.toContain('Character image is required.');
+        expect(text(tree)).not.toContain('Reference video is required.');
         expect(blocker(tree)).toBe('Add a character image and a motion clip.');
       });
 
-      it('take a clip on Kling 3.0 from Inputs, and send the picture and the clip in its slots', async () => {
+      it('take a clip on Kling 3.0 beside its picture, and send the picture and the clip in its slots', async () => {
         onMotionModel('kling-3.0', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) });
         vi.mocked(pickMedia).mockResolvedValue(pickedClip as never);
         vi.mocked(uploadPickedMedia).mockResolvedValue(uploadedClip());
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
-        // With the picture in, Inputs asks for the clip.
-        await renderer.act(async () => { await labelled(tree.root, 'Inputs').props.onPress(); });
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference videos').props.onPress(); });
         await settle();
         expect(text(tree)).not.toContain('This model does not support reference videos.');
         expect(pickMedia).toHaveBeenCalledWith('video');
@@ -6553,19 +6563,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         ]);
       });
 
-      it('take a clip in Kling 3.0’s clip slot', async () => {
-        onMotionModel('kling-3.0');
-        vi.mocked(pickMedia).mockResolvedValue(pickedClip as never);
-        vi.mocked(uploadPickedMedia).mockResolvedValue(uploadedClip());
-        const tree = await open(<MediaCreationScreen initialTool="motion" />);
-
-        await renderer.act(async () => { await labelled(tree.root, 'Add reference videos').props.onPress(); });
-        await settle();
-        expect(pickMedia).toHaveBeenCalledWith('video');
-        expect(storedDrafts().motion.referenceVideo).toMatchObject({ url: 'https://cdn.example.com/moves.mp4' });
-      });
-
-      it('draw and send Kling 2.6 as before: its own slot names, both required, the picture and the clip in its motion-inputs slots', async () => {
+      it('draw and send Kling 2.6 as before: its own slot names, the picture and the clip in its motion-inputs slots', async () => {
         onMotionModel('kling-2.6', {
           characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
           referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }),
@@ -6574,8 +6572,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
         expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 2.6');
-        expect(slotText(tree, 'motion-character-slot')).toEqual(['Character image', 'Required', 'Dancer']);
-        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference video', 'Required', 'Moves']);
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Character image', 'Dancer']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference video', 'Moves']);
         await pressGenerate(tree);
         expect(sentInputs()).toEqual([
           expect.objectContaining({ slot: 'characterImage', kind: 'image', url: 'https://cdn.example.com/dancer.png' }),
@@ -6613,8 +6611,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           expect.objectContaining({ slot: 'castImage', url: 'https://cdn.example.com/dancer.png' }),
           expect.objectContaining({ slot: 'danceClip', url: 'https://cdn.example.com/moves.mp4' }),
         ]);
-        expect(slotText(tree, 'motion-character-slot')).toEqual(['Cast image', 'Required', 'Dancer']);
-        expect(slotText(tree, 'motion-video-slot')).toEqual(['Dance clip', 'Required', 'Moves']);
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Cast image', 'Dancer']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Dance clip', 'Moves']);
       });
 
       it('draw a line once, under the slot it names, where one slot’s label begins the other’s', async () => {
@@ -6625,7 +6623,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           default: true,
           slots: [
             { key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference', min: 0, max: 1 },
-            { key: 'videoReferences', kind: 'video', role: 'reference', label: 'Reference video', min: 0, max: 1 },
+            { key: 'videoReferences', kind: 'video', role: 'reference', label: 'Reference video', min: 0, max: 1, maxDurationSeconds: 10 },
           ],
         }];
         catalogState.catalog = { ...productionMotionCatalog(), models: [model] };
@@ -6633,12 +6631,14 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           model: 'kling-3.0',
           catalogRevision: productionMotion.revision,
           characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+          referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 12 }),
+          duration: 12,
         } }));
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
-        // Only the clip is missing: its line is drawn once, and the picture's slot has none.
-        expect(slotText(tree, 'motion-required-inputs').filter((line) => line.endsWith(' required.')))
-          .toEqual(['Reference video is required.']);
+        // Only the clip is wrong: its line is drawn once, and the picture's slot has none.
+        expect(slotText(tree, 'motion-required-inputs').filter((line) => line.endsWith(' seconds or shorter.')))
+          .toEqual(['Reference video inputs must be 10 seconds or shorter.']);
       });
 
       it('name each slot as the mode the run opens does, where a closed mode gives its key another label', async () => {
@@ -6658,9 +6658,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         memory.set(ordinaryKey, savedDrafts({ motion: { model: 'kling-3.0', catalogRevision: productionMotion.revision } }));
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
-        expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Required', 'Who should move?']);
-        expect(text(tree)).toContain('Reference images are required.');
-        expect(text(tree)).toContain('Reference videos are required.');
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Who should move?']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference videos', 'How should they move?']);
         expect(text(tree)).not.toContain('Closed reference');
         expect(blocker(tree)).toBe('Add reference images and reference videos.');
       });
