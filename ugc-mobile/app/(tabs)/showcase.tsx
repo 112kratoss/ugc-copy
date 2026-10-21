@@ -991,6 +991,7 @@ export default function ShowcaseScreen() {
 
               <ScrollView
                 horizontal
+                keyboardShouldPersistTaps="handled"
                 contentContainerStyle={{ alignItems: 'center', gap: 6, paddingRight: 10 }}
                 showsHorizontalScrollIndicator={false}
               >

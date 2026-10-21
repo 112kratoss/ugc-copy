@@ -1793,7 +1793,7 @@ function ResourceScopePicker({
         <Check size={17} color={card.appliesToAll ? theme.colors.image : theme.colors.faint} />
         <AppText variant="label">All outputs</AppText>
       </Pressable>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9 }}>
+      <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9 }}>
         {mediaItems.map((item, index) => {
           const mediaKey = item.mediaKey ?? item.id;
           const selected = !card.appliesToAll && card.mediaKeys.includes(mediaKey);
@@ -2908,9 +2908,13 @@ function NewPostComposer() {
    * Hand the draft that is about to be destroyed to the undo offer, and start
    * the clock on it. Everything that removes part of the draft goes through
    * here, so the reversal is the same one everywhere rather than a courtesy on
-   * whichever control someone remembered.
+   * whichever control someone remembered. The offer is drawn above the footer,
+   * which a raised keyboard covers, so the keyboard goes first: the media row
+   * answers its × with the keyboard up (2026-10-21), so a removal can happen
+   * mid-typing, and an offer under the keys is an offer nobody sees.
    */
   const offerUndo = (label: string) => {
+    Keyboard.dismiss();
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     setUndoEntry({ label, snapshot: draft, scrollY: scrollYRef.current });
     undoTimerRef.current = setTimeout(() => setUndoEntry(null), COMPOSER_UNDO_WINDOW_MS);
@@ -4346,6 +4350,7 @@ function UploadContent({
         <ScrollView
           ref={rowRef}
           horizontal
+          keyboardShouldPersistTaps="handled"
           showsHorizontalScrollIndicator={false}
           scrollEnabled={drag === null}
           scrollEventThrottle={16}

@@ -99,7 +99,7 @@ export function GenerationReferences({ generationId }: { generationId: string })
           <SecondaryButton label="Retry references" onPress={() => void query.refetch()} />
         </View>
       ) : null}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
+      <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
         {references.map((item) => {
           const failed = !item.url || failedUrls[item.id] === item.url;
           return (
@@ -203,7 +203,7 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
           <SecondaryButton label="Retry outputs" onPress={() => void query.refetch()} />
         </View>
       ) : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
+        <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
           {record ? urls.map((url, index) => {
             const thumbnail = thumbnailUrl(url, index);
             const failed = Boolean(thumbnail) && failedUrls[index] === thumbnail;

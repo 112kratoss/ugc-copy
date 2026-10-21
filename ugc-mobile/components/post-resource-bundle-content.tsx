@@ -284,7 +284,7 @@ function ResourceMediaSelector({
       <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800', textTransform: 'uppercase' }}>
         Resources for
       </Text>
-      <ScrollView horizontal contentContainerStyle={{ gap: 8 }} showsHorizontalScrollIndicator={false}>
+      <ScrollView horizontal keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8 }} showsHorizontalScrollIndicator={false}>
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ selected: selectedMediaKey === null }}
