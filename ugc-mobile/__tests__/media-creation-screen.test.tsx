@@ -605,6 +605,46 @@ function captureActionSheets() {
   return sheets;
 }
 
+/** A sheet's rows as the creator reads them: the kind, its count, and whether it is greyed out. */
+function sheetRows(sheet: ActionSheetRequest) {
+  return sheet.actions.map((action) => [action.label, action.detail, Boolean(action.disabled)]);
+}
+
+const pickedImage = (fileName: string, fileSize = 2048) => ({ uri: `file:///${fileName}`, fileName, mimeType: 'image/png', fileSize });
+const uploaded = (fileName: string, extra: Partial<UploadedMedia> = {}): UploadedMedia => ({
+  signedUrl: `https://cdn.example.com/${fileName}`,
+  storagePath: `uploads/user-123/${fileName}`,
+  mimeType: 'image/png',
+  fileName,
+  kind: 'image',
+  durationSeconds: null,
+  sizeBytes: 2048,
+  ...extra,
+});
+
+/** A layout event, as Fabric sends one to a rail's scroller or item. */
+const layoutAt = (x: number, width = 72) => ({ nativeEvent: { layout: { x, y: 0, width, height: 72 } } });
+
+/**
+ * A reference rail's scroller with a stand-in native side: what the rail asks it to scroll to.
+ * Pass `options` to the renderer, then lay the scroller out at a width.
+ */
+function railScroller(testID: string) {
+  const scrollTo = vi.fn();
+  const find = (tree: renderer.ReactTestRenderer) => tree.root.find((node) => String(node.type) === 'scrollview' && node.props.testID === testID);
+  return {
+    scrollTo,
+    find,
+    options: {
+      createNodeMock: (element: React.ReactElement) => ((element.props as { testID?: string }).testID === testID ? { scrollTo } : null),
+    } satisfies Parameters<typeof renderer.create>[1],
+    layOut: (tree: renderer.ReactTestRenderer, width: number) => {
+      renderer.act(() => { find(tree).props.onLayout(layoutAt(0, width)); });
+    },
+    endInset: (tree: renderer.ReactTestRenderer) => find(tree).props.contentContainerStyle.paddingRight as number,
+  };
+}
+
 describe('MediaCreationScreen Phase 3 create workspace', () => {
   afterEach(() => {
     renderer.act(() => {
@@ -5084,44 +5124,59 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     describe('a reference rail with its add tile fixed at its start', () => {
       const wide = () => parityImageModel('wide-image', 'Wide Image', 8);
       const narrow = () => parityImageModel('narrow-image', 'Narrow Image', 2);
-      const layoutAt = (x: number, width = 72) => ({ nativeEvent: { layout: { x, y: 0, width, height: 72 } } });
-      const railScrolls = vi.fn();
-      const withRailScroller: Parameters<typeof renderer.create>[1] = {
-        createNodeMock: (element) => ((element.props as { testID?: string }).testID === 'image-reference-scroller' ? { scrollTo: railScrolls } : null),
-      };
-      const scroller = (tree: renderer.ReactTestRenderer) => tree.root.find((node) => String(node.type) === 'scrollview' && node.props.testID === 'image-reference-scroller');
       const layOut = (tree: renderer.ReactTestRenderer, label: string, x: number) => renderer.act(() => { labelled(tree.root, label).props.onLayout(layoutAt(x)); });
+      const picks = (...names: string[]) => names.map((name) => pickedImage(`${name}.png`));
 
-      beforeEach(() => { railScrolls.mockClear(); });
+      beforeEach(() => {
+        vi.mocked(uploadPickedMedia).mockImplementation(async (uri) => uploaded(uri.replace('file:///', '')));
+      });
 
       it('brings the last picture of a pick into view, the first pick into an empty rail too', async () => {
         catalogState.catalog = parityCatalog([wide()]);
         memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev' } }));
-        vi.mocked(pickMediaList).mockResolvedValueOnce(['one', 'two', 'three', 'four'].map((name) => ({ uri: `file:///${name}.png`, fileName: `${name}.png`, mimeType: 'image/png', fileSize: 2048 })) as never);
-        vi.mocked(uploadPickedMedia).mockImplementation(async (uri) => {
-          const fileName = uri.replace('file:///', '');
-          return { signedUrl: `https://cdn.example.com/${fileName}`, storagePath: `uploads/user-123/${fileName}`, mimeType: 'image/png', fileName, kind: 'image', durationSeconds: null, sizeBytes: 2048 };
-        });
-        const tree = await open(<MediaCreationScreen initialTool="image" />, withRailScroller);
-        renderer.act(() => { scroller(tree).props.onLayout(layoutAt(0, 300)); });
+        vi.mocked(pickMediaList).mockResolvedValueOnce(picks('one', 'two', 'three', 'four') as never);
+        const rail = railScroller('image-reference-scroller');
+        const tree = await open(<MediaCreationScreen initialTool="image" />, rail.options);
+        rail.layOut(tree, 300);
 
         await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
         await settle();
         // The others are laid out too; only the last one added is followed.
         layOut(tree, 'Open details for three', 162);
-        expect(railScrolls).not.toHaveBeenCalled();
+        expect(rail.scrollTo).not.toHaveBeenCalled();
         layOut(tree, 'Open details for four', 243);
-        const endInset = scroller(tree).props.contentContainerStyle.paddingRight;
-        expect(railScrolls).toHaveBeenCalledWith({ x: 243 + 72 + endInset - 300, animated: true });
-        expect(railScrolls).toHaveBeenCalledTimes(1);
+        expect(rail.scrollTo).toHaveBeenCalledWith({ x: 243 + 72 + rail.endInset(tree) - 300, animated: true });
+        expect(rail.scrollTo).toHaveBeenCalledTimes(1);
+      });
+
+      it('gives way to the creator dragging the rail when the pictures arrive', async () => {
+        catalogState.catalog = parityCatalog([wide()]);
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev', references: ['alpha', 'bravo', 'charlie'].map((id) => stagedMedia(id)) } }));
+        vi.mocked(pickMediaList).mockResolvedValueOnce(picks('delta') as never).mockResolvedValueOnce(picks('echo') as never);
+        const rail = railScroller('image-reference-scroller');
+        const tree = await open(<MediaCreationScreen initialTool="image" />, rail.options);
+        rail.layOut(tree, 200);
+
+        renderer.act(() => { rail.find(tree).props.onScrollBeginDrag(); });
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
+        await settle();
+        layOut(tree, 'Open details for delta', 243);
+        expect(rail.scrollTo).not.toHaveBeenCalled();
+
+        renderer.act(() => { rail.find(tree).props.onScrollEndDrag({ nativeEvent: { contentOffset: { x: 0, y: 0 } } }); });
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
+        await settle();
+        layOut(tree, 'Open details for echo', 324);
+        expect(rail.scrollTo).toHaveBeenCalledWith({ x: 324 + 72 + rail.endInset(tree) - 200, animated: true });
       });
 
       it('stays where it is when the saved draft is read, and when a model change sends the references it held back', async () => {
         catalogState.catalog = parityCatalog([wide(), narrow()]);
         const names = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo'];
         memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev', references: names.map((name) => stagedMedia(name.toLowerCase())) } }));
-        const tree = await open(<MediaCreationScreen initialTool="image" />, withRailScroller);
-        renderer.act(() => { scroller(tree).props.onLayout(layoutAt(0, 300)); });
+        const rail = railScroller('image-reference-scroller');
+        const tree = await open(<MediaCreationScreen initialTool="image" />, rail.options);
+        rail.layOut(tree, 300);
         names.forEach((name, index) => layOut(tree, `Open details for ${name}`, index * 81));
 
         await pickModel(tree, 'Narrow Image');
@@ -5130,7 +5185,36 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await pickModel(tree, 'Wide Image');
         await settle();
         names.slice(2).forEach((name, index) => layOut(tree, `Open details for ${name}`, (index + 2) * 81));
-        expect(railScrolls).not.toHaveBeenCalled();
+        expect(rail.scrollTo).not.toHaveBeenCalled();
+      });
+
+      // The model can be changed while an upload runs: what it then adds waits with the pictures
+      // the new model holds back, and a later change that sends it is still no add.
+      it('lets a picture that lands held back join later without moving the rail', async () => {
+        catalogState.catalog = parityCatalog([wide(), narrow()]);
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev', references: ['alpha', 'bravo', 'charlie', 'delta'].map((id) => stagedMedia(id)) } }));
+        vi.mocked(pickMediaList).mockResolvedValueOnce(picks('late') as never);
+        let land: () => void = () => undefined;
+        vi.mocked(uploadPickedMedia).mockImplementation((uri) => new Promise<UploadedMedia>((resolve) => { land = () => resolve(uploaded(uri.replace('file:///', ''))); }));
+        const rail = railScroller('image-reference-scroller');
+        const tree = await open(<MediaCreationScreen initialTool="image" />, rail.options);
+        rail.layOut(tree, 300);
+
+        await renderer.act(async () => {
+          void labelled(tree.root, 'Add reference images').props.onPress();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        await pickModel(tree, 'Narrow Image');
+        await settle();
+        await renderer.act(async () => { land(); });
+        await settle();
+        expect(storedDrafts().image.references.map((media: { displayName: string }) => media.displayName)).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta', 'late']);
+        expect(pressables(tree.root).some((node) => node.props.accessibilityLabel === 'Open details for late')).toBe(false);
+
+        await pickModel(tree, 'Wide Image');
+        await settle();
+        layOut(tree, 'Open details for late', 324);
+        expect(rail.scrollTo).not.toHaveBeenCalled();
       });
     });
 
@@ -6309,17 +6393,6 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const started = (predictionId: string) => ({
       success: true, predictionId, generationId: `gen-${predictionId}`, status: 'processing', remainingCredits: 990, cost: 8,
     });
-    const pickedImage = (fileName: string, fileSize = 2048) => ({ uri: `file:///${fileName}`, fileName, mimeType: 'image/png', fileSize });
-    const uploaded = (fileName: string, extra: Partial<UploadedMedia> = {}): UploadedMedia => ({
-      signedUrl: `https://cdn.example.com/${fileName}`,
-      storagePath: `uploads/user-123/${fileName}`,
-      mimeType: 'image/png',
-      fileName,
-      kind: 'image',
-      durationSeconds: null,
-      sizeBytes: 2048,
-      ...extra,
-    });
     const thumbnailUrl = (tree: renderer.ReactTestRenderer, name: string) => labelled(tree.root, `Open details for ${name}`)
       .find((node) => String(node.type) === 'stable-media-image').props.url as string;
 
@@ -6493,7 +6566,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
       // Three tiles ahead of the pictures left about half of the first reference in view on a
       // phone, so a model that takes pictures, clips and audio has one tile, which asks which;
-      // a kind that is full is offered greyed out. A model that takes one kind opens its picker.
+      // a kind that is full is offered greyed out, and the counts the three tiles showed sit in
+      // a line over the rail, as the image rail's "n / max" does. A model that takes one kind
+      // opens its picker, and its tile keeps its own count.
       it('on a model that takes pictures, clips and audio, are added from one tile that asks which', async () => {
         catalogState.catalog = parityCatalog([paritySeedanceVideo(), parityKlingVideo()]);
         memory.set(ordinaryKey, savedDrafts({ video: {
@@ -6505,26 +6580,24 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('bottle.png')] as never);
         vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('bottle.png'));
         const sheets = captureActionSheets();
+        const counts = (tree: renderer.ReactTestRenderer) => collectText(tree.root.findByProps({ testID: 'video-reference-counts' })).join('');
         const tree = await open(<MediaCreationScreen initialTool="video" />);
         expect(hasLabel(tree.root, 'Add Images 1/5')).toBe(false);
-        // The counts the three tiles showed, read out with the one tile.
-        expect(labelled(tree.root, 'Add References').props.accessibilityValue).toEqual({ text: 'Images 1 of 5, video 3 of 3, audio 0 of 3' });
+        expect(counts(tree)).toBe('Images 1/5 · Video 3/3 · Audio 0/3');
 
         renderer.act(() => { labelled(tree.root, 'Add References').props.onPress(); });
         expect(sheets).toHaveLength(1);
         expect(pickMediaList).not.toHaveBeenCalled();
-        expect(sheets[0].actions.map((action) => [action.label, action.detail, Boolean(action.disabled)])).toEqual([
+        expect(sheetRows(sheets[0])).toEqual([
           ['Image', '1 of 5', false],
           ['Video', '3 of 3', true],
           ['Audio', '0 of 3', false],
         ]);
-        // The rows say it all while one kind still has room.
-        expect(sheets[0].message).toBeUndefined();
         await renderer.act(async () => { await sheets[0].actions[0].onPress?.(); });
         await settle();
         expect(vi.mocked(pickMediaList).mock.calls[0][0]).toBe('image');
         expect(storedDrafts().video.references.map((media: { displayName: string }) => media.displayName)).toEqual(['Hero', 'bottle']);
-        expect(labelled(tree.root, 'Add References').props.accessibilityValue).toEqual({ text: 'Images 2 of 5, video 3 of 3, audio 0 of 3' });
+        expect(counts(tree)).toBe('Images 2/5 · Video 3/3 · Audio 0/3');
         // "References" is one long word with nowhere to wrap: at a larger text size the tile widens
         // for it, up to the controls' cap, rather than breaking it mid-word as a fixed 80pt did.
         const tileStyle = labelled(tree.root, 'Add References').props.style;
@@ -6533,20 +6606,20 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tileLabel = labelled(tree.root, 'Add References').find((node) => String(node.type) === 'text' && node.props.children === 'References');
         expect(tileLabel.props.maxFontSizeMultiplier).toBe(appTheme.typeScale.control);
 
-        // Kling 3.0 takes clips alone: its tile is the clip's, and opens the picker at once.
+        // Kling 3.0 takes clips alone: its tile is the clip's, opens the picker at once, and the
+        // rail has no counts line, as the tile shows the count.
         memory.set(ordinaryKey, savedDrafts({ video: { model: 'kling-3.0-video', catalogRevision: 'parity-rev' } }));
         vi.mocked(pickMedia).mockResolvedValueOnce({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 4000 } as never);
         vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('move.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 4 }));
         const clips = await open(<MediaCreationScreen initialTool="video" />);
+        expect(clips.root.findAllByProps({ testID: 'video-reference-counts' })).toHaveLength(0);
         await renderer.act(async () => { await labelled(clips.root, 'Add Video 0/3').props.onPress(); });
         await settle();
         expect(sheets).toHaveLength(1);
         expect(pickMedia).toHaveBeenCalledWith('video');
       });
 
-      // A dimmed tile said nothing of which kinds were full, and the counts were in the sheet it
-      // could not open; a single kind's tile shows its own "3/3", so it still dims at its limit.
-      it('with every kind full, keep the one tile live, and its sheet says why nothing can be added', async () => {
+      it('with every kind full, dim the one tile, and the counts over the rail say why', async () => {
         catalogState.catalog = parityCatalog([paritySeedanceVideo()]);
         memory.set(ordinaryKey, savedDrafts({ video: {
           model: 'seedance-2',
@@ -6555,20 +6628,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           referenceVideos: ['a', 'b', 'c'].map((id) => stagedMedia(`clip-${id}`, 'video')),
           referenceAudios: ['a', 'b', 'c'].map((id) => stagedMedia(`voice-${id}`, 'audio')),
         } }));
-        const sheets = captureActionSheets();
         const tree = await open(<MediaCreationScreen initialTool="video" />);
-        const tile = labelled(tree.root, 'Add References');
-        expect(tile.props.disabled).toBe(false);
-        expect(tile.props.accessibilityValue).toEqual({ text: 'Images 5 of 5, video 3 of 3, audio 3 of 3' });
-
-        renderer.act(() => { tile.props.onPress(); });
-        expect(sheets[0].message).toBe('Every kind is at its limit. Remove a reference to add another.');
-        expect(sheets[0].actions.map((action) => [action.label, action.detail, Boolean(action.disabled)])).toEqual([
-          ['Image', '5 of 5', true],
-          ['Video', '3 of 3', true],
-          ['Audio', '3 of 3', true],
-        ]);
-        expect(pickMediaList).not.toHaveBeenCalled();
+        expect(labelled(tree.root, 'Add References').props.disabled).toBe(true);
+        expect(collectText(tree.root.findByProps({ testID: 'video-reference-counts' })).join('')).toBe('Images 5/5 · Video 3/3 · Audio 3/3');
 
         // Kling 3.0's own tile shows its count, and dims when it is full.
         memory.set(ordinaryKey, savedDrafts({ video: {
@@ -6581,9 +6643,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(labelled(clips.root, 'Add Video 3/3').props.disabled).toBe(true);
       });
 
-      // The tile is outside the scroller, so the reference added from its sheet can land past the
-      // rail's edge; the clips after it move over, and only the one added is followed.
-      it('added from the sheet is brought into view, an image among the clips after it', async () => {
+      // The tile is outside the scroller, so the reference added can land past the rail's edge:
+      // an image among the clips after it, which move over (only the one added is followed), and
+      // a clip or a voice at the end.
+      it('added from the sheet or the clip tile are brought into view, an image among the clips after it', async () => {
         catalogState.catalog = parityCatalog([paritySeedanceVideo()]);
         memory.set(ordinaryKey, savedDrafts({ video: {
           model: 'seedance-2',
@@ -6592,24 +6655,74 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           referenceVideos: [stagedMedia('turn', 'video')],
         } }));
         vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('bottle.png')] as never);
-        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('bottle.png'));
-        const railScrolls = vi.fn();
+        vi.mocked(pickAudioDocument).mockResolvedValueOnce({ uri: 'file:///voice.mp3', name: 'voice.mp3', mimeType: 'audio/mpeg', size: 1024 } as never);
+        vi.mocked(uploadPickedMedia)
+          .mockResolvedValueOnce(uploaded('bottle.png'))
+          .mockResolvedValueOnce(uploaded('voice.mp3', { mimeType: 'audio/mpeg', kind: 'audio' }));
+        const rail = railScroller('video-reference-scroller');
         const sheets = captureActionSheets();
-        const tree = await open(<MediaCreationScreen initialTool="video" />, {
-          createNodeMock: (element) => ((element.props as { testID?: string }).testID === 'video-reference-scroller' ? { scrollTo: railScrolls } : null),
-        });
-        const scroller = tree.root.find((node) => String(node.type) === 'scrollview' && node.props.testID === 'video-reference-scroller');
-        const layoutAt = (x: number, width = 72) => ({ nativeEvent: { layout: { x, y: 0, width, height: 96 } } });
-        renderer.act(() => { scroller.props.onLayout(layoutAt(0, 120)); });
+        const tree = await open(<MediaCreationScreen initialTool="video" />, rail.options);
+        rail.layOut(tree, 120);
+        const end = (x: number) => x + 72 + rail.endInset(tree) - 120;
 
         renderer.act(() => { labelled(tree.root, 'Add References').props.onPress(); });
         await renderer.act(async () => { await sheets[0].actions.find((action) => action.label === 'Image')!.onPress?.(); });
         await settle();
-        expect(labelsIn(scroller)).toEqual(['Open details for Hero', 'Open details for bottle', 'Open details for Turn']);
+        expect(labelsIn(rail.find(tree))).toEqual(['Open details for Hero', 'Open details for bottle', 'Open details for Turn']);
         renderer.act(() => { labelled(tree.root, 'Open details for Turn').props.onLayout(layoutAt(162)); });
-        expect(railScrolls).not.toHaveBeenCalled();
+        expect(rail.scrollTo).not.toHaveBeenCalled();
         renderer.act(() => { labelled(tree.root, 'Open details for bottle').props.onLayout(layoutAt(81)); });
-        expect(railScrolls).toHaveBeenCalledWith({ x: 81 + 72 + scroller.props.contentContainerStyle.paddingRight - 120, animated: true });
+        expect(rail.scrollTo).toHaveBeenLastCalledWith({ x: end(81), animated: true });
+
+        renderer.act(() => { labelled(tree.root, 'Add References').props.onPress(); });
+        await renderer.act(async () => { await sheets[1].actions.find((action) => action.label === 'Audio')!.onPress?.(); });
+        await settle();
+        const voice = rail.find(tree).findAll((node) => String(node.type) === 'view' && typeof node.props.onLayout === 'function').at(-1)!;
+        renderer.act(() => { voice.props.onLayout(layoutAt(243)); });
+        expect(rail.scrollTo).toHaveBeenLastCalledWith({ x: end(243), animated: true });
+        expect(rail.scrollTo).toHaveBeenCalledTimes(2);
+      });
+
+      it('added from a clip model’s own tile are brought into view', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          referenceVideos: [stagedMedia('one', 'video'), stagedMedia('two', 'video')],
+        } }));
+        vi.mocked(pickMedia).mockResolvedValueOnce({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 4000 } as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('move.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 4 }));
+        const rail = railScroller('video-reference-scroller');
+        const tree = await open(<MediaCreationScreen initialTool="video" />, rail.options);
+        rail.layOut(tree, 120);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add Video 2/3').props.onPress(); });
+        await settle();
+        const clip = rail.find(tree).findAll((node) => String(node.type) === 'pressable' && typeof node.props.onLayout === 'function').at(-1)!;
+        renderer.act(() => { clip.props.onLayout(layoutAt(162)); });
+        expect(rail.scrollTo).toHaveBeenCalledWith({ x: 162 + 72 + rail.endInset(tree) - 120, animated: true });
+      });
+
+      // Both tools upload pictures: each tool's tile shows its own upload, not the other's.
+      it('show a picture upload started on the video tool on its own tile, not on the image tool’s', async () => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: { model: 'seedance-2', catalogRevision: 'parity-rev', references: [stagedMedia('hero')] } }));
+        vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('bottle.png')] as never);
+        vi.mocked(uploadPickedMedia).mockImplementation(() => new Promise<UploadedMedia>(() => undefined));
+        const sheets = captureActionSheets();
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        renderer.act(() => { labelled(tree.root, 'Add References').props.onPress(); });
+        await renderer.act(async () => {
+          void sheets[0].actions.find((action) => action.label === 'Image')!.onPress?.();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(hasLabel(tree.root, 'Uploading Images, 0%')).toBe(true);
+
+        renderer.act(() => { labelled(tree.root, 'Image').props.onPress(); });
+        await settle();
+        expect(hasLabel(tree.root, 'Uploading reference images, 0%')).toBe(false);
+        expect(hasLabel(tree.root, 'Add reference images')).toBe(true);
       });
 
       it('made into a subject take the next place no subject answers to, where one before it was removed', async () => {
@@ -6707,6 +6820,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         });
         const tile = labelled(tree.root, 'Uploading Video, 0%');
         expect(tile.props.disabled).toBe(true);
+        // The label stays laid out, unseen, under the percentage, so a tile a larger text size
+        // widened keeps its width and the rail beside it does not shift.
+        expect(collectText(tile)).toEqual(['References', '0%']);
+        const hidden = tile.find((node) => String(node.type) === 'text' && node.props.children === 'References');
+        expect(hidden.props.style).toEqual(expect.arrayContaining([expect.objectContaining({ opacity: 0 })]));
         await pressAndLook(labelled(tree.root, 'Cancel upload'));
         await settle();
 

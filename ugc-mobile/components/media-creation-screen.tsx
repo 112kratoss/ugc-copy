@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react-native';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { ActivityIndicator, AppState, Keyboard, Modal, Pressable, ScrollView, Switch, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, AppState, Keyboard, Modal, Pressable, ScrollView, Switch, Text, TextInput, useWindowDimensions, View, type TextStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -165,7 +165,7 @@ import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { haptic } from '@/lib/haptics';
 import { useHardwareBack } from '@/lib/use-hardware-back';
-import { nextRailRevealRequest, useRailReveal, type RailRevealRequest } from '@/lib/use-rail-reveal';
+import { useRailReveal, type RailRevealRequest } from '@/lib/use-rail-reveal';
 import { showActionSheet } from '@/lib/action-sheet';
 
 // The space each reference rail keeps after its last item: its scroller's end padding, and where
@@ -626,7 +626,9 @@ function groupDigits(value: number) {
 }
 
 /** Which add control an upload came from: that tile shows the upload's progress. */
-type UploadTarget = 'image-references' | 'subject' | 'start-frame' | 'end-frame' | 'character' | 'reference-video' | 'reference-audio' | 'motion-clip';
+// The video tool's pictures upload under a target of their own, so neither tool's rail shows the
+// other's upload as its own.
+type UploadTarget = 'image-references' | 'video-image-references' | 'subject' | 'start-frame' | 'end-frame' | 'character' | 'reference-video' | 'reference-audio' | 'motion-clip';
 
 /** An upload in flight: where it came from, how far its bytes have got (null while their size is unknown), and whether it can be stopped. */
 type UploadProgress = { target: UploadTarget; percent: number | null; cancellable: boolean };
@@ -913,7 +915,7 @@ function IdentityCreationScreen({
   // The reference an add just put on a rail, for the rail to bring into view: only the add knows
   // what it added.
   const [railRevealRequest, setRailRevealRequest] = useState<RailRevealRequest | null>(null);
-  const revealInRail = (id: string) => setRailRevealRequest((current) => nextRailRevealRequest(current, id));
+  const revealInRail = (id: string) => setRailRevealRequest({ id });
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const [guidedReferencesExpanded, setGuidedReferencesExpanded] = useState(false);
   const [draftsHydrated, setDraftsHydrated] = useState(false);
@@ -1695,7 +1697,7 @@ function IdentityCreationScreen({
     try {
       const picked = await pickMediaList('image', { allowsMultipleSelection: true });
       if (picked.length === 0) return;
-      const result = await uploadPicks('image-references', picked.slice(0, remainingSlots).map((asset) => ({
+      const result = await uploadPicks(tool === 'image' ? 'image-references' : 'video-image-references', picked.slice(0, remainingSlots).map((asset) => ({
         uri: asset.uri,
         fileName: asset.fileName,
         mimeType: asset.mimeType,
@@ -3532,7 +3534,7 @@ function ImagePromptComposer({
     scrollRef: referenceRailRef,
     scrollerProps: referenceScrollerProps,
     itemLayout: referenceItemLayout,
-  } = useRailReveal(railRevealRequest, REFERENCE_RAIL_END_INSET, !reducedMotion);
+  } = useRailReveal(railRevealRequest, sentReferences.map((media) => media.id), REFERENCE_RAIL_END_INSET, !reducedMotion);
   const detectedMention = useMemo(
     () => promptFocused ? findActiveReferenceMention(draft.prompt, promptSelection) : null,
     [draft.prompt, promptFocused, promptSelection],
@@ -3765,7 +3767,7 @@ function ImagePromptComposer({
                 >
                   {isUploading ? <ActivityIndicator color={theme.colors.image} size="small" /> : <Plus size={22} color={theme.colors.image} />}
                   {uploadProgress ? (
-                    <Text testID="reference-upload-progress" style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{uploadPercentLabel(uploadProgress)}</Text>
+                    <Text testID="reference-upload-progress" maxFontSizeMultiplier={appTheme.typeScale.control} style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{uploadPercentLabel(uploadProgress)}</Text>
                   ) : null}
                 </Pressable>
                 <ScrollView testID="image-reference-scroller" ref={referenceRailRef} {...referenceScrollerProps} horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={{ gap: 9, paddingRight: REFERENCE_RAIL_END_INSET }}>
@@ -4229,26 +4231,21 @@ function VideoCreatorComposer({
   // The kinds the references rail adds, each with its count. One add tile leads the rail: a
   // model that takes one kind adds it at once, and one that takes several asks which, as three
   // tiles ahead of the pictures left about half of the first in view on a phone (2026-10-21).
-  // That one tile reads out each kind's count, as the three tiles' labels did, and names the kind
-  // an upload in progress is.
+  // The counts the three tiles' labels showed go in a line over the rail, as the image rail's
+  // "n / max" does, so the one tile can dim at the limit like every other add tile; while an
+  // upload runs it names that upload's kind.
   const referenceKinds = [
-    { name: 'Image', railLabel: 'Images', icon: 'image', target: 'image-references', count: draft.references.length, limit: imageLimit, onAdd: onUploadImages },
+    { name: 'Image', railLabel: 'Images', icon: 'image', target: 'video-image-references', count: draft.references.length, limit: imageLimit, onAdd: onUploadImages },
     { name: 'Video', railLabel: 'Video', icon: 'video', target: 'reference-video', count: draft.referenceVideos.length, limit: videoLimit, onAdd: onUploadVideo },
     { name: 'Audio', railLabel: 'Audio', icon: 'audio', target: 'reference-audio', count: draft.referenceAudios.length, limit: audioLimit, onAdd: onUploadAudio },
   ] as const satisfies ReadonlyArray<{ name: string; railLabel: string; icon: 'image' | 'video' | 'audio'; target: UploadTarget; count: number; limit: number; onAdd: () => void }>;
   const addableKinds = referenceKinds.filter((kind) => kind.limit > 0);
   const onlyKind = addableKinds.length === 1 ? addableKinds[0] : null;
   const uploadingKind = upload ? addableKinds.find((kind) => kind.target === upload.target) : undefined;
-  const referenceCounts = addableKinds
-    .map((kind, index) => `${index === 0 ? kind.railLabel : kind.railLabel.toLowerCase()} ${kind.count} of ${kind.limit}`)
-    .join(', ');
-  // With every kind full the tile stays live and its sheet says why: a dimmed tile named no kind,
-  // and the counts were in the sheet it could not open. A single kind's tile shows its own count,
-  // so it still dims at its limit.
+  const referenceCounts = addableKinds.map((kind) => `${kind.railLabel} ${kind.count}/${kind.limit}`).join(' · ');
   const everyKindFull = addableKinds.every((kind) => kind.count >= kind.limit);
   const chooseReferenceKind = () => showActionSheet({
     title: 'Add a reference',
-    message: everyKindFull ? 'Every kind is at its limit. Remove a reference to add another.' : undefined,
     actions: addableKinds.map((kind) => ({
       label: kind.name,
       detail: `${kind.count} of ${kind.limit}`,
@@ -4256,12 +4253,15 @@ function VideoCreatorComposer({
       onPress: kind.onAdd,
     })),
   });
+  // What the rail shows, in its order: pictures and clips, then audio.
+  const railVisuals = [...draft.references, ...draft.referenceVideos].filter(isSent);
+  const railAudios = draft.referenceAudios.filter(isSent);
   const reducedMotion = useReducedMotion();
   const {
     scrollRef: reusableRailRef,
     scrollerProps: reusableScrollerProps,
     itemLayout: reusableItemLayout,
-  } = useRailReveal(railRevealRequest, REUSABLE_RAIL_END_INSET, !reducedMotion);
+  } = useRailReveal(railRevealRequest, [...railVisuals, ...railAudios].map((media) => media.id), REUSABLE_RAIL_END_INSET, !reducedMotion);
   const preparedVoiceLimit = catalogInputLimit(
     model,
     draft,
@@ -4615,32 +4615,35 @@ function VideoCreatorComposer({
             pointerEvents={referencesLockedByFrames || referencesLockedBySubjects ? 'none' : 'auto'}
             style={{ gap: 10, opacity: referencesLockedByFrames || referencesLockedBySubjects ? 0.4 : 1 }}
           >
+            {addableKinds.length > 1 ? (
+              <Text testID="video-reference-counts" maxFontSizeMultiplier={appTheme.typeScale.control} style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] }}>{referenceCounts}</Text>
+            ) : null}
             {/* The add tile stays fixed at the start of the row, outside the pictures' scroller, so it
                 is in view however many references follow it and wherever they are scrolled to; a
                 reference added is brought into view (`useRailReveal`). */}
             <View style={{ flexDirection: 'row', gap: 9 }}>
               {addableKinds.length > 0 ? (
                 <CompactRailAddButton
-                  label={onlyKind ? `${onlyKind.railLabel} ${onlyKind.count}/${onlyKind.limit}` : uploadingKind?.railLabel ?? 'References'}
-                  accessibilityValueText={onlyKind ? '' : referenceCounts}
+                  label={onlyKind ? `${onlyKind.railLabel} ${onlyKind.count}/${onlyKind.limit}` : 'References'}
+                  uploadingLabel={onlyKind ? undefined : uploadingKind?.railLabel}
                   icon={onlyKind?.icon}
                   onPress={onlyKind?.onAdd ?? chooseReferenceKind}
-                  disabled={isUploading || (onlyKind !== null && everyKindFull)}
+                  disabled={isUploading || everyKindFull}
                   progress={uploadingKind ? upload : null}
                 />
               ) : null}
               <ScrollView testID="video-reference-scroller" ref={reusableRailRef} {...reusableScrollerProps} horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={{ gap: 9, paddingRight: REUSABLE_RAIL_END_INSET }}>
-              {[...draft.references, ...draft.referenceVideos].filter(isSent).map((media) => (
+              {railVisuals.map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} onLayout={reusableItemLayout(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <ReferenceMediaPreview media={media} size={72} />
                   <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
                 </Pressable>
               ))}
-              {draft.referenceAudios.filter(isSent).map((media) => (
+              {railAudios.map((media) => (
                 <View key={media.id} onLayout={reusableItemLayout(media.id)} style={{ width: 72, gap: 4 }}>
                   <ReferenceMediaPreview media={media} size={72} />
                   <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange({ ...draft, referenceAudios: draft.referenceAudios.filter((item) => item.id !== media.id) })} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-                    <Text style={{ color: theme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
+                    <Text maxFontSizeMultiplier={appTheme.typeScale.control} style={{ color: theme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
                   </Pressable>
                   {preparesSeedanceAssets ? (
                     /* An audio tile opens no details sheet, so its Seedance asset is prepared from the tile. */
@@ -4739,10 +4742,10 @@ function VideoCreatorComposer({
   );
 }
 
-function CompactRailAddButton({ label, accessibilityValueText = '', icon = 'image', onPress, disabled, progress = null }: {
+function CompactRailAddButton({ label, uploadingLabel = label, icon = 'image', onPress, disabled, progress = null }: {
   label: string;
-  /** What the label leaves out, read after it: the counts a tile that adds several kinds stands for. */
-  accessibilityValueText?: string;
+  /** What an upload in progress is named to a screen reader, when not the label: its kind. */
+  uploadingLabel?: string;
   icon?: 'image' | 'video' | 'audio';
   onPress: () => void;
   disabled: boolean;
@@ -4750,12 +4753,11 @@ function CompactRailAddButton({ label, accessibilityValueText = '', icon = 'imag
   progress?: UploadProgress | null;
 }) {
   const theme = useAppTheme();
+  const labelStyle: TextStyle = { color: theme.colors.muted, fontSize: 11, fontWeight: '800', lineHeight: 14, textAlign: 'center', fontVariant: ['tabular-nums'] };
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={progress ? `Uploading ${label}, ${uploadPercentLabel(progress)}` : `Add ${label}`}
-      // Always a value, never undefined: Android keeps the last one it was given.
-      accessibilityValue={{ text: accessibilityValueText }}
+      accessibilityLabel={progress ? `Uploading ${uploadingLabel}, ${uploadPercentLabel(progress)}` : `Add ${label}`}
       accessibilityState={{ disabled, busy: Boolean(progress) }}
       disabled={disabled}
       onPress={onPress}
@@ -4766,7 +4768,14 @@ function CompactRailAddButton({ label, accessibilityValueText = '', icon = 'imag
       {progress
         ? <ActivityIndicator color={theme.colors.image} size="small" />
         : icon === 'video' ? <Video size={20} color={theme.colors.video} /> : icon === 'audio' ? <AudioLines size={20} color={theme.colors.motion} /> : <Plus size={21} color={theme.colors.image} />}
-      <Text numberOfLines={2} maxFontSizeMultiplier={appTheme.typeScale.control} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', lineHeight: 14, textAlign: 'center', fontVariant: ['tabular-nums'] }}>{progress ? uploadPercentLabel(progress) : label}</Text>
+      {/* The label keeps its place under an upload's percentage, so a tile a larger text size
+          widened keeps its width, and the rail beside it does not shift as an upload starts and ends. */}
+      <View>
+        <Text numberOfLines={2} maxFontSizeMultiplier={appTheme.typeScale.control} style={[labelStyle, { opacity: progress ? 0 : 1 }]}>{label}</Text>
+        {progress ? (
+          <Text numberOfLines={1} maxFontSizeMultiplier={appTheme.typeScale.control} style={[labelStyle, { position: 'absolute', top: 0, left: 0, right: 0 }]}>{uploadPercentLabel(progress)}</Text>
+        ) : null}
+      </View>
     </Pressable>
   );
 }
