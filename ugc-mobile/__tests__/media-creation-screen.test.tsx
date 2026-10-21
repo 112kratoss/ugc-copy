@@ -5959,60 +5959,96 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         });
       });
 
-      it('keeps a Wan 2.7 end frame apart while references go with the run, which takes a start frame beside them and no end frame', async () => {
-        catalogState.catalog = parityCatalog([liveWan27()]);
-        memory.set(ordinaryKey, savedDrafts({ video: {
+      // With references attached Wan 2.7 takes a start frame beside them and no end frame, and the
+      // frames group's slot is the one place that start frame is drawn and added.
+      describe('Wan 2.7, which sends a start frame beside its references', () => {
+        const wanDraft = (video: Record<string, unknown> = {}) => savedDrafts({ video: {
           model: 'wan-2.7',
           catalogRevision: 'parity-rev',
           prompt: 'The product from @look turns on the doorstep',
           references: [stagedMedia('look')],
-          startFrame: stagedMedia('doorstep'),
-          endFrame: stagedMedia('porch'),
-        } }));
-        const tree = await open(<MediaCreationScreen initialTool="video" />);
+          ...video,
+        } });
+        const sentInputs = () => {
+          expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+          return (authState.api.startGeneration.mock.calls[0][0] as { inputs: Array<Record<string, unknown>> }).inputs;
+        };
 
-        const standby = tree.root.findByProps({ testID: 'standby-references' });
-        expect(collectText(standby)).toContain('Not sent with this run');
-        expect(pressables(standby).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Porch']);
-        // Its slot says why, and takes none while the references go.
-        const endSlot = tree.root.findByProps({ testID: 'video-end-frame-slot' });
-        expect(endSlot.props).toMatchObject({ media: null, disabled: true, helper: 'Not with references' });
-        // The start frame goes with the references.
-        expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Doorstep' })).not.toHaveLength(0);
-        expect(generateButton(tree).props.disabled).toBe(false);
+        beforeEach(() => {
+          catalogState.catalog = parityCatalog([liveWan27()]);
+        });
 
-        renderer.act(() => { labelled(standby, 'Remove Porch').props.onPress(); });
-        await settle();
-        expect(storedDrafts().video.endFrame).toBeNull();
-        expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
-        expect(text(tree)).toContain('Porch was removed from this draft.');
-      });
+        it('keeps an end frame apart while references go with the run', async () => {
+          memory.set(ordinaryKey, wanDraft({ startFrame: stagedMedia('doorstep'), endFrame: stagedMedia('porch') }));
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
 
-      it('draws a Wan 2.7 start frame once, in the frames group, and sends it beside the references', async () => {
-        catalogState.catalog = parityCatalog([liveWan27()]);
-        memory.set(ordinaryKey, savedDrafts({ video: {
-          model: 'wan-2.7',
-          catalogRevision: 'parity-rev',
-          prompt: 'The product from @look turns on the doorstep',
-          references: [stagedMedia('look')],
-          startFrame: stagedMedia('doorstep'),
-        } }));
-        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
-        const tree = await open(<MediaCreationScreen initialTool="video" />);
+          const standby = tree.root.findByProps({ testID: 'standby-references' });
+          expect(collectText(standby)).toContain('Not sent with this run');
+          expect(pressables(standby).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Porch']);
+          // Its slot says why, and takes none while the references go.
+          const endSlot = tree.root.findByProps({ testID: 'video-end-frame-slot' });
+          expect(endSlot.props).toMatchObject({ media: null, disabled: true, helper: 'Not with references' });
+          // The start frame goes with the references.
+          expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Doorstep' })).not.toHaveLength(0);
+          expect(generateButton(tree).props.disabled).toBe(false);
 
-        // The frames group's slot is the one place the start frame is drawn: a second tile in the
-        // references area, bound to the same frame, only said it again.
-        expect(tree.root.findByProps({ testID: 'video-start-frame-slot' }).props).toMatchObject({ disabled: false, media: expect.objectContaining({ id: 'doorstep' }) });
-        expect(tree.root.findAllByProps({ testID: 'video-optional-first-frame-slot' })).toHaveLength(0);
-        expect(pressables(tree.root).filter((node) => node.props.accessibilityLabel === 'Open details for Doorstep')).toHaveLength(1);
+          renderer.act(() => { labelled(standby, 'Remove Porch').props.onPress(); });
+          await settle();
+          expect(storedDrafts().video.endFrame).toBeNull();
+          expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+          expect(text(tree)).toContain('Porch was removed from this draft.');
+        });
 
-        await pressGenerate(tree);
-        const inputs = (authState.api.startGeneration.mock.calls[0][0] as { inputs: Array<Record<string, unknown>> }).inputs;
-        expect(inputs).toEqual(expect.arrayContaining([
-          expect.objectContaining({ slot: 'imageReferences', url: 'https://cdn.example.com/look.png', handle: '@look' }),
-          expect.objectContaining({ slot: 'startFrame', url: 'https://cdn.example.com/doorstep.png' }),
-        ]));
-        expect(inputs).toHaveLength(2);
+        it('draws a start frame once, in the frames group, and sends it beside the references', async () => {
+          memory.set(ordinaryKey, wanDraft({ startFrame: stagedMedia('doorstep') }));
+          authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+          // The frames group's slot is the one place the start frame is drawn: a second tile in the
+          // references area, bound to the same frame, only said it again.
+          expect(tree.root.findByProps({ testID: 'video-start-frame-slot' }).props).toMatchObject({ disabled: false, media: expect.objectContaining({ id: 'doorstep' }) });
+          expect(pressables(tree.root).filter((node) => node.props.accessibilityLabel === 'Open details for Doorstep')).toHaveLength(1);
+
+          await pressGenerate(tree);
+          expect(sentInputs()).toEqual([
+            expect.objectContaining({ slot: 'imageReferences', url: 'https://cdn.example.com/look.png', handle: '@look' }),
+            expect.objectContaining({ slot: 'startFrame', url: 'https://cdn.example.com/doorstep.png' }),
+          ]);
+        });
+
+        it('keeps the empty start-frame slot open with references attached, and sends the frame it takes', async () => {
+          memory.set(ordinaryKey, wanDraft());
+          vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///doorstep.png', fileName: 'doorstep.png', mimeType: 'image/png', fileSize: 2048 } as never);
+          vi.mocked(uploadPickedMedia).mockResolvedValue({
+            signedUrl: 'https://cdn.example.com/doorstep.png',
+            storagePath: 'uploads/user-123/doorstep.png',
+            mimeType: 'image/png',
+            fileName: 'doorstep.png',
+            kind: 'image',
+            durationSeconds: null,
+            sizeBytes: 2048,
+          });
+          authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+          // Neither the references attached nor the slot's own state may close it: it is the way in.
+          const slot = labelled(tree.root, 'Add start frame');
+          expect(slot.props.disabled).toBe(false);
+          let framesGroup: renderer.ReactTestInstance | null = tree.root.findByProps({ testID: 'video-frame-slots' });
+          while (framesGroup && framesGroup.props.pointerEvents === undefined) framesGroup = framesGroup.parent;
+          expect(framesGroup?.props.pointerEvents).toBe('auto');
+
+          await renderer.act(async () => { await slot.props.onPress(); });
+          await settle();
+          expect(storedDrafts().video.startFrame).toMatchObject({ url: 'https://cdn.example.com/doorstep.png', displayName: 'Start Frame' });
+          expect(pressables(tree.root).filter((node) => node.props.accessibilityLabel === 'Open details for Start Frame')).toHaveLength(1);
+
+          await pressGenerate(tree);
+          expect(sentInputs()).toEqual([
+            expect.objectContaining({ slot: 'imageReferences', url: 'https://cdn.example.com/look.png', handle: '@look' }),
+            expect.objectContaining({ slot: 'startFrame', url: 'https://cdn.example.com/doorstep.png' }),
+          ]);
+        });
       });
 
       it('lets a run go without a swept upload it leaves out, and marks that upload where it waits', async () => {
