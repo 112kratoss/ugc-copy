@@ -5,7 +5,7 @@ description: Drive the Pixel_9a emulator or the owner's Samsung S24 over adb for
 
 # Android devices
 
-Scripts beside this file: `scripts/emulator.sh` (lock, boot, launch, shot, restarts; it refuses a serial that is not an emulator's), `scripts/phone.sh` (one short command per step on the S24), `scripts/keep-awake.sh`, `scripts/ui_find.py` (on-screen controls with their centres, for taps). They run under the Mac's `/bin/bash`, which is 3.2: `shell-scripts.test.ts` parses every tracked shell script with the interpreter its first line names. `ANDROID_SERIAL` picks the device; `adb devices` lists serials. The package is `com.magicbooklet.mobile` (the `.dev` build claims the same deep-link scheme, so name the package in every `am start`).
+Scripts beside this file: `scripts/emulator.sh` (lock, boot, launch, shot, restarts; all but lock and unlock refuse a serial that is not an emulator's), `scripts/phone.sh` (one short command per step on the S24), `scripts/keep-awake.sh`, `scripts/ui_find.py` (on-screen controls with their centres, for taps). The shell scripts run under the Mac's `/bin/bash`, which is 3.2: `shell-scripts.test.ts` parses every tracked shell script with the interpreter its first line names, and `android-device-phone-script.test.ts` runs phone.sh, keep-awake.sh and emulator.sh's guard against a stand-in adb. `ANDROID_SERIAL` picks the device; `adb devices` lists serials. The package is `com.magicbooklet.mobile` (the `.dev` build claims the same deep-link scheme, so name the package in every `am start`).
 
 ## 1. Is the device free?
 
