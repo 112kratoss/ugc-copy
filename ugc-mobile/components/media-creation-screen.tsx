@@ -5115,7 +5115,7 @@ function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disab
     >
       {icon}
       {/* Centred, because a priced label ("Enhance · 2 credits") can take two lines in half the row. */}
-      <Text style={{ color: accent ? theme.colors.primary : theme.colors.muted, fontSize: accent ? 11 : 10, fontWeight: '800', textAlign: 'center', paddingHorizontal: 4 }}>{label}</Text>
+      <Text style={{ color: accent ? theme.colors.primary : theme.colors.muted, fontSize: 11, fontWeight: '800', textAlign: 'center', paddingHorizontal: 4 }}>{label}</Text>
     </Pressable>
   );
 }

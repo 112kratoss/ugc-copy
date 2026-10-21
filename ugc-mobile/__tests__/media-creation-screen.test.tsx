@@ -6558,6 +6558,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(text(tree)).toContain('Required inputs');
         expect(text(tree)).not.toContain('Reference images are required.');
         expect(text(tree)).not.toContain('Reference videos are required.');
+        // The panel holds its heading and its slots, and no empty block of lines under them.
+        expect(tree.root.find((node) => String(node.type) === 'view' && node.props.testID === 'motion-required-inputs').children).toHaveLength(2);
         // The bar's hint names the slots as drawn, not the motion-inputs pair.
         expect(blocker(tree)).toBe('Add reference images and reference videos.');
       });
@@ -6584,6 +6586,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
         expect(blocker(tree)).toBe(hint);
+        // And the empty slot has no line of its own under it.
+        expect(slotText(tree, 'motion-required-inputs').filter((line) => /required|requires/i.test(line))).toEqual(['Required inputs']);
       });
 
       it('take a clip on Kling 3.0 beside its picture, and send the picture and the clip in its slots', async () => {
