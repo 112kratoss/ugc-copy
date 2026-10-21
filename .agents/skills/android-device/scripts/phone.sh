@@ -12,12 +12,15 @@
 #   phone.sh tapkey <keycode> one key (4 = BACK)
 #   phone.sh home             a launcher-style start that clears the task (after a deep-link start)
 set -u
-S="${ANDROID_SERIAL:?set ANDROID_SERIAL to the phone's serial from adb devices}"
+S="${ANDROID_SERIAL:?set ANDROID_SERIAL to the serial of the phone, from adb devices}"
 PKG="${PKG:-com.magicbooklet.mobile}"
 SHOTS="${SHOTS:-${TMPDIR:-/tmp}/phone-shots}"
 A() { adb -s "$S" "$@"; }
 front() { A shell dumpsys window 2>/dev/null | grep -m1 'mCurrentFocus' | sed 's/.* u0 //; s/}.*//; s|/.*||' | tr -d '\r'; }
 touches() { local since; since=$(A shell "date -d @\$(( \$(date +%s) - 6 )) '+%m-%d %H:%M:%S.000'" | tr -d '\r'); A logcat -d -T "$since" 2>/dev/null | grep -c 'ViewPostIme pointer'; }
+# A call in progress, from telephony's current state (one line per SIM: 1 ringing, 2 in a call). Telecom's dump
+# also keeps an event log of past calls, so its `state=DIALING` lines counted every call since the log began.
+calls() { A shell dumpsys telephony.registry 2>/dev/null | grep -c -E 'mCallState=[12]'; }
 cmd="${1:?a step}"; shift
 case "$cmd" in
   state)
@@ -25,7 +28,7 @@ case "$cmd" in
     A shell dumpsys power 2>/dev/null | grep -m1 'mWakefulness=' | sed 's/^ */power: /'
     A shell dumpsys window policy 2>/dev/null | grep -m1 -i 'showing=' | sed 's/^ */keyguard: /'
     echo "front: $(front)"
-    A shell dumpsys telecom 2>/dev/null | grep -m1 -E 'state=(ACTIVE|RINGING|DIALING)' | sed 's/^ */call: /'
+    echo "calls in progress: $(calls) ($(A shell dumpsys telephony.registry 2>/dev/null | grep -oE 'mCallState=[0-9]' | tr '\n' ' ' | sed 's/ $//'))"
     A shell dumpsys audio 2>/dev/null | grep -m1 'Actual mode' | sed 's/^ */audio: /'
     echo "touches in the last 6 s: $(touches)"
     echo "app pid: $(A shell pidof "$PKG" 2>/dev/null)";;
@@ -33,7 +36,7 @@ case "$cmd" in
     awake=$(A shell dumpsys power 2>/dev/null | grep -c 'mWakefulness=Awake')
     locked=$(A shell dumpsys window policy 2>/dev/null | grep -m1 -ic 'showing=true')
     f=$(front); mode=$(A shell dumpsys audio 2>/dev/null | grep -m1 'Actual mode')
-    call=$(A shell dumpsys telecom 2>/dev/null | grep -c -E 'state=(ACTIVE|RINGING|DIALING)')
+    call=$(calls)
     t=$(touches)
     case "$f" in com.sec.android.app.launcher|"$PKG") ok_front=1;; *) ok_front=0;; esac
     if [ "$awake" = 1 ] && [ "$locked" = 0 ] && [ "$ok_front" = 1 ] && [ "$call" = 0 ] && printf '%s' "$mode" | grep -q MODE_NORMAL && [ "$t" = 0 ]; then echo "free"; exit 0; fi

@@ -3,7 +3,7 @@
 # while the screen is on and the launcher or our app is in front. Stops by itself otherwise.
 #   keep-awake.sh [minutes, default 15]     ANDROID_SERIAL names the phone; touch $STOP to stop early
 set -u
-S="${ANDROID_SERIAL:?set ANDROID_SERIAL to the phone's serial}"
+S="${ANDROID_SERIAL:?set ANDROID_SERIAL to the serial of the phone}"
 PKG="${PKG:-com.magicbooklet.mobile}"
 STOP="${STOP:-${TMPDIR:-/tmp}/keep-awake-stop}"
 end=$(( $(date +%s) + ${1:-15} * 60 ))
