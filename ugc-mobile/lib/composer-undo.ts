@@ -1,6 +1,6 @@
 import { MEDIA_MAX_ITEMS } from './media-reorder';
 import {
-  createMadeWithRow,
+  MAX_MADE_WITH_ROWS,
   type PostComposerDraft,
   type PostComposerMadeWithRow,
   type PostComposerMediaItem,
@@ -30,11 +30,12 @@ import {
  * - *"Let people undo multiple times"* is the one rule this deliberately does
  *   not meet; see `COMPOSER_UNDO_WINDOW_MS`.
  *
- * Undo puts back what the removal took and nothing else. The offer rides above
- * the keyboard, so it can be taken mid-typing: it used to restore the whole
- * draft as it stood before the removal, and on the Pixel 9a emulator
- * (2026-10-22) text typed into the package summary after a card's removal was
- * gone again after Undo. So a removal records the piece it took, where it stood
+ * Undo puts back what the removal took and nothing else. Typing can go on while
+ * the offer stands: on Android the offer rides above the keyboard, and on iOS a
+ * field can be focused again before the keyboard is put away to reach it. It
+ * used to restore the whole draft as it stood before the removal, and on the
+ * Pixel 9a emulator (2026-10-22) text typed into the package summary after a
+ * card's removal was gone again after Undo. So a removal records the piece it took, where it stood
  * and what it changed around it (`PostComposerRemoval`), and Undo applies that
  * to the draft as it is when the control is pressed.
  */
@@ -75,14 +76,18 @@ export interface PostComposerMediaRemoval {
   index: number;
   /** The resource cards whose outputs the removal changed: what they were, and what it left. */
   cards: Array<{ id: string; before: ResourceCardOutputs; after: ResourceCardOutputs }>;
+  /**
+   * The draft's cover upload before and after. Editing a post starts from an upload built from the
+   * post itself, not from its first item, so rebuilding it on the way back would leave the draft
+   * reading as changed.
+   */
+  upload: { before: PostComposerDraft['upload']; after: PostComposerDraft['upload'] };
 }
 
 export interface PostComposerMadeWithRemoval {
   kind: 'made-with';
   row: PostComposerMadeWithRow;
   index: number;
-  /** The blank row put in when the last one went, which the row's return replaces. */
-  standInId: string | null;
 }
 
 export interface PostComposerResourceCardRemoval {
@@ -110,6 +115,11 @@ function uploadFor(item: PostComposerMediaItem | undefined): PostComposerDraft['
   return item ? { uri: item.uri, name: item.name, type: item.type } : null;
 }
 
+function sameUpload(left: PostComposerDraft['upload'], right: PostComposerDraft['upload']) {
+  return left === right || (left !== null && right !== null
+    && left.uri === right.uri && left.name === right.name && left.type === right.type);
+}
+
 function sameOutputs(left: ResourceCardOutputs, right: ResourceCardOutputs) {
   return left.appliesToAll === right.appliesToAll
     && left.mediaKeys.length === right.mediaKeys.length
@@ -134,27 +144,25 @@ export function takeComposerMedia(draft: PostComposerDraft, id: string): PostCom
     changed.push({ id: card.id, before: { mediaKeys: card.mediaKeys, appliesToAll: card.appliesToAll }, after });
     return { ...card, ...after };
   });
+  const upload = uploadFor(mediaItems[0]);
   return {
     draft: {
       ...draft,
       mediaItems,
-      upload: uploadFor(mediaItems[0]),
+      upload,
       resource: { ...draft.resource, cards },
     },
-    removal: { kind: 'media', item, index, cards: changed },
+    removal: { kind: 'media', item, index, cards: changed, upload: { before: draft.upload, after: upload } },
   };
 }
 
-/** Removes one made-with row; the list never empties, so the last one is replaced by a blank row. */
+/** Removes one made-with row. The list never empties: the last row is not taken, as the screen offers no Remove on it. */
 export function takeComposerMadeWithRow(draft: PostComposerDraft, id: string): PostComposerTaken<PostComposerMadeWithRemoval> | null {
   const index = draft.madeWithRows.findIndex((row) => row.id === id);
-  if (index < 0) return null;
-  const rest = draft.madeWithRows.filter((row) => row.id !== id);
-  // Named after the row it stands in for, so taking the row twice gives the same stand-in.
-  const standIn = rest.length > 0 ? null : createMadeWithRow({ id: `${id}-stand-in` });
+  if (index < 0 || draft.madeWithRows.length <= 1) return null;
   return {
-    draft: { ...draft, madeWithRows: standIn ? [standIn] : rest },
-    removal: { kind: 'made-with', row: draft.madeWithRows[index], index, standInId: standIn?.id ?? null },
+    draft: { ...draft, madeWithRows: draft.madeWithRows.filter((row) => row.id !== id) },
+    removal: { kind: 'made-with', row: draft.madeWithRows[index], index },
   };
 }
 
@@ -187,8 +195,9 @@ export function takeComposerResourceCard(draft: PostComposerDraft, id: string): 
  * typed or chosen since stays. The piece returns to its place (or the end, if
  * the list has since grown shorter), and what the removal changed around it is
  * changed back where nothing has changed it again since: a resource card's
- * outputs, the blank made-with row, resources switched off. A piece that is
- * already back is left alone, and so is media there is no longer a slot for.
+ * outputs, resources switched off. A piece that is already back is left alone,
+ * and so is media or a made-with row the list no longer has room for (the
+ * screen's Add filled it again meanwhile).
  */
 export function putBackComposerRemoval(draft: PostComposerDraft, removal: PostComposerRemoval): PostComposerDraft {
   switch (removal.kind) {
@@ -204,15 +213,14 @@ export function putBackComposerRemoval(draft: PostComposerDraft, removal: PostCo
       return {
         ...draft,
         mediaItems,
-        upload: uploadFor(mediaItems[0]),
+        upload: sameUpload(draft.upload, removal.upload.after) ? removal.upload.before : uploadFor(mediaItems[0]),
         resource: { ...draft.resource, cards },
       };
     }
     case 'made-with': {
       if (draft.madeWithRows.some((row) => row.id === removal.row.id)) return draft;
-      const madeWithRows = draft.madeWithRows.filter((row) => !(
-        row.id === removal.standInId && !row.toolLabel.trim() && !row.modelLabel.trim()
-      ));
+      if (draft.madeWithRows.length >= MAX_MADE_WITH_ROWS) return draft;
+      const madeWithRows = [...draft.madeWithRows];
       madeWithRows.splice(Math.min(removal.index, madeWithRows.length), 0, removal.row);
       return { ...draft, madeWithRows };
     }

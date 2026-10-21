@@ -11,6 +11,7 @@ import {
   createMadeWithRow,
   createPostComposerResourceCard,
   getDefaultPostComposerDraft,
+  MAX_MADE_WITH_ROWS,
   type PostComposerDraft,
   type PostComposerMediaItem,
 } from '../lib/post-new-view-model';
@@ -83,6 +84,15 @@ describe('composer undo — Undo puts back what the removal took, onto the draft
       expect(putBackComposerRemoval(taken.draft, taken.removal).upload?.uri).toBe('file:///a.jpg');
     });
 
+    it('gives back the cover upload it found, so an edited post reads as unchanged again', () => {
+      // Editing builds the upload from the post (its URL, its title), not from its first item.
+      const edited = { ...mediaPost(), upload: { uri: 'https://cdn.example/post.jpg', name: 'Before', type: 'image/jpeg' } };
+      for (const id of ['a', 'b']) {
+        const taken = takeComposerMedia(edited, id)!;
+        expect(putBackComposerRemoval(taken.draft, taken.removal)).toEqual(edited);
+      }
+    });
+
     it('leaves a card whose outputs were chosen again since', () => {
       const taken = takeComposerMedia(mediaPost(), 'b')!;
       const rechosen = {
@@ -125,19 +135,20 @@ describe('composer undo — Undo puts back what the removal took, onto the draft
       expect(putBackComposerRemoval(taken.draft, taken.removal).madeWithRows).toEqual(rows);
     });
 
-    it('replace the blank row that stood in for the last one, unless it has been filled', () => {
+    it('keep the last one, as the screen offers no Remove on it', () => {
       const draft = getDefaultPostComposerDraft();
-      const row = draft.madeWithRows[0];
-      const taken = takeComposerMadeWithRow(draft, row.id)!;
-      expect(taken.draft.madeWithRows).toHaveLength(1);
-      expect(taken.draft.madeWithRows[0]).toMatchObject({ toolLabel: '', modelLabel: '' });
-      // Taking the same row from the same draft gives the same stand-in, so the screen's two reads agree.
-      expect(takeComposerMadeWithRow(draft, row.id)!.draft).toEqual(taken.draft);
+      expect(draft.madeWithRows).toHaveLength(1);
+      expect(takeComposerMadeWithRow(draft, draft.madeWithRows[0].id)).toBeNull();
+    });
 
-      expect(putBackComposerRemoval(taken.draft, taken.removal).madeWithRows).toEqual([row]);
-
-      const filled = { ...taken.draft, madeWithRows: [{ ...taken.draft.madeWithRows[0], toolLabel: 'Runway' }] };
-      expect(putBackComposerRemoval(filled, taken.removal).madeWithRows.map((candidate) => candidate.toolLabel)).toEqual(['Manual', 'Runway']);
+    it('do not come back past the five a post carries', () => {
+      // Remove one of five, add another while the offer stands, then Undo: a sixth row would be
+      // drawn with Add hidden, and publishing keeps five (MAX_MADE_WITH_ROWS).
+      const draft = getDefaultPostComposerDraft();
+      const rows = Array.from({ length: MAX_MADE_WITH_ROWS }, (_, index) => createMadeWithRow({ toolLabel: `Tool ${index + 1}` }));
+      const taken = takeComposerMadeWithRow({ ...draft, madeWithRows: rows }, rows[1].id)!;
+      const refilled = { ...taken.draft, madeWithRows: [...taken.draft.madeWithRows, createMadeWithRow()] };
+      expect(putBackComposerRemoval(refilled, taken.removal)).toBe(refilled);
     });
   });
 

@@ -89,6 +89,7 @@ import {
   type PostComposerResourceCardType,
   type PostComposerValidationResult,
   getDefaultResourceDraft,
+  MAX_MADE_WITH_ROWS,
 } from '@/lib/post-new-view-model';
 import {
   COMPOSER_UNDO_WINDOW_MS,
@@ -2905,7 +2906,7 @@ function NewPostComposer() {
   const addMadeWithRow = () => {
     setDraft((current) => ({
       ...current,
-      madeWithRows: [...current.madeWithRows, createMadeWithRow()].slice(0, 5),
+      madeWithRows: [...current.madeWithRows, createMadeWithRow()].slice(0, MAX_MADE_WITH_ROWS),
     }));
   };
 
@@ -3238,6 +3239,10 @@ function NewPostComposer() {
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   };
 
+  // An offer that could no longer bring anything back (its list filled up again meanwhile) is not
+  // drawn: Undo would take the bar away and change nothing.
+  const shownUndoEntry = undoEntry && putBackComposerRemoval(draft, undoEntry.removal) !== draft ? undoEntry : null;
+
   const submitPost = () => {
     setMessage(null);
     setPendingPublishVisibility(draft.visibility);
@@ -3263,13 +3268,14 @@ function NewPostComposer() {
           setComposerStep('details');
         }}
       />
-      {/* The page's own fields, its undo offer and its footer give way to the keyboard together. On
-          Android the area shortens by the keyboard, so the scroll view keeps the focused field in view
-          and the offer and the footer ride above the keys; on the Pixel 9a emulator a focused Title,
-          Story, post text, package summary and price all sat under the keys without it (2026-10-22),
-          the resource sheet's area being the only one in this file. On iOS the scroll view's own
-          insets make the room and the offer and the footer stay under the keys. `reservedBottomInset`:
-          the footer already pads that much for the screen's edge, which the keyboard covers. */}
+      {/* The page's own fields give way to the keyboard. On Android the area shortens by the keyboard,
+          so the scroll view keeps the focused field in view and the undo offer and the footer ride above
+          the keys; on the Pixel 9a emulator a focused Title, Story, post text, package summary and price
+          all sat under the keys without it (2026-10-22), the resource sheet's area being the only one in
+          this file. On iOS the scroll view's own insets make the room, and the offer and the footer stay
+          under the keys: React Native brings the field's bottom to the keys' top edge, under anything
+          lifted above them. `reservedBottomInset`: the footer already pads that much for the screen's
+          edge, which the keyboard covers. */}
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets reservedBottomInset={bottomInset} testID="composer-keyboard-area">
       <ScrollView
         ref={scrollRef}
@@ -3376,7 +3382,7 @@ function NewPostComposer() {
         )}
       </ScrollView>
 
-      <ComposerUndoBar entry={undoEntry} onUndo={applyUndo} onDismiss={dismissUndo} />
+      <ComposerUndoBar entry={shownUndoEntry} onUndo={applyUndo} onDismiss={dismissUndo} />
 
       <PostComposerFooter
         step={composerStep}
@@ -3649,7 +3655,7 @@ function MadeWithSection({
             </View>
           );
         })}
-        {!disabled && rows.length < 5 ? (
+        {!disabled && rows.length < MAX_MADE_WITH_ROWS ? (
           <View style={{ alignSelf: 'flex-start' }}>
             <MiniAction label="Add another tool" onPress={onAdd} />
           </View>

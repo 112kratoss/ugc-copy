@@ -285,6 +285,9 @@ describe('S11 — a removal can be taken back', () => {
   it('puts back only what was removed', () => {
     expect(composer).toContain('setDraft((current) => putBackComposerRemoval(current, removal));');
     expect(composer).not.toContain('setDraft(snapshot)');
+    // An offer whose list has filled up again meanwhile would do nothing, so it is not drawn.
+    expect(composer).toContain('putBackComposerRemoval(draft, undoEntry.removal) !== draft ? undoEntry : null');
+    expect(composer).toContain('<ComposerUndoBar entry={shownUndoEntry}');
   });
 
   // The consistency rule: a reversal offered on one control and not the next is

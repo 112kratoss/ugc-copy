@@ -742,8 +742,11 @@ describe('mobile external post composer', () => {
     // resizing; KeyboardAvoidingArea shrinks the surface on either platform.
     const keyboardContainer = tree.root.findAll((node) => node.props?.testID === 'resource-editor-keyboard-area')[0];
     expect(keyboardContainer).toBeTruthy();
-    const keyboardScroll = tree.root.findAll((node) => String(node.type) === 'scrollview' && node.props.automaticallyAdjustKeyboardInsets)[0];
+    // Inside the editor's own area: the page's scroll view carries the prop too, and comes first.
+    const keyboardScroll = keyboardContainer.findAll((node) => String(node.type) === 'scrollview' && node.props.automaticallyAdjustKeyboardInsets)[0];
     expect(keyboardScroll).toBeTruthy();
+    const pageArea = tree.root.findAll((node) => node.props?.testID === 'composer-keyboard-area')[0];
+    expect(pageArea.findAll((node) => String(node.type) === 'scrollview' && node.props.automaticallyAdjustKeyboardInsets)).not.toHaveLength(0);
 
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Close resource editor').props.onPress());
     expect(alertState.alert).toHaveBeenCalledWith(
