@@ -686,6 +686,46 @@ export function createMediaDraftFromUpload(
   };
 }
 
+type Mentionable = Pick<MediaDraft, 'displayName' | 'handle'>;
+
+/**
+ * A name by place ("Subject 3"): the first place from `from` on that nothing in `held` answers to, by
+ * its name or by its @mention, so the name on a tile and the mention it inserts stay one. A remix can
+ * bring a picture back as "@reference_2" under another name.
+ */
+export function placeName(word: string, from: number, held: ReadonlyArray<Mentionable>): string {
+  const taken = new Set(held.flatMap((media) => [toHandleBase(media.displayName), ...(media.handle ? [media.handle.slice(1)] : [])]));
+  let place = from;
+  while (taken.has(toHandleBase(`${word} ${place}`))) place += 1;
+  return `${word} ${place}`;
+}
+
+// A file name nobody would call a picture by. Android's photo picker hands a picture over under its
+// media id ("1000333161.jpg"), or a random UUID where it cannot read a name, and a pick with no name is
+// uploaded under the time. Upload names are ASCII (lib/media.ts), so a name with a letter says something.
+const NAMELESS_FILE = /^(?:[^a-z]*|[0-9a-f]{8}(?:[ _-]?[0-9a-f]{4}){3}[ _-]?[0-9a-f]{12})$/i;
+
+/**
+ * Picked pictures, named for the draft they join. A picture keeps the name its file gives it; one whose
+ * file name says nothing is named by its place among the draft's references ("Reference 3" for the
+ * third), the number the server's legend gives it ("attached reference image 3"), and passes over a
+ * place that another reference, `others` (a video's clips and subjects) or a picture picked with it
+ * already answers to.
+ */
+export function nameUnnamedReferences(
+  added: MediaDraft[],
+  references: ReadonlyArray<Mentionable>,
+  others: ReadonlyArray<Mentionable> = [],
+): MediaDraft[] {
+  const named = added.filter((media) => !NAMELESS_FILE.test(media.displayName.trim()));
+  return added.reduce<MediaDraft[]>((result, media, index) => [
+    ...result,
+    named.includes(media)
+      ? media
+      : renameMediaDraft(media, placeName('Reference', references.length + index + 1, [...references, ...others, ...named, ...result])),
+  ], []);
+}
+
 function stringSetting(settings: Record<string, unknown>, key: string) {
   const value = settings[key];
   return typeof value === 'string' && value.trim().length > 0 ? value : null;

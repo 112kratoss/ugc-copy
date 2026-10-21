@@ -17,6 +17,7 @@ import {
   getVideoElementSupport,
   getVisibleGenerationCheckMessages,
   hydrateCreationDraftFromRemixSource,
+  nameUnnamedReferences,
   renameMediaDraft,
   replaceMediaDraftMedia,
   replaceShotPrompt,
@@ -1043,5 +1044,64 @@ describe('extractPromptHandles', () => {
 
     expect(server).toBeDefined();
     expect(patternIn(join(repoRoot, 'lib/media-creation-view-model.ts'))).toBe(server);
+  });
+});
+
+// Android's system photo picker names a picture by its media id ("1000333161.jpg"), so a reference
+// picked through it was named "1000333161" and answered to "@1000333161" (the owner's S24, 2026-10-21).
+describe('nameUnnamedReferences', () => {
+  const picked = (fileName: string) => createMediaDraftFromUpload({
+    signedUrl: `https://cdn.example.com/${fileName}`,
+    storagePath: `uploads/user/${fileName}`,
+    mimeType: 'image/jpeg',
+    fileName,
+    kind: 'image',
+  });
+
+  const named = (media: MediaDraft[]) => media.map((item) => [item.displayName, item.handle]);
+
+  // The names uploads arrive under: a media id, a random UUID where the picker could not read a name, a
+  // Samsung camera file, and "фото.jpg" as the upload's ASCII-only name has it (lib/media.ts). The place is
+  // the one the server's legend gives the picture ("attached reference image 3").
+  it('names a picture whose file name says nothing by its place among the references, and keeps a name with words', () => {
+    expect(named(nameUnnamedReferences(
+      [picked('1000333161.jpg'), picked('Bottle_shot.jpg'), picked('3f2504e0-4f89-11d3-9a0c-0305e82c3301.jpg'), picked('20261021_103000.jpg'), picked('-.jpg'), picked('Facade.jpg'), picked('IMG_1234.jpg')],
+      [imageReference()],
+    ))).toEqual([
+      ['Reference 2', '@reference_2'],
+      ['Bottle shot', '@bottle_shot'],
+      ['Reference 4', '@reference_4'],
+      ['Reference 5', '@reference_5'],
+      ['Reference 6', '@reference_6'],
+      ['Facade', '@facade'],
+      ['IMG 1234', '@img_1234'],
+    ]);
+  });
+
+  it('passes over a place another picture answers to by mention, and one it gave a picture picked before it', () => {
+    // A remix whose stored picture had no handle brings it back as "@reference_2", under another name.
+    const restored = { ...imageReference({ displayName: 'Reference image 2' }), handle: '@reference_2' };
+    expect(named(nameUnnamedReferences([picked('1000333161.jpg'), picked('1000333162.jpg')], [restored]))).toEqual([
+      ['Reference 3', '@reference_3'],
+      ['Reference 4', '@reference_4'],
+    ]);
+  });
+
+  it('passes over a place a clip or subject answers to', () => {
+    // A video's clips and subjects take mentions too: a clip renamed "Reference 2" answers to @reference_2.
+    const clip = { displayName: 'Reference 2', handle: '@reference_2' };
+    expect(named(nameUnnamedReferences([picked('1000333161.jpg')], [imageReference()], [clip]))).toEqual([['Reference 3', '@reference_3']]);
+  });
+
+  it('passes over a place a picture picked with it is named for', () => {
+    expect(named(nameUnnamedReferences([picked('1000333161.jpg'), picked('Reference_1.jpg')], []))).toEqual([
+      ['Reference 2', '@reference_2'],
+      ['Reference 1', '@reference_1'],
+    ]);
+  });
+
+  it('changes nothing about a picture it names but its name and mention', () => {
+    const original = picked('1000333161.jpg');
+    expect(nameUnnamedReferences([original], [])).toEqual([{ ...original, displayName: 'Reference 1', handle: '@reference_1' }]);
   });
 });

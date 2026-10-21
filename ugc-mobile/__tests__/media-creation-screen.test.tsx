@@ -6288,6 +6288,75 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(storedDrafts().image.prompt).toBe('Put @alpha_3 on the table');
       });
 
+      // Android's system photo picker names a picture by its media id ("1000333161.jpg"), which named the
+      // reference "1000333161" (the owner's S24, 2026-10-21).
+      it('are named by their place where the file name says nothing, and answer to that name', async () => {
+        // A remix whose stored picture had no handle brings it back as "@reference_2", under another name.
+        memory.set(ordinaryKey, savedDrafts({ image: { references: [stagedMedia('hero', 'image', { displayName: 'Reference image 2', handle: '@reference_2' })] } }));
+        vi.mocked(pickMediaList)
+          .mockResolvedValueOnce([pickedImage('1000333161.jpg'), pickedImage('Bottle_shot.jpg')] as never)
+          .mockResolvedValueOnce([pickedImage('1000333162.jpg')] as never);
+        vi.mocked(uploadPickedMedia).mockImplementation(async (uri) => uploaded(uri.replace('file:///', '')));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
+        await settle();
+        expect(storedDrafts().image.references.map((media: { displayName: string; handle: string }) => [media.displayName, media.handle])).toEqual([
+          ['Reference image 2', '@reference_2'],
+          ['Reference 3', '@reference_3'],
+          ['Bottle shot', '@bottle_shot'],
+          ['Reference 4', '@reference_4'],
+        ]);
+        expect(labelled(tree.root, 'Open details for Reference 4')).toBeTruthy();
+      });
+
+      it('in a video draft are numbered among its pictures, past a place a clip answers to', async () => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo()]);
+        // A clip renamed "Reference 3" answers to @reference_3.
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-2',
+          catalogRevision: 'parity-rev',
+          references: [stagedMedia('hero'), stagedMedia('bottle')],
+          referenceVideos: [stagedMedia('turn', 'video', { displayName: 'Reference 3', handle: '@reference_3' })],
+        } }));
+        vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('1000333161.jpg')] as never);
+        vi.mocked(uploadPickedMedia).mockImplementation(async (uri) => uploaded(uri.replace('file:///', '')));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await renderer.act(async () => { await findPressableByLabelPrefix(tree.root, 'Add Images ').props.onPress(); });
+        await settle();
+        expect(storedDrafts().video.references.map((media: { displayName: string; handle: string }) => [media.displayName, media.handle])).toEqual([
+          ['Hero', '@hero'],
+          ['Bottle', '@bottle'],
+          ['Reference 4', '@reference_4'],
+        ]);
+      });
+
+      it('made into a subject take the next place no subject answers to, where one before it was removed', async () => {
+        catalogState.catalog = parityCatalog([parityKlingO3()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-o3',
+          catalogRevision: 'parity-rev',
+          subjects: [{
+            id: 'subject-2',
+            displayName: 'Subject 2',
+            handle: '@subject_2',
+            images: [stagedMedia('two-front', 'image', { handle: '@subject_2' }), stagedMedia('two-side', 'image', { handle: '@subject_2' })],
+          }],
+        } }));
+        vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('1000333161.jpg'), pickedImage('1000333162.jpg')] as never);
+        vi.mocked(uploadPickedMedia).mockImplementation(async (uri) => uploaded(uri.replace('file:///', '')));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await renderer.act(async () => { await findPressableByLabelPrefix(tree.root, 'Add Subject 1/').props.onPress(); });
+        await settle();
+        expect(storedDrafts().video.subjects.map((subject: { displayName: string; handle: string }) => [subject.displayName, subject.handle])).toEqual([
+          ['Subject 2', '@subject_2'],
+          ['Subject 3', '@subject_3'],
+        ]);
+      });
+
       it('are drawn from the picker’s copy this session, saved and sent as their link, and drawn from the link after a restart', async () => {
         // A descriptor with input modes, as production publishes, so the run carries its references.
         catalogState.catalog = parityCatalog([parityImageModel('wide-image', 'Wide Image', 5)]);
