@@ -1793,7 +1793,7 @@ function ResourceScopePicker({
         <Check size={17} color={card.appliesToAll ? theme.colors.image : theme.colors.faint} />
         <AppText variant="label">All outputs</AppText>
       </Pressable>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9 }}>
+      <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9 }}>
         {mediaItems.map((item, index) => {
           const mediaKey = item.mediaKey ?? item.id;
           const selected = !card.appliesToAll && card.mediaKeys.includes(mediaKey);
@@ -4346,6 +4346,7 @@ function UploadContent({
         <ScrollView
           ref={rowRef}
           horizontal
+          keyboardShouldPersistTaps="handled"
           showsHorizontalScrollIndicator={false}
           scrollEnabled={drag === null}
           scrollEventThrottle={16}

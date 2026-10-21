@@ -160,6 +160,7 @@ export function PostResourceReferences({
       </Text>
       <ScrollView
         horizontal
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ gap: 10 }}
         showsHorizontalScrollIndicator={false}
       >

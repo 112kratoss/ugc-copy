@@ -1493,6 +1493,7 @@ function TopSlider({
       ref={listRef}
       data={loopedSlides}
       horizontal
+      keyboardShouldPersistTaps="handled"
       keyExtractor={(item) => item.key}
       // Recentering jumps a full pass, so the list re-renders its window on
       // arrival. Typing the rows lets it reuse the view it already had for the

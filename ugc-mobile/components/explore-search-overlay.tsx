@@ -519,7 +519,7 @@ export function ExploreSearchOverlay({
             ) : null}
           </View>
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 3, paddingTop: 10 }} accessibilityRole="tablist">
+        <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 3, paddingTop: 10 }} accessibilityRole="tablist">
           {SEARCH_TYPES.map((item) => (
             <SearchTab
               key={item.id}

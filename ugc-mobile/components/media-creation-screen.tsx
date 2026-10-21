@@ -3348,7 +3348,7 @@ function GuidedPromptChips({
 }) {
   const theme = useAppTheme();
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
+    <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
       {GUIDED_PROMPTS[tool].map((starter, index) => {
         const active = starter === prompt;
         return (
@@ -3939,7 +3939,7 @@ function CompactShotEditor({
           <Text style={{ color: theme.colors.text, fontSize: 11, fontWeight: '800' }}>Add shot</Text>
         </Pressable>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
+      <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
         {draft.multiPrompts.map((shot, index) => {
           const active = shot.id === selectedShot?.id;
           // A shot past its limit says so on its chip too, so it can be found among the others.
@@ -3994,7 +3994,7 @@ function CompactShotEditor({
           </View>
           <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}>
             <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Shot duration</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 7 }}>
+            <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 7 }}>
               {[3, 4, 5, 6, 8, 10, 12].map((duration) => (
                 <Chip key={duration} label={`${duration}s`} active={selectedShot.duration === duration} accent="video" onPress={() => updateSelected({ duration })} />
               ))}
@@ -4725,7 +4725,7 @@ function StandbyReferences({
         <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Not sent with this run</Text>
         {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{message}</Text> : null}
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
+      <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
         {references.map((media) => (
           <View key={media.id} style={{ width: 72, gap: 4 }}>
             <View style={{ opacity: 0.45 }}>
@@ -5326,7 +5326,7 @@ function ReferenceDetailsOverlay({
             <ScrollView {...drag.scrollProps} automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 14 }}>
               {content.gallery ? (
                 /* A subject is all of its pictures; the sheet draws each, as the model is given each. */
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9 }} testID="subject-details-gallery">
+                <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9 }} testID="subject-details-gallery">
                   {content.gallery.map((image) => <ReferenceMediaPreview key={image.id} media={image} size={132} />)}
                 </ScrollView>
               ) : (

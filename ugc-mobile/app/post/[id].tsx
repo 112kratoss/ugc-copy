@@ -398,6 +398,12 @@ export default function PostScreen() {
         data={pages}
         keyExtractor={(page) => page}
         horizontal
+        // React Native's default, written out (keyboard-taps-coverage.test.ts). The pager holds the
+        // comment field, so with its keyboard up the first tap anywhere on the post only puts the
+        // keyboard away: Details did on the emulator (2026-10-21), and Post comment sits in the same
+        // pager. `handled` would answer that tap, but the post's links, menus and details page would
+        // then open with the keyboard still up, so it waits for a change of its own.
+        keyboardShouldPersistTaps="never"
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={(event) => {
