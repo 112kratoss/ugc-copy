@@ -117,7 +117,6 @@ export default function InviteScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Invite & Earn"
         title="Create more, together."
         body={`Friends get ${inviteeBonus} on their first top-up. You earn ${inviterBonus} whenever they top up.`}
       />
@@ -202,7 +201,6 @@ function SignedOutInvite() {
   return (
     <Screen keyboardAware>
       <SectionTitle
-        eyebrow="Invite & Earn"
         title="Share creativity. Earn credits."
         body="Sign in to get your personal link, or apply an invite code you received before creating a new account."
       />

@@ -64,7 +64,7 @@ export default function SellerDashboardScreen() {
   if (!user) {
     return (
       <Screen>
-        <SectionTitle eyebrow="Recipe Sales" title="Sign in to view sales." body="Your paid unlock earnings and seller listings appear here once you sign in." />
+        <SectionTitle title="Sign in to view sales." body="Your paid unlock earnings and seller listings appear here once you sign in." />
         {/* Signing in comes back to Recipe Sales, not Home (audit 01-12). */}
         <PrimaryButton
           label="Sign in"
@@ -86,7 +86,6 @@ export default function SellerDashboardScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Recipe Sales"
         title="Sales and unlocks."
         body="Track total sales from your reusable resources. Earnings are shown as lifetime tracked sales."
       />

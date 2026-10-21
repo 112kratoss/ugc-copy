@@ -106,6 +106,103 @@ describe('HIG toolbars — view titles', () => {
     );
     expect(offenders).toEqual([]);
   });
+
+  /**
+   * A pushed screen's header already names it, so the words over its page say
+   * something else or nothing: "Settings" over "Account settings." under a
+   * Settings header said the screen's name twice (redundant-ui audit, 2026-10-21).
+   *
+   * Titles are read as the sweep above reads them, from the root layout's list and
+   * from screens that set their own, and a layout entry is read across lines. A
+   * route that only renders a component is read through the components it imports,
+   * where its page is drawn. On a page, the eyebrow is read in every form one is
+   * written (a string, the strings of an expression, a bare Kicker) and the heading
+   * where it is written as words; a heading drawn from data is not read.
+   */
+  describe('never repeats a view title over its page', () => {
+    type PageWords = { kind: 'eyebrow' | 'heading'; text: string };
+    const pageWords = (source: string): PageWords[] => [
+      ...[...source.matchAll(/\beyebrow="([^"]+)"/g)].map((match) => match[1]),
+      ...[...source.matchAll(/\beyebrow=\{([^}]*)\}/g)].flatMap((match) => (
+        [...match[1].matchAll(/'([^'\\]+)'|"([^"\\]+)"|`([^`$\\]+)`/g)].map((string) => string[1] ?? string[2] ?? string[3])
+      )),
+      ...[...source.matchAll(/<Kicker\b[^>]*>([^<{]+)<\/Kicker>/g)].map((match) => match[1].trim()),
+    ].map((text): PageWords => ({ kind: 'eyebrow', text })).concat(
+      [...source.matchAll(/<(?:SectionTitle|SectionHeader)\b[^>]*?\btitle="([^"]+)"/g)].map((match) => ({ kind: 'heading', text: match[1] })),
+    );
+    const sameWords = (a: string, b: string) => a.toLowerCase().replace(/[^a-z0-9]+/g, '') === b.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+    // Every entry of the root layout, however it is wrapped; one with no header shows no title to repeat.
+    const layoutEntries = [...rootLayout.matchAll(/<Stack\.Screen\b([\s\S]*?)\/>/g)].flatMap((match) => {
+      const name = /\bname="([^"]+)"/.exec(match[1])?.[1];
+      const title = /\btitle: '([^']+)'/.exec(match[1])?.[1];
+      return name && title ? [{ name, title, headerShown: !/headerShown: false/.test(match[1]) }] : [];
+    });
+    const routeFile = (name: string) => [`app/${name}.tsx`, `app/${name}/index.tsx`]
+      .map((candidate) => path.join(mobileRoot, candidate))
+      .find((candidate) => files.includes(candidate));
+    // The route's own file and the components it imports, leaving out the primitives every page imports.
+    const drawnIn = (file: string) => [file, ...[...readFileSync(file, 'utf8').matchAll(/from '@\/components\/([^']+)'/g)]
+      .filter((match) => match[1] !== 'ui')
+      .map((match) => path.join(mobileRoot, 'components', `${match[1]}.tsx`))
+      .filter((candidate) => files.includes(candidate))];
+    const pages = [
+      ...layoutEntries.filter((entry) => entry.headerShown).flatMap(({ name, title }) => {
+        const file = routeFile(name);
+        return file ? [{ title, files: drawnIn(file) }] : [];
+      }),
+      ...titled.filter((entry) => entry.file !== 'app/_layout.tsx')
+        .map(({ file, title }) => ({ title, files: [path.join(mobileRoot, file)] })),
+    ];
+    const read = pages.flatMap(({ title, files: drawn }) => drawn.flatMap((file) => (
+      pageWords(readFileSync(file, 'utf8')).map((words) => ({ ...words, title, file: relative(file) }))
+    )));
+    const repeats = [...new Set(read
+      .filter(({ text, title }) => sameWords(text, title))
+      .map(({ kind, text, title, file }) => `${file}: ${kind} "${text}" under the "${title}" header`))];
+
+    /**
+     * Two pages whose heading is their header's words. A page heading is the page's shape
+     * as an eyebrow is not, so these wait for the owner's call (redundant-ui audit,
+     * 2026-10-21, "For the owner to decide"); a new page cannot join them.
+     */
+    const HEADINGS_LEFT_FOR_THE_OWNER = [
+      'app/ai-data-sharing.tsx: heading "AI data sharing." under the "AI Data Sharing" header',
+      'app/blocked-users.tsx: heading "Blocked users." under the "Blocked Users" header',
+    ];
+
+    it('reads every form of eyebrow and a written heading', () => {
+      expect(pageWords([
+        '<SectionTitle eyebrow="Settings" title="Settings." />',
+        "<SectionHeader eyebrow={user ? 'Your recipes' : `Recipes`} title={detail.title} />",
+        '<Kicker color="commerce">Help & Support</Kicker>',
+        '<Kicker>{count} templates</Kicker>',
+      ].join('\n'))).toEqual([
+        { kind: 'eyebrow', text: 'Settings' },
+        { kind: 'eyebrow', text: 'Your recipes' },
+        { kind: 'eyebrow', text: 'Recipes' },
+        { kind: 'eyebrow', text: 'Help & Support' },
+        { kind: 'heading', text: 'Settings.' },
+      ]);
+      expect(sameWords('Your recipe', 'Your Recipe')).toBe(true);
+      expect(sameWords('Help & Support', 'Help and Support')).toBe(false);
+    });
+
+    it('reads every titled screen, and the pages they draw', () => {
+      // The layout's titles as the sweep above reads them, so an entry wrapped across lines is still one.
+      expect(layoutEntries.map((entry) => entry.title)).toEqual(titled.filter((entry) => entry.file === 'app/_layout.tsx').map((entry) => entry.title));
+      expect(layoutEntries.filter((entry) => !routeFile(entry.name)).map((entry) => entry.name)).toEqual([]);
+      // Templates and a creator's page are drawn in components the route renders.
+      expect(read.filter((words) => words.file === 'components/media-template-screens.tsx').length).toBeGreaterThan(0);
+      expect(read.filter((words) => words.kind === 'eyebrow').length).toBeGreaterThan(9);
+    });
+
+    it('never repeats a view title in an eyebrow or a written page heading', () => {
+      expect(repeats.filter((repeat) => !HEADINGS_LEFT_FOR_THE_OWNER.includes(repeat))).toEqual([]);
+      // Taken off as the owner decides; a page whose heading changes leaves the list.
+      expect(HEADINGS_LEFT_FOR_THE_OWNER.filter((repeat) => !repeats.includes(repeat))).toEqual([]);
+    });
+  });
 });
 
 describe('HIG toolbars — the Back control', () => {

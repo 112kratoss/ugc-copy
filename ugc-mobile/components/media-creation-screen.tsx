@@ -4591,11 +4591,6 @@ function VideoCreatorComposer({
                 Open a reference to prepare it with Seedance once. Every run then reuses the prepared asset instead of sending the file again.
               </Text>
             ) : null}
-            {model?.inputs.combineFramesWithReferences && supportsStartFrame ? (
-              <View style={{ maxWidth: 170 }}>
-                <CompactReferenceSlot testID="video-optional-first-frame-slot" title="First frame" helper="Optional with reusable refs" media={draft.startFrame} isUploading={isUploading} progress={upload?.target === 'start-frame' ? upload : null} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
-              </View>
-            ) : null}
             {preparedVoiceLimit > 0 ? (
               <PreparedReferenceIds title="Prepared voice IDs" accessibilityLabel="Prepared voice ID" placeholder="Paste prepared voice ID" items={draft.preparedAudioIds} max={preparedVoiceLimit} onChange={(items) => onChange({ ...draft, preparedAudioIds: items })} />
             ) : null}
@@ -4866,9 +4861,8 @@ function MotionCreatorComposer({
       </View> : null}
 
       <View style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.motion, 0.16), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
-        <View style={{ paddingHorizontal: 16, paddingTop: 15, paddingBottom: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ paddingHorizontal: 16, paddingTop: 15, paddingBottom: 7 }}>
           <Text style={{ color: theme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Optional direction</Text>
-          <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '800' }}>Optional</Text>
         </View>
         <TextInput
           ref={promptInputRef}

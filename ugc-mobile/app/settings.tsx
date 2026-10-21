@@ -45,7 +45,6 @@ export default function SettingsScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Settings"
         title="Account settings."
         body={user ? 'Manage profile details, credits, and app preferences.' : 'Sign in to manage your Magicbooklet account.'}
       />
