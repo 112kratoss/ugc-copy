@@ -1448,6 +1448,7 @@ function ImmersivePreviewViewer() {
         }}
       />
       <FlatList
+        keyboardShouldPersistTaps="never"
         ref={listRef}
         data={items}
         decelerationRate="fast"

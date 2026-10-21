@@ -680,6 +680,7 @@ function ProfileMediaList({
     <MediaZoomSurface revealItem={revealItem}>
     <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FlashList
+        keyboardShouldPersistTaps="never"
         ref={listRef}
         data={isLoading ? [] : cards}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}

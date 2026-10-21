@@ -200,6 +200,7 @@ export default function CreditHistoryScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FlatList
+        keyboardShouldPersistTaps="never"
         data={entries}
         keyExtractor={(entry) => entry.id}
         // The first and last rows round the group's corners, so the old last
