@@ -1058,24 +1058,41 @@ describe('nameUnnamedReferences', () => {
     kind: 'image',
   });
 
-  it('names a picture whose file name has no letters by its place, and keeps a name with words', () => {
-    const named = nameUnnamedReferences([picked('1000333161.jpg'), picked('Bottle_shot.jpg'), picked('20261021_103000.jpg')], []);
-    expect(named.map((media) => [media.displayName, media.handle])).toEqual([
-      ['Reference 1', '@reference_1'],
-      ['Bottle shot', '@bottle_shot'],
+  const named = (media: MediaDraft[]) => media.map((item) => [item.displayName, item.handle]);
+
+  // The names uploads arrive under: a media id, a random UUID where the picker could not read a name, a
+  // Samsung camera file, and "фото.jpg" as the upload's ASCII-only name has it (lib/media.ts). The place is
+  // the one the server's legend gives the picture ("attached reference image 3").
+  it('names a picture whose file name says nothing by its place among the references, and keeps a name with words', () => {
+    expect(named(nameUnnamedReferences(
+      [picked('1000333161.jpg'), picked('Bottle_shot.jpg'), picked('3f2504e0-4f89-11d3-9a0c-0305e82c3301.jpg'), picked('20261021_103000.jpg'), picked('-.jpg'), picked('Facade.jpg'), picked('IMG_1234.jpg')],
+      [imageReference()],
+    ))).toEqual([
       ['Reference 2', '@reference_2'],
+      ['Bottle shot', '@bottle_shot'],
+      ['Reference 4', '@reference_4'],
+      ['Reference 5', '@reference_5'],
+      ['Reference 6', '@reference_6'],
+      ['Facade', '@facade'],
+      ['IMG 1234', '@img_1234'],
     ]);
   });
 
-  it('takes the first place no reference in the draft holds', () => {
-    const existing = [{ displayName: 'Reference 1' }, { displayName: 'Reference 3' }, { displayName: 'IMG 1234' }];
-    expect(nameUnnamedReferences([picked('1000333161.jpg'), picked('1000333162.jpg')], existing).map((media) => media.displayName))
-      .toEqual(['Reference 2', 'Reference 4']);
+  it('passes over a place another picture answers to by mention', () => {
+    // A remix whose stored picture had no handle brings it back as "@reference_2", under another name.
+    const restored = { ...imageReference({ displayName: 'Reference image 2' }), handle: '@reference_2' };
+    expect(named(nameUnnamedReferences([picked('1000333161.jpg')], [restored]))).toEqual([['Reference 3', '@reference_3']]);
   });
 
-  it('keeps names with letters in any script, and changes nothing else about the media', () => {
-    const [kept, renamed] = nameUnnamedReferences([picked('Café 2.jpg'), picked('1000333161.jpg')], []);
-    expect(kept.displayName).toBe('Café 2');
-    expect(renamed).toMatchObject({ fileName: '1000333161.jpg', url: 'https://cdn.example.com/1000333161.jpg', storagePath: 'uploads/user/1000333161.jpg' });
+  it('passes over a place a picture picked with it is named for', () => {
+    expect(named(nameUnnamedReferences([picked('1000333161.jpg'), picked('Reference_1.jpg')], []))).toEqual([
+      ['Reference 2', '@reference_2'],
+      ['Reference 1', '@reference_1'],
+    ]);
+  });
+
+  it('changes nothing about a picture it names but its name and mention', () => {
+    const original = picked('1000333161.jpg');
+    expect(nameUnnamedReferences([original], [])).toEqual([{ ...original, displayName: 'Reference 1', handle: '@reference_1' }]);
   });
 });

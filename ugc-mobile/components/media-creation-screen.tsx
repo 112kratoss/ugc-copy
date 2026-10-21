@@ -114,6 +114,7 @@ import {
   createSubjectDraft,
   getMotionDuration,
   nameUnnamedReferences,
+  placeName,
   REMIX_RESTORE_WARNING_MESSAGE,
   renameMediaDraft,
   renameSubjectDraft,
@@ -1690,10 +1691,10 @@ function IdentityCreationScreen({
         ? `Added ${remainingSlots} reference${remainingSlots === 1 ? '' : 's'} to stay within this model's ${maxImages}-image limit.`
         : null));
       if (uploaded.length === 0) return;
-      // Named after their files (or by their place, where a file name has no words in it), so the same
+      // Named after their files (or by their place, where a file name says nothing), so the same
       // photo picked twice, or two files named alike, would otherwise answer to one @mention.
-      const withHandles = (existing: MediaDraft[]) => nameUnnamedReferences(uploaded, existing).reduce<MediaDraft[]>(
-        (added, media) => [...added, withUniqueReferenceHandle(media, [...existing, ...added])],
+      const withHandles = (references: MediaDraft[], others: MediaDraft[] = []) => nameUnnamedReferences(uploaded, references, others).reduce<MediaDraft[]>(
+        (added, media) => [...added, withUniqueReferenceHandle(media, [...references, ...others, ...added])],
         [],
       );
       if (tool === 'image') {
@@ -1701,7 +1702,7 @@ function IdentityCreationScreen({
       } else {
         setVideoDraft((draft) => normalizeCatalogDraft({
           ...draft,
-          references: [...draft.references, ...withHandles([...draft.references, ...draft.referenceVideos, ...videoSubjects(draft).map(subjectAsReference)])],
+          references: [...draft.references, ...withHandles(draft.references, [...draft.referenceVideos, ...videoSubjects(draft).map(subjectAsReference)])],
           referenceMode: 'elements',
         }));
       }
@@ -2001,7 +2002,8 @@ function IdentityCreationScreen({
         : null));
       setVideoDraft((draft) => {
         const subjects = videoSubjects(draft);
-        const subject = createSubjectDraft(uploaded, `Subject ${subjects.length + 1}`, videoDraftHandles(draft));
+        const name = placeName('Subject', subjects.length + 1, [...draft.references, ...draft.referenceVideos, ...subjects.map(subjectAsReference)]);
+        const subject = createSubjectDraft(uploaded, name, videoDraftHandles(draft));
         return normalizeCatalogDraft({ ...draft, subjects: [...subjects, subject] });
       });
     } catch (error) {
