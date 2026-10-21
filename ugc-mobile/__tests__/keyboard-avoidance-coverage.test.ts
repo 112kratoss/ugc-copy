@@ -4,7 +4,7 @@ import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-import { canBeAbsent, SCROLLER } from './fixtures/jsx-syntax';
+import { SCROLLER } from './fixtures/jsx-syntax';
 
 const mobileRoot = path.resolve(__dirname, '..');
 const sourceRoots = ['app', 'components'] as const;
@@ -74,13 +74,15 @@ type Walk = {
  * drawn where the element is, unless the component draws an `Overlay` or a
  * `Modal`. An area outside an `Overlay` or a `Modal` does not reach the surface
  * inside it, which is drawn elsewhere. And an area that leaves iOS to
- * `automaticallyAdjustKeyboardInsets` has to be met through a scroll view that
- * carries it, or iOS gets nothing; a field outside any scroll view (the model
- * picker's search field, above its list) needs one in the area all the same.
+ * `automaticallyAdjustKeyboardInsets` has to be met through a vertical scroll
+ * view that carries it, or iOS gets nothing; a field outside any (the model
+ * picker's search field, above its list) needs one after it in the area, as a
+ * field below the list stays where it is while the list makes room.
  * The area itself must not sit inside a vertical scroll view: there it pads the
  * scroll view's content and the view keeps its height, so Android never brings
- * the field up. `keyboardAware` and `automaticallyAdjustKeyboardInsets` count
- * only when written so that they cannot come out off.
+ * the field up. The props this relies on (`keyboardAware`,
+ * `automaticallyAdjustKeyboardInsets`, `horizontal`, `<Screen scroll>`) count
+ * only as written literally: an expression may come out the other way.
  */
 function sweep(name: string, source: string) {
   const file = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -96,26 +98,28 @@ function sweep(name: string, source: string) {
       && !(property.initializer
         && ts.isJsxExpression(property.initializer)
         && property.initializer.expression?.kind === ts.SyntaxKind.FalseKeyword));
-  /**
-   * On in every state: written bare, or as an expression that cannot come out `undefined`, `null` or
-   * `false` by its own syntax, and not taken back by a spread written after it (in JSX the later one
-   * wins). The reading for a prop the check relies on.
-   */
-  const on = (element: ts.JsxElement | ts.JsxSelfClosingElement, wanted: string) => {
+  /** The attribute's literal value: true written bare or `={true}`, false for `={false}`, else undefined (unknown). */
+  const literal = (element: ts.JsxElement | ts.JsxSelfClosingElement, wanted: string): boolean | undefined => {
     const properties = attributesOf(element).properties;
     const index = properties.findIndex((property) => ts.isJsxAttribute(property) && property.name.getText(file) === wanted);
-    if (index < 0 || properties.slice(index + 1).some(ts.isJsxSpreadAttribute)) return false;
+    // A spread written after the prop can take it back: in JSX the later one wins.
+    if (index < 0 || properties.slice(index + 1).some(ts.isJsxSpreadAttribute)) return undefined;
     const value = (properties[index] as ts.JsxAttribute).initializer;
     if (!value) return true;
-    return ts.isJsxExpression(value) && value.expression !== undefined && !canBeAbsent(value.expression);
+    const kind = ts.isJsxExpression(value) ? value.expression?.kind : undefined;
+    return kind === ts.SyntaxKind.TrueKeyword ? true : kind === ts.SyntaxKind.FalseKeyword ? false : undefined;
   };
-  /** `<Screen>` draws a scroll view unless it is told `scroll={false}`, and only then reads `keyboardAware`. */
-  const screenScrolls = (element: ts.JsxElement | ts.JsxSelfClosingElement) => !attributesOf(element).properties.some((property) =>
-    ts.isJsxAttribute(property)
-    && property.name.getText(file) === 'scroll'
-    && property.initializer !== undefined
-    && ts.isJsxExpression(property.initializer)
-    && property.initializer.expression?.kind === ts.SyntaxKind.FalseKeyword);
+  /** On in every state: the reading for a prop the check relies on. */
+  const on = (element: ts.JsxElement | ts.JsxSelfClosingElement, wanted: string) => literal(element, wanted) === true;
+  /** A scroll view that may scroll vertically: anything not written `horizontal`. */
+  const vertical = (element: ts.JsxElement | ts.JsxSelfClosingElement) => SCROLLER.test(tagOf(element)) && !on(element, 'horizontal');
+  /** `<Screen>` draws a scroll view unless told `scroll={false}`, and reads `keyboardAware` only then. */
+  const screenScrolls = (element: ts.JsxElement | ts.JsxSelfClosingElement, certainly: boolean) => {
+    const scroll = attributesOf(element).properties.some((property) => ts.isJsxAttribute(property) && property.name.getText(file) === 'scroll')
+      ? literal(element, 'scroll')
+      : true;
+    return certainly ? scroll === true : scroll !== false;
+  };
 
   const fields: Array<ts.JsxElement | ts.JsxSelfClosingElement> = [];
   const functions = new Map<string, ts.FunctionLikeDeclaration>();
@@ -164,31 +168,75 @@ function sweep(name: string, source: string) {
   /** Where an in-file component reads a prop it is given (`children` for what is nested in it). */
   function propSlots(component: ts.FunctionLikeDeclaration, prop: string): ts.Node[] {
     const slots: ts.Node[] = [];
+    const named = new Set([prop]);
+    const read = (name: string) => {
+      const visit = (node: ts.Node) => {
+        // A type names the prop without drawing it (`{ children: React.ReactNode }`).
+        if (ts.isTypeNode(node)) return;
+        if (ts.isIdentifier(node) && node.text === name) {
+          const parent = node.parent;
+          if (ts.isBindingElement(parent) && parent.propertyName === node) {
+            // `{ children: body }`: the prop is drawn wherever `body` is.
+            if (ts.isIdentifier(parent.name) && !named.has(parent.name.text)) {
+              named.add(parent.name.text);
+              read(parent.name.text);
+            }
+          } else if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
+            slots.push(parent); // `props.children`
+          } else if (!((ts.isBindingElement(parent) || ts.isParameter(parent) || ts.isVariableDeclaration(parent)
+            || ts.isPropertyAssignment(parent) || ts.isJsxAttribute(parent)) && parent.name === node)) {
+            slots.push(node);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      // The parameters too: a prop can be renamed where it is destructured.
+      component.parameters.forEach(visit);
+      if (component.body) visit(component.body);
+    };
+    read(prop);
+    return slots;
+  }
+
+  /**
+   * Whether some element under `root` matches, without looking inside a surface drawn elsewhere or another area.
+   * `after` keeps only elements that start after that position.
+   */
+  function drawsAny(root: ts.Node, matches: (element: ts.JsxElement | ts.JsxSelfClosingElement) => boolean, after = -1): boolean {
+    let found = false;
     const visit = (node: ts.Node) => {
-      if (ts.isIdentifier(node) && node.text === prop) {
-        const parent = node.parent;
-        if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
-          slots.push(parent); // `props.children`
-        } else if (!((ts.isBindingElement(parent) || ts.isParameter(parent) || ts.isVariableDeclaration(parent)
-          || ts.isPropertyAssignment(parent) || ts.isJsxAttribute(parent)) && parent.name === node)) {
-          slots.push(node);
+      if (found) return;
+      if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+        if (node.getStart(file) >= after && matches(node)) {
+          found = true;
+          return;
+        }
+        if (node !== root && (ELSEWHERE.has(tagOf(node)) || tagOf(node) === 'KeyboardAvoidingArea')) return;
+      }
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(root, visit);
+    return found;
+  }
+
+  /** Whether an in-file component draws an Overlay or a Modal, itself or through the in-file components it draws. */
+  function drawsElsewhere(component: ts.FunctionLikeDeclaration, seen = new Set<ts.Node>()): boolean {
+    if (seen.has(component)) return false;
+    seen.add(component);
+    let found = false;
+    const visit = (node: ts.Node) => {
+      if (found) return;
+      if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+        const tag = tagOf(node);
+        const inner = functions.get(tag);
+        if (ELSEWHERE.has(tag) || (inner !== undefined && drawsElsewhere(inner, seen))) {
+          found = true;
+          return;
         }
       }
       ts.forEachChild(node, visit);
     };
-    if (component.body) visit(component.body);
-    return slots;
-  }
-
-  /** Whether some element under `root` matches. */
-  function drawsAny(root: ts.Node, matches: (element: ts.JsxElement | ts.JsxSelfClosingElement) => boolean): boolean {
-    let found = false;
-    const visit = (node: ts.Node) => {
-      if (found) return;
-      if ((ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) && matches(node)) found = true;
-      else ts.forEachChild(node, visit);
-    };
-    ts.forEachChild(root, visit);
+    ts.forEachChild(component, visit);
     return found;
   }
 
@@ -216,21 +264,22 @@ function sweep(name: string, source: string) {
         if (current.area !== null) {
           // Above the field's area: only a scroll view holding it matters, up to a surface drawn elsewhere.
           if (ELSEWHERE.has(tag)) return { failures: [], resumes: [] };
-          if ((SCROLLER.test(tag) && !flagged(node, 'horizontal')) || (tag === 'Screen' && screenScrolls(node))) {
+          if (vertical(node) || (tag === 'Screen' && screenScrolls(node, false))) {
             return fail(`the KeyboardAvoidingArea at line ${current.area} is inside the ${tag} at line ${lineOf(node)}: it pads that scroll view's content instead of shortening it`);
           }
         } else if (tag === 'KeyboardAvoidingArea') {
+          // Outside any vertical scroll view the field stays where it is on iOS, so the one making room must come after it.
           if (flagged(node, 'iosScrollViewAdjustsInsets') && !(current.scrolls
             ? current.adjustsInsets
-            : drawsAny(node, (inner) => SCROLLER.test(tagOf(inner)) && on(inner, 'automaticallyAdjustKeyboardInsets')))) {
-            return fail(`the KeyboardAvoidingArea at line ${lineOf(node)} leaves iOS to a scroll view's automaticallyAdjustKeyboardInsets, and ${current.scrolls ? 'the field\'s scroll view does not carry it' : 'no scroll view in it carries it'}`);
+            : drawsAny(node, (inner) => vertical(inner) && on(inner, 'automaticallyAdjustKeyboardInsets'), start.getEnd()))) {
+            return fail(`the KeyboardAvoidingArea at line ${lineOf(node)} leaves iOS to a scroll view's automaticallyAdjustKeyboardInsets, and ${current.scrolls ? 'the field\'s scroll view does not carry it' : 'no scroll view after the field in it carries it'}`);
           }
           // Met: what is left to check is what holds the area.
           return follow(node, { ...current, area: lineOf(node), trail: [...current.trail, `area at line ${lineOf(node)}`], followed: new Set() }, boundary);
         } else {
-          if (tag === 'KeyboardLift' || (tag === 'Screen' && screenScrolls(node) && on(node, 'keyboardAware'))) return { failures: [], resumes: [] };
+          if (tag === 'KeyboardLift' || (tag === 'Screen' && screenScrolls(node, true) && on(node, 'keyboardAware'))) return { failures: [], resumes: [] };
           if (ELSEWHERE.has(tag)) return fail(`drawn in the ${tag} at line ${lineOf(node)} with nothing inside it giving way`);
-          if (SCROLLER.test(tag)) {
+          if (vertical(node)) {
             current = { ...current, scrolls: true, adjustsInsets: current.adjustsInsets || on(node, 'automaticallyAdjustKeyboardInsets') };
           }
         }
@@ -241,8 +290,9 @@ function sweep(name: string, source: string) {
         if (component && prop && !current.followed.has(component)) {
           const slots = propSlots(component, prop);
           if (slots.length === 0) {
-            if (drawsAny(component, (inner) => ELSEWHERE.has(tagOf(inner)))) {
-              return fail(`given to the ${tag} at line ${lineOf(node)} as \`${prop}\`, which it may draw in its Overlay or Modal where the sweep cannot follow`);
+            // Not read by name (a spread passes it on): only a surface drawn elsewhere, here or further in, can hide it.
+            if (drawsElsewhere(component)) {
+              return fail(`given to the ${tag} at line ${lineOf(node)} as \`${prop}\`, which it may draw in an Overlay or a Modal where the sweep cannot follow`);
             }
           } else {
             // The prop is drawn where the component reads it.
@@ -383,6 +433,17 @@ describe('keyboard avoidance coverage', () => {
       'function Sheet({ open, children }) { return <Overlay visible={open}>{open ? children : null}</Overlay>; }\nfunction Page() { return <KeyboardAvoidingArea><Sheet open><TextInput /></Sheet></KeyboardAvoidingArea>; }',
       'function Sheet({ field }) { return <Overlay visible>{field}</Overlay>; }\nfunction Page() { return <KeyboardAvoidingArea><Sheet field={<TextInput />} /></KeyboardAvoidingArea>; }',
       'function Sheet(props) { return <Overlay visible {...props} />; }\nfunction Page() { return <KeyboardAvoidingArea><Sheet><TextInput /></Sheet></KeyboardAvoidingArea>; }',
+      'function Sheet(props) { const { children: body } = props; return <Overlay visible>{body}</Overlay>; }\nfunction Page() { return <KeyboardAvoidingArea><Sheet><TextInput /></Sheet></KeyboardAvoidingArea>; }',
+      'function Sheet({ children: body }) { return <Overlay visible>{body}</Overlay>; }\nfunction Page() { return <KeyboardAvoidingArea><Sheet><TextInput /></Sheet></KeyboardAvoidingArea>; }',
+      'function Frame({ children }) { return <Overlay visible>{children}</Overlay>; }\nfunction Sheet(props) { return <Frame {...props} />; }\nfunction Page() { return <KeyboardAvoidingArea><Sheet><TextInput /></Sheet></KeyboardAvoidingArea>; }',
+      // Props the check relies on, written as expressions that may come out the other way.
+      'function Page() { return <Screen keyboardAware={editing}><AppTextInput /></Screen>; }',
+      'function Page() { return <Screen keyboardAware scroll={expanded}><AppTextInput /></Screen>; }',
+      'function Page() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><ScrollView automaticallyAdjustKeyboardInsets={!sheetOpen}><TextInput /></ScrollView></KeyboardAvoidingArea>; }',
+      'function Page() { return <ScrollView horizontal={wide}><KeyboardAvoidingArea><TextInput /></KeyboardAvoidingArea></ScrollView>; }',
+      // iOS: a field below the list that makes room stays under the keys; a horizontal row makes none.
+      'function Sheet() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><FlatList automaticallyAdjustKeyboardInsets /><TextInput /></KeyboardAvoidingArea>; }',
+      'function Page() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><ScrollView horizontal automaticallyAdjustKeyboardInsets><TextInput /></ScrollView></KeyboardAvoidingArea>; }',
       // One use covered and one not.
       'function Field() { return <TextInput />; }\nfunction Page() { return <View><KeyboardLift><Field /></KeyboardLift><Field /></View>; }',
       // A component that puts its children outside its area.
@@ -413,6 +474,9 @@ describe('keyboard avoidance coverage', () => {
       // A prop drawn inside the component's area, and a plain wrapper that passes children on unread.
       'function Form({ field }) { return <KeyboardAvoidingArea>{field}</KeyboardAvoidingArea>; }\nfunction Page() { return <Form field={<TextInput />} />; }',
       'function Card(props) { return <View {...props} />; }\nfunction Page() { return <KeyboardAvoidingArea><Card><TextInput /></Card></KeyboardAvoidingArea>; }',
+      // A typed children prop (the type names it, the body draws it), and a field above the list in one panel.
+      'function Form({ children }: { children: React.ReactNode }) { return <KeyboardAvoidingArea><ScrollView>{children}</ScrollView></KeyboardAvoidingArea>; }\nfunction Page() { return <Form><TextInput /></Form>; }',
+      'function Sheet() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><View><TextInput /><ScrollView automaticallyAdjustKeyboardInsets /></View></KeyboardAvoidingArea>; }',
       // Each page of a horizontal pager with its own area.
       'function Pager() { return <FlatList horizontal renderItem={() => <KeyboardAvoidingArea><TextInput /></KeyboardAvoidingArea>} />; }',
       // The variable the Screen primitive uses, and a name reused in another component.
