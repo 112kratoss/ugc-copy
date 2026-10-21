@@ -4861,9 +4861,8 @@ function MotionCreatorComposer({
       </View> : null}
 
       <View style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.motion, 0.16), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
-        <View style={{ paddingHorizontal: 16, paddingTop: 15, paddingBottom: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ paddingHorizontal: 16, paddingTop: 15, paddingBottom: 7 }}>
           <Text style={{ color: theme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Optional direction</Text>
-          <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '800' }}>Optional</Text>
         </View>
         <TextInput
           ref={promptInputRef}

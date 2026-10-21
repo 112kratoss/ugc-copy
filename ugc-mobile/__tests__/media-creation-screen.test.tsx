@@ -2252,6 +2252,18 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(tree!.root.findByProps({ testID: 'motion-video-slot' })).toBeTruthy();
   });
 
+  it('says once that the motion prompt is optional: its title, with no second "Optional" beside it', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="motion" />);
+    });
+
+    const text = collectText(tree!.root);
+    expect(text.filter((item) => item === 'Optional direction')).toHaveLength(1);
+    expect(text.filter((item) => item === 'Optional')).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Optional motion prompt' })).not.toHaveLength(0);
+  });
+
   it('keeps the persistent generate bar above the tab bar', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
