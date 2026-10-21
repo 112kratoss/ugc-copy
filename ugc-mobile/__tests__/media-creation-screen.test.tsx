@@ -6358,29 +6358,41 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         ]);
       });
 
-      // A rail's add tile is the way to add, now the toolbar's button is gone (A1, 2026-10-21), so its
+      // A rail's add tile is the way to add, now the toolbar's button is gone (A1, 2026-10-21). It
+      // leads its rail, so it is in view however many pictures follow it, where at the end it went
+      // past the screen's edge from the fourth reference (the owner's call, 2026-10-21); and its
       // rail answers the first tap with the keyboard up, as the page around it does: an inner
       // ScrollView spends that tap on putting the keyboard away by default.
-      it('are added from rails that answer the first tap with the keyboard up', async () => {
+      it('are added from rails that start with their add tiles and answer the first tap with the keyboard up', async () => {
         const railOf = (pressable: renderer.ReactTestInstance) => {
           let node: renderer.ReactTestInstance | null = pressable;
           while (node && node.props.horizontal !== true) node = node.parent;
           return node!;
         };
+        const railLabels = (rail: renderer.ReactTestInstance) => rail
+          .findAll((node) => String(node.type) === 'pressable')
+          .map((node) => node.props.accessibilityLabel as string);
+        memory.set(ordinaryKey, savedDrafts({ image: { references: [stagedMedia('alpha'), stagedMedia('bravo')] } }));
         const image = await open(<MediaCreationScreen initialTool="image" />);
-        expect(railOf(labelled(image.root, 'Add reference images')).props.keyboardShouldPersistTaps).toBe('handled');
+        const imageRail = railOf(labelled(image.root, 'Add reference images'));
+        expect(imageRail.props.keyboardShouldPersistTaps).toBe('handled');
+        expect(railLabels(imageRail)).toEqual(['Add reference images', 'Open details for Alpha', 'Open details for Bravo']);
 
         catalogState.catalog = parityCatalog([paritySeedanceVideo(), parityKlingO3()]);
         memory.set(ordinaryKey, savedDrafts({ video: { model: 'seedance-2', catalogRevision: 'parity-rev', references: [stagedMedia('hero')] } }));
         const video = await open(<MediaCreationScreen initialTool="video" />);
-        expect(railOf(findPressableByLabelPrefix(video.root, 'Add Images ')).props.keyboardShouldPersistTaps).toBe('handled');
+        const videoRail = railOf(findPressableByLabelPrefix(video.root, 'Add Images '));
+        expect(videoRail.props.keyboardShouldPersistTaps).toBe('handled');
+        expect(railLabels(videoRail)).toEqual(['Add Images 1/5', 'Add Video 0/3', 'Add Audio 0/3', 'Open details for Hero']);
 
         memory.set(ordinaryKey, savedDrafts({ video: { model: 'kling-o3', catalogRevision: 'parity-rev', subjects: [{
           id: 'subject-1', displayName: 'Subject 1', handle: '@subject_1',
           images: [stagedMedia('one-front', 'image', { handle: '@subject_1' }), stagedMedia('one-side', 'image', { handle: '@subject_1' })],
         }] } }));
         const subjects = await open(<MediaCreationScreen initialTool="video" />);
-        expect(railOf(findPressableByLabelPrefix(subjects.root, 'Add Subject ')).props.keyboardShouldPersistTaps).toBe('handled');
+        const subjectRail = railOf(findPressableByLabelPrefix(subjects.root, 'Add Subject '));
+        expect(subjectRail.props.keyboardShouldPersistTaps).toBe('handled');
+        expect(railLabels(subjectRail)).toEqual(['Add Subject 1/3', 'Open details for Subject 1, @subject_1']);
       });
 
       it('made into a subject take the next place no subject answers to, where one before it was removed', async () => {

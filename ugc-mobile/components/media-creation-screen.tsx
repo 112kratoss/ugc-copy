@@ -3714,17 +3714,7 @@ function ImagePromptComposer({
                 <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
               </View>
               <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingHorizontal: 16, paddingRight: 16 }}>
-                {sentReferences.map((media) => (
-                  <Pressable
-                    key={media.id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`}
-                    onPress={() => setReferenceId(media.id)}
-                    style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1, width: 72 })}
-                  >
-                    <ReferenceMediaPreview media={media} size={72} />
-                  </Pressable>
-                ))}
+                {/* First, so it is in view however many pictures follow it. */}
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={uploadProgress ? `Uploading reference images, ${uploadPercentLabel(uploadProgress)}` : 'Add reference images'}
@@ -3751,6 +3741,17 @@ function ImagePromptComposer({
                     <Text testID="reference-upload-progress" style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{uploadPercentLabel(uploadProgress)}</Text>
                   ) : null}
                 </Pressable>
+                {sentReferences.map((media) => (
+                  <Pressable
+                    key={media.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`}
+                    onPress={() => setReferenceId(media.id)}
+                    style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1, width: 72 })}
+                  >
+                    <ReferenceMediaPreview media={media} size={72} />
+                  </Pressable>
+                ))}
               </ScrollView>
             </>
           )}
@@ -4546,6 +4547,10 @@ function VideoCreatorComposer({
             style={{ gap: 10, opacity: referencesLockedByFrames || referencesLockedBySubjects ? 0.4 : 1 }}
           >
             <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
+              {/* The add tiles first, so they are in view however many references follow them. */}
+              {imageLimit > 0 ? <CompactRailAddButton label={`Images ${draft.references.length}/${imageLimit}`} onPress={onUploadImages} disabled={isUploading || draft.references.length >= imageLimit} progress={upload?.target === 'image-references' ? upload : null} /> : null}
+              {videoLimit > 0 ? <CompactRailAddButton label={`Video ${draft.referenceVideos.length}/${videoLimit}`} onPress={onUploadVideo} disabled={isUploading || draft.referenceVideos.length >= videoLimit} icon="video" progress={upload?.target === 'reference-video' ? upload : null} /> : null}
+              {audioLimit > 0 ? <CompactRailAddButton label={`Audio ${draft.referenceAudios.length}/${audioLimit}`} onPress={onUploadAudio} disabled={isUploading || draft.referenceAudios.length >= audioLimit} icon="audio" progress={upload?.target === 'reference-audio' ? upload : null} /> : null}
               {draft.references.filter(isSent).map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <ReferenceMediaPreview media={media} size={72} />
@@ -4581,9 +4586,6 @@ function VideoCreatorComposer({
                   ) : null}
                 </View>
               ))}
-              {imageLimit > 0 ? <CompactRailAddButton label={`Images ${draft.references.length}/${imageLimit}`} onPress={onUploadImages} disabled={isUploading || draft.references.length >= imageLimit} progress={upload?.target === 'image-references' ? upload : null} /> : null}
-              {videoLimit > 0 ? <CompactRailAddButton label={`Video ${draft.referenceVideos.length}/${videoLimit}`} onPress={onUploadVideo} disabled={isUploading || draft.referenceVideos.length >= videoLimit} icon="video" progress={upload?.target === 'reference-video' ? upload : null} /> : null}
-              {audioLimit > 0 ? <CompactRailAddButton label={`Audio ${draft.referenceAudios.length}/${audioLimit}`} onPress={onUploadAudio} disabled={isUploading || draft.referenceAudios.length >= audioLimit} icon="audio" progress={upload?.target === 'reference-audio' ? upload : null} /> : null}
             </ScrollView>
             {upload?.target === 'reference-video' && upload.cancellable ? <UploadCancelButton onPress={onCancelUpload} /> : null}
             {preparesSeedanceAssets ? (
@@ -4611,15 +4613,16 @@ function VideoCreatorComposer({
               <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{subjects.length} / {maxSubjects}</Text>
             </View>
             <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
+              {/* First, so it is in view however many subjects follow it. */}
+              {subjects.length < maxSubjects ? (
+                <CompactRailAddButton label={`Subject ${subjects.length}/${maxSubjects}`} onPress={onAddSubject} disabled={isUploading} progress={upload?.target === 'subject' ? upload : null} />
+              ) : null}
               {subjects.map((subject) => (
                 <Pressable key={subject.id} accessibilityRole="button" accessibilityLabel={`Open details for ${subject.displayName}, ${subject.handle}`} onPress={() => setReferenceId(subject.id)} style={({ pressed }) => ({ width: 72, gap: 4, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <SubjectPreview subject={subject} size={72} />
                   <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{subject.displayName}</Text>
                 </Pressable>
               ))}
-              {subjects.length < maxSubjects ? (
-                <CompactRailAddButton label={`Subject ${subjects.length}/${maxSubjects}`} onPress={onAddSubject} disabled={isUploading} progress={upload?.target === 'subject' ? upload : null} />
-              ) : null}
             </ScrollView>
             <Text style={{ color: theme.colors.muted, fontSize: 11 }}>
               {`${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max} pictures of one person or thing, mentioned in the prompt as @name.`}
