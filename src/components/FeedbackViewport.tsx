@@ -53,7 +53,11 @@ export default function FeedbackViewport() {
   return (
     <>
       {host ? createPortal(viewport, host) : viewport}
-      {confirmation ? <ConfirmDialog confirmation={confirmation} /> : null}
+      {/* A child of <body> added when it opens, wherever the viewport sits: a
+          modal that makes the rest of the page inert while it is up (the
+          composer's resource editor) knew nothing of it then, so it can still
+          be pressed and focused over that modal. */}
+      {confirmation ? createPortal(<ConfirmDialog confirmation={confirmation} />, document.body) : null}
     </>
   );
 }
@@ -225,8 +229,11 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
     previouslyFocusedRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    // The safe choice takes focus, so Enter never confirms by accident.
-    const focusFrame = window.requestAnimationFrame(() => cancelRef.current?.focus());
+    // The safe choice takes focus, so Enter never confirms by accident. Without
+    // scrolling: the phone's sheet starts below the window, and focusing it
+    // there scrolled the backdrop to it, so the sheet jumped into place in one
+    // frame instead of sliding up.
+    const focusFrame = window.requestAnimationFrame(() => cancelRef.current?.focus({ preventScroll: true }));
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -280,18 +287,25 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
         aria-describedby={`ui-confirm-message-${id}`}
         className="ui-confirm-dialog"
       >
-        <h2 id={`ui-confirm-title-${id}`} className="text-lg font-semibold leading-6 text-white">
+        {/* Only a step that cannot be taken back carries a mark, so the mark
+            keeps its meaning. */}
+        {isDanger ? (
+          <span className="ui-confirm-icon">
+            <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+          </span>
+        ) : null}
+        <h2 id={`ui-confirm-title-${id}`} className="ui-confirm-title">
           {request.title}
         </h2>
-        <p id={`ui-confirm-message-${id}`} className="mt-2 text-sm leading-6 text-zinc-300">
+        <p id={`ui-confirm-message-${id}`} className="ui-confirm-message">
           {request.message}
         </p>
-        <div className="mt-6 flex flex-wrap justify-end gap-2">
+        <div className="ui-confirm-actions">
           <button
             ref={cancelRef}
             type="button"
             onClick={() => resolveConfirmation(id, false)}
-            className="ui-focus-ring inline-flex min-h-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+            className="ui-button ui-button-secondary ui-focus-ring"
           >
             {request.cancelLabel ?? 'Cancel'}
           </button>
@@ -299,11 +313,7 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
             ref={confirmRef}
             type="button"
             onClick={() => resolveConfirmation(id, true)}
-            className={`ui-focus-ring inline-flex min-h-11 items-center justify-center rounded-full px-4 text-sm font-semibold transition ${
-              isDanger
-                ? 'bg-rose-500 text-white hover:bg-rose-400'
-                : 'bg-white text-black hover:bg-zinc-200'
-            }`}
+            className={`ui-button ui-focus-ring ${isDanger ? 'ui-button-danger' : 'ui-button-primary'}`}
           >
             {request.confirmLabel}
           </button>

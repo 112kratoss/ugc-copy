@@ -146,6 +146,7 @@ Use these from `DesignSystem.tsx` for new or migrated UI:
 
 Also shared:
 - **`FeedbackViewport`:** toasts and the one confirmation dialog, mounted once in the root layout.
+- **Confirmations:** ask with `requestConfirmation` from `feedback-state`, or in a component with `useConfirmation`, whose question is answered "cancel" and taken down when the component goes (a Back taken while it was up). Never the browser's own `confirm`, `alert` or `prompt`: they are unstyled, titled with the site's address and block the page, and `native-browser-dialogs.test.ts` fails on one. The dialog is a sheet along the bottom edge below 40rem, its actions full width with the confirming one on top, and a centred card from 40rem; it enters with a fade and a rise (`--ui-duration-reveal`) and leaves at once, so the chosen action starts without a wait. Its actions are `.ui-button` primitives: Cancel `.ui-button-secondary`, the confirming action `.ui-button-primary`, or `.ui-button-danger` with a warning mark for a step that cannot be taken back (`tone: 'danger'`). Cancel takes the focus. It is drawn as a child of `<body>` added when it opens, so a modal that made the rest of the page inert (the composer's resource editor) cannot make it inert too; a modal with its own Escape or Tab listener leaves a key alone while one is open (`event.defaultPrevented || readFeedbackSnapshot().confirmation`).
 - **`.ui-focus-ring`:** the focus style for anything custom-clickable.
 
 Rules:

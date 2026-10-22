@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import FeedbackViewport from '@/components/FeedbackViewport';
 import PostComments from '@/components/PostComments';
+import { resetFeedbackState } from '@/components/feedback-state';
 import type { PostComment, PostCommentsPage } from '@/lib/post-comments-client';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
@@ -146,6 +148,7 @@ describe('PostComments', () => {
     });
 
     afterEach(() => {
+        resetFeedbackState();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
@@ -630,22 +633,36 @@ describe('PostComments', () => {
 
     it('describes a delete by what happens to the comment', async () => {
         signIn();
-        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(page([
+        const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => jsonResponse(page([
             comment({ id: 'mine-with-replies', body: 'Has replies', replyCount: 2, author: viewerAuthor }),
             comment({ id: 'mine-alone', body: 'Stands alone', author: viewerAuthor }),
-        ]))));
-        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+        ])));
+        vi.stubGlobal('fetch', fetchMock);
 
-        render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={2} />);
+        render(
+            <>
+                <PostComments postId="post-1" postCreatorId="post-owner" commentCount={2} />
+                <FeedbackViewport />
+            </>
+        );
         await screen.findByText('Stands alone');
         const [withReplies, alone] = screen.getAllByRole('button', { name: 'Delete your comment' });
 
         fireEvent.click(withReplies);
-        expect(confirm).toHaveBeenLastCalledWith(
-            'Delete your comment? It will be replaced with “[deleted]”. Replies to it stay visible.'
-        );
+        let question = await screen.findByRole('alertdialog', { name: 'Delete your comment?' });
+        expect(question).toHaveAccessibleDescription('It will be replaced with “[deleted]”. Replies to it stay visible.');
+        fireEvent.click(within(question).getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+
         fireEvent.click(alone);
-        expect(confirm).toHaveBeenLastCalledWith('Delete your comment? It will be removed.');
+        question = await screen.findByRole('alertdialog', { name: 'Delete your comment?' });
+        expect(question).toHaveAccessibleDescription('It will be removed from this post.');
+        expect(within(question).getByRole('button', { name: 'Delete comment' })).toBeInTheDocument();
+        fireEvent.click(within(question).getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+
+        // Declined both times: nothing was deleted.
+        expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
     });
 
     it('says why a delete failed when the answer is not JSON', async () => {

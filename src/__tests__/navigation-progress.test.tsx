@@ -2,7 +2,9 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import FeedbackViewport from '@/components/FeedbackViewport';
 import NavigationProgress from '@/components/NavigationProgress';
+import { requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
 import { publishNavigationStart } from '@/components/navigation-progress-state';
 
 let mockedPathname = '/feed';
@@ -144,5 +146,61 @@ describe('NavigationProgress', () => {
         expect(bar()).toHaveAttribute('aria-hidden', 'true');
         // An invented percentage is worse than silence.
         expect(screen.queryByRole('progressbar')).toBeNull();
+    });
+
+    // The composer's Back link and the profile editor's leave guard hold the
+    // click and ask; the bar crept over the question and on after a "stay".
+    describe('a link that asks before it goes', () => {
+        afterEach(() => {
+            resetFeedbackState();
+        });
+
+        function renderGuardedLink() {
+            render(
+                <>
+                    <NavigationProgress />
+                    <FeedbackViewport />
+                    {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                    <a
+                        href="/showcase/post-1"
+                        onClick={(event) => {
+                            event.preventDefault();
+                            void requestConfirmation({ title: 'Leave this post?', message: 'Unsaved.', confirmLabel: 'Leave' })
+                                .then((confirmed) => {
+                                    if (confirmed) publishNavigationStart();
+                                });
+                        }}
+                    >
+                        Back to Explore
+                    </a>
+                </>
+            );
+        }
+
+        it('takes the bar down while the question is up, and keeps it down after a "stay"', async () => {
+            renderGuardedLink();
+
+            fireEvent.click(screen.getByText('Back to Explore'));
+
+            expect(screen.getByRole('alertdialog', { name: 'Leave this post?' })).toBeInTheDocument();
+            expect(bar()).toBeNull();
+
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+            await act(async () => {
+                await new Promise((resolve) => setTimeout(resolve, 300));
+            });
+            expect(screen.queryByRole('alertdialog')).toBeNull();
+            expect(bar()).toBeNull();
+        });
+
+        it('raises it again for a "leave", which announces its own navigation', async () => {
+            renderGuardedLink();
+
+            fireEvent.click(screen.getByText('Back to Explore'));
+            fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
+            await act(async () => {});
+
+            expect(bar()).toBeInTheDocument();
+        });
     });
 });

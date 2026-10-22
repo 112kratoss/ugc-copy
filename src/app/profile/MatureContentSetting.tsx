@@ -3,15 +3,20 @@
 import { useEffect, useState } from 'react';
 import { EyeOff, Loader2, RefreshCw } from 'lucide-react';
 
+import type { ConfirmationRequest } from '@/components/feedback-state';
+import { useConfirmation } from '@/components/useConfirmation';
+
 type PreferenceState =
   | { status: 'loading' }
   | { status: 'failed' }
   | { status: 'ready'; showMature: boolean };
 
-const TURN_ON_QUESTION = [
-  'Turn on mature content?',
-  'Confirm that you are 18 or older. NSFW posts stay covered until you choose to reveal one.',
-].join('\n\n');
+const TURN_ON_QUESTION: ConfirmationRequest = {
+  title: 'Turn on mature content?',
+  message: 'Confirm that you are 18 or older. NSFW posts stay covered until you choose to reveal one.',
+  confirmLabel: 'I’m 18 or older',
+  cancelLabel: 'Not now',
+};
 
 /**
  * The account's mature-content preference as a settings row, so it can be
@@ -26,6 +31,7 @@ export default function MatureContentSetting() {
   const [attempt, setAttempt] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const askToConfirm = useConfirmation();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -48,7 +54,7 @@ export default function MatureContentSetting() {
 
   const changePreference = async (showMature: boolean) => {
     if (preference.status !== 'ready' || isSaving) return;
-    if (showMature && !window.confirm(TURN_ON_QUESTION)) return;
+    if (showMature && !(await askToConfirm(TURN_ON_QUESTION))) return;
 
     setIsSaving(true);
     setSaveError(null);

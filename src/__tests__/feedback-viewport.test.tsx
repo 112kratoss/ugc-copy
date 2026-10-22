@@ -1,8 +1,9 @@
-import React from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import React, { Activity } from 'react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedbackViewport from '@/components/FeedbackViewport';
+import { useConfirmation } from '@/components/useConfirmation';
 import {
   dismissToast,
   pushToast,
@@ -142,6 +143,170 @@ describe('feedback viewport', () => {
     await expect(requestConfirmation({ title: 'Archive?', message: 'Hidden until restored.', confirmLabel: 'Archive' }))
       .resolves.toBe(true);
     expect(nativeConfirm).toHaveBeenCalledWith('Archive?\n\nHidden until restored.');
+  });
+
+  it('marks a step that cannot be taken back, and only that', async () => {
+    render(<FeedbackViewport />);
+
+    act(() => {
+      void requestConfirmation({ title: 'Delete?', message: 'Gone for good.', confirmLabel: 'Delete', tone: 'danger' });
+    });
+    let dialog = await screen.findByRole('alertdialog', { name: 'Delete?' });
+    expect(dialog.querySelector('.ui-confirm-icon')).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Delete' })).toHaveClass('ui-button', 'ui-button-danger');
+
+    act(() => {
+      void requestConfirmation({ title: 'Archive?', message: 'Hidden until restored.', confirmLabel: 'Archive' });
+    });
+    dialog = await screen.findByRole('alertdialog', { name: 'Archive?' });
+    expect(dialog.querySelector('.ui-confirm-icon')).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Archive' })).toHaveClass('ui-button', 'ui-button-primary');
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveClass('ui-button', 'ui-button-secondary');
+  });
+
+  // The phone's sheet starts below the window: focusing Cancel there scrolled
+  // the backdrop to it, and the sheet jumped into place instead of sliding up.
+  it('gives Cancel the focus without scrolling to it', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    render(<FeedbackViewport />);
+
+    act(() => {
+      void requestConfirmation({ title: 'Delete?', message: 'Gone for good.', confirmLabel: 'Delete', tone: 'danger' });
+    });
+    const cancel = within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' });
+
+    await waitFor(() => expect(cancel).toHaveFocus());
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  // A modal that makes the rest of the page inert while it is up (the
+  // composer's resource editor) did so before the question existed.
+  it('draws the question as a child of the body, added when it opens', async () => {
+    render(<FeedbackViewport />);
+
+    act(() => {
+      void requestConfirmation({ title: 'Discard?', message: 'Unsaved.', confirmLabel: 'Discard' });
+    });
+    const dialog = await screen.findByRole('alertdialog', { name: 'Discard?' });
+    const backdrop = dialog.parentElement as HTMLElement;
+    expect(backdrop).toHaveClass('ui-confirm-backdrop');
+    expect(backdrop.parentElement).toBe(document.body);
+    expect(document.body.lastElementChild).toBe(backdrop);
+  });
+
+  it('answers cancel and takes the question down when its signal aborts', async () => {
+    render(<FeedbackViewport />);
+
+    const controller = new AbortController();
+    let answer: Promise<boolean> | null = null;
+    act(() => {
+      answer = requestConfirmation(
+        { title: 'Leave?', message: 'Unsaved.', confirmLabel: 'Leave' },
+        { signal: controller.signal },
+      );
+    });
+    await screen.findByRole('alertdialog', { name: 'Leave?' });
+
+    act(() => controller.abort());
+    await expect(answer).resolves.toBe(false);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+
+    // Already aborted: nothing is shown at all.
+    await expect(requestConfirmation(
+      { title: 'Leave?', message: 'Unsaved.', confirmLabel: 'Leave' },
+      { signal: controller.signal },
+    )).resolves.toBe(false);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('leaves a question alone once it is answered, whatever its signal does later', async () => {
+    render(<FeedbackViewport />);
+
+    const first = new AbortController();
+    let answer: Promise<boolean> | null = null;
+    act(() => {
+      answer = requestConfirmation({ title: 'First?', message: 'm', confirmLabel: 'Yes' }, { signal: first.signal });
+    });
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Yes' }));
+    await expect(answer).resolves.toBe(true);
+
+    act(() => {
+      void requestConfirmation({ title: 'Second?', message: 'm', confirmLabel: 'Yes' });
+    });
+    await screen.findByRole('alertdialog', { name: 'Second?' });
+    act(() => first.abort());
+    expect(screen.getByRole('alertdialog', { name: 'Second?' })).toBeInTheDocument();
+  });
+});
+
+describe('a question a component asks with useConfirmation', () => {
+  afterEach(() => {
+    resetFeedbackState();
+  });
+
+  function Asker({ onAnswer }: { onAnswer: (confirmed: boolean) => void }) {
+    const askToConfirm = useConfirmation();
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          void askToConfirm({ title: 'Discard changes?', message: 'Unsaved.', confirmLabel: 'Discard' }).then(onAnswer);
+        }}
+      >
+        Close editor
+      </button>
+    );
+  }
+
+  it('is answered by the viewer while the component is there', async () => {
+    const onAnswer = vi.fn();
+    render(
+      <>
+        <Asker onAnswer={onAnswer} />
+        <FeedbackViewport />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close editor' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(onAnswer).toHaveBeenCalledWith(true));
+  });
+
+  it('is answered "cancel" and taken down when the component goes', async () => {
+    const onAnswer = vi.fn();
+    render(<FeedbackViewport />);
+    const asker = render(<Asker onAnswer={onAnswer} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close editor' }));
+    await screen.findByRole('alertdialog', { name: 'Discard changes?' });
+    asker.unmount();
+
+    await waitFor(() => expect(onAnswer).toHaveBeenCalledWith(false));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('is answered "cancel" when an <Activity> hides the component, which asks afresh once shown', async () => {
+    const onAnswer = vi.fn();
+    const view = (mode: 'visible' | 'hidden') => (
+      <>
+        <Activity mode={mode}>
+          <Asker onAnswer={onAnswer} />
+        </Activity>
+        <FeedbackViewport />
+      </>
+    );
+    const { rerender } = render(view('visible'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close editor' }));
+    await screen.findByRole('alertdialog');
+    rerender(view('hidden'));
+    await waitFor(() => expect(onAnswer).toHaveBeenCalledWith(false));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+
+    rerender(view('visible'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close editor' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(onAnswer).toHaveBeenLastCalledWith(true));
   });
 });
 

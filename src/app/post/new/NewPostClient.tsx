@@ -25,6 +25,9 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
+import type { ConfirmationRequest } from '@/components/feedback-state';
+import { publishNavigationStart } from '@/components/navigation-progress-state';
+import { useConfirmation } from '@/components/useConfirmation';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import {
   assessMarketplaceListingQuality,
@@ -81,6 +84,14 @@ import ResourceCardEditorDialog from './ResourceCardEditorDialog';
 import ResourceCardsSection from './ResourceCardsSection';
 import CreatableCombobox, { type CreatableComboboxOption } from './CreatableCombobox';
 import type { EditablePostDraft } from './post-editor-types';
+
+const LEAVE_WITH_UNSAVED_CHANGES: ConfirmationRequest = {
+  title: 'Leave this post?',
+  message: 'Your unsaved changes will be discarded.',
+  confirmLabel: 'Leave without saving',
+  cancelLabel: 'Keep editing',
+  tone: 'danger',
+};
 
 /** A post is public or private (decision 12, 2026-10-17). */
 type PostVisibility = 'public' | 'private';
@@ -554,6 +565,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const router = useRouter();
   const searchParams = useSearchParams();
   const { session } = useAuth();
+  const askToConfirm = useConfirmation();
   const [isNsfw, setIsNsfw] = useState(initialPost?.isNsfw === true);
   const generationId = initialPost?.generationId ?? searchParams.get('generationId');
   const isEditMode = Boolean(initialPost);
@@ -2507,11 +2519,17 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           href={backHref}
           // beforeunload covers a reload or a closed tab, not this in-app link,
           // which left with the work unasked. onNavigate, not onClick: a
-          // Cmd-click opens a tab and loses nothing.
+          // Cmd-click opens a tab and loses nothing. The answer comes after
+          // the click has been handled, so the click is always held and a
+          // "leave" navigates by itself.
           onNavigate={(event) => {
-            if (hasUnsavedWork && !window.confirm('Leave this post? Your unsaved changes will be discarded.')) {
-              event.preventDefault();
-            }
+            if (!hasUnsavedWork) return;
+            event.preventDefault();
+            void askToConfirm(LEAVE_WITH_UNSAVED_CHANGES).then((confirmed) => {
+              if (!confirmed) return;
+              publishNavigationStart();
+              router.push(backHref);
+            });
           }}
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
         >

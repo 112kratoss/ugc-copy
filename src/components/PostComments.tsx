@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import { useAuth } from '@/components/AuthProvider';
+import { useConfirmation } from '@/components/useConfirmation';
 import {
     POST_COMMENT_MAX_LENGTH,
     POST_COMMENTS_MAX_PAGE_SIZE,
@@ -120,6 +121,7 @@ export default function PostComments({
     const { session, user } = useAuth();
     const accessToken = session?.access_token ?? null;
     const viewerId = user?.id ?? null;
+    const askToConfirm = useConfirmation();
 
     const [sort, setSort] = useState<PostCommentSort>('top');
     const [comments, setComments] = useState<PostComment[]>([]);
@@ -525,11 +527,21 @@ export default function PostComments({
     const removeComment = useCallback(async (comment: PostComment, asOwner: boolean) => {
         // A removed comment keeps a "[deleted]" row only while it holds
         // replies; without replies it is simply gone.
-        const confirmed = window.confirm(asOwner
-            ? 'Remove this comment? It will be hidden from everyone viewing your post.'
-            : comment.replyCount > 0
-                ? 'Delete your comment? It will be replaced with “[deleted]”. Replies to it stay visible.'
-                : 'Delete your comment? It will be removed.');
+        const confirmed = await askToConfirm(asOwner
+            ? {
+                title: 'Remove this comment?',
+                message: 'It will be hidden from everyone viewing your post.',
+                confirmLabel: 'Remove comment',
+                tone: 'danger',
+            }
+            : {
+                title: 'Delete your comment?',
+                message: comment.replyCount > 0
+                    ? 'It will be replaced with “[deleted]”. Replies to it stay visible.'
+                    : 'It will be removed from this post.',
+                confirmLabel: 'Delete comment',
+                tone: 'danger',
+            });
         if (!confirmed) return;
 
         setBusyCommentId(comment.id);
@@ -591,7 +603,7 @@ export default function PostComments({
         } finally {
             setBusyCommentId(null);
         }
-    }, [authHeaders, postId, publishCount, readReplies, readTopLevel, replyPages, totalCount]);
+    }, [askToConfirm, authHeaders, postId, publishCount, readReplies, readTopLevel, replyPages, totalCount]);
 
     const submitReport = useCallback(async () => {
         if (!reportTarget || busyCommentId) return;

@@ -14,11 +14,21 @@ import {
 } from '@/lib/post-composer-resource-cards';
 import type { PostResourceAttachment, PostResourceItemType } from '@/lib/post-resource-bundles';
 import { isUploadCancelledError } from '@/lib/upload-queue';
+import { readFeedbackSnapshot, type ConfirmationRequest } from '@/components/feedback-state';
+import { useConfirmation } from '@/components/useConfirmation';
 
 import { getResourceCardTypeLabel, ResourceTypeIcon } from './ResourceCardsSection';
 
 const CARD_TITLE_MAX_LENGTH = 80;
 const CARD_PREVIEW_MAX_LENGTH = 120;
+
+const DISCARD_RESOURCE_CHANGES: ConfirmationRequest = {
+  title: 'Discard changes to this resource?',
+  message: 'Your edits to it haven’t been saved and will be lost.',
+  confirmLabel: 'Discard changes',
+  cancelLabel: 'Keep editing',
+  tone: 'danger',
+};
 
 type ResourceFileUploadProgress = {
   bytesSent: number;
@@ -197,15 +207,16 @@ function ResourceCardEditorDialogContent({
     percent: number;
   } | null>(null);
   const portalRoot = typeof document === 'undefined' ? null : document.body;
+  const askToConfirm = useConfirmation();
 
   const isDirty = Boolean(card) && getCardSignature(card!) !== openedSignatureRef.current;
 
-  const requestClose = () => {
+  const requestClose = async () => {
     if (isUploading) {
       setUploadError('Wait for the file upload to finish or cancel it before closing this resource.');
       return;
     }
-    if (isDirty && !window.confirm('Discard the changes to this resource?')) {
+    if (isDirty && !(await askToConfirm(DISCARD_RESOURCE_CHANGES))) {
       return;
     }
     onClose();
@@ -213,9 +224,15 @@ function ResourceCardEditorDialogContent({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // A confirmation drawn over the editor has the keyboard: its Escape
+      // (which it has already taken by the time the window hears it) is its
+      // own Cancel, and its Tab stays among its buttons.
+      if (event.defaultPrevented || readFeedbackSnapshot().confirmation) {
+        return;
+      }
       if (event.key === 'Escape') {
         event.preventDefault();
-        requestClose();
+        void requestClose();
         return;
       }
 
@@ -406,7 +423,7 @@ function ResourceCardEditorDialogContent({
     <div
       ref={overlayRef}
       className="fixed inset-0 z-[85] flex items-end justify-center bg-black/85 p-0 backdrop-blur-sm sm:items-center sm:p-4"
-      onClick={requestClose}
+      onClick={() => void requestClose()}
     >
       <div
         ref={panelRef}
@@ -429,7 +446,7 @@ function ResourceCardEditorDialogContent({
           </div>
           <button
             type="button"
-            onClick={requestClose}
+            onClick={() => void requestClose()}
             disabled={isUploading}
             aria-label="Close resource editor"
             aria-describedby={isUploading ? uploadStatusId : undefined}
@@ -691,7 +708,7 @@ function ResourceCardEditorDialogContent({
             <div className="flex items-center justify-end gap-2 border-t border-white/8 px-5 py-4">
               <button
                 type="button"
-                onClick={requestClose}
+                onClick={() => void requestClose()}
                 disabled={isUploading}
                 className="rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-zinc-300 transition hover:text-white disabled:cursor-wait disabled:opacity-50"
               >

@@ -19,6 +19,9 @@ import {
 } from '@/lib/auth-onboarding';
 import { uploadProfileMediaWithSignedIntent } from '@/lib/profile-media-upload';
 import { supabase } from '@/lib/supabase';
+import type { ConfirmationRequest } from '@/components/feedback-state';
+import { publishNavigationStart } from '@/components/navigation-progress-state';
+import { useConfirmation } from '@/components/useConfirmation';
 
 interface CreatorProfileCardProps {
   initialProfile: EditableCreatorProfile | null;
@@ -33,7 +36,17 @@ interface CreatorProfileCardProps {
 }
 
 const EMPTY_ERRORS: ProfileFieldErrors = {};
-const LEAVE_WITHOUT_SAVING_QUESTION = 'Leave this page without saving your profile changes?';
+const LEAVE_WITHOUT_SAVING: ConfirmationRequest = {
+  title: 'Leave without saving?',
+  message: 'Your profile changes haven’t been saved and will be lost.',
+  confirmLabel: 'Leave without saving',
+  cancelLabel: 'Keep editing',
+  tone: 'danger',
+};
+const LEAVE_SETUP_WITHOUT_SAVING: ConfirmationRequest = {
+  ...LEAVE_WITHOUT_SAVING,
+  title: 'Leave profile setup?',
+};
 const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_BIO_LENGTH = 280;
 // The server's caps (`src/lib/profile.ts`). A social field also takes a pasted
@@ -283,6 +296,7 @@ export default function CreatorProfileCard({
   const leaveGuardUrlRef = useRef<string | null>(null);
   // Where the editor itself is going once Back has taken the guard entry off.
   const afterLeaveGuardPopRef = useRef<(() => void) | null>(null);
+  const askToConfirm = useConfirmation();
 
   const validateProfileImage = (file: File, field: 'avatarUrl' | 'coverUrl') => {
     if (!file.type.startsWith('image/')) {
@@ -611,26 +625,31 @@ export default function CreatorProfileCard({
         return;
       }
 
-      if (!window.confirm(LEAVE_WITHOUT_SAVING_QUESTION)) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
+      // The answer comes after this click has been handled, so the click is
+      // held either way and a "leave" goes by the router.
+      event.preventDefault();
+      event.stopPropagation();
+      const href = `${destination.pathname}${destination.search}${destination.hash}`;
+      void askToConfirm(LEAVE_WITHOUT_SAVING).then((confirmed) => {
+        if (!confirmed) return;
 
-      allowDirtyNavigationRef.current = true;
-      window.setTimeout(() => {
-        allowDirtyNavigationRef.current = false;
-      }, 0);
-
-      if (leaveGuardEntryRef.current) {
-        // Off the guard entry first, then on: left under the next page, it
-        // would be a Back that goes nowhere.
-        event.preventDefault();
-        event.stopPropagation();
-        const href = `${destination.pathname}${destination.search}${destination.hash}`;
-        afterLeaveGuardPopRef.current = () => router.push(href);
-        window.history.back();
-      }
+        const follow = () => {
+          allowDirtyNavigationRef.current = true;
+          window.setTimeout(() => {
+            allowDirtyNavigationRef.current = false;
+          }, 0);
+          publishNavigationStart();
+          router.push(href);
+        };
+        if (leaveGuardEntryRef.current) {
+          // Off the guard entry first, then on: left under the next page, it
+          // would be a Back that goes nowhere.
+          afterLeaveGuardPopRef.current = follow;
+          window.history.back();
+          return;
+        }
+        follow();
+      });
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -639,7 +658,7 @@ export default function CreatorProfileCard({
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('click', handleDocumentClick, true);
     };
-  }, [isDirty, router]);
+  }, [askToConfirm, isDirty, router]);
 
   // Back, and a phone browser's back swipe, leave through history, which
   // neither the click guard nor `beforeunload` sees. While the page's form is
@@ -667,22 +686,28 @@ export default function CreatorProfileCard({
       leaveGuardEntryRef.current = false;
       // A jump several entries back has already left the page: nothing to hold.
       if (window.location.href !== leaveGuardUrlRef.current) return;
-      if (isDirtyRef.current) {
-        if (!window.confirm(LEAVE_WITHOUT_SAVING_QUESTION)) {
-          leaveGuardUrlRef.current = pushLeaveGuardEntry();
-          leaveGuardEntryRef.current = true;
-          return;
-        }
+      if (!isDirtyRef.current) {
+        // Finish the Back that was asked for.
+        window.history.back();
+        return;
+      }
+      // The guard entry goes back on while the question is up, so another
+      // Back asks again (answering this one "stay") rather than leaving.
+      leaveGuardUrlRef.current = pushLeaveGuardEntry();
+      leaveGuardEntryRef.current = true;
+      void askToConfirm(LEAVE_WITHOUT_SAVING).then((confirmed) => {
+        if (!confirmed || !leaveGuardEntryRef.current) return;
         // Asked and answered: the page this Back reaches may be another site.
         allowDirtyNavigationRef.current = true;
-      }
-      // Finish the Back that was asked for.
-      window.history.back();
+        // Off the guard entry, then the Back that was asked for.
+        afterLeaveGuardPopRef.current = () => window.history.back();
+        window.history.back();
+      });
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [askToConfirm]);
 
   // The editor's own ways out (a save, Skip for now) step off the guard entry
   // before they move on, for the same reason as a confirmed link.
@@ -746,7 +771,7 @@ export default function CreatorProfileCard({
   };
 
   const continueWithoutSaving = async () => {
-    if (isDirty && !window.confirm('Leave profile setup without saving these changes?')) {
+    if (isDirty && !(await askToConfirm(LEAVE_SETUP_WITHOUT_SAVING))) {
       return;
     }
 

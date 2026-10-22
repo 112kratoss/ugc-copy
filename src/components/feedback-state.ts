@@ -161,8 +161,19 @@ export function dismissToast(id: number, how: ToastDismissal = 'closed') {
  * has shown the dialog and they have chosen. With no viewport mounted (a test
  * rendering a single component, for instance) it falls back to the native
  * dialog so the caller still gets an answer instead of hanging.
+ *
+ * An aborted `signal` answers "cancel" and takes the dialog down: for a
+ * question that stops making sense, such as one asked by a component that has
+ * since gone (`useConfirmation`).
  */
-export function requestConfirmation(request: ConfirmationRequest): Promise<boolean> {
+export function requestConfirmation(
+  request: ConfirmationRequest,
+  options: { signal?: AbortSignal } = {},
+): Promise<boolean> {
+  const { signal } = options;
+  if (signal?.aborted) {
+    return Promise.resolve(false);
+  }
   if (listeners.size === 0) {
     return Promise.resolve(
       typeof window !== 'undefined' ? window.confirm(`${request.title}\n\n${request.message}`) : false,
@@ -177,7 +188,12 @@ export function requestConfirmation(request: ConfirmationRequest): Promise<boole
 
   const id = nextId++;
   return new Promise<boolean>((resolve) => {
-    confirmationResolvers.set(id, resolve);
+    const abort = () => resolveConfirmation(id, false);
+    signal?.addEventListener('abort', abort, { once: true });
+    confirmationResolvers.set(id, (confirmed) => {
+      signal?.removeEventListener('abort', abort);
+      resolve(confirmed);
+    });
     commit({ ...snapshot, confirmation: { id, request } });
   });
 }

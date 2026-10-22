@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
+import { readFeedbackSnapshot, subscribeToFeedback } from '@/components/feedback-state';
 import {
   publishNavigationStart,
   readNavigationToken,
@@ -30,6 +31,9 @@ function isNavigatingClick(event: MouseEvent): boolean {
   return url !== null && url.pathname !== window.location.pathname;
 }
 
+const readQuestionOpen = () => readFeedbackSnapshot().confirmation !== null;
+const readServerQuestionOpen = () => false;
+
 /**
  * The thin bar across the top that acknowledges a click while the next page is
  * being fetched. Without it a navigation reads as a frozen page: the shell and
@@ -53,6 +57,7 @@ export default function NavigationProgress() {
     readServerNavigationToken
   );
   const pathname = usePathname();
+  const questionOpen = useSyncExternalStore(subscribeToFeedback, readQuestionOpen, readServerQuestionOpen);
   const [progress, setProgress] = useState<number | null>(null);
   // The path we were on when the navigation began; arrival is when it changes.
   const originRef = useRef<string | null>(null);
@@ -101,6 +106,17 @@ export default function NavigationProgress() {
     };
   }, [token]);
 
+  // A guarded link asks first (leave without saving?), so its click has not
+  // navigated: the bar it raised goes while the question is up, rather than
+  // creeping over it and on after a "stay". A "leave" announces its own
+  // navigation. Declared after the effect above: a click that raises the bar
+  // and the question at once runs both, and this one last.
+  useEffect(() => {
+    if (!questionOpen) return;
+    originRef.current = null;
+    setProgress(null);
+  }, [questionOpen]);
+
   // Arrival: the rendered path is no longer the one we left.
   useEffect(() => {
     if (progress === null) return;
@@ -114,7 +130,9 @@ export default function NavigationProgress() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
-  if (progress === null) return null;
+  // Not drawn in the frame the question appears in either, which comes before
+  // the effect above has run.
+  if (progress === null || questionOpen) return null;
 
   return (
     <div
