@@ -180,7 +180,7 @@ const RESOURCE_FILTERS: Array<{ id: ShowcaseResourceFilter; label: string }> = [
     { id: 'remix', label: 'Remixable' },
 ];
 
-interface ShowcaseClientProps {
+export interface ShowcaseClientProps {
     initialFeed: ShowcaseFeedPage;
     initialCategory: ShowcaseCategory;
     initialSort: ShowcaseSort;
@@ -189,6 +189,14 @@ interface ShowcaseClientProps {
     initialResource: ShowcaseResourceFilter;
     sourceToolOptions: SourceToolFilterOption[];
     initialPriorityPoster?: ShowcasePriorityPosterData | null;
+    /**
+     * The post whose history entry the bootstrap shell pushed for the tap
+     * that loaded this client (`ShowcaseBootstrapClient`). The address names
+     * it at mount, as a shared link's would, but the entry under it is
+     * Explore's: the reel is treated as opened from a tile, and Explore goes
+     * Back to that entry instead of replacing the pushed one.
+     */
+    initialPushedPostId?: string | null;
 }
 
 function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
@@ -664,6 +672,7 @@ export default function ShowcaseClient({
     initialResource,
     sourceToolOptions,
     initialPriorityPoster = null,
+    initialPushedPostId = null,
 }: ShowcaseClientProps) {
     const router = useRouter();
     const pathname = usePathname();
@@ -833,8 +842,15 @@ export default function ShowcaseClient({
     const personalizedRefreshLandedRef = useRef(false);
     const pageInfoRef = useRef(restoredInitialFeed.pageInfo);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+    // An address naming a post at mount opened the reel by address (direct:
+    // Explore replaces the entry), unless the bootstrap shell pushed that
+    // entry for the tap that loaded this client: then the reel is pushed, as
+    // from a tile, and Explore goes Back to the shell's entry under it.
+    const initialPostParam = searchParams.get('post');
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
-        searchParams.get('post') ? 'direct' : null
+        !initialPostParam
+            ? null
+            : initialPostParam === initialPushedPostId ? 'pushed' : 'direct'
     );
     // The post a close is taking out of the URL. The reel closes at once,
     // but the URL keeps the post until the browser's Back comes (popstate,
