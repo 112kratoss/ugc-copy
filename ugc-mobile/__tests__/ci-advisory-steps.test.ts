@@ -17,7 +17,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { stepScript, workflowStep } from './fixtures/workflow-steps';
+import { stepScript, workflowJob, workflowStep } from './fixtures/workflow-steps';
 
 /**
  * The checks CI added around Expo's patches (why: expo-install-exclude.test.ts)
@@ -53,6 +53,7 @@ function writeStub(file: string) {
     '#!/bin/bash',
     'printf "%s" "$*" > "$STUB_DIR/args"',
     'printf "%s" "${EXPO_OFFLINE-unset}" > "$STUB_DIR/expo-offline"',
+    'printf "%s %s" "${EXPO_NO_DOTENV-unset}" "${NODE_NO_WARNINGS-unset}" > "$STUB_DIR/quiet"',
     'printf "%s" "$STUB_STDOUT"',
     'printf "%s" "$STUB_STDERR" >&2',
     'exit "$STUB_CODE"',
@@ -126,13 +127,16 @@ describe('the release-bump check of the live list', () => {
   const name = "Check Expo's live version list at a release bump";
   const script = stepScript('quality.yml', name);
 
-  /** A checkout whose base branch says `base`, at `head`, with git and the script stood in for. */
-  function run(base: string, head: string, gate: Outcome) {
+  /** A merge commit at `head` whose first parent says `base`, with git and the script stood in for. */
+  function run(base: string | null, head: string, gate: Outcome) {
     const dir = scratchDir();
     writeFileSync(path.join(dir, 'app.json'), JSON.stringify({ expo: { version: head } }));
     writeExecutable(path.join(dir, 'bin/git'), [
       '#!/bin/bash',
-      `if [ "$1" = show ]; then printf '%s' '${JSON.stringify({ expo: { version: base } })}'; fi`,
+      'printf "%s" "$*" > "$STUB_DIR/git-args"',
+      base === null
+        ? 'echo "fatal: bad revision" >&2; exit 128'
+        : `printf '%s' '${JSON.stringify({ expo: { version: base } })}'`,
     ]);
     writeExecutable(path.join(dir, 'scripts/expo-live-versions.mjs'), [
       "import { writeFileSync } from 'node:fs';",
@@ -141,28 +145,48 @@ describe('the release-bump check of the live list', () => {
     ]);
     const result = spawnSync('bash', ['-e', '-c', script], {
       cwd: dir,
-      env: stubEnv(dir, gate, { PATH: `${path.join(dir, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`, BASE_REF: 'main' }),
+      env: stubEnv(dir, gate, { PATH: `${path.join(dir, 'bin')}${path.delimiter}${process.env.PATH ?? ''}` }),
       encoding: 'utf8',
     });
-    return { status: result.status, log: `${result.stdout}${result.stderr}`, args: recorded(dir, 'args') };
+    return {
+      status: result.status,
+      log: `${result.stdout}${result.stderr}`,
+      args: recorded(dir, 'args'),
+      gitArgs: recorded(dir, 'git-args'),
+    };
   }
 
-  it('runs only on pull requests, and fails the job when it fails', () => {
+  it('runs only on pull requests, fails the job when it fails, and has the base it reads', () => {
     const step = workflowStep('quality.yml', name);
     expect(step).toContain("if: github.event_name == 'pull_request'");
     expect(step).not.toContain('continue-on-error');
+    expect(workflowJob('quality.yml', 'mobile')).toMatch(/uses: actions\/checkout@v6\n {8}with:\n {10}fetch-depth: 2\n/);
   });
 
-  it('leaves a pull request that keeps the version alone', () => {
-    const result = run('0.1.8', '0.1.8', { code: 1 });
+  it('reads the base from the merge commit it runs on, not from the base branch now', () => {
+    expect(run('0.1.8', '0.1.8', { code: 0 }).gitArgs).toBe('show HEAD^1:ugc-mobile/app.json');
+  });
+
+  it.each([
+    ['keeps the version', '0.1.8', '0.1.8'],
+    ['takes the version back', '0.1.9', '0.1.8'],
+  ])('leaves a pull request that %s alone', (_label, base, head) => {
+    const result = run(base, head, { code: 1 });
     expect(result.status).toBe(0);
     expect(result.args).toBeNull();
-    expect(result.log).toContain('not a release bump');
+    expect(result.log).toContain('Not a release bump');
   });
 
-  it('gates a pull request that changes the version on the live list', () => {
+  it('gates a pull request that raises the version on the live list', () => {
     expect(run('0.1.8', '0.1.9', { code: 0 })).toMatchObject({ status: 0, args: '--gate' });
+    expect(run('0.1.9', '0.1.10', { code: 0 })).toMatchObject({ status: 0, args: '--gate' });
     expect(run('0.1.8', '0.1.9', { code: 1 }).status).not.toBe(0);
+  });
+
+  it('fails, rather than skipping, when it cannot read the base', () => {
+    const result = run(null, '0.1.9', { code: 0 });
+    expect(result.status).not.toBe(0);
+    expect(result.args).toBeNull();
   });
 });
 
@@ -202,13 +226,15 @@ describe('scripts/expo-live-versions.mjs', () => {
       summary: readFileSync(summary, 'utf8'),
       args: recorded(dir, 'args'),
       expoOffline: recorded(dir, 'expo-offline'),
+      quiet: recorded(dir, 'quiet'),
     };
   }
 
-  it('asks the live list, with EXPO_OFFLINE taken out', () => {
+  it('asks the live list online, with no .env output or Node warnings in the way', () => {
     const result = run('--report', { stdout: upToDate, code: 0 });
     expect(result.args).toBe('install --check --json');
     expect(result.expoOffline).toBe('unset');
+    expect(result.quiet).toBe('1 1');
   });
 
   it('lists what the live list would add: a warning on main, a failure at a release bump', () => {

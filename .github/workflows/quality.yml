@@ -172,8 +172,12 @@ jobs:
       run:
         working-directory: ugc-mobile
     steps:
+      # Depth 2: a pull request's merge commit with its first parent, the base
+      # it was built on, which the release-bump check reads.
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -200,18 +204,22 @@ jobs:
 
       - name: Check Expo's live version list at a release bump
         if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          base="$(git show FETCH_HEAD:ugc-mobile/app.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).expo.version')"
-          head="$(node -p 'require("./app.json").expo.version')"
-          if [ "$base" = "$head" ]; then
-            echo "The app stays at $head, so this is not a release bump."
-          else
-            echo "Release bump $base -> $head: Expo's live list must have nothing to add."
-            node ./scripts/expo-live-versions.mjs --gate
-          fi
+          base="$(git show HEAD^1:ugc-mobile/app.json)"
+          verdict="$(node -e '
+            const base = JSON.parse(process.argv[1]).expo.version;
+            const head = require("./app.json").expo.version;
+            const [h, b] = [head, base].map((version) => version.split(".").map(Number));
+            const i = h.findIndex((part, index) => part !== b[index]);
+            console.log(`${i >= 0 && h[i] > b[i] ? "bump" : "same"} ${base} -> ${head}`);
+          ' "$base")"
+          case "$verdict" in
+            bump*)
+              echo "Release bump ${verdict#bump }: Expo's live list must have nothing to add."
+              node ./scripts/expo-live-versions.mjs --gate
+              ;;
+            *) echo "Not a release bump (${verdict#same }), so Expo's live list is not checked here." ;;
+          esac
 
       - name: Report Expo's live version list
         if: github.event_name == 'push'

@@ -25,16 +25,17 @@
 // with such files never matches a plain tree, which is expected and says
 // nothing about reach.
 //
-// Deliberately NOT wired to an npm script. package.json's `scripts` are a
-// fingerprint input, so adding `"ota:preflight": "..."` to it moves the
-// runtime version — verified on 2026-08-31: the identical tree fingerprinted
-// 9e59d85d… without the script line and d832ccd9… with it, which would have
-// left no JS-only descendant of main able to reach the shipped build 64. A
-// convenience alias is not worth surrendering the ability to ship an update.
-// The same applies to renaming a script. Its `expo.autolinking` settings and
-// native dependencies count too, through autolinking; fields the fingerprint
-// does not read (`expo.install`, "description") move nothing, but measure an
-// edit before assuming it is one of those.
+// Deliberately NOT wired to an npm script. package.json feeds the fingerprint
+// in more ways than it looks: its `scripts` directly, so adding
+// `"ota:preflight": "..."` to it moves the runtime version — verified on
+// 2026-08-31: the identical tree fingerprinted 9e59d85d… without the script
+// line and d832ccd9… with it, which would have left no JS-only descendant of
+// main able to reach the shipped build 64 — its native dependencies and
+// `expo.autolinking` through autolinking, and "description" through the app
+// config, which copies it while app.json has none (both fingerprints moved,
+// 2026-10-22). A convenience alias is not worth surrendering the ability to
+// ship an update. Treat any package.json edit as moving it until measured
+// (`expo.install` is one that does not).
 
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';

@@ -42,8 +42,9 @@ const read = (relativePath: string) => readFileSync(join(projectRoot, relativePa
  * android-config.test.ts's expo-dev-client range, graduate
  * experiments/fingerprint-dev-only (its README), and leave HELD as it is;
  * empty it in the commit that records the new binaries in ota-targets.json. A
- * rebuild at 0.1.8 trips none of this; one that carries a native change anyway
- * should take the bumps too.
+ * rebuild at 0.1.8 trips none of this. One that carries a native change anyway
+ * can take the bumps too, repinning HELD and android-config.test.ts's range to
+ * the new versions in the same commit.
  *
  * What the held versions defer, to check on a device when they are taken:
  * expo 55.0.32 brings expo-modules-core 55.0.27, whose Android update log no

@@ -11,9 +11,20 @@ import { join } from 'node:path';
  * tests of its own.
  */
 const repoRoot = join(__dirname, '..', '..', '..');
+const readWorkflow = (workflow: string) => readFileSync(join(repoRoot, '.github/workflows', workflow), 'utf8');
+
+/** One job, from its `  <id>:` line to the next job's. */
+export function workflowJob(workflow: string, id: string): string {
+  const text = readWorkflow(workflow);
+  const start = text.indexOf(`\n  ${id}:\n`);
+  if (start === -1) throw new Error(`${workflow} has no job ${id}`);
+  const rest = text.slice(start + 1);
+  const end = rest.slice(1).search(/\n {2}\S/);
+  return end === -1 ? rest : rest.slice(0, end + 1);
+}
 
 export function workflowStep(workflow: string, name: string): string {
-  const text = readFileSync(join(repoRoot, '.github/workflows', workflow), 'utf8');
+  const text = readWorkflow(workflow);
   const start = text.indexOf(`\n      - name: ${name}\n`);
   if (start === -1) throw new Error(`${workflow} has no step named ${name}`);
   const rest = text.slice(start + 1);

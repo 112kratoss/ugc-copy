@@ -38,7 +38,9 @@ function cliWarnings(stderr) {
 }
 
 function readLiveList() {
-  const env = { ...process.env };
+  // Online; without the CLI loading .env files (it reports that on stdout,
+  // ahead of the JSON) or Node printing its own warnings to stderr.
+  const env = { ...process.env, EXPO_NO_DOTENV: '1', NODE_NO_WARNINGS: '1' };
   delete env.EXPO_OFFLINE;
   const run = spawnSync(path.join(projectRoot, 'node_modules/.bin/expo'), ['install', '--check', '--json'], {
     cwd: projectRoot,
@@ -107,7 +109,10 @@ function main() {
   const result = readLiveList();
   publish(summarize(result));
   if (!result.read) {
-    process.stderr.write("\nExpo's live list could not be read, so this release bump is unchecked. Rerun the job.\n");
+    process.stderr.write(
+      "\nExpo's live list could not be read, so this release bump is unchecked. A network error in the output\n"
+      + 'above clears on a rerun of the job; anything else needs fixing first.\n',
+    );
     process.exitCode = 1;
   } else if (!result.report.upToDate) {
     process.stderr.write(
