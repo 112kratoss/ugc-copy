@@ -362,6 +362,16 @@ beforeEach(() => {
 });
 
 describe('inline post comments', () => {
+  it('puts the keyboard away on the first tap in the post or its thread, which the sheet answers at once', () => {
+    // Inline, the list also holds the post: its creator link, ••• and Details open only once the
+    // keyboard is down.
+    const inline = renderInline().tree.root.findByType('list' as never);
+    expect(inline.props.keyboardShouldPersistTaps).toBe('never');
+
+    const sheet = renderSheet().root.findByType('list' as never);
+    expect(sheet.props.keyboardShouldPersistTaps).toBe('handled');
+  });
+
   it('renders the post and first comment page in one list without a modal', () => {
     pages = [page([comment()])];
     const { tree } = renderInline();

@@ -345,6 +345,7 @@ export function PostDetailsPage({
         topInset={topInset}
       />
       <ScrollView
+        keyboardShouldPersistTaps="never"
         contentContainerStyle={{
           paddingTop: 8,
           paddingBottom: bottomInset + 36,

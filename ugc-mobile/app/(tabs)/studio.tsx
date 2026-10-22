@@ -246,6 +246,7 @@ export default function StudioScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <ScrollView
+        keyboardShouldPersistTaps="never"
         ref={scrollRef}
         contentInsetAdjustmentBehavior="never"
         showsVerticalScrollIndicator={false}

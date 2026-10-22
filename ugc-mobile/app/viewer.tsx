@@ -1448,6 +1448,7 @@ function ImmersivePreviewViewer() {
         }}
       />
       <FlatList
+        keyboardShouldPersistTaps="never"
         ref={listRef}
         data={items}
         decelerationRate="fast"
@@ -2171,6 +2172,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         decelerationRate="fast"
         getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
         horizontal
+        keyboardShouldPersistTaps="handled"
         initialNumToRender={IMMERSIVE_HORIZONTAL_LIST_TUNING.initialNumToRender}
         initialScrollIndex={currentHorizontalIndex}
         contentOffset={initialHorizontalOffset}

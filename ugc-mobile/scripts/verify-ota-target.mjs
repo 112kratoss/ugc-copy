@@ -17,28 +17,41 @@
 //   node ./scripts/verify-ota-target.mjs                    # every platform in ota-targets.json
 //   node ./scripts/verify-ota-target.mjs --platform android
 //   node ./scripts/verify-ota-target.mjs --json
+//   node ./scripts/verify-ota-target.mjs --set-aside
 //
-// Deliberately NOT wired to an npm script. package.json is a fingerprint input
-// in its entirety, so adding `"ota:preflight": "..."` to it moves the runtime
-// version — verified on 2026-08-31: the identical tree fingerprinted
-// 9e59d85d… without the script line and d832ccd9… with it, which would have
-// left no JS-only descendant of main able to reach the shipped build 64. A
-// convenience alias is not worth surrendering the ability to ship an update.
-// The same applies to renaming a script, editing "description", or any other
-// package.json edit that looks harmless.
+// --set-aside fingerprints each platform without the files its target lists
+// under "setAside", as scripts/publish-ota.mjs does in its throwaway tree, and
+// puts them back afterwards (CI's advisory step uses it). Without it a target
+// with such files never matches a plain tree, which is expected and says
+// nothing about reach.
+//
+// Deliberately NOT wired to an npm script. package.json feeds the fingerprint
+// in more ways than it looks: its `scripts` directly, so adding
+// `"ota:preflight": "..."` to it moves the runtime version — verified on
+// 2026-08-31: the identical tree fingerprinted 9e59d85d… without the script
+// line and d832ccd9… with it, which would have left no JS-only descendant of
+// main able to reach the shipped build 64 — its native dependencies and
+// `expo.autolinking` through autolinking, and "description" through the app
+// config, which copies it while app.json has none (both fingerprints moved,
+// 2026-10-22). A convenience alias is not worth surrendering the ability to
+// ship an update. Treat any package.json edit as moving it until measured
+// (`expo.install` is one that does not).
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { setAsideFor } from './publish-ota.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TARGETS_FILE = 'ota-targets.json';
 
 function parseArgs(argv) {
-  const args = { platforms: null, json: false };
+  const args = { platforms: null, json: false, setAside: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--json') args.json = true;
+    else if (argv[i] === '--set-aside') args.setAside = true;
     else if (argv[i] === '--platform') {
       const value = argv[i + 1];
       if (!value || value.startsWith('--')) {
@@ -86,6 +99,50 @@ function computeFingerprint(platform) {
   return hash;
 }
 
+function present(absolute) {
+  try {
+    lstatSync(absolute);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Run `compute` with `files` (paths inside the project) removed, then put
+ * them back from memory (a symlink as a symlink), so uncommitted edits
+ * survive. A listed file that is missing throws before anything is removed,
+ * as publish-ota.mjs's removal does.
+ */
+function withFilesSetAside(files, compute) {
+  const held = files.map((file) => {
+    const absolute = path.join(projectRoot, file);
+    const stats = lstatSync(absolute);
+    return stats.isSymbolicLink()
+      ? { absolute, link: readlinkSync(absolute) }
+      : { absolute, contents: readFileSync(absolute), mode: stats.mode };
+  });
+  if (held.length === 0) return compute();
+  // The fingerprint runs synchronously, so no listener body runs until it
+  // ends; registering one only stops a signal killing Node mid-way, which
+  // would leave the files removed. Ctrl-C also reaches the child, whose
+  // failure then runs `finally`.
+  const keepAlive = () => {};
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  for (const signal of signals) process.on(signal, keepAlive);
+  try {
+    for (const file of held) rmSync(file.absolute);
+    return compute();
+  } finally {
+    for (const file of held) {
+      if (present(file.absolute)) continue;
+      if (file.link !== undefined) symlinkSync(file.link, file.absolute);
+      else writeFileSync(file.absolute, file.contents, { mode: file.mode });
+    }
+    for (const signal of signals) process.removeListener(signal, keepAlive);
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const targets = readTargets();
@@ -101,7 +158,10 @@ function main() {
 
   const results = platforms.map((platform) => {
     const target = targets[platform];
-    const actual = computeFingerprint(platform);
+    const setAside = setAsideFor(targets, platform);
+    const actual = args.setAside
+      ? withFilesSetAside(setAside, () => computeFingerprint(platform))
+      : computeFingerprint(platform);
     return {
       platform,
       expected: target.fingerprint,
@@ -109,7 +169,7 @@ function main() {
       matches: actual === target.fingerprint,
       shippedAs: `${target.appVersion} (${target.buildNumber})`,
       tracks: target.tracks ?? [],
-      setAside: target.setAside ?? [],
+      setAside,
     };
   });
 
@@ -121,7 +181,8 @@ function main() {
       process.stdout.write(
         `${mark} ${result.platform}: ${result.actual}\n`
         + `     shipped ${result.shippedAs} → ${result.expected}`
-        + `${result.tracks.length > 0 ? ` (${result.tracks.join(', ')})` : ''}\n`,
+        + `${result.tracks.length > 0 ? ` (${result.tracks.join(', ')})` : ''}\n`
+        + `${args.setAside && result.setAside.length > 0 ? `     fingerprinted without ${result.setAside.join(', ')} (set aside)\n` : ''}`,
       );
     }
   }
@@ -132,11 +193,11 @@ function main() {
     return;
   }
 
-  for (const result of failed.filter((entry) => entry.setAside.length > 0)) {
+  for (const result of failed.filter((entry) => !args.setAside && entry.setAside.length > 0)) {
     process.stderr.write(
       `\n${result.platform}: its binary was built without ${result.setAside.join(', ')}, which this tree`
       + ' carries, so a mismatch here is expected. scripts/publish-ota.mjs sets those files aside'
-      + ' in a throwaway tree before it fingerprints and publishes.\n',
+      + ' in a throwaway tree before it fingerprints and publishes; --set-aside does the same here.\n',
     );
   }
 

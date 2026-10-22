@@ -89,11 +89,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Offline, as in quality.yml: ugc-mobile/__tests__/expo-install-exclude.test.ts
+      # says why, and where Expo's live list is read instead.
       - name: Validate Expo dependency alignment
         run: npx expo install --check
+        env:
+          EXPO_OFFLINE: "1"
 
       - name: Run Expo Doctor
         run: npx --yes expo-doctor@1.20.1
+        env:
+          EXPO_OFFLINE: "1"
 
       - name: Test fail-closed production environment guard
         run: npm run release-env:self-test

@@ -179,6 +179,31 @@ describe('HIG modality — sheets, alerts and the way out', () => {
     expect(ordered.map((action) => action.label)).toEqual(['Discard', 'Save draft', 'Duplicate']);
   });
 
+  it('puts the page’s keyboard away from every overlay-hosted surface', () => {
+    // An overlay takes no window focus, so the keyboard of the page under it
+    // stays up: Report from a comment's ••• in the comments sheet opened the
+    // action sheet with every reason under the keys (Pixel_9a, 2026-10-22). A
+    // Modal's own window put the keyboard away; a sheet in the overlay host does
+    // it itself (action-sheet.test.tsx renders that one).
+    const exempt = new Set([
+      // Opens above the keys on purpose (`coveredBottom`), and its rows keep taps.
+      'components/anchored-menu.tsx',
+      // Holds its own field, and opens only from pages that have none.
+      'components/comments-sheet.tsx',
+      // Started from the side menu, a Modal, or from Settings, which has no field.
+      'components/sign-out-overlay.tsx',
+    ]);
+    const keeping = files
+      .filter((entry) => entry.name !== 'app/_layout.tsx')
+      .filter((entry) => /<Overlay[\s>]/.test(entry.source))
+      .filter((entry) => !exempt.has(entry.name) && !entry.source.includes('Keyboard.dismiss('))
+      .map((entry) => entry.name);
+
+    expect(keeping).toEqual([]);
+    // A positive control: the sweep reads the hosts it names.
+    for (const name of exempt) expect(file(name)).toMatch(/<Overlay[\s>]/);
+  });
+
   it('claims Android back on every overlay-hosted surface', () => {
     // An overlay is an ordinary view; a Modal took the key natively and an
     // overlay has no such privilege, so a hosted sheet without this is a dead

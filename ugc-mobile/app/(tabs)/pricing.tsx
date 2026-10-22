@@ -518,6 +518,7 @@ export default function PricingScreen() {
           <ScrollView
             ref={carouselRef}
             horizontal
+            keyboardShouldPersistTaps="handled"
             accessibilityLabel="Credit pack carousel"
             showsHorizontalScrollIndicator={false}
             decelerationRate="fast"

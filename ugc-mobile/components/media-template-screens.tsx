@@ -327,6 +327,7 @@ export function MediaTemplateCatalogScreen() {
           view every loaded template was, 48 posters on opening and 48 more
           with each page (01-5). */}
       <FlatList
+        keyboardShouldPersistTaps="never"
         data={templates}
         keyExtractor={(template) => template.id}
         extraData={[posters, resumableRuns]}

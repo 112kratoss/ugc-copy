@@ -298,6 +298,10 @@ function MenuSurface({ anchor, model, open, accessibilityLabel, onDismiss, onExi
           overScrollMode="never"
           scrollEnabled={scrollable}
           showsVerticalScrollIndicator={scrollable}
+          // It opens over a raised keyboard (`coveredBottom`), and at React Native's default a scroll
+          // view spends the first touch inside it on putting the keys away, so a row took two presses.
+          // A touch between rows still puts them away.
+          keyboardShouldPersistTaps="handled"
           onLayout={(event) => {
             const viewport = event.nativeEvent.layout.height;
             setScrollSize((current) => (current.viewport === viewport ? current : { ...current, viewport }));

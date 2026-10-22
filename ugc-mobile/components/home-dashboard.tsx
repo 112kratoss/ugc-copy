@@ -1040,6 +1040,7 @@ export function HomeDashboard() {
     <MediaZoomSurface>
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FlashList
+        keyboardShouldPersistTaps="never"
         // A lane is a new feed, not a mutation of the visible one. Remounting
         // gives it a true native origin; reusing the list preserves iOS's old
         // content offset and can place the first media card above the screen.
@@ -1493,6 +1494,7 @@ function TopSlider({
       ref={listRef}
       data={loopedSlides}
       horizontal
+      keyboardShouldPersistTaps="handled"
       keyExtractor={(item) => item.key}
       // Recentering jumps a full pass, so the list re-renders its window on
       // arrival. Typing the rows lets it reuse the view it already had for the

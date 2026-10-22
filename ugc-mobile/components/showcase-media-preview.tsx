@@ -174,6 +174,7 @@ function ShowcaseMediaCarousel({
         decelerationRate="fast"
         getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
         horizontal
+        keyboardShouldPersistTaps="handled"
         initialNumToRender={IMMERSIVE_HORIZONTAL_LIST_TUNING.initialNumToRender}
         keyExtractor={(mediaItem) => mediaItem.id}
         maxToRenderPerBatch={IMMERSIVE_HORIZONTAL_LIST_TUNING.maxToRenderPerBatch}
