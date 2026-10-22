@@ -52,13 +52,17 @@ const authState = vi.hoisted(() => ({
 // them when the URL changes. The part this file relies on is
 // `useSyncExternalStore`: it reads the URL in every render and counts a changed
 // URL as an update, so React cannot drop a render the URL moved under. A plain
-// getter, cached or not, lets it drop one; see "closes the reel when Explore is
-// pressed before…" below. Reading `window.location` runs ahead of Next: after
-// the app's own pushState or replaceState, Next keeps the old URL until a
-// transition commits the new one, while this mock has the new one at the next
-// render. And it re-renders after any popstate that changes the search, where
-// Next acts only on history entries that carry its state (the app's own entries
-// do; this file's PopStateEvents carry none).
+// getter, cached or not, let it drop one (#521); ShowcaseClient's closing guard
+// now keeps the reel shut there too (see "closes the reel when Explore is
+// pressed before…" below). On a plain getter, "keeps the reel closed when a page
+// lands…" still fails (it needs the re-render after popstate) and so does "asks
+// again when the URL effect runs…" (it needs one object per URL). Next applies
+// the app's own pushState or replaceState from a microtask right after it (in a
+// production build, in the same commit as the tap's own render), close to this
+// mock, which has the new URL at the next render. And it re-renders after any
+// popstate that changes the search, where Next acts only on history entries
+// that carry its state (the app's own entries do; this file's PopStateEvents
+// carry none).
 function subscribeToPopstate(onChange: () => void) {
   window.addEventListener('popstate', onChange);
   return () => window.removeEventListener('popstate', onChange);
@@ -1380,6 +1384,101 @@ describe('ShowcaseClient save actions', () => {
     expect(back).toHaveBeenCalledTimes(1);
   });
 
+  const nextPageItem = createShowcaseItem({
+    id: 'post-next-page',
+    title: 'Next Page Frame',
+    generationId: 'gen-next-page',
+    mediaUrl: 'https://example.com/next-page.jpg',
+  });
+  // Answers the next feed page (offset 24) with `nextPageItem`, and the rest as the default
+  // stub does; `route` answers first, and passes with `undefined`.
+  const answerWithNextPage = (route: (url: string, init?: RequestInit) => unknown = () => undefined) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const routed = route(url, init);
+      if (routed !== undefined) {
+        return routed;
+      }
+      if (url.startsWith('/api/showcase/feed?') && url.includes('&offset=24&')) {
+        return { ok: true, json: async () => createFeed(nextPageItem) };
+      }
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return { ok: true, json: async () => [] };
+      }
+      return { ok: true, json: async () => ({ success: true }) };
+    }));
+  };
+  // Draws a first page with more to come and returns a way to land the next one. The URL
+  // effect reads `items`, so a page landing runs it again with `post` unchanged; a browser
+  // lands the next page of a short first page at once.
+  const renderWithNextPage = () => {
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem(), { hasMore: true, nextOffset: 24 })}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+    return async () => {
+      const sentinelObserver = intersectionObservers.filter((observer) => observer.observedTargets.some((target) => (
+        target.getAttribute('data-showcase-load-more-sentinel') === 'true' && target.isConnected
+      ))).at(-1);
+      expect(sentinelObserver).toBeDefined();
+      act(() => {
+        sentinelObserver?.trigger(true);
+      });
+      expect(await screen.findByText('Next Page Frame')).toBeInTheDocument();
+      // The URL effect ran with the commit that took the page in; let what it started settle.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    };
+  };
+
+  // Explore closes the reel at once, but the URL keeps the post until the browser's Back comes
+  // (popstate, a task later). A page that landed in between ran the URL effect on that URL and
+  // opened the reel again for a frame: seen in a production build with Back held 5 ms
+  // (archive/web-showcase-reel-races-2026-10-22).
+  it('keeps the reel closed when a page lands between Explore and the browser going back', async () => {
+    answerWithNextPage();
+    // Back as a browser does it: the URL keeps `post` until popstate, which comes later.
+    let finishBack = () => {};
+    vi.spyOn(window.history, 'back').mockImplementation(() => {
+      finishBack = () => {
+        window.history.replaceState(null, '', '/showcase');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      };
+    });
+
+    const landNextPage = renderWithNextPage();
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+    fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+    });
+    expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
+
+    await landNextPage();
+    expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+
+    act(() => {
+      finishBack();
+    });
+    expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+    // Once the URL has moved on it is followed again: Forward to the post opens the reel.
+    act(() => {
+      window.history.replaceState(null, '', '/showcase?post=post-1');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(await screen.findByRole('dialog', { name: 'Explore reel viewer' })).toBeInTheDocument();
+    // Room as #457 gave, so a wait above that never passes fails on its own assertion.
+  }, 15_000);
+
   it('preserves the selected carousel slide when opening the reel', async () => {
     renderShowcase(createShowcaseItem({
       mediaItems: [
@@ -1475,60 +1574,15 @@ describe('ShowcaseClient save actions', () => {
       generationId: 'gen-shared',
       mediaUrl: 'https://example.com/shared.jpg',
     });
-    const nextPageItem = createShowcaseItem({
-      id: 'post-next-page',
-      title: 'Next Page Frame',
-      generationId: 'gen-next-page',
-      mediaUrl: 'https://example.com/next-page.jpg',
-    });
     type SharedPostAnswer = { ok: boolean; status: number; json: () => Promise<unknown> };
     const answerSharedPost = (answer: (init?: RequestInit) => SharedPostAnswer | Promise<SharedPostAnswer>) => {
       const reads: string[] = [];
-      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url === '/api/showcase/posts/post-shared') {
-          reads.push(url);
-          return answer(init);
-        }
-        if (url.startsWith('/api/showcase/feed?') && url.includes('&offset=24&')) {
-          return { ok: true, json: async () => createFeed(nextPageItem) };
-        }
-        if (url.startsWith('/api/showcase/saved-state')) {
-          return { ok: true, json: async () => [] };
-        }
-        return { ok: true, json: async () => ({ success: true }) };
-      }));
+      answerWithNextPage((url, init) => {
+        if (url !== '/api/showcase/posts/post-shared') return undefined;
+        reads.push(url);
+        return answer(init);
+      });
       return reads;
-    };
-    // Draws a first page with more to come and returns a way to land the next one. The URL
-    // effect reads `items`, so a page landing runs it again with `post` unchanged; a browser
-    // lands the next page of a short first page at once.
-    const renderWithNextPage = () => {
-      render(
-        <ShowcaseClient
-          initialFeed={createFeed(createShowcaseItem(), { hasMore: true, nextOffset: 24 })}
-          initialCategory="all"
-          initialSort="recent"
-          initialTool={null}
-          initialUnlock="all"
-          initialResource="all"
-          sourceToolOptions={SOURCE_TOOL_OPTIONS}
-        />
-      );
-      return async () => {
-        const sentinelObserver = intersectionObservers.filter((observer) => observer.observedTargets.some((target) => (
-          target.getAttribute('data-showcase-load-more-sentinel') === 'true' && target.isConnected
-        ))).at(-1);
-        expect(sentinelObserver).toBeDefined();
-        act(() => {
-          sentinelObserver?.trigger(true);
-        });
-        expect(await screen.findByText('Next Page Frame')).toBeInTheDocument();
-        // The URL effect ran with the commit that took the page in; let what it started settle.
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        });
-      };
     };
 
     it("says inside the reel that a deleted or hidden post isn't available", async () => {
@@ -1604,6 +1658,56 @@ describe('ShowcaseClient save actions', () => {
       expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
 
       answerSecondRead();
+      expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
+      // Room as #457 gave, so a wait above that never passes fails on its own assertion.
+    }, 15_000);
+
+    // A read can be cut short after its answer's headers came, while the body is still on its
+    // way: a browser's `fetch` has resolved by then, and `json()` rejects with the AbortError.
+    // That rejection was taken for a broken answer, and the reel said "Couldn't load this post"
+    // with Try again until the read asked after it answered.
+    it('shows no failure for a read cut short while its answer was still arriving', async () => {
+      window.history.replaceState(null, '', '/showcase?post=post-shared');
+      // Each read's headers come at once and its body when the test answers it, unless an abort
+      // comes first: then `json()` rejects, as a browser's does.
+      type HeldRead = { signal?: AbortSignal; bodyLoading: boolean; answer: () => void };
+      const heldReads: HeldRead[] = [];
+      answerSharedPost((init) => {
+        const read: HeldRead = { signal: init?.signal ?? undefined, bodyLoading: false, answer: () => {} };
+        heldReads.push(read);
+        return {
+          ok: true,
+          status: 200,
+          json: () => new Promise((resolve, reject) => {
+            const abort = () => reject(new DOMException('The read was aborted.', 'AbortError'));
+            if (read.signal?.aborted) return abort();
+            read.signal?.addEventListener('abort', abort);
+            read.bodyLoading = true;
+            read.answer = () => resolve({ success: true, item: sharedItem });
+          }),
+        };
+      });
+
+      const landNextPage = renderWithNextPage();
+      const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+      let cutShort: HeldRead | undefined;
+      await waitFor(() => {
+        cutShort = heldReads.find((read) => read.bodyLoading && !read.signal?.aborted);
+        expect(cutShort).toBeDefined();
+      });
+
+      // The page landing runs the URL effect again: its cleanup aborts the read whose body is
+      // loading, and the run asks again.
+      await landNextPage();
+      expect(cutShort?.signal?.aborted).toBe(true);
+      expect(within(reel).queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+      expect(within(reel).getByRole('status')).toHaveTextContent('Loading post');
+
+      const newest = heldReads.at(-1);
+      expect(newest?.bodyLoading && !newest.signal?.aborted).toBe(true);
+      act(() => {
+        newest?.answer();
+      });
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
       // Room as #457 gave, so a wait above that never passes fails on its own assertion.
     }, 15_000);
@@ -1727,9 +1831,11 @@ describe('ShowcaseClient save actions', () => {
   }, 15_000);
 
   it('closes the reel when Explore is pressed before the render that drew the count has run its effects', async () => {
-    // As above, popstate fires inside `back()`. That order is half of the race this test
-    // holds: ShowcaseClient's own popstate listener clears the post before the stale effect
-    // selects it again, so the three updates net to nothing.
+    // As above, popstate fires inside `back()`. That order is half of the race this test was
+    // written for (#521): ShowcaseClient's own popstate listener cleared the post before the
+    // stale effect selected it again, so the three updates netted to nothing and React dropped
+    // the render. The stale effect now stops at the closing guard (`closingPostIdRef`), so the
+    // test holds that guard against this order as well.
     vi.spyOn(window.history, 'back').mockImplementation(() => {
       window.history.replaceState(null, '', '/showcase');
       window.dispatchEvent(new PopStateEvent('popstate'));
@@ -1762,9 +1868,10 @@ describe('ShowcaseClient save actions', () => {
     // passive effects of the render it found: Testing Library resumes through `setTimeout(0)`,
     // React flushes those effects on `setImmediate`, and a millisecond of other work lets the
     // timer win. The render that drew the count then runs its URL effect after Explore, still
-    // holding `post=post-1`, and selects the post again (2026-10-13/14, 10-20 and 10-22 on
-    // main). A mutation observer takes that slot every time: its callback is a microtask after
-    // the commit. The button's name is its aria-label, so a selector finds it cheaply.
+    // holding `post=post-1`, which selected the post again before the closing guard
+    // (2026-10-13/14, 10-20 and 10-22 on main). A mutation observer takes that slot every time:
+    // its callback is a microtask after the commit. The button's name is its aria-label, so a
+    // selector finds it cheaply.
     const observer = new MutationObserver(() => {
       if (!reel.querySelector('button[aria-label="Hide comments on Campaign Frame (3)"]')) return;
       observer.disconnect();
