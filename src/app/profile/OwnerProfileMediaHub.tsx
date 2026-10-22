@@ -572,12 +572,23 @@ export default function OwnerProfileMediaHub({
     })();
   }, [accessToken, initialTab, runTabLoad, userId]);
 
+  // The creation the address names opens once: when the address comes to name
+  // it, or when the list it waits for brings it in; never again while the
+  // address still names it. A close clears the selection before this query
+  // lets go of the creation (Next hands the page's own replaceState to its
+  // readers a microtask later, and Back's popstate comes after the close), and
+  // the list can change in between.
+  const generationOpenedByAddressRef = useRef<string | null>(null);
   useEffect(() => {
     const requestedGenerationId = searchParams.get('generation');
-    if (!requestedGenerationId || selectedGeneration?.id === requestedGenerationId) return;
-    const existing = generations.find((generation) => generation.id === requestedGenerationId);
-    if (existing) setSelectedGeneration(existing);
-  }, [generations, searchParams, selectedGeneration?.id]);
+    if (requestedGenerationId === generationOpenedByAddressRef.current) return;
+    generationOpenedByAddressRef.current = null;
+    if (!requestedGenerationId) return;
+    const requested = generations.find((generation) => generation.id === requestedGenerationId);
+    if (!requested) return;
+    generationOpenedByAddressRef.current = requestedGenerationId;
+    setSelectedGeneration(requested);
+  }, [generations, searchParams]);
 
   const updateLocation = useCallback((updates: {
     tab?: ProfileMediaTab;
@@ -759,7 +770,9 @@ export default function OwnerProfileMediaHub({
       const payload = await response.json();
       const fullGeneration = Array.isArray(payload.generations) ? payload.generations[0] as OwnerGeneration | undefined : undefined;
       if (response.ok && fullGeneration) {
-        setSelectedGeneration(fullGeneration);
+        // Details that come after a close, or after another creation opened,
+        // leave the viewer as it is.
+        setSelectedGeneration((current) => current?.id === fullGeneration.id ? fullGeneration : current);
         setGenerations((current) => current.map((item) => item.id === fullGeneration.id ? { ...item, ...fullGeneration } : item));
       }
     } catch (error) {
