@@ -113,9 +113,9 @@ Three Vercel crons run every 10 min under `CRON_SECRET` bearer auth: `/api/cron/
 
 ### Tests
 
-All web unit/integration tests live flat in `src/__tests__/` (~1,050 files; `ugc-mobile/__tests__/` holds ~360 more) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production. Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
+All web unit/integration tests live flat in `src/__tests__/` (~1,050 files; `ugc-mobile/__tests__/` holds ~360 more) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production, and its dev server answers the server-side Supabase reads of the pages specs draw with a stub (`tests/e2e/support/supabase-server-stub.cjs`). Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
 
-The four E2E gotchas (a second `next dev` blocks Playwright's own server, the auth bypass needs its cookie, two open pages reload each other after a compile, a compile spends the timeout of whatever waits while it runs) are `.claude/rules/e2e.md`, loaded with `tests/e2e/`.
+The four E2E gotchas (a second `next dev` blocks Playwright's own server, the auth bypass needs its cookie, two open pages reload each other after a compile, a compile spends the timeout of whatever waits while it runs) and how a page's server reads join that stub are `.claude/rules/e2e.md`, loaded with `tests/e2e/`.
 
 ## Conventions and cautions
 

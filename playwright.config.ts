@@ -1,7 +1,16 @@
+import path from 'node:path';
+
 import { defineConfig, devices } from '@playwright/test';
 
 const PORT = 3100;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+
+// Loaded into the dev server, where it answers the Supabase reads of the pages specs draw whose
+// server render reads them (the creator page): Playwright's routes reach only the browser. The
+// file says which reads, and why every other request goes on as before. Quoted, as a checkout's
+// path can hold a space; `next dev` hands its server process only the last --require it was
+// given, so this one goes last.
+const SUPABASE_SERVER_STUB = `--require=${JSON.stringify(path.join(__dirname, 'tests/e2e/support/supabase-server-stub.cjs'))}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -29,6 +38,7 @@ export default defineConfig({
       ...process.env,
       E2E_AUTH_BYPASS: '1',
       NEXT_PUBLIC_E2E_AUTH_BYPASS: '1',
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, SUPABASE_SERVER_STUB].filter(Boolean).join(' '),
     },
   },
   projects: [

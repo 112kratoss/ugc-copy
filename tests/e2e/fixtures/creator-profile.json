@@ -1,0 +1,14 @@
+{
+  "id": "workflow-user",
+  "username": "e2e-creator",
+  "display_name": "E2E Creator",
+  "bio": "Makes the pictures the end-to-end suite opens.",
+  "avatar_url": null,
+  "cover_url": null,
+  "website_url": null,
+  "twitter_handle": null,
+  "instagram_handle": null,
+  "tiktok_handle": null,
+  "location": null,
+  "identity_state": "active"
+}
