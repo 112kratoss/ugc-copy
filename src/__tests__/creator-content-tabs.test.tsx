@@ -9,6 +9,7 @@ import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-
 import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
+import { navigateWithinPage } from './fixtures/address-bar-search-params';
 
 // One router for every render, so a test can read what a click asked of it.
 const routerMock = vi.hoisted(() => ({
@@ -22,14 +23,19 @@ const authState = vi.hoisted(() => ({
   session: null as { access_token: string } | null,
   user: null as { id: string } | null,
 }));
-// The query the page is opened with; empty unless a test opens a link.
-const searchState = vi.hoisted(() => ({ search: '' }));
-
-vi.mock('next/navigation', () => ({
-  usePathname: () => '/creators/creator-name',
-  useRouter: () => routerMock,
-  useSearchParams: () => new URLSearchParams(searchState.search),
-}));
+// The query is the address bar's, as Next's follows the page's own pushState
+// and replaceState: a reel opened from a tile has `?post=` in the query the
+// page's URL effect reads. The page closes the reel when the query has no
+// post, so a query that never moved would close every reel a tile opened. A
+// test opens a link by setting the URL before it renders.
+vi.mock('next/navigation', async () => {
+  const { useAddressBarSearchParams } = await import('./fixtures/address-bar-search-params');
+  return {
+    usePathname: () => '/creators/creator-name',
+    useRouter: () => routerMock,
+    useSearchParams: useAddressBarSearchParams,
+  };
+});
 
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({ session: authState.session, user: authState.user }),
@@ -203,7 +209,6 @@ describe('CreatorContentTabs', () => {
     routerReplace.mockReset();
     authState.session = null;
     authState.user = null;
-    searchState.search = '';
     resetFeedbackState();
     window.history.replaceState(null, '', '/creators/creator-name');
   });
@@ -324,7 +329,6 @@ describe('CreatorContentTabs', () => {
   // it was gone, or someone else's, the page opened nothing and said nothing.
   describe('a linked post the page does not hold', () => {
     const linkTo = (postId: string) => {
-      searchState.search = `?post=${postId}`;
       window.history.replaceState(null, '', `/creators/creator-name?post=${postId}`);
     };
     const answerPost = (answer: () => { ok: boolean; status: number; json: () => Promise<unknown> }) => {
@@ -383,6 +387,182 @@ describe('CreatorContentTabs', () => {
       });
       expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-late');
     });
+
+    // The query stand-in renders a new query only when the address changes, so
+    // the URL effect no longer runs again on every render by accident. A page
+    // that lands while the reel is open runs it again with `post` unchanged
+    // (it reads `items`), as a browser does when the grid asks for more: the
+    // tests below land one on purpose, after the read failed or while it is out.
+    const nextPageItem = { ...items[0], id: 'item-next-page', title: 'Next Page Frame' };
+    type PostAnswer = { ok: boolean; status: number; json: () => Promise<unknown> };
+    const answerPostAndPages = (answer: (init?: RequestInit) => PostAnswer | Promise<PostAnswer>) => {
+      const reads: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+        if (input.startsWith('/api/showcase/posts/')) {
+          reads.push(input);
+          return answer(init);
+        }
+        if (input.startsWith('/api/creators/creator-name?')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              items: [nextPageItem],
+              pageInfo: { hasMore: false, limit: 24, offset: 24, nextOffset: null, nextLimit: null },
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      }));
+      return reads;
+    };
+    const renderWithNextPage = () => {
+      // No observer here, so the page offers its own button for the next page.
+      vi.stubGlobal('IntersectionObserver', undefined);
+      render(
+        <CreatorContentTabs
+          initialData={{
+            ...initialData,
+            pageInfo: { hasMore: true, limit: 24, offset: 0, nextOffset: 24, nextLimit: 48 },
+          }}
+          profilePath="/creators/creator-name"
+        />
+      );
+      return async () => {
+        fireEvent.click(await screen.findByRole('button', { name: 'Load more posts' }));
+        expect((await screen.findAllByText('Next Page Frame')).length).toBeGreaterThan(0);
+        // The URL effect ran with the commit that took the page in; let what it started settle.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        });
+      };
+    };
+
+    it('neither asks again nor shows a read loading when the URL effect runs again after a failed read', async () => {
+      linkTo('item-late');
+      const reads = answerPostAndPages(() => ({ ok: false, status: 503, json: async () => ({ error: 'Busy' }) }));
+      const landNextPage = renderWithNextPage();
+
+      const reel = await screen.findByRole('dialog', { name: /creator immersive viewer/i });
+      await waitFor(() => expect(reel).toHaveTextContent('Linked post: failed'));
+      expect(reads).toHaveLength(1);
+
+      await landNextPage();
+      expect(reads).toHaveLength(1);
+      expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('Linked post: failed');
+    }, 15_000);
+
+    it('asks again when the URL effect runs while the read is out, and shows no failure for the read it cut short', async () => {
+      linkTo('item-late');
+      const signals: Array<AbortSignal | undefined> = [];
+      let answerSecondRead = () => {};
+      const reads = answerPostAndPages((init) => {
+        signals.push(init?.signal ?? undefined);
+        if (signals.length === 1) {
+          // The first read stays out until it is aborted, then rejects as a browser's does.
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
+          });
+        }
+        return new Promise((resolve) => {
+          answerSecondRead = () => resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ success: true, item: { ...items[0], id: 'item-late', title: 'Late Frame' } }),
+          });
+        });
+      });
+      const landNextPage = renderWithNextPage();
+
+      const reel = await screen.findByRole('dialog', { name: /creator immersive viewer/i });
+      expect(reel).toHaveTextContent('Linked post: loading');
+      expect(reads).toHaveLength(1);
+
+      await landNextPage();
+      expect(signals[0]?.aborted).toBe(true);
+      expect(reads).toHaveLength(2);
+      expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('Linked post: loading');
+
+      answerSecondRead();
+      await waitFor(() => {
+        expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).not.toHaveTextContent('Linked post:');
+      });
+      expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-late');
+    }, 15_000);
+
+    // A post read on its own is added to the list, and the read is not asked
+    // again while its post is in the URL. A refresh of the page's data (a
+    // profile save) gives back the first page without it, so a return to it
+    // must read it again rather than open on nothing.
+    it('reads a linked post again when it comes back after leaving the list', async () => {
+      linkTo('item-far');
+      const reads = answerPostAndPages(() => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, item: { ...items[0], id: 'item-far', title: 'Far Frame' } }),
+      }));
+      const { rerender } = render(<CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />);
+
+      const reel = await screen.findByRole('dialog', { name: /creator immersive viewer/i });
+      await waitFor(() => expect(reel).not.toHaveTextContent('Linked post:'));
+      expect(reel).toHaveTextContent('item-far');
+
+      act(() => {
+        navigateWithinPage('/creators/creator-name');
+      });
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: /creator immersive viewer/i })).not.toBeInTheDocument();
+      });
+      rerender(<CreatorContentTabs initialData={{ ...initialData, items: [...items] }} profilePath="/creators/creator-name" />);
+
+      window.history.back();
+      await waitFor(() => {
+        expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-far');
+        expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).not.toHaveTextContent('Linked post:');
+      });
+      expect(reads).toHaveLength(2);
+    }, 15_000);
+
+    it('shows no failure for a read cut short while its answer was still arriving', async () => {
+      linkTo('item-late');
+      const signals: Array<AbortSignal | undefined> = [];
+      let answerSecondRead = () => {};
+      const reads = answerPostAndPages((init) => {
+        signals.push(init?.signal ?? undefined);
+        if (signals.length === 1) {
+          // The answer's head is in and its body is still on the way; aborted
+          // then, reading the body rejects as a browser's does.
+          return {
+            ok: true,
+            status: 200,
+            json: () => new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
+            }),
+          };
+        }
+        return new Promise((resolve) => {
+          answerSecondRead = () => resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ success: true, item: { ...items[0], id: 'item-late', title: 'Late Frame' } }),
+          });
+        });
+      });
+      const landNextPage = renderWithNextPage();
+
+      expect(await screen.findByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('Linked post: loading');
+
+      await landNextPage();
+      expect(signals[0]?.aborted).toBe(true);
+      expect(reads).toHaveLength(2);
+      expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('Linked post: loading');
+
+      answerSecondRead();
+      await waitFor(() => {
+        expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).not.toHaveTextContent('Linked post:');
+      });
+      expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-late');
+    }, 15_000);
   });
 
   // The reel opened from a creator's page had no ⋯ at all. It carries the three
@@ -749,7 +929,6 @@ describe('CreatorContentTabs', () => {
 
     it('draws a linked post the viewer saved as saved', async () => {
       signIn();
-      searchState.search = '?post=item-linked';
       window.history.replaceState(null, '', '/creators/creator-name?post=item-linked');
       vi.stubGlobal('fetch', vi.fn(async (url: string) => {
         if (url.startsWith('/api/showcase/saved-state')) return { ok: true, status: 200, json: async () => [] };

@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
@@ -28,6 +28,7 @@ import {
   reportPostAfterConfirmation,
   toastSafetyOutcome,
 } from '@/lib/feed-safety-actions';
+import { readInAppLinkClick } from '@/lib/link-clicks';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
@@ -184,6 +185,20 @@ export function CreatorContentTabs({
     updateLocation(null, 'replace');
   }, [updateLocation]);
 
+  // The reel's links to this creator's page, their name and their own
+  // comments, lead to the page it is open on. Followed, one drew the page
+  // again from the server (on a page entered with a query, back to its first
+  // posts and its top), put an entry without the tab in history and could be
+  // dropped by the reel's own address changes, with the reel open over it.
+  // The reel closes instead, as Close does.
+  const closeOnLinkToThisPage = (event: MouseEvent<HTMLElement>) => {
+    if (!selectedItemId) return;
+    const url = readInAppLinkClick(event.nativeEvent);
+    if (!url || url.pathname !== pathname || url.search || url.hash) return;
+    event.preventDefault();
+    closeViewer();
+  };
+
   useEffect(() => {
     const handleHashChange = () => setActiveTab(getTabFromHash(window.location.hash));
     handleHashChange();
@@ -207,8 +222,17 @@ export function CreatorContentTabs({
 
   useEffect(() => {
     const postId = searchParams.get('post');
+    // No post in the URL, no reel, as on Explore. Close and the popstate
+    // listener clear the selection themselves: Next hands the page's own
+    // history calls to `searchParams` a render later. This closes the reel for
+    // any other way the address loses its post, and after a run that read the
+    // query from before Close opened it again. While the address bar still
+    // names a post, the query is the one from before a tile's pushState, and
+    // the reel the tile opened stays. The history mode is left to whatever
+    // opens the reel next.
     if (!postId) {
       directPostRequestRef.current = null;
+      if (!new URLSearchParams(window.location.search).get('post')) setSelectedItemId(null);
       setDirectPostStatus(null);
       return;
     }
@@ -230,6 +254,10 @@ export function CreatorContentTabs({
       signal: controller.signal,
     }).then(async (response) => {
       const payload = await response.json().catch(() => null);
+      // Cut short while its body was still on the way: `json()` rejected with
+      // the abort, not a broken answer, and the run that aborted it has asked
+      // again if the post is still wanted.
+      if (controller.signal.aborted) return;
       const item = payload?.item as ShowcaseFeedItem | undefined;
       settled = true;
       if (!response.ok || !item) {
@@ -433,7 +461,7 @@ export function CreatorContentTabs({
   });
 
   return (
-    <section className="mt-7" aria-label="Creator portfolio">
+    <section className="mt-7" aria-label="Creator portfolio" onClickCapture={closeOnLinkToThisPage}>
       <div className="sticky top-16 z-20 -mx-1 rounded-[20px] border border-white/8 bg-black/80 p-1.5 shadow-lg backdrop-blur-xl sm:top-20 sm:mx-0">
         <div className="grid grid-cols-3 gap-1" role="tablist" aria-label="Creator profile sections">
           {tabs.map((tab) => {

@@ -9,6 +9,7 @@ import {
   readServerNavigationToken,
   subscribeToNavigationStart,
 } from '@/components/navigation-progress-state';
+import { readInAppLinkClick } from '@/lib/link-clicks';
 
 /** How far the bar creeps while waiting; the last stretch is reserved for arrival. */
 const CEILING = 90;
@@ -24,25 +25,9 @@ const FAILSAFE_MS = 12_000;
  * the current page — must not raise the bar.
  */
 function isNavigatingClick(event: MouseEvent): boolean {
-  if (event.defaultPrevented || event.button !== 0) return false;
-  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false;
-
-  const target = event.target;
-  if (!(target instanceof Element)) return false;
-  const anchor = target.closest('a[href]');
-  if (!(anchor instanceof HTMLAnchorElement)) return false;
-  if (anchor.hasAttribute('download')) return false;
-  if (anchor.target && anchor.target !== '_self') return false;
-
-  let url: URL;
-  try {
-    url = new URL(anchor.href, window.location.href);
-  } catch {
-    return false;
-  }
-  if (url.origin !== window.location.origin) return false;
+  const url = readInAppLinkClick(event);
   // Same path means a hash jump or a no-op, not a page change.
-  return url.pathname !== window.location.pathname;
+  return url !== null && url.pathname !== window.location.pathname;
 }
 
 /**
