@@ -21,6 +21,9 @@ const SCREENS = [
   // Re-rendered on every keystroke of the prompt (2026-10-21: a rail's scroll ref read beside
   // its other fields during render knocked it back to uncompiled).
   ['components/media-creation-screen.tsx', 'ImagePromptComposer'],
+  // The video tool's composer, re-rendered the same way (2026-10-22: a useMemo over `subjects`,
+  // an array the compiler could not hold still past the memo, was a memo it could not keep).
+  ['components/media-creation-screen.tsx', 'VideoCreatorComposer'],
 ] as const;
 
 const metroCaller = {
