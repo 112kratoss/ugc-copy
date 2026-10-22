@@ -518,7 +518,8 @@ export const BODY_MAX_LENGTH = 2000;
 export const MADE_WITH_LABEL_MAX_LENGTH = 80;
 const MIN_RESOURCE_PRICE_TOKENS = 10;
 const MAX_MEDIA_ITEMS = 5;
-const MAX_MADE_WITH_ROWS = 5;
+/** How many made-with rows a post carries: the composer's Add stops here, and publishing keeps no more. */
+export const MAX_MADE_WITH_ROWS = 5;
 
 /** Default recipe price in credits, the same as the web composer's. */
 const DEFAULT_PRICE_TOKENS = 900;

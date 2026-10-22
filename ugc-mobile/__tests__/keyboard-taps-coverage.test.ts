@@ -4,7 +4,7 @@ import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-import { canBeAbsent, unwrap } from './fixtures/jsx-syntax';
+import { canBeAbsent, SCROLLER, unwrap } from './fixtures/jsx-syntax';
 
 /**
  * A scroll view decides for itself what a tap does while a field's keyboard is
@@ -35,7 +35,6 @@ import { canBeAbsent, unwrap } from './fixtures/jsx-syntax';
  * and so does one with a spread written after the prop, since in JSX the later
  * spread wins.
  */
-const SCROLLER = /(?:ScrollView|FlatList|SectionList|FlashList)$/;
 const DECISIONS = new Set(['always', 'handled', 'never']);
 
 const mobileRoot = path.resolve(__dirname, '..');
