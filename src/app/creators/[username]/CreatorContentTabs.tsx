@@ -207,8 +207,13 @@ export function CreatorContentTabs({
 
   useEffect(() => {
     const postId = searchParams.get('post');
+    // No post in the URL, no reel, as on Explore. The reel's creator link
+    // leads to this page without `?post` and the page keeps its state, so
+    // this is what closes the reel then. It also closes a reel that an effect
+    // from before Close, still reading the old URL, opened again.
     if (!postId) {
       directPostRequestRef.current = null;
+      setSelectedItemId(null);
       setDirectPostStatus(null);
       return;
     }

@@ -1,4 +1,4 @@
-import { act, type ReactNode } from 'react';
+import { act, type ReactNode, useMemo, useSyncExternalStore } from 'react';
 import { hydrateRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -22,13 +22,29 @@ const authState = vi.hoisted(() => ({
   session: null as { access_token: string } | null,
   user: null as { id: string } | null,
 }));
-// The query the page is opened with; empty unless a test opens a link.
-const searchState = vi.hoisted(() => ({ search: '' }));
+// The query is the address bar's, read in every render through
+// `useSyncExternalStore` (as in `showcase-client-save-actions.test.tsx`),
+// since Next's `useSearchParams` follows the page's own pushState and
+// replaceState: a reel opened from a tile has `?post=` in the query the page's
+// URL effect reads. The page closes the reel when the query has no post, so a
+// query that never moved would close every reel a tile opened. A test opens a
+// link by setting the URL before it renders; the hydration test's server
+// render reads it too.
+function subscribeToPopstate(onChange: () => void) {
+  window.addEventListener('popstate', onChange);
+  return () => window.removeEventListener('popstate', onChange);
+}
+function readSearch() {
+  return window.location.search;
+}
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/creators/creator-name',
   useRouter: () => routerMock,
-  useSearchParams: () => new URLSearchParams(searchState.search),
+  useSearchParams: () => {
+    const search = useSyncExternalStore(subscribeToPopstate, readSearch, readSearch);
+    return useMemo(() => new URLSearchParams(search), [search]);
+  },
 }));
 
 vi.mock('@/components/AuthProvider', () => ({
@@ -203,7 +219,6 @@ describe('CreatorContentTabs', () => {
     routerReplace.mockReset();
     authState.session = null;
     authState.user = null;
-    searchState.search = '';
     resetFeedbackState();
     window.history.replaceState(null, '', '/creators/creator-name');
   });
@@ -324,7 +339,6 @@ describe('CreatorContentTabs', () => {
   // it was gone, or someone else's, the page opened nothing and said nothing.
   describe('a linked post the page does not hold', () => {
     const linkTo = (postId: string) => {
-      searchState.search = `?post=${postId}`;
       window.history.replaceState(null, '', `/creators/creator-name?post=${postId}`);
     };
     const answerPost = (answer: () => { ok: boolean; status: number; json: () => Promise<unknown> }) => {
@@ -749,7 +763,6 @@ describe('CreatorContentTabs', () => {
 
     it('draws a linked post the viewer saved as saved', async () => {
       signIn();
-      searchState.search = '?post=item-linked';
       window.history.replaceState(null, '', '/creators/creator-name?post=item-linked');
       vi.stubGlobal('fetch', vi.fn(async (url: string) => {
         if (url.startsWith('/api/showcase/saved-state')) return { ok: true, status: 200, json: async () => [] };
