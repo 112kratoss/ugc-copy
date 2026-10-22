@@ -8,7 +8,10 @@
       "exclude": [
         "react-native",
         "@shopify/flash-list",
-        "expo-updates"
+        "expo-updates@55.0.x",
+        "expo@55.0.x",
+        "expo-auth-session@55.0.x",
+        "expo-dev-client@55.0.x"
       ]
     },
     "autolinking": {
