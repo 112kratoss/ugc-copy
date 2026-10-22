@@ -1390,14 +1390,16 @@ describe('ShowcaseClient save actions', () => {
     expect(back).toHaveBeenCalledTimes(1);
   });
 
-  // The bootstrap shell's hand-off (ShowcaseClientProps.initialPushedPostId;
-  // archive/web-showcase-bootstrap-history-2026-10-22).
-  it('goes Back from a reel whose entry the bootstrap shell pushed, as from a tile', async () => {
-    window.history.replaceState(null, '', '/showcase?post=post-1');
+  // The client mounts on the reel's own entry: the bootstrap shell's tap pushed it and
+  // loaded this client (archive/web-showcase-bootstrap-history-2026-10-22), or the reader
+  // came back to a tile's entry by a reload or by Back from a page the reel linked to
+  // ("Post details"), where the page mounts again (archive/web-reel-forward-history-2026-10-23).
+  it('goes Back from a reel whose own entry this client mounted on, as from a tile', async () => {
+    window.history.replaceState(createReelEntryState('post'), '', '/showcase?post=post-1');
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
 
-    renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-1' });
+    renderShowcase(createShowcaseItem());
 
     fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
     expect(back).toHaveBeenCalledTimes(1);
@@ -1406,11 +1408,18 @@ describe('ShowcaseClient save actions', () => {
 
   // The reader went Back off the shell's entry before this client came.
   it('opens nothing and writes no history when the shell\'s pushed post is no longer in the address', async () => {
+    window.history.pushState(createReelEntryState('post'), '', '/showcase?post=post-1');
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
     const pushState = vi.spyOn(window.history, 'pushState');
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
 
-    renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-1' });
+    renderShowcase(createShowcaseItem());
 
     expect(await screen.findByText('Campaign Frame')).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
@@ -1419,12 +1428,21 @@ describe('ShowcaseClient save actions', () => {
     expect(back).not.toHaveBeenCalled();
   });
 
+  // A shared link's entry, under the entry the shell's tap pushed over it: the reader
+  // went Back to the shared post before this client came. The mark is that entry's own.
   it('replaces the entry of a reel opened by address when the shell pushed some other post', async () => {
     window.history.replaceState(null, '', '/showcase?post=post-1');
+    window.history.pushState(createReelEntryState('post'), '', '/showcase?post=post-other');
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
+    });
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
 
-    renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-other' });
+    renderShowcase(createShowcaseItem());
 
     fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
     expect(back).not.toHaveBeenCalled();
@@ -1501,7 +1519,7 @@ describe('ShowcaseClient save actions', () => {
       await waitFor(() => {
         expect(window.location.search).toBe('');
       });
-      renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-1' });
+      renderShowcase(createShowcaseItem());
       expect(await screen.findByText('Campaign Frame')).toBeInTheDocument();
       expect(reelDialog()).not.toBeInTheDocument();
 

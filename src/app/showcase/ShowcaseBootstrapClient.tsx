@@ -10,7 +10,7 @@ import { useAuth } from '@/components/AuthProvider';
 import type { ShowcaseClientProps } from '@/app/showcase/ShowcaseClient';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
-import { createReelEntryState } from '@/lib/reel-history-entry';
+import { pushReelEntry, replaceReelEntry } from '@/lib/reel-history-entry';
 import {
     buildShowcaseClientCacheKey,
     filterFeedItemsForVisit,
@@ -27,9 +27,8 @@ import {
 } from '@/lib/showcase';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
 
-// The page's props, passed on to the full client whole; what the shell learns
-// from the tap that loads it (`initialPushedPostId`) is added by the shell.
-export type ShowcaseBootstrapClientProps = Omit<ShowcaseClientProps, 'initialPushedPostId'>;
+// The page's props, passed on to the full client whole.
+export type ShowcaseBootstrapClientProps = ShowcaseClientProps;
 
 const CATEGORY_LINKS: Array<{ id: ShowcaseCategory; label: string }> = [
     { id: 'all', label: 'All posts' },
@@ -201,18 +200,15 @@ function shouldDeferGlobalActivation(target: EventTarget | null): boolean {
 
 export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientProps) {
     const { session, user, isLoading: isAuthLoading } = useAuth();
-    // The full client once its module has come, with the post whose entry the
-    // tap that loaded it pushed over Explore's (`initialPushedPostId`).
-    const [fullClient, setFullClient] = useState<{
-        Component: ComponentType<ShowcaseClientProps>;
-        pushedPostId: string | null;
-    } | null>(null);
-    const hasFullClient = fullClient !== null;
+    // The full client, once its module has come.
+    const [FullShowcaseClient, setFullShowcaseClient] = useState<ComponentType<ShowcaseClientProps> | null>(null);
+    const hasFullClient = FullShowcaseClient !== null;
     const [isActivating, setIsActivating] = useState(false);
     const fullClientPromiseRef = useRef<Promise<ComponentType<ShowcaseClientProps>> | null>(null);
     // The post whose entry the last tap pushed over Explore's own entry while
     // the full client is on its way; null when nothing was pushed, or the tap
-    // pushed over a shared link's entry.
+    // pushed over a shared link's entry. Only a second tap reads it: the full
+    // client reads the entry itself (`reel-history-entry.ts`).
     const pushedPostIdRef = useRef<string | null>(null);
     const initialScrollYRef = useRef<number | null>(null);
     const shouldRelayAnonymousDemandRef = useRef(false);
@@ -240,31 +236,24 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
             if (pushedPostIdRef.current !== null && currentPostId === pushedPostIdRef.current) {
                 // A second tap while the full client is still on its way, with
                 // the address still on the entry the first tap pushed: that
-                // entry is pointed at the new post, so two taps leave one entry.
-                window.history.replaceState(createReelEntryState('post'), '', nextUrl);
+                // entry is pointed at the new post, so two taps leave one entry,
+                // still the reel's own.
+                replaceReelEntry(nextUrl);
                 pushedPostIdRef.current = postId;
             } else {
-                // Only an entry pushed over Explore's own is handed over, and
-                // marked as the reel's own, which the full client reads when
-                // Back or Forward reaches it (`reel-history-entry.ts`). Pushed
-                // over a shared link's entry (the address named a post before
-                // the tap), the reel closes by replacing, as before, and the
-                // browser's Back then returns to the shared post.
-                window.history.pushState(currentPostId ? null : createReelEntryState('post'), '', nextUrl);
+                // Only an entry pushed over Explore's own is the reel's own: the
+                // full client, mounting on it, closes the reel by going Back to
+                // Explore's. Pushed over a shared link's entry (the address named
+                // a post before the tap), the reel closes by replacing, as
+                // before, and the browser's Back then returns to the shared post.
+                pushReelEntry(currentPostId ? null : 'post', nextUrl);
                 pushedPostIdRef.current = currentPostId ? null : postId;
             }
         }
 
         setIsActivating(true);
         void loadFullClient().then((Component) => {
-            const pushedPostId = pushedPostIdRef.current;
-            // A later activation with nothing new (a token refresh re-runs
-            // the auth effect) keeps the same object, so nothing re-renders.
-            setFullClient((current) => (
-                current?.Component === Component && current.pushedPostId === pushedPostId
-                    ? current
-                    : { Component, pushedPostId }
-            ));
+            setFullShowcaseClient(() => Component);
         }).catch(() => {
             fullClientPromiseRef.current = null;
             setIsActivating(false);
@@ -392,9 +381,8 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
         return () => observer.disconnect();
     }, [hasFullClient, activate, isActivating]);
 
-    if (fullClient) {
-        const { Component: FullShowcaseClient, pushedPostId } = fullClient;
-        return <FullShowcaseClient {...props} initialPushedPostId={pushedPostId} />;
+    if (FullShowcaseClient) {
+        return <FullShowcaseClient {...props} />;
     }
 
     // What this tab already knows this viewer's own feed leaves out (a creator

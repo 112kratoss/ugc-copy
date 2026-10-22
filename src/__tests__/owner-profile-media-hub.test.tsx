@@ -1,4 +1,3 @@
-import { useSyncExternalStore } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,21 +11,16 @@ import type { ShowcaseFeedItem } from '@/lib/showcase';
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 const pushMock = router.push;
 
-function subscribeToPopstate(onChange: () => void) {
-  window.addEventListener('popstate', onChange);
-  return () => window.removeEventListener('popstate', onChange);
-}
-
-// The address bar's query, read in every render; the browser's Back and Forward
-// draw the page again, as Next's router does when it restores an entry.
-vi.mock('next/navigation', () => ({
-  useRouter: () => router,
-  usePathname: () => '/profile',
-  useSearchParams: () => {
-    useSyncExternalStore(subscribeToPopstate, () => window.location.search);
-    return new URLSearchParams(window.location.search);
-  },
-}));
+// The address bar's query, one object per address, drawn again on the browser's
+// Back and Forward, as Next's is (`fixtures/address-bar-search-params.ts`).
+vi.mock('next/navigation', async () => {
+  const { useAddressBarSearchParams } = await import('./fixtures/address-bar-search-params');
+  return {
+    useRouter: () => router,
+    usePathname: () => '/profile',
+    useSearchParams: useAddressBarSearchParams,
+  };
+});
 
 // Stands in for the reel: names the open post, and offers a button for each
 // menu handler the page gives it.
@@ -521,6 +515,32 @@ describe('OwnerProfileMediaHub', () => {
       const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
       fireEvent.click(within(reel).getByRole('button', { name: 'Close reel' }));
       expect(back).toHaveBeenCalledTimes(1);
+    });
+
+    // The hub mounts on an entry it pushed: a reload, or a Back from a page the reel or
+    // the creation linked to ("Post details", "Turn into post"), where the page mounts again.
+    it("goes Back from a post's reel whose own entry the hub mounted on", async () => {
+      window.history.replaceState(createReelEntryState('post'), '', '/profile?tab=posts&post=post-public');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      const reel = await screen.findByRole('dialog', { name: /public post showcase reel/i });
+
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(reel).getByRole('button', { name: 'Close reel' }));
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(replaceState).not.toHaveBeenCalled();
+    });
+
+    it('goes Back from a creation whose own entry the hub mounted on', async () => {
+      window.history.replaceState(createReelEntryState('generation'), '', '/profile?tab=creations&generation=raw-generation');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
+
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(replaceState).not.toHaveBeenCalled();
     });
 
     // A linked post's entry, and every entry from before the page marked its own: opened

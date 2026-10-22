@@ -29,7 +29,13 @@ import {
   toastSafetyOutcome,
 } from '@/lib/feed-safety-actions';
 import { readInAppLinkClick } from '@/lib/link-clicks';
-import { createReelEntryState, keepReelEntryState, readReelHistoryMode } from '@/lib/reel-history-entry';
+import {
+  pushReelEntry,
+  readCurrentReelHistoryMode,
+  readReelHistoryMode,
+  replaceReelEntry,
+  type ReelHistoryMode,
+} from '@/lib/reel-history-entry';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
@@ -108,7 +114,9 @@ export function CreatorContentTabs({
   });
   const loadingMoreRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(searchParams.get('post') ? 'direct' : null);
+  // How Creator, the reel's close, leaves history: read from the entry when
+  // the page mounts and on popstate, and set by a tile.
+  const reelHistoryModeRef = useRef<ReelHistoryMode>(null);
   const directPostRequestRef = useRef<string | null>(null);
   const {
     items,
@@ -159,8 +167,8 @@ export function CreatorContentTabs({
     const nextUrl = `${pathname}${query}${tabHashes[activeTab]}`;
     // The reel's own entry says so on its state (`reel-history-entry.ts`), and
     // keeps saying so while the reel moves to another post or slide.
-    if (mode === 'push') window.history.pushState(createReelEntryState('post'), '', nextUrl);
-    else window.history.replaceState(keepReelEntryState(window.history.state, params), '', nextUrl);
+    if (mode === 'push') pushReelEntry('post', nextUrl);
+    else replaceReelEntry(nextUrl);
   }, [activeTab, pathname]);
 
   const selectViewerItem = useCallback((id: string) => {
@@ -205,6 +213,11 @@ export function CreatorContentTabs({
   useEffect(() => {
     const handleHashChange = () => setActiveTab(getTabFromHash(window.location.hash));
     handleHashChange();
+    // The entry the page mounts on says how its reel was opened: one a tile
+    // pushed (a reload, or a Back from a page the reel linked to, brought the
+    // reader back to it) closes by going Back to the entry under it; a post any
+    // other entry names opened by address, and Creator replaces the entry.
+    reelHistoryModeRef.current = readCurrentReelHistoryMode('post');
     const handlePopState = (event: PopStateEvent) => {
       const params = new URLSearchParams(window.location.search);
       const postId = params.get('post');
@@ -212,8 +225,7 @@ export function CreatorContentTabs({
       setSelectedItemId(postId);
       if (!postId) setDirectPostStatus(null);
       setSelectedMediaIndex(Number.isInteger(mediaIndex) && mediaIndex >= 0 ? mediaIndex : 0);
-      // Back or Forward onto the reel's own entry still closes by going Back to
-      // the entry under it; a post any other entry names opened by address.
+      // The same for the entry Back or Forward reaches.
       reelHistoryModeRef.current = readReelHistoryMode('post', params, event.state);
       setActiveTab(getTabFromHash(window.location.hash));
     };

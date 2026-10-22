@@ -6,6 +6,7 @@ import { CreatorContentTabs } from '@/app/creators/[username]/CreatorContentTabs
 import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
 import { POST_COMMENTS_PAGE_SIZE, type PostComment, type PostCommentsPage } from '@/lib/post-comments-client';
+import { createReelEntryState } from '@/lib/reel-history-entry';
 import { navigateWithinPage } from './fixtures/address-bar-search-params';
 
 // The creator page with the real reel and the real thread, for what the
@@ -406,10 +407,27 @@ describe('CreatorContentTabs with the reel', () => {
     const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
     expect(window.location.search).toBe('?post=item-2');
 
-    const back = vi.spyOn(window.history, 'back');
+    // Stubbed: the dialog goes in the click itself, and a real Back would still be on its
+    // way when the next test starts.
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
     fireEvent.click(within(reel).getByRole('button', { name: 'Creator' }));
     await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
     expect(back).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  // The page mounts on the reel's own entry: a reload, or a Back from a page the reel
+  // linked to ("Post details", a commenter's page), where the page mounts again.
+  it('goes Back from a reel whose own entry the page mounted on', async () => {
+    window.history.replaceState(createReelEntryState('post'), '', '/creators/creator-name?post=item-1');
+    renderCreatorPage();
+    const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    fireEvent.click(within(reel).getByRole('button', { name: 'Creator' }));
+    await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(replaceState).not.toHaveBeenCalled();
   }, 15_000);
 
   // A linked post's entry (a shared link), and every entry from before the reel marked
