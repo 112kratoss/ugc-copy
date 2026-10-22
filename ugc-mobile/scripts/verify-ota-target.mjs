@@ -17,6 +17,12 @@
 //   node ./scripts/verify-ota-target.mjs                    # every platform in ota-targets.json
 //   node ./scripts/verify-ota-target.mjs --platform android
 //   node ./scripts/verify-ota-target.mjs --json
+//   node ./scripts/verify-ota-target.mjs --set-aside        # as publish-ota.mjs fingerprints (CI's advisory step)
+//
+// --set-aside fingerprints each platform without the files its target lists
+// under "setAside", as scripts/publish-ota.mjs does in its throwaway tree, and
+// puts them back afterwards. Without it a target with such files never matches
+// a plain tree, which is expected and says nothing about reach.
 //
 // Deliberately NOT wired to an npm script. package.json is a fingerprint input
 // in its entirety, so adding `"ota:preflight": "..."` to it moves the runtime
@@ -28,17 +34,20 @@
 // package.json edit that looks harmless.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { setAsideFor } from './publish-ota.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TARGETS_FILE = 'ota-targets.json';
 
 function parseArgs(argv) {
-  const args = { platforms: null, json: false };
+  const args = { platforms: null, json: false, setAside: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--json') args.json = true;
+    else if (argv[i] === '--set-aside') args.setAside = true;
     else if (argv[i] === '--platform') {
       const value = argv[i + 1];
       if (!value || value.startsWith('--')) {
@@ -86,6 +95,37 @@ function computeFingerprint(platform) {
   return hash;
 }
 
+/**
+ * Run `compute` with `files` (paths inside the project) removed, then write
+ * them back from memory, so uncommitted edits survive, also on Ctrl-C.
+ */
+function withFilesSetAside(files, compute) {
+  const held = files
+    .map((file) => path.join(projectRoot, file))
+    .filter((absolute) => existsSync(absolute))
+    .map((absolute) => ({ absolute, contents: readFileSync(absolute), mode: statSync(absolute).mode }));
+  if (held.length === 0) return compute();
+
+  const restore = () => {
+    for (const file of held) {
+      if (!existsSync(file.absolute)) writeFileSync(file.absolute, file.contents, { mode: file.mode });
+    }
+  };
+  const onSignal = () => {
+    restore();
+    process.exit(130);
+  };
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  for (const signal of signals) process.on(signal, onSignal);
+  try {
+    for (const file of held) rmSync(file.absolute);
+    return compute();
+  } finally {
+    restore();
+    for (const signal of signals) process.removeListener(signal, onSignal);
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const targets = readTargets();
@@ -101,7 +141,10 @@ function main() {
 
   const results = platforms.map((platform) => {
     const target = targets[platform];
-    const actual = computeFingerprint(platform);
+    const setAside = setAsideFor(targets, platform);
+    const actual = args.setAside
+      ? withFilesSetAside(setAside, () => computeFingerprint(platform))
+      : computeFingerprint(platform);
     return {
       platform,
       expected: target.fingerprint,
@@ -109,7 +152,8 @@ function main() {
       matches: actual === target.fingerprint,
       shippedAs: `${target.appVersion} (${target.buildNumber})`,
       tracks: target.tracks ?? [],
-      setAside: target.setAside ?? [],
+      setAside,
+      setAsideApplied: args.setAside && setAside.length > 0,
     };
   });
 
@@ -121,7 +165,8 @@ function main() {
       process.stdout.write(
         `${mark} ${result.platform}: ${result.actual}\n`
         + `     shipped ${result.shippedAs} → ${result.expected}`
-        + `${result.tracks.length > 0 ? ` (${result.tracks.join(', ')})` : ''}\n`,
+        + `${result.tracks.length > 0 ? ` (${result.tracks.join(', ')})` : ''}\n`
+        + `${result.setAsideApplied ? `     fingerprinted without ${result.setAside.join(', ')} (set aside)\n` : ''}`,
       );
     }
   }
@@ -132,11 +177,11 @@ function main() {
     return;
   }
 
-  for (const result of failed.filter((entry) => entry.setAside.length > 0)) {
+  for (const result of failed.filter((entry) => entry.setAside.length > 0 && !entry.setAsideApplied)) {
     process.stderr.write(
       `\n${result.platform}: its binary was built without ${result.setAside.join(', ')}, which this tree`
       + ' carries, so a mismatch here is expected. scripts/publish-ota.mjs sets those files aside'
-      + ' in a throwaway tree before it fingerprints and publishes.\n',
+      + ' in a throwaway tree before it fingerprints and publishes; --set-aside does the same here.\n',
     );
   }
 

@@ -89,8 +89,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Offline for the reason given in quality.yml: compared with the versions
-      # the installed expo package lists, not with Expo's live list.
+      # Offline for the reason in ugc-mobile/__tests__/expo-install-exclude.test.ts.
       - name: Validate Expo dependency alignment
         run: npx expo install --check
         env:
@@ -101,38 +100,47 @@ jobs:
         env:
           EXPO_OFFLINE: "1"
 
-      # Advisory: the versions Expo's live list recommends that this build does
-      # not carry, in the job summary while the signed build runs. A native one
-      # moves the runtime fingerprint, so it goes out only with new binaries:
-      # to take it, cancel, land it on main and dispatch again.
+      # Advisory: what Expo's live list would add to this build, in the job
+      # summary while the signed build runs. To take a patch, cancel, land it on
+      # main as expo-install-exclude.test.ts says, and dispatch again.
       - name: Report Expo's live version list
         continue-on-error: true
         run: |
           set -uo pipefail
-          report="$RUNNER_TEMP/expo-live-versions.txt"
-          if npx expo install --check > "$report" 2>&1; then status=0; else status=$?; fi
-          if grep -q "offline-mode" "$report"; then
-            verdict="Expo's live list could not be read (the check fell back to offline mode), so this says nothing about patches this build leaves out."
+          out="$RUNNER_TEMP/expo-live-versions.json"
+          err="$RUNNER_TEMP/expo-live-versions.err"
+          status=0
+          npx expo install --check --json > "$out" 2> "$err" || status=$?
+          if grep -q "offline-mode" "$err"; then
+            verdict="Expo's live list could not be read: the check fell back to offline mode, so this says nothing about the patches this build leaves out."
             echo "::warning title=Expo's live list not read::See the job summary."
-          elif [ "$status" -eq 0 ]; then
+          elif ! jq -e 'has("upToDate")' "$out" > /dev/null 2>&1; then
+            verdict="Expo's live list could not be read (the check exited $status); its output is below."
+            echo "::warning title=Expo's live list not read::See the job summary."
+          elif jq -e '.upToDate' "$out" > /dev/null; then
             verdict="Every checked package is at the version Expo's live list recommends."
-          elif grep -q "Found outdated dependencies" "$report"; then
-            verdict="Expo's live list recommends versions this build does not carry (packages in \`expo.install.exclude\` are left out). \`ugc-mobile/__tests__/expo-install-exclude.test.ts\` says how to take them in the release-bump commit."
-            echo "::warning title=Expo patches not in this build::Expo's live list recommends newer versions than this build carries. See the job summary."
           else
-            verdict="Expo's live list could not be read; the check's output is below."
-            echo "::warning title=Expo's live list not read::See the job summary."
+            verdict="Expo's live list recommends versions this build does not carry (packages in \`expo.install.exclude\` are left out). To take them, see \`ugc-mobile/__tests__/expo-install-exclude.test.ts\`."
+            echo "::warning title=Expo patches not in this build::See the job summary."
           fi
           {
             echo "### Expo's live version list"
             echo
             echo "$verdict"
-            echo
-            echo '```'
-            cat "$report"
-            echo '```'
+            if jq -e '(.dependencies // []) | length > 0' "$out" > /dev/null 2>&1; then
+              echo
+              echo "| Package | Installed | Expo's live list |"
+              echo "| --- | --- | --- |"
+              jq -r '.dependencies[] | "| \(.packageName) | \(.actualVersion) | \(.expectedVersionOrRange) |"' "$out"
+            fi
+            if [ -s "$err" ] || ! jq -e 'has("upToDate")' "$out" > /dev/null 2>&1; then
+              echo
+              echo '```'
+              cat "$out" "$err"
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          cat "$report"
+          cat "$out" "$err"
 
       - name: Test fail-closed production environment guard
         run: npm run release-env:self-test

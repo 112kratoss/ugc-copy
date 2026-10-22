@@ -185,16 +185,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Offline, both steps compare the installed packages with the versions
-      # the installed expo package lists (its bundledNativeModules.json). Online
-      # they used Expo's live list, so every Expo patch release turned every
-      # tree red with nothing changed here (2026-08-26, 2026-09-19, 2026-10-21),
-      # and taking a native patch moves the runtime fingerprint, after which no
-      # over-the-air update reaches the store builds until new ones ship.
-      # Doctor's version check runs `expo install --check` and inherits the
-      # variable. The store release's validate job reports what the live list
-      # would add; ugc-mobile/__tests__/expo-install-exclude.test.ts says when
-      # to take it.
+      # Offline (EXPO_OFFLINE=1), both steps compare the installed packages
+      # with the versions the installed expo package lists, not with Expo's
+      # live list. Doctor's version check runs `expo install --check` and
+      # inherits the variable. Why, and when Expo's newer patches are taken:
+      # ugc-mobile/__tests__/expo-install-exclude.test.ts.
       - name: Validate Expo dependency alignment
         run: npx expo install --check
         env:
@@ -207,19 +202,21 @@ jobs:
 
       # Advisory, never a gate: native work meant for the next store build
       # moves the fingerprint on purpose, and that build needs a green Quality
-      # run on its exact main commit. The publish script refuses a mismatched
-      # update on its own; this only shows a moved fingerprint on the pull
-      # request that moved it, before main is stranded.
+      # run on its exact main commit, so from the moment such work lands until
+      # ota-targets.json moves with the new binaries every run warns. A warning
+      # on a pull request while main's runs have none means it moved the
+      # fingerprint. --set-aside fingerprints each platform the way
+      # scripts/publish-ota.mjs publishes to it.
       - name: Compare the runtime fingerprint with the store builds
         continue-on-error: true
         run: |
           set -uo pipefail
           report="$RUNNER_TEMP/ota-reach.txt"
-          if node ./scripts/verify-ota-target.mjs > "$report" 2>&1; then
+          if node ./scripts/verify-ota-target.mjs --set-aside > "$report" 2>&1; then
             verdict="An over-the-air update built from this tree would reach every store build in \`ota-targets.json\`."
           else
-            verdict="An over-the-air update built from this tree would reach **no device** on a store build below, or the fingerprint could not be computed. Expected when this change carries native work for the next store build; otherwise find what moved it (a dependency or lockfile change, a config plugin, \`app.json\`, \`patches/\`, \`eas.json\`, \`.gitignore\`). Advisory: this step never fails the job."
-            echo "::warning title=Over-the-air reach not confirmed::An update from this tree would not reach every store build in ota-targets.json. See the job summary."
+            verdict="An over-the-air update built from this tree would not reach every store build in \`ota-targets.json\`, or its fingerprint could not be computed; the output below says which."
+            echo "::warning title=Over-the-air reach not confirmed::See the job summary."
           fi
           {
             echo "### Over-the-air reach"
