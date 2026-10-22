@@ -582,6 +582,7 @@ export function ProfileMediaFeedScreen() {
       <MediaZoomSurface>
       <View style={{ flex: 1, width: contentWidth, alignSelf: 'center' }}>
       <FlashList
+        keyboardShouldPersistTaps="never"
         ref={listRef}
         testID="profile-media-feed-list"
         data={cards}
