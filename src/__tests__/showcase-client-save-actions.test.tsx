@@ -53,10 +53,12 @@ const authState = vi.hoisted(() => ({
 // `useSyncExternalStore`: it reads the URL in every render and counts a changed
 // URL as an update, so React cannot drop a render the URL moved under. A plain
 // getter, cached or not, lets it drop one; see "closes the reel when Explore is
-// pressed before…" below. The popstate subscription re-renders readers when
-// history moves, as Next does; Next also re-renders after its own
-// pushState/replaceState, in a transition, which this mock leaves to the next
-// render.
+// pressed before…" below. Reading `window.location` runs ahead of Next: after
+// the app's own pushState or replaceState, Next keeps the old URL until a
+// transition commits the new one, while this mock has the new one at the next
+// render. And it re-renders on every popstate, where Next acts only on history
+// entries that carry its state (the app's own entries do; this file's
+// PopStateEvents carry none).
 function subscribeToPopstate(onChange: () => void) {
   window.addEventListener('popstate', onChange);
   return () => window.removeEventListener('popstate', onChange);
@@ -1473,13 +1475,14 @@ describe('ShowcaseClient save actions', () => {
       generationId: 'gen-shared',
       mediaUrl: 'https://example.com/shared.jpg',
     });
-    const answerSharedPost = (answer: () => { ok: boolean; status: number; json: () => Promise<unknown> }) => {
+    type SharedPostAnswer = { ok: boolean; status: number; json: () => Promise<unknown> };
+    const answerSharedPost = (answer: (init?: RequestInit) => SharedPostAnswer | Promise<SharedPostAnswer>) => {
       const reads: string[] = [];
-      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url === '/api/showcase/posts/post-shared') {
           reads.push(url);
-          return answer();
+          return answer(init);
         }
         if (url.startsWith('/api/showcase/saved-state')) {
           return { ok: true, json: async () => [] };
@@ -1487,6 +1490,27 @@ describe('ShowcaseClient save actions', () => {
         return { ok: true, json: async () => ({ success: true }) };
       }));
       return reads;
+    };
+    // Draws the page and returns a token refresh, which draws it again with the same feed: the
+    // URL effect runs again with `post` unchanged, as it does whenever a feed page lands.
+    const renderWithTokenRefresh = () => {
+      const feed = createFeed(createShowcaseItem());
+      const draw = () => (
+        <ShowcaseClient
+          initialFeed={feed}
+          initialCategory="all"
+          initialSort="recent"
+          initialTool={null}
+          initialUnlock="all"
+          initialResource="all"
+          sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        />
+      );
+      const view = render(draw());
+      return () => {
+        authState.session = { access_token: 'refreshed-token', user: { id: 'user-1' } };
+        view.rerender(draw());
+      };
     };
 
     it("says inside the reel that a deleted or hidden post isn't available", async () => {
@@ -1516,22 +1540,49 @@ describe('ShowcaseClient save actions', () => {
         ? { ok: false, status: 500, json: async () => ({ error: 'Failed to fetch showcase post.' }) }
         : { ok: true, status: 200, json: async () => ({ success: true, item: sharedItem }) });
 
-      renderShowcase(createShowcaseItem());
+      const refreshToken = renderWithTokenRefresh();
 
       const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
-      const tryAgain = await within(reel).findByRole('button', { name: 'Try again' });
+      await within(reel).findByRole('button', { name: 'Try again' });
       expect(within(reel).getByRole('heading', { name: /couldn.t load this post/i })).toBeInTheDocument();
       const readsBeforeRetry = reads.length;
+      // The URL effect runs again after the failure: it neither asks again nor shows a read
+      // loading that nobody makes.
+      refreshToken();
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
       });
       expect(reads).toHaveLength(readsBeforeRetry);
+      expect(within(reel).getByRole('heading', { name: /couldn.t load this post/i })).toBeInTheDocument();
 
       failing = false;
-      fireEvent.click(tryAgain);
+      fireEvent.click(within(reel).getByRole('button', { name: 'Try again' }));
 
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
       expect(reads.length).toBeGreaterThan(readsBeforeRetry);
+    });
+
+    it('asks again when the URL effect runs while the read is out, rather than loading for ever', async () => {
+      window.history.replaceState(null, '', '/showcase?post=post-shared');
+      let firstRead: AbortSignal | null | undefined;
+      const reads = answerSharedPost((init) => {
+        if (firstRead !== undefined) {
+          return { ok: true, status: 200, json: async () => ({ success: true, item: sharedItem }) };
+        }
+        // The first read stays out until it is aborted, then rejects as a browser's does.
+        firstRead = init?.signal;
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
+        });
+      });
+
+      const refreshToken = renderWithTokenRefresh();
+      expect(reads).toHaveLength(1);
+
+      refreshToken();
+      expect(firstRead?.aborted).toBe(true);
+      expect(reads).toHaveLength(2);
+      expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
     });
   });
 
@@ -2001,7 +2052,10 @@ describe('ShowcaseClient save actions', () => {
 
     expect(await screen.findByText('More for you')).toBeInTheDocument();
     expect(feedFetch).toHaveBeenCalledWith(expect.stringContaining('cursor=cursor-1'));
-  });
+    // About 200 ms here, as long as the comment-count test that took 5,016 ms on a GitHub
+    // runner (#459). Room as #457 gave, so a wait above that never passes fails on its own
+    // assertion, not on the test's timeout.
+  }, 15_000);
 
   it('keeps the anonymous fallback idle until interaction establishes a feed session', async () => {
     vi.useFakeTimers();
