@@ -1,5 +1,5 @@
 import type { AnchorHTMLAttributes, ComponentProps, HTMLAttributes, ReactNode } from 'react';
-import { useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -48,39 +48,27 @@ const authState = vi.hoisted(() => ({
   saverNoticeRecord: null as { userId: string; seen: boolean } | null,
 }));
 
-// The URL's search params as Next's `useSearchParams` hands them over: one
-// object per URL, and a re-render of every reader when history moves. A mock
-// that builds a new object from `window.location` on each render does neither:
-// `history.back()` then reaches ShowcaseClient only through whatever render
-// comes next, and that render can be one React bails out of. On 2026-10-22,
-// as on 10-13 and 10-20, main's slower runner pressed Explore before the
-// effects of the render that drew the thread's count had run; that render's
-// URL effect, still holding `post=post-1`, chose the post again after the
-// close, React found nothing changed and dropped the render's effects, and
-// the reel stayed open with the URL already at /showcase.
-const windowSearch = vi.hoisted(() => {
-  const paramsBySearch = new Map<string, URLSearchParams>();
-  return {
-    subscribe(onChange: () => void) {
-      window.addEventListener('popstate', onChange);
-      return () => window.removeEventListener('popstate', onChange);
-    },
-    current() {
-      const { search } = window.location;
-      let params = paramsBySearch.get(search);
-      if (!params) {
-        params = new URLSearchParams(search);
-        paramsBySearch.set(search, params);
-      }
-      return params;
-    },
-  };
-});
+// Next's `useSearchParams` gives its readers one object per URL and re-renders
+// them when the URL changes. The part this file relies on is
+// `useSyncExternalStore`: it reads the URL in every render and counts a changed
+// URL as an update, so React cannot drop a render the URL moved under. A plain
+// getter, cached or not, lets it drop one; see "closes the reel when Explore is
+// pressed before…" below. The popstate subscription re-renders readers when
+// history moves, as Next does; Next also re-renders after its own
+// pushState/replaceState, in a transition, which this mock leaves to the next
+// render.
+function subscribeToPopstate(onChange: () => void) {
+  window.addEventListener('popstate', onChange);
+  return () => window.removeEventListener('popstate', onChange);
+}
 
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
   usePathname: () => '/showcase',
-  useSearchParams: () => useSyncExternalStore(windowSearch.subscribe, windowSearch.current),
+  useSearchParams: () => {
+    const search = useSyncExternalStore(subscribeToPopstate, () => window.location.search);
+    return useMemo(() => new URLSearchParams(search), [search]);
+  },
 }));
 
 vi.mock('next/link', () => ({
@@ -583,7 +571,7 @@ describe('ShowcaseClient save actions', () => {
 
     it('draws none as the reel opens, lands on other posts, swipes media and closes', async () => {
       vi.spyOn(window.history, 'pushState');
-      // Back from the reel as the browser does it: the URL loses `post`, then popstate.
+      // Back from the reel, sooner than a browser: the URL loses `post` and popstate fires at once (a browser fires it in a later task).
       vi.spyOn(window.history, 'back').mockImplementation(() => {
         window.history.replaceState(null, '', '/showcase');
         window.dispatchEvent(new PopStateEvent('popstate'));
@@ -968,7 +956,7 @@ describe('ShowcaseClient save actions', () => {
     });
 
     it('plays no tile under the open reel, and the chosen clip again once it closes', async () => {
-      // Back from the reel as the browser does it: the URL loses `post`, then popstate.
+      // Back from the reel, sooner than a browser: the URL loses `post` and popstate fires at once (a browser fires it in a later task).
       vi.spyOn(window.history, 'back').mockImplementation(() => {
         window.history.replaceState(null, '', '/showcase');
         window.dispatchEvent(new PopStateEvent('popstate'));
@@ -1620,7 +1608,7 @@ describe('ShowcaseClient save actions', () => {
 
   it('keeps the comment count a thread read in the reel when the reel opens on that post again', async () => {
     vi.spyOn(window.history, 'pushState');
-    // Back from the reel as the browser does it: the URL loses `post`, then popstate.
+    // Back from the reel, sooner than a browser: the URL loses `post` and popstate fires at once (a browser fires it in a later task).
     vi.spyOn(window.history, 'back').mockImplementation(() => {
       window.history.replaceState(null, '', '/showcase');
       window.dispatchEvent(new PopStateEvent('popstate'));
@@ -1665,7 +1653,9 @@ describe('ShowcaseClient save actions', () => {
   }, 15_000);
 
   it('closes the reel when Explore is pressed before the render that drew the count has run its effects', async () => {
-    vi.spyOn(window.history, 'pushState');
+    // As above, popstate fires inside `back()`. That order is half of the race this test
+    // holds: ShowcaseClient's own popstate listener clears the post before the stale effect
+    // selects it again, so the three updates net to nothing.
     vi.spyOn(window.history, 'back').mockImplementation(() => {
       window.history.replaceState(null, '', '/showcase');
       window.dispatchEvent(new PopStateEvent('popstate'));
@@ -1694,30 +1684,26 @@ describe('ShowcaseClient save actions', () => {
 
     fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
     const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
-    // A mutation observer's callback runs in the microtask after the commit, before React's
-    // scheduler flushes that render's passive effects: the order main's runner can give a
-    // `findBy` that resolves on the same mutation.
-    let pressed = false;
+    // On main's loaded runner a test can resume after a `findBy` before React has run the
+    // passive effects of the render it found: Testing Library resumes through `setTimeout(0)`,
+    // React flushes those effects on `setImmediate`, and a millisecond of other work lets the
+    // timer win. The render that drew the count then runs its URL effect after Explore, still
+    // holding `post=post-1`, and selects the post again (2026-10-13/14, 10-20 and 10-22 on
+    // main). A mutation observer takes that slot every time: its callback is a microtask after
+    // the commit. The button's name is its aria-label, so a selector finds it cheaply.
     const observer = new MutationObserver(() => {
-      if (!pressed && within(reel).queryByRole('button', { name: 'Hide comments on Campaign Frame (3)' })) {
-        pressed = true;
-        observer.disconnect();
-        fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
-    try {
-      fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
-      await waitFor(() => expect(pressed).toBe(true));
-    } finally {
+      if (!reel.querySelector('button[aria-label="Hide comments on Campaign Frame (3)"]')) return;
       observer.disconnect();
-    }
+      fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
+    });
+    observer.observe(reel, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-label'] });
+    fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
 
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
     });
-    expect(window.location.search).toBe('');
-  });
+    // The same work as the test above, which needed this room on a GitHub runner (#459).
+  }, 15_000);
 
   it('automatically loads the next showcase page when the feed sentinel enters view', async () => {
     const firstItem = createShowcaseItem({ id: 'post-1', title: 'Campaign Frame', generationId: 'gen-1' });
@@ -1989,16 +1975,22 @@ describe('ShowcaseClient save actions', () => {
       'Ranked for you',
     ]);
 
-    let loadMoreObserver: (typeof intersectionObservers)[number] | undefined;
+    // The viewer's own page brings the cursor, and the sentinel observes again with a
+    // `loadMore` that reads it: that effect depends on the page. findByText can return before
+    // React has run that commit's effects, as on main's loaded runner, and the newest sentinel
+    // observer then still held the first page's offset, so the next page came by offset and
+    // the cursor read never did (shown with Testing Library's post-query drain removed). The
+    // new tile is observed in the same commit's effects, as #468 found, so wait for it first.
+    const observing = (matches: (target: Element) => boolean) => intersectionObservers.filter((observer) => (
+      observer.observedTargets.some(matches)
+    ));
     await waitFor(() => {
-      loadMoreObserver = intersectionObservers.findLast((observer) => (
-        observer.observedTargets.some((target) => (
-          target.getAttribute('data-showcase-load-more-sentinel') === 'true'
-          && target.isConnected
-        ))
-      ));
-      expect(loadMoreObserver).toBeDefined();
+      expect(observing((target) => target.getAttribute('data-showcase-post-id') === 'post-ranked')).not.toHaveLength(0);
     });
+    const loadMoreObserver = observing((target) => (
+      target.getAttribute('data-showcase-load-more-sentinel') === 'true' && target.isConnected
+    )).at(-1);
+    expect(loadMoreObserver).toBeDefined();
     act(() => {
       loadMoreObserver?.trigger(true);
     });
