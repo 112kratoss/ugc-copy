@@ -19,16 +19,12 @@ import {
     SHOWCASE_INITIAL_RENDER_COUNT,
     type ShowcaseCategory,
     type ShowcaseFeedItem,
-    type ShowcaseFeedPage,
     type ShowcaseMediaItem,
     type ShowcasePriorityPosterData,
-    type ShowcaseResourceFilter,
     type ShowcaseSort,
-    type ShowcaseUnlockFilter,
     getShowcaseItemMediaItems,
 } from '@/lib/showcase';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
-import type { SourceToolFilterOption } from '@/lib/source-tools';
 
 // The page's props, passed on to the full client whole; what the shell learns
 // from the tap that loads it (`initialPushedPostId`) is added by the shell.
