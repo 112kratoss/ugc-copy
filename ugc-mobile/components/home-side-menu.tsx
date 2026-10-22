@@ -255,6 +255,7 @@ export function HomeSideMenu({
           }}
         >
           <ScrollView
+            keyboardShouldPersistTaps="never"
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{
               flexGrow: 1,

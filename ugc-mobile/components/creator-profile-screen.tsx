@@ -566,6 +566,7 @@ export function CreatorProfileScreen({
       <Stack.Screen options={{ title: 'Creator' }} />
       {ownBar ? <CreatorTopBar topInset={topInset} /> : null}
       <FlashList
+        keyboardShouldPersistTaps="never"
         data={listItems}
         drawDistance={900}
         extraData={`${activeTab}:${activeVideoItemId ?? ''}:${isFocused}`}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Animated, Pressable, Text, View } from 'react-native';
+import { Animated, Keyboard, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Overlay } from '@/components/overlay-host';
@@ -42,6 +42,12 @@ export function ActionSheetHost() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => registerActionSheetPresenter((next) => {
+    // An overlay takes no window focus, so the keyboard of the page it opens
+    // over stays up, over its rows, typing into a field behind the scrim: Report
+    // from a comment's ••• in the comments sheet opened this sheet with all four
+    // reasons and Cancel under the keys (Pixel_9a, 2026-10-22). It goes as the
+    // sheet is asked for; a Modal's own window did this for the sheets before.
+    Keyboard.dismiss();
     setRequest(next);
     setVisible(true);
   }), []);

@@ -17,6 +17,7 @@ type QueryResult = { data: unknown; isError: boolean; error: unknown; refetch: (
 
 const mocks = vi.hoisted(() => ({
   platform: { OS: 'ios' },
+  dismissKeyboard: vi.fn(),
   router: { push: vi.fn(), replace: vi.fn(), back: vi.fn(), canGoBack: vi.fn(() => true), setParams: vi.fn() },
   params: { id: 'post-1' } as Record<string, string | undefined>,
   auth: {
@@ -51,19 +52,24 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   FlatList: React.forwardRef(function FlatList(
-    { data, renderItem, keyExtractor }: {
+    { data, renderItem, keyExtractor, ...props }: {
       data: string[];
       renderItem: (info: { item: string; index: number }) => React.ReactNode;
       keyExtractor: (item: string) => string;
+      // What a tap and a drag do with the keyboard up: the props the pager is pinned by.
+      horizontal?: boolean;
+      keyboardShouldPersistTaps?: string;
+      keyboardDismissMode?: string;
     },
     _ref: React.ForwardedRef<unknown>
   ) {
     return React.createElement(
       'flat-list',
-      null,
+      props,
       data.map((page, index) => React.createElement(React.Fragment, { key: keyExtractor(page) }, renderItem({ item: page, index })))
     );
   }),
+  Keyboard: { dismiss: mocks.dismissKeyboard },
   Platform: mocks.platform,
   Pressable: ({ children, style: _style, ...props }: MockProps) => React.createElement('pressable', props, children),
   Share: { share: vi.fn(), sharedAction: 'sharedAction' },
@@ -343,6 +349,29 @@ describe('a written post', () => {
     expect(byType(tree, 'post-comments')[0]!.props.enabled).toBe(true);
     expect(byType(tree, 'post-details-page')).toHaveLength(1);
     expect(byType(tree, 'viewer-actions-menu')[0]!.props.excludeActions).toEqual([]);
+  });
+
+  it('answers a tap on the comment composer with its keyboard up, and puts the keyboard away as a swipe begins', () => {
+    // At the default the pager spent Cancel reply's first tap on the keyboard (Pixel_9a, 2026-10-22).
+    const pager = byType(renderScreen(), 'flat-list')[0]!;
+
+    expect(pager.props.horizontal).toBe(true);
+    expect(pager.props.keyboardShouldPersistTaps).toBe('handled');
+    expect(pager.props.keyboardDismissMode).toBe('on-drag');
+  });
+
+  it('puts the keyboard away when it turns to the details page without a drag', () => {
+    // Details, the ••• menu's View details and TalkBack's double tap move the pager with no drag.
+    const tree = renderScreen();
+    const details = byType(tree, 'feed-card-action').find((node) => node.props.label === 'Details');
+
+    renderer.act(() => (details!.props.onPress as () => void)());
+    expect(mocks.dismissKeyboard).toHaveBeenCalledTimes(1);
+
+    mocks.dismissKeyboard.mockClear();
+    const item = byType(tree, 'viewer-actions-menu')[0]!.props.item as ImmersivePreviewItem;
+    renderer.act(() => mocks.callbacksFor.current!(item).onDetails!());
+    expect(mocks.dismissKeyboard).toHaveBeenCalledTimes(1);
   });
 
   it("gives the creator Edit post on their own post, wherever it was opened from", () => {

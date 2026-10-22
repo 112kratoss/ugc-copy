@@ -89,6 +89,7 @@ export function FeedFeedbackSheet({
           <SheetGrabber drag={drag} />
           <ScrollView
             {...drag.scrollProps}
+            keyboardShouldPersistTaps="never"
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingHorizontal: appTheme.spacing.panel, gap: appTheme.spacing.gap }}
           >

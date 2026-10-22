@@ -302,6 +302,17 @@ describe("Android's menu", () => {
     expect(mocks.motions).toEqual([expect.objectContaining({ kind: 'timing', toValue: 1 })]);
   });
 
+  it('keeps taps on its rows while the keys are up', () => {
+    // It opens over a raised keyboard (below), and a scroll view at React Native's default takes a
+    // touch inside it while the keys are up and spends it on putting them away: in the comments
+    // sheet the first press on Report or Block only lowered the keyboard (Pixel_9a, 2026-10-22).
+    // `keyboard-taps-coverage.test.ts` accepts any answer the prop is given; this pins the one it needs.
+    mocks.keyboardHeight = 300;
+    const tree = render(menu(), measurable);
+
+    expect(tree.root.findByType('scroll-view' as never).props.keyboardShouldPersistTaps).toBe('handled');
+  });
+
   it('stays out from under the status bar, the navigation bar and the keys', () => {
     const margin = appTheme.spacing.compact;
     expect(panelStyle(render(menu(), measurable)).maxHeight).toBe(923 - 24 - margin - (55 + margin));

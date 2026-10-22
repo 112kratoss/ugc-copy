@@ -27,6 +27,9 @@ export function MediaViewportScrollView(props: ScrollViewProps) {
     <MediaViewportContext.Provider value={viewport}>
       <ScrollView
         {...props}
+        // The caller's answer (`Screen` keeps taps), or React Native's default written out
+        // (keyboard-taps-coverage.test.ts).
+        keyboardShouldPersistTaps={props.keyboardShouldPersistTaps ?? 'never'}
         ref={ref}
         scrollEventThrottle={100}
         onScroll={(event) => { props.onScroll?.(event); notify(); }}

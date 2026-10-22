@@ -3,12 +3,16 @@ import ts from 'typescript';
 /**
  * What a JSX attribute's expression can come out as, read from its own syntax.
  * Shared by the guard tests that sweep the tree with the TypeScript parser
- * (`hig-accessibility-label-states.test.ts`, `keyboard-taps-coverage.test.ts`):
- * a prop a native view holds, or a scroll view reads at a touch, has to be
+ * (`hig-accessibility-label-states.test.ts`, `keyboard-taps-coverage.test.ts`,
+ * `keyboard-avoidance-coverage.test.ts`): a prop a native view holds, a scroll
+ * view reads at a touch, or a keyboard area depends on, has to be
  * given a value in every state, and these say whether the expression written
  * for it can fail to be one. Vitest collects only `*.test.ts(x)` under
  * `__tests__/`, so this module runs no tests of its own.
  */
+
+/** The tags that draw a React Native scroll view: the FlatList family renders one. */
+export const SCROLLER = /(?:ScrollView|FlatList|SectionList|FlashList)$/;
 
 /** The expression under its parentheses, `as`, `satisfies` and `!`. */
 export function unwrap(expression: ts.Expression): ts.Expression {

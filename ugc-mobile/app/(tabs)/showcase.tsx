@@ -910,6 +910,7 @@ export default function ShowcaseScreen() {
     <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <FlashList
+        keyboardShouldPersistTaps="never"
         ref={feedRef}
         contentInsetAdjustmentBehavior="never"
         data={isFirstLoad ? [] : cards}

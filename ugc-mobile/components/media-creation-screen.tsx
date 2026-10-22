@@ -5902,7 +5902,7 @@ function GenerationWorkspace({
           </Pressable>
         </View>
 
-        <ScrollView contentContainerStyle={{ flexGrow: 1, padding: 18, paddingBottom: safeAreaInsets.bottom + 18, gap: 18 }}>
+        <ScrollView keyboardShouldPersistTaps="never" contentContainerStyle={{ flexGrow: 1, padding: 18, paddingBottom: safeAreaInsets.bottom + 18, gap: 18 }}>
           {succeeded && outputUrl ? (
             <>
               {/* The whole result, whatever its shape: cropping it to fill
