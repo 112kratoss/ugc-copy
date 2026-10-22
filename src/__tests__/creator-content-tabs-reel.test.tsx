@@ -1,86 +1,81 @@
 import type { AnchorHTMLAttributes, HTMLAttributes, MouseEvent, ReactNode } from 'react';
-import { useMemo, useSyncExternalStore } from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CreatorContentTabs } from '@/app/creators/[username]/CreatorContentTabs';
+import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
+import { POST_COMMENTS_PAGE_SIZE, type PostComment, type PostCommentsPage } from '@/lib/post-comments-client';
+import { navigateWithinPage } from './fixtures/address-bar-search-params';
 
 // The creator page with the real reel and the real thread, for what the
 // stand-in reel of `creator-content-tabs.test.tsx` cannot press: the reel's own
-// Close button and creator link, and a comment count that arrives while the
-// reel is open.
+// Close button, the links in it to this creator's page, and a comment count
+// that arrives while the reel is open.
 
 const routerMock = vi.hoisted(() => ({
   push: vi.fn(),
   replace: vi.fn(),
-  refresh: vi.fn(),
 }));
-// Who hears a link's navigation; see the `next/link` stand-in below.
-const navigation = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
+// The reel reads the credit fields too; one object, so no value changes from
+// render to render.
+const authState = vi.hoisted(() => ({
+  session: null,
+  user: null,
+  credits: null,
+  marketplaceSpendableCredits: null,
+  updateCredits: () => {},
+}));
 
-// Next's `useSearchParams` re-renders its readers when the URL changes: after
-// the page's own pushState and replaceState, after Back and Forward, and after
-// a link to the page it is on. `useSyncExternalStore` reads the URL in every
-// render, so a render after Close sees the URL Close left. It runs ahead of
-// Next, which keeps the old URL until a transition commits the new one; the
-// tests below need only that a later render sees it.
-function subscribeToUrl(onChange: () => void) {
-  window.addEventListener('popstate', onChange);
-  navigation.listeners.add(onChange);
-  return () => {
-    window.removeEventListener('popstate', onChange);
-    navigation.listeners.delete(onChange);
+vi.mock('next/navigation', async () => {
+  const { useAddressBarSearchParams } = await import('./fixtures/address-bar-search-params');
+  return {
+    usePathname: () => '/creators/creator-name',
+    useRouter: () => routerMock,
+    useSearchParams: useAddressBarSearchParams,
   };
-}
+});
 
-vi.mock('next/navigation', () => ({
-  usePathname: () => '/creators/creator-name',
-  useRouter: () => routerMock,
-  useSearchParams: () => {
-    const search = useSyncExternalStore(subscribeToUrl, () => window.location.search);
-    return useMemo(() => new URLSearchParams(search), [search]);
-  },
-}));
-
-// A link is Next's navigation without a page load: the address changes with a
-// pushState and the page's readers of the query render again. No popstate
-// fires, so the page's own popstate listener does not hear it; on the page the
-// link names, the page stays mounted and keeps its state.
-vi.mock('next/link', () => ({
-  default: ({
-    href,
-    prefetch,
-    children,
-    onClick,
-    ...props
-  }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; prefetch?: boolean; children: ReactNode }) => (
-    <a
-      href={href}
-      data-prefetch={prefetch === undefined ? undefined : String(prefetch)}
-      {...props}
-      onClick={(event: MouseEvent<HTMLAnchorElement>) => {
-        onClick?.(event);
-        if (event.defaultPrevented) return;
-        event.preventDefault();
-        window.history.pushState(null, '', href);
-        navigation.listeners.forEach((listener) => listener());
-      }}
-    >
-      {children}
-    </a>
-  ),
-}));
+// Next's `<Link>`: a plain click navigates without a page load; a click that
+// opens a new tab or downloads (`next/dist/client/app-dir/link.js`) is the
+// browser's, and goes nowhere here. Every link these tests follow leads to the
+// page that is open; one to another page fails the test rather than leave the
+// page mounted under a changed address.
+vi.mock('next/link', async () => {
+  const { navigateWithinPage: navigate } = await import('./fixtures/address-bar-search-params');
+  return {
+    default: ({
+      href,
+      prefetch,
+      children,
+      onClick,
+      ...props
+    }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; prefetch?: boolean; children: ReactNode }) => (
+      <a
+        href={href}
+        data-prefetch={prefetch === undefined ? undefined : String(prefetch)}
+        {...props}
+        onClick={(event: MouseEvent<HTMLAnchorElement>) => {
+          onClick?.(event);
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          const leftToTheBrowser = event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+            || (props.target !== undefined && props.target !== '_self') || props.download !== undefined;
+          if (leftToTheBrowser) return;
+          if (new URL(href, window.location.href).pathname !== window.location.pathname) {
+            throw new Error(`The link stand-in follows links to the page that is open only, not ${href}.`);
+          }
+          navigate(href);
+        }}
+      >
+        {children}
+      </a>
+    ),
+  };
+});
 
 vi.mock('@/components/AuthProvider', () => ({
-  useAuth: () => ({
-    session: null,
-    user: null,
-    credits: null,
-    marketplaceSpendableCredits: null,
-    updateCredits: vi.fn(),
-    isLoading: false,
-  }),
+  useAuth: () => authState,
 }));
 
 vi.mock('framer-motion', () => ({
@@ -140,11 +135,43 @@ const initialData: CreatorProfilePageData = {
   pageInfo: { hasMore: false, limit: 24, offset: 0, nextOffset: null, nextLimit: null },
 };
 
+// What the thread reads; a test that needs a comment in it says so.
+let threadComments: PostComment[] = [];
+const creatorsComment: PostComment = {
+  id: 'comment-1',
+  parentId: null,
+  body: 'Shot on a phone, by the window.',
+  status: 'active',
+  createdAt: '2026-03-27T11:00:00.000Z',
+  replyCount: 0,
+  author: { id: 'creator-1', username: 'creator-name', displayName: 'Creator Name', avatarUrl: null },
+};
+
 function renderCreatorPage() {
   return render(<CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />);
 }
 
+const REEL = '[role="dialog"][aria-label="Creator reel viewer"]';
 const queryReel = () => screen.queryByRole('dialog', { name: 'Creator reel viewer' });
+
+/** Counts the reel's dialog being put on the page from now on. */
+function countReelInsertions() {
+  let insertions = 0;
+  const count = (records: MutationRecord[]) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node instanceof Element && (node.matches(REEL) || node.querySelector(REEL))) insertions += 1;
+      }
+    }
+  };
+  const observer = new MutationObserver(count);
+  observer.observe(document.body, { childList: true, subtree: true });
+  return () => {
+    count(observer.takeRecords());
+    observer.disconnect();
+    return insertions;
+  };
+}
 
 /**
  * Opens the thread and presses the reel's Close in the slot after the commit
@@ -155,10 +182,9 @@ const queryReel = () => screen.queryByRole('dialog', { name: 'Creator reel viewe
  *
  * jsdom leaves those effects for a later task (React flushes them on
  * `setImmediate`), and a mutation observer's callback, a microtask after the
- * commit, takes the slot every time. In Chromium the same press closed the
- * reel in four probe runs out of four (2026-10-22): the three traced ones ran
- * those effects inside the commit's own task, before the callback. The page
- * must close the reel whichever comes first.
+ * commit, takes the slot every time. Chromium has not shown that order (its
+ * commit ran those effects first); the page must close the reel whichever
+ * comes first.
  */
 async function pressCloseAsTheCountArrives(reel: HTMLElement) {
   let pressed = false;
@@ -169,13 +195,29 @@ async function pressCloseAsTheCountArrives(reel: HTMLElement) {
     fireEvent.click(within(reel).getByRole('button', { name: 'Creator' }));
   });
   observer.observe(reel, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-label'] });
-  fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
-  await waitFor(() => expect(pressed).toBe(true));
+  try {
+    fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
+    await waitFor(() => {
+      if (!pressed) throw new Error('The thread never drew "Hide comments on Campaign Frame (3)", so Close was not pressed.');
+    });
+  } finally {
+    observer.disconnect();
+  }
 }
 
 describe('CreatorContentTabs with the reel', () => {
+  beforeAll(async () => {
+    // The reel loads on demand (`next/dynamic`). Loaded here, the first test's
+    // wait for its dialog is not also a wait for the import.
+    await loadShowcaseReelViewer();
+    // The reel scrolls its details to the top each time it opens, and an
+    // opened thread into view; jsdom has no element scrolling.
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: () => {} });
+  });
+
   beforeEach(() => {
     window.history.replaceState(null, '', '/creators/creator-name');
+    threadComments = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/showcase/posts/item-1/comments')) {
@@ -185,63 +227,112 @@ describe('CreatorContentTabs with the reel', () => {
             postId: 'item-1',
             postCreatorId: 'creator-1',
             commentCount: 3,
-            comments: [],
-            pageInfo: { hasMore: false, nextOffset: null, limit: 20, offset: 0 },
-          }),
+            comments: threadComments,
+            pageInfo: { hasMore: false, nextOffset: null, limit: POST_COMMENTS_PAGE_SIZE, offset: 0 },
+          } satisfies PostCommentsPage),
         };
       }
       return { ok: true, json: async () => ({ success: true }) };
     }));
-    // The reel scrolls the opened thread into view; jsdom has no element scrolling.
-    Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.restoreAllMocks();
   });
 
-  // The reel's creator link leads to the page the reel is open on. The page
-  // stays and keeps its state, the address loses `?post`, and the reel stayed
-  // open over it; opened from a tile, the next Close went Back to the post and
-  // opened it again (both seen in Chromium on 2026-10-22).
-  describe("the creator link, on that creator's page", () => {
-    it('closes a linked post', async () => {
+  // The reel's links to this creator, their name and their own comments, lead
+  // to the page the reel is open on. Followed, such a link drew the page again
+  // from the server (on a page entered with a query, back to its first posts
+  // and its top), put an entry without the tab in history and could be
+  // dropped by the reel's own address changes, and the reel stayed open over
+  // it. The reel closes instead, as its Close does.
+  describe("a link to this creator's page inside the reel", () => {
+    it('closes a linked post as Close does, keeping the tab and adding no entry', async () => {
       window.history.replaceState(null, '', '/creators/creator-name?post=item-1');
       renderCreatorPage();
-
       const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+      const entries = window.history.length;
+
       fireEvent.click(within(reel).getByRole('link', { name: /Creator Name/ }));
 
       await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
       expect(window.location.search).toBe('');
+      expect(window.location.hash).toBe('#creator-creations');
+      expect(window.history.length).toBe(entries);
     }, 15_000);
 
-    it('closes a post opened from its tile, and Back opens it again', async () => {
+    it('closes a post opened from its tile by going back to the grid, as Close does', async () => {
       renderCreatorPage();
+      const entries = window.history.length;
 
       fireEvent.click(screen.getByRole('button', { name: 'Open Campaign Frame' }));
       const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
       fireEvent.click(within(reel).getByRole('link', { name: /Creator Name/ }));
 
+      await waitFor(() => {
+        expect(queryReel()).not.toBeInTheDocument();
+        expect(window.location.search).toBe('');
+      });
+      // Only the tile's entry, now ahead of this one: Forward opens the post again.
+      expect(window.history.length).toBe(entries + 1);
+      window.history.forward();
+      expect(await screen.findByRole('dialog', { name: 'Creator reel viewer' })).toBeInTheDocument();
+    }, 15_000);
+
+    it("closes the reel from the creator's own comment", async () => {
+      threadComments = [creatorsComment];
+      window.history.replaceState(null, '', '/creators/creator-name?post=item-1');
+      renderCreatorPage();
+      const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+      const entries = window.history.length;
+
+      fireEvent.click(within(reel).getByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
+      fireEvent.click(await within(reel).findByRole('link', { name: '@creator-name' }));
+
       await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
       expect(window.location.search).toBe('');
+      expect(window.history.length).toBe(entries);
+    }, 15_000);
 
-      window.history.back();
-      expect(await screen.findByRole('dialog', { name: 'Creator reel viewer' })).toBeInTheDocument();
+    it('leaves a click that opens a new tab to the browser', async () => {
+      window.history.replaceState(null, '', '/creators/creator-name?post=item-1');
+      renderCreatorPage();
+      const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+
+      fireEvent.click(within(reel).getByRole('link', { name: /Creator Name/ }), { ctrlKey: true });
+
+      expect(queryReel()).toBeInTheDocument();
       expect(window.location.search).toBe('?post=item-1');
     }, 15_000);
   });
 
+  // Back and Forward close and open the reel through the page's popstate
+  // listener; any other navigation that leaves the page without a post closes
+  // it through the URL effect.
+  it('closes when a navigation leaves the page without a post', async () => {
+    window.history.replaceState(null, '', '/creators/creator-name?post=item-1');
+    renderCreatorPage();
+    await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+
+    act(() => {
+      navigateWithinPage('/creators/creator-name');
+    });
+
+    await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
+  }, 15_000);
+
   it('closes a linked post on the first Close when an effect from before Close selects it again', async () => {
     window.history.replaceState(null, '', '/creators/creator-name?post=item-1');
     renderCreatorPage();
-
     const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+    const reelInsertions = countReelInsertions();
+
     await pressCloseAsTheCountArrives(reel);
 
     await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
     expect(window.location.search).toBe('');
+    // Closed once, never drawn again on the way.
+    expect(reelInsertions()).toBe(0);
   }, 15_000);
 
   it('closes a post opened from its tile on the first Close in the same slot', async () => {
@@ -250,6 +341,7 @@ describe('CreatorContentTabs with the reel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Campaign Frame' }));
     const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
     expect(window.location.search).toBe('?post=item-1');
+    const reelInsertions = countReelInsertions();
     // Close goes Back here, and the popstate after it clears the post the
     // effect selected again. jsdom goes Back in a later task, as a browser does.
     await pressCloseAsTheCountArrives(reel);
@@ -258,6 +350,7 @@ describe('CreatorContentTabs with the reel', () => {
       expect(queryReel()).not.toBeInTheDocument();
       expect(window.location.search).toBe('');
     });
+    expect(reelInsertions()).toBe(0);
   }, 15_000);
 
   it('closes an opened post with Back, opens it again with Forward, and closes it with Creator', async () => {
