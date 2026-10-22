@@ -56,9 +56,9 @@ const authState = vi.hoisted(() => ({
 // pressed before…" below. Reading `window.location` runs ahead of Next: after
 // the app's own pushState or replaceState, Next keeps the old URL until a
 // transition commits the new one, while this mock has the new one at the next
-// render. And it re-renders on every popstate, where Next acts only on history
-// entries that carry its state (the app's own entries do; this file's
-// PopStateEvents carry none).
+// render. And it re-renders after any popstate that changes the search, where
+// Next acts only on history entries that carry its state (the app's own entries
+// do; this file's PopStateEvents carry none).
 function subscribeToPopstate(onChange: () => void) {
   window.addEventListener('popstate', onChange);
   return () => window.removeEventListener('popstate', onChange);
@@ -1475,6 +1475,12 @@ describe('ShowcaseClient save actions', () => {
       generationId: 'gen-shared',
       mediaUrl: 'https://example.com/shared.jpg',
     });
+    const nextPageItem = createShowcaseItem({
+      id: 'post-next-page',
+      title: 'Next Page Frame',
+      generationId: 'gen-next-page',
+      mediaUrl: 'https://example.com/next-page.jpg',
+    });
     type SharedPostAnswer = { ok: boolean; status: number; json: () => Promise<unknown> };
     const answerSharedPost = (answer: (init?: RequestInit) => SharedPostAnswer | Promise<SharedPostAnswer>) => {
       const reads: string[] = [];
@@ -1484,6 +1490,9 @@ describe('ShowcaseClient save actions', () => {
           reads.push(url);
           return answer(init);
         }
+        if (url.startsWith('/api/showcase/feed?') && url.includes('&offset=24&')) {
+          return { ok: true, json: async () => createFeed(nextPageItem) };
+        }
         if (url.startsWith('/api/showcase/saved-state')) {
           return { ok: true, json: async () => [] };
         }
@@ -1491,13 +1500,13 @@ describe('ShowcaseClient save actions', () => {
       }));
       return reads;
     };
-    // Draws the page and returns a token refresh, which draws it again with the same feed: the
-    // URL effect runs again with `post` unchanged, as it does whenever a feed page lands.
-    const renderWithTokenRefresh = () => {
-      const feed = createFeed(createShowcaseItem());
-      const draw = () => (
+    // Draws a first page with more to come and returns a way to land the next one. The URL
+    // effect reads `items`, so a page landing runs it again with `post` unchanged; a browser
+    // lands the next page of a short first page at once.
+    const renderWithNextPage = () => {
+      render(
         <ShowcaseClient
-          initialFeed={feed}
+          initialFeed={createFeed(createShowcaseItem(), { hasMore: true, nextOffset: 24 })}
           initialCategory="all"
           initialSort="recent"
           initialTool={null}
@@ -1506,10 +1515,19 @@ describe('ShowcaseClient save actions', () => {
           sourceToolOptions={SOURCE_TOOL_OPTIONS}
         />
       );
-      const view = render(draw());
-      return () => {
-        authState.session = { access_token: 'refreshed-token', user: { id: 'user-1' } };
-        view.rerender(draw());
+      return async () => {
+        const sentinelObserver = intersectionObservers.filter((observer) => observer.observedTargets.some((target) => (
+          target.getAttribute('data-showcase-load-more-sentinel') === 'true' && target.isConnected
+        ))).at(-1);
+        expect(sentinelObserver).toBeDefined();
+        act(() => {
+          sentinelObserver?.trigger(true);
+        });
+        expect(await screen.findByText('Next Page Frame')).toBeInTheDocument();
+        // The URL effect ran with the commit that took the page in; let what it started settle.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        });
       };
     };
 
@@ -1540,7 +1558,7 @@ describe('ShowcaseClient save actions', () => {
         ? { ok: false, status: 500, json: async () => ({ error: 'Failed to fetch showcase post.' }) }
         : { ok: true, status: 200, json: async () => ({ success: true, item: sharedItem }) });
 
-      const refreshToken = renderWithTokenRefresh();
+      const landNextPage = renderWithNextPage();
 
       const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
       await within(reel).findByRole('button', { name: 'Try again' });
@@ -1548,10 +1566,7 @@ describe('ShowcaseClient save actions', () => {
       const readsBeforeRetry = reads.length;
       // The URL effect runs again after the failure: it neither asks again nor shows a read
       // loading that nobody makes.
-      refreshToken();
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      });
+      await landNextPage();
       expect(reads).toHaveLength(readsBeforeRetry);
       expect(within(reel).getByRole('heading', { name: /couldn.t load this post/i })).toBeInTheDocument();
 
@@ -1560,30 +1575,38 @@ describe('ShowcaseClient save actions', () => {
 
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
       expect(reads.length).toBeGreaterThan(readsBeforeRetry);
-    });
+      // Room as #457 gave, so a wait above that never passes fails on its own assertion.
+    }, 15_000);
 
-    it('asks again when the URL effect runs while the read is out, rather than loading for ever', async () => {
+    it('asks again when the URL effect runs while the read is out, and shows no failure for the read it cut short', async () => {
       window.history.replaceState(null, '', '/showcase?post=post-shared');
-      let firstRead: AbortSignal | null | undefined;
+      const signals: Array<AbortSignal | undefined> = [];
+      let answerSecondRead = () => {};
       const reads = answerSharedPost((init) => {
-        if (firstRead !== undefined) {
-          return { ok: true, status: 200, json: async () => ({ success: true, item: sharedItem }) };
+        signals.push(init?.signal ?? undefined);
+        if (signals.length === 1) {
+          // The first read stays out until it is aborted, then rejects as a browser's does.
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
+          });
         }
-        // The first read stays out until it is aborted, then rejects as a browser's does.
-        firstRead = init?.signal;
-        return new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
+        return new Promise((resolve) => {
+          answerSecondRead = () => resolve({ ok: true, status: 200, json: async () => ({ success: true, item: sharedItem }) });
         });
       });
 
-      const refreshToken = renderWithTokenRefresh();
+      const landNextPage = renderWithNextPage();
       expect(reads).toHaveLength(1);
 
-      refreshToken();
-      expect(firstRead?.aborted).toBe(true);
+      await landNextPage();
+      expect(signals[0]?.aborted).toBe(true);
       expect(reads).toHaveLength(2);
+      expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+
+      answerSecondRead();
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
-    });
+      // Room as #457 gave, so a wait above that never passes fails on its own assertion.
+    }, 15_000);
   });
 
   // A failed page left `hasMore` true and loading ended, and the reel asked for
