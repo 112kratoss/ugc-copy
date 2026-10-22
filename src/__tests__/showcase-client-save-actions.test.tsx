@@ -1,4 +1,5 @@
 import type { AnchorHTMLAttributes, ComponentProps, HTMLAttributes, ReactNode } from 'react';
+import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -47,10 +48,39 @@ const authState = vi.hoisted(() => ({
   saverNoticeRecord: null as { userId: string; seen: boolean } | null,
 }));
 
+// The URL's search params as Next's `useSearchParams` hands them over: one
+// object per URL, and a re-render of every reader when history moves. A mock
+// that builds a new object from `window.location` on each render does neither:
+// `history.back()` then reaches ShowcaseClient only through whatever render
+// comes next, and that render can be one React bails out of. On 2026-10-22,
+// as on 10-13 and 10-20, main's slower runner pressed Explore before the
+// effects of the render that drew the thread's count had run; that render's
+// URL effect, still holding `post=post-1`, chose the post again after the
+// close, React found nothing changed and dropped the render's effects, and
+// the reel stayed open with the URL already at /showcase.
+const windowSearch = vi.hoisted(() => {
+  const paramsBySearch = new Map<string, URLSearchParams>();
+  return {
+    subscribe(onChange: () => void) {
+      window.addEventListener('popstate', onChange);
+      return () => window.removeEventListener('popstate', onChange);
+    },
+    current() {
+      const { search } = window.location;
+      let params = paramsBySearch.get(search);
+      if (!params) {
+        params = new URLSearchParams(search);
+        paramsBySearch.set(search, params);
+      }
+      return params;
+    },
+  };
+});
+
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
   usePathname: () => '/showcase',
-  useSearchParams: () => new URLSearchParams(window.location.search),
+  useSearchParams: () => useSyncExternalStore(windowSearch.subscribe, windowSearch.current),
 }));
 
 vi.mock('next/link', () => ({
@@ -1633,6 +1663,61 @@ describe('ShowcaseClient save actions', () => {
     // Opens the reel twice and a comment thread once: 5,016 ms at the start of a PR run's web
     // suite on a GitHub runner (#459), about 360 ms here, as on main before it. Room as #457 gave.
   }, 15_000);
+
+  it('closes the reel when Explore is pressed before the render that drew the count has run its effects', async () => {
+    vi.spyOn(window.history, 'pushState');
+    vi.spyOn(window.history, 'back').mockImplementation(() => {
+      window.history.replaceState(null, '', '/showcase');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/posts/post-1/comments')) {
+        return {
+          ok: true,
+          json: async () => ({
+            postId: 'post-1',
+            postCreatorId: 'creator-1',
+            commentCount: 3,
+            comments: [],
+            pageInfo: { hasMore: false, nextOffset: null, limit: 20, offset: 0 },
+          }),
+        };
+      }
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return { ok: true, json: async () => [] };
+      }
+      return { ok: true, json: async () => ({ success: true }) };
+    }));
+
+    renderShowcase(createShowcaseItem());
+
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+    // A mutation observer's callback runs in the microtask after the commit, before React's
+    // scheduler flushes that render's passive effects: the order main's runner can give a
+    // `findBy` that resolves on the same mutation.
+    let pressed = false;
+    const observer = new MutationObserver(() => {
+      if (!pressed && within(reel).queryByRole('button', { name: 'Hide comments on Campaign Frame (3)' })) {
+        pressed = true;
+        observer.disconnect();
+        fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+    try {
+      fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
+      await waitFor(() => expect(pressed).toBe(true));
+    } finally {
+      observer.disconnect();
+    }
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+    });
+    expect(window.location.search).toBe('');
+  });
 
   it('automatically loads the next showcase page when the feed sentinel enters view', async () => {
     const firstItem = createShowcaseItem({ id: 'post-1', title: 'Campaign Frame', generationId: 'gen-1' });
