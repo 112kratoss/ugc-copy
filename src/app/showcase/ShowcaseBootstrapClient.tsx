@@ -6,6 +6,8 @@ import type { ComponentType, MouseEvent as ReactMouseEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
+// A type alone: the full client's module is loaded with `import()` below, on demand.
+import type { ShowcaseClientProps } from '@/app/showcase/ShowcaseClient';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import {
@@ -17,27 +19,16 @@ import {
     SHOWCASE_INITIAL_RENDER_COUNT,
     type ShowcaseCategory,
     type ShowcaseFeedItem,
-    type ShowcaseFeedPage,
     type ShowcaseMediaItem,
     type ShowcasePriorityPosterData,
-    type ShowcaseResourceFilter,
     type ShowcaseSort,
-    type ShowcaseUnlockFilter,
     getShowcaseItemMediaItems,
 } from '@/lib/showcase';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
-import type { SourceToolFilterOption } from '@/lib/source-tools';
 
-export interface ShowcaseBootstrapClientProps {
-    initialFeed: ShowcaseFeedPage;
-    initialCategory: ShowcaseCategory;
-    initialSort: ShowcaseSort;
-    initialTool: string | null;
-    initialUnlock: ShowcaseUnlockFilter;
-    initialResource: ShowcaseResourceFilter;
-    sourceToolOptions: SourceToolFilterOption[];
-    initialPriorityPoster?: ShowcasePriorityPosterData | null;
-}
+// The page's props, passed on to the full client whole; what the shell learns
+// from the tap that loads it (`initialPushedPostId`) is added by the shell.
+export type ShowcaseBootstrapClientProps = Omit<ShowcaseClientProps, 'initialPushedPostId'>;
 
 const CATEGORY_LINKS: Array<{ id: ShowcaseCategory; label: string }> = [
     { id: 'all', label: 'All posts' },
@@ -209,16 +200,26 @@ function shouldDeferGlobalActivation(target: EventTarget | null): boolean {
 
 export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientProps) {
     const { session, user, isLoading: isAuthLoading } = useAuth();
-    const [FullShowcaseClient, setFullShowcaseClient] = useState<ComponentType<ShowcaseBootstrapClientProps> | null>(null);
+    // The full client once its module has come, with the post whose entry the
+    // tap that loaded it pushed over Explore's (`initialPushedPostId`).
+    const [fullClient, setFullClient] = useState<{
+        Component: ComponentType<ShowcaseClientProps>;
+        pushedPostId: string | null;
+    } | null>(null);
+    const hasFullClient = fullClient !== null;
     const [isActivating, setIsActivating] = useState(false);
-    const fullClientPromiseRef = useRef<Promise<ComponentType<ShowcaseBootstrapClientProps>> | null>(null);
+    const fullClientPromiseRef = useRef<Promise<ComponentType<ShowcaseClientProps>> | null>(null);
+    // The post whose entry the last tap pushed over Explore's own entry while
+    // the full client is on its way; null when nothing was pushed, or the tap
+    // pushed over a shared link's entry.
+    const pushedPostIdRef = useRef<string | null>(null);
     const initialScrollYRef = useRef<number | null>(null);
     const shouldRelayAnonymousDemandRef = useRef(false);
 
     const loadFullClient = useCallback(() => {
         if (!fullClientPromiseRef.current) {
             fullClientPromiseRef.current = import('@/app/showcase/ShowcaseClient')
-                .then((module) => module.default as ComponentType<ShowcaseBootstrapClientProps>);
+                .then((module) => module.default);
         }
 
         return fullClientPromiseRef.current;
@@ -231,14 +232,36 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
 
         if (postId) {
             const params = new URLSearchParams(window.location.search);
+            const currentPostId = params.get('post');
             params.set('post', postId);
             params.delete('media');
-            window.history.pushState(null, '', `/showcase?${params.toString()}`);
+            const nextUrl = `/showcase?${params.toString()}`;
+            if (pushedPostIdRef.current !== null && currentPostId === pushedPostIdRef.current) {
+                // A second tap while the full client is still on its way, with
+                // the address still on the entry the first tap pushed: that
+                // entry is pointed at the new post, so two taps leave one entry.
+                window.history.replaceState(null, '', nextUrl);
+                pushedPostIdRef.current = postId;
+            } else {
+                window.history.pushState(null, '', nextUrl);
+                // Only an entry pushed over Explore's own is handed over. Pushed
+                // over a shared link's entry (the address named a post before
+                // the tap), the reel closes by replacing, as before, and the
+                // browser's Back then returns to the shared post.
+                pushedPostIdRef.current = currentPostId ? null : postId;
+            }
         }
 
         setIsActivating(true);
         void loadFullClient().then((Component) => {
-            setFullShowcaseClient(() => Component);
+            const pushedPostId = pushedPostIdRef.current;
+            // A later activation with nothing new (a token refresh re-runs
+            // the auth effect) keeps the same object, so nothing re-renders.
+            setFullClient((current) => (
+                current?.Component === Component && current.pushedPostId === pushedPostId
+                    ? current
+                    : { Component, pushedPostId }
+            ));
         }).catch(() => {
             fullClientPromiseRef.current = null;
             setIsActivating(false);
@@ -260,7 +283,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
     }, [activate, isAuthLoading, session?.access_token, user]);
 
     useEffect(() => {
-        if (isAuthLoading || FullShowcaseClient || isActivating) {
+        if (isAuthLoading || hasFullClient || isActivating) {
             return;
         }
 
@@ -276,7 +299,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
             activate();
         }
     }, [
-        FullShowcaseClient,
+        hasFullClient,
         activate,
         isActivating,
         isAuthLoading,
@@ -289,7 +312,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
     ]);
 
     useEffect(() => {
-        if (FullShowcaseClient) {
+        if (hasFullClient) {
             return;
         }
 
@@ -324,10 +347,10 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
             window.removeEventListener('touchmove', activateFromGesture);
             window.removeEventListener('scroll', activateFromScroll);
         };
-    }, [FullShowcaseClient, activate]);
+    }, [hasFullClient, activate]);
 
     useEffect(() => {
-        if (!FullShowcaseClient || !shouldRelayAnonymousDemandRef.current) {
+        if (!hasFullClient || !shouldRelayAnonymousDemandRef.current) {
             return;
         }
 
@@ -339,10 +362,10 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
             window.dispatchEvent(new Event('showcase:demand'));
         }, 0);
         return () => window.clearTimeout(handle);
-    }, [FullShowcaseClient]);
+    }, [hasFullClient]);
 
     useEffect(() => {
-        if (FullShowcaseClient || isActivating || typeof IntersectionObserver === 'undefined') {
+        if (hasFullClient || isActivating || typeof IntersectionObserver === 'undefined') {
             return;
         }
 
@@ -364,10 +387,11 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
         }, { rootMargin: '160px 0px' });
         observer.observe(sentinel);
         return () => observer.disconnect();
-    }, [FullShowcaseClient, activate, isActivating]);
+    }, [hasFullClient, activate, isActivating]);
 
-    if (FullShowcaseClient) {
-        return <FullShowcaseClient {...props} />;
+    if (fullClient) {
+        const { Component: FullShowcaseClient, pushedPostId } = fullClient;
+        return <FullShowcaseClient {...props} initialPushedPostId={pushedPostId} />;
     }
 
     // What this tab already knows this viewer's own feed leaves out (a creator

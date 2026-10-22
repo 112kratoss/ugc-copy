@@ -3,7 +3,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import ShowcaseClient from '@/app/showcase/ShowcaseClient';
+import ShowcaseClient, { type ShowcaseClientProps } from '@/app/showcase/ShowcaseClient';
 import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import {
   FEED_REMOVAL_UNDO_MS,
@@ -183,7 +183,10 @@ function clearShowcaseSnapshotsOnly() {
   forgetShowcaseSnapshotsInMemoryForTests();
 }
 
-function renderShowcase(itemOrItems: ShowcaseFeedItem | ShowcaseFeedItem[]) {
+function renderShowcase(
+  itemOrItems: ShowcaseFeedItem | ShowcaseFeedItem[],
+  props: Partial<ShowcaseClientProps> = {}
+) {
   return render(
     <ShowcaseClient
       initialFeed={createFeed(itemOrItems)}
@@ -193,6 +196,7 @@ function renderShowcase(itemOrItems: ShowcaseFeedItem | ShowcaseFeedItem[]) {
       initialUnlock="all"
       initialResource="all"
       sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      {...props}
     />
   );
 }
@@ -1382,6 +1386,47 @@ describe('ShowcaseClient save actions', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
     expect(back).toHaveBeenCalledTimes(1);
+  });
+
+  // The bootstrap shell's hand-off (ShowcaseClientProps.initialPushedPostId;
+  // archive/web-showcase-bootstrap-history-2026-10-22).
+  it('goes Back from a reel whose entry the bootstrap shell pushed, as from a tile', async () => {
+    window.history.replaceState(null, '', '/showcase?post=post-1');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+
+    renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-1' });
+
+    fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(replaceState).not.toHaveBeenCalledWith(null, '', '/showcase');
+  });
+
+  // The reader went Back off the shell's entry before this client came.
+  it('opens nothing and writes no history when the shell\'s pushed post is no longer in the address', async () => {
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+
+    renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-1' });
+
+    expect(await screen.findByText('Campaign Frame')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+    expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(back).not.toHaveBeenCalled();
+  });
+
+  it('replaces the entry of a reel opened by address when the shell pushed some other post', async () => {
+    window.history.replaceState(null, '', '/showcase?post=post-1');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+
+    renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-other' });
+
+    fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
+    expect(back).not.toHaveBeenCalled();
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/showcase');
   });
 
   const nextPageItem = createShowcaseItem({

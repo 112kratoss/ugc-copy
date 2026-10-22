@@ -132,6 +132,8 @@ describe('ShowcaseBootstrapClient', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    // The history spies, so a count in one test never includes another's calls.
+    vi.restoreAllMocks();
   });
 
   it('paints a full grid prefix with SSR-compatible links before the full client loads', async () => {
@@ -341,6 +343,7 @@ describe('ShowcaseBootstrapClient', () => {
 
   it('imports the full client on card activation and opens the selected post query', async () => {
     const props = createProps();
+    const pushState = vi.spyOn(window.history, 'pushState');
     render(<ShowcaseBootstrapClient {...props} />);
 
     fireEvent.click(screen.getByRole('link', { name: 'Open Priority campaign in viewer' }));
@@ -349,9 +352,84 @@ describe('ShowcaseBootstrapClient', () => {
       expect(screen.getByTestId('full-showcase-client')).toBeInTheDocument();
     });
     expect(new URLSearchParams(window.location.search).get('post')).toBe('post-priority');
+    expect(pushState).toHaveBeenCalledTimes(1);
+    expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-priority');
+    // Whose entry the tap pushed: ShowcaseClientProps.initialPushedPostId.
     expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
       initialFeed: props.initialFeed,
       initialPriorityPoster: props.initialPriorityPoster,
+      initialPushedPostId: 'post-priority',
+    }));
+  });
+
+  it('tells the full client it pushed nothing when the address already named a post', async () => {
+    window.history.replaceState(null, '', '/showcase?post=post-shared');
+    const pushState = vi.spyOn(window.history, 'pushState');
+
+    render(<ShowcaseBootstrapClient {...createProps()} />);
+
+    expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
+    expect(pushState).not.toHaveBeenCalled();
+    expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
+      initialPushedPostId: null,
+    }));
+  });
+
+  // Its entry sits over the shared post's, not Explore's: handed over, the
+  // reel's close would go Back into the shared post's reel. Handed nothing, it
+  // closes onto Explore by replacing, as before, and Back reopens the shared post.
+  it('hands nothing over for a tap that pushed over a shared link\'s entry', async () => {
+    window.history.replaceState(null, '', '/showcase?post=post-shared');
+    const pushState = vi.spyOn(window.history, 'pushState');
+    render(<ShowcaseBootstrapClient {...createProps()} />);
+
+    // Before the import the mount started for the shared post can settle.
+    fireEvent.click(screen.getByRole('link', { name: 'Open Priority campaign in viewer' }));
+
+    expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
+    expect(pushState).toHaveBeenCalledTimes(1);
+    expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-priority');
+    expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
+      initialPushedPostId: null,
+    }));
+  });
+
+  // The cards stay until the full client comes, so a second tap can land first.
+  it('points the entry its first tap pushed at a second card tapped before the full client comes', async () => {
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    render(<ShowcaseBootstrapClient {...createProps()} />);
+
+    // Both taps before the import's promise can settle (that takes a later microtask).
+    fireEvent.click(screen.getByRole('link', { name: 'Open Priority campaign in viewer' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Open Trailing campaign 1 in viewer' }));
+
+    expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
+    expect(pushState).toHaveBeenCalledTimes(1);
+    expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-priority');
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/showcase?post=post-trailing-1');
+    expect(new URLSearchParams(window.location.search).get('post')).toBe('post-trailing-1');
+    expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
+      initialPushedPostId: 'post-trailing-1',
+    }));
+  });
+
+  it('pushes again for a tap after the reader went Back off the entry the first tap pushed', async () => {
+    const pushState = vi.spyOn(window.history, 'pushState');
+    render(<ShowcaseBootstrapClient {...createProps()} />);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Open Priority campaign in viewer' }));
+    // Back, sooner than a browser: the address is Explore's own entry again.
+    window.history.replaceState(null, '', '/showcase');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    fireEvent.click(screen.getByRole('link', { name: 'Open Trailing campaign 1 in viewer' }));
+
+    expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
+    expect(pushState).toHaveBeenCalledTimes(2);
+    expect(pushState).toHaveBeenLastCalledWith(null, '', '/showcase?post=post-trailing-1');
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
+      initialPushedPostId: 'post-trailing-1',
     }));
   });
 
