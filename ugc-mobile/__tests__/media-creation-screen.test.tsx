@@ -6310,6 +6310,30 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           expect(generateButton(tree).props.disabled).toBe(true);
         });
 
+        // The composer's mention list takes the subjects beside the references, and a bare @
+        // (an empty query) lists every name the run takes.
+        it('are offered to mention, for a bare @ and by name', async () => {
+          catalogState.catalog = parityCatalog([parityKlingO3()]);
+          memory.set(ordinaryKey, heroDraft({}));
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          const typeAtEnd = (value: string) => {
+            let prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+            renderer.act(() => prompt.props.onChangeText(value));
+            prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+            renderer.act(() => prompt.props.onSelectionChange({ nativeEvent: { selection: { start: value.length, end: value.length } } }));
+          };
+          renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onFocus());
+
+          typeAtEnd('Walks in beside @');
+          expect(labelled(tree.root, 'Insert @hero, Hero')).toBeTruthy();
+
+          typeAtEnd('Walks in beside @He');
+          expect(labelled(tree.root, 'Insert @hero, Hero')).toBeTruthy();
+
+          typeAtEnd('Walks in beside @zz');
+          expect(text(tree)).toContain('No named references match “@zz”.');
+        });
+
         it('have a link that ran out renewed in the draft', async () => {
           catalogState.catalog = parityCatalog([parityKlingO3()]);
           memory.set(ordinaryKey, heroDraft({ url: expiredLink('uploads/user-123/hero-side.png') }));

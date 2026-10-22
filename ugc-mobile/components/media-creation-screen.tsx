@@ -4307,14 +4307,23 @@ function VideoCreatorComposer({
   );
   const mentionKey = detectedMention ? `${draft.prompt}:${promptSelection.start}:${promptSelection.end}` : null;
   const activeMention = detectedMention && mentionKey !== dismissedMentionKey ? detectedMention : null;
-  const mentionReferences = useMemo(() => {
-    if (!activeMention) return [];
-    const query = activeMention.query.toLowerCase();
-    const namedReferences = [...draft.references, ...draft.referenceVideos, ...subjects.map(subjectAsReference)];
-    return namedReferences.filter((media) => media.handle && runHandles.has(media.handle) && (
-      media.handle.slice(1).toLowerCase().includes(query) || media.displayName.toLowerCase().includes(query)
-    ));
-  }, [activeMention, draft.referenceVideos, draft.references, runHandles, subjects]);
+  // A plain derivation where ImagePromptComposer's is a useMemo. React Compiler keeps a manual
+  // memo only when the block it builds for each dependency closes before the memo, and its block
+  // for `subjects` stays open almost to the end of the render: what is picked out of it
+  // (`selectedSubject`, then `selectedReference`) is captured by the Rename and Remove closures
+  // and the details sheet's handlers below, and handed through `runTextNames` to
+  // `promptContainsHandle`, a function the compiler does not look inside and so must assume may
+  // change what it is given. Kept, the memo made the compiler skip the whole component
+  // (2026-10-22, `__tests__/compiled-screens.test.ts`). Nothing is lost: `runHandles` is a new
+  // Set each render, so the memo recomputed on every render, as this does compiled or not.
+  const mentionQuery = activeMention ? activeMention.query.toLowerCase() : null;
+  const mentionReferences = mentionQuery === null ? [] : [
+    ...draft.references,
+    ...draft.referenceVideos,
+    ...subjects.map(subjectAsReference),
+  ].filter((media) => media.handle && runHandles.has(media.handle) && (
+    media.handle.slice(1).toLowerCase().includes(mentionQuery) || media.displayName.toLowerCase().includes(mentionQuery)
+  ));
 
   useEffect(() => {
     promptTextRef.current = draft.prompt;
