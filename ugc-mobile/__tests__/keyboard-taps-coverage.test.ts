@@ -20,16 +20,20 @@ import { canBeAbsent, unwrap } from './fixtures/jsx-syntax';
  * 5s; the shot chips and the search overlay's type tabs did the same. The
  * creator's reference rails were given the prop in A1 (#515).
  *
- * A horizontal scroller is nearly always a row inside a page or a sheet, so
- * every one says what a tap does with the keyboard up. 'handled' is the usual
- * answer: a press on a control in the row answers, and the keyboard stays; a
- * touch on nothing in particular still puts it away. 'never' is for a row that
- * keeps the default on purpose, or for now, with a comment saying why: the post
- * page's pager holds the comment field, and answering taps there is a change of
- * its own (2026-10-21). The FlatList family renders a ScrollView, so it is read
- * too. A spread cannot be read here: one that supplies `horizontal` is not seen,
- * and one written after the prop fails the row, since in JSX the later spread
- * wins.
+ * So every scroller says what a tap does with the keyboard up. A horizontal one
+ * is nearly always a row inside a page or a sheet; a vertical one is a page, a
+ * sheet's body, or a list in something that opens over the keys, as Android's
+ * ••• menu does (`components/anchored-menu.tsx`): in the comments sheet its rows
+ * took two presses until 2026-10-22, and a guard over horizontal rows alone never
+ * saw it. 'handled' is the usual answer where a keyboard can be up: a press on a
+ * control answers, and the keyboard stays; a touch on nothing in particular
+ * still puts it away. 'never' is the default written out: for a scroller no
+ * keyboard can be up over, or one whose first tap is meant to put the keys away,
+ * as the post page's inline comments list does (`components/comments-sheet.tsx`
+ * says why). The FlatList family renders a ScrollView, so it is read too. A
+ * spread cannot be read here: a scroller whose prop comes only from one fails,
+ * and so does one with a spread written after the prop, since in JSX the later
+ * spread wins.
  */
 const SCROLLER = /(?:ScrollView|FlatList|SectionList|FlashList)$/;
 const DECISIONS = new Set(['always', 'handled', 'never']);
@@ -45,13 +49,6 @@ function sourceFiles(root: string): string[] {
     else if (/\.tsx$/.test(entry)) files.push(absolutePath);
   }
   return files;
-}
-
-/** `horizontal`, `horizontal={true}` or any expression; only a literal `false` is vertical. */
-function isHorizontal(attribute: ts.JsxAttribute | undefined): boolean {
-  if (!attribute) return false;
-  const value = attribute.initializer;
-  return !(value && ts.isJsxExpression(value) && value.expression?.kind === ts.SyntaxKind.FalseKeyword);
 }
 
 /**
@@ -77,39 +74,45 @@ function decidesExpression(expression: ts.Expression): boolean {
   return !canBeAbsent(node);
 }
 
-/** The horizontal scrollers in one file, and those that leave a tap to the default, as `file:line <Tag>`. */
+/** The scrollers in one file, and those that leave a tap to the default, as `file:line <Tag>`. */
 function sweep(name: string, source: string) {
   const sourceFile = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const horizontal: string[] = [];
+  const scrollers: string[] = [];
   const undecided: string[] = [];
   const visit = (node: ts.Node) => {
     if ((ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) && SCROLLER.test(node.tagName.getText(sourceFile))) {
       const properties = node.attributes.properties;
-      const attributes = properties.filter(ts.isJsxAttribute);
-      const named = (wanted: string) => attributes.find((attribute) => attribute.name.getText(sourceFile) === wanted);
-      if (isHorizontal(named('horizontal'))) {
-        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-        const where = `${name}:${line} <${node.tagName.getText(sourceFile)}>`;
-        horizontal.push(where);
-        const persists = named('keyboardShouldPersistTaps');
-        // In JSX the later spread wins, so one written after the prop can take it back unseen.
-        const overridden = persists !== undefined && properties.slice(properties.indexOf(persists) + 1).some(ts.isJsxSpreadAttribute);
-        if (!decides(persists) || overridden) undecided.push(where);
-      }
+      const persists = properties
+        .filter(ts.isJsxAttribute)
+        .find((attribute) => attribute.name.getText(sourceFile) === 'keyboardShouldPersistTaps');
+      const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+      const where = `${name}:${line} <${node.tagName.getText(sourceFile)}>`;
+      scrollers.push(where);
+      // In JSX the later spread wins, so one written after the prop can take it back unseen.
+      const overridden = persists !== undefined && properties.slice(properties.indexOf(persists) + 1).some(ts.isJsxSpreadAttribute);
+      if (!decides(persists) || overridden) undecided.push(where);
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return { horizontal, undecided };
+  return { scrollers, undecided };
 }
 
 const tree = ['app', 'components', 'lib']
   .flatMap((root) => sourceFiles(path.join(mobileRoot, root)))
   .map((absolutePath) => sweep(path.relative(mobileRoot, absolutePath).replaceAll(path.sep, '/'), readFileSync(absolutePath, 'utf8')));
 
-describe('keyboard taps — a horizontal scroller says what a tap does while the keyboard is up', () => {
-  it('sees a horizontal scroller that leaves it to the default', () => {
+describe('keyboard taps — every scroller says what a tap does while the keyboard is up', () => {
+  it('sees a scroller that leaves it to the default', () => {
     const undecided = [
+      // A page, a sheet's body or a list.
+      '<ScrollView />',
+      '<ScrollView horizontal={false} />',
+      '<FlatList data={comments} renderItem={renderComment} />',
+      // Android's ••• menu on 2026-10-22, which opens over the keys.
+      '<ScrollView bounces={false} overScrollMode="never" scrollEnabled={scrollable}>{rows}</ScrollView>',
+      // A prop that comes only in a spread is not read.
+      '<ScrollView {...props} />',
       // The multi-shot story's duration chips on 2026-10-21.
       '<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 7 }}>{chips}</ScrollView>',
       // Over several lines, past arrows whose `>` a pattern would stop at (the composer's media row).
@@ -117,8 +120,6 @@ describe('keyboard taps — a horizontal scroller says what a tap does while the
       '<Animated.ScrollView horizontal />',
       '<FlatList horizontal data={pages} renderItem={renderPage} />',
       '<FlashList horizontal data={slides} renderItem={renderSlide} />',
-      '<ScrollView horizontal={true} />',
-      '<ScrollView horizontal={wide} />',
       // What a spread carries cannot be read here, so the prop is written out.
       '<ScrollView {...railProps} horizontal />',
       '<ScrollView horizontal keyboardShouldPersistTaps />',
@@ -138,14 +139,13 @@ describe('keyboard taps — a horizontal scroller says what a tap does while the
       // A page that keeps taps, around a row that does not: the shape of the fault.
       '<ScrollView keyboardShouldPersistTaps="handled">\n  <ScrollView horizontal />\n</ScrollView>',
     ];
-    for (const source of undecided) {
-      const result = sweep('case.tsx', source);
-      expect(result.horizontal, source).toHaveLength(1);
-      expect(result.undecided, source).toEqual(result.horizontal);
-    }
+    // One scroller left to the default in each.
+    for (const source of undecided) expect(sweep('case.tsx', source).undecided, source).toHaveLength(1);
+    // And in the fault's shape, the row, named by its own line, not the page that keeps taps around it.
+    expect(sweep('case.tsx', undecided.at(-1)!).undecided).toEqual(['case.tsx:2 <ScrollView>']);
   });
 
-  it('passes one that decides, and leaves vertical scrollers alone', () => {
+  it('passes one that decides, and leaves other tags alone', () => {
     const decided = [
       '<ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} />',
       '<ScrollView {...railProps} horizontal keyboardShouldPersistTaps="handled" />',
@@ -153,25 +153,25 @@ describe('keyboard taps — a horizontal scroller says what a tap does while the
       '<ScrollView horizontal keyboardShouldPersistTaps="never" />',
       "<ScrollView horizontal keyboardShouldPersistTaps={editing ? 'handled' : 'never'} />",
       "<ScrollView horizontal keyboardShouldPersistTaps={'handled'} />",
-    ];
-    for (const source of decided) expect(sweep('case.tsx', source), source).toEqual({ horizontal: [expect.any(String)], undecided: [] });
-
-    const vertical = [
       '<ScrollView keyboardShouldPersistTaps="handled" />',
-      '<ScrollView />',
-      '<ScrollView horizontal={false} />',
-      '<View horizontal />',
+      '<FlatList keyboardShouldPersistTaps="never" data={rows} renderItem={renderRow} />',
+      "<FlatList keyboardShouldPersistTaps={presentation === 'inline' ? 'never' : 'handled'} />",
+      // A wrapper that forwards its caller's answer, with the default written out.
+      "<ScrollView {...props} keyboardShouldPersistTaps={props.keyboardShouldPersistTaps ?? 'never'} />",
     ];
-    for (const source of vertical) expect(sweep('case.tsx', source), source).toEqual({ horizontal: [], undecided: [] });
+    for (const source of decided) expect(sweep('case.tsx', source), source).toEqual({ scrollers: [expect.any(String)], undecided: [] });
+
+    expect(sweep('case.tsx', '<View horizontal />')).toEqual({ scrollers: [], undecided: [] });
   });
 
   it('reads the real tree', () => {
     // A positive control: a sweep that parsed nothing would pass the last test.
-    const horizontal = tree.flatMap((file) => file.horizontal);
-    expect(horizontal.length).toBeGreaterThanOrEqual(20);
-    // The creator's rails and chip rows, and the post composer's rows.
-    expect(horizontal.filter((where) => where.startsWith('components/media-creation-screen.tsx:')).length).toBeGreaterThanOrEqual(7);
-    expect(horizontal.filter((where) => where.startsWith('app/post/new.tsx:')).length).toBeGreaterThanOrEqual(2);
+    const scrollers = tree.flatMap((file) => file.scrollers);
+    expect(scrollers.length).toBeGreaterThanOrEqual(50);
+    // The creator's rails, chip rows and sheets, the post composer's rows and sheets, and Android's ••• menu.
+    expect(scrollers.filter((where) => where.startsWith('components/media-creation-screen.tsx:')).length).toBeGreaterThanOrEqual(14);
+    expect(scrollers.filter((where) => where.startsWith('app/post/new.tsx:')).length).toBeGreaterThanOrEqual(6);
+    expect(scrollers.filter((where) => where.startsWith('components/anchored-menu.tsx:')).length).toBeGreaterThanOrEqual(1);
   });
 
   it('finds none in app/, components/ or lib/ that leaves it to the default', () => {

@@ -1518,6 +1518,7 @@ function ResourceComposerContent({
       {mode === 'type' ? (
         <ScrollView
           {...drag.scrollProps}
+          keyboardShouldPersistTaps="never"
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: bottomInset + 20, gap: 9 }}
         >

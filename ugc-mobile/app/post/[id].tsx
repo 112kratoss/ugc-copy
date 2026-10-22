@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   Platform,
   Pressable,
   Share,
@@ -246,6 +247,10 @@ export default function PostScreen() {
 
   const goToPage = useCallback((index: number) => {
     if (index >= pages.length) return;
+    // A turn the finger does not drag never reaches the pager's on-drag: TalkBack's double tap on
+    // Details opened the details page under the comment keyboard (Pixel_9a, 2026-10-22), and so
+    // would the ••• menu's View details. The keyboard goes here instead.
+    if (index > 0) Keyboard.dismiss();
     setPageIndex(index);
     pagerRef.current?.scrollToOffset({ offset: index * width, animated: true });
   }, [pages.length, width]);
@@ -398,12 +403,13 @@ export default function PostScreen() {
         data={pages}
         keyExtractor={(page) => page}
         horizontal
-        // React Native's default, written out (keyboard-taps-coverage.test.ts). The pager holds the
-        // comment field, so with its keyboard up the first tap anywhere on the post only puts the
-        // keyboard away: Details did on the emulator (2026-10-21), and Post comment sits in the same
-        // pager. `handled` would answer that tap, but the post's links, menus and details page would
-        // then open with the keyboard still up, so it waits for a change of its own.
-        keyboardShouldPersistTaps="never"
+        // The pager holds the comment field, and at the default its first tap with that keyboard up
+        // only put the keyboard away, wherever it landed: Cancel reply, in the composer row with Post
+        // comment, did on the Pixel_9a (2026-10-22). What a tap in the post or its thread does is
+        // the comments list's to say (`PostComments`). A swipe puts the keyboard away as it begins,
+        // and `goToPage` a turn it was not dragged to, so neither opens the details page under it.
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={(event) => {

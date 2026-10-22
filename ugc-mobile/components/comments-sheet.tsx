@@ -752,7 +752,12 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       data={commentsUnavailable || !enabled ? [] : topLevel}
       keyExtractor={(comment) => comment.id}
       renderItem={renderTopLevelComment}
-      keyboardShouldPersistTaps="handled"
+      // In the sheet a tap on a comment answers with the keyboard up. Inline, on the post page, the
+      // list also holds the post itself, whose creator link pushes a screen and whose Create slot
+      // opens a Modal, neither checked on an iPhone with the keys up; so there the first tap only
+      // puts the keyboard away, as before. The composer is outside the list and answers as its
+      // page's scroller does.
+      keyboardShouldPersistTaps={presentation === 'inline' ? 'never' : 'handled'}
       ListHeaderComponent={presentation === 'inline' ? (
         <>
           {contentHeader}
