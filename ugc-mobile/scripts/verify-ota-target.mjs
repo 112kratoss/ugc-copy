@@ -17,24 +17,27 @@
 //   node ./scripts/verify-ota-target.mjs                    # every platform in ota-targets.json
 //   node ./scripts/verify-ota-target.mjs --platform android
 //   node ./scripts/verify-ota-target.mjs --json
-//   node ./scripts/verify-ota-target.mjs --set-aside        # as publish-ota.mjs fingerprints (CI's advisory step)
+//   node ./scripts/verify-ota-target.mjs --set-aside
 //
 // --set-aside fingerprints each platform without the files its target lists
 // under "setAside", as scripts/publish-ota.mjs does in its throwaway tree, and
-// puts them back afterwards. Without it a target with such files never matches
-// a plain tree, which is expected and says nothing about reach.
+// puts them back afterwards (CI's advisory step uses it). Without it a target
+// with such files never matches a plain tree, which is expected and says
+// nothing about reach.
 //
-// Deliberately NOT wired to an npm script. package.json is a fingerprint input
-// in its entirety, so adding `"ota:preflight": "..."` to it moves the runtime
-// version — verified on 2026-08-31: the identical tree fingerprinted
+// Deliberately NOT wired to an npm script. package.json's `scripts` are a
+// fingerprint input, so adding `"ota:preflight": "..."` to it moves the
+// runtime version — verified on 2026-08-31: the identical tree fingerprinted
 // 9e59d85d… without the script line and d832ccd9… with it, which would have
 // left no JS-only descendant of main able to reach the shipped build 64. A
 // convenience alias is not worth surrendering the ability to ship an update.
-// The same applies to renaming a script, editing "description", or any other
-// package.json edit that looks harmless.
+// The same applies to renaming a script. Its `expo.autolinking` settings and
+// native dependencies count too, through autolinking; fields the fingerprint
+// does not read (`expo.install`, "description") move nothing, but measure an
+// edit before assuming it is one of those.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -95,34 +98,47 @@ function computeFingerprint(platform) {
   return hash;
 }
 
+function present(absolute) {
+  try {
+    lstatSync(absolute);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Run `compute` with `files` (paths inside the project) removed, then write
- * them back from memory, so uncommitted edits survive, also on Ctrl-C.
+ * Run `compute` with `files` (paths inside the project) removed, then put
+ * them back from memory (a symlink as a symlink), so uncommitted edits
+ * survive. A listed file that is missing throws before anything is removed,
+ * as publish-ota.mjs's removal does.
  */
 function withFilesSetAside(files, compute) {
-  const held = files
-    .map((file) => path.join(projectRoot, file))
-    .filter((absolute) => existsSync(absolute))
-    .map((absolute) => ({ absolute, contents: readFileSync(absolute), mode: statSync(absolute).mode }));
+  const held = files.map((file) => {
+    const absolute = path.join(projectRoot, file);
+    const stats = lstatSync(absolute);
+    return stats.isSymbolicLink()
+      ? { absolute, link: readlinkSync(absolute) }
+      : { absolute, contents: readFileSync(absolute), mode: stats.mode };
+  });
   if (held.length === 0) return compute();
-
-  const restore = () => {
-    for (const file of held) {
-      if (!existsSync(file.absolute)) writeFileSync(file.absolute, file.contents, { mode: file.mode });
-    }
-  };
-  const onSignal = () => {
-    restore();
-    process.exit(130);
-  };
+  // The fingerprint runs synchronously, so no listener body runs until it
+  // ends; registering one only stops a signal killing Node mid-way, which
+  // would leave the files removed. Ctrl-C also reaches the child, whose
+  // failure then runs `finally`.
+  const keepAlive = () => {};
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-  for (const signal of signals) process.on(signal, onSignal);
+  for (const signal of signals) process.on(signal, keepAlive);
   try {
     for (const file of held) rmSync(file.absolute);
     return compute();
   } finally {
-    restore();
-    for (const signal of signals) process.removeListener(signal, onSignal);
+    for (const file of held) {
+      if (present(file.absolute)) continue;
+      if (file.link !== undefined) symlinkSync(file.link, file.absolute);
+      else writeFileSync(file.absolute, file.contents, { mode: file.mode });
+    }
+    for (const signal of signals) process.removeListener(signal, keepAlive);
   }
 }
 
@@ -153,7 +169,6 @@ function main() {
       shippedAs: `${target.appVersion} (${target.buildNumber})`,
       tracks: target.tracks ?? [],
       setAside,
-      setAsideApplied: args.setAside && setAside.length > 0,
     };
   });
 
@@ -166,7 +181,7 @@ function main() {
         `${mark} ${result.platform}: ${result.actual}\n`
         + `     shipped ${result.shippedAs} → ${result.expected}`
         + `${result.tracks.length > 0 ? ` (${result.tracks.join(', ')})` : ''}\n`
-        + `${result.setAsideApplied ? `     fingerprinted without ${result.setAside.join(', ')} (set aside)\n` : ''}`,
+        + `${args.setAside && result.setAside.length > 0 ? `     fingerprinted without ${result.setAside.join(', ')} (set aside)\n` : ''}`,
       );
     }
   }
@@ -177,7 +192,7 @@ function main() {
     return;
   }
 
-  for (const result of failed.filter((entry) => entry.setAside.length > 0 && !entry.setAsideApplied)) {
+  for (const result of failed.filter((entry) => !args.setAside && entry.setAside.length > 0)) {
     process.stderr.write(
       `\n${result.platform}: its binary was built without ${result.setAside.join(', ')}, which this tree`
       + ' carries, so a mismatch here is expected. scripts/publish-ota.mjs sets those files aside'

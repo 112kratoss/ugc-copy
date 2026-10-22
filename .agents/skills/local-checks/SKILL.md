@@ -15,7 +15,7 @@ What it runs, in the order of `.github/workflows/quality.yml`: web `vitest run -
 
 It prints one line per step (`name exit code seconds`) and, for a failing step, the last forty lines of its log; full logs sit in the out dir. The exit code is 0 only when every step passed. Read the summary, not the logs, unless a step failed.
 
-Not covered, because they need the local Supabase stack or CI's images: the Supabase API integration job and the migration replay (`npx supabase db reset --local` and `npx supabase test db` with Docker up), the four FFmpeg audits, and the mobile `expo install --check`, `expo-doctor`, `prebuild` and `export` steps.
+Not covered, because they need the local Supabase stack or CI's images: the Supabase API integration job and the migration replay (`npx supabase db reset --local` and `npx supabase test db` with Docker up), the four FFmpeg audits, and the mobile `expo install --check`, `expo-doctor`, live-list (`scripts/expo-live-versions.mjs`), fingerprint (`scripts/verify-ota-target.mjs --set-aside`), `prebuild` and `export` steps. The two scripts need no stack: run them from `ugc-mobile` when a change could move them.
 
 A `typecheck` failure that names only `.next/types/validator.ts` is a stale build artefact listing routes since removed; CI never sees it because it has no `.next` before typecheck. With no `next dev` running, `rm -rf .next/types` and rerun (the script prints this hint when it applies).
 

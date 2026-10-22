@@ -185,11 +185,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Offline (EXPO_OFFLINE=1), both steps compare the installed packages
-      # with the versions the installed expo package lists, not with Expo's
-      # live list. Doctor's version check runs `expo install --check` and
-      # inherits the variable. Why, and when Expo's newer patches are taken:
-      # ugc-mobile/__tests__/expo-install-exclude.test.ts.
+      # The dependency check runs offline, and Expo's live list is read only in
+      # the two steps after Doctor: ugc-mobile/__tests__/expo-install-exclude.test.ts
+      # says why.
       - name: Validate Expo dependency alignment
         run: npx expo install --check
         env:
@@ -199,6 +197,26 @@ jobs:
         run: npx --yes expo-doctor@1.20.1
         env:
           EXPO_OFFLINE: "1"
+
+      - name: Check Expo's live version list at a release bump
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          base="$(git show FETCH_HEAD:ugc-mobile/app.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).expo.version')"
+          head="$(node -p 'require("./app.json").expo.version')"
+          if [ "$base" = "$head" ]; then
+            echo "The app stays at $head, so this is not a release bump."
+          else
+            echo "Release bump $base -> $head: Expo's live list must have nothing to add."
+            node ./scripts/expo-live-versions.mjs --gate
+          fi
+
+      - name: Report Expo's live version list
+        if: github.event_name == 'push'
+        continue-on-error: true
+        run: node ./scripts/expo-live-versions.mjs --report
 
       # Advisory, never a gate: native work meant for the next store build
       # moves the fingerprint on purpose, and that build needs a green Quality
@@ -210,9 +228,9 @@ jobs:
       - name: Compare the runtime fingerprint with the store builds
         continue-on-error: true
         run: |
-          set -uo pipefail
+          set -o pipefail
           report="$RUNNER_TEMP/ota-reach.txt"
-          if node ./scripts/verify-ota-target.mjs --set-aside > "$report" 2>&1; then
+          if node ./scripts/verify-ota-target.mjs --set-aside 2>&1 | tee "$report"; then
             verdict="An over-the-air update built from this tree would reach every store build in \`ota-targets.json\`."
           else
             verdict="An over-the-air update built from this tree would not reach every store build in \`ota-targets.json\`, or its fingerprint could not be computed; the output below says which."
@@ -227,7 +245,6 @@ jobs:
             cat "$report"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          cat "$report"
 
       - name: Test production build environment guard
         run: npm run release-env:self-test
