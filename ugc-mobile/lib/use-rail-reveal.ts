@@ -27,7 +27,8 @@ type ScrollEvent = NativeSyntheticEvent<NativeScrollEvent>;
  * The item asked for is brought into view when its own layout arrives, which on Fabric comes
  * after the commit that mounts it, by the least scroll: none when it is already in view. The
  * creator's own scroll wins: a reveal that lands during a drag or the coast after a fling is
- * dropped. A rail that mounts after an ask (a tab switch) leaves it answered. `endInset` is the
+ * dropped. A rail that mounts after an ask (a tab switch) leaves it answered, and a rail that
+ * mounts anew is known to start at offset 0 and at rest. `endInset` is the
  * space the rail keeps after its last item; `animated` is off under Reduce Motion.
  *
  * The scroll ref comes back on its own, beside the handlers: React Compiler treats whatever is
@@ -43,6 +44,7 @@ export function useRailReveal(
   const scrollRef = useRef<ScrollView>(null);
   const answered = useRef(request);
   const pending = useRef<string | null>(null);
+  const node = useRef<ScrollView | null>(null);
   const railWidth = useRef(0);
   const offset = useRef(0);
   const gestureSince = useRef<number | null>(null);
@@ -66,6 +68,15 @@ export function useRailReveal(
     /** For the rail's ScrollView: its width and offset, and the creator's own drags and flings. */
     scrollerProps: {
       onLayout: (event: LayoutChangeEvent) => {
+        if (scrollRef.current !== node.current) {
+          // A rail that mounts anew starts at offset 0 and at rest, and no event says so: the
+          // image rail gives way to a note on a prompt-only model and the video rail to a model
+          // that takes no references, and each comes back as a new ScrollView. A layout of the
+          // same rail (a rotation) keeps what it knows.
+          node.current = scrollRef.current;
+          offset.current = 0;
+          gestureSince.current = null;
+        }
         railWidth.current = event.nativeEvent.layout.width;
       },
       onScroll: (event: ScrollEvent) => {

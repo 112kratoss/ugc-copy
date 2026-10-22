@@ -232,6 +232,13 @@ vi.mock('expo-image-picker', () => ({ launchImageLibraryAsync: vi.fn() }));
 // same native core.
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'onboarding-event-id' }));
 
+// Reduce Motion as the phone reports it; a test flips it and puts it back.
+const motionState = vi.hoisted(() => ({ reduced: false }));
+vi.mock('@/lib/motion', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/motion')>()),
+  useReducedMotion: () => motionState.reduced,
+}));
+
 vi.mock('@/lib/media', async (importOriginal) => ({
   // Pure helpers (assetDurationSeconds, duration-limit predicates) stay real;
   // only the picker/upload side effects are stubbed.
@@ -5149,6 +5156,25 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(rail.scrollTo).toHaveBeenCalledTimes(1);
       });
 
+      it('brings the picture into view without animation under Reduce Motion', async () => {
+        motionState.reduced = true;
+        try {
+          catalogState.catalog = parityCatalog([wide()]);
+          memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev', references: ['alpha', 'bravo', 'charlie'].map((id) => stagedMedia(id)) } }));
+          vi.mocked(pickMediaList).mockResolvedValueOnce(picks('delta') as never);
+          const rail = railScroller('image-reference-scroller');
+          const tree = await open(<MediaCreationScreen initialTool="image" />, rail.options);
+          rail.layOut(tree, 200);
+
+          await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
+          await settle();
+          layOut(tree, 'Open details for delta', 243);
+          expect(rail.scrollTo).toHaveBeenCalledWith({ x: 243 + 72 + rail.endInset(tree) - 200, animated: false });
+        } finally {
+          motionState.reduced = false;
+        }
+      });
+
       it('gives way to the creator dragging the rail when the pictures arrive', async () => {
         catalogState.catalog = parityCatalog([wide()]);
         memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev', references: ['alpha', 'bravo', 'charlie'].map((id) => stagedMedia(id)) } }));
@@ -6701,6 +6727,61 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const clip = rail.find(tree).findAll((node) => String(node.type) === 'pressable' && typeof node.props.onLayout === 'function').at(-1)!;
         renderer.act(() => { clip.props.onLayout(layoutAt(162)); });
         expect(rail.scrollTo).toHaveBeenCalledWith({ x: 162 + 72 + rail.endInset(tree) - 120, animated: true });
+      });
+
+      // The video rail's items also change when a model that takes no pictures holds them back and a
+      // later change sends them again; neither is an add, so neither moves the rail.
+      it('stays where it is when a model change sends the pictures it held back', async () => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo(), parityKlingVideo()]);
+        const names = ['Alpha', 'Bravo', 'Charlie', 'Delta'];
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-2',
+          catalogRevision: 'parity-rev',
+          references: names.map((name) => stagedMedia(name.toLowerCase())),
+          referenceVideos: [stagedMedia('turn', 'video')],
+        } }));
+        const rail = railScroller('video-reference-scroller');
+        const tree = await open(<MediaCreationScreen initialTool="video" />, rail.options);
+        rail.layOut(tree, 120);
+        const pickModel = async (displayName: string) => {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Selected model').props.onPress(); });
+          await renderer.act(async () => { findPressableByLabelPrefix(tree.root, `${displayName}.`).props.onPress(); });
+          await settle();
+        };
+        expect(labelsIn(rail.find(tree))).toEqual([...names.map((name) => `Open details for ${name}`), 'Open details for Turn']);
+        names.forEach((name, index) => renderer.act(() => { labelled(tree.root, `Open details for ${name}`).props.onLayout(layoutAt(index * 81)); }));
+
+        await pickModel('Kling 3.0 Cinematic');
+        expect(labelsIn(rail.find(tree))).toEqual(['Open details for Turn']);
+        await pickModel('Seedance 2');
+        expect(labelsIn(rail.find(tree))).toEqual([...names.map((name) => `Open details for ${name}`), 'Open details for Turn']);
+        names.forEach((name, index) => renderer.act(() => { labelled(tree.root, `Open details for ${name}`).props.onLayout(layoutAt(index * 81)); }));
+        expect(rail.scrollTo).not.toHaveBeenCalled();
+      });
+
+      it('added from a clip model’s own tile are brought into view without animation under Reduce Motion', async () => {
+        motionState.reduced = true;
+        try {
+          catalogState.catalog = parityCatalog([parityKlingVideo()]);
+          memory.set(ordinaryKey, savedDrafts({ video: {
+            model: 'kling-3.0-video',
+            catalogRevision: 'parity-rev',
+            referenceVideos: [stagedMedia('one', 'video'), stagedMedia('two', 'video')],
+          } }));
+          vi.mocked(pickMedia).mockResolvedValueOnce({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 4000 } as never);
+          vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('move.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 4 }));
+          const rail = railScroller('video-reference-scroller');
+          const tree = await open(<MediaCreationScreen initialTool="video" />, rail.options);
+          rail.layOut(tree, 120);
+
+          await renderer.act(async () => { await labelled(tree.root, 'Add Video 2/3').props.onPress(); });
+          await settle();
+          const clip = rail.find(tree).findAll((node) => String(node.type) === 'pressable' && typeof node.props.onLayout === 'function').at(-1)!;
+          renderer.act(() => { clip.props.onLayout(layoutAt(162)); });
+          expect(rail.scrollTo).toHaveBeenCalledWith({ x: 162 + 72 + rail.endInset(tree) - 120, animated: false });
+        } finally {
+          motionState.reduced = false;
+        }
       });
 
       // Both tools upload pictures: each tool's tile shows its own upload, not the other's.

@@ -129,4 +129,23 @@ describe('useRailReveal', () => {
     rail.reveal.itemLayout('f')(layout(405));
     expect(rail.scrollTo).not.toHaveBeenCalled();
   });
+
+  // The image rail gives way to a note on a prompt-only model and the video rail to a model that
+  // takes no references; each comes back as a new ScrollView at offset 0, with no event to say so.
+  it('starts from offset 0 and at rest when the rail mounts anew, and keeps its offset across a layout of the same rail', () => {
+    const rail = mount(null, ['a', 'b', 'c', 'd']);
+    rail.reveal.scrollerProps.onScroll(scrolled(160));
+    renderer.act(() => { rail.reveal.scrollerProps.onLayout(layout(0, 300)); });
+    rail.add('e', ['a', 'b', 'c', 'd', 'e']);
+    rail.reveal.itemLayout('e')(layout(324));
+    expect(rail.scrollTo).not.toHaveBeenCalled();
+
+    rail.reveal.scrollerProps.onScrollBeginDrag();
+    const remounted = { scrollTo: rail.scrollTo };
+    Object.assign(rail.reveal.scrollRef, { current: remounted });
+    renderer.act(() => { rail.reveal.scrollerProps.onLayout(layout(0, 300)); });
+    rail.add('f', ['a', 'b', 'c', 'd', 'e', 'f']);
+    rail.reveal.itemLayout('f')(layout(405));
+    expect(rail.scrollTo).toHaveBeenCalledWith({ x: 405 + 72 + 16 - 300, animated: true });
+  });
 });
