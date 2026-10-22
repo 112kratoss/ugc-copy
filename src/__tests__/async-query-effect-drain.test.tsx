@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // Pins the async wrapper in setup.ts. A findBy* or waitFor returns only after
@@ -35,6 +35,22 @@ function Probe({ ready, onStep }: { ready: Promise<void>; onStep: (step: string)
   return shown ? <p>Shown</p> : null;
 }
 
+/** Shows "Shown" on the click and asks for "Later" from a zero-delay timer. */
+function ZeroDelayProbe() {
+  const [shown, setShown] = useState(false);
+  const [later, setLater] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => {
+        setShown(true);
+        setTimeout(() => setLater(true), 0);
+      }}>Show</button>
+      {shown ? <p>Shown</p> : null}
+      {later ? <p>Later</p> : null}
+    </>
+  );
+}
+
 describe('async queries', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -52,22 +68,22 @@ describe('async queries', () => {
     const steps: string[] = [];
     const { promise: ready, resolve: open } = Promise.withResolvers<void>();
     render(<Probe ready={ready} onStep={(step) => steps.push(step)} />);
-
-    // Both timers fire in one timers phase. The first lets the probe set state
-    // outside act, so React renders on its scheduler, in a setImmediate; the
-    // second queues 3 ms of other work right behind that render. Testing
-    // Library's own setTimeout(0) is then due before React's next setImmediate,
-    // the one that runs the commit's effects: the loaded runner's order, every
-    // time.
-    setTimeout(() => open(), 0);
-    setTimeout(() => {
+    // Runs right after the probe's own reaction to `ready`, whose setState has
+    // by then asked React for a render: React queues that render's setImmediate
+    // in the next microtask, so this one is queued behind it. It holds the
+    // thread for 3 ms after the commit, the loaded runner's case: Testing
+    // Library's setTimeout(0) is then due before React's next setImmediate, the
+    // one that runs the commit's effects.
+    void ready.then(() => queueMicrotask(() => {
       realSetImmediate(() => {
         holdThread(3);
         steps.push('other work');
       });
-    }, 0);
+    }));
 
-    expect(await screen.findByText('Shown')).toBeInTheDocument();
+    const found = screen.findByText('Shown');
+    open();
+    expect(await found).toBeInTheDocument();
     // 'other work' in the middle shows the race was set up; 'effects' at the end
     // shows the query waited them out.
     expect(steps).toEqual(['commit', 'other work', 'effects']);
@@ -86,5 +102,17 @@ describe('async queries', () => {
     const found = screen.findByText('Shown');
     await vi.advanceTimersByTimeAsync(200);
     expect(await found).toBeInTheDocument();
+  });
+
+  it('still let a zero-delay timer set before them fire, and the render it asks for land', async () => {
+    // Testing Library's own setTimeout(0) comes after any zero-delay timer set
+    // before the query, and the setImmediate after it lets the render that timer
+    // asked for commit. A wait on the setImmediate alone returns before that
+    // timer has fired.
+    render(<ZeroDelayProbe />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }));
+
+    expect(await screen.findByText('Shown')).toBeInTheDocument();
+    expect(screen.getByText('Later')).toBeInTheDocument();
   });
 });
