@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ShowcaseBootstrapClient, {
   type ShowcaseBootstrapClientProps,
 } from '@/app/showcase/ShowcaseBootstrapClient';
+import { createReelEntryState } from '@/lib/reel-history-entry';
 import { SHOWCASE_INITIAL_RENDER_COUNT, type ShowcaseFeedItem } from '@/lib/showcase';
 import {
   buildShowcaseClientCacheKey,
@@ -353,7 +354,9 @@ describe('ShowcaseBootstrapClient', () => {
     });
     expect(new URLSearchParams(window.location.search).get('post')).toBe('post-priority');
     expect(pushState).toHaveBeenCalledTimes(1);
-    expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-priority');
+    // Marked as the reel's own entry, which the full client reads when the browser's
+    // Back or Forward reaches it again (`reel-history-entry.ts`).
+    expect(pushState).toHaveBeenCalledWith(createReelEntryState('post'), '', '/showcase?post=post-priority');
     // Whose entry the tap pushed: ShowcaseClientProps.initialPushedPostId.
     expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
       initialFeed: props.initialFeed,
@@ -388,6 +391,7 @@ describe('ShowcaseBootstrapClient', () => {
 
     expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
     expect(pushState).toHaveBeenCalledTimes(1);
+    // Nor marked as the reel's own: Back and Forward onto it open the reel by address.
     expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-priority');
     expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
       initialPushedPostId: null,
@@ -406,8 +410,9 @@ describe('ShowcaseBootstrapClient', () => {
 
     expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
     expect(pushState).toHaveBeenCalledTimes(1);
-    expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-priority');
-    expect(replaceState).toHaveBeenCalledWith(null, '', '/showcase?post=post-trailing-1');
+    expect(pushState).toHaveBeenCalledWith(createReelEntryState('post'), '', '/showcase?post=post-priority');
+    // Still the reel's own entry.
+    expect(replaceState).toHaveBeenCalledWith(createReelEntryState('post'), '', '/showcase?post=post-trailing-1');
     expect(new URLSearchParams(window.location.search).get('post')).toBe('post-trailing-1');
     expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
       initialPushedPostId: 'post-trailing-1',
@@ -426,7 +431,7 @@ describe('ShowcaseBootstrapClient', () => {
 
     expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
     expect(pushState).toHaveBeenCalledTimes(2);
-    expect(pushState).toHaveBeenLastCalledWith(null, '', '/showcase?post=post-trailing-1');
+    expect(pushState).toHaveBeenLastCalledWith(createReelEntryState('post'), '', '/showcase?post=post-trailing-1');
     expect(replaceState).not.toHaveBeenCalled();
     expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
       initialPushedPostId: 'post-trailing-1',

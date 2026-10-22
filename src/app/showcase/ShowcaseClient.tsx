@@ -79,6 +79,7 @@ import {
     type ShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
 import { feedNewestCategoryFor, newestCreatedAtOf, useNewPostsProbe, type NewPostsProbeLane } from '@/lib/feed-newest-probe';
+import { createReelEntryState, keepReelEntryState, readReelHistoryMode } from '@/lib/reel-history-entry';
 import { scheduleIdleWork } from '@/lib/schedule-idle-work';
 import { useMediaQuery } from '@/lib/use-media-query';
 
@@ -1175,10 +1176,12 @@ export default function ShowcaseClient({
         }
 
         const nextUrl = params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
+        // The reel's own entry says so on its state (`reel-history-entry.ts`),
+        // and keeps saying so while the reel moves to another post or slide.
         if (mode === 'push') {
-            window.history.pushState(null, '', nextUrl);
+            window.history.pushState(createReelEntryState('post'), '', nextUrl);
         } else {
-            window.history.replaceState(null, '', nextUrl);
+            window.history.replaceState(keepReelEntryState(window.history.state, params), '', nextUrl);
         }
     }, [pathname]);
 
@@ -1222,10 +1225,14 @@ export default function ShowcaseClient({
     }, []);
 
     useEffect(() => {
-        const handlePopState = () => {
-            const postParam = new URLSearchParams(window.location.search).get('post');
-            const mediaParam = Number(new URLSearchParams(window.location.search).get('media'));
-            reelHistoryModeRef.current = postParam ? 'direct' : null;
+        const handlePopState = (event: PopStateEvent) => {
+            const params = new URLSearchParams(window.location.search);
+            const postParam = params.get('post');
+            const mediaParam = Number(params.get('media'));
+            // Back or Forward onto the reel's own entry (a tile's, or the one
+            // the bootstrap shell pushed) still closes by going Back to the
+            // entry under it; a post any other entry names opened by address.
+            reelHistoryModeRef.current = readReelHistoryMode('post', params, event.state);
             setSelectedMediaIndex(Number.isInteger(mediaParam) && mediaParam >= 0 ? mediaParam : 0);
 
             if (!postParam) {

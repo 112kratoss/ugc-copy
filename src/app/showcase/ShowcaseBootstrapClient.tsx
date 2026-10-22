@@ -10,6 +10,7 @@ import { useAuth } from '@/components/AuthProvider';
 import type { ShowcaseClientProps } from '@/app/showcase/ShowcaseClient';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
+import { createReelEntryState } from '@/lib/reel-history-entry';
 import {
     buildShowcaseClientCacheKey,
     filterFeedItemsForVisit,
@@ -240,14 +241,16 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                 // A second tap while the full client is still on its way, with
                 // the address still on the entry the first tap pushed: that
                 // entry is pointed at the new post, so two taps leave one entry.
-                window.history.replaceState(null, '', nextUrl);
+                window.history.replaceState(createReelEntryState('post'), '', nextUrl);
                 pushedPostIdRef.current = postId;
             } else {
-                window.history.pushState(null, '', nextUrl);
-                // Only an entry pushed over Explore's own is handed over. Pushed
+                // Only an entry pushed over Explore's own is handed over, and
+                // marked as the reel's own, which the full client reads when
+                // Back or Forward reaches it (`reel-history-entry.ts`). Pushed
                 // over a shared link's entry (the address named a post before
                 // the tap), the reel closes by replacing, as before, and the
                 // browser's Back then returns to the shared post.
+                window.history.pushState(currentPostId ? null : createReelEntryState('post'), '', nextUrl);
                 pushedPostIdRef.current = currentPostId ? null : postId;
             }
         }

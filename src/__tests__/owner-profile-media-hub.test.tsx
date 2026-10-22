@@ -1,19 +1,31 @@
+import { useSyncExternalStore } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import OwnerProfileMediaHub from '@/app/profile/OwnerProfileMediaHub';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { resetSaverNoticeForTests } from '@/components/saver-notice';
+import { createReelEntryState } from '@/lib/reel-history-entry';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 // One router object for every render, as Next's is.
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 const pushMock = router.push;
 
+function subscribeToPopstate(onChange: () => void) {
+  window.addEventListener('popstate', onChange);
+  return () => window.removeEventListener('popstate', onChange);
+}
+
+// The address bar's query, read in every render; the browser's Back and Forward
+// draw the page again, as Next's router does when it restores an entry.
 vi.mock('next/navigation', () => ({
   useRouter: () => router,
   usePathname: () => '/profile',
-  useSearchParams: () => new URLSearchParams(window.location.search),
+  useSearchParams: () => {
+    useSyncExternalStore(subscribeToPopstate, () => window.location.search);
+    return new URLSearchParams(window.location.search);
+  },
 }));
 
 // Stands in for the reel: names the open post, and offers a button for each
@@ -30,6 +42,8 @@ vi.mock('next/dynamic', () => ({
     onReportUser,
     onBlockUser,
     onToggleSave,
+    onClose,
+    onMediaIndexChange,
     originLabel,
     loadMoreError,
   }: {
@@ -37,6 +51,8 @@ vi.mock('next/dynamic', () => ({
     items: ShowcaseFeedItem[];
     selectedItemId: string | null;
     buildDetailPath: (id: string, section?: string) => string;
+    onClose: () => void;
+    onMediaIndexChange: (index: number) => void;
     originLabel?: string;
     onFeedback?: unknown;
     onReportContent?: ReelHandler;
@@ -53,6 +69,8 @@ vi.mock('next/dynamic', () => ({
         {loadMoreError ? <span role="alert">{loadMoreError}</span> : null}
         <a href={buildDetailPath(item.id, 'resources')}>Post details</a>
         <span>Closes to {originLabel ?? 'Explore'}</span>
+        <button type="button" onClick={onClose}>Close reel</button>
+        <button type="button" onClick={() => onMediaIndexChange(1)}>Next slide</button>
         {onToggleSave ? <button type="button" onClick={() => void onToggleSave(item.id)}>Toggle save</button> : null}
         {onFeedback ? <button type="button">Feed rows</button> : null}
         {onReportContent ? <button type="button" onClick={() => void onReportContent(item)}>Report content</button> : null}
@@ -88,10 +106,11 @@ vi.mock('@/components/OptimizedPreviewImage', () => ({
 }));
 
 vi.mock('@/components/MediaDetailsPreviewModal', () => ({
-  default: ({ isOpen, title, prompt }: { isOpen: boolean; title: string; prompt?: string }) => isOpen ? (
+  default: ({ isOpen, title, prompt, onClose }: { isOpen: boolean; title: string; prompt?: string; onClose: () => void }) => isOpen ? (
     <div role="dialog" aria-label={`${title} creation preview`}>
       <span>{title}</span>
       {prompt ? <span>{prompt}</span> : null}
+      <button type="button" onClick={onClose}>Close preview</button>
     </div>
   ) : null,
 }));
@@ -424,6 +443,123 @@ describe('OwnerProfileMediaHub', () => {
     expect(screen.getByRole('dialog', { name: /raw frame creation preview/i })).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: /showcase reel/i })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('Owner-only creation prompt')).toBeInTheDocument());
+  });
+
+  // The browser's Back or Forward onto an entry the page pushed for a post or a creation:
+  // the entry says so (`reel-history-entry.ts`). Popstate took every entry naming one for a
+  // linked one's, so after Forward the close replaced the page's entry: the profile stood
+  // twice in history, and the next Back stayed on it
+  // (archive/web-reel-forward-history-2026-10-23).
+  describe("a reel or creation the browser's Back or Forward reaches again", () => {
+    const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
+
+    it("goes Back from a post's reel that Forward opened again on its own entry", async () => {
+      const pushState = vi.spyOn(window.history, 'pushState');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      fireEvent.click(await screen.findByRole('button', { name: /open public post/i }));
+      expect(pushState).toHaveBeenLastCalledWith(createReelEntryState('post'), '', '/profile?tab=posts&post=post-public');
+
+      act(() => {
+        window.history.back();
+      });
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /public post showcase reel/i })).not.toBeInTheDocument());
+      act(() => {
+        window.history.forward();
+      });
+      const reel = await screen.findByRole('dialog', { name: /public post showcase reel/i });
+
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(reel).getByRole('button', { name: 'Close reel' }));
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(replaceState).not.toHaveBeenCalled();
+    });
+
+    it('goes Back from a creation that Forward opened again on its own entry', async () => {
+      const pushState = vi.spyOn(window.history, 'pushState');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await screen.findByRole('button', { name: /open public post/i });
+      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
+      // A tab's entry is a plain one.
+      expect(pushState).toHaveBeenLastCalledWith(null, '', '/profile?tab=creations');
+      fireEvent.click(await screen.findByRole('button', { name: /open raw frame/i }));
+      expect(pushState).toHaveBeenLastCalledWith(createReelEntryState('generation'), '', '/profile?tab=creations&generation=raw-generation');
+
+      act(() => {
+        window.history.back();
+      });
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /raw frame creation preview/i })).not.toBeInTheDocument());
+      act(() => {
+        window.history.forward();
+      });
+      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
+
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(replaceState).not.toHaveBeenCalled();
+    });
+
+    // A slide replaces the reel's entry, which stays the reel's own.
+    it('goes Back after Forward from a reel that had moved on to another slide', async () => {
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      fireEvent.click(await screen.findByRole('button', { name: /open public post/i }));
+      const opened = await screen.findByRole('dialog', { name: /public post showcase reel/i });
+      fireEvent.click(within(opened).getByRole('button', { name: 'Next slide' }));
+      expect(window.location.search).toBe('?tab=posts&post=post-public&media=1');
+
+      act(() => {
+        window.history.back();
+      });
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /public post showcase reel/i })).not.toBeInTheDocument());
+      act(() => {
+        window.history.forward();
+      });
+      const reel = await screen.findByRole('dialog', { name: /public post showcase reel/i });
+
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      fireEvent.click(within(reel).getByRole('button', { name: 'Close reel' }));
+      expect(back).toHaveBeenCalledTimes(1);
+    });
+
+    // A linked post's entry, and every entry from before the page marked its own: opened
+    // by address, so the close replaces it, also once Back has reached it.
+    it('replaces the entry of a post Back reached on an entry the page did not push', async () => {
+      window.history.replaceState(null, '', '/profile?tab=posts&post=post-public');
+      window.history.pushState(null, '', '/profile?tab=posts');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await screen.findByRole('button', { name: /open public post/i });
+
+      act(() => {
+        window.history.back();
+      });
+      const reel = await screen.findByRole('dialog', { name: /public post showcase reel/i });
+
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(reel).getByRole('button', { name: 'Close reel' }));
+      expect(back).not.toHaveBeenCalled();
+      expect(replaceState).toHaveBeenLastCalledWith(null, '', '/profile?tab=posts');
+    });
+
+    it('replaces the entry of a creation Back reached on an entry the page did not push', async () => {
+      window.history.replaceState(null, '', '/profile?tab=creations&generation=raw-generation');
+      window.history.pushState(null, '', '/profile?tab=creations');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await screen.findByRole('button', { name: /open raw frame/i });
+
+      act(() => {
+        window.history.back();
+      });
+      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
+
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      expect(back).not.toHaveBeenCalled();
+      expect(replaceState).toHaveBeenLastCalledWith(null, '', '/profile?tab=creations');
+    });
   });
 
   it('shows an explicit note for a creation whose only source is gone instead of a broken tile', async () => {

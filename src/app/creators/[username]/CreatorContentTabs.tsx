@@ -29,6 +29,7 @@ import {
   toastSafetyOutcome,
 } from '@/lib/feed-safety-actions';
 import { readInAppLinkClick } from '@/lib/link-clicks';
+import { createReelEntryState, keepReelEntryState, readReelHistoryMode } from '@/lib/reel-history-entry';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
@@ -156,8 +157,10 @@ export function CreatorContentTabs({
 
     const query = params.size ? `?${params.toString()}` : '';
     const nextUrl = `${pathname}${query}${tabHashes[activeTab]}`;
-    if (mode === 'push') window.history.pushState(null, '', nextUrl);
-    else window.history.replaceState(null, '', nextUrl);
+    // The reel's own entry says so on its state (`reel-history-entry.ts`), and
+    // keeps saying so while the reel moves to another post or slide.
+    if (mode === 'push') window.history.pushState(createReelEntryState('post'), '', nextUrl);
+    else window.history.replaceState(keepReelEntryState(window.history.state, params), '', nextUrl);
   }, [activeTab, pathname]);
 
   const selectViewerItem = useCallback((id: string) => {
@@ -202,14 +205,16 @@ export function CreatorContentTabs({
   useEffect(() => {
     const handleHashChange = () => setActiveTab(getTabFromHash(window.location.hash));
     handleHashChange();
-    const handlePopState = () => {
+    const handlePopState = (event: PopStateEvent) => {
       const params = new URLSearchParams(window.location.search);
       const postId = params.get('post');
       const mediaIndex = Number(params.get('media'));
       setSelectedItemId(postId);
       if (!postId) setDirectPostStatus(null);
       setSelectedMediaIndex(Number.isInteger(mediaIndex) && mediaIndex >= 0 ? mediaIndex : 0);
-      reelHistoryModeRef.current = postId ? 'direct' : null;
+      // Back or Forward onto the reel's own entry still closes by going Back to
+      // the entry under it; a post any other entry names opened by address.
+      reelHistoryModeRef.current = readReelHistoryMode('post', params, event.state);
       setActiveTab(getTabFromHash(window.location.hash));
     };
     window.addEventListener('hashchange', handleHashChange);

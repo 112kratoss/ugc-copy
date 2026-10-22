@@ -47,6 +47,7 @@ import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
 import type { OwnerProfileStats } from '@/lib/profile';
+import { createReelEntryState, keepReelEntryState, readReelHistoryMode } from '@/lib/reel-history-entry';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import type {
@@ -589,12 +590,16 @@ export default function OwnerProfileMediaHub({
     if (updates.generationId) params.set('generation', updates.generationId);
     else if (updates.generationId === null) params.delete('generation');
     const nextUrl = `${pathname}?${params.toString()}${window.location.hash}`;
-    if (mode === 'push') window.history.pushState(null, '', nextUrl);
-    else window.history.replaceState(null, '', nextUrl);
+    // An entry pushed for a post's reel or a creation says so on its state
+    // (`reel-history-entry.ts`), and keeps saying so while the reel moves to
+    // another post or slide; a tab's entry is a plain one.
+    const pushedFor = updates.postId ? 'post' : updates.generationId ? 'generation' : null;
+    if (mode === 'push') window.history.pushState(pushedFor ? createReelEntryState(pushedFor) : null, '', nextUrl);
+    else window.history.replaceState(keepReelEntryState(window.history.state, params), '', nextUrl);
   }, [activeTab, pathname]);
 
   useEffect(() => {
-    const handlePopState = () => {
+    const handlePopState = (event: PopStateEvent) => {
       const params = new URLSearchParams(window.location.search);
       const tab = isProfileMediaTab(params.get('tab')) ? params.get('tab') as ProfileMediaTab : 'posts';
       const mediaIndex = Number(params.get('media'));
@@ -602,8 +607,11 @@ export default function OwnerProfileMediaHub({
       setSelectedPostId(params.get('post'));
       setSelectedMediaIndex(Number.isInteger(mediaIndex) && mediaIndex >= 0 ? mediaIndex : 0);
       setSelectedGeneration((current) => current?.id === params.get('generation') ? current : null);
-      reelHistoryModeRef.current = params.get('post') ? 'direct' : null;
-      creationHistoryModeRef.current = params.get('generation') ? 'direct' : null;
+      // Back or Forward onto an entry the page pushed for a post or a creation
+      // still closes it by going Back to the entry under it; one that any other
+      // entry names opened by address.
+      reelHistoryModeRef.current = readReelHistoryMode('post', params, event.state);
+      creationHistoryModeRef.current = readReelHistoryMode('generation', params, event.state);
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
