@@ -836,6 +836,11 @@ export default function ShowcaseClient({
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
         searchParams.get('post') ? 'direct' : null
     );
+    // The post a close is taking out of the URL. The reel closes at once,
+    // but the URL keeps the post until the browser's Back comes (popstate,
+    // a task later) or Next applies the replace: a page landing in between
+    // ran the URL effect on that URL and opened the reel again.
+    const closingPostIdRef = useRef<string | null>(null);
     const directPostRequestRef = useRef<string | null>(null);
     const selectedItemIdRef = useRef<string | null>(selectedItemId);
     const pendingSnapshotRef = useRef<{
@@ -1039,6 +1044,14 @@ export default function ShowcaseClient({
 
     useEffect(() => {
         const postParam = searchParams.get('post');
+        // A close on its way: until the URL moves on, it names the post the
+        // reader just closed.
+        if (closingPostIdRef.current !== null) {
+            if (postParam === closingPostIdRef.current) {
+                return;
+            }
+            closingPostIdRef.current = null;
+        }
         const mediaParam = Number(searchParams.get('media'));
         // Browser history is the source of truth for the active reel and media index.
         setSelectedMediaIndex(Number.isInteger(mediaParam) && mediaParam >= 0 ? mediaParam : 0);
@@ -1082,6 +1095,12 @@ export default function ShowcaseClient({
         })
             .then(async (response) => {
                 const payload = await response.json().catch(() => null);
+                // Cut short while the body was still on its way: `json()`
+                // rejected with the abort, which is no broken answer. The
+                // cleanup that aborted it lets the next run ask again.
+                if (controller.signal.aborted) {
+                    return;
+                }
                 settled = true;
                 if (!response.ok || !payload?.item) {
                     // 404 is the server's answer for a post that is gone or
@@ -1156,6 +1175,7 @@ export default function ShowcaseClient({
     // What the tiles call is kept across renders (`ShowcaseGridCard`), and
     // reads the list and the open post through refs, not from one render.
     const openPreview = useCallback((item: ShowcaseFeedItem, mediaIndex = 0) => {
+        closingPostIdRef.current = null;
         reelHistoryModeRef.current = 'pushed';
         setSelectedMediaIndex(mediaIndex);
         updateReelUrl(item.id, 'push', mediaIndex);
@@ -1163,6 +1183,7 @@ export default function ShowcaseClient({
     }, [updateReelUrl]);
 
     const closePreview = useCallback(() => {
+        closingPostIdRef.current = new URLSearchParams(window.location.search).get('post');
         setSelectedItemId(null);
         setDirectPostStatus(null);
 
