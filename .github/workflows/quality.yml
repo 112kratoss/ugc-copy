@@ -172,8 +172,12 @@ jobs:
       run:
         working-directory: ugc-mobile
     steps:
+      # Depth 2: a pull request's merge commit with its first parent, the base
+      # it was built on, which the release-bump check reads.
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -185,11 +189,70 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The dependency check runs offline, and Expo's live list is read only in
+      # the two steps after Doctor: ugc-mobile/__tests__/expo-install-exclude.test.ts
+      # says why.
       - name: Validate Expo dependency alignment
         run: npx expo install --check
+        env:
+          EXPO_OFFLINE: "1"
 
       - name: Run Expo Doctor
         run: npx --yes expo-doctor@1.20.1
+        env:
+          EXPO_OFFLINE: "1"
+
+      - name: Check Expo's live version list at a release bump
+        if: github.event_name == 'pull_request'
+        run: |
+          base="$(git show HEAD^1:ugc-mobile/app.json)"
+          verdict="$(node -e '
+            const base = JSON.parse(process.argv[1]).expo.version;
+            const head = require("./app.json").expo.version;
+            const [h, b] = [head, base].map((version) => version.split(".").map(Number));
+            const i = h.findIndex((part, index) => part !== b[index]);
+            console.log(`${i >= 0 && h[i] > b[i] ? "bump" : "same"} ${base} -> ${head}`);
+          ' "$base")"
+          case "$verdict" in
+            bump*)
+              echo "Release bump ${verdict#bump }: Expo's live list must have nothing to add."
+              node ./scripts/expo-live-versions.mjs --gate
+              ;;
+            *) echo "Not a release bump (${verdict#same }), so Expo's live list is not checked here." ;;
+          esac
+
+      - name: Report Expo's live version list
+        if: github.event_name == 'push'
+        continue-on-error: true
+        run: node ./scripts/expo-live-versions.mjs --report
+
+      # Advisory, never a gate: native work meant for the next store build
+      # moves the fingerprint on purpose, and that build needs a green Quality
+      # run on its exact main commit, so from the moment such work lands until
+      # ota-targets.json moves with the new binaries every run warns. A warning
+      # on a pull request while main's runs have none means it moved the
+      # fingerprint. --set-aside fingerprints each platform the way
+      # scripts/publish-ota.mjs publishes to it.
+      - name: Compare the runtime fingerprint with the store builds
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          report="$RUNNER_TEMP/ota-reach.txt"
+          if node ./scripts/verify-ota-target.mjs --set-aside 2>&1 | tee "$report"; then
+            verdict="An over-the-air update built from this tree would reach every store build in \`ota-targets.json\`."
+          else
+            verdict="An over-the-air update built from this tree would not reach every store build in \`ota-targets.json\`, or its fingerprint could not be computed; the output below says which."
+            echo "::warning title=Over-the-air reach not confirmed::See the job summary."
+          fi
+          {
+            echo "### Over-the-air reach"
+            echo
+            echo "$verdict"
+            echo
+            echo '```'
+            cat "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Test production build environment guard
         run: npm run release-env:self-test
