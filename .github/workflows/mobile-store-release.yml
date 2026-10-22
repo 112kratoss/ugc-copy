@@ -89,11 +89,50 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Offline for the reason given in quality.yml: compared with the versions
+      # the installed expo package lists, not with Expo's live list.
       - name: Validate Expo dependency alignment
         run: npx expo install --check
+        env:
+          EXPO_OFFLINE: "1"
 
       - name: Run Expo Doctor
         run: npx --yes expo-doctor@1.20.1
+        env:
+          EXPO_OFFLINE: "1"
+
+      # Advisory: the versions Expo's live list recommends that this build does
+      # not carry, in the job summary while the signed build runs. A native one
+      # moves the runtime fingerprint, so it goes out only with new binaries:
+      # to take it, cancel, land it on main and dispatch again.
+      - name: Report Expo's live version list
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/expo-live-versions.txt"
+          if npx expo install --check > "$report" 2>&1; then status=0; else status=$?; fi
+          if grep -q "offline-mode" "$report"; then
+            verdict="Expo's live list could not be read (the check fell back to offline mode), so this says nothing about patches this build leaves out."
+            echo "::warning title=Expo's live list not read::See the job summary."
+          elif [ "$status" -eq 0 ]; then
+            verdict="Every checked package is at the version Expo's live list recommends."
+          elif grep -q "Found outdated dependencies" "$report"; then
+            verdict="Expo's live list recommends versions this build does not carry (packages in \`expo.install.exclude\` are left out). \`ugc-mobile/__tests__/expo-install-exclude.test.ts\` says how to take them in the release-bump commit."
+            echo "::warning title=Expo patches not in this build::Expo's live list recommends newer versions than this build carries. See the job summary."
+          else
+            verdict="Expo's live list could not be read; the check's output is below."
+            echo "::warning title=Expo's live list not read::See the job summary."
+          fi
+          {
+            echo "### Expo's live version list"
+            echo
+            echo "$verdict"
+            echo
+            echo '```'
+            cat "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$report"
 
       - name: Test fail-closed production environment guard
         run: npm run release-env:self-test

@@ -185,11 +185,52 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Offline, both steps compare the installed packages with the versions
+      # the installed expo package lists (its bundledNativeModules.json). Online
+      # they used Expo's live list, so every Expo patch release turned every
+      # tree red with nothing changed here (2026-08-26, 2026-09-19, 2026-10-21),
+      # and taking a native patch moves the runtime fingerprint, after which no
+      # over-the-air update reaches the store builds until new ones ship.
+      # Doctor's version check runs `expo install --check` and inherits the
+      # variable. The store release's validate job reports what the live list
+      # would add; ugc-mobile/__tests__/expo-install-exclude.test.ts says when
+      # to take it.
       - name: Validate Expo dependency alignment
         run: npx expo install --check
+        env:
+          EXPO_OFFLINE: "1"
 
       - name: Run Expo Doctor
         run: npx --yes expo-doctor@1.20.1
+        env:
+          EXPO_OFFLINE: "1"
+
+      # Advisory, never a gate: native work meant for the next store build
+      # moves the fingerprint on purpose, and that build needs a green Quality
+      # run on its exact main commit. The publish script refuses a mismatched
+      # update on its own; this only shows a moved fingerprint on the pull
+      # request that moved it, before main is stranded.
+      - name: Compare the runtime fingerprint with the store builds
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/ota-reach.txt"
+          if node ./scripts/verify-ota-target.mjs > "$report" 2>&1; then
+            verdict="An over-the-air update built from this tree would reach every store build in \`ota-targets.json\`."
+          else
+            verdict="An over-the-air update built from this tree would reach **no device** on a store build below, or the fingerprint could not be computed. Expected when this change carries native work for the next store build; otherwise find what moved it (a dependency or lockfile change, a config plugin, \`app.json\`, \`patches/\`, \`eas.json\`, \`.gitignore\`). Advisory: this step never fails the job."
+            echo "::warning title=Over-the-air reach not confirmed::An update from this tree would not reach every store build in ota-targets.json. See the job summary."
+          fi
+          {
+            echo "### Over-the-air reach"
+            echo
+            echo "$verdict"
+            echo
+            echo '```'
+            cat "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$report"
 
       - name: Test production build environment guard
         run: npm run release-env:self-test
