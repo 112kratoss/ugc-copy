@@ -355,6 +355,74 @@ describe('CreatorContentTabs with the reel', () => {
     expect(reelInsertions()).toBe(0);
   }, 15_000);
 
+  // Close goes Back, and the address keeps the post until Back's popstate comes. A page of
+  // posts that landed in between ran the URL effect on that address (the effect followed the
+  // list) and opened the reel again until the popstate: seen in Chromium with Back's traversal
+  // 5 or 20 ms slower (archive/web-history-follow-ups-2026-10-23).
+  it('keeps the reel closed when a page of posts lands between Close and the browser going back', async () => {
+    const nextItem = { ...item, id: 'item-2', title: 'Second Page Frame', generationId: 'gen-2' };
+    let landPage = () => {};
+    // No observer here, so the page offers its own button for the next page.
+    vi.stubGlobal('IntersectionObserver', undefined);
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+      String(input).startsWith('/api/creators/creator-name?')
+        ? new Promise((resolve) => {
+          landPage = () => resolve({
+            ok: true,
+            json: async () => ({
+              items: [nextItem],
+              pageInfo: { hasMore: false, limit: 24, offset: 24, nextOffset: null, nextLimit: null },
+            }),
+          });
+        })
+        : Promise.resolve({ ok: true, json: async () => ({ success: true }) })
+    )));
+    // Back as a browser takes it: the address keeps the post until popstate, which comes later.
+    let finishBack = () => {};
+    vi.spyOn(window.history, 'back').mockImplementation(() => {
+      finishBack = () => {
+        window.history.replaceState(null, '', '/creators/creator-name#creator-creations');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      };
+    });
+    render(
+      <CreatorContentTabs
+        initialData={{ ...initialData, pageInfo: { hasMore: true, limit: 24, offset: 0, nextOffset: 24, nextLimit: 48 } }}
+        profilePath="/creators/creator-name"
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Load more posts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Campaign Frame' }));
+    const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+    const reelInsertions = countReelInsertions();
+
+    fireEvent.click(within(reel).getByRole('button', { name: 'Creator' }));
+    await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
+    expect(window.location.search).toBe('?post=item-1');
+
+    await act(async () => {
+      landPage();
+    });
+    expect((await screen.findAllByText('Second Page Frame')).length).toBeGreaterThan(0);
+    // The effects of the commit that took the page in.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(queryReel()).not.toBeInTheDocument();
+
+    act(() => {
+      finishBack();
+    });
+    expect(queryReel()).not.toBeInTheDocument();
+    expect(reelInsertions()).toBe(0);
+    // Once the address has moved on it is followed again: Forward onto the post opens the reel.
+    act(() => {
+      window.history.replaceState(createReelEntryState('post'), '', '/creators/creator-name?post=item-1#creator-creations');
+      window.dispatchEvent(new PopStateEvent('popstate', { state: createReelEntryState('post') }));
+    });
+    expect(await screen.findByRole('dialog', { name: 'Creator reel viewer' })).toBeInTheDocument();
+  }, 15_000);
+
   it('closes an opened post with Back, opens it again with Forward, and closes it with Creator', async () => {
     renderCreatorPage();
 

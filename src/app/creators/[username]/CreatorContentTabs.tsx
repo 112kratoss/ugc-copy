@@ -237,6 +237,14 @@ export function CreatorContentTabs({
     };
   }, []);
 
+  // Whether the list holds the post the URL names. The URL effect follows
+  // that, not the list: on the list it ran again at every page that landed,
+  // which cut a linked post's read short and asked again each time, and
+  // between Close and Back's popstate (the URL still names the post) opened
+  // the reel again until the popstate.
+  const urlPostId = searchParams.get('post');
+  const isUrlPostLoaded = urlPostId !== null && items.some((item) => item.id === urlPostId);
+
   useEffect(() => {
     const postId = searchParams.get('post');
     // No post in the URL, no reel, as on Explore. Close and the popstate
@@ -253,7 +261,7 @@ export function CreatorContentTabs({
       setDirectPostStatus(null);
       return;
     }
-    if (items.some((item) => item.id === postId)) {
+    if (isUrlPostLoaded) {
       // The URL can directly select an item already present in the client page.
       setSelectedItemId(postId);
       setDirectPostStatus(null);
@@ -307,7 +315,7 @@ export function CreatorContentTabs({
         directPostRequestRef.current = null;
       }
     };
-  }, [addSavedItemIds, directPostAttempt, initialData.profile.username, items, searchParams, session?.access_token, setItems]);
+  }, [addSavedItemIds, directPostAttempt, initialData.profile.username, isUrlPostLoaded, searchParams, session?.access_token, setItems]);
 
   const retryDirectPost = useCallback(() => {
     directPostRequestRef.current = null;

@@ -390,12 +390,17 @@ describe('CreatorContentTabs', () => {
 
     // The query stand-in renders a new query only when the address changes, so
     // the URL effect no longer runs again on every render by accident. A page
-    // that lands while the reel is open runs it again with `post` unchanged
-    // (it reads `items`), as a browser does when the grid asks for more: the
-    // tests below land one on purpose, after the read failed or while it is out.
+    // lands while the reel is open, as a browser's does when the grid asks for
+    // more: the tests below land one on purpose, after the read failed, while it
+    // is out, and with the linked post in it. The URL effect follows whether the
+    // post is in the list, not the list: keyed on the list, it ran again at
+    // every page, which cut the read short and asked again each time.
     const nextPageItem = { ...items[0], id: 'item-next-page', title: 'Next Page Frame' };
     type PostAnswer = { ok: boolean; status: number; json: () => Promise<unknown> };
-    const answerPostAndPages = (answer: (init?: RequestInit) => PostAnswer | Promise<PostAnswer>) => {
+    const answerPostAndPages = (
+      answer: (init?: RequestInit) => PostAnswer | Promise<PostAnswer>,
+      pageItems: ShowcaseFeedItem[] = [nextPageItem],
+    ) => {
       const reads: string[] = [];
       vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
         if (input.startsWith('/api/showcase/posts/')) {
@@ -407,7 +412,7 @@ describe('CreatorContentTabs', () => {
             ok: true,
             status: 200,
             json: async () => ({
-              items: [nextPageItem],
+              items: pageItems,
               pageInfo: { hasMore: false, limit: 24, offset: 24, nextOffset: null, nextLimit: null },
             }),
           };
@@ -452,20 +457,15 @@ describe('CreatorContentTabs', () => {
       expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('Linked post: failed');
     }, 15_000);
 
-    it('asks again when the URL effect runs while the read is out, and shows no failure for the read it cut short', async () => {
+    it('leaves the read out while a page without the post lands, and opens the post when it comes', async () => {
       linkTo('item-late');
       const signals: Array<AbortSignal | undefined> = [];
-      let answerSecondRead = () => {};
+      let answerRead = () => {};
       const reads = answerPostAndPages((init) => {
         signals.push(init?.signal ?? undefined);
-        if (signals.length === 1) {
-          // The first read stays out until it is aborted, then rejects as a browser's does.
-          return new Promise((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
-          });
-        }
-        return new Promise((resolve) => {
-          answerSecondRead = () => resolve({
+        return new Promise((resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
+          answerRead = () => resolve({
             ok: true,
             status: 200,
             json: async () => ({ success: true, item: { ...items[0], id: 'item-late', title: 'Late Frame' } }),
@@ -479,15 +479,16 @@ describe('CreatorContentTabs', () => {
       expect(reads).toHaveLength(1);
 
       await landNextPage();
-      expect(signals[0]?.aborted).toBe(true);
-      expect(reads).toHaveLength(2);
+      expect(signals[0]?.aborted).toBe(false);
+      expect(reads).toHaveLength(1);
       expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('Linked post: loading');
 
-      answerSecondRead();
+      answerRead();
       await waitFor(() => {
         expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).not.toHaveTextContent('Linked post:');
       });
       expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-late');
+      expect(reads).toHaveLength(1);
     }, 15_000);
 
     // A post read on its own is added to the list, and the read is not asked
@@ -523,45 +524,34 @@ describe('CreatorContentTabs', () => {
       expect(reads).toHaveLength(2);
     }, 15_000);
 
+    // A page that brings the linked post in ends its read: the post opens from
+    // the page. Cut short while its answer was still arriving, the read must
+    // not say it failed.
     it('shows no failure for a read cut short while its answer was still arriving', async () => {
       linkTo('item-late');
       const signals: Array<AbortSignal | undefined> = [];
-      let answerSecondRead = () => {};
       const reads = answerPostAndPages((init) => {
         signals.push(init?.signal ?? undefined);
-        if (signals.length === 1) {
-          // The answer's head is in and its body is still on the way; aborted
-          // then, reading the body rejects as a browser's does.
-          return {
-            ok: true,
-            status: 200,
-            json: () => new Promise((_resolve, reject) => {
-              init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
-            }),
-          };
-        }
-        return new Promise((resolve) => {
-          answerSecondRead = () => resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ success: true, item: { ...items[0], id: 'item-late', title: 'Late Frame' } }),
-          });
-        });
-      });
+        // The answer's head is in and its body is still on the way; aborted
+        // then, reading the body rejects as a browser's does.
+        return {
+          ok: true,
+          status: 200,
+          json: () => new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
+          }),
+        };
+      }, [{ ...items[0], id: 'item-late', title: 'Late Frame' }, nextPageItem]);
       const landNextPage = renderWithNextPage();
 
       expect(await screen.findByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('Linked post: loading');
 
       await landNextPage();
       expect(signals[0]?.aborted).toBe(true);
-      expect(reads).toHaveLength(2);
-      expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('Linked post: loading');
-
-      answerSecondRead();
-      await waitFor(() => {
-        expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).not.toHaveTextContent('Linked post:');
-      });
-      expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-late');
+      expect(reads).toHaveLength(1);
+      const reel = screen.getByRole('dialog', { name: /creator immersive viewer/i });
+      expect(reel).not.toHaveTextContent('Linked post:');
+      expect(reel).toHaveTextContent('item-late');
     }, 15_000);
   });
 
