@@ -17,9 +17,10 @@ describe('production performance readiness', () => {
     // `inlineCss` is on so the public pages paint without a second,
     // render-blocking request: on the throttled mobile Lighthouse run that
     // request competed with the script chunks and moved the home page's first
-    // paint from 0.8 s to 2.2 s. Next inlines the root sheet three times per
-    // response (a <style> tag, and copies in the flight data for the root
-    // layout and the global-error boundary), so the sheet a public page
+    // paint from 0.8 s to 2.2 s. Next inlines the root sheet twice per response
+    // (a <style> tag and a copy in the flight data for the root layout; the
+    // global-error boundary's third copy is patched out, see the budget test
+    // below), so the sheet a public page
     // inlines has to stay small: globals.css scans only public routes, and a
     // public route never links the supplement (route-style-readiness.test.ts
     // pins the split).
@@ -170,12 +171,14 @@ describe('production performance readiness', () => {
     };
 
     expect(budgets.load.targets.length).toBeGreaterThanOrEqual(4);
-    // With `inlineCss` on, every document carries the root stylesheet three
+    // With `inlineCss` on, every document carried the root stylesheet three
     // times: the <style> tag, its escaped copy in the RSC payload, and a second
     // escaped copy Next writes for the global-error boundary (the payload's
     // `G`), which Turbopack credits with the root layout's CSS. That was
     // 454 KB of /showcase's 602 KB on 2026-10-20, so the decoded size of a
-    // page is dominated by the sheet rather than its content. The three page
+    // page is dominated by the sheet rather than its content. The root
+    // postinstall patches the third copy out (vercel/next.js#98110; the test
+    // after this one), 160 KB of every page, and these budgets predate it. The three page
     // targets therefore budget decoded bytes explicitly, re-based on the
     // measured inlined documents (home 763,979 B, showcase 586,662 B,
     // marketplace 565,782 B on 2026-09-15) with the same ~10% headroom the
@@ -227,6 +230,35 @@ describe('production performance readiness', () => {
       FCP: 1800,
       TTFB: 800,
     });
+  });
+
+  it('leaves /showcase room under its decoded budget for the largest poster it inlines', () => {
+    const packageJson = JSON.parse(readProjectFile('package.json')) as { scripts: Record<string, string> };
+    const budgets = JSON.parse(readProjectFile('config/performance-budgets.json')) as {
+      load: { targets: Array<{ name: string; p95DecodedBytes?: number }> };
+    };
+    const showcaseBudget = budgets.load.targets.find((target) => target.name === 'showcase-page')?.p95DecodedBytes;
+    const capKilobytes = Number(/SHOWCASE_PRIORITY_POSTER_MAX_BYTES = (\d+) \* 1024/
+      .exec(readProjectFile('src/lib/showcase-priority-poster.ts'))?.[1]);
+
+    // When a video leads Explore's feed, the page inlines its poster (at most
+    // SHOWCASE_PRIORITY_POSTER_MAX_BYTES) as a base64 data URL twice, in the
+    // bootstrap <img> and again in the flight props: 8/3 of its bytes, measured
+    // on a production build on 2026-10-23 (24 KB added 65,540 B, 64 KB 174,773 B).
+    // /showcase read 575,158 B on production that day with an image first, so
+    // while Next wrote the root sheet three times any poster over 23.9 KB took
+    // the page past its budget, and one at the cap by 110 KB. The Next patch
+    // takes the third copy out of every page, 160,300 B on the same build:
+    // with it, a poster at the cap leaves the page ~49 KB under.
+    const MEASURED_IMAGE_FIRST = 575_158;
+    const THIRD_STYLESHEET_COPY = 160_300;
+    const posterAtTheCap = 2 * (Math.ceil((capKilobytes * 1024) / 3) * 4 + 'data:image/webp;base64,'.length);
+    expect(showcaseBudget).toBe(638_976);
+    expect(MEASURED_IMAGE_FIRST + posterAtTheCap, 'the poster cap sank /showcase before the patch').toBeGreaterThan(showcaseBudget!);
+    expect(MEASURED_IMAGE_FIRST - THIRD_STYLESHEET_COPY + posterAtTheCap).toBeLessThan(showcaseBudget!);
+    // So the patch has to keep applying, and the build has to say when it does not.
+    expect(packageJson.scripts.postinstall).toContain('node scripts/build/patch-next-global-error-css.mjs');
+    expect(packageJson.scripts['build:verify']).toContain('node scripts/build/check-inline-css-copies.mjs');
   });
 
   it('validates the harness in CI and schedules production budget checks', () => {
