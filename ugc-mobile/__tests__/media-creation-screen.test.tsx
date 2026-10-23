@@ -6461,6 +6461,49 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           ]);
           expect(generateButton(tree).props.disabled).toBe(false);
         });
+
+        // A model without a subjects slot keeps a draft's subjects, as it keeps references: they wait apart
+        // with a Remove that takes their @mention too, and are the run's again on a model that takes them.
+        // Dropped, they were gone for good, and "@hero" named nothing: "Unknown element mention: @hero"
+        // held the run on Kling 3.0 and on Kling O3 again (the redundant-UI leftovers' review, 2026-10-23).
+        describe('through a model change away from Kling O3', () => {
+          beforeEach(() => {
+            catalogState.catalog = parityCatalog([parityKlingO3(), parityKlingVideo()]);
+            memory.set(ordinaryKey, heroDraft({}));
+          });
+
+          it('wait apart, each with a Remove that takes its mention too', async () => {
+            const tree = await open(<MediaCreationScreen initialTool="video" />);
+            await pickModel(tree, 'Kling 3.0 Cinematic');
+            await settle();
+
+            expect(storedDrafts().video).toMatchObject({ model: 'kling-3.0-video', subjects: [expect.objectContaining({ handle: '@hero' })] });
+            const standby = tree.root.findByProps({ testID: 'standby-references' });
+            expect(pressables(standby).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Hero']);
+            // Kling 3.0 takes none: they lock no frames, and the prompt names nothing this run sends.
+            expect(text(tree)).not.toContain('replace frames and references');
+            expect(blocker(tree)).toContain('Unknown element mention: @hero');
+
+            renderer.act(() => { labelled(standby, 'Remove Hero').props.onPress(); });
+            await settle();
+            expect(storedDrafts().video).toMatchObject({ subjects: [], prompt: 'walks in' });
+            expect(text(tree)).toContain('Hero and @hero were removed from this draft.');
+            expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+          });
+
+          it('are the run’s again once Kling O3 is picked again', async () => {
+            const tree = await open(<MediaCreationScreen initialTool="video" />);
+            await pickModel(tree, 'Kling 3.0 Cinematic');
+            await settle();
+            await pickModel(tree, 'Kling O3');
+            await settle();
+
+            expect(storedDrafts().video).toMatchObject({ model: 'kling-o3', referenceMode: 'subjects', subjects: [expect.objectContaining({ handle: '@hero' })] });
+            expect(labelled(tree.root, 'Open details for Hero, @hero')).toBeTruthy();
+            expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+            expect(text(tree)).not.toContain('Unknown element mention');
+          });
+        });
       });
 
       it('tells the enhancer what a Kling 3.0 run sends: its start frame, and the clip that goes beside it', async () => {

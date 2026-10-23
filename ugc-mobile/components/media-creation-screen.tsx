@@ -568,14 +568,18 @@ function isFrameRole(role: CatalogInputSlot['role']) {
  * across a model change, as the web creator does, so they wait apart from the run's own inputs
  * until they are removed or a model or shape that takes them is picked. Frames a run sends none
  * of are the other side of a frames-or-references choice, which the frames group itself says.
+ * Named subjects wait here too on a model without a slot for them, each wearing a reference's
+ * shape (`subjectAsReference`); a model with one draws them in its own group.
  */
 function standbyVideoReferences(draft: VideoCreationDraft, model: CreatorCatalogModel | null): MediaDraft[] {
   if (!model) return [];
+  const subjects = catalogSubjectSlot(model) ? [] : videoSubjects(draft).map(subjectAsReference);
   if (!model.inputModes) {
     return [
       ...draft.references.slice(model.inputs.imageReferences?.max ?? 0),
       ...draft.referenceVideos.slice(model.inputs.videoReferences?.max ?? 0),
       ...draft.referenceAudios.slice(model.inputs.audioReferences?.max ?? 0),
+      ...subjects,
     ];
   }
   const run = catalogRunSlots(draft, model);
@@ -583,7 +587,7 @@ function standbyVideoReferences(draft: VideoCreationDraft, model: CreatorCatalog
   const frames = run.some(({ slot }) => isFrameRole(slot.role))
     ? [draft.startFrame, draft.endFrame].filter((media): media is MediaDraft => Boolean(media))
     : [];
-  return [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios, ...frames].filter((media) => !sent.has(media.id));
+  return [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios, ...frames, ...subjects].filter((media) => !sent.has(media.id));
 }
 
 /** The validator's word on a slot holding more than it takes, said beside the extras. */
@@ -4328,9 +4332,11 @@ function VideoCreatorComposer({
   const framesAndReferencesConflict = framesExcludeReferences && hasFrameAttachment && hasReferenceAttachment;
   // Named subjects, where the model's descriptor publishes a slot for them. They replace
   // frames and references for the run, as the server's quote reads them, so the same
-  // empty-side locks hold between the subjects group and the other two.
+  // empty-side locks hold between the subjects group and the other two. A model without the
+  // slot keeps a draft's subjects for the next one that has it: they lock nothing here, and
+  // wait apart with the run's other leftovers (standbyVideoReferences).
   const subjectSlot = catalogSubjectSlot(model);
-  const subjects = videoSubjects(draft);
+  const subjects = subjectSlot ? videoSubjects(draft) : [];
   const maxSubjects = subjectSlot ? subjectsPerRun(subjectSlot) : 0;
   const subjectsAttached = subjects.length > 0;
   const framesLockedBySubjects = subjectsAttached && !hasFrameAttachment;

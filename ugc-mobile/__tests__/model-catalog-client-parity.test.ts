@@ -230,9 +230,9 @@ describe('named subjects on the native creator', () => {
     expect(tooFew.errors).toContain(`Lone needs ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max} pictures of the same person or thing.`);
 
     const four = ['A', 'B', 'C', 'D'].map((name, index) => createSubjectDraft([picture(index * 2), picture(index * 2 + 1)], name, []));
-    // applyCatalogModelDefaults keeps as many subjects as the slot names; the check below reads the raw draft.
-    const raw: VideoCreationDraft = { ...subjectDraft(model, four.slice(0, 3)), subjects: four, referenceMode: 'subjects' };
-    const tooMany = validateCatalogCreationDraft(raw, model, { credits: 999 });
+    // Kept past the slot's count, as references past a slot's max are, so the check says so until one goes.
+    const tooMany = validateCatalogCreationDraft(subjectDraft(model, four), model, { credits: 999 });
+    expect(subjectDraft(model, four).subjects).toHaveLength(4);
     expect(tooMany.errors).toContain(`${model.displayName} takes up to 3 named subjects per run.`);
   });
 
@@ -258,12 +258,29 @@ describe('named subjects on the native creator', () => {
     expect(validateCatalogCreationDraft({ ...reconciled.draft, prompt: '@hero waves' } as VideoCreationDraft, published, { credits: 999 }).errors).toEqual([]);
   });
 
-  it('drops subjects when the model switches to one without a slot for them', () => {
+  // A model without a subjects slot keeps them, as it keeps references, clips and tracks. Dropped, they
+  // were gone for good: picking the subjects model again did not bring them back, and a prompt naming one
+  // was refused with "Unknown element mention" (the redundant-UI leftovers' review, 2026-10-23).
+  it('keeps subjects through a model without a slot for them, out of its run, its quote and its checks', () => {
     const hero = createSubjectDraft([picture(1), picture(2)], 'Hero', []);
     const plain = remoteVideoModel();
     const moved = applyCatalogModelDefaults(subjectDraft(model, [hero]), plain) as VideoCreationDraft;
-    expect(moved.subjects).toEqual([]);
+    expect(moved.subjects).toEqual([hero]);
     expect(moved.referenceMode).not.toBe('subjects');
+    const request = buildUnifiedCatalogGenerationRequest(moved, plain, 'catalog-v2-revision');
+    expect(request.settings.referenceMode).not.toBe('subjects');
+    expect(request.inputs.some((input) => input.slot === SUBJECT_IMAGES_SLOT_KEY)).toBe(false);
+    const quote = buildCatalogQuoteRequest(moved, plain, 'catalog-v2-revision');
+    expect(quote.inputCounts.images).toBe(0);
+    expect(quote.inputMetadata?.slots?.[SUBJECT_IMAGES_SLOT_KEY]).toBeUndefined();
+    expect(validateCatalogCreationDraft(moved, plain, { credits: 999 }).errors).toEqual([]);
+    // A prompt naming one names nothing this run sends, as the server reads it.
+    expect(validateCatalogCreationDraft({ ...moved, prompt: '@hero walks in' }, plain, { credits: 999 }).errors)
+      .toContain('Unknown element mention: @hero');
+
+    const back = applyCatalogModelDefaults(moved, model) as VideoCreationDraft;
+    expect(back.subjects).toEqual([hero]);
+    expect(back.referenceMode).toBe('subjects');
   });
 
   it('gives a subject a handle no reference or subject holds, and moves it with a rename', () => {

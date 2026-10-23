@@ -459,9 +459,9 @@ export function applyCatalogModelDefaults(
   catalogRevision: string | null = draft.catalogRevision ?? null,
 ): CreationDraft {
   const values = writeControlValues(draft, model);
-  // References, clips, tracks and generic slot inputs stay in the draft whatever this model
-  // takes: cut to its slots, they were gone for good, and picking the first model again did
-  // not bring them back. A run sends what the model takes (catalogRunSlots), and
+  // References, clips, tracks, named subjects and generic slot inputs stay in the draft whatever
+  // this model takes: cut to its slots, they were gone for good, and picking the first model again
+  // did not bring them back. A run sends what the model takes (catalogRunSlots), and
   // an excess blocks Generate with the slot's message until it is removed.
   if (draft.tool === 'image') {
     const normalized = { ...draft, ...values, model: model.id, catalogRevision } as ImageCreationDraft;
@@ -469,7 +469,6 @@ export function applyCatalogModelDefaults(
   }
   if (draft.tool === 'video') {
     const isMultiShot = model.capabilities.multiShot ? Boolean(values.isMultiShot ?? draft.isMultiShot) : false;
-    const subjectSlot = catalogSubjectSlot(model);
     const normalized = {
       ...draft,
       ...values,
@@ -478,9 +477,10 @@ export function applyCatalogModelDefaults(
       isMultiShot,
       sound: model.capabilities.sound ? Boolean(values.sound ?? draft.sound) : false,
       fixedLens: model.capabilities.fixedLens ? Boolean(values.fixedLens ?? draft.fixedLens) : false,
-      subjects: subjectSlot
-        ? videoSubjects(draft).slice(0, subjectsPerRun(subjectSlot))
-        : [],
+      // A model without a subjects slot sends none (it has no slot for their pictures), and a prompt
+      // naming one is refused as naming nothing the run sends; more than a slot names is refused by
+      // validateSubjects.
+      subjects: videoSubjects(draft),
       preparedAudioIds: model.inputs.preparedAudioReferences
         ? preparedAudioIds(draft).slice(0, model.inputs.preparedAudioReferences.max)
         : [],
