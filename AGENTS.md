@@ -64,7 +64,7 @@ CI (`.github/workflows/quality.yml`) gates PRs with: web `test → lint → type
 
 ## Local environment
 
-`.env.local` is hand-toggled between local and production Supabase by commenting/uncommenting the key blocks — **check which one is active before running the dev server** so you don't develop against production. Reference URLs and the toggle procedure: `docs/local-development.md`. Full variable reference: `.env.example`. `GENERATION_MODEL_CATALOG_SOURCE` is `code` for local/test, `database` in production.
+`.env.local` is hand-toggled between local and production Supabase by commenting/uncommenting the key blocks — **check which one is active before running the dev server** so you don't develop against production. Reference URLs and the toggle procedure: `docs/local-development.md`. Full variable reference: `.env.example`, which lists every `process.env` name the app reads (`e2e-smoke-readiness.test.ts` fails on one it does not, because the E2E server unsets exactly that list). `GENERATION_MODEL_CATALOG_SOURCE` is `code` for local/test, `database` in production.
 
 ## Architecture
 

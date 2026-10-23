@@ -15,9 +15,11 @@ const fs = require('node:fs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require('node:path');
 
-// Compared by real path: Next names the files from the project directory it was given, which can
-// reach the checkout through a symlink (macOS's /var is /private/var).
-const ROOT = fs.realpathSync(path.resolve(__dirname, '../../..'));
+// Compared by real path in the disk's own case, as Next resolves its project directory
+// (realpathSync.native, next/dist/lib/realpath.js): the path this file was required by can go through
+// a symlink (macOS's /var is /private/var) or differ in case on a case-insensitive disk.
+const realpath = fs.realpathSync.native;
+const ROOT = realpath(path.resolve(__dirname, '../../..'));
 const NAMES = new Set(
   ['', '.local', '.development', '.development.local', '.test', '.test.local', '.production', '.production.local']
     .map((suffix) => `.env${suffix}`),
@@ -26,7 +28,7 @@ const NAMES = new Set(
 function hidden(file) {
   if (typeof file !== 'string' || !NAMES.has(path.basename(file))) return false;
   try {
-    return fs.realpathSync(path.dirname(path.resolve(file))) === ROOT;
+    return realpath(path.dirname(path.resolve(file))) === ROOT;
   } catch {
     return false;
   }

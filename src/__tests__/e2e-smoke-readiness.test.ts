@@ -14,10 +14,31 @@ function read(relativePath: string) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
-/** The variables the app reads, as .env.example lists them. */
+/** The variables .env.example lists, commented out or not. */
 function appEnvNames() {
   return [...read('.env.example').matchAll(/^#? ?([A-Z][A-Z0-9_]*)=/gm)].map(([, name]) => name);
 }
+
+/** The names the app's own code reads as `process.env.NAME` or `process.env['NAME']`, comment lines left out. */
+function namesTheAppReads() {
+  const sources = fs.readdirSync(path.join(repoRoot, 'src'), { recursive: true, encoding: 'utf8' })
+    .filter((file) => /\.(ts|tsx|js|mjs|cjs)$/.test(file) && !file.startsWith(`__tests__${path.sep}`))
+    .map((file) => path.join('src', file))
+    .concat('next.config.ts');
+  const names = new Set<string>();
+  for (const file of sources) {
+    const code = read(file).split('\n').filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line)).join('\n');
+    for (const match of code.matchAll(/process\.env(?:\.([A-Z_][A-Z0-9_]*)|\[['"]([A-Z_][A-Z0-9_]*)['"]\])/g)) {
+      names.add(match[1] ?? match[2]);
+    }
+  }
+  return [...names].sort();
+}
+
+// Read by the app but not its configuration: Next sets the first three and the CI runner sets CI, so
+// they pass through; the config sets the bypass flags itself.
+const SET_BY_THE_RUNTIME = ['NODE_ENV', 'NEXT_RUNTIME', 'NEXT_PHASE', 'CI'];
+const SET_BY_THE_CONFIG = ['E2E_AUTH_BYPASS', 'NEXT_PUBLIC_E2E_AUTH_BYPASS'];
 
 /**
  * playwright.config.ts as Playwright reads it under the shell env given, and the env its dev server
@@ -81,7 +102,9 @@ describe('E2E smoke job', () => {
     const configKeys = [...config.matchAll(/^ {2,6}([A-Z][A-Z0-9_]*): /gm)].map(([, key]) => key)
       .filter((key) => key !== 'NODE_OPTIONS');
     const shell = Object.fromEntries(
-      [...new Set([...appEnvNames(), ...configKeys])].map((name) => [name, `from-the-shell-${name}`]),
+      [...new Set([...appEnvNames(), ...namesTheAppReads(), ...configKeys])]
+        .filter((name) => !SET_BY_THE_RUNTIME.includes(name))
+        .map((name) => [name, `from-the-shell-${name}`]),
     );
     const { serverEnv } = await loadConfig(shell);
     const fromTheShell = Object.keys(serverEnv).filter((key) => serverEnv[key]?.startsWith('from-the-shell-'));
@@ -95,6 +118,16 @@ describe('E2E smoke job', () => {
     for (const entry of setByTheConfig) {
       expect(entry).toMatch(/^[A-Z0-9_]+=(ci-placeholder-[a-z-]+|1|http:\/\/127\.0\.0\.1:3100|https:\/\/example\.supabase\.co)$/);
     }
+  });
+
+  // The config unsets every name .env.example lists, so a name the app reads that it does not list
+  // would still reach the dev server from a shell that exports it.
+  it('lists every variable the app reads in .env.example', () => {
+    const listed = new Set(appEnvNames());
+
+    expect(namesTheAppReads().length).toBeGreaterThan(40);
+    expect(namesTheAppReads().filter((name) => !listed.has(name)
+      && !SET_BY_THE_RUNTIME.includes(name) && !SET_BY_THE_CONFIG.includes(name))).toEqual([]);
   });
 
   // `next dev` keeps only the last --require of NODE_OPTIONS for its server process, so the config's
@@ -125,19 +158,26 @@ describe('E2E smoke job', () => {
     // @next/env as `next dev` resolves it.
     const fromRoot = createRequire(path.join(repoRoot, 'package.json'));
     const nextEnv = createRequire(fromRoot.resolve('next/package.json')).resolve('@next/env');
+    // The project directory as `next dev` resolves it (realpathSync.native, next/dist/lib/realpath.js).
     const script = `
       const { loadEnvConfig } = require(${JSON.stringify(nextEnv)});
+      const dir = require('node:fs').realpathSync.native(${JSON.stringify(checkout)});
       const quiet = { info() {}, warn() {}, error() {} };
       const applied = () => ${JSON.stringify(files)}.map((file, index) => process.env['E2E_ENV_FILE_' + index] ?? null);
-      loadEnvConfig(${JSON.stringify(checkout)}, true, quiet);
+      loadEnvConfig(dir, true, quiet);
       const atStart = applied();
-      loadEnvConfig(${JSON.stringify(checkout)}, true, quiet, true);
+      loadEnvConfig(dir, true, quiet, true);
       console.log(JSON.stringify({ atStart, afterReload: applied() }));
     `;
+    const none = { atStart: [null, null, null, null], afterReload: [null, null, null, null] };
+    // The guard required by a path in another case, as a config reached that way would require it.
+    const recased = guard.replace('e2e-env-files-', 'E2E-ENV-FILES-');
 
     try {
       expect(runNode([], script)).toEqual({ atStart: ['read', 'read', 'read', 'read'], afterReload: ['read', 'read', 'read', 'read'] });
-      expect(runNode(['--require', guard], script)).toEqual({ atStart: [null, null, null, null], afterReload: [null, null, null, null] });
+      expect(runNode(['--require', guard], script)).toEqual(none);
+      // Only a case-insensitive disk (macOS's default) has that path.
+      if (fs.existsSync(recased)) expect(runNode(['--require', recased], script)).toEqual(none);
     } finally {
       fs.rmSync(checkout, { recursive: true, force: true });
     }
