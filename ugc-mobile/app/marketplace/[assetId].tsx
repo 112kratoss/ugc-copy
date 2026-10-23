@@ -126,17 +126,16 @@ export default function MarketplaceAssetScreen() {
 
   return (
     <Screen>
-      <SectionTitle
-        eyebrow="Recipe details"
-        title={detail?.title ?? 'Recipe'}
-        // Without the error branch this still read "Loading recipe details."
-        // directly above a failure notice, so the page contradicted itself.
-        body={detail
-          ? `${resourceLabel(detail.resourceKinds)} · ${detail.seller?.name ?? detail.creator?.name ?? 'Creator'}`
-          : detailQuery.isError
-            ? 'This recipe could not be opened.'
-            : 'Loading recipe details.'}
-      />
+      {/* The header names the page, so its heading is the recipe's title: until the recipe is in the
+          skeleton is the page, and after a failure the notice is. Both read "Recipe" under the Recipe
+          header (redundant-UI audit, 2026-10-21). */}
+      {detail ? (
+        <SectionTitle
+          eyebrow="Recipe details"
+          title={detail.title}
+          body={`${resourceLabel(detail.resourceKinds)} · ${detail.seller?.name ?? detail.creator?.name ?? 'Creator'}`}
+        />
+      ) : null}
 
       {detailQuery.error ? (
         // A 404 is the unlock being gone (a removed listing opened from an

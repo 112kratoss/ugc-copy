@@ -116,21 +116,40 @@ describe('HIG toolbars — view titles', () => {
    * from screens that set their own, and a layout entry is read across lines. A
    * route that only renders a component is read through the components it imports,
    * where its page is drawn. On a page, the eyebrow is read in every form one is
-   * written (a string, the strings of an expression, a bare Kicker) and the heading
-   * where it is written as words; a heading drawn from data is not read.
+   * written (a string, the strings of an expression, a bare Kicker), and so is the
+   * heading: a heading drawn from data is read for the words written into its
+   * expression, or the declaration of the name it is given, since those are what
+   * the page shows while the data loads and after it fails to ("Recipe" under the
+   * Your Recipe header until the recipe was in, the same audit's follow-up).
+   *
+   * An eyebrow repeats the title when it is the title's words. A heading names the
+   * page, so it repeats the title when it says nothing the title does not: every
+   * word of it is one of the title's, and "Recipe" repeats "Your Recipe". An eyebrow
+   * names the group a page is in, which can be one of the title's words ("Account"
+   * over Delete Account).
    */
   describe('never repeats a view title over its page', () => {
     type PageWords = { kind: 'eyebrow' | 'heading'; text: string };
+    const stringsIn = (expression: string) => [...expression.matchAll(/'([^'\\]+)'|"([^"\\]+)"|`([^`$\\]+)`/g)]
+      .map((string) => string[1] ?? string[2] ?? string[3]);
     const pageWords = (source: string): PageWords[] => [
       ...[...source.matchAll(/\beyebrow="([^"]+)"/g)].map((match) => match[1]),
-      ...[...source.matchAll(/\beyebrow=\{([^}]*)\}/g)].flatMap((match) => (
-        [...match[1].matchAll(/'([^'\\]+)'|"([^"\\]+)"|`([^`$\\]+)`/g)].map((string) => string[1] ?? string[2] ?? string[3])
-      )),
+      ...[...source.matchAll(/\beyebrow=\{([^}]*)\}/g)].flatMap((match) => stringsIn(match[1])),
       ...[...source.matchAll(/<Kicker\b[^>]*>([^<{]+)<\/Kicker>/g)].map((match) => match[1].trim()),
     ].map((text): PageWords => ({ kind: 'eyebrow', text })).concat(
       [...source.matchAll(/<(?:SectionTitle|SectionHeader)\b[^>]*?\btitle="([^"]+)"/g)].map((match) => ({ kind: 'heading', text: match[1] })),
+      [...source.matchAll(/<(?:SectionTitle|SectionHeader)\b[^>]*?\btitle=\{([^}]*)\}/g)].flatMap((match) => {
+        const expression = match[1].trim();
+        const declared = /^[A-Za-z_$][\w$]*$/.test(expression)
+          ? new RegExp(`\\bconst ${expression.replace(/\$/g, '\\$')} = ([^;]+);`).exec(source)?.[1] ?? ''
+          : expression;
+        return stringsIn(declared).map((text): PageWords => ({ kind: 'heading', text }));
+      }),
     );
-    const sameWords = (a: string, b: string) => a.toLowerCase().replace(/[^a-z0-9]+/g, '') === b.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const words = (text: string) => text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    const repeatsTitle = ({ kind, text }: PageWords, title: string) => (kind === 'eyebrow'
+      ? words(text).join(' ') === words(title).join(' ')
+      : words(text).length > 0 && words(text).every((word) => words(title).includes(word)));
 
     // Every entry of the root layout, however it is wrapped; one with no header shows no title to repeat.
     const layoutEntries = [...rootLayout.matchAll(/<Stack\.Screen\b([\s\S]*?)\/>/g)].flatMap((match) => {
@@ -158,24 +177,40 @@ describe('HIG toolbars — view titles', () => {
       pageWords(readFileSync(file, 'utf8')).map((words) => ({ ...words, title, file: relative(file) }))
     )));
     const repeats = [...new Set(read
-      .filter(({ text, title }) => sameWords(text, title))
+      .filter((words) => repeatsTitle(words, words.title))
       .map(({ kind, text, title, file }) => `${file}: ${kind} "${text}" under the "${title}" header`))];
 
-    it('reads every form of eyebrow and a written heading', () => {
+    it('reads every form of eyebrow and heading', () => {
       expect(pageWords([
         '<SectionTitle eyebrow="Settings" title="Settings." />',
         "<SectionHeader eyebrow={user ? 'Your recipes' : `Recipes`} title={detail.title} />",
         '<Kicker color="commerce">Help & Support</Kicker>',
         '<Kicker>{count} templates</Kicker>',
+        "<SectionTitle eyebrow=\"Recipe details\" title={detail?.title ?? 'Recipe'} />",
+        "const activeTitle = revision?.title ?? detail?.title ?? 'Your recipe';",
+        '<SectionTitle',
+        '  title={activeTitle}',
+        '/>',
+        '<SectionTitle title={`${count} recipes`} />',
       ].join('\n'))).toEqual([
         { kind: 'eyebrow', text: 'Settings' },
+        { kind: 'eyebrow', text: 'Recipe details' },
         { kind: 'eyebrow', text: 'Your recipes' },
         { kind: 'eyebrow', text: 'Recipes' },
         { kind: 'eyebrow', text: 'Help & Support' },
         { kind: 'heading', text: 'Settings.' },
+        { kind: 'heading', text: 'Recipe' },
+        { kind: 'heading', text: 'Your recipe' },
       ]);
-      expect(sameWords('Your recipe', 'Your Recipe')).toBe(true);
-      expect(sameWords('Help & Support', 'Help and Support')).toBe(false);
+      const eyebrow = (text: string): PageWords => ({ kind: 'eyebrow', text });
+      const heading = (text: string): PageWords => ({ kind: 'heading', text });
+      expect(repeatsTitle(eyebrow('Your recipe'), 'Your Recipe')).toBe(true);
+      expect(repeatsTitle(eyebrow('Help & Support'), 'Help and Support')).toBe(false);
+      expect(repeatsTitle(eyebrow('Account'), 'Delete Account')).toBe(false);
+      expect(repeatsTitle(heading('Your recipe.'), 'Your Recipe')).toBe(true);
+      expect(repeatsTitle(heading('Recipe'), 'Your Recipe')).toBe(true);
+      expect(repeatsTitle(heading('Recipe details'), 'Recipe')).toBe(false);
+      expect(repeatsTitle(heading('Account settings.'), 'Settings')).toBe(false);
     });
 
     it('reads every titled screen, and the pages they draw', () => {
@@ -191,7 +226,7 @@ describe('HIG toolbars — view titles', () => {
 
     // AI Data Sharing and Blocked Users were the last two, by the owner's call on A8 (2026-10-21):
     // a page heading says the page in words of its own, as Settings' "Account settings." does.
-    it('never repeats a view title in an eyebrow or a written page heading', () => {
+    it('never repeats a view title in an eyebrow or a page heading, loading or failed', () => {
       expect(repeats).toEqual([]);
     });
   });

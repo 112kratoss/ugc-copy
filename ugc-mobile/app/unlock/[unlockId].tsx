@@ -57,7 +57,6 @@ export default function ViewerUnlockScreen() {
     ? detail?.purchasedRevision.resources ?? null
     : detail?.currentResources ?? detail?.purchasedRevision.resources ?? null;
   const selectedRevision = purchasedSelected ? detail?.purchasedRevision : null;
-  const activeTitle = selectedRevision?.title ?? detail?.title ?? 'Recipe';
   const activeSummary = selectedRevision?.summary
     || selectedRevision?.previewText
     || detail?.summary
@@ -121,16 +120,14 @@ export default function ViewerUnlockScreen() {
 
   return (
     <Screen>
-      <SectionTitle
-        title={activeTitle}
-        body={detail
-          ? `by ${detail.creatorDisplayName}`
-          : loadError
-            ? 'This recipe could not be opened.'
-            : 'Loading your purchased resources.'}
-      />
-
-      {detailQuery.isLoading ? <DetailSkeleton label="Loading your recipe" /> : null}
+      {/* The header names the page, so its heading is the recipe's title: until the recipe is in the
+          skeleton is the page, and after a failure the notice is. Both read "Recipe" under the Your
+          Recipe header (redundant-UI audit, 2026-10-21). */}
+      {detail ? (
+        <SectionTitle title={selectedRevision?.title ?? detail.title} body={`by ${detail.creatorDisplayName}`} />
+      ) : loadError ? null : (
+        <DetailSkeleton label="Loading your recipe" />
+      )}
       {loadError ? (
         unlockGone ? (
           <StatusBlock title="Recipe unavailable" body="It may have been removed by moderation, or belong to another account." />

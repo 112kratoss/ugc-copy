@@ -23,6 +23,7 @@ const authState = vi.hoisted(() => ({
 const queryState = vi.hoisted(() => ({
   data: null as Record<string, unknown> | null,
   error: null as unknown,
+  isLoading: false,
 }));
 
 vi.mock('expo-router', () => ({
@@ -73,7 +74,7 @@ vi.mock('@/lib/unlock-cache', () => ({ refreshUnlockedBundleCaches: vi.fn() }));
 
 vi.mock('@tanstack/react-query', () => ({
   useMutation: () => ({ mutate, isPending: false, error: null }),
-  useQuery: () => ({ data: queryState.data, error: queryState.error, isError: Boolean(queryState.error), isLoading: false, refetch: vi.fn() }),
+  useQuery: () => ({ data: queryState.data, error: queryState.error, isError: Boolean(queryState.error), isLoading: queryState.isLoading, refetch: vi.fn() }),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 
@@ -131,6 +132,7 @@ beforeEach(() => {
   authState.user = { id: 'user-1' };
   queryState.data = paidDetail();
   queryState.error = null;
+  queryState.isLoading = false;
 });
 
 describe('marketplace asset screen (HIG S18)', () => {
@@ -282,17 +284,28 @@ describe('marketplace asset screen recipe words', () => {
     expect(texts(tree)).not.toContain('Unlocked');
   });
 
-  it('calls a recipe that is gone unavailable, and a failed read a recipe to retry', () => {
+  // Under the Recipe header the page read "Recipe" while it loaded and after a failed read, over the failure's own
+  // notice (redundant-UI audit, 2026-10-21): the header names the page, so a heading waits for the recipe's title.
+  it('calls a recipe that is gone unavailable, and a failed read a recipe to retry, in the notice alone', () => {
     queryState.data = null;
     queryState.error = new ApiError('Not found', 404);
     const gone = renderScreen();
     expect(statusTitles(gone)).toEqual(['Recipe unavailable']);
-    expect(sectionTitle(gone).title).toBe('Recipe');
-    expect(sectionTitle(gone).body).toBe('This recipe could not be opened.');
+    expect(sectionTitle(gone)).toBeUndefined();
 
     queryState.error = new Error('Network request failed.');
     const failed = renderScreen();
     expect(statusTitles(failed)).toEqual(['Could not load recipe']);
+    expect(sectionTitle(failed)).toBeUndefined();
     expect(failed.root.findAll((node) => String(node.type) === 'secondary-button').map((node) => node.props.label)).toEqual(['Retry recipe']);
+  });
+
+  it('draws only the skeleton while the recipe loads', () => {
+    queryState.data = null;
+    queryState.isLoading = true;
+    const tree = renderScreen();
+    expect(tree.root.findAll((node) => String(node.type) === 'detail-skeleton')).toHaveLength(1);
+    expect(sectionTitle(tree)).toBeUndefined();
+    expect(statusTitles(tree)).toEqual([]);
   });
 });
