@@ -115,12 +115,59 @@ function getProfileFormFingerprint(profile: EditableCreatorProfile | null): stri
   return JSON.stringify(buildProfilePayload(profile));
 }
 
-/** Adds the leave guard's entry (the same address) and returns that address. */
-function pushLeaveGuardEntry(): string {
-  // The current state is carried over, so Next's router takes a Back onto the
-  // page's own entry as staying on the page.
-  window.history.pushState(window.history.state, '', window.location.href);
-  return window.location.href;
+// The leave guard's two entries say what they are in `history.state`: the
+// entry pushed on top while the form is dirty, and the page's own entry under
+// it, both with the guard's id. Told apart by the address and a ref alone,
+// Forward onto the guard entry after a Leave (a new editor, the ref off) left
+// the editor twice in history, and a jump back to an earlier visit of the
+// editor (the same address) was taken for the guard's own Back.
+const LEAVE_GUARD_ENTRY_KEY = 'profileLeaveGuard';
+const LEAVE_GUARD_PAGE_KEY = 'profileLeaveGuardPage';
+
+/** The guard id an entry's state carries under `key`. */
+function readLeaveGuardId(state: unknown, key: string): string | null {
+  if (!state || typeof state !== 'object') return null;
+  const value = (state as Record<string, unknown>)[key];
+  return typeof value === 'string' && value ? value : null;
+}
+
+function createLeaveGuardId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Marks the page's entry with the guard's id and adds the guard's entry (the same address) over it. */
+function pushLeaveGuardEntry(id: string): void {
+  const current: Record<string, unknown> = { ...window.history.state };
+  delete current[LEAVE_GUARD_ENTRY_KEY];
+  delete current[LEAVE_GUARD_PAGE_KEY];
+  // The page's entry keeps its fields, Next's included, and carries Next's
+  // `__NA` also when it had no state (a plain `#fragment` link's): Next's
+  // popstate reloads the page on a state without `__NA`, and restores one with
+  // it as staying on the page. Next's patched replaceState hands an object with
+  // `__NA` straight on.
+  window.history.replaceState({ ...current, __NA: true, [LEAVE_GUARD_PAGE_KEY]: id }, '', window.location.href);
+  // The guard's entry leaves Next's fields to Next's patched pushState, which
+  // copies them in from the page's entry and has the router write the page's
+  // tree in when that entry has none: a guard entry without a tree would draw
+  // whatever page Back or Forward came from. The reels' entries are written the
+  // same way (`src/lib/reel-history-entry.ts`). Next's own writes for a
+  // navigation or a refresh drop the marks from the entry they replace: the
+  // editor on it still knows its guard by its refs, and a later visit takes
+  // the entry for a plain one.
+  const guardState: Record<string, unknown> = { ...current, [LEAVE_GUARD_ENTRY_KEY]: id };
+  delete guardState.__NA;
+  delete guardState.__PRIVATE_NEXTJS_INTERNALS_TREE;
+  window.history.pushState(guardState, '', window.location.href);
+}
+
+/** Takes the guard's mark off its entry, which the editor is about to step off to leave. */
+function unmarkLeaveGuardEntry(): void {
+  // A replace keeps the entries after the one it replaces (a save's, Skip for
+  // now's): still marked, the entry left ahead would bring a later editor
+  // (Forward) onto a guard over a page that is no longer the editor's.
+  const current: Record<string, unknown> = { ...window.history.state };
+  delete current[LEAVE_GUARD_ENTRY_KEY];
+  window.history.replaceState(current, '', window.location.href);
 }
 
 function getMediaObjectStyle(crop: MediaCrop): CSSProperties {
@@ -291,21 +338,26 @@ export default function CreatorProfileCard({
   const optionalDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const allowDirtyNavigationRef = useRef(false);
   const isDirtyRef = useRef(false);
-  // Whether the leave guard's entry is on top of history now, at which address.
+  // Whether the leave guard's entry is on top of history now, and its id.
   const leaveGuardEntryRef = useRef(false);
-  const leaveGuardUrlRef = useRef<string | null>(null);
+  const leaveGuardIdRef = useRef<string | null>(null);
   // Where the editor itself is going once Back has taken the guard entry off.
   const afterLeaveGuardPopRef = useRef<(() => void) | null>(null);
   const askToConfirm = useConfirmation();
 
   // Every way out (a save, Skip for now, a confirmed link, a confirmed Back)
   // steps off the guard entry before it moves on: left under the next page,
-  // it would be a Back that goes nowhere.
-  const leaveEditor = useCallback((navigate: () => void) => {
+  // it would be a Back that goes nowhere. All but Back take the guard's mark
+  // off that entry first, as they replace the page's entry or push over it: a
+  // replace keeps the guard entry ahead, and Forward would bring a later
+  // editor onto a guard over a page that is no longer the editor's. A Back
+  // leaves the page's entry as it is, so the guard entry ahead stays its own.
+  const leaveEditor = useCallback((navigate: () => void, { byBack = false } = {}) => {
     if (!leaveGuardEntryRef.current) {
       navigate();
       return;
     }
+    if (!byBack) unmarkLeaveGuardEntry();
     afterLeaveGuardPopRef.current = navigate;
     window.history.back();
   }, []);
@@ -673,13 +725,28 @@ export default function CreatorProfileCard({
   useEffect(() => {
     isDirtyRef.current = isDirty;
     if (isDirty && !isEmbedded && !leaveGuardEntryRef.current) {
-      leaveGuardUrlRef.current = pushLeaveGuardEntry();
+      leaveGuardIdRef.current = createLeaveGuardId();
+      pushLeaveGuardEntry(leaveGuardIdRef.current);
       leaveGuardEntryRef.current = true;
     }
   }, [isDirty, isEmbedded]);
 
   useEffect(() => {
-    const handlePopState = () => {
+    if (isEmbedded) return;
+
+    // This page's address: an entry with it is an entry of this page.
+    const pageAddress = `${window.location.pathname}${window.location.search}`;
+    // A guard entry is this page's, whichever editor pushed it: the editor
+    // mounts on one (Back from a page a link reached from it, a reload) or
+    // comes to it with Forward after a Leave, or with a jump.
+    const holdGuardEntry = (id: string) => {
+      leaveGuardIdRef.current = id;
+      leaveGuardEntryRef.current = true;
+    };
+    const mountedOnGuardId = readLeaveGuardId(window.history.state, LEAVE_GUARD_ENTRY_KEY);
+    if (mountedOnGuardId) holdGuardEntry(mountedOnGuardId);
+
+    const handlePopState = (event: PopStateEvent) => {
       const afterPop = afterLeaveGuardPopRef.current;
       if (afterPop) {
         afterLeaveGuardPopRef.current = null;
@@ -687,10 +754,27 @@ export default function CreatorProfileCard({
         afterPop();
         return;
       }
+      const guardId = readLeaveGuardId(event.state, LEAVE_GUARD_ENTRY_KEY);
+      if (guardId) {
+        holdGuardEntry(guardId);
+        return;
+      }
       if (!leaveGuardEntryRef.current) return;
       leaveGuardEntryRef.current = false;
-      // A jump several entries back has already left the page: nothing to hold.
-      if (window.location.href !== leaveGuardUrlRef.current) return;
+      // Only Back onto the page's entry under the guard's is the guard's own.
+      // Any other entry is a jump further, with nothing to ask or undo: away
+      // from this page it has left the page; onto an earlier visit of it the
+      // edits are still here, so the guard goes up again over that entry
+      // (which drops the entries after it, as any new entry does).
+      const pageGuardId = readLeaveGuardId(event.state, LEAVE_GUARD_PAGE_KEY);
+      if (!pageGuardId || pageGuardId !== leaveGuardIdRef.current) {
+        if (isDirtyRef.current && `${window.location.pathname}${window.location.search}` === pageAddress) {
+          leaveGuardIdRef.current = createLeaveGuardId();
+          pushLeaveGuardEntry(leaveGuardIdRef.current);
+          leaveGuardEntryRef.current = true;
+        }
+        return;
+      }
       if (!isDirtyRef.current) {
         // Finish the Back that was asked for.
         window.history.back();
@@ -698,20 +782,20 @@ export default function CreatorProfileCard({
       }
       // The guard entry goes back on while the question is up, so another
       // Back asks again (answering this one "stay") rather than leaving.
-      leaveGuardUrlRef.current = pushLeaveGuardEntry();
+      pushLeaveGuardEntry(pageGuardId);
       leaveGuardEntryRef.current = true;
       void askToConfirm(LEAVE_WITHOUT_SAVING).then((confirmed) => {
         if (!confirmed || !leaveGuardEntryRef.current) return;
         // Asked and answered: the page this Back reaches may be another site.
         allowDirtyNavigationRef.current = true;
         // Off the guard entry, then the Back that was asked for.
-        leaveEditor(() => window.history.back());
+        leaveEditor(() => window.history.back(), { byBack: true });
       });
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [askToConfirm, leaveEditor]);
+  }, [askToConfirm, isEmbedded, leaveEditor]);
 
   const focusFirstInvalidField = (errors: ProfileFieldErrors) => {
     const fieldOrder: Array<keyof ProfileFieldErrors> = [
