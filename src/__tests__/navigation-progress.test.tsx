@@ -2,8 +2,10 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import FeedbackViewport from '@/components/FeedbackViewport';
 import NavigationProgress from '@/components/NavigationProgress';
-import { publishNavigationStart } from '@/components/navigation-progress-state';
+import { requestConfirmation } from '@/components/feedback-state';
+import { publishNavigationStart, publishNavigationStartTo } from '@/components/navigation-progress-state';
 
 let mockedPathname = '/feed';
 
@@ -144,5 +146,72 @@ describe('NavigationProgress', () => {
         expect(bar()).toHaveAttribute('aria-hidden', 'true');
         // An invented percentage is worse than silence.
         expect(screen.queryByRole('progressbar')).toBeNull();
+    });
+
+    // The bar finishes when the pathname changes, so a push that only changes
+    // the search or the hash would leave it creeping until its failsafe.
+    it('is raised for a push to another page, and not for one that only changes the search or hash', () => {
+        render(<NavigationProgress />);
+
+        act(() => publishNavigationStartTo('/feed?tab=recent'));
+        act(() => publishNavigationStartTo('/feed#comments'));
+        expect(bar()).toBeNull();
+
+        act(() => publishNavigationStartTo('/showcase?tab=new'));
+        expect(bar()).toBeInTheDocument();
+    });
+
+    // The composer's Back link and the profile editor's leave guard hold the
+    // click and ask; the bar crept over the question and on after a "stay".
+    describe('a link that asks before it goes', () => {
+        function renderGuardedLink() {
+            render(
+                <>
+                    <NavigationProgress />
+                    <FeedbackViewport />
+                    {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                    <a
+                        href="/showcase/post-1"
+                        onClick={(event) => {
+                            event.preventDefault();
+                            void requestConfirmation({ title: 'Leave this post?', message: 'Unsaved.', confirmLabel: 'Leave' })
+                                .then((confirmed) => {
+                                    if (confirmed) publishNavigationStart();
+                                });
+                        }}
+                    >
+                        Back to Explore
+                    </a>
+                </>
+            );
+        }
+
+        it('takes the bar down while the question is up, and keeps it down after a "stay"', async () => {
+            vi.useFakeTimers();
+            renderGuardedLink();
+
+            fireEvent.click(screen.getByText('Back to Explore'));
+
+            expect(screen.getByRole('alertdialog', { name: 'Leave this post?' })).toBeInTheDocument();
+            expect(bar()).toBeNull();
+
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+            // Long enough for the bar's creep to have ticked twice.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(300);
+            });
+            expect(screen.queryByRole('alertdialog')).toBeNull();
+            expect(bar()).toBeNull();
+        });
+
+        it('raises it again for a "leave", which announces its own navigation', async () => {
+            renderGuardedLink();
+
+            fireEvent.click(screen.getByText('Back to Explore'));
+            fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
+            await act(async () => {});
+
+            expect(bar()).toBeInTheDocument();
+        });
     });
 });

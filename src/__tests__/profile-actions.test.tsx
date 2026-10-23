@@ -6,6 +6,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProfileActions } from '@/app/creators/[username]/ProfileActions';
+import FeedbackViewport from '@/components/FeedbackViewport';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import type { EditableCreatorProfile } from '@/lib/profile';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
@@ -646,26 +647,95 @@ describe('ProfileActions', () => {
     });
 
     it('asks before throwing changes away, from Close and from Escape', async () => {
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
       answerProfileRead();
-      render(<ProfileActions profile={profile} />);
+      render(
+        <>
+          <ProfileActions profile={profile} />
+          <FeedbackViewport />
+        </>
+      );
 
       const dialog = await openEditor();
       const bio = await within(dialog).findByRole('textbox', { name: 'Bio' });
       fireEvent.change(bio, { target: { value: 'A new bio' } });
 
       fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
-      expect(confirm).toHaveBeenCalledWith('Discard your profile changes?');
+      const question = await screen.findByRole('alertdialog', { name: 'Discard your profile changes?' });
+      expect(question).toHaveAccessibleDescription('Your edits haven’t been saved and will be lost.');
+      fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
       expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument();
       expect(bio).toHaveValue('A new bio');
 
-      fireEvent.keyDown(window, { key: 'Escape' });
-      expect(confirm).toHaveBeenCalledTimes(2);
-      expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument();
+      fireEvent.keyDown(bio, { key: 'Escape' });
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard changes' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Edit profile' })).toHaveFocus();
+    });
 
-      confirm.mockReturnValue(true);
-      fireEvent.keyDown(window, { key: 'Escape' });
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // The editor's Escape and Tab trap listen on the window, which hears a key
+    // after the question has handled it.
+    it('leaves the keyboard to its question: Escape answers it, and Tab stays among its buttons', async () => {
+      answerProfileRead();
+      render(
+        <>
+          <ProfileActions profile={profile} />
+          <FeedbackViewport />
+        </>
+      );
+
+      const dialog = await openEditor();
+      const bio = await within(dialog).findByRole('textbox', { name: 'Bio' });
+      fireEvent.change(bio, { target: { value: 'A new bio' } });
+      bio.focus();
+      fireEvent.keyDown(bio, { key: 'Escape' });
+
+      const question = await screen.findByRole('alertdialog', { name: 'Discard your profile changes?' });
+      const keep = within(question).getByRole('button', { name: 'Keep editing' });
+      const discard = within(question).getByRole('button', { name: 'Discard changes' });
+      await waitFor(() => expect(keep).toHaveFocus());
+
+      // A Tab that does not wrap never reaches the editor's trap beneath,
+      // which would pull the focus back into the editor.
+      fireEvent.keyDown(keep, { key: 'Tab' });
+      expect(keep).toHaveFocus();
+
+      fireEvent.keyDown(keep, { key: 'Tab', shiftKey: true });
+      expect(discard).toHaveFocus();
+      fireEvent.keyDown(discard, { key: 'Tab' });
+      expect(keep).toHaveFocus();
+
+      // Escape answers the question alone: the editor stays, asks nothing
+      // more, and has its focus back.
+      fireEvent.keyDown(keep, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument();
+      expect(bio).toHaveValue('A new bio');
+      expect(bio).toHaveFocus();
+    });
+
+    // A save on its way when Close asked: landing, it closes the editor, and
+    // the question about that editor goes with it.
+    it('takes its discard question down when a save closes the editor while it is up', async () => {
+      answerProfileRead();
+      render(
+        <>
+          <ProfileActions profile={profile} />
+          <FeedbackViewport />
+        </>
+      );
+
+      const dialog = await openEditor();
+      fireEvent.change(await within(dialog).findByRole('textbox', { name: 'Bio' }), { target: { value: 'Saved bio' } });
+      const save = within(dialog).getByRole('button', { name: 'Save changes' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+      await screen.findByRole('alertdialog', { name: 'Discard your profile changes?' });
+
+      fireEvent.click(save);
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(screen.queryByRole('dialog', { name: 'Edit profile' })).not.toBeInTheDocument();
+      await waitFor(() => expect(routerMock.refresh).toHaveBeenCalledTimes(1));
     });
 
     it('starts each opening unchanged', async () => {

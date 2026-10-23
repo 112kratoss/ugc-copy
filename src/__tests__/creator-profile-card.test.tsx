@@ -1,7 +1,9 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
+import FeedbackViewport from '@/components/FeedbackViewport';
+import { readNavigationToken } from '@/components/navigation-progress-state';
 import type { EditableCreatorProfile } from '@/lib/profile';
 
 const supabaseMocks = vi.hoisted(() => ({
@@ -197,7 +199,6 @@ describe('CreatorProfileCard', () => {
   });
 
   describe('the leave guard on Back', () => {
-    const LEAVE_QUESTION = 'Leave this page without saving your profile changes?';
     // The browser's Back: the entry on top comes off and popstate follows.
     const pressBack = () => act(() => {
       window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
@@ -225,11 +226,15 @@ describe('CreatorProfileCard', () => {
 
     // Back and a phone's back swipe left /profile/edit without a word: the
     // guard saw link clicks and tab closes only.
-    it('asks before Back leaves typed changes, and keeps them when the person stays', () => {
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    it('asks before Back leaves typed changes, and keeps them when the person stays', async () => {
       const pushState = vi.spyOn(window.history, 'pushState');
-      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
-      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      const back = answerBackLater();
+      render(
+        <>
+          <CreatorProfileCard initialProfile={profile} loadError={null} />
+          <FeedbackViewport />
+        </>
+      );
       expect(pushState).not.toHaveBeenCalled();
 
       typeName('New Name');
@@ -240,18 +245,66 @@ describe('CreatorProfileCard', () => {
 
       pressBack();
 
-      expect(confirm).toHaveBeenLastCalledWith(LEAVE_QUESTION);
-      // Staying: the entry goes back on top and nothing typed is lost.
+      // The entry goes back on top while the question is up, so a second Back
+      // cannot slip past it.
+      const question = await screen.findByRole('alertdialog', { name: 'Leave without saving?' });
+      expect(question).toHaveAccessibleDescription('Your profile changes haven’t been saved and will be lost.');
       expect(pushState).toHaveBeenCalledTimes(2);
+      expect(pushState.mock.calls[1][2]).toBe(window.location.href);
+
+      // Staying: nothing moves and nothing typed is lost.
+      fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
       expect(back).not.toHaveBeenCalled();
       expect(screen.getByPlaceholderText('Your creator name')).toHaveValue('New Name');
 
       pressBack();
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave without saving' }));
 
-      // Leaving: the Back that was asked for is finished.
-      expect(confirm).toHaveBeenCalledTimes(2);
-      expect(back).toHaveBeenCalledTimes(1);
-      expect(pushState).toHaveBeenCalledTimes(2);
+      // Leaving: off the guard entry, then the Back that was asked for.
+      await waitFor(() => expect(back).toHaveBeenCalledTimes(2));
+      expect(pushState).toHaveBeenCalledTimes(3);
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+
+    it('asks again, rather than leaving, for a Back pressed while the question is up', async () => {
+      const pushState = vi.spyOn(window.history, 'pushState');
+      const back = answerBackLater();
+      render(
+        <>
+          <CreatorProfileCard initialProfile={profile} loadError={null} />
+          <FeedbackViewport />
+        </>
+      );
+      typeName('New Name');
+
+      pressBack();
+      await screen.findByRole('alertdialog', { name: 'Leave without saving?' });
+      pressBack();
+
+      // The second Back took the guard entry off and it went straight back on:
+      // still one question, and the page is still here.
+      expect(pushState).toHaveBeenCalledTimes(3);
+      expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(back).not.toHaveBeenCalled();
+      expect(pushState).toHaveBeenCalledTimes(3);
+      expect(screen.getByPlaceholderText('Your creator name')).toHaveValue('New Name');
+    });
+
+    it('takes its question down when the page goes while it is up', async () => {
+      render(<FeedbackViewport />);
+      const page = render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      typeName('New Name');
+      fireEvent.click(addPageLink('/showcase'));
+      await screen.findByRole('alertdialog', { name: 'Leave without saving?' });
+
+      // A jump several entries back, say: the page is gone, and so is its question.
+      page.unmount();
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(routerMocks.push).not.toHaveBeenCalled();
     });
 
     it('lets Back through without a question once the changes are reset', () => {
@@ -301,6 +354,27 @@ describe('CreatorProfileCard', () => {
       expect(click.defaultPrevented).toBe(true);
       await waitFor(() => expect(routerMocks.push).toHaveBeenCalledWith('/showcase?tab=new'));
       expect(back.mock.invocationCallOrder[0]).toBeLessThan(routerMocks.push.mock.invocationCallOrder[0]);
+    });
+
+    // The bar finishes on a change of pathname: announced for a link that only
+    // changed the search (the Profile tab from /profile?next=…), it crept on
+    // for its 12 s failsafe.
+    it('announces the navigation a "leave" starts only when it changes page', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      answerBackLater();
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      typeName('New Name');
+      const samePage = addPageLink(`${window.location.pathname}?tab=new`);
+      const otherPage = addPageLink('/showcase');
+      const before = readNavigationToken();
+
+      fireEvent.click(samePage);
+      await waitFor(() => expect(routerMocks.push).toHaveBeenCalledTimes(1));
+      expect(readNavigationToken()).toBe(before);
+
+      fireEvent.click(otherPage);
+      await waitFor(() => expect(routerMocks.push).toHaveBeenLastCalledWith('/showcase'));
+      expect(readNavigationToken()).toBe(before + 1);
     });
 
     it('asks nothing for a click that opens a new tab', () => {

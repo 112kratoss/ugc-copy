@@ -2486,11 +2486,14 @@ export default function ShowcaseClient({
                 ) : null}
             </div>
 
+            {/* Over the reel (z 90) and under a confirmation (z 100): on a phone
+                the question is a sheet along this same bottom edge, and a notice
+                above it covered its Cancel. */}
             {feedbackNotice ? (
                 <div
                     role={feedbackNotice.tone === 'error' ? 'alert' : 'status'}
                     aria-live={feedbackNotice.tone === 'error' ? 'assertive' : 'polite'}
-                    className={`fixed bottom-5 left-1/2 z-[110] flex w-[min(calc(100%-2rem),32rem)] -translate-x-1/2 items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm shadow-[0_18px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl ${
+                    className={`fixed bottom-5 left-1/2 z-[95] flex w-[min(calc(100%-2rem),32rem)] -translate-x-1/2 items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm shadow-[0_18px_60px_rgba(0,0,0,0.5)] backdrop-blur-xl ${
                         feedbackNotice.tone === 'error'
                             ? 'border-rose-300/25 bg-[rgba(70,20,28,0.96)] text-rose-50'
                             : 'border-emerald-300/20 bg-[rgba(18,51,42,0.96)] text-emerald-50'

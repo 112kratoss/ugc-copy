@@ -1,6 +1,8 @@
 import '@testing-library/jest-dom/vitest';
 import { configure } from '@testing-library/react';
-import { vi } from 'vitest';
+import { afterEach, vi } from 'vitest';
+
+import { resetFeedbackState } from '@/components/feedback-state';
 
 // The async queries' default wait is one second. A loaded runner (main's
 // Quality job, which shares capacity with the PR runs) took longer than that to
@@ -60,3 +62,10 @@ vi.mock('next/cache', () => ({
 if (typeof Element !== 'undefined') {
   Element.prototype.scrollIntoView ??= () => {};
 }
+
+// Toasts and confirmations live in one module-level store that outlives a
+// test: a question one test left open would be drawn by the next test's
+// FeedbackViewport the moment it mounted. Every test starts with none.
+afterEach(() => {
+  resetFeedbackState();
+});

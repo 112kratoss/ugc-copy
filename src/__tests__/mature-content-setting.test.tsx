@@ -1,8 +1,9 @@
 import { StrictMode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MatureContentSetting from '@/app/profile/MatureContentSetting';
+import FeedbackViewport from '@/components/FeedbackViewport';
 
 type SentRequest = { url: string; init?: RequestInit };
 
@@ -53,8 +54,12 @@ describe('MatureContentSetting', () => {
   const posts = () => sent.filter((request) => request.init?.method === 'POST');
 
   it('reads the setting and turns it on only after the 18+ question, from the cookie session', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
-    render(<MatureContentSetting />);
+    render(
+      <>
+        <MatureContentSetting />
+        <FeedbackViewport />
+      </>
+    );
 
     const toggle = await screen.findByRole('switch', { name: 'Mature content' });
     await waitFor(() => expect(toggle).toBeEnabled());
@@ -63,11 +68,18 @@ describe('MatureContentSetting', () => {
 
     // Declined: nothing is sent and the setting stays off.
     fireEvent.click(toggle);
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('18 or older'));
+    let question = await screen.findByRole('alertdialog', { name: 'Turn on mature content?' });
+    expect(question).toHaveAccessibleDescription(
+      'Confirm that you are 18 or older. NSFW posts stay covered until you choose to reveal one.',
+    );
+    fireEvent.click(within(question).getByRole('button', { name: 'Not now' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(posts()).toHaveLength(0);
     expect(toggle).toHaveAttribute('aria-checked', 'false');
 
     fireEvent.click(toggle);
+    question = await screen.findByRole('alertdialog', { name: 'Turn on mature content?' });
+    fireEvent.click(within(question).getByRole('button', { name: 'I’m 18 or older' }));
 
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
     expect(posts()).toHaveLength(1);

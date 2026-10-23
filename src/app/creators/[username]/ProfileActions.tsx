@@ -11,6 +11,8 @@ import { toEditableCreatorProfile } from '@/lib/profile';
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
 import { ShowcaseFeedbackMenu } from '@/app/showcase/ShowcaseFeedInteraction';
 import ProfileShareButton from '@/components/ProfileShareButton';
+import type { ConfirmationRequest } from '@/components/feedback-state';
+import { useConfirmation } from '@/components/useConfirmation';
 import {
   blockCreatorAfterConfirmation,
   reportCreatorAfterConfirmation,
@@ -35,6 +37,14 @@ const EDITOR_FOCUSABLE_SELECTOR = [
   'textarea:not([disabled])',
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ');
+
+const DISCARD_PROFILE_CHANGES: ConfirmationRequest = {
+  title: 'Discard your profile changes?',
+  message: 'Your edits haven’t been saved and will be lost.',
+  confirmLabel: 'Discard changes',
+  cancelLabel: 'Keep editing',
+  tone: 'danger',
+};
 
 export function ProfileActions({ profile, blockedByViewer = false }: ProfileActionsProps) {
   const router = useRouter();
@@ -61,6 +71,8 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
   const editorDialogRef = useRef<HTMLDivElement | null>(null);
   const editorTitleId = useId();
   const followStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Its one question is about the open editor.
+  const askToConfirm = useConfirmation(isEditing);
 
   const clearFollowStatusTimer = () => {
     if (followStatusTimerRef.current) {
@@ -188,8 +200,8 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
 
   // The editor's own guard covers leaving the page; closing the dialog
   // unmounts it, so the dialog asks first.
-  const requestCloseEditor = () => {
-    if (editorChangedRef.current && !window.confirm('Discard your profile changes?')) {
+  const requestCloseEditor = async () => {
+    if (editorChangedRef.current && !(await askToConfirm(DISCARD_PROFILE_CHANGES))) {
       return;
     }
     closeEditor();
@@ -221,7 +233,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
   const onEditorKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (event.key === 'Escape') {
       event.preventDefault();
-      requestCloseEditor();
+      void requestCloseEditor();
       return;
     }
     if (event.key === 'Tab') {
@@ -455,7 +467,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
                 <h2 id={editorTitleId} className="text-xl font-semibold text-white">Edit profile</h2>
                 <button
                   type="button"
-                  onClick={requestCloseEditor}
+                  onClick={() => void requestCloseEditor()}
                   aria-label="Close"
                   className="ui-focus-ring -my-1.5 inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/5 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
                 >

@@ -52,6 +52,15 @@ const eslintConfig = defineConfig([
     },
   },
   {
+    // The browser's own alert, confirm and prompt are unstyled, titled with
+    // the site's address and block the page. Ask with `requestConfirmation`
+    // (`useConfirmation` in a component), which draws the app's dialog.
+    files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      "no-alert": "error",
+    },
+  },
+  {
     // Layering: routes -> route adapters -> services -> domain modules.
     // An adapter importing another adapter smuggles HTTP concerns sideways and
     // hides the real dependency; share through a service or `*-route-shared`.

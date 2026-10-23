@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 // vitest resolves next/link to the pages-router Link, which only navigates (and
 // only calls onNavigate) inside this context.
 import { RouterContext } from 'next/dist/shared/lib/router-context.shared-runtime';
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NewPostClient from '@/app/post/new/NewPostClient';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
+import FeedbackViewport from '@/components/FeedbackViewport';
 import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 
 const mockPush = vi.fn();
@@ -299,9 +300,13 @@ describe('NewPostClient', () => {
 
   // The editor opens on a type chooser with no card, so its pristine snapshot
   // was taken before the card existed and the warning never fired for new cards.
-  it('warns before discarding a new resource card with unsaved edits', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    render(<NewPostClient />);
+  it('warns before discarding a new resource card with unsaved edits', async () => {
+    render(
+      <>
+        <NewPostClient />
+        <FeedbackViewport />
+      </>
+    );
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
@@ -311,13 +316,54 @@ describe('NewPostClient', () => {
       target: { value: 'A prompt worth keeping.' },
     });
 
+    // The editor hides the rest of the page from assistive tech while it is
+    // up; the question, added after it opened, is still reachable.
     fireEvent.click(screen.getByRole('button', { name: /close resource editor/i }));
-    expect(confirmSpy).toHaveBeenCalledWith('Discard the changes to this resource?');
-    expect(screen.getByLabelText(/^protected content$/i)).toBeInTheDocument();
+    const question = await screen.findByRole('alertdialog', { name: 'Discard changes to this resource?' });
+    fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByLabelText(/^protected content$/i)).toHaveValue('A prompt worth keeping.');
 
-    confirmSpy.mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: /close resource editor/i }));
-    expect(screen.queryByLabelText(/^protected content$/i)).not.toBeInTheDocument();
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(screen.queryByLabelText(/^protected content$/i)).not.toBeInTheDocument());
+  });
+
+  // Its own Escape and Tab trap listen on the window, which hears a key after
+  // the question has handled it.
+  it('leaves the keyboard to its discard question while the question is up', async () => {
+    render(
+      <>
+        <NewPostClient />
+        <FeedbackViewport />
+      </>
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
+    const content = screen.getByLabelText(/^protected content$/i);
+    fireEvent.change(content, { target: { value: 'A prompt worth keeping.' } });
+
+    content.focus();
+    fireEvent.keyDown(content, { key: 'Escape' });
+    const question = await screen.findByRole('alertdialog', { name: 'Discard changes to this resource?' });
+    const keep = within(question).getByRole('button', { name: 'Keep editing' });
+    const discard = within(question).getByRole('button', { name: 'Discard changes' });
+    await waitFor(() => expect(keep).toHaveFocus());
+
+    // A Tab that does not wrap never reaches the editor's trap beneath.
+    fireEvent.keyDown(keep, { key: 'Tab' });
+    expect(keep).toHaveFocus();
+
+    discard.focus();
+    fireEvent.keyDown(discard, { key: 'Tab' });
+    expect(keep).toHaveFocus();
+
+    // Escape answers the question alone: the editor stays open and asks nothing more.
+    fireEvent.keyDown(keep, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByLabelText(/^protected content$/i)).toHaveValue('A prompt worth keeping.');
   });
 
   // The server resolves the content type from the extension when the browser
@@ -3449,35 +3495,42 @@ describe('NewPostClient', () => {
       expect(leaveWouldPrompt()).toBe(false);
     });
 
-    it('asks before the Back link leaves unsaved changes, and only then', () => {
+    it('asks before the Back link leaves unsaved changes, and only then', async () => {
       const linkRouter = {
         push: vi.fn(),
         replace: vi.fn(),
         prefetch: vi.fn(async () => undefined),
       };
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
       render(
         <RouterContext.Provider value={linkRouter as unknown as NextRouter}>
           <NewPostClient />
+          <FeedbackViewport />
         </RouterContext.Provider>
       );
       const back = screen.getByRole('link', { name: /back to explore/i });
 
       // Nothing typed: the link just goes.
       fireEvent.click(back);
-      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
       expect(linkRouter.push).toHaveBeenCalledTimes(1);
 
       fireEvent.change(screen.getByRole('textbox', { name: /caption/i }), {
         target: { value: 'Words not yet published.' },
       });
       fireEvent.click(back);
-      expect(confirmSpy).toHaveBeenCalledWith('Leave this post? Your unsaved changes will be discarded.');
+      const question = await screen.findByRole('alertdialog', { name: 'Leave this post?' });
+      expect(question).toHaveAccessibleDescription('Your changes haven’t been saved and will be lost.');
       expect(linkRouter.push).toHaveBeenCalledTimes(1);
 
-      confirmSpy.mockReturnValue(true);
+      fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(mockPush).not.toHaveBeenCalled();
+
+      // The click was held for the answer, so "leave" goes by the router.
       fireEvent.click(back);
-      expect(linkRouter.push).toHaveBeenCalledTimes(2);
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave without saving' }));
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/showcase'));
+      expect(linkRouter.push).toHaveBeenCalledTimes(1);
     });
   });
 
