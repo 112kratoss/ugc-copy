@@ -448,7 +448,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm sm:p-6"
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm sm:p-6"
           >
             <motion.div
               ref={editorDialogRef}
@@ -469,7 +469,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
                   type="button"
                   onClick={() => void requestCloseEditor()}
                   aria-label="Close"
-                  className="ui-focus-ring rounded-full bg-white/5 p-2 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
+                  className="ui-focus-ring -my-1.5 inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/5 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
                 >
                   <X className="h-5 w-5" aria-hidden />
                 </button>

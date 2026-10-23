@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ShowcaseBootstrapClient, {
   type ShowcaseBootstrapClientProps,
 } from '@/app/showcase/ShowcaseBootstrapClient';
+import { createReelEntryState } from '@/lib/reel-history-entry';
 import { SHOWCASE_INITIAL_RENDER_COUNT, type ShowcaseFeedItem } from '@/lib/showcase';
 import {
   buildShowcaseClientCacheKey,
@@ -353,16 +354,17 @@ describe('ShowcaseBootstrapClient', () => {
     });
     expect(new URLSearchParams(window.location.search).get('post')).toBe('post-priority');
     expect(pushState).toHaveBeenCalledTimes(1);
-    expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-priority');
-    // Whose entry the tap pushed: ShowcaseClientProps.initialPushedPostId.
+    // Marked as the reel's own entry, which the full client reads when it mounts on it
+    // and when the browser's Back or Forward reaches it again (`reel-history-entry.ts`).
+    expect(pushState).toHaveBeenCalledWith(createReelEntryState('post'), '', '/showcase?post=post-priority');
+    expect(window.history.state).toEqual(createReelEntryState('post'));
     expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
       initialFeed: props.initialFeed,
       initialPriorityPoster: props.initialPriorityPoster,
-      initialPushedPostId: 'post-priority',
     }));
   });
 
-  it('tells the full client it pushed nothing when the address already named a post', async () => {
+  it('pushes nothing for a shared link, whose entry stays unmarked', async () => {
     window.history.replaceState(null, '', '/showcase?post=post-shared');
     const pushState = vi.spyOn(window.history, 'pushState');
 
@@ -370,15 +372,13 @@ describe('ShowcaseBootstrapClient', () => {
 
     expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
     expect(pushState).not.toHaveBeenCalled();
-    expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
-      initialPushedPostId: null,
-    }));
+    expect(window.history.state).toBeNull();
   });
 
-  // Its entry sits over the shared post's, not Explore's: handed over, the
-  // reel's close would go Back into the shared post's reel. Handed nothing, it
+  // Its entry sits over the shared post's, not Explore's: marked as the reel's
+  // own, the reel's close would go Back into the shared post's reel. Unmarked, it
   // closes onto Explore by replacing, as before, and Back reopens the shared post.
-  it('hands nothing over for a tap that pushed over a shared link\'s entry', async () => {
+  it('leaves unmarked the entry a tap pushes over a shared link\'s', async () => {
     window.history.replaceState(null, '', '/showcase?post=post-shared');
     const pushState = vi.spyOn(window.history, 'pushState');
     render(<ShowcaseBootstrapClient {...createProps()} />);
@@ -389,9 +389,7 @@ describe('ShowcaseBootstrapClient', () => {
     expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
     expect(pushState).toHaveBeenCalledTimes(1);
     expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-priority');
-    expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
-      initialPushedPostId: null,
-    }));
+    expect(window.history.state).toBeNull();
   });
 
   // The cards stay until the full client comes, so a second tap can land first.
@@ -406,12 +404,11 @@ describe('ShowcaseBootstrapClient', () => {
 
     expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
     expect(pushState).toHaveBeenCalledTimes(1);
-    expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-priority');
-    expect(replaceState).toHaveBeenCalledWith(null, '', '/showcase?post=post-trailing-1');
+    expect(pushState).toHaveBeenCalledWith(createReelEntryState('post'), '', '/showcase?post=post-priority');
+    // Still the reel's own entry.
+    expect(replaceState).toHaveBeenCalledWith(createReelEntryState('post'), '', '/showcase?post=post-trailing-1');
     expect(new URLSearchParams(window.location.search).get('post')).toBe('post-trailing-1');
-    expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
-      initialPushedPostId: 'post-trailing-1',
-    }));
+    expect(window.history.state).toEqual(createReelEntryState('post'));
   });
 
   it('pushes again for a tap after the reader went Back off the entry the first tap pushed', async () => {
@@ -426,11 +423,9 @@ describe('ShowcaseBootstrapClient', () => {
 
     expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
     expect(pushState).toHaveBeenCalledTimes(2);
-    expect(pushState).toHaveBeenLastCalledWith(null, '', '/showcase?post=post-trailing-1');
+    expect(pushState).toHaveBeenLastCalledWith(createReelEntryState('post'), '', '/showcase?post=post-trailing-1');
     expect(replaceState).not.toHaveBeenCalled();
-    expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
-      initialPushedPostId: 'post-trailing-1',
-    }));
+    expect(window.history.state).toEqual(createReelEntryState('post'));
   });
 
   it('activates the full experience immediately for an authenticated viewer', async () => {

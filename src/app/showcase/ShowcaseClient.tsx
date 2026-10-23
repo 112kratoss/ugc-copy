@@ -79,6 +79,13 @@ import {
     type ShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
 import { feedNewestCategoryFor, newestCreatedAtOf, useNewPostsProbe, type NewPostsProbeLane } from '@/lib/feed-newest-probe';
+import {
+    pushReelEntry,
+    readCurrentReelHistoryMode,
+    readReelHistoryMode,
+    replaceReelEntry,
+    type ReelHistoryMode,
+} from '@/lib/reel-history-entry';
 import { scheduleIdleWork } from '@/lib/schedule-idle-work';
 import { useMediaQuery } from '@/lib/use-media-query';
 
@@ -189,14 +196,6 @@ export interface ShowcaseClientProps {
     initialResource: ShowcaseResourceFilter;
     sourceToolOptions: SourceToolFilterOption[];
     initialPriorityPoster?: ShowcasePriorityPosterData | null;
-    /**
-     * The post whose history entry the bootstrap shell pushed for the tap
-     * that loaded this client (`ShowcaseBootstrapClient`). The address names
-     * it at mount, as a shared link's would, but the entry under it is
-     * Explore's: the reel is treated as opened from a tile, and Explore goes
-     * Back to that entry instead of replacing the pushed one.
-     */
-    initialPushedPostId?: string | null;
 }
 
 function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
@@ -672,7 +671,6 @@ export default function ShowcaseClient({
     initialResource,
     sourceToolOptions,
     initialPriorityPoster = null,
-    initialPushedPostId = null,
 }: ShowcaseClientProps) {
     const router = useRouter();
     const pathname = usePathname();
@@ -842,16 +840,9 @@ export default function ShowcaseClient({
     const personalizedRefreshLandedRef = useRef(false);
     const pageInfoRef = useRef(restoredInitialFeed.pageInfo);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
-    // An address naming a post at mount opened the reel by address (direct:
-    // Explore replaces the entry), unless the bootstrap shell pushed that
-    // entry for the tap that loaded this client: then the reel is pushed, as
-    // from a tile, and Explore goes Back to the shell's entry under it.
-    const initialPostParam = searchParams.get('post');
-    const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
-        !initialPostParam
-            ? null
-            : initialPostParam === initialPushedPostId ? 'pushed' : 'direct'
-    );
+    // How Explore, the reel's close, leaves history: read from the entry when
+    // this client mounts and on popstate, and set by a tile.
+    const reelHistoryModeRef = useRef<ReelHistoryMode>(null);
     // The post a close is taking out of the URL. The reel closes at once,
     // but the URL keeps the post until the browser's Back comes (popstate,
     // a task later) or Next applies the replace: a page landing in between
@@ -1175,10 +1166,12 @@ export default function ShowcaseClient({
         }
 
         const nextUrl = params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
+        // The reel's own entry says so on its state (`reel-history-entry.ts`),
+        // and keeps saying so while the reel moves to another post or slide.
         if (mode === 'push') {
-            window.history.pushState(null, '', nextUrl);
+            pushReelEntry('post', nextUrl);
         } else {
-            window.history.replaceState(null, '', nextUrl);
+            replaceReelEntry(nextUrl);
         }
     }, [pathname]);
 
@@ -1222,10 +1215,18 @@ export default function ShowcaseClient({
     }, []);
 
     useEffect(() => {
-        const handlePopState = () => {
-            const postParam = new URLSearchParams(window.location.search).get('post');
-            const mediaParam = Number(new URLSearchParams(window.location.search).get('media'));
-            reelHistoryModeRef.current = postParam ? 'direct' : null;
+        // The entry this client mounts on says how its reel was opened: one a
+        // tile or the bootstrap shell pushed (its tap loaded this client, or
+        // a reload or a Back from a page the reel linked to brought the reader
+        // back to it) closes by going Back to the entry under it; a post any
+        // other entry names opened by address, and Explore replaces the entry.
+        reelHistoryModeRef.current = readCurrentReelHistoryMode('post');
+        const handlePopState = (event: PopStateEvent) => {
+            const params = new URLSearchParams(window.location.search);
+            const postParam = params.get('post');
+            const mediaParam = Number(params.get('media'));
+            // The same for the entry Back or Forward reaches.
+            reelHistoryModeRef.current = readReelHistoryMode('post', params, event.state);
             setSelectedMediaIndex(Number.isInteger(mediaParam) && mediaParam >= 0 ? mediaParam : 0);
 
             if (!postParam) {

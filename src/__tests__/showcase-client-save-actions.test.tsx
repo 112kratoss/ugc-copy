@@ -18,6 +18,7 @@ import {
   type ShowcaseMediaItem,
   type ShowcaseSort,
 } from '@/lib/showcase';
+import { createReelEntryState } from '@/lib/reel-history-entry';
 import type { SourceToolFilterOption } from '@/lib/source-tools';
 import {
   buildShowcaseClientCacheKey,
@@ -1382,20 +1383,23 @@ describe('ShowcaseClient save actions', () => {
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
     });
-    expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-1');
+    // Marked as the reel's own entry (`reel-history-entry.ts`).
+    expect(pushState).toHaveBeenCalledWith(createReelEntryState('post'), '', '/showcase?post=post-1');
 
     fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
     expect(back).toHaveBeenCalledTimes(1);
   });
 
-  // The bootstrap shell's hand-off (ShowcaseClientProps.initialPushedPostId;
-  // archive/web-showcase-bootstrap-history-2026-10-22).
-  it('goes Back from a reel whose entry the bootstrap shell pushed, as from a tile', async () => {
-    window.history.replaceState(null, '', '/showcase?post=post-1');
+  // The client mounts on the reel's own entry: the bootstrap shell's tap pushed it and
+  // loaded this client (archive/web-showcase-bootstrap-history-2026-10-22), or the reader
+  // came back to a tile's entry by a reload or by Back from a page the reel linked to
+  // ("Post details"), where the page mounts again (archive/web-reel-forward-history-2026-10-23).
+  it('goes Back from a reel whose own entry this client mounted on, as from a tile', async () => {
+    window.history.replaceState(createReelEntryState('post'), '', '/showcase?post=post-1');
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
 
-    renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-1' });
+    renderShowcase(createShowcaseItem());
 
     fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
     expect(back).toHaveBeenCalledTimes(1);
@@ -1404,11 +1408,18 @@ describe('ShowcaseClient save actions', () => {
 
   // The reader went Back off the shell's entry before this client came.
   it('opens nothing and writes no history when the shell\'s pushed post is no longer in the address', async () => {
+    window.history.pushState(createReelEntryState('post'), '', '/showcase?post=post-1');
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
     const pushState = vi.spyOn(window.history, 'pushState');
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
 
-    renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-1' });
+    renderShowcase(createShowcaseItem());
 
     expect(await screen.findByText('Campaign Frame')).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
@@ -1417,16 +1428,139 @@ describe('ShowcaseClient save actions', () => {
     expect(back).not.toHaveBeenCalled();
   });
 
+  // A shared link's entry, under the entry the shell's tap pushed over it: the reader
+  // went Back to the shared post before this client came. The mark is that entry's own.
   it('replaces the entry of a reel opened by address when the shell pushed some other post', async () => {
     window.history.replaceState(null, '', '/showcase?post=post-1');
+    window.history.pushState(createReelEntryState('post'), '', '/showcase?post=post-other');
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
+    });
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
 
-    renderShowcase(createShowcaseItem(), { initialPushedPostId: 'post-other' });
+    renderShowcase(createShowcaseItem());
 
     fireEvent.click(await screen.findByRole('button', { name: /explore/i }));
     expect(back).not.toHaveBeenCalled();
     expect(replaceState).toHaveBeenLastCalledWith(null, '', '/showcase');
+  });
+
+  // The browser's Back or Forward onto the reel's own entry: the entry says the reel
+  // pushed it (`reel-history-entry.ts`). Popstate took every entry naming a post for a
+  // shared link's, so after Forward the close replaced the reel's entry: Explore stood
+  // twice in history, and the next Back stayed on it
+  // (archive/web-reel-forward-history-2026-10-23).
+  describe('a reel the browser\'s Back or Forward reaches again', () => {
+    const secondItem = createShowcaseItem({
+      id: 'post-2',
+      title: 'Second Frame',
+      generationId: 'gen-2',
+      mediaUrl: 'https://example.com/second-frame.jpg',
+    });
+    const reelDialog = () => screen.queryByRole('dialog', { name: 'Explore reel viewer' });
+    // jsdom traverses a task later and fires popstate with the entry's state, as a browser does.
+    const browserBackThenForward = async () => {
+      act(() => {
+        window.history.back();
+      });
+      await waitFor(() => {
+        expect(reelDialog()).not.toBeInTheDocument();
+      });
+      act(() => {
+        window.history.forward();
+      });
+      return screen.findByRole('dialog', { name: 'Explore reel viewer' });
+    };
+
+    it('goes Back from a tile\'s reel that Forward opened again on its own entry', async () => {
+      renderShowcase(createShowcaseItem());
+      fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+      await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+
+      const reel = await browserBackThenForward();
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(replaceState).not.toHaveBeenCalled();
+    });
+
+    // Next post replaces the reel's entry, which stays the reel's own.
+    it('goes Back after Forward from a reel that had moved on to another post', async () => {
+      renderShowcase([createShowcaseItem(), secondItem]);
+      fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+      const opened = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+      fireEvent.click(within(opened).getByRole('button', { name: 'Next post' }));
+      await waitFor(() => {
+        expect(new URLSearchParams(window.location.search).get('post')).toBe('post-2');
+      });
+
+      const reel = await browserBackThenForward();
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-2');
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(replaceState).not.toHaveBeenCalled();
+    });
+
+    // The bootstrap shell pushed the entry, and the reader went Back before this client
+    // came: it mounted on Explore's own entry, and Forward reaches the shell's.
+    it('goes Back from the shell\'s entry when Forward reaches it after this client came', async () => {
+      window.history.pushState(createReelEntryState('post'), '', '/showcase?post=post-1');
+      act(() => {
+        window.history.back();
+      });
+      await waitFor(() => {
+        expect(window.location.search).toBe('');
+      });
+      renderShowcase(createShowcaseItem());
+      expect(await screen.findByText('Campaign Frame')).toBeInTheDocument();
+      expect(reelDialog()).not.toBeInTheDocument();
+
+      act(() => {
+        window.history.forward();
+      });
+      const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(replaceState).not.toHaveBeenCalled();
+    });
+
+    // A shared link's entry, the shell's tap over one, and every entry from before the
+    // reels marked theirs: opened by address, so the close replaces.
+    it('replaces the entry of a post Back or Forward reached on an entry the reel did not push', async () => {
+      window.history.replaceState(null, '', '/showcase?post=post-1');
+      window.history.pushState(null, '', '/showcase?post=post-2');
+      renderShowcase([createShowcaseItem(), secondItem]);
+      await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+
+      act(() => {
+        window.history.back();
+      });
+      await waitFor(() => {
+        expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
+      });
+      act(() => {
+        window.history.forward();
+      });
+      await waitFor(() => {
+        expect(new URLSearchParams(window.location.search).get('post')).toBe('post-2');
+      });
+      const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
+      expect(back).not.toHaveBeenCalled();
+      expect(replaceState).toHaveBeenLastCalledWith(null, '', '/showcase');
+    });
   });
 
   const nextPageItem = createShowcaseItem({

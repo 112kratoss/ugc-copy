@@ -47,6 +47,13 @@ import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
 import type { OwnerProfileStats } from '@/lib/profile';
+import {
+  pushReelEntry,
+  readCurrentReelHistoryMode,
+  readReelHistoryMode,
+  replaceReelEntry,
+  type ReelHistoryMode,
+} from '@/lib/reel-history-entry';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import type {
@@ -419,8 +426,10 @@ export default function OwnerProfileMediaHub({
   // hourly, and on coming back to a long-idle tab) keeps every page loaded and
   // the open reel. The requests read the newest token through `authHeaders`.
   const loadedUserRef = useRef<string | null>(null);
-  const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(searchParams.get('post') ? 'direct' : null);
-  const creationHistoryModeRef = useRef<'pushed' | 'direct' | null>(searchParams.get('generation') ? 'direct' : null);
+  // How the reel's close and the creation viewer's leave history: read from the
+  // entry when the hub mounts and on popstate, and set by a tile.
+  const reelHistoryModeRef = useRef<ReelHistoryMode>(null);
+  const creationHistoryModeRef = useRef<ReelHistoryMode>(null);
   // The server's Saved total moves with what is done here, as the app's header
   // does, until the next server render brings a fresh one. Kept against the
   // totals it applies to, so a fresh set starts again from the server's number.
@@ -589,12 +598,21 @@ export default function OwnerProfileMediaHub({
     if (updates.generationId) params.set('generation', updates.generationId);
     else if (updates.generationId === null) params.delete('generation');
     const nextUrl = `${pathname}?${params.toString()}${window.location.hash}`;
-    if (mode === 'push') window.history.pushState(null, '', nextUrl);
-    else window.history.replaceState(null, '', nextUrl);
+    // An entry pushed for a post's reel or a creation says so on its state
+    // (`reel-history-entry.ts`), and keeps saying so while the reel moves to
+    // another post or slide; a tab's entry is a plain one.
+    if (mode === 'push') pushReelEntry(updates.postId ? 'post' : updates.generationId ? 'generation' : null, nextUrl);
+    else replaceReelEntry(nextUrl);
   }, [activeTab, pathname]);
 
   useEffect(() => {
-    const handlePopState = () => {
+    // The entry the hub mounts on says how its reel or creation was opened: one
+    // a tile pushed (a reload, or a Back from a page they linked to, brought the
+    // reader back to it) closes by going Back to the entry under it; one any
+    // other entry names opened by address, and its close replaces the entry.
+    reelHistoryModeRef.current = readCurrentReelHistoryMode('post');
+    creationHistoryModeRef.current = readCurrentReelHistoryMode('generation');
+    const handlePopState = (event: PopStateEvent) => {
       const params = new URLSearchParams(window.location.search);
       const tab = isProfileMediaTab(params.get('tab')) ? params.get('tab') as ProfileMediaTab : 'posts';
       const mediaIndex = Number(params.get('media'));
@@ -602,8 +620,9 @@ export default function OwnerProfileMediaHub({
       setSelectedPostId(params.get('post'));
       setSelectedMediaIndex(Number.isInteger(mediaIndex) && mediaIndex >= 0 ? mediaIndex : 0);
       setSelectedGeneration((current) => current?.id === params.get('generation') ? current : null);
-      reelHistoryModeRef.current = params.get('post') ? 'direct' : null;
-      creationHistoryModeRef.current = params.get('generation') ? 'direct' : null;
+      // The same for the entry Back or Forward reaches.
+      reelHistoryModeRef.current = readReelHistoryMode('post', params, event.state);
+      creationHistoryModeRef.current = readReelHistoryMode('generation', params, event.state);
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);

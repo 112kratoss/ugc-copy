@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { Activity, type HTMLAttributes, type ReactNode, type Ref } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -803,6 +806,25 @@ describe('ProfileActions', () => {
 
       fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
       expect(save).toHaveFocus();
+    });
+
+    // Below 768px the app shell's bottom navigation floats over the page at
+    // its own layer (globals.css). At z-50 the editor sat under it, so on a
+    // phone the nav was drawn over the dialog's lower part and took its taps.
+    it('is drawn over the bottom navigation, with a Close button of the 48px floor', async () => {
+      const globalsCss = fs.readFileSync(path.join(process.cwd(), 'src/app/globals.css'), 'utf8');
+      const bottomNavLayer = Number(/\n\.app-shell-bottom-nav\s*\{[^}]*?\bz-index:\s*(\d+)/.exec(globalsCss)?.[1]);
+      answerProfileRead();
+      render(<ProfileActions profile={profile} />);
+
+      const dialog = await openEditor();
+      const backdrop = dialog.parentElement!;
+
+      // The modal layer of the scale in docs/design/design-web.md (Layers).
+      expect(backdrop).toHaveClass('fixed', 'inset-0', 'z-[80]');
+      expect(Number(/(?:^|\s)z-\[(\d+)\]/.exec(backdrop.className)?.[1])).toBeGreaterThan(bottomNavLayer);
+      // h-12 and w-12: 3rem, 48px at the default text size.
+      expect(within(dialog).getByRole('button', { name: 'Close' })).toHaveClass('h-12', 'w-12');
     });
   });
 });
