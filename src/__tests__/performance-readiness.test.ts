@@ -178,24 +178,24 @@ describe('production performance readiness', () => {
     // 454 KB of /showcase's 602 KB on 2026-10-20, so the decoded size of a
     // page is dominated by the sheet rather than its content. The root
     // postinstall patches the third copy out (vercel/next.js#98110; the test
-    // after this one), 160 KB of every page, and these budgets predate it. The three page
-    // targets therefore budget decoded bytes explicitly, re-based on the
-    // measured inlined documents (home 763,979 B, showcase 586,662 B,
-    // marketplace 565,782 B on 2026-09-15) with the same ~10% headroom the
-    // earlier budgets had. Encoded budgets are untouched: brotli matches the
-    // duplicate copies against the first, so the wire cost of inlining is
-    // about one compressed copy (~20 KB). /showcase also moves with its first
-    // post: a video there inlines its poster (up to
-    // SHOWCASE_PRIORITY_POSTER_MAX_BYTES) in the HTML and again in the flight
-    // data, about 35 KB more on the 2026-10-12 and 10-19 runs.
+    // after this one): live on 2026-10-23, every page lost 160 KB. The three
+    // page targets budget decoded bytes explicitly, re-based that evening on
+    // the live documents by the rule the 2026-09-15 budgets used (the multiple
+    // of 16 KiB nearest 1.1 times the page): home 604,990 B, marketplace
+    // 410,806 B. /showcase moves with its first post: a video there inlines its
+    // poster (up to SHOWCASE_PRIORITY_POSTER_MAX_BYTES) in the HTML and again in
+    // the flight data, so the poster test after this one sets its budget, not
+    // its image-first 415,168 B. Encoded budgets are untouched: brotli matches
+    // the duplicate copies against the first, so the wire cost of inlining is
+    // about one compressed copy (~20 KB).
     const pageTargets = Object.fromEntries(
       budgets.load.targets
         .filter((target) => !target.path.startsWith('/api/'))
         .map((target) => [target.name, target as typeof target & { p95DecodedBytes?: number }]),
     );
-    expect(pageTargets['home-page']?.p95DecodedBytes).toBe(835_584);
+    expect(pageTargets['home-page']?.p95DecodedBytes).toBe(671_744);
     expect(pageTargets['showcase-page']?.p95DecodedBytes).toBe(638_976);
-    expect(pageTargets['marketplace-page']?.p95DecodedBytes).toBe(622_592);
+    expect(pageTargets['marketplace-page']?.p95DecodedBytes).toBe(458_752);
     expect(budgets.load.targets.every((target) => target.method === 'GET')).toBe(true);
     expect(budgets.load.targets.every((target) => target.path.startsWith('/'))).toBe(true);
     expect(budgets.load.targets.some((target) => target.path.includes('sort=recent'))).toBe(true);
@@ -245,15 +245,13 @@ describe('production performance readiness', () => {
     // SHOWCASE_PRIORITY_POSTER_MAX_BYTES) as a base64 data URL twice, in the
     // bootstrap <img> and again in the flight props: 8/3 of its bytes, measured
     // on a production build on 2026-10-23 (24 KB added 65,540 B, 64 KB 174,773 B).
-    // /showcase read 575,158 B on production that day with an image first, so
-    // while Next wrote the root sheet three times any poster over 23.9 KB took
-    // the page past its budget, and one at the cap by 110 KB. The Next patch
-    // takes the third copy out of every page, 160,300 B on the same build:
-    // with it, a poster at the cap leaves the page ~49 KB under.
-    const MEASURED_IMAGE_FIRST = 575_158;
-    const THIRD_STYLESHEET_COPY = 160_300;
+    // While Next wrote the root sheet three times, any poster over 23.9 KB took
+    // /showcase past this budget. With the patch live, /showcase read 415,168 B
+    // with an image first (production, 2026-10-23 22:18 IST), so a poster at
+    // the cap brings it to ~590 KB, 8% under the budget.
+    const MEASURED_IMAGE_FIRST = 415_168;
     const posterAtTheCap = 2 * (Math.ceil((capKilobytes * 1024) / 3) * 4 + 'data:image/webp;base64,'.length);
-    expect(MEASURED_IMAGE_FIRST - THIRD_STYLESHEET_COPY + posterAtTheCap).toBeLessThan(showcaseBudget!);
+    expect(MEASURED_IMAGE_FIRST + posterAtTheCap).toBeLessThan(showcaseBudget!);
     // So the patch has to keep applying, and the build has to say when it does not.
     expect(packageJson.scripts.postinstall).toContain('node scripts/build/patch-next-global-error-css.mjs');
     expect(packageJson.scripts['build:verify']).toContain('node scripts/build/check-inline-css-copies.mjs');
