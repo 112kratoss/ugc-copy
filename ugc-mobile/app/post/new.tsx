@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { AppText, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
-import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
+import { ComposerMediaLightbox, getComposerMediaFileName, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { Overlay } from '@/components/overlay-host';
 import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDrag, useSheetPresentation, type SheetDismissDrag } from '@/components/sheet-chrome';
@@ -37,7 +37,6 @@ import {
   loadPersistedPostComposerDraft,
   persistPostComposerDraft,
 } from '@/lib/post-composer-draft-resume';
-import { readableFileName } from '@/lib/media-file-names';
 import {
   applyPostComposerMediaRecoveryToDraft,
   describeFailedRecoveryReuploads,
@@ -4716,10 +4715,8 @@ function MediaGalleryCard({
         <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>
           {isDragging ? getComposerMediaLabel(drag.to) : label}
         </Text>
-        {/* The file's name where it says something; Android's photo picker names a picture after its
-            media id ("1000333161.jpg"), and an edited post's item with no name of its own after its id. */}
         <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>
-          {readableFileName(item.name) ?? (item.mediaKind === 'video' ? 'Video' : 'Image')}
+          {getComposerMediaFileName(item) ?? (item.mediaKind === 'video' ? 'Video' : 'Image')}
         </Text>
       </View>
     </View>

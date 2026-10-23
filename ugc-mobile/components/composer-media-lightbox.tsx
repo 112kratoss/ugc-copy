@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
+import { readableFileName } from '@/lib/media-file-names';
 import type { PostComposerMediaItem } from '@/lib/post-new-view-model';
 
 /**
@@ -10,6 +11,17 @@ import type { PostComposerMediaItem } from '@/lib/post-new-view-model';
  */
 export function getComposerMediaLabel(index: number) {
   return index === 0 ? 'Cover' : `Media ${index + 1}`;
+}
+
+/**
+ * A slot's file name as the strip card and the lightbox caption show it: the name where it says
+ * something, else null. Android's photo picker names a picture after its media id ("1000333161.jpg"),
+ * and an edited post's item with no name of its own carries its id (a UUID, or "<post id>:cover" for a
+ * post older than its media rows).
+ */
+export function getComposerMediaFileName(item: Pick<PostComposerMediaItem, 'name' | 'existingId'>) {
+  if (item.existingId && item.name === item.existingId) return null;
+  return readableFileName(item.name);
 }
 
 /** The composer's media slots, previewed on the app's shared lightbox. */
@@ -31,7 +43,7 @@ export function ComposerMediaLightbox({
       url: item.mediaKind === 'video' ? item.uri : item.previewUrl ?? item.uri,
       mediaKind: item.mediaKind,
       label: getComposerMediaLabel(index),
-      caption: item.name,
+      caption: getComposerMediaFileName(item),
     })),
     [items]
   );
