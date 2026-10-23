@@ -277,6 +277,44 @@ test.describe('the workflow pages in the app shell', () => {
     await expectFitsAtEveryWidth(page, { selector: '[role="application"]', name: 'the work area' });
   });
 
+  // The AI Builder's column runs the canvas's full height on its right, as wide as its
+  // trigger row, which grows with the text. It took every tap it covered, so the phone
+  // node library's opener, centred along the bottom, lost its right end on a 360px or
+  // 390px phone at the default text size and its centre at a larger one, where pressing
+  // it did nothing. Only what the column draws takes the pointer now.
+  test('the node library opener can be pressed along its length at every text size', async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await openCanvas(page);
+    await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
+    const textSize = await page.addStyleTag({ content: '/* the root font size, set below */' });
+    const opener = page.getByRole('button', { name: /^Open (node library|nodes and workflows)$/ });
+    const library = page.getByRole('dialog', { name: 'Build your graph' });
+    for (const width of [360, 390]) {
+      for (const text of [16, 20, 24]) {
+        const where = `at ${width}px, ${text}px text`;
+        await page.setViewportSize({ width, height: 800 });
+        await textSize.evaluate((style, px) => { style.textContent = `html { font-size: ${px}px; }`; }, text);
+        await expect(opener, `the opener is on screen ${where}`).toBeInViewport({ ratio: 1 });
+        // Seven points along its middle, from one rounded end to the other.
+        const covered = await opener.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          const y = box.top + box.height / 2;
+          return Array.from({ length: 7 }, (_, i) => box.left + box.height / 2 + ((box.width - box.height) * i) / 6)
+            .flatMap((x) => {
+              const hit = document.elementsFromPoint(x, y).find((candidate) => !candidate.closest('nextjs-portal'));
+              return hit && element.contains(hit) ? [] : [`${Math.round(x)}px: ${hit?.className ?? 'nothing'}`];
+            });
+        });
+        expect.soft(covered, `what is drawn over the opener ${where}`).toEqual([]);
+        const box = (await opener.boundingBox())!;
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        await expect.soft(library, `a press at its centre opens the library ${where}`).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(library).toBeHidden();
+      }
+    }
+  });
+
   // Below 768px the bottom navigation (z-60) floats over the page. The canvas's
   // dialogs and its media preview were z-50, so the nav's links stayed on top of
   // them, live, and over the preview's bottom 40px at 390x844; the phone node

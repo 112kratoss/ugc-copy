@@ -1029,6 +1029,14 @@ button:disabled,
   }
 }
 
+/* While the unlock CTA floats along the bottom edge (below 1180px), the post's
+   end scrolls clear of it. Unlayered, so it beats the page's own py-6. */
+@media (width < 1180px) {
+  .canonical-post-cta-room {
+    padding-bottom: 6.5rem;
+  }
+}
+
 @media (min-width: 1180px) {
   .canonical-post-mobile-cta {
     display: none;

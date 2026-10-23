@@ -177,13 +177,16 @@ const nextConfig: NextConfig = {
   // and 0.8 s with it inlined (run 32591925400) against a 1.8 s budget; the
   // sheet itself took 1.5 s to arrive once it competed with the scripts.
   //
-  // Inlining copies the root sheet three times per response: a <style> tag for
-  // SSR, an escaped copy inside the RSC flight payload (the flag's documented
-  // limitation), and a second escaped copy for the global-error boundary,
-  // which Turbopack credits with the root layout's CSS (a `global-error.tsx`
-  // of our own gets it as well; checked 2026-10-20). On the wire that costs
-  // about one compressed copy, because brotli matches the later copies against
-  // the first (the home document went from 53 KB to 76 KB compressed). So what
+  // Inlining copies the root sheet twice per response: a <style> tag for SSR
+  // and an escaped copy inside the RSC flight payload (the flag's documented
+  // limitation). Next wrote a third, for the global-error boundary, which
+  // Turbopack credits with the root layout's CSS (vercel/next.js#98110; a
+  // `global-error.tsx` of our own gets it as well): the root postinstall runs
+  // scripts/build/patch-next-global-error-css.mjs, which drops it (160 KB of
+  // every page's decoded HTML on 2026-10-23), and `build:verify` fails a
+  // prerendered page that carries a sheet more than twice. On the wire that
+  // costs about one compressed copy, because brotli matches the later copies
+  // against the first (the home document went from 53 KB to 76 KB compressed). So what
   // matters is the size of the sheet a public page inlines, and that is kept
   // small by the route-scoped split: `globals.css` scans only the routes a
   // signed-out visitor can land on, and signed-in surfaces add

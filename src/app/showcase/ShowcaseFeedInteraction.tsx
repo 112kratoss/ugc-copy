@@ -966,7 +966,10 @@ export function ShowcaseFeedbackMenu({
       onClick={(event) => event.stopPropagation()}
       onKeyDown={handleMenuKeyDown}
       style={usesPortal && anchor ? { top: anchor.top, bottom: anchor.bottom, right: anchor.right } : undefined}
-      className={`${usesPortal ? 'fixed' : 'absolute right-0 top-[calc(100%+0.5rem)]'} z-50 w-64 overflow-hidden rounded-2xl border border-white/10 bg-[rgba(24,24,27,0.98)] p-1.5 text-left shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl`}
+      // In the page body it is placed from the window's height, so on a phone it can
+      // open over the app shell's bottom navigation (z-60), which drew over its last
+      // row at z-50: the layer of the app's other body menus, over the nav.
+      className={`${usesPortal ? 'fixed z-[90]' : 'absolute right-0 top-[calc(100%+0.5rem)] z-50'} w-64 overflow-hidden rounded-2xl border border-white/10 bg-[rgba(24,24,27,0.98)] p-1.5 text-left shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl`}
     >
       {rows.map((row, index) => (
         <Fragment key={row.key}>

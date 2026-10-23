@@ -253,8 +253,12 @@ export function WorkflowAssistantDrawer({
 
   return (
     <div className="pointer-events-none absolute inset-y-4 right-4 z-40 flex justify-end">
-      <div ref={popupRef} className="pointer-events-auto flex h-full flex-col items-end gap-3">
-        <div className="flex shrink-0 items-center gap-2">
+      {/* The column runs the canvas's full height as wide as its trigger row, so only
+          what it draws takes the pointer: the rest of it passes taps through to the
+          canvas and to the phone node library's opener, which it covered (from 16px
+          text on a 360px phone, at its centre with larger text). */}
+      <div ref={popupRef} className="pointer-events-none flex h-full flex-col items-end gap-3">
+        <div className="pointer-events-auto flex shrink-0 items-center gap-2">
           {creditsLabel ? (
             <div className="rounded-full border border-white/10 bg-black/70 px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-zinc-300 shadow-[0_12px_36px_rgba(0,0,0,0.35)] backdrop-blur">
               {creditsLabel}
@@ -281,7 +285,7 @@ export function WorkflowAssistantDrawer({
         {isOpen ? (
           <aside
             data-testid="workflow-assistant-popup"
-            className="flex min-h-0 flex-1 w-[min(440px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-x-hidden overflow-y-auto rounded-[30px] border border-white/10 bg-[#050505]/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] backdrop-blur-xl"
+            className="pointer-events-auto flex min-h-0 flex-1 w-[min(440px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-x-hidden overflow-y-auto rounded-[30px] border border-white/10 bg-[#050505]/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] backdrop-blur-xl"
           >
             <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
               <div className="flex items-start gap-3">
