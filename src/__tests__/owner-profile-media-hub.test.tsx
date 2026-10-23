@@ -100,10 +100,21 @@ vi.mock('@/components/OptimizedPreviewImage', () => ({
 }));
 
 vi.mock('@/components/MediaDetailsPreviewModal', () => ({
-  default: ({ isOpen, title, prompt, onClose }: { isOpen: boolean; title: string; prompt?: string; onClose: () => void }) => isOpen ? (
+  default: ({ isOpen, title, prompt, src, inputMedia, additionalMedia, onClose }: {
+    isOpen: boolean;
+    title: string;
+    prompt?: string;
+    src: string | null;
+    inputMedia?: Array<{ label: string }> | null;
+    additionalMedia?: Array<{ src: string }> | null;
+    onClose: () => void;
+  }) => isOpen ? (
     <div role="dialog" aria-label={`${title} creation preview`}>
       <span>{title}</span>
       {prompt ? <span>{prompt}</span> : null}
+      <span data-testid="preview-src">{src}</span>
+      <span data-testid="preview-inputs">{(inputMedia ?? []).map((item) => item.label).join(', ')}</span>
+      <span data-testid="preview-more-outputs">{(additionalMedia ?? []).map((item) => item.src).join(' ')}</span>
       <button type="button" onClick={onClose}>Close preview</button>
     </div>
   ) : null,
@@ -807,6 +818,233 @@ describe('OwnerProfileMediaHub', () => {
       fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
       await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
       noPreview();
+    });
+  });
+
+  // The list answers each creation's summary (`detail=summary`: no inputs, no further
+  // outputs), and its details come from a read of their own. A creation opened by its address
+  // showed only the summary, one beyond the loaded pages opened nothing until a later Load more
+  // popped it open over the grid, and the details of the one on screen came with its media
+  // signed again, which mounted the viewer again and loaded its media again
+  // (archive/web-history-follow-ups-2026-10-23).
+  describe("a creation's details", () => {
+    const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
+    const noPreview = () => expect(screen.queryByRole('dialog', { name: /creation preview/i })).not.toBeInTheDocument();
+    const settle = () => act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    // A private file's address as one read signs it.
+    const signed = (file: string, read: string) => `https://storage.example.com/${file}?token=${read}`;
+    type Row = ReturnType<typeof summaryRow>;
+    const summaryRow = (id: string, title: string, expiresAt: string | null = null) => ({
+      id,
+      output_url: signed(`${id}.jpg`, 'list'),
+      preview_url: signed(`${id}-preview.jpg`, 'list'),
+      media: { renditionUrl: null, expiresAt },
+      status: 'completed',
+      created_at: '2026-07-04T00:00:00.000Z',
+      model: 'image-model',
+      category: 'image',
+      title,
+      linked_post_id: null,
+    });
+    const detailsOf = (row: Row) => ({
+      ...row,
+      output_url: signed(`${row.id}.jpg`, 'details'),
+      preview_url: signed(`${row.id}-preview.jpg`, 'details'),
+      media: { renditionUrl: null, expiresAt: null },
+      output_urls: [signed(`${row.id}.jpg`, 'details'), signed(`${row.id}-2.jpg`, 'details')],
+      prompt: `${row.title} prompt`,
+      input_media: [{
+        id: `${row.id}-input`,
+        generationId: row.id,
+        mediaType: 'image',
+        role: 'reference',
+        label: `${row.title} input`,
+        url: signed(`${row.id}-input.jpg`, 'details'),
+        storagePath: null,
+        sourceGenerationId: null,
+        sortOrder: 0,
+        metadata: {},
+      }],
+    });
+    // Answers the list's first page, the page after it, and each details read (none for an id
+    // `details` leaves out, a refused read for one it marks 'failed'); returns the ids the details
+    // were read for. `listAfter` holds the list's answers until it settles.
+    const answerCreations = (
+      first: Row[],
+      second: Row[] | null,
+      details: Record<string, ReturnType<typeof detailsOf> | 'failed'>,
+      listAfter?: Promise<unknown>,
+    ) => {
+      const answerElse = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+      const detailsReads: string[] = [];
+      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
+          const answer = () => (url.includes('cursor=page-2')
+            ? response({ generations: second ?? [], pagination: { hasMore: false, nextCursor: null } })
+            : response({ generations: first, pagination: { hasMore: Boolean(second), nextCursor: second ? 'page-2' : null } }));
+          return listAfter ? listAfter.then(answer) : answer();
+        }
+        const read = /\/api\/generations\?includeArchived=false&id=([^&]+)&limit=1$/.exec(url);
+        if (read) {
+          detailsReads.push(read[1]);
+          const answer = details[read[1]];
+          if (answer === 'failed') return response({ error: 'Too many requests.' }, false);
+          return response({ generations: answer ? [answer] : [] });
+        }
+        return answerElse(input);
+      }));
+      return detailsReads;
+    };
+    const held = () => {
+      let release!: () => void;
+      const settled = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { settled, release };
+    };
+
+    it('reads the details of a creation its address opened', async () => {
+      const row = summaryRow('gen-linked', 'Linked frame');
+      const reads = answerCreations([row], null, { 'gen-linked': detailsOf(row) });
+      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-linked');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+
+      const preview = await screen.findByRole('dialog', { name: /linked frame creation preview/i });
+      expect(await within(preview).findByText('Linked frame prompt')).toBeInTheDocument();
+      expect(within(preview).getByTestId('preview-inputs')).toHaveTextContent('Linked frame input');
+      expect(within(preview).getByTestId('preview-more-outputs')).toHaveTextContent(signed('gen-linked-2.jpg', 'details'));
+      expect(reads).toEqual(['gen-linked']);
+    });
+
+    it('opens one beyond the loaded pages from its details, and a later page leaves it closed after its Close', async () => {
+      const first = summaryRow('gen-first', 'First frame');
+      const far = summaryRow('gen-far', 'Far frame');
+      answerCreations([first], [far], { 'gen-far': detailsOf(far) });
+      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-far');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+
+      const preview = await screen.findByRole('dialog', { name: /far frame creation preview/i });
+      expect(await within(preview).findByText('Far frame prompt')).toBeInTheDocument();
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
+      noPreview();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Load more creations' }));
+      expect(await screen.findByRole('button', { name: /open far frame/i })).toBeInTheDocument();
+      await settle();
+      noPreview();
+    });
+
+    it('leaves one whose details could not be read closed when a later page brings it', async () => {
+      const first = summaryRow('gen-first', 'First frame');
+      const far = summaryRow('gen-far', 'Far frame');
+      const reads = answerCreations([first], [far], {});
+      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-far');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      expect(await screen.findByRole('button', { name: /open first frame/i })).toBeInTheDocument();
+      await settle();
+      expect(reads).toEqual(['gen-far']);
+      noPreview();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Load more creations' }));
+      expect(await screen.findByRole('button', { name: /open far frame/i })).toBeInTheDocument();
+      await settle();
+      noPreview();
+    });
+
+    // The details opened it before the list came, so the list's row (signed by another read) must
+    // not open it again: the viewer would change its media and load it again.
+    it('leaves the creation its details opened as they opened it when the list brings it', async () => {
+      const row = summaryRow('gen-linked', 'Linked frame');
+      const list = held();
+      answerCreations([row], null, { 'gen-linked': detailsOf(row) }, list.settled);
+      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-linked');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      const preview = await screen.findByRole('dialog', { name: /linked frame creation preview/i });
+      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-linked.jpg', 'details'));
+
+      list.release();
+      expect(await screen.findByRole('button', { name: /open linked frame/i })).toBeInTheDocument();
+      await settle();
+      expect(screen.getByTestId('preview-src')).toHaveTextContent(signed('gen-linked.jpg', 'details'));
+    });
+
+    // A refused read (the per-user limit Studio's polling shares, a server error) says nothing about
+    // the creation, so the list still opens it, as before the details were read at once.
+    it('opens the creation from the list when its details read is refused', async () => {
+      const row = summaryRow('gen-linked', 'Linked frame');
+      const list = held();
+      const reads = answerCreations([row], null, { 'gen-linked': 'failed' }, list.settled);
+      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-linked');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await waitFor(() => expect(reads).toEqual(['gen-linked']));
+      await settle();
+      noPreview();
+
+      list.release();
+      const preview = await screen.findByRole('dialog', { name: /linked frame creation preview/i });
+      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-linked.jpg', 'list'));
+    });
+
+    // The server describes no media for a sound, though its file is signed as a picture's is: with
+    // nothing saying how long the address on screen holds, the details' fresh one is taken.
+    it("takes the details' address for a sound, whose media the list does not describe", async () => {
+      const soundRow = (read: string) => ({
+        ...summaryRow('gen-sound', 'Sound take'),
+        output_url: signed('gen-sound.mp3', read),
+        preview_url: null,
+        media: null,
+        category: 'audio',
+        model: 'audio-model',
+      }) as unknown as Row;
+      const row = soundRow('list');
+      answerCreations([row], null, {
+        'gen-sound': { ...detailsOf(row), ...soundRow('details'), output_urls: [signed('gen-sound.mp3', 'details')] } as unknown as ReturnType<typeof detailsOf>,
+      });
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await screen.findByRole('button', { name: /open public post/i });
+      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /open sound take/i }));
+
+      const preview = await screen.findByRole('dialog', { name: /sound take creation preview/i });
+      expect(await within(preview).findByText('Sound take prompt')).toBeInTheDocument();
+      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-sound.mp3', 'details'));
+    });
+
+    it('keeps the media on screen when the details of the open creation come signed again', async () => {
+      const row = summaryRow('gen-tile', 'Tile frame', new Date(Date.now() + 30 * 60_000).toISOString());
+      answerCreations([row], null, { 'gen-tile': detailsOf(row) });
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await screen.findByRole('button', { name: /open public post/i });
+      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /open tile frame/i }));
+
+      const preview = await screen.findByRole('dialog', { name: /tile frame creation preview/i });
+      expect(await within(preview).findByText('Tile frame prompt')).toBeInTheDocument();
+      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-tile.jpg', 'list'));
+      expect(within(preview).getByTestId('preview-inputs')).toHaveTextContent('Tile frame input');
+      // The main output is the file on screen, not a further output at the details' address.
+      expect(within(preview).getByTestId('preview-more-outputs').textContent).toBe(signed('gen-tile-2.jpg', 'details'));
+      // The grid's tile keeps its address too.
+      expect(screen.getByRole('img', { name: 'Tile frame' })).toHaveAttribute('src', signed('gen-tile-preview.jpg', 'list'));
+    });
+
+    it("takes the details' addresses once the ones on screen have run out", async () => {
+      const row = summaryRow('gen-old', 'Old frame', new Date(Date.now() - 60_000).toISOString());
+      answerCreations([row], null, { 'gen-old': detailsOf(row) });
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await screen.findByRole('button', { name: /open public post/i });
+      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /open old frame/i }));
+
+      const preview = await screen.findByRole('dialog', { name: /old frame creation preview/i });
+      expect(await within(preview).findByText('Old frame prompt')).toBeInTheDocument();
+      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-old.jpg', 'details'));
     });
   });
 

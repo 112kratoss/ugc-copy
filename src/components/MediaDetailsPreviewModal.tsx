@@ -101,6 +101,19 @@ export default function MediaDetailsPreviewModal({
   );
 }
 
+const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, audio[controls], video[controls], [tabindex]:not([tabindex="-1"])';
+
+// Only the controls the browser draws: a folded <details> shows its summary alone, and Tab
+// skips the rest, so counting them let the focus out past the summary and sent Shift+Tab to
+// a control that cannot take it.
+function getFocusableElements(container: HTMLElement | null): HTMLElement[] {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    .filter((element) => element.getAttribute('aria-hidden') !== 'true'
+      && !element.closest('details:not([open]) > :not(summary)')
+      && (typeof element.checkVisibility !== 'function' || element.checkVisibility()));
+}
+
 const STATUS_NOTE_TONE_CLASS: Record<NonNullable<MediaDetailsStatusNote['tone']>, string> = {
   danger: 'border-rose-400/25 bg-rose-500/10 text-rose-100',
   pending: 'border-amber-400/25 bg-amber-500/10 text-amber-100',
@@ -147,6 +160,8 @@ function MediaDetailsPreviewDialog({
   const [activeMediaPreview, setActiveMediaPreview] = useState<ActiveMediaPreview | null>(null);
   const portalRoot = typeof document === 'undefined' ? null : document.body;
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const trimmedPrompt = prompt?.trim() ?? '';
   const trimmedBody = body?.trim() ?? '';
   const hasPrompt = trimmedPrompt.length > 0;
@@ -161,6 +176,28 @@ function MediaDetailsPreviewDialog({
     visibleAdditionalMedia.length > 0 ? `${visibleAdditionalMedia.length} more output${visibleAdditionalMedia.length === 1 ? '' : 's'}` : null,
   ].filter((item): item is string => Boolean(item));
 
+  // The viewer takes the focus as it opens and hands it back as it goes. Left
+  // behind, the focus kept the page under it in the tab order, and Enter on
+  // the tile that opened it pressed that tile again.
+  useEffect(() => {
+    previouslyFocusedRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusFrame = window.requestAnimationFrame(() => {
+      if (!dialogRef.current?.contains(document.activeElement)) {
+        dialogRef.current?.focus({ preventScroll: true });
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      const focusTarget = previouslyFocusedRef.current;
+      if (focusTarget?.isConnected) {
+        focusTarget.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -170,6 +207,34 @@ function MediaDetailsPreviewDialog({
         }
 
         onClose();
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      // Tab goes round the viewer's own controls, never on to the page under it.
+      const dialog = dialogRef.current;
+      const focusable = getFocusableElements(dialog);
+      if (!dialog || focusable.length === 0) {
+        event.preventDefault();
+        dialog?.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!dialog.contains(active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && (active === first || active === dialog)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
 
@@ -390,11 +455,13 @@ function MediaDetailsPreviewDialog({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
-        className="preview-modal-panel relative flex max-h-[calc(100dvh-1.5rem)] min-w-0 w-[calc(100vw-1.5rem)] max-w-4xl flex-col gap-4 overflow-y-auto overscroll-contain rounded-[28px] border border-white/10 bg-zinc-950 p-4 shadow-2xl shadow-black/70 sm:max-h-[90dvh] sm:gap-5 sm:rounded-[30px] sm:p-6"
+        className="preview-modal-panel relative flex max-h-[calc(100dvh-1.5rem)] min-w-0 w-[calc(100vw-1.5rem)] max-w-4xl flex-col gap-4 overflow-y-auto overscroll-contain rounded-[28px] border border-white/10 bg-zinc-950 p-4 shadow-2xl shadow-black/70 outline-none sm:max-h-[90dvh] sm:gap-5 sm:rounded-[30px] sm:p-6"
       >
         <button
           type="button"

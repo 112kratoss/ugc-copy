@@ -109,7 +109,11 @@ interface OwnerPost {
 
 interface OwnerGeneration {
   id: string;
-  media?: { renditionUrl?: string | null } | null;
+  /**
+   * `expiresAt`: when the signed addresses of a private output stop holding; null for ones that do not
+   * expire. A sound comes with no media at all, though its file is signed as a picture's is.
+   */
+  media?: { renditionUrl?: string | null; expiresAt?: string | null } | null;
   output_url: string | null;
   /** Set when the only source is gone; the API withholds every address. */
   source_unavailable_at?: string | null;
@@ -226,6 +230,28 @@ function getAdditionalGenerationMedia(generation: OwnerGeneration): MediaDetails
       title: `${getGenerationTitle(generation)} output ${index + 2}`,
       alt: `${getGenerationTitle(generation)} output ${index + 2}`,
     }));
+}
+
+/**
+ * A creation's details read over the row already drawn: the details carry
+ * what the list's summary leaves out (the inputs, the further outputs), and
+ * the row keeps the addresses of the media it shows while they hold. A
+ * private output is signed anew on each read, and the viewer, keyed by its
+ * media's address, mounted again and loaded it again when the details came.
+ */
+function withGenerationDetails(shown: OwnerGeneration, details: OwnerGeneration, now: number): OwnerGeneration {
+  const expiresAt = shown.media?.expiresAt ? Date.parse(shown.media.expiresAt) : null;
+  // With no media (a sound), nothing says how long the addresses on screen hold: the details' are taken.
+  if (!shown.output_url || !shown.media || (expiresAt !== null && !(expiresAt > now))) return { ...shown, ...details };
+  return {
+    ...shown,
+    ...details,
+    output_url: shown.output_url,
+    preview_url: shown.preview_url,
+    media: shown.media,
+    // A run's outputs hold its main output too, at this read's address for it.
+    output_urls: details.output_urls?.map((url) => (url === details.output_url ? shown.output_url! : url)) ?? shown.output_urls,
+  };
 }
 
 function mapOwnerPostToFeedItem(post: OwnerPost, creator: ShowcaseCreator): ShowcaseFeedItem {
@@ -572,23 +598,68 @@ export default function OwnerProfileMediaHub({
     })();
   }, [accessToken, initialTab, runTabLoad, userId]);
 
-  // The creation the address names opens once: when the address comes to name
-  // it, or when the list it waits for brings it in (a tile marks the one it
-  // opens itself); never again while the address still names it. A close
-  // clears the selection before this query lets go of the creation (Next hands
-  // the page's own replaceState to its readers a microtask later, and Back's
-  // popstate comes after the close), and the list can change in between.
-  const generationOpenedForAddressRef = useRef<string | null>(null);
+  // The creation the address names, once the hub has taken it up: its details
+  // are read at once, and it opens once, from the list or from its details,
+  // whichever comes first (a tile marks the one it opens itself); never again
+  // while the address still names it. A close clears the selection before
+  // this query lets go of the creation (Next hands the page's own replaceState
+  // to its readers a microtask later, and Back's popstate comes after the
+  // close), and the list can change in between. Waiting for the list alone, a
+  // creation opened by its address showed only the list's summary, and one
+  // beyond the loaded pages opened nothing until a later Load more popped it
+  // open over the grid.
+  const addressGenerationRef = useRef<{ id: string; opened: boolean } | null>(null);
+
+  // A creation's details fill in the creation on screen while it is the one
+  // they are for (details that come after a close, or after another creation
+  // opened, leave the viewer as it is), and open the address's creation when
+  // the list has not.
+  const readGenerationDetails = useCallback(async (generationId: string) => {
+    let answered: OwnerGeneration | undefined;
+    let read = false;
+    try {
+      const response = await fetch(`/api/generations?includeArchived=false&id=${encodeURIComponent(generationId)}&limit=1`, { headers: authHeaders });
+      const payload = await response.json();
+      const first = Array.isArray(payload.generations) ? payload.generations[0] as OwnerGeneration | undefined : undefined;
+      read = response.ok;
+      if (response.ok && first?.id === generationId) answered = first;
+    } catch (error) {
+      console.error('Failed to load full creation details:', error);
+    }
+    const request = addressGenerationRef.current;
+    if (!answered) {
+      // Read and not found: nothing to open it with, and a later page of the list does not pop it
+      // open either. A refused or failed read says nothing about it, so the list still may.
+      if (read && request?.id === generationId) request.opened = true;
+      return;
+    }
+    const details = answered;
+    const now = Date.now();
+    if (request?.id === generationId && !request.opened) {
+      request.opened = true;
+      setSelectedGeneration(details);
+    } else {
+      setSelectedGeneration((current) => current?.id === generationId ? withGenerationDetails(current, details, now) : current);
+    }
+    setGenerations((current) => current.map((item) => item.id === generationId ? withGenerationDetails(item, details, now) : item));
+  }, [authHeaders]);
+
   useEffect(() => {
     const requestedGenerationId = searchParams.get('generation');
-    if (requestedGenerationId === generationOpenedForAddressRef.current) return;
-    generationOpenedForAddressRef.current = null;
-    if (!requestedGenerationId) return;
-    const requested = generations.find((generation) => generation.id === requestedGenerationId);
-    if (!requested) return;
-    generationOpenedForAddressRef.current = requestedGenerationId;
-    setSelectedGeneration(requested);
-  }, [generations, searchParams]);
+    if (requestedGenerationId !== (addressGenerationRef.current?.id ?? null)) {
+      addressGenerationRef.current = null;
+      // Taken up once there is a token to read its details with.
+      if (!requestedGenerationId || !accessToken) return;
+      addressGenerationRef.current = { id: requestedGenerationId, opened: false };
+      void readGenerationDetails(requestedGenerationId);
+    }
+    const request = addressGenerationRef.current;
+    if (!request || request.opened) return;
+    const listed = generations.find((generation) => generation.id === request.id);
+    if (!listed) return;
+    request.opened = true;
+    setSelectedGeneration(listed);
+  }, [accessToken, generations, readGenerationDetails, searchParams]);
 
   const updateLocation = useCallback((updates: {
     tab?: ProfileMediaTab;
@@ -760,29 +831,16 @@ export default function OwnerProfileMediaHub({
     }
   };
 
-  const openGeneration = async (generation: OwnerGeneration) => {
-    // Open already: its tile keeps the focus behind the viewer, so Enter can
-    // press it again, and a second entry for it left Close going Back onto one
-    // that still named it.
+  const openGeneration = (generation: OwnerGeneration) => {
+    // Open already: a second press of its tile (one that came before the
+    // viewer took the focus) pushed a second entry for it, and Close then
+    // went Back onto one that still named it.
     if (selectedGeneration?.id === generation.id) return;
     creationHistoryModeRef.current = 'pushed';
-    generationOpenedForAddressRef.current = generation.id;
+    addressGenerationRef.current = { id: generation.id, opened: true };
     setSelectedGeneration(generation);
     updateLocation({ generationId: generation.id, postId: null }, 'push');
-
-    try {
-      const response = await fetch(`/api/generations?includeArchived=false&id=${encodeURIComponent(generation.id)}&limit=1`, { headers: authHeaders });
-      const payload = await response.json();
-      const fullGeneration = Array.isArray(payload.generations) ? payload.generations[0] as OwnerGeneration | undefined : undefined;
-      if (response.ok && fullGeneration) {
-        // Details that come after a close, or after another creation opened,
-        // leave the viewer as it is.
-        setSelectedGeneration((current) => current?.id === fullGeneration.id ? fullGeneration : current);
-        setGenerations((current) => current.map((item) => item.id === fullGeneration.id ? { ...item, ...fullGeneration } : item));
-      }
-    } catch (error) {
-      console.error('Failed to load full creation details:', error);
-    }
+    void readGenerationDetails(generation.id);
   };
 
   const closeGeneration = () => {
@@ -1142,7 +1200,7 @@ export default function OwnerProfileMediaHub({
                       failed ? 'Failed run' : generation.linked_post_id ? 'Posted' : 'Private creation',
                       generation.origin === 'template' ? 'Template' : generation.model,
                     ]}
-                    onClick={generation.output_url ? () => void openGeneration(generation) : undefined}
+                    onClick={generation.output_url ? () => openGeneration(generation) : undefined}
                     actionLabel="Preview"
                   />
                 );

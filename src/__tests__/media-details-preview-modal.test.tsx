@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from 'react';
+import { useState, type HTMLAttributes, type ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -251,5 +251,82 @@ describe('MediaDetailsPreviewModal', () => {
     );
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  // The viewer moved no focus and kept none: the grid under it stayed in the tab order, the
+  // tile that opened it kept the focus (Enter pressed it again), and the focus was left on
+  // nothing when it closed (archive/web-history-follow-ups-2026-10-23).
+  describe('the focus', () => {
+    function Opener() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>Open Prompted still</button>
+          <button type="button">Next tile</button>
+          <MediaDetailsPreviewModal
+            isOpen={open}
+            onClose={() => setOpen(false)}
+            mediaType="image"
+            src="https://example.com/image.jpg"
+            alt="Preview image"
+            title="Prompted still"
+            prompt="Detailed creator prompt"
+            actions={<a href="/post/new">Turn into post</a>}
+          />
+        </>
+      );
+    }
+    const openFromTile = async () => {
+      render(<Opener />);
+      const tile = screen.getByRole('button', { name: 'Open Prompted still' });
+      tile.focus();
+      fireEvent.click(tile);
+      const dialog = await screen.findByRole('dialog', { name: /prompted still/i });
+      return { tile, dialog };
+    };
+
+    it('takes the focus as it opens and hands it back to the tile as it closes', async () => {
+      const { tile, dialog } = await openFromTile();
+      await waitFor(() => expect(dialog).toHaveFocus());
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(tile).toHaveFocus();
+    });
+
+    it('keeps Tab and Shift+Tab inside, also from the page under it', async () => {
+      const { dialog } = await openFromTile();
+      await waitFor(() => expect(dialog).toHaveFocus());
+      const close = within(dialog).getByRole('button', { name: 'Close preview' });
+      const copy = within(dialog).getByRole('button', { name: /copy prompt/i });
+
+      fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+      expect(copy).toHaveFocus();
+      fireEvent.keyDown(window, { key: 'Tab' });
+      expect(close).toHaveFocus();
+      fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+      expect(copy).toHaveFocus();
+
+      screen.getByRole('button', { name: 'Next tile' }).focus();
+      fireEvent.keyDown(window, { key: 'Tab' });
+      expect(close).toHaveFocus();
+    });
+
+    // With the saved setup folded away, its Copy prompt is not drawn: Tab from the setup's summary,
+    // the last control on screen, went on out of the viewer, and Shift+Tab from Close sent the
+    // focus to the hidden button, so it stayed on Close.
+    it('goes round only the controls on screen when the saved setup is folded', async () => {
+      const { dialog } = await openFromTile();
+      await waitFor(() => expect(dialog).toHaveFocus());
+      const close = within(dialog).getByRole('button', { name: 'Close preview' });
+      const summary = dialog.querySelector('summary') as HTMLElement;
+      (summary.parentElement as HTMLDetailsElement).open = false;
+
+      summary.focus();
+      fireEvent.keyDown(window, { key: 'Tab' });
+      expect(close).toHaveFocus();
+      fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+      expect(summary).toHaveFocus();
+    });
   });
 });

@@ -1049,6 +1049,14 @@ export default function ShowcaseClient({
     // the debounced write may still be pending.
     useEffect(() => flushShowcaseSnapshot, [flushShowcaseSnapshot]);
 
+    // Whether the list holds the post the URL names. The URL effect follows
+    // that, not the list: on the list it ran again at every page that landed
+    // (and at every save and hide), which cut a shared post's read short and
+    // asked again each time, and opened the reel again whenever a page landed
+    // between a close and the URL moving on.
+    const urlPostId = searchParams.get('post');
+    const isUrlPostLoaded = urlPostId !== null && items.some((item) => item.id === urlPostId);
+
     useEffect(() => {
         const postParam = searchParams.get('post');
         // A close on its way: until the URL moves on, it names the post the
@@ -1075,7 +1083,7 @@ export default function ShowcaseClient({
             reelHistoryModeRef.current = 'direct';
         }
 
-        if (items.some((item) => item.id === postParam)) {
+        if (isUrlPostLoaded) {
             directPostRequestRef.current = postParam;
             setSelectedItemId(postParam);
             setDirectPostStatus(null);
@@ -1140,7 +1148,7 @@ export default function ShowcaseClient({
                 directPostRequestRef.current = null;
             }
         };
-    }, [directPostAttempt, items, searchParams, session?.access_token, setItems]);
+    }, [directPostAttempt, isUrlPostLoaded, searchParams, session?.access_token, setItems]);
 
     const retryDirectPost = useCallback(() => {
         directPostRequestRef.current = null;
