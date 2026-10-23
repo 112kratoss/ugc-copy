@@ -13,10 +13,12 @@ Flags: `--web-only`, `--mobile-only`, `--build` (production build and `build:ver
 
 What it runs, in the order of `.github/workflows/quality.yml`: web `vitest run --reporter=dot --silent=passed-only` (the same suite as `npm test`, output only from failing tests), `lint`, `typecheck`, `typecheck:scripts`, `typecheck:tests`, the perf self-tests, then with `--build` the build pair; mobile `npm test` and `npm run typecheck` in `ugc-mobile`; with `--e2e`, `npm run test:e2e`.
 
+`--e2e` runs the suite as Quality's E2E job does, from any checkout and with nothing exported: `playwright.config.ts` gives its own dev server on port 3100 the placeholder project and keys, none of the app's variables from the shell and none of the checkout's `.env*` files (the primary checkout's `.env.local` points at production), and runs one worker; how is in `.claude/rules/e2e.md`, "The dev server's env". So `npm run test:e2e` alone is the same run.
+
 It prints one line per step (`name exit code seconds`) and, for a failing step, the last forty lines of its log; full logs sit in the out dir. The exit code is 0 only when every step passed. Read the summary, not the logs, unless a step failed.
 
 Not covered, because they need the local Supabase stack or CI's images: the Supabase API integration job and the migration replay (`npx supabase db reset --local` and `npx supabase test db` with Docker up), the four FFmpeg audits, and the mobile `expo install --check`, `expo-doctor`, live-list (`scripts/expo-live-versions.mjs`), fingerprint (`scripts/verify-ota-target.mjs --set-aside`), `prebuild` and `export` steps. The two scripts need no stack: run them from `ugc-mobile` when a change could move them.
 
 A `typecheck` failure that names only `.next/types/validator.ts` is a stale build artefact listing routes since removed; CI never sees it because it has no `.next` before typecheck. With no `next dev` running, `rm -rf .next/types` and rerun (the script prints this hint when it applies).
 
-Before running: `--build` and `--e2e` refuse to run while a `next dev` is listening (they share `.next`, and Playwright's own server refuses to start), so stop any preview server first. If the mobile suite times out on a busy Mac, stop the emulator and rerun `--mobile-only`.
+Before running: `--build` still refuses while any `next dev` runs. `--e2e` refuses only while a `next dev` of this checkout holds `.next/dev/lock` (Next allows one per checkout; a server of another worktree does not matter) or port 3100 is taken, and names the process; once it is gone, `npm run test:e2e` runs the step alone. If the mobile suite times out on a busy Mac, stop the emulator and rerun `--mobile-only`.

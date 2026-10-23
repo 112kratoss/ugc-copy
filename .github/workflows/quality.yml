@@ -134,31 +134,19 @@ jobs:
       # (see playwright.config.ts). The authenticated workflow test stubs only
       # persistence APIs; public version and auth-boundary checks use the real
       # app routes. The bypass stays dev-only because `next dev` never runs a
-      # production build. The Supabase project below is a placeholder with no
-      # DNS record: the dev server answers the reads of the pages specs draw
-      # that read on the server (tests/e2e/support/supabase-server-stub.cjs),
-      # and every other read fails.
+      # production build. playwright.config.ts gives the dev server its whole
+      # env, here as on a laptop: a placeholder Supabase project with no DNS
+      # record and placeholder keys (the dev server answers the reads of the
+      # pages specs draw that read on the server,
+      # tests/e2e/support/supabase-server-stub.cjs, and every other read fails),
+      # none of the app's variables from the job's env, and no .env file.
       - name: Run E2E smoke tests
         run: npm run test:e2e
-        env:
-          NEXT_TELEMETRY_DISABLED: "1"
-          NEXT_PUBLIC_SITE_URL: http://127.0.0.1:3100
-          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
-          NEXT_PUBLIC_RAZORPAY_KEY_ID: ci-placeholder-razorpay-key
-          SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key
-          KIE_AI_API_KEY: ci-placeholder-kie-key
-          WEBHOOK_SECRET: ci-placeholder-webhook-secret
-          CRON_SECRET: ci-placeholder-cron-secret
-          RAZORPAY_KEY_SECRET: ci-placeholder-razorpay-secret
-          RAZORPAY_WEBHOOK_SECRET: ci-placeholder-razorpay-webhook-secret
-          REVENUECAT_REST_API_KEY: ci-placeholder-revenuecat-key
-          REVENUECAT_WEBHOOK_AUTH_TOKEN: ci-placeholder-revenuecat-webhook-token
 
       # A failed test leaves its trace in test-results/ (trace: 'retain-on-failure'
       # in playwright.config.ts) and the runner is gone when the job ends. Kept for
       # a week, the next failure can be read instead of guessed at. The run uses
-      # the placeholder values above, so a trace holds no secret.
+      # the config's placeholder values, so a trace holds no secret.
       - name: Upload the traces of failed tests
         if: ${{ failure() }}
         uses: actions/upload-artifact@v6

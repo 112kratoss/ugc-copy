@@ -28,8 +28,9 @@ function searchResponse(query: string, type: string) {
 // when another page connects after such a compile (see
 // kling-o3-named-subjects.spec.ts for the same behaviour surfacing as aborted
 // navigations). A self-reload mid-journey wipes typed input and in-memory
-// results, so environmental retries keep this spec stable on a run with several
-// workers without loosening any assertion. CI runs one worker and does not meet it.
+// results, so environmental retries keep this spec stable on a run given several
+// workers (`--workers`) without loosening any assertion. The config's one worker,
+// in CI and out of it, does not meet it.
 test.describe.configure({ retries: 2 });
 
 test.describe('public search', () => {

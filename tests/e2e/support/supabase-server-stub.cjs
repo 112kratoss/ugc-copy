@@ -1,12 +1,12 @@
 // The Supabase reads the E2E dev server answers itself, so that a spec can draw a page whose
 // server render reads its data.
 //
-// CI's E2E job points the app at a placeholder project, https://example.supabase.co
-// (.github/workflows/quality.yml), a host with no DNS record: every read the server makes fails,
+// The E2E run points the app at a placeholder project, https://example.supabase.co
+// (playwright.config.ts), a host with no DNS record: every read the server makes fails,
 // and a page that reads its data on the server draws its error state. The creator page,
 // /creators/<name>, reads its creator in getCreatorProfileSummary (src/lib/creator-profile.ts).
-// Playwright's page.route answers only the browser's requests. So playwright.config.ts loads this
-// file into the dev server (NODE_OPTIONS --require), where it wraps fetch: a request that matches
+// Playwright's page.route answers only the browser's requests. So the dev server loads this file
+// (through dev-server.cjs, which playwright.config.ts preloads), where it wraps fetch: a request that matches
 // one of READS below is answered here, before anything leaves the process, and every other
 // request goes on as before. A page no spec draws through this file fails offline as it did.
 //
