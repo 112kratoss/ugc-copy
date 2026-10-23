@@ -11,7 +11,9 @@
 // request goes on as before. A page no spec draws through this file fails offline as it did.
 //
 // The data is one creator, owned by the E2E user (`workflow-user`, src/lib/e2e-auth.ts), who has
-// published nothing: the profiles row in fixtures/creator-profile.json, which the specs read too.
+// published nothing: the profiles row in fixtures/creator-profile.json, which the specs read too. And
+// one post page's: a text post with a free recipe, by a creator of its own
+// (fixtures/post-with-recipe.json).
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -23,6 +25,11 @@ const { appendFileSync } = require('node:fs');
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const creator = require('../fixtures/creator-profile.json');
+// A text post with a free recipe, by a creator of its own (not the E2E user, whose profile row the
+// other pages read): the post page, /showcase/<id>, reads it in getPublicPostDetail
+// (src/lib/public-posts.ts) and its recipe in getPostResourceBundleDetailByPostId.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const recipePost = require('../fixtures/post-with-recipe.json');
 
 const HOST = 'example.supabase.co';
 
@@ -56,6 +63,48 @@ const READS = [
     path: '/rest/v1/rpc/get_creator_profile_stats',
     body: { p_creator_id: creator.id },
     answer: () => json({ publicCreations: 0, totalSaves: 0, totalRemixes: 0, unlocks: 0, totalUnlockSales: 0, toolsUsed: [] }),
+  },
+  {
+    // fetchPublicPostRow: the post by id.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `eq.${recipePost.post.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? recipePost.post : [recipePost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // loadPostMediaItemsMap: a text post has none.
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: `in.(${recipePost.post.id})` },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // loadPublicPostCreator.
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `eq.${recipePost.creator.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? recipePost.creator : [recipePost.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // The post's recipe.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: `eq.${recipePost.post.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? recipePost.bundle : [recipePost.bundle], { 'content-range': '0-0/1' }),
+  },
+  {
+    // hydrateBundleRows: the recipe's seller (loadProfileMap)...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${recipePost.creator.id})` },
+    answer: () => json([recipePost.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...and the post it belongs to (loadLinkedPostMap).
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `in.(${recipePost.post.id})` },
+    answer: () => json([recipePost.post], { 'content-range': '0-0/1' }),
   },
 ];
 

@@ -2488,7 +2488,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       </div>
 
       {!createdPost ? (
-        <div className="fixed inset-x-4 bottom-4 z-40 lg:hidden">
+        // Above the app shell's bottom navigation, which floats over the page's
+        // bottom edge below 768px (z-60): at `bottom-4` the nav was drawn over
+        // both buttons, so a phone could not save or publish.
+        <div className="fixed inset-x-4 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+1rem)] z-40 lg:hidden">
           <div className="flex items-center gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
             <button
               type="submit"
@@ -2514,7 +2517,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         </div>
       ) : null}
 
-      <div className="studio-shell relative z-10 py-12 sm:py-16">
+      {/* Below 1024px the page's end scrolls clear of the phone bar over it (7rem). */}
+      <div className="studio-shell relative z-10 pt-12 pb-28 sm:pt-16 lg:pb-16">
         <Link
           href={backHref}
           // beforeunload covers a reload or a closed tab, not this in-app link,

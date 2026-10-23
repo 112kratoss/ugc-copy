@@ -273,8 +273,10 @@ export default function ShowcaseDetailBody({
     />
   );
 
+  const showsMobileCta = Boolean(bundle && lockedViewer);
+
   return (
-    <div className="min-h-screen overflow-x-clip bg-[#050506] py-6 text-white">
+    <div className={`min-h-screen overflow-x-clip bg-[#050506] py-6 text-white${showsMobileCta ? ' canonical-post-cta-room' : ''}`}>
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute left-[8%] top-[-18%] h-[34rem] w-[34rem] rounded-full bg-blue-600/10 blur-[150px] mix-blend-screen" />
         <div className="absolute bottom-[-18%] right-[-8%] h-[34rem] w-[34rem] rounded-full bg-emerald-500/10 blur-[150px] mix-blend-screen" />
@@ -492,10 +494,12 @@ export default function ShowcaseDetailBody({
         </div>
       </div>
 
-      {bundle && lockedViewer ? (
+      {bundle && showsMobileCta ? (
+        // Above the app shell's bottom navigation, which floats over the page's
+        // bottom edge below 768px (z-60) and was drawn over the whole CTA there.
         <Link
           href="#recipe"
-          className="canonical-post-mobile-cta fixed inset-x-3 bottom-3 z-40 flex items-center justify-between gap-3 rounded-[22px] border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
+          className="canonical-post-mobile-cta fixed inset-x-3 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-40 flex items-center justify-between gap-3 rounded-[22px] border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
         >
           <span>
             <span className="block text-sm font-bold">
