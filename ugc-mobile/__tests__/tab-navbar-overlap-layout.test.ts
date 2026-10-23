@@ -34,6 +34,8 @@ describe('tab navbar overlap layout', () => {
     expect(source).toMatch(/const contentBottom = persistentBarBottom \+ persistentBarHeight \+ PERSISTENT_BAR_CLEARANCE;/);
     expect(source.match(/paddingBottom: contentBottom,/g)).toHaveLength(2);
     expect(source.match(/bottom=\{persistentBarBottom\}/g)).toHaveLength(2);
+    expect(source).toMatch(/const PERSISTENT_BAR_HEIGHT = 72;/);
+    expect(source).toMatch(/const PERSISTENT_BAR_CLEARANCE = 28;/);
     expect(source).not.toContain('getMagicTabBarMetrics');
   });
 

@@ -292,11 +292,13 @@ describe('marketplace asset screen recipe words', () => {
     const gone = renderScreen();
     expect(statusTitles(gone)).toEqual(['Recipe unavailable']);
     expect(sectionTitle(gone)).toBeUndefined();
+    expect(gone.root.findAll((node) => String(node.type) === 'detail-skeleton')).toHaveLength(0);
 
     queryState.error = new Error('Network request failed.');
     const failed = renderScreen();
     expect(statusTitles(failed)).toEqual(['Could not load recipe']);
     expect(sectionTitle(failed)).toBeUndefined();
+    expect(failed.root.findAll((node) => String(node.type) === 'detail-skeleton')).toHaveLength(0);
     expect(failed.root.findAll((node) => String(node.type) === 'secondary-button').map((node) => node.props.label)).toEqual(['Retry recipe']);
   });
 

@@ -148,7 +148,7 @@ describe('HIG toolbars — view titles', () => {
     );
     const words = (text: string) => text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
     const repeatsTitle = ({ kind, text }: PageWords, title: string) => (kind === 'eyebrow'
-      ? words(text).join(' ') === words(title).join(' ')
+      ? words(text).join('') === words(title).join('')
       : words(text).length > 0 && words(text).every((word) => words(title).includes(word)));
 
     // Every entry of the root layout, however it is wrapped; one with no header shows no title to repeat.
@@ -177,7 +177,7 @@ describe('HIG toolbars — view titles', () => {
       pageWords(readFileSync(file, 'utf8')).map((words) => ({ ...words, title, file: relative(file) }))
     )));
     const repeats = [...new Set(read
-      .filter((words) => repeatsTitle(words, words.title))
+      .filter((entry) => repeatsTitle(entry, entry.title))
       .map(({ kind, text, title, file }) => `${file}: ${kind} "${text}" under the "${title}" header`))];
 
     it('reads every form of eyebrow and heading', () => {
@@ -205,6 +205,7 @@ describe('HIG toolbars — view titles', () => {
       const eyebrow = (text: string): PageWords => ({ kind: 'eyebrow', text });
       const heading = (text: string): PageWords => ({ kind: 'heading', text });
       expect(repeatsTitle(eyebrow('Your recipe'), 'Your Recipe')).toBe(true);
+      expect(repeatsTitle(eyebrow('Signin'), 'Sign In')).toBe(true);
       expect(repeatsTitle(eyebrow('Help & Support'), 'Help and Support')).toBe(false);
       expect(repeatsTitle(eyebrow('Account'), 'Delete Account')).toBe(false);
       expect(repeatsTitle(heading('Your recipe.'), 'Your Recipe')).toBe(true);

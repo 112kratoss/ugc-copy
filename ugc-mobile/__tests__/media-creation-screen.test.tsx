@@ -6138,12 +6138,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
       };
 
-      const story = () => savedDrafts({ video: {
+      const story = (video: Record<string, unknown> = {}) => savedDrafts({ video: {
         model: 'kling-3.0-video',
         catalogRevision: 'parity-rev',
         isMultiShot: true,
         multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', '@turn spins in', 4)],
         referenceVideos: [stagedMedia('turn', 'video', { durationSeconds: 3 })],
+        ...video,
       } });
 
       it('draws the clips a Kling 3.0 story sends, beside the rail’s own count', async () => {
@@ -6185,15 +6186,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       // on screen lost a clip's mention when it was removed or renamed: switched to the other, the run named
       // a clip it no longer had, "Unknown element mention: @turn" (redundant-UI audit, 2026-10-21).
       describe('the words a switch between single shot and story brings back', () => {
-        const bothNaming = (video: Record<string, unknown> = {}) => savedDrafts({ video: {
-          model: 'kling-3.0-video',
-          catalogRevision: 'parity-rev',
-          isMultiShot: true,
-          prompt: 'Close on @turn at dusk',
-          multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', '@turn spins in', 4)],
-          referenceVideos: [stagedMedia('turn', 'video', { durationSeconds: 3 })],
-          ...video,
-        } });
+        // The story above, with the single shot's prompt naming the clip too.
+        const bothNaming = (video: Record<string, unknown> = {}) => story({ prompt: 'Close on @turn at dusk', ...video });
 
         beforeEach(() => {
           catalogState.catalog = parityCatalog([parityKlingVideo()]);
