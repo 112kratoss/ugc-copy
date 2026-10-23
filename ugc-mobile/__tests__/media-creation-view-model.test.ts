@@ -159,6 +159,15 @@ describe('media creation view model', () => {
     });
   });
 
+  // Rename runs at every keystroke and an emptied name has no handle, so a clip that kept a handle
+  // only while it held one lost it for good on the way to a new name. Its slot says whether it has one.
+  it('gives a clip its handle back after its name was emptied, where its slot names clips', () => {
+    const emptied = renameMediaDraft({ ...videoReference(), handle: '@reference_motion' }, '', true);
+    expect(emptied).toMatchObject({ displayName: '', handle: undefined });
+    expect(renameMediaDraft(emptied, 'Dance Loop', true)).toMatchObject({ displayName: 'Dance Loop', handle: '@dance_loop' });
+    expect(renameMediaDraft(emptied, 'Dance Loop')).toMatchObject({ displayName: 'Dance Loop', handle: undefined });
+  });
+
   it('replaces a reference media in place while keeping its identity', () => {
     const original = imageReference({ sourceGenerationId: 'gen-1' });
 

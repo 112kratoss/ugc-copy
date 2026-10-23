@@ -6258,6 +6258,37 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         });
       });
 
+      // Rename runs at every keystroke and an emptied name has no handle. A clip got one back only
+      // while it still held one, so a name backspaced away on the way to a new one left the clip
+      // with no "Insert @…" and no place in the mention list (the redundant-UI leftovers' review).
+      it('gives a clip whose name was emptied its @handle back with the name typed after it', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          referenceVideos: [stagedMedia('turn', 'video', { durationSeconds: 3 })],
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        renderer.act(() => { labelled(tree.root, 'Open details for Turn').props.onPress(); });
+        const nameField = () => tree.root.find((node) => (
+          String(node.type) === 'textinput' && String(node.props.accessibilityLabel).startsWith('Reference name for')
+        ));
+        for (const name of ['Tur', 'Tu', 'T', '', 'S', 'Sp', 'Spin']) {
+          renderer.act(() => { nameField().props.onChangeText(name); });
+        }
+        await settle();
+
+        expect(storedDrafts().video.referenceVideos).toEqual([expect.objectContaining({ displayName: 'Spin', handle: '@spin' })]);
+        expect(text(tree)).toContain('Insert @spin');
+        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
+        await settle();
+        const prompt = () => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+        renderer.act(() => prompt().props.onFocus());
+        renderer.act(() => prompt().props.onChangeText('Close on @sp'));
+        renderer.act(() => prompt().props.onSelectionChange({ nativeEvent: { selection: { start: 12, end: 12 } } }));
+        expect(labelled(tree.root, 'Insert @spin, Spin')).toBeTruthy();
+      });
+
       // With references attached Wan 2.7 takes a start frame beside them and no end frame, and the
       // frames group's slot is the one place that start frame is drawn and added.
       describe('Wan 2.7, which sends a start frame beside its references', () => {

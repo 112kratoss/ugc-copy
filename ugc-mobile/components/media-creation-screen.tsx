@@ -451,6 +451,16 @@ function referenceVideoSlot(model: CreatorCatalogModel | null, draft: VideoCreat
 }
 
 /**
+ * Whether a video draft's clips answer to an @handle on this model: where its clip slot names them, and
+ * on Kling 3.0 when its descriptor has no input modes. An upload and a rename ask the same, so a clip
+ * renamed has the handle an upload gives it.
+ */
+function clipsTakeHandles(model: CreatorCatalogModel | null, draft: VideoCreationDraft) {
+  const clipSlot = model?.inputModes ? referenceVideoSlot(model, draft, referenceRailShape(draft, model)) : null;
+  return clipSlot ? Boolean(clipSlot.supportsNaming) : draft.model === 'kling-3.0-video';
+}
+
+/**
  * Whether a video draft's words name a handle: the single shot's prompt or a story's shots, whichever is
  * on screen, as a switch between the two brings the other back as the words the run reads.
  */
@@ -485,7 +495,7 @@ function withVideoMentionReplaced(
  * the words that name it. Like `withoutVideoReference`, it is made from the draft it is handed, the
  * draft as it is when the change is applied.
  */
-function withVideoReferenceRenamed(draft: VideoCreationDraft, id: string, displayName: string): VideoCreationDraft {
+function withVideoReferenceRenamed(draft: VideoCreationDraft, id: string, displayName: string, model: CreatorCatalogModel | null): VideoCreationDraft {
   const subjects = videoSubjects(draft);
   const subject = subjects.find((item) => item.id === id);
   if (subject) {
@@ -498,7 +508,7 @@ function withVideoReferenceRenamed(draft: VideoCreationDraft, id: string, displa
   }
   const reference = [...draft.references, ...draft.referenceVideos].find((media) => media.id === id);
   if (reference) {
-    const nextName = renameMediaDraft(reference, displayName);
+    const nextName = renameMediaDraft(reference, displayName, clipsTakeHandles(model, draft));
     // Two references renamed alike would otherwise answer to one @mention.
     const renamed = nextName.handle
       ? withUniqueReferenceHandle(nextName, [...draft.references, ...draft.referenceVideos, ...subjects.map(subjectAsReference)]
@@ -1998,7 +2008,7 @@ function IdentityCreationScreen({
       ? selectedModel?.inputModes ? clipSlot?.max ?? 0 : selectedModel?.inputs.videoReferences?.max ?? 0
       : catalogInputLimit(selectedModel, selectedDraft, motionClipSlotKey, 1, 'elements');
     // Named clips are mentioned in the prompt, so each needs a handle of its own.
-    const namesClips = clipSlot ? Boolean(clipSlot.supportsNaming) : videoDraft.model === 'kling-3.0-video';
+    const namesClips = target === 'video' && clipsTakeHandles(selectedModel, videoDraft);
     // A motion run takes one clip, so a new pick takes the place of the one attached, as Replace does.
     const replacesClip = target === 'motion' && maxVideos > 0;
     if (currentCount >= maxVideos && !replacesClip) {
@@ -4509,7 +4519,7 @@ function VideoCreatorComposer({
   const renameSelectedReference = (displayName: string) => {
     if (!selectedReference) return;
     const { id } = selectedReference;
-    onChange((current) => withVideoReferenceRenamed(current, id, displayName));
+    onChange((current) => withVideoReferenceRenamed(current, id, displayName, model));
   };
 
   // A reference, clip or track, with its @handle taken out of the words the run reads. A frame
