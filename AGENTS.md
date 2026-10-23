@@ -27,7 +27,7 @@ npm run typecheck:tests    # separate project for src/__tests__/ (tsconfig.tests
 npm test                   # vitest run — all unit/integration tests in src/__tests__/
 npm run test:quiet         # the same suite with the dot reporter and output only from failing tests (agents, long sessions)
 npx vitest run src/__tests__/<file>.test.ts   # single test file
-npm run test:e2e           # Playwright, tests/e2e/ — boots its own dev server on :3100 with E2E auth bypass and CI's placeholder env (never a checkout's .env files)
+npm run test:e2e           # Playwright, tests/e2e/ — boots its own dev server on :3100 with E2E auth bypass and the config's placeholder env only (no app variable from the shell, no .env file of the checkout)
 # also available: backfill:* (media/preview/fingerprint backfills), perf:load / perf:lighthouse,
 # db:inspect:performance, db:benchmark:scaling, eval:enhancer (prompt-enhancer eval), ops:guest-acceptance
 ```

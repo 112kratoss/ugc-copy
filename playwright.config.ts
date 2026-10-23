@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { defineConfig, devices } from '@playwright/test';
@@ -5,13 +6,12 @@ import { defineConfig, devices } from '@playwright/test';
 const PORT = 3100;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
-// The E2E job's env (.github/workflows/quality.yml, "Run E2E smoke tests"), given to the dev server
-// over the shell's, so that a run anywhere gets the job's placeholder project and keys and no shell
-// can point the server at a real project. The project has no DNS record; the stub below answers the
-// server reads specs need. e2e-smoke-readiness.test.ts keeps this copy equal to the job's.
-const E2E_JOB_ENV = {
+// The project and keys of every E2E run, CI's E2E job included (it sets none of its own): a
+// placeholder project with no DNS record, whose server reads the specs need the stub below answers,
+// and keys that open nothing.
+const PLACEHOLDER_ENV = {
   NEXT_TELEMETRY_DISABLED: '1',
-  NEXT_PUBLIC_SITE_URL: 'http://127.0.0.1:3100',
+  NEXT_PUBLIC_SITE_URL: BASE_URL,
   NEXT_PUBLIC_SUPABASE_URL: 'https://example.supabase.co',
   NEXT_PUBLIC_SUPABASE_ANON_KEY: 'ci-placeholder-anon-key',
   NEXT_PUBLIC_RAZORPAY_KEY_ID: 'ci-placeholder-razorpay-key',
@@ -25,12 +25,21 @@ const E2E_JOB_ENV = {
   REVENUECAT_WEBHOOK_AUTH_TOKEN: 'ci-placeholder-revenuecat-webhook-token',
 };
 
-// Loaded into the dev server, where it answers the Supabase reads of the pages specs draw whose
-// server render reads them (the creator page): Playwright's routes reach only the browser. The
-// file says which reads, and why every other request goes on as before. Quoted, as a checkout's
-// path can hold a space; `next dev` hands its server process only the last --require it was
-// given, so this one goes last.
-const SUPABASE_SERVER_STUB = `--require=${JSON.stringify(path.join(__dirname, 'tests/e2e/support/supabase-server-stub.cjs'))}`;
+// Every variable the app reads is listed in .env.example. The dev server gets none of them from the
+// shell, as on CI's runner, only the ones above: a shell that exported a real project or real keys
+// reaches nothing. Playwright spreads its own process.env under webServer.env, so each name is set to
+// undefined there, which Node's spawn leaves out of the server's env.
+const UNSET_APP_ENV = Object.fromEntries(
+  [...fs.readFileSync(path.join(__dirname, '.env.example'), 'utf8').matchAll(/^#? ?([A-Z][A-Z0-9_]*)=/gm)]
+    .map(([, name]) => [name, undefined]),
+) as unknown as Record<string, string>;
+
+// Loaded into the dev server: it keeps the checkout's .env files from Next
+// (tests/e2e/support/no-env-files.cjs) and answers the Supabase reads of the pages specs draw whose
+// server render reads them, which Playwright's routes cannot reach (supabase-server-stub.cjs). Quoted,
+// as a checkout's path can hold a space; `next dev` hands its server process only the last --require
+// it was given, so this one goes last.
+const DEV_SERVER_PRELOAD = `--require=${JSON.stringify(path.join(__dirname, 'tests/e2e/support/dev-server.cjs'))}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -50,25 +59,22 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: `npm run dev -- --hostname 127.0.0.1 --port ${PORT}`,
+    // Starts from an empty data cache, as CI's checkout does. The checkout's own `next dev` keeps
+    // unstable_cache entries in .next/dev/cache/fetch-cache under keys that do not name the project
+    // (the primary checkout's hold production's feed), and Next serves such an entry stale when its
+    // refresh fails, which every refresh against the placeholder does.
+    command: `rm -rf .next/dev/cache/fetch-cache && npm run dev -- --hostname 127.0.0.1 --port ${PORT}`,
     url: BASE_URL,
     // Always a server of its own, as in CI: one already on the port could have any project
     // and any keys, and the specs would run against it.
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
-      ...process.env,
-      ...E2E_JOB_ENV,
-      // Next reads this as "the .env files are applied already" (processEnv in @next/env) and
-      // applies none, as in CI, whose checkout has none: a checkout's .env.local (the primary
-      // checkout's points at production) never reaches this server. Not a documented switch, so
-      // e2e-smoke-readiness.test.ts checks this Next still honours it. An env file changed during
-      // a run is applied after all (Next's forceReload ignores the flag), but only to keys this env
-      // leaves unset: the project and its keys stay the placeholder's.
-      __NEXT_PROCESSED_ENV: 'true',
+      ...UNSET_APP_ENV,
+      ...PLACEHOLDER_ENV,
       E2E_AUTH_BYPASS: '1',
       NEXT_PUBLIC_E2E_AUTH_BYPASS: '1',
-      NODE_OPTIONS: [process.env.NODE_OPTIONS, SUPABASE_SERVER_STUB].filter(Boolean).join(' '),
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, DEV_SERVER_PRELOAD].filter(Boolean).join(' '),
     },
   },
   projects: [
