@@ -311,5 +311,22 @@ describe('MediaDetailsPreviewModal', () => {
       fireEvent.keyDown(window, { key: 'Tab' });
       expect(close).toHaveFocus();
     });
+
+    // With the saved setup folded away, its Copy prompt is not drawn: Tab from the setup's summary,
+    // the last control on screen, went on out of the viewer, and Shift+Tab from Close sent the
+    // focus to the hidden button, so it stayed on Close.
+    it('goes round only the controls on screen when the saved setup is folded', async () => {
+      const { dialog } = await openFromTile();
+      await waitFor(() => expect(dialog).toHaveFocus());
+      const close = within(dialog).getByRole('button', { name: 'Close preview' });
+      const summary = dialog.querySelector('summary') as HTMLElement;
+      (summary.parentElement as HTMLDetailsElement).open = false;
+
+      summary.focus();
+      fireEvent.keyDown(window, { key: 'Tab' });
+      expect(close).toHaveFocus();
+      fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+      expect(summary).toHaveFocus();
+    });
   });
 });
