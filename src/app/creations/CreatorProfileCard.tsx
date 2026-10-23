@@ -780,9 +780,13 @@ export default function CreatorProfileCard({
         window.history.back();
         return;
       }
-      // The guard entry goes back on while the question is up, so another
-      // Back asks again (answering this one "stay") rather than leaving.
-      pushLeaveGuardEntry(pageGuardId);
+      // Forward onto the guard entry, still the one after this, while the
+      // question is up, so another Back asks again (answering this one "stay")
+      // rather than leaving. Forward, not the entry pushed again: Chrome takes
+      // an entry added in a popstate (no user activation since the Back) for
+      // history manipulation, and its own Back button then skipped every entry
+      // of the page, out of the site (archive/web-history-follow-ups-2026-10-23).
+      window.history.forward();
       leaveGuardEntryRef.current = true;
       void askToConfirm(LEAVE_WITHOUT_SAVING).then((confirmed) => {
         if (!confirmed || !leaveGuardEntryRef.current) return;

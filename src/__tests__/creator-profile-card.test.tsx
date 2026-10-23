@@ -265,8 +265,16 @@ describe('CreatorProfileCard', () => {
 
     // Back and a phone's back swipe left /profile/edit without a word: the
     // guard saw link clicks and tab closes only.
+    // Back onto the page's entry: the editor goes Forward onto its guard entry again while the
+    // question is up, so a second Back cannot slip past it. It used to push the entry again
+    // there, and Chrome takes an entry added in a popstate (no user activation since the Back)
+    // for history manipulation: its own Back button then skipped every entry of the page, out
+    // of the site, past the question (archive/web-history-follow-ups-2026-10-23).
+    const guardEntryAgain = () => waitFor(() => expect(window.history.state).toHaveProperty('profileLeaveGuard'));
+
     it('asks before Back leaves typed changes, and keeps them when the person stays', async () => {
       const pushState = vi.spyOn(window.history, 'pushState');
+      const forward = vi.spyOn(window.history, 'forward');
       const back = answerBackLater();
       render(
         <>
@@ -281,15 +289,16 @@ describe('CreatorProfileCard', () => {
       // One entry for the same address goes on top while the form is dirty.
       expect(pushState).toHaveBeenCalledTimes(1);
       expect(pushState.mock.calls[0][2]).toBe(window.location.href);
+      const entries = window.history.length;
 
       await pressBack();
 
-      // The entry goes back on top while the question is up, so a second Back
-      // cannot slip past it.
       const question = await screen.findByRole('alertdialog', { name: 'Leave without saving?' });
       expect(question).toHaveAccessibleDescription('Your profile changes haven’t been saved and will be lost.');
-      expect(pushState).toHaveBeenCalledTimes(2);
-      expect(pushState.mock.calls[1][2]).toBe(window.location.href);
+      await guardEntryAgain();
+      expect(forward).toHaveBeenCalledTimes(1);
+      expect(pushState).toHaveBeenCalledTimes(1);
+      expect(window.history.length).toBe(entries);
 
       // Staying: nothing moves and nothing typed is lost.
       fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }));
@@ -302,7 +311,7 @@ describe('CreatorProfileCard', () => {
 
       // Leaving: off the guard entry, then the Back that was asked for.
       await waitFor(() => expect(back).toHaveBeenCalledTimes(2));
-      expect(pushState).toHaveBeenCalledTimes(3);
+      expect(pushState).toHaveBeenCalledTimes(1);
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
 
@@ -316,19 +325,24 @@ describe('CreatorProfileCard', () => {
         </>
       );
       typeName('New Name');
+      const entries = window.history.length;
 
       await pressBack();
       await screen.findByRole('alertdialog', { name: 'Leave without saving?' });
+      await guardEntryAgain();
       await pressBack();
+      await guardEntryAgain();
 
-      // The second Back took the guard entry off and it went straight back on:
-      // still one question, and the page is still here.
-      expect(pushState).toHaveBeenCalledTimes(3);
+      // The second Back took the page off the guard entry and it went straight
+      // Forward onto it again: still one question, no entry added, and the page
+      // is still here.
+      expect(pushState).toHaveBeenCalledTimes(1);
+      expect(window.history.length).toBe(entries);
       expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
       fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Keep editing' }));
       await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
       expect(back).not.toHaveBeenCalled();
-      expect(pushState).toHaveBeenCalledTimes(3);
+      expect(pushState).toHaveBeenCalledTimes(1);
       expect(screen.getByPlaceholderText('Your creator name')).toHaveValue('New Name');
     });
 
