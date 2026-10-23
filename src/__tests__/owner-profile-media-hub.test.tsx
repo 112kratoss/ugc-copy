@@ -11,14 +11,14 @@ import type { ShowcaseFeedItem } from '@/lib/showcase';
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 const pushMock = router.push;
 
-// The address bar's query, one object per address, drawn again on the browser's
-// Back and Forward, as Next's is (`fixtures/address-bar-search-params.ts`).
+// The query a microtask behind the page's own history writes, as Next's is
+// (`fixtures/router-search-params.ts`).
 vi.mock('next/navigation', async () => {
-  const { useAddressBarSearchParams } = await import('./fixtures/address-bar-search-params');
+  const { useRouterSearchParams } = await import('./fixtures/router-search-params');
   return {
     useRouter: () => router,
     usePathname: () => '/profile',
-    useSearchParams: useAddressBarSearchParams,
+    useSearchParams: useRouterSearchParams,
   };
 });
 
@@ -632,6 +632,182 @@ describe('OwnerProfileMediaHub', () => {
     // No media to open, so the card is a record rather than a control that
     // does nothing when pressed.
     expect(screen.queryByRole('button', { name: /open failed clip/i })).not.toBeInTheDocument();
+  });
+
+  // A close clears the selection a render before the query lets go of the
+  // creation: the router takes the page's own replaceState a microtask later,
+  // and Back's popstate comes after the close. The effect that opens the
+  // creation the address names took that render for a new request, so a
+  // creation opened by address opened again after its Close, with no
+  // `generation` left in the address; and details that came after a close
+  // opened it again too (archive/web-profile-creation-close-2026-10-23).
+  describe('a creation the reader closed', () => {
+    const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
+    const noPreview = () => expect(screen.queryByRole('dialog', { name: /creation preview/i })).not.toBeInTheDocument();
+    // Holds back the details read of a creation until the returned call sends it.
+    const holdDetails = (generationId: string) => {
+      const answer = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+      let send: () => void = () => {
+        throw new Error(`No details read of ${generationId} was held`);
+      };
+      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+        String(input).includes(`/api/generations?includeArchived=false&id=${generationId}`)
+          ? new Promise<Response>((resolve) => {
+            send = () => resolve(answer(input));
+          })
+          : answer(input)
+      )));
+      return () => send();
+    };
+    // Lets what was sent (and the router's own update) reach the page.
+    const settle = () => act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    const openRawFrameFromItsTile = async () => {
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await screen.findByRole('button', { name: /open public post/i });
+      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /open raw frame/i }));
+      return screen.findByRole('dialog', { name: /raw frame creation preview/i });
+    };
+
+    it('stays closed when the address had opened it', async () => {
+      window.history.replaceState(null, '', '/profile?tab=creations&generation=raw-generation');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
+
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      await settle();
+
+      expect(window.location.search).toBe('?tab=creations');
+      noPreview();
+      // Its tile still opens it.
+      fireEvent.click(screen.getByRole('button', { name: /open raw frame/i }));
+      expect(await screen.findByText('Owner-only creation prompt')).toBeInTheDocument();
+    });
+
+    it('stays closed until the popstate of the Back that closes it, when its details come meanwhile too', async () => {
+      const sendDetails = holdDetails('raw-generation');
+      const preview = await openRawFrameFromItsTile();
+
+      // Until Back's popstate the address still names the creation.
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      await settle();
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(window.location.search).toBe('?tab=creations&generation=raw-generation');
+      noPreview();
+
+      // The list takes the details, and the selection stays empty.
+      sendDetails();
+      await settle();
+      noPreview();
+    });
+
+    // Opened by address on the page's own entry (a reload, or Back from a page
+    // it linked to), its Close goes Back too; a page of the list can land first.
+    it('stays closed until the popstate of the Back that closes it, when more creations load meanwhile', async () => {
+      const answerPage = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
+          const page = await (await answerPage(input)).json();
+          return url.includes('cursor=')
+            ? response({ generations: [{ ...page.generations[0], id: 'older-generation', title: 'Older frame' }], pagination: { hasMore: false, nextCursor: null } })
+            : response({ ...page, pagination: { hasMore: true, nextCursor: 'page-2' } });
+        }
+        return answerPage(input);
+      }));
+      window.history.replaceState(createReelEntryState('generation'), '', '/profile?tab=creations&generation=raw-generation');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
+
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      await settle();
+      expect(back).toHaveBeenCalledTimes(1);
+      noPreview();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Load more creations' }));
+      expect(await screen.findByRole('button', { name: /open older frame/i })).toBeInTheDocument();
+      noPreview();
+    });
+
+    it('stays closed when its details come after the Close, and Forward opens it again with them', async () => {
+      const sendDetails = holdDetails('raw-generation');
+      const preview = await openRawFrameFromItsTile();
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
+      noPreview();
+
+      sendDetails();
+      await settle();
+
+      noPreview();
+      expect(window.location.search).toBe('?tab=creations');
+      window.history.forward();
+      const reopened = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
+      expect(within(reopened).getByText('Owner-only creation prompt')).toBeInTheDocument();
+    });
+
+    it('keeps the creation opened next when the details of the one closed come', async () => {
+      const answerPage = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+      const secondCreation = {
+        id: 'second-generation',
+        output_url: 'https://example.com/second.jpg',
+        preview_url: null,
+        status: 'completed',
+        created_at: '2026-07-06T00:00:00.000Z',
+        model: 'image-model',
+        category: 'image',
+        title: 'Second frame',
+        linked_post_id: null,
+      };
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
+          const page = await (await answerPage(input)).json();
+          return response({ ...page, generations: [...page.generations, secondCreation] });
+        }
+        if (url.includes('/api/generations?includeArchived=false&id=second-generation')) {
+          return response({ generations: [{ ...secondCreation, prompt: 'Second creation prompt', input_media: [] }] });
+        }
+        return answerPage(input);
+      }));
+      const sendFirstDetails = holdDetails('raw-generation');
+      const first = await openRawFrameFromItsTile();
+      fireEvent.click(within(first).getByRole('button', { name: 'Close preview' }));
+      await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
+      fireEvent.click(screen.getByRole('button', { name: /open second frame/i }));
+      const second = await screen.findByRole('dialog', { name: /second frame creation preview/i });
+      await within(second).findByText('Second creation prompt');
+
+      sendFirstDetails();
+      await settle();
+
+      expect(screen.getByRole('dialog', { name: /second frame creation preview/i })).toHaveTextContent('Second creation prompt');
+      expect(screen.queryByRole('dialog', { name: /raw frame creation preview/i })).not.toBeInTheDocument();
+      expect(window.location.search).toBe('?tab=creations&generation=second-generation');
+    });
+
+    // The viewer moves no focus, so Enter on a tile can press it again behind
+    // it. A second entry naming the same creation left its Close going Back
+    // onto the first, which still named it.
+    it('pushes no second entry when the tile of the open creation is pressed again', async () => {
+      const preview = await openRawFrameFromItsTile();
+      await within(preview).findByText('Owner-only creation prompt');
+      const pushState = vi.spyOn(window.history, 'pushState');
+
+      fireEvent.click(screen.getByRole('button', { name: /open raw frame/i }));
+      await settle();
+      expect(pushState).not.toHaveBeenCalled();
+
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
+      noPreview();
+    });
   });
 
   // The reel opened from your own profile had no ⋯ at all. Saved posts are

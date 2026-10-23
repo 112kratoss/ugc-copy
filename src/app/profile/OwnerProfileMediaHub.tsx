@@ -572,12 +572,23 @@ export default function OwnerProfileMediaHub({
     })();
   }, [accessToken, initialTab, runTabLoad, userId]);
 
+  // The creation the address names opens once: when the address comes to name
+  // it, or when the list it waits for brings it in (a tile marks the one it
+  // opens itself); never again while the address still names it. A close
+  // clears the selection before this query lets go of the creation (Next hands
+  // the page's own replaceState to its readers a microtask later, and Back's
+  // popstate comes after the close), and the list can change in between.
+  const generationOpenedForAddressRef = useRef<string | null>(null);
   useEffect(() => {
     const requestedGenerationId = searchParams.get('generation');
-    if (!requestedGenerationId || selectedGeneration?.id === requestedGenerationId) return;
-    const existing = generations.find((generation) => generation.id === requestedGenerationId);
-    if (existing) setSelectedGeneration(existing);
-  }, [generations, searchParams, selectedGeneration?.id]);
+    if (requestedGenerationId === generationOpenedForAddressRef.current) return;
+    generationOpenedForAddressRef.current = null;
+    if (!requestedGenerationId) return;
+    const requested = generations.find((generation) => generation.id === requestedGenerationId);
+    if (!requested) return;
+    generationOpenedForAddressRef.current = requestedGenerationId;
+    setSelectedGeneration(requested);
+  }, [generations, searchParams]);
 
   const updateLocation = useCallback((updates: {
     tab?: ProfileMediaTab;
@@ -750,7 +761,12 @@ export default function OwnerProfileMediaHub({
   };
 
   const openGeneration = async (generation: OwnerGeneration) => {
+    // Open already: its tile keeps the focus behind the viewer, so Enter can
+    // press it again, and a second entry for it left Close going Back onto one
+    // that still named it.
+    if (selectedGeneration?.id === generation.id) return;
     creationHistoryModeRef.current = 'pushed';
+    generationOpenedForAddressRef.current = generation.id;
     setSelectedGeneration(generation);
     updateLocation({ generationId: generation.id, postId: null }, 'push');
 
@@ -759,7 +775,9 @@ export default function OwnerProfileMediaHub({
       const payload = await response.json();
       const fullGeneration = Array.isArray(payload.generations) ? payload.generations[0] as OwnerGeneration | undefined : undefined;
       if (response.ok && fullGeneration) {
-        setSelectedGeneration(fullGeneration);
+        // Details that come after a close, or after another creation opened,
+        // leave the viewer as it is.
+        setSelectedGeneration((current) => current?.id === fullGeneration.id ? fullGeneration : current);
         setGenerations((current) => current.map((item) => item.id === fullGeneration.id ? { ...item, ...fullGeneration } : item));
       }
     } catch (error) {
