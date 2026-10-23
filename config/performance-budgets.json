@@ -24,7 +24,7 @@
         "weight": 2,
         "p95TtfbMs": 1000,
         "p99TtfbMs": 2000,
-        "p95DecodedBytes": 835584,
+        "p95DecodedBytes": 671744,
         "minCacheHitRatio": 0.8
       },
       {
@@ -47,7 +47,7 @@
         ],
         "weight": 1,
         "p95EncodedBodyBytes": 294912,
-        "p95DecodedBytes": 622592
+        "p95DecodedBytes": 458752
       },
       {
         "name": "model-catalog-api",
