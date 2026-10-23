@@ -2392,26 +2392,33 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
   });
 
   // The page's end was padded for the bar alone, and a blocker stacks above the bar: two lines and the
-  // Get credits button covered the page's last row on the Pixel 9a (redundant-UI audit, 2026-10-21).
-  it.each(['image', 'video'] as const)('pads the end of the %s page by the bar and whatever stacks above it', (tool) => {
+  // Get credits button covered the page's last row on the Pixel 9a (redundant-UI audit, 2026-10-21). A
+  // padding that followed the bar both ways dropped with the credits blocker while a re-quote was pending,
+  // and a scroll view at its end keeps its offset as content grows, so the row went under it again.
+  it.each(['image', 'video'] as const)('keeps room at the end of the %s page for the bar and its tallest blocker, and only adds to it', (tool) => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<MediaCreationScreen initialTool={tool} />);
     });
     const paddingBottom = () => tree!.root.find((node) => String(node.type) === 'scrollview').props.contentContainerStyle.paddingBottom;
+    const bar = () => tree!.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'creator-persistent-bar')[0];
     const layOutBar = (height: number) => renderer.act(() => {
-      tree!.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'creator-persistent-bar')[0]
-        .props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 360, height } } });
+      bar().props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 360, height } } });
     });
     const base = paddingBottom();
 
-    // The bar alone is 72pt; a two-line blocker and the 7pt gap over it make 129.
+    // From the start: the bar's offset, the bar (72), the tallest blocker with its gap (59) and 28 to spare.
+    expect(base).toBe(bar().props.style.bottom + 72 + 59 + 28);
+    // Nothing over the bar, or two lines beside Get credits at the default text size: the room holds.
     layOutBar(72);
     expect(paddingBottom()).toBe(base);
-    layOutBar(129);
-    expect(paddingBottom()).toBe(base + 57);
-    layOutBar(72);
+    layOutBar(131);
     expect(paddingBottom()).toBe(base);
+    // A larger text size makes the stack taller; the end follows it out, and not back in.
+    layOutBar(170);
+    expect(paddingBottom()).toBe(base + 39);
+    layOutBar(72);
+    expect(paddingBottom()).toBe(base + 39);
   });
 
   it('shows the authoritative server quote in the persistent bar', async () => {

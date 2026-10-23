@@ -124,23 +124,9 @@ export default function ViewerUnlockScreen() {
           skeleton is the page, and after a failure the notice is. Both read "Recipe" under the Your
           Recipe header (redundant-UI audit, 2026-10-21). */}
       {detail ? (
-        <SectionTitle title={selectedRevision?.title ?? detail.title} body={`by ${detail.creatorDisplayName}`} />
-      ) : loadError ? null : (
-        <DetailSkeleton label="Loading your recipe" />
-      )}
-      {loadError ? (
-        unlockGone ? (
-          <StatusBlock title="Recipe unavailable" body="It may have been removed by moderation, or belong to another account." />
-        ) : (
-          <View style={{ gap: appTheme.spacing.gap }}>
-            <StatusBlock tone="danger" title="Could not load your recipe" body="Check your connection, then try again." />
-            <SecondaryButton label="Retry" onPress={() => void detailQuery.refetch()} />
-          </View>
-        )
-      ) : null}
-
-      {detail ? (
         <>
+          <SectionTitle title={selectedRevision?.title ?? detail.title} body={`by ${detail.creatorDisplayName}`} />
+
           <Card accent={activeAccessMode === 'free' ? 'workflow' : 'commerce'}>
             <UnlockCoverMedia
               cover={cover}
@@ -211,7 +197,18 @@ export default function ViewerUnlockScreen() {
             <SecondaryButton label="View original post" onPress={() => router.push(`/showcase/${detail.postId}` as never)} />
           ) : null}
         </>
-      ) : null}
+      ) : loadError ? (
+        unlockGone ? (
+          <StatusBlock title="Recipe unavailable" body="It may have been removed by moderation, or belong to another account." />
+        ) : (
+          <View style={{ gap: appTheme.spacing.gap }}>
+            <StatusBlock tone="danger" title="Could not load your recipe" body="Check your connection, then try again." />
+            <SecondaryButton label="Retry" onPress={() => void detailQuery.refetch()} />
+          </View>
+        )
+      ) : (
+        <DetailSkeleton label="Loading your recipe" />
+      )}
     </Screen>
   );
 }

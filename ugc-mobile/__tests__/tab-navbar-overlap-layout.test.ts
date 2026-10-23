@@ -25,16 +25,18 @@ describe('tab navbar overlap layout', () => {
     const source = readSource('components/media-creation-screen.tsx');
 
     expect(source).not.toContain('contentBottomReserve');
-    // Both branches that can render pad off the safe-area inset and the
-    // persistent bar's own stack (a blocker over it included, as laid out),
+    // Both branches that can render pad off the safe-area inset and the room
+    // kept for the persistent bar's stack (the bar and its tallest blocker),
     // so a reintroduced reserve would show up as a tab-bar metric added here.
     // This used to pin `contentBottomPadding`, which only the screen's
     // unreachable third branch consumed — the guard was reading dead code.
     expect(source).toMatch(/const persistentBarBottom = bottomInset \+ 8;/);
-    expect(source).toMatch(/const contentBottom = persistentBarBottom \+ persistentBarHeight \+ PERSISTENT_BAR_CLEARANCE;/);
+    expect(source).toMatch(/const contentBottom = persistentBarBottom \+ persistentBarRoom \+ PERSISTENT_BAR_CLEARANCE;/);
+    expect(source).toMatch(/useState\(PERSISTENT_BAR_HEIGHT \+ PERSISTENT_BAR_BLOCKER_ROOM\)/);
     expect(source.match(/paddingBottom: contentBottom,/g)).toHaveLength(2);
     expect(source.match(/bottom=\{persistentBarBottom\}/g)).toHaveLength(2);
     expect(source).toMatch(/const PERSISTENT_BAR_HEIGHT = 72;/);
+    expect(source).toMatch(/const PERSISTENT_BAR_BLOCKER_ROOM = 59;/);
     expect(source).toMatch(/const PERSISTENT_BAR_CLEARANCE = 28;/);
     expect(source).not.toContain('getMagicTabBarMetrics');
   });

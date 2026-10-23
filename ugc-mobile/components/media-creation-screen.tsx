@@ -1014,8 +1014,10 @@ function IdentityCreationScreen({
   const loadCatalogDetails = catalogQuery.loadDetails;
   const [parametersVisible, setParametersVisible] = useState(false);
   const [workspaceVisible, setWorkspaceVisible] = useState(false);
-  // What the persistent bar stacks over the page's end, a blocker over it included, as last laid out.
-  const [persistentBarHeight, setPersistentBarHeight] = useState(PERSISTENT_BAR_HEIGHT);
+  // The room the page's end keeps for the persistent bar's stack: the bar and the tallest blocker from the
+  // start, more when a larger text size makes the stack taller, never less (see PERSISTENT_BAR_BLOCKER_ROOM).
+  const [persistentBarRoom, setPersistentBarRoom] = useState(PERSISTENT_BAR_HEIGHT + PERSISTENT_BAR_BLOCKER_ROOM);
+  const growPersistentBarRoom = (height: number) => setPersistentBarRoom((current) => Math.max(current, height));
   const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
   const modelSelectionTouched = useRef<Record<CreatorToolId, boolean>>({ image: false, video: false, motion: false });
   const activeGenerationRequestKeyRef = useRef<string | null>(null);
@@ -1370,7 +1372,7 @@ function IdentityCreationScreen({
   const persistentBarBottom = bottomInset + 8;
   // The page scrolls on under the bar, so its end clears the bar's whole stack: padded for the bar
   // alone, a two-line blocker over it covered the last row (redundant-UI audit, 2026-10-21).
-  const contentBottom = persistentBarBottom + persistentBarHeight + PERSISTENT_BAR_CLEARANCE;
+  const contentBottom = persistentBarBottom + persistentBarRoom + PERSISTENT_BAR_CLEARANCE;
   const isCompact = width < 380;
   const meta = TOOL_META[activeTool];
   // Both branches must clear the status bar: the tab navigator does not apply a
@@ -2873,7 +2875,7 @@ function IdentityCreationScreen({
 
         <CreatorPersistentBar
           bottom={persistentBarBottom}
-          onHeightChange={setPersistentBarHeight}
+          onHeightChange={growPersistentBarRoom}
           summary={parameterSummary}
           blocker={persistentAction === 'generate' ? blocker : null}
           quoteStatus={creatorQuoteStatus}
@@ -3156,7 +3158,7 @@ function IdentityCreationScreen({
 
         <CreatorPersistentBar
           bottom={persistentBarBottom}
-          onHeightChange={setPersistentBarHeight}
+          onHeightChange={growPersistentBarRoom}
           summary={parameterSummary || 'Settings'}
           blocker={persistentAction === 'generate' ? blocker : null}
           quoteStatus={creatorQuoteStatus}
@@ -4389,12 +4391,20 @@ function VideoCreatorComposer({
   // screen, as a switch between the two brings the other back as the words the run reads.
   const draftTextNames = (handle?: string | null) => promptContainsHandle(draft.prompt, handle)
     || draft.multiPrompts.some((shot) => promptContainsHandle(shot.prompt, handle));
-  // Those words with a reference's @handle renamed, or taken out when it is removed. Left in the words off
-  // screen, a mention named nothing once they came back (redundant-UI audit, 2026-10-21).
-  const withMentionReplaced = (handle: string, replacement = '') => ({
-    prompt: promptContainsHandle(draft.prompt, handle) ? replacePromptHandle(draft.prompt, handle, replacement) : draft.prompt,
-    multiPrompts: draft.multiPrompts.map((shot) => (promptContainsHandle(shot.prompt, handle) ? { ...shot, prompt: replacePromptHandle(shot.prompt, handle, replacement) } : shot)),
-  });
+  // Those words with a reference's @handle renamed, or taken out when it is removed, and nothing when no
+  // words name it. Left in the words off screen, a mention named nothing once they came back (redundant-UI
+  // audit, 2026-10-21).
+  const withMentionReplaced = (handle: string | null | undefined, replacement = ''): Partial<Pick<VideoCreationDraft, 'prompt' | 'multiPrompts'>> => {
+    if (!handle || !draftTextNames(handle)) return {};
+    const replaced = (text: string) => (promptContainsHandle(text, handle) ? replacePromptHandle(text, handle, replacement) : text);
+    return {
+      prompt: replaced(draft.prompt),
+      multiPrompts: draft.multiPrompts.map((shot) => {
+        const prompt = replaced(shot.prompt);
+        return prompt === shot.prompt ? shot : { ...shot, prompt };
+      }),
+    };
+  };
 
   const renameSelectedReference = (displayName: string) => {
     if (!selectedReference) return;
@@ -4402,7 +4412,7 @@ function VideoCreatorComposer({
       const renamedSubject = renameSubjectDraft(selectedSubject, displayName, videoDraftHandles(draft));
       onChange({
         ...draft,
-        ...(draftTextNames(selectedSubject.handle) ? withMentionReplaced(selectedSubject.handle, renamedSubject.handle) : {}),
+        ...withMentionReplaced(selectedSubject.handle, renamedSubject.handle),
         subjects: subjects.map((subject) => (subject.id === selectedSubject.id ? renamedSubject : subject)),
       });
       return;
@@ -4414,9 +4424,7 @@ function VideoCreatorComposer({
         .filter((media) => media.id !== selectedReference.id))
       : nextName;
     const withRenamed = (items: MediaDraft[]) => items.map((media) => (media.id === selectedReference.id ? renamed : media));
-    const mention = selectedReference.handle && draftTextNames(selectedReference.handle)
-      ? withMentionReplaced(selectedReference.handle, renamed.handle ?? '')
-      : {};
+    const mention = withMentionReplaced(selectedReference.handle, renamed.handle ?? '');
     if (draft.references.some((media) => media.id === selectedReference.id)) {
       onChange({ ...draft, ...mention, references: withRenamed(draft.references) });
       return;
@@ -4448,7 +4456,7 @@ function VideoCreatorComposer({
     const without = (items: MediaDraft[]) => items.filter((item) => item.id !== media.id);
     onChange({
       ...draft,
-      ...(handleUsed && media.handle ? withMentionReplaced(media.handle) : {}),
+      ...withMentionReplaced(media.handle),
       references: without(draft.references),
       referenceVideos: without(draft.referenceVideos),
       referenceAudios: without(draft.referenceAudios),
@@ -4464,7 +4472,7 @@ function VideoCreatorComposer({
         : `${selectedSubject.displayName} was removed from this draft.`);
       onChange({
         ...draft,
-        ...(handleUsed ? withMentionReplaced(selectedSubject.handle) : {}),
+        ...withMentionReplaced(selectedSubject.handle),
         subjects: subjects.filter((subject) => subject.id !== selectedSubject.id),
       });
     } else if ([...draft.references, ...draft.referenceVideos].some((media) => media.id === selectedReference.id)) {
@@ -5517,6 +5525,14 @@ function ReferenceDetailsOverlay({
 
 /** The persistent bar's row with nothing stacked over it (its `minHeight`). */
 const PERSISTENT_BAR_HEIGHT = 72;
+/**
+ * The tallest blocker over the bar at the default text size, with the 7pt gap: two lines beside the Get
+ * credits button, 59pt on the Pixel 9a emulator. The page keeps this room whether a blocker shows or not.
+ * Blockers come and go with the quote (the credits blocker drops while a re-quote is pending), and a scroll
+ * view keeps its offset when its content grows and pulls it back when it shrinks, so a padding that followed
+ * the bar both ways left the last row under the blocker whenever one came back at the end of the page.
+ */
+const PERSISTENT_BAR_BLOCKER_ROOM = 59;
 /** The room left between the page's last row and the bar's stack at the end of the scroll. */
 const PERSISTENT_BAR_CLEARANCE = 28;
 
