@@ -81,11 +81,36 @@ describe('CreatorProfileCard', () => {
     });
 
     vi.stubGlobal('fetch', vi.fn());
+    // An entry of its own for each test: the editor takes an entry marked as a
+    // leave guard's for its own, and an earlier test may have left one on top.
+    window.history.pushState(null, '', window.location.href);
+    // Next's patched history methods (next/dist/client/components/app-router.js)
+    // copy its own fields in from the entry on top when an object is written
+    // without them. A state the tests write as null stands for an entry
+    // without one, as a plain `#fragment` link leaves.
+    for (const method of ['pushState', 'replaceState'] as const) {
+      const write = History.prototype[method];
+      window.history[method] = function (data: unknown, unused: string, url?: string | URL | null) {
+        const current = window.history.state as Record<string, unknown> | null;
+        const withNextFields = data && typeof data === 'object' && !('__NA' in data)
+          ? {
+            ...data,
+            ...(current?.__NA ? { __NA: current.__NA } : {}),
+            ...(current?.__PRIVATE_NEXTJS_INTERNALS_TREE
+              ? { __PRIVATE_NEXTJS_INTERNALS_TREE: current.__PRIVATE_NEXTJS_INTERNALS_TREE }
+              : {}),
+          }
+          : data;
+        write.call(this, withNextFields, unused, url);
+      };
+    }
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    Reflect.deleteProperty(window.history, 'pushState');
+    Reflect.deleteProperty(window.history, 'replaceState');
   });
 
   it('validates before patching and updates the preview link after a successful save', async () => {
@@ -199,14 +224,28 @@ describe('CreatorProfileCard', () => {
   });
 
   describe('the leave guard on Back', () => {
-    // The browser's Back: the entry on top comes off and popstate follows.
-    const pressBack = () => act(() => {
-      window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+    // A traversal of the browser's own, past any stub of the page's
+    // `history.back()`: popstate follows with the state of the entry reached
+    // (jsdom answers later). Next's own popstate reloads the page on an entry
+    // whose state is neither empty nor Next's (`__NA`,
+    // next/dist/client/components/app-router.js), so none may be reached.
+    const traverse = (delta: number) => act(async () => {
+      const reached = new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(() => reject(new Error(`No popstate after history.go(${delta})`)), 2000);
+        window.addEventListener('popstate', () => {
+          window.clearTimeout(timer);
+          resolve();
+        }, { once: true });
+      });
+      History.prototype.go.call(window.history, delta);
+      await reached;
+      const state = window.history.state as Record<string, unknown> | null;
+      expect(state === null || state.__NA === true, 'an entry Next would reload the page on').toBe(true);
     });
-    // `history.back()` from the page itself, answered as a browser would: later.
-    const answerBackLater = () => vi.spyOn(window.history, 'back').mockImplementation(() => {
-      window.setTimeout(() => window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state })), 0);
-    });
+    // The browser's Back: the entry on top comes off.
+    const pressBack = () => traverse(-1);
+    // `history.back()` from the page itself, counted, and answered as a browser would: later.
+    const answerBackLater = () => vi.spyOn(window.history, 'back');
     const typeName = (value: string) => fireEvent.change(screen.getByPlaceholderText('Your creator name'), {
       target: { value },
     });
@@ -243,7 +282,7 @@ describe('CreatorProfileCard', () => {
       expect(pushState).toHaveBeenCalledTimes(1);
       expect(pushState.mock.calls[0][2]).toBe(window.location.href);
 
-      pressBack();
+      await pressBack();
 
       // The entry goes back on top while the question is up, so a second Back
       // cannot slip past it.
@@ -258,7 +297,7 @@ describe('CreatorProfileCard', () => {
       expect(back).not.toHaveBeenCalled();
       expect(screen.getByPlaceholderText('Your creator name')).toHaveValue('New Name');
 
-      pressBack();
+      await pressBack();
       fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave without saving' }));
 
       // Leaving: off the guard entry, then the Back that was asked for.
@@ -278,9 +317,9 @@ describe('CreatorProfileCard', () => {
       );
       typeName('New Name');
 
-      pressBack();
+      await pressBack();
       await screen.findByRole('alertdialog', { name: 'Leave without saving?' });
-      pressBack();
+      await pressBack();
 
       // The second Back took the guard entry off and it went straight back on:
       // still one question, and the page is still here.
@@ -307,16 +346,178 @@ describe('CreatorProfileCard', () => {
       expect(routerMocks.push).not.toHaveBeenCalled();
     });
 
-    it('lets Back through without a question once the changes are reset', () => {
+    // Next's patched pushState copies its own fields in from the page's entry,
+    // and has the router write the page's tree in when that entry has none
+    // (after a `#fragment` link). Written in by the editor, a guard entry over
+    // an entry without state had no tree, so Back or Forward onto it from
+    // another page drew that page under the editor's address.
+    it("leaves Next's own fields on the guard entry to Next", () => {
+      const nextState = { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: { tree: 'editor' } };
+      window.history.replaceState(nextState, '', window.location.href);
+      const pushState = vi.spyOn(window.history, 'pushState');
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+
+      typeName('New Name');
+
+      expect(replaceState.mock.calls[0][0]).toMatchObject(nextState);
+      expect(pushState.mock.calls[0][0]).not.toHaveProperty('__NA');
+      expect(pushState.mock.calls[0][0]).not.toHaveProperty('__PRIVATE_NEXTJS_INTERNALS_TREE');
+      expect(window.history.state).toMatchObject(nextState);
+    });
+
+    it('lets Back through without a question once the changes are reset', async () => {
       const confirm = vi.spyOn(window, 'confirm');
       const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
       render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
       typeName('New Name');
       fireEvent.click(screen.getByRole('button', { name: /reset changes/i }));
 
-      pressBack();
+      await pressBack();
 
       expect(confirm).not.toHaveBeenCalled();
+      expect(back).toHaveBeenCalledTimes(1);
+    });
+
+    // The guard entry and the page's entry under it carry the guard's id in
+    // `history.state`. Told by the address and a ref alone, Forward onto the
+    // guard entry after a Leave reached a new editor that did not know it: the
+    // editor stood twice in history, an edit there pushed a second guard entry,
+    // and a later Leave landed on the editor again
+    // (archive/web-profile-leave-guard-entry-2026-10-23).
+    it('takes its guard entry for its own again when Forward reaches it after a Leave', async () => {
+      window.history.pushState(null, '', '/profile');
+      window.history.pushState(null, '', '/profile/edit');
+      const back = answerBackLater();
+      render(<FeedbackViewport />);
+      const left = render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      typeName('New Name');
+      await pressBack();
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave without saving' }));
+      // Off the guard entry, then the Back that was asked for: the page goes.
+      await waitFor(() => expect(window.location.pathname).toBe('/profile'));
+      expect(back).toHaveBeenCalledTimes(2);
+      left.unmount();
+      // Forward brings the page back, a new editor on its own entry.
+      await traverse(1);
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      const entries = window.history.length;
+
+      await traverse(1);
+      typeName('Another Name');
+
+      // No second guard entry: the editor stands once.
+      expect(window.history.length).toBe(entries);
+
+      await pressBack();
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave without saving' }));
+
+      // Back took the guard entry off, and Leave goes to the page before the editor.
+      await waitFor(() => expect(window.location.pathname).toBe('/profile'));
+      expect(back).toHaveBeenCalledTimes(4);
+    });
+
+    // A jump from the Back menu to an earlier visit of the editor (the same
+    // address) was taken for the guard's own Back: the question, then a Back
+    // past the entry chosen, or the guard pushed over it after the answer.
+    it('takes a jump back to an earlier visit of the page for no Back of its own, and guards the edits there', async () => {
+      window.history.pushState(null, '', '/profile/edit');
+      render(<FeedbackViewport />);
+      // The earlier visit had a guard of its own, and left from the page's entry.
+      const earlier = render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      typeName('Earlier Name');
+      earlier.unmount();
+      await pressBack();
+      window.history.pushState(null, '', '/profile');
+      window.history.pushState(null, '', '/profile/edit');
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      typeName('New Name');
+      const back = vi.spyOn(window.history, 'back');
+      const pushState = vi.spyOn(window.history, 'pushState');
+
+      await traverse(-3);
+
+      // No question, and no Back past the entry chosen. The edits are still on
+      // the page, so the guard goes up again over that entry.
+      expect(window.location.pathname).toBe('/profile/edit');
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(back).not.toHaveBeenCalled();
+      expect(pushState).toHaveBeenCalledTimes(1);
+
+      await pressBack();
+
+      expect(await screen.findByRole('alertdialog', { name: 'Leave without saving?' })).toBeInTheDocument();
+    });
+
+    // In the app the page goes on a jump to another page, but it is still drawn
+    // until the next one is: its guard must not go up on the entry reached.
+    it('puts no guard up on another page a jump reaches', async () => {
+      window.history.pushState(null, '', '/profile');
+      window.history.pushState(null, '', '/profile/edit');
+      render(<FeedbackViewport />);
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      typeName('New Name');
+      const pushState = vi.spyOn(window.history, 'pushState');
+
+      await traverse(-2);
+
+      expect(window.location.pathname).toBe('/profile');
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(pushState).not.toHaveBeenCalled();
+    });
+
+    // Save steps off the guard entry, then replaces the page's entry with the
+    // next page's, which keeps the entries after it: Forward brings the editor
+    // onto the entry the guard left. Still marked, it was taken for a guard
+    // entry over a page that was no longer the editor's, so an edit there put
+    // none up and Back left without a question.
+    it('takes its mark off the guard entry a save steps off', async () => {
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith('/api/profile/validate')) return { ok: true, json: async () => ({ ok: true }) } as Response;
+        if (url.endsWith('/api/profile')) {
+          return { ok: true, json: async () => ({ ...profile, displayName: 'New Name' }) } as Response;
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+      // Next's replace: the entry becomes the next page's, with Next's own state.
+      routerMocks.replace.mockImplementation((href: string) => window.history.replaceState({ __NA: true }, '', href));
+      render(<FeedbackViewport />);
+      const saved = render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      typeName('New Name');
+      fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+      await waitFor(() => expect(routerMocks.replace).toHaveBeenCalledWith('/profile'));
+      saved.unmount();
+      await traverse(1);
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      const pushState = vi.spyOn(window.history, 'pushState');
+
+      typeName('Another Name');
+
+      // A guard of its own goes up, and Back asks.
+      expect(pushState).toHaveBeenCalledTimes(1);
+      await pressBack();
+      expect(await screen.findByRole('alertdialog', { name: 'Leave without saving?' })).toBeInTheDocument();
+    });
+
+    // A link away with nothing left to keep does not stop for the guard entry,
+    // which stays under the next page; Back reaches it and the page mounts on it
+    // (a reload on it the same). Back from there passed the page's own entry
+    // only after a second Back: the editor stood twice.
+    it('takes the guard entry it mounts on for its own, so one Back passes the page', async () => {
+      render(<FeedbackViewport />);
+      const first = render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      typeName('New Name');
+      fireEvent.click(screen.getByRole('button', { name: /reset changes/i }));
+      first.unmount();
+      window.history.pushState(null, '', '/profile');
+      await pressBack();
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+
+      await pressBack();
+
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
       expect(back).toHaveBeenCalledTimes(1);
     });
 
