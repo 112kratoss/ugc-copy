@@ -283,6 +283,30 @@ describe('named subjects on the native creator', () => {
     expect(back.referenceMode).toBe('subjects');
   });
 
+  // Kept past the slot's count, the next subject's pictures went into the quote, as far as the slot's
+  // twelve pictures reached, beside the check that refuses the run (the branch's review, 2026-10-23).
+  it('quotes and sends the subjects a run names, never a part of the next one', () => {
+    const four = ['A', 'B', 'C', 'D'].map((name, index) => createSubjectDraft([picture(index * 2), picture(index * 2 + 1)], name, []));
+    const draft = subjectDraft(model, four, { prompt: '@a meets @b' });
+    const quote = buildCatalogQuoteRequest(draft, model, 'catalog-v2-revision');
+    expect(quote.inputCounts.images).toBe(6);
+    expect(quote.inputMetadata?.slots?.[SUBJECT_IMAGES_SLOT_KEY]).toMatchObject({ count: 6 });
+    const request = buildUnifiedCatalogGenerationRequest(draft, model, 'catalog-v2-revision');
+    expect([...new Set(request.inputs.map((input) => input.handle))]).toEqual(['@a', '@b', '@c']);
+    expect(validateCatalogCreationDraft(draft, model, { credits: 999 }).errors).toContain(`${model.displayName} takes up to 3 named subjects per run.`);
+  });
+
+  // A descriptor without input modes has no subjects slot, so a run on it sends none, and a subject the
+  // draft keeps for another model is no name its prompt may use.
+  it('lets no prompt name a kept subject on a descriptor without input modes', () => {
+    const hero = createSubjectDraft([picture(1), picture(2)], 'Hero', []);
+    const legacy: GenerationModelDescriptor = { ...remoteVideoModel('legacy-video'), inputModes: undefined };
+    const moved = applyCatalogModelDefaults(subjectDraft(model, [hero]), legacy) as VideoCreationDraft;
+    expect(moved.subjects).toEqual([hero]);
+    expect(validateCatalogCreationDraft({ ...moved, prompt: '@hero walks in' }, legacy, { credits: 999 }).errors)
+      .toContain('Unknown element mention: @hero');
+  });
+
   it('gives a subject a handle no reference or subject holds, and moves it with a rename', () => {
     const hero = createSubjectDraft([picture(1), picture(2)], 'Hero', ['@hero']);
     expect(hero.handle).toBe('@hero_2');

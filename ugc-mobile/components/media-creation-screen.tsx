@@ -423,10 +423,11 @@ function supportsReusableVideoInputs(
  * The shape a video run takes on this model, as the quote, the validator and the request
  * read it. A reference kept from another model, which this one has no slot for, no longer
  * makes a frames run a references run. Seeded with the shape the attachments imply, which
- * is all a descriptor without input modes can go by.
+ * is all a descriptor without input modes can go by; subjects kept for a model with a slot
+ * for them imply nothing on one without it.
  */
 function videoRunReferenceMode(draft: VideoCreationDraft, model: CreatorCatalogModel | null): ReferenceMode {
-  const derived = videoDraftReferenceMode(draft);
+  const derived = videoDraftReferenceMode(model && !catalogSubjectSlot(model) ? { ...draft, subjects: [] } : draft);
   return model ? catalogVideoRunReferenceMode({ ...draft, referenceMode: derived }, model) : derived;
 }
 
@@ -605,7 +606,7 @@ function isMissingUploadError(error: unknown) {
  * max, kept for another model) is marked where it waits and holds nothing. A subject's picture
  * carries the subject's name, and the subject is what is added again. A descriptor without input
  * modes has no slots to read, so every piece of media the draft holds counts, as its quote counts
- * them from the draft.
+ * them from the draft, but for subjects, which such a run never sends.
  */
 function unavailableRunInputMessage(
   draft: CreationDraft,
@@ -615,7 +616,7 @@ function unavailableRunInputMessage(
   if (!model || unavailablePaths.size === 0) return null;
   const inputs = model.inputModes
     ? catalogRunSlots(draft, model).flatMap(({ slot, assets }) => assets.map((asset) => ({ asset, ofSubject: slot.key === SUBJECT_IMAGES_SLOT_KEY })))
-    : heldDraftMedia(draft).map((asset) => ({ asset, ofSubject: false }));
+    : heldDraftMedia(draft.tool === 'video' ? { ...draft, subjects: [] } : draft).map((asset) => ({ asset, ofSubject: false }));
   const gone = inputs.find(({ asset }) => Boolean(asset.storagePath && unavailablePaths.has(asset.storagePath)));
   if (!gone) return null;
   const name = gone.asset.displayName?.trim() || gone.asset.fileName?.trim() || 'unnamed reference';

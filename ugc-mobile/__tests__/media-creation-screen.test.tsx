@@ -6503,6 +6503,31 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
             expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
             expect(text(tree)).not.toContain('Unknown element mention');
           });
+
+          // A descriptor without input modes reads its run's shape off the draft's own mode, which a kept
+          // subject turned to "subjects": a start frame then read as a references run in a frames-or-
+          // references conflict (the branch's review, 2026-10-23).
+          it('leave the frames run of a descriptor without input modes alone', async () => {
+            const legacy = { ...paritySeedanceVideo(), id: 'legacy-video', displayName: 'Legacy Video', inputModes: undefined };
+            catalogState.catalog = parityCatalog([parityKlingO3(), legacy]);
+            memory.set(ordinaryKey, savedDrafts({ video: {
+              model: 'legacy-video',
+              catalogRevision: 'parity-rev',
+              prompt: 'A door opens',
+              startFrame: stagedMedia('door'),
+              subjects: [{
+                id: 'subject-hero',
+                displayName: 'Hero',
+                handle: '@hero',
+                images: [stagedMedia('hero-front', 'image', { handle: '@hero' }), stagedMedia('hero-side', 'image', { handle: '@hero' })],
+              }],
+            } }));
+            const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+            expect(text(tree)).not.toContain('Clear one');
+            expect(text(tree)).toContain('Reusable unavailable with frames attached');
+            expect(pressables(tree.root.findByProps({ testID: 'standby-references' })).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Hero']);
+          });
         });
       });
 
