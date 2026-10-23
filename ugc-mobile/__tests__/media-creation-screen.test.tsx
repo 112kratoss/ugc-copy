@@ -6181,6 +6181,66 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(text(tree)).toContain('Turn and @turn were removed from this draft.');
       });
 
+      // A draft keeps both sets of words, the single shot's prompt and the story's shots, and only the ones
+      // on screen lost a clip's mention when it was removed or renamed: switched to the other, the run named
+      // a clip it no longer had, "Unknown element mention: @turn" (redundant-UI audit, 2026-10-21).
+      describe('the words a switch between single shot and story brings back', () => {
+        const bothNaming = (video: Record<string, unknown> = {}) => savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          isMultiShot: true,
+          prompt: 'Close on @turn at dusk',
+          multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', '@turn spins in', 4)],
+          referenceVideos: [stagedMedia('turn', 'video', { durationSeconds: 3 })],
+          ...video,
+        } });
+
+        beforeEach(() => {
+          catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        });
+
+        it('lose a removed clip’s mention from a story’s hidden prompt', async () => {
+          memory.set(ordinaryKey, bothNaming());
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          await removeFromDetails(tree, 'Turn');
+
+          expect(storedDrafts().video).toMatchObject({
+            referenceVideos: [],
+            prompt: 'Close on at dusk',
+            multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', 'spins in', 4)],
+          });
+          renderer.act(() => { labelled(tree.root, 'Single shot').props.onPress(); });
+          await settle();
+          expect(text(tree)).not.toContain('Unknown element mention: @turn');
+        });
+
+        it('lose a removed clip’s mention from the shots a single shot hides, and say so before and after', async () => {
+          memory.set(ordinaryKey, bothNaming({ isMultiShot: false, prompt: 'Close on the door at dusk' }));
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          await removeFromDetails(tree, 'Turn');
+
+          expect(nativeAlertState.alert.mock.lastCall?.[1]).toBe('Turn and @turn will be removed from this draft.');
+          expect(storedDrafts().video).toMatchObject({
+            prompt: 'Close on the door at dusk',
+            multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', 'spins in', 4)],
+          });
+          expect(text(tree)).toContain('Turn and @turn were removed from this draft.');
+        });
+
+        it('rename a clip’s mention in both', async () => {
+          memory.set(ordinaryKey, bothNaming());
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          renderer.act(() => { labelled(tree.root, 'Open details for Turn').props.onPress(); });
+          renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Reference name for Turn' }).props.onChangeText('Spin'); });
+          await settle();
+
+          expect(storedDrafts().video).toMatchObject({
+            prompt: 'Close on @spin at dusk',
+            multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', '@spin spins in', 4)],
+          });
+        });
+      });
+
       it('renames a story clip’s mention in the shot that names it', async () => {
         catalogState.catalog = parityCatalog([parityKlingVideo()]);
         memory.set(ordinaryKey, story());

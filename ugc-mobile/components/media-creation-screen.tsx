@@ -4323,7 +4323,7 @@ function VideoCreatorComposer({
   // memo only when the block it builds for each dependency closes before the memo, and its block
   // for `subjects` stays open almost to the end of the render: what is picked out of it
   // (`selectedSubject`, then `selectedReference`) is captured by the Rename and Remove closures
-  // and the details sheet's handlers below, and handed through `runTextNames` to
+  // and the details sheet's handlers below, and handed through `draftTextNames` to
   // `promptContainsHandle`, a function the compiler does not look inside and so must assume may
   // change what it is given. Kept, the memo made the compiler skip the whole component
   // (2026-10-22, `__tests__/compiled-screens.test.ts`). Nothing is lost: `runHandles` is a new
@@ -4385,14 +4385,16 @@ function VideoCreatorComposer({
     restorePromptFocus(focusDelay);
   };
 
-  // Whether the words the run reads name a handle: a single shot's prompt, or a story's shots.
-  const runTextNames = (handle?: string | null) => (draft.isMultiShot
-    ? draft.multiPrompts.some((shot) => promptContainsHandle(shot.prompt, handle))
-    : promptContainsHandle(draft.prompt, handle));
-  // Those words with a reference's @handle renamed, or taken out when it is removed.
-  const withMentionReplaced = (handle: string, replacement = '') => (draft.isMultiShot
-    ? { multiPrompts: draft.multiPrompts.map((shot) => (promptContainsHandle(shot.prompt, handle) ? { ...shot, prompt: replacePromptHandle(shot.prompt, handle, replacement) } : shot)) }
-    : { prompt: replacePromptHandle(draft.prompt, handle, replacement) });
+  // Whether the draft's words name a handle: the single shot's prompt or a story's shots, whichever is on
+  // screen, as a switch between the two brings the other back as the words the run reads.
+  const draftTextNames = (handle?: string | null) => promptContainsHandle(draft.prompt, handle)
+    || draft.multiPrompts.some((shot) => promptContainsHandle(shot.prompt, handle));
+  // Those words with a reference's @handle renamed, or taken out when it is removed. Left in the words off
+  // screen, a mention named nothing once they came back (redundant-UI audit, 2026-10-21).
+  const withMentionReplaced = (handle: string, replacement = '') => ({
+    prompt: promptContainsHandle(draft.prompt, handle) ? replacePromptHandle(draft.prompt, handle, replacement) : draft.prompt,
+    multiPrompts: draft.multiPrompts.map((shot) => (promptContainsHandle(shot.prompt, handle) ? { ...shot, prompt: replacePromptHandle(shot.prompt, handle, replacement) } : shot)),
+  });
 
   const renameSelectedReference = (displayName: string) => {
     if (!selectedReference) return;
@@ -4400,7 +4402,7 @@ function VideoCreatorComposer({
       const renamedSubject = renameSubjectDraft(selectedSubject, displayName, videoDraftHandles(draft));
       onChange({
         ...draft,
-        ...(runTextNames(selectedSubject.handle) ? withMentionReplaced(selectedSubject.handle, renamedSubject.handle) : {}),
+        ...(draftTextNames(selectedSubject.handle) ? withMentionReplaced(selectedSubject.handle, renamedSubject.handle) : {}),
         subjects: subjects.map((subject) => (subject.id === selectedSubject.id ? renamedSubject : subject)),
       });
       return;
@@ -4412,7 +4414,7 @@ function VideoCreatorComposer({
         .filter((media) => media.id !== selectedReference.id))
       : nextName;
     const withRenamed = (items: MediaDraft[]) => items.map((media) => (media.id === selectedReference.id ? renamed : media));
-    const mention = selectedReference.handle && runTextNames(selectedReference.handle)
+    const mention = selectedReference.handle && draftTextNames(selectedReference.handle)
       ? withMentionReplaced(selectedReference.handle, renamed.handle ?? '')
       : {};
     if (draft.references.some((media) => media.id === selectedReference.id)) {
@@ -4439,7 +4441,7 @@ function VideoCreatorComposer({
       });
       return;
     }
-    const handleUsed = runTextNames(media.handle);
+    const handleUsed = draftTextNames(media.handle);
     onReferenceNotice(handleUsed && media.handle
       ? `${media.displayName} and ${media.handle} were removed from this draft.`
       : `${media.displayName} was removed from this draft.`);
@@ -4456,7 +4458,7 @@ function VideoCreatorComposer({
   const removeSelectedReference = () => {
     if (!selectedReference) return;
     if (selectedSubject) {
-      const handleUsed = runTextNames(selectedSubject.handle);
+      const handleUsed = draftTextNames(selectedSubject.handle);
       onReferenceNotice(handleUsed
         ? `${selectedSubject.displayName} and ${selectedSubject.handle} were removed from this draft.`
         : `${selectedSubject.displayName} was removed from this draft.`);
@@ -4739,7 +4741,7 @@ function VideoCreatorComposer({
         media={selectedReference}
         gallery={selectedSubject?.images ?? null}
         noun={selectedSubject ? 'subject' : 'reference'}
-        handleUsedInPrompt={runTextNames(selectedReference?.handle)}
+        handleUsedInPrompt={draftTextNames(selectedReference?.handle)}
         onClose={() => setReferenceId(null)}
         onRename={renameSelectedReference}
         // A story's prompt is its shots: the single shot's prompt an insert would write into is hidden.
