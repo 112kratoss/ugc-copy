@@ -134,7 +134,10 @@ jobs:
       # (see playwright.config.ts). The authenticated workflow test stubs only
       # persistence APIs; public version and auth-boundary checks use the real
       # app routes. The bypass stays dev-only because `next dev` never runs a
-      # production build.
+      # production build. The Supabase project below is a placeholder with no
+      # DNS record: the dev server answers the reads of the pages specs draw
+      # that read on the server (tests/e2e/support/supabase-server-stub.cjs),
+      # and every other read fails.
       - name: Run E2E smoke tests
         run: npm run test:e2e
         env:
