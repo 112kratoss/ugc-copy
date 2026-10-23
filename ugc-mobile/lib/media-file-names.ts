@@ -6,7 +6,7 @@
  * would know a picture by. A name with a letter in it says something. Upload names are ASCII (lib/media.ts),
  * but a picker's own name can be in any script, so a character past ASCII counts as a letter too.
  */
-const NAMELESS = /^(?:[^a-z\u0080-￿]*|[0-9a-f]{8}(?:[ _-]?[0-9a-f]{4}){3}[ _-]?[0-9a-f]{12})$/i;
+const NAMELESS = /^(?:[\x00-\x40\x5b-\x60\x7b-\x7f]*|[0-9a-f]{8}(?:[ _-]?[0-9a-f]{4}){3}[ _-]?[0-9a-f]{12})$/i;
 
 /** Whether a name says nothing: a file's name without its extension, or a reference's name made from one. */
 export function nameSaysNothing(name: string) {
