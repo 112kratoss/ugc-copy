@@ -956,12 +956,19 @@ function hydrateVideoMultiPrompts(value: unknown): VideoShotDraft[] | null {
   return shots.length > 0 ? shots : null;
 }
 
-export function renameMediaDraft(media: MediaDraft, displayName: string): MediaDraft {
+/**
+ * A reference under a new name, with the @handle made from it, and none while the name is empty. A
+ * picture always has one, and a clip has one while it holds one or where `namesClips` says its slot
+ * names clips (Kling 3.0's video elements). Rename runs at every keystroke, so a clip told only by the
+ * handle it held lost it for good to a name emptied on the way to a new one.
+ */
+export function renameMediaDraft(media: MediaDraft, displayName: string, namesClips = false): MediaDraft {
   const nextDisplayName = displayName.trim();
+  const named = media.kind === 'image' || (media.kind === 'video' && namesClips) || Boolean(media.handle);
   return {
     ...media,
     displayName: nextDisplayName,
-    handle: (media.kind === 'image' || Boolean(media.handle)) && nextDisplayName ? `@${toHandleBase(nextDisplayName)}` : undefined,
+    handle: named && nextDisplayName ? `@${toHandleBase(nextDisplayName)}` : undefined,
   };
 }
 

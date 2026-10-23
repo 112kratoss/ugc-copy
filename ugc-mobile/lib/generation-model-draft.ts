@@ -20,7 +20,6 @@ import {
   extractPromptHandles,
   hydrateCreationDraftFromRemixSource,
   REMIX_RESTORE_WARNING_MESSAGE,
-  subjectHandles,
   videoSubjects,
   type CatalogDraftInputAsset,
   type CatalogDraftInputSlots,
@@ -250,9 +249,11 @@ function legacyAssetsForSlot(
   }
   if (slot.key === SUBJECT_IMAGES_SLOT_KEY) {
     // One asset per picture, each under its subject's handle and name: the server
-    // groups them back into subjects by the handle, and labels each by the name.
+    // groups them back into subjects by the handle, and labels each by the name. The
+    // subjects past those a run names wait in the draft whole, out of the run and its
+    // quote, which would otherwise take a part of the next one up to the slot's max.
     return draft.tool === 'video'
-      ? videoSubjects(draft).flatMap((subject) => subject.images.map((image) => ({
+      ? videoSubjects(draft).slice(0, subjectsPerRun(slot)).flatMap((subject) => subject.images.map((image) => ({
           ...mediaDraftAsset(image),
           displayName: subject.displayName,
           handle: subject.handle,
@@ -459,9 +460,9 @@ export function applyCatalogModelDefaults(
   catalogRevision: string | null = draft.catalogRevision ?? null,
 ): CreationDraft {
   const values = writeControlValues(draft, model);
-  // References, clips, tracks and generic slot inputs stay in the draft whatever this model
-  // takes: cut to its slots, they were gone for good, and picking the first model again did
-  // not bring them back. A run sends what the model takes (catalogRunSlots), and
+  // References, clips, tracks, named subjects and generic slot inputs stay in the draft whatever
+  // this model takes: cut to its slots, they were gone for good, and picking the first model again
+  // did not bring them back. A run sends what the model takes (catalogRunSlots), and
   // an excess blocks Generate with the slot's message until it is removed.
   if (draft.tool === 'image') {
     const normalized = { ...draft, ...values, model: model.id, catalogRevision } as ImageCreationDraft;
@@ -469,7 +470,6 @@ export function applyCatalogModelDefaults(
   }
   if (draft.tool === 'video') {
     const isMultiShot = model.capabilities.multiShot ? Boolean(values.isMultiShot ?? draft.isMultiShot) : false;
-    const subjectSlot = catalogSubjectSlot(model);
     const normalized = {
       ...draft,
       ...values,
@@ -478,9 +478,10 @@ export function applyCatalogModelDefaults(
       isMultiShot,
       sound: model.capabilities.sound ? Boolean(values.sound ?? draft.sound) : false,
       fixedLens: model.capabilities.fixedLens ? Boolean(values.fixedLens ?? draft.fixedLens) : false,
-      subjects: subjectSlot
-        ? videoSubjects(draft).slice(0, subjectsPerRun(subjectSlot))
-        : [],
+      // A model without a subjects slot sends none (it has no slot for their pictures), and a prompt
+      // naming one is refused as naming nothing the run sends; more than a slot names is refused by
+      // validateSubjects.
+      subjects: videoSubjects(draft),
       preparedAudioIds: model.inputs.preparedAudioReferences
         ? preparedAudioIds(draft).slice(0, model.inputs.preparedAudioReferences.max)
         : [],
@@ -565,17 +566,16 @@ export function getCatalogCreationSectionSummary(draft: CreationDraft, model: Ge
 export function catalogDraftRunHandles(draft: CreationDraft, model: GenerationModelDescriptor): string[] {
   if (draft.tool === 'motion') return [];
   if (!model.inputModes) {
-    // No slots to read: every named reference the draft holds.
+    // No slots to read: every named reference the draft holds. No subject: without input modes
+    // there is no subjects slot, so a run sends none, and those the draft keeps for another
+    // model are not names its prompt may use.
     const references = draft.tool === 'image'
       ? draft.references
       : [
           ...draft.references,
           ...(model.id === 'kling-3.0-video' && draft.referenceMode === 'elements' ? draft.referenceVideos : []),
         ];
-    return Array.from(new Set([
-      ...references.map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle)),
-      ...(draft.tool === 'video' ? subjectHandles(draft) : []),
-    ]));
+    return Array.from(new Set(references.map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle))));
   }
   const runDraft = catalogRunDraft(draft, model);
   return Array.from(new Set(heldCatalogDraftInputSlots(runDraft, model, catalogRunSettings(runDraft, model))

@@ -6258,6 +6258,37 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         });
       });
 
+      // Rename runs at every keystroke and an emptied name has no handle. A clip got one back only
+      // while it still held one, so a name backspaced away on the way to a new one left the clip
+      // with no "Insert @…" and no place in the mention list (the redundant-UI leftovers' review).
+      it('gives a clip whose name was emptied its @handle back with the name typed after it', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          referenceVideos: [stagedMedia('turn', 'video', { durationSeconds: 3 })],
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        renderer.act(() => { labelled(tree.root, 'Open details for Turn').props.onPress(); });
+        const nameField = () => tree.root.find((node) => (
+          String(node.type) === 'textinput' && String(node.props.accessibilityLabel).startsWith('Reference name for')
+        ));
+        for (const name of ['Tur', 'Tu', 'T', '', 'S', 'Sp', 'Spin']) {
+          renderer.act(() => { nameField().props.onChangeText(name); });
+        }
+        await settle();
+
+        expect(storedDrafts().video.referenceVideos).toEqual([expect.objectContaining({ displayName: 'Spin', handle: '@spin' })]);
+        expect(text(tree)).toContain('Insert @spin');
+        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
+        await settle();
+        const prompt = () => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+        renderer.act(() => prompt().props.onFocus());
+        renderer.act(() => prompt().props.onChangeText('Close on @sp'));
+        renderer.act(() => prompt().props.onSelectionChange({ nativeEvent: { selection: { start: 12, end: 12 } } }));
+        expect(labelled(tree.root, 'Insert @spin, Spin')).toBeTruthy();
+      });
+
       // With references attached Wan 2.7 takes a start frame beside them and no end frame, and the
       // frames group's slot is the one place that start frame is drawn and added.
       describe('Wan 2.7, which sends a start frame beside its references', () => {
@@ -6430,6 +6461,74 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           ]);
           expect(generateButton(tree).props.disabled).toBe(false);
         });
+
+        // A model without a subjects slot keeps a draft's subjects, as it keeps references: they wait apart
+        // with a Remove that takes their @mention too, and are the run's again on a model that takes them.
+        // Dropped, they were gone for good, and "@hero" named nothing: "Unknown element mention: @hero"
+        // held the run on Kling 3.0 and on Kling O3 again (the redundant-UI leftovers' review, 2026-10-23).
+        describe('through a model change away from Kling O3', () => {
+          beforeEach(() => {
+            catalogState.catalog = parityCatalog([parityKlingO3(), parityKlingVideo()]);
+            memory.set(ordinaryKey, heroDraft({}));
+          });
+
+          it('wait apart, each with a Remove that takes its mention too', async () => {
+            const tree = await open(<MediaCreationScreen initialTool="video" />);
+            await pickModel(tree, 'Kling 3.0 Cinematic');
+            await settle();
+
+            expect(storedDrafts().video).toMatchObject({ model: 'kling-3.0-video', subjects: [expect.objectContaining({ handle: '@hero' })] });
+            const standby = tree.root.findByProps({ testID: 'standby-references' });
+            expect(pressables(standby).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Hero']);
+            // Kling 3.0 takes none: they lock no frames, and the prompt names nothing this run sends.
+            expect(text(tree)).not.toContain('replace frames and references');
+            expect(blocker(tree)).toContain('Unknown element mention: @hero');
+
+            renderer.act(() => { labelled(standby, 'Remove Hero').props.onPress(); });
+            await settle();
+            expect(storedDrafts().video).toMatchObject({ subjects: [], prompt: 'walks in' });
+            expect(text(tree)).toContain('Hero and @hero were removed from this draft.');
+            expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+          });
+
+          it('are the run’s again once Kling O3 is picked again', async () => {
+            const tree = await open(<MediaCreationScreen initialTool="video" />);
+            await pickModel(tree, 'Kling 3.0 Cinematic');
+            await settle();
+            await pickModel(tree, 'Kling O3');
+            await settle();
+
+            expect(storedDrafts().video).toMatchObject({ model: 'kling-o3', referenceMode: 'subjects', subjects: [expect.objectContaining({ handle: '@hero' })] });
+            expect(labelled(tree.root, 'Open details for Hero, @hero')).toBeTruthy();
+            expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+            expect(text(tree)).not.toContain('Unknown element mention');
+          });
+
+          // A descriptor without input modes reads its run's shape off the draft's own mode, which a kept
+          // subject turned to "subjects": a start frame then read as a references run in a frames-or-
+          // references conflict (the branch's review, 2026-10-23).
+          it('leave the frames run of a descriptor without input modes alone', async () => {
+            const legacy = { ...paritySeedanceVideo(), id: 'legacy-video', displayName: 'Legacy Video', inputModes: undefined };
+            catalogState.catalog = parityCatalog([parityKlingO3(), legacy]);
+            memory.set(ordinaryKey, savedDrafts({ video: {
+              model: 'legacy-video',
+              catalogRevision: 'parity-rev',
+              prompt: 'A door opens',
+              startFrame: stagedMedia('door'),
+              subjects: [{
+                id: 'subject-hero',
+                displayName: 'Hero',
+                handle: '@hero',
+                images: [stagedMedia('hero-front', 'image', { handle: '@hero' }), stagedMedia('hero-side', 'image', { handle: '@hero' })],
+              }],
+            } }));
+            const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+            expect(text(tree)).not.toContain('Clear one');
+            expect(text(tree)).toContain('Reusable unavailable with frames attached');
+            expect(pressables(tree.root.findByProps({ testID: 'standby-references' })).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Hero']);
+          });
+        });
       });
 
       it('tells the enhancer what a Kling 3.0 run sends: its start frame, and the clip that goes beside it', async () => {
@@ -6453,6 +6552,85 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           elementReferences: [{ handle: '@turn', displayName: 'Turn' }],
           frameImageUrls: ['https://cdn.example.com/door.png'],
         });
+      });
+    });
+
+    // A Remove runs once its question is answered, and the composer's handler wrote back the draft it
+    // was drawn with when Remove was pressed: what landed while the question was open went with it
+    // (the redundant-UI leftovers' review, 2026-10-23).
+    describe('a Remove answered after the draft has moved on', () => {
+      const askToRemove = (tree: renderer.ReactTestRenderer, name: string) => {
+        renderer.act(() => { labelled(tree.root, `Open details for ${name}`).props.onPress(); });
+        renderer.act(() => { labelled(tree.root, `Remove ${name}`).props.onPress(); });
+        expect(nativeAlertState.alert.mock.lastCall?.[0]).toBe('Remove reference?');
+      };
+      const answerRemove = async () => {
+        const buttons = nativeAlertState.alert.mock.lastCall![2] as Array<{ text: string; onPress?: () => void }>;
+        await renderer.act(async () => {
+          buttons.find((button) => button.text === 'Remove')?.onPress?.();
+          await Promise.resolve();
+        });
+        await settle();
+      };
+      const girlDraft = (video: Record<string, unknown> = {}) => savedDrafts({ video: {
+        model: 'seedance-2',
+        catalogRevision: 'parity-rev',
+        prompt: '@girl waves',
+        references: [stagedMedia('girl')],
+        ...video,
+      } });
+
+      beforeEach(() => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo()]);
+      });
+
+      it('keeps a picture that finished uploading while it was asked', async () => {
+        memory.set(ordinaryKey, girlDraft());
+        vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('bottle.png')] as never);
+        let finishUpload!: (media: UploadedMedia) => void;
+        vi.mocked(uploadPickedMedia).mockImplementationOnce(() => new Promise((resolve) => { finishUpload = resolve; }));
+        const sheets = captureActionSheets();
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        renderer.act(() => { labelled(tree.root, 'Add References').props.onPress(); });
+        await renderer.act(async () => { void sheets[0].actions.find((action) => action.label === 'Image')!.onPress?.(); });
+        await settle();
+        askToRemove(tree, 'Girl');
+        await renderer.act(async () => { finishUpload(uploaded('bottle.png')); });
+        await settle();
+        expect(storedDrafts().video.references.map((media: { displayName: string }) => media.displayName)).toEqual(['Girl', 'bottle']);
+
+        await answerRemove();
+        expect(storedDrafts().video).toMatchObject({ prompt: 'waves', references: [expect.objectContaining({ displayName: 'bottle', handle: '@bottle' })] });
+        expect(labelled(tree.root, 'Open details for bottle')).toBeTruthy();
+        expect(text(tree)).toContain('Girl and @girl were removed from this draft.');
+      });
+
+      it('keeps a Seedance check that came back while it was asked', async () => {
+        const asset = (status: 'processing' | 'active') => ({
+          success: true, assetId: 'asset-voice', assetType: 'Audio', status, rawStatus: status, error: null, sourceUrl: null, lastCheckedAt: '2026-10-23T00:00:00.000Z',
+        });
+        memory.set(ordinaryKey, girlDraft({ referenceAudios: [stagedMedia('voice', 'audio', { handle: undefined })] }));
+        authState.api.createSeedanceAsset.mockResolvedValue(asset('processing'));
+        authState.api.getSeedanceAsset.mockResolvedValue(asset('active'));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        // Seedance is still processing the track, and the screen asks again in four seconds.
+        await renderer.act(async () => { labelled(tree.root, 'Prepare for Seedance for Voice').props.onPress(); });
+        await settle();
+        expect(labelled(tree.root, 'Check status for Voice')).toBeTruthy();
+        askToRemove(tree, 'Girl');
+        await renderer.act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+        await settle();
+        expect(authState.api.getSeedanceAsset).toHaveBeenCalledWith('asset-voice');
+        expect(labelled(tree.root, 'Prepare again for Voice')).toBeTruthy();
+
+        await answerRemove();
+        expect(storedDrafts().video.references).toEqual([]);
+        expect(storedDrafts().video.referenceAudios).toEqual([
+          expect.objectContaining({ id: 'voice', seedanceAsset: expect.objectContaining({ assetId: 'asset-voice', status: 'active' }) }),
+        ]);
+        expect(labelled(tree.root, 'Prepare again for Voice')).toBeTruthy();
       });
     });
 
