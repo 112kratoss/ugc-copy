@@ -122,7 +122,10 @@ export default function MarketplaceAssetScreen() {
     }
   };
 
-  const isUnlockGone = detailQuery.error instanceof ApiError && detailQuery.error.status === 404;
+  // A refresh that fails leaves the recipe on screen, as Your Recipe does; only one that never loaded
+  // is a failure to show. Drawn over a loaded recipe, the notice sat above its live Unlock button.
+  const loadError = detail ? null : detailQuery.error;
+  const isUnlockGone = loadError instanceof ApiError && loadError.status === 404;
 
   return (
     <Screen>
@@ -137,7 +140,7 @@ export default function MarketplaceAssetScreen() {
         />
       ) : null}
 
-      {detailQuery.error ? (
+      {loadError ? (
         // A 404 is the unlock being gone (a removed listing opened from an
         // alert), not a connection problem; the two used to show together.
         isUnlockGone ? (
@@ -246,7 +249,7 @@ export default function MarketplaceAssetScreen() {
             )}
           </Card>
         </>
-      ) : !detailQuery.isLoading && !detailQuery.error ? (
+      ) : !detailQuery.isLoading && !loadError ? (
         <StatusBlock title="Recipe unavailable" body="This resource may be unlisted, private, or removed." />
       ) : null}
     </Screen>

@@ -302,6 +302,18 @@ describe('marketplace asset screen recipe words', () => {
     expect(failed.root.findAll((node) => String(node.type) === 'secondary-button').map((node) => node.props.label)).toEqual(['Retry recipe']);
   });
 
+  // React Query keeps a loaded recipe and sets the error when a refresh fails (a return to the app past the
+  // 45 s stale time, offline), and the notice was drawn above the recipe and its live Unlock button.
+  it('keeps a loaded recipe on screen, with no failure notice, when a refresh fails', () => {
+    for (const error of [new Error('Network request failed.'), new ApiError('Not found', 404)]) {
+      queryState.error = error;
+      const tree = renderScreen();
+      expect(statusTitles(tree)).toEqual([]);
+      expect(sectionTitle(tree).title).toBe(paidDetail().title);
+      expect(tree.root.findAll((node) => String(node.type) === 'primary-button')[0]?.props.label).toBe('Unlock for 900 credits');
+    }
+  });
+
   it('draws only the skeleton while the recipe loads', () => {
     queryState.data = null;
     queryState.isLoading = true;
