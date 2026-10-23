@@ -12,14 +12,16 @@ import { isMinimalAppChromePath } from '@/components/app-shell-nav';
 // picker's phone sheet (z-50), the last row of a feed card's menu (z-50, placed by script), and,
 // before them, the workflow canvas's dialogs and the creator page's profile editor (z-50).
 //
-// So an element of the web app positioned `fixed` that reaches the bottom edge on a phone, or that
-// script places (no edge of its own in its classes), does one of these (docs/design/design-web.md,
-// "Layers"):
+// So every element of the web app positioned `fixed`, wherever its classes or a script place it,
+// does one of these (docs/design/design-web.md, "Layers"):
 // - sits above the nav: its bottom offset adds `--app-shell-bottom-nav-space` (0px from 768px);
 // - is drawn over it: a layer above 60 (z-[70] and up);
 // - draws nothing that takes the pointer (`pointer-events-none` at no layer above the page);
 // - is hidden below 768px (`hidden md:flex`), or lives on a route the shell draws without the nav.
-// This reads the class lists the way they are written in this codebase, one line each.
+// It reads each class list as one line of this codebase writes it: the quoted string that holds
+// `fixed`, with the static classes of the template literal it sits in, one list for each branch of
+// a ternary. A `fixed` whose positioning classes are in another string, or on another line, is not
+// seen.
 
 const ROOT = process.cwd();
 const SCANNED = ['src/app', 'src/components'];
@@ -51,8 +53,6 @@ function routeWithoutNav(file: string) {
 type Placement = { file: string; line: number; text: string; verdict: string | null };
 
 const LAYER = /^z-(?:(\d+)|\[(\d+)\])$/;
-const BOTTOM_EDGE = /^(?:bottom-|inset-(?:0|\d|\[|px)|inset-y-)|^(?:h-(?:full|screen|dvh|svh|lvh|\[)|min-h-(?:screen|dvh))/;
-const TOP_EDGE = /^(?:top-|inset-x-)/;
 const POSITIONED = /^(?:inset|top|bottom|left|right|z)-|^pointer-events-/;
 const SHOWN_FROM_MD = /^(?:md|lg|xl|2xl):(?:flex|block|grid|inline-flex|inline-block|inline|table|contents)$/;
 
@@ -64,9 +64,36 @@ function classifyFixedClasses(tokens: string[]): string | null {
   if (layer !== null && layer >= 70) return 'over the nav';
   if (tokens.includes('pointer-events-none') && (layer === null || layer <= 0)) return 'takes no pointer';
   if (tokens.includes('hidden') && tokens.some((token) => SHOWN_FROM_MD.test(token))) return 'hidden below 768px';
-  const reachesBottom = tokens.some((token) => BOTTOM_EDGE.test(token));
-  if (!reachesBottom && tokens.some((token) => TOP_EDGE.test(token))) return 'along the top edge';
   return null;
+}
+
+const QUOTED = /'([^'\n]*)'|"([^"\n]*)"/g;
+const words = (classes: string) => classes.split(/\s+/).filter(Boolean);
+
+// The class lists `fixed` comes with on a line, one for each way the line can draw it: a quoted
+// string that holds `fixed`, with the static classes of the template literal it sits in; or, where
+// `fixed` is among a template's static classes, those with each string inside its `${…}` in turn.
+// One line read as one list mixed a ternary's branches: main's card menu,
+// `${usesPortal ? 'fixed' : 'absolute right-0 top-[…]'} z-50 …`, passed on the other branch's `top-`.
+function fixedClassLists(text: string): string[][] {
+  const lists: string[][] = [];
+  const rest = text.replace(/`([^`]*)`/g, (_, body: string) => {
+    const strings: string[][] = [];
+    const statics = words(body.replace(/\$\{([^{}]*)\}/g, (__, expression: string) => {
+      for (const match of expression.matchAll(QUOTED)) strings.push(words(match[1] ?? match[2]));
+      return ' ';
+    }));
+    const fixedStrings = strings.filter((list) => list.includes('fixed'));
+    if (fixedStrings.length > 0) lists.push(...fixedStrings.map((list) => [...list, ...statics]));
+    else if (statics.includes('fixed')) lists.push(...(strings.length > 0 ? strings.map((list) => [...statics, ...list]) : [statics]));
+    return ' ';
+  });
+  for (const match of rest.matchAll(QUOTED)) {
+    const list = words(match[1] ?? match[2]);
+    if (list.includes('fixed')) lists.push(list);
+  }
+  // A class list, not prose that says "fixed": it positions or layers something too.
+  return lists.filter((list) => list.some((token) => POSITIONED.test(token)));
 }
 
 function fixedPlacements(): Placement[] {
@@ -76,10 +103,10 @@ function fixedPlacements(): Placement[] {
     readFileSync(path.join(ROOT, file), 'utf8').split('\n').forEach((text, index) => {
       const trimmed = text.trim();
       if (/^(?:\/\/|\/\*|\*|\{\/\*)/.test(trimmed)) return;
-      const tokens = text.split(/[\s'"`]+/).filter(Boolean);
-      // A class list, not prose that says "fixed": it positions or layers something too.
-      if (!tokens.includes('fixed') || !tokens.some((token) => POSITIONED.test(token))) return;
-      found.push({ file, line: index + 1, text: trimmed, verdict: classifyFixedClasses(tokens) });
+      const lists = fixedClassLists(text);
+      if (lists.length === 0) return;
+      const verdicts = lists.map(classifyFixedClasses);
+      found.push({ file, line: index + 1, text: trimmed, verdict: verdicts.includes(null) ? null : verdicts[0] });
     });
   }
   return found;
@@ -144,7 +171,25 @@ describe('overlays and the bottom navigation', () => {
     expect(classifyFixedClasses('fixed inset-0 pointer-events-none'.split(' '))).toBe('takes no pointer');
     expect(classifyFixedClasses('hidden md:flex fixed bottom-4 z-40'.split(' '))).toBe('hidden below 768px');
     expect(classifyFixedClasses('fixed left-4 top-3 z-[120]'.split(' '))).toBe('over the nav');
-    expect(classifyFixedClasses('fixed left-4 top-3'.split(' '))).toBe('along the top edge');
+    // Along the top edge it still covers the page's own layers, so it takes its layer from the scale too.
+    expect(classifyFixedClasses('fixed left-4 top-3'.split(' '))).toBeNull();
+    expect(classifyFixedClasses('fixed inset-x-4 z-40'.split(' '))).toBeNull();
+  });
+
+  it("reads each branch of a ternary as its own class list", () => {
+    const verdicts = (line: string) => fixedClassLists(line).map(classifyFixedClasses);
+    // The card menu's line on main: the fixed branch is `fixed` and the shared z-50, under the nav.
+    expect(verdicts("className={`${usesPortal ? 'fixed' : 'absolute right-0 top-[calc(100%+0.5rem)]'} z-50 w-64 overflow-hidden`}")).toEqual([null]);
+    expect(verdicts("className={`${usesPortal ? 'fixed z-[90]' : 'absolute right-0 top-[calc(100%+0.5rem)] z-50'} w-64`}")).toEqual(['over the nav']);
+    // The other branch's layer is not the fixed one's.
+    expect(verdicts("className={`${open ? 'fixed bottom-4 z-40' : 'absolute z-[80]'} flex`}")).toEqual([null]);
+    // `fixed` among the static classes: each branch in turn.
+    expect(verdicts("className={`fixed inset-0 ${open ? 'z-[80]' : 'z-40'}`}")).toEqual(['over the nav', null]);
+    expect(verdicts('<div className="fixed inset-0 z-[90]" />')).toEqual(['over the nav']);
+    // Prose and option values that say "fixed" are no class lists.
+    expect(fixedClassLists("{ value: 'fixed', label: 'Fixed template asset' },")).toEqual([]);
+    expect(fixedClassLists("'Use motion transfer, which holds identity fixed by construction.',")).toEqual([]);
+    expect(fixedClassLists('value={`${videoModel.durations[0]} sec fixed`}')).toEqual([]);
   });
 
   it('keeps every fixed rule of the stylesheets over the nav, the nav itself aside', () => {
