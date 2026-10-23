@@ -6,6 +6,7 @@ import { CreatorContentTabs } from '@/app/creators/[username]/CreatorContentTabs
 import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
 import { POST_COMMENTS_PAGE_SIZE, type PostComment, type PostCommentsPage } from '@/lib/post-comments-client';
+import { createReelEntryState } from '@/lib/reel-history-entry';
 import { navigateWithinPage } from './fixtures/address-bar-search-params';
 
 // The creator page with the real reel and the real thread, for what the
@@ -237,6 +238,7 @@ describe('CreatorContentTabs with the reel', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -369,9 +371,81 @@ describe('CreatorContentTabs with the reel', () => {
     const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
     expect(window.location.search).toBe('?post=item-1');
 
-    // Forward made it a linked post: Close takes `post` out of this entry.
+    // Forward reached the reel's own entry (`reel-history-entry.ts`), so Close goes Back
+    // to the grid's, as from the tile. It took Forward for a linked post's and replaced
+    // the reel's entry, which left the grid twice in history
+    // (archive/web-reel-forward-history-2026-10-23).
+    const back = vi.spyOn(window.history, 'back');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    fireEvent.click(within(reel).getByRole('button', { name: 'Creator' }));
+    await waitFor(() => {
+      expect(queryReel()).not.toBeInTheDocument();
+      expect(window.location.search).toBe('');
+    });
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(replaceState).not.toHaveBeenCalled();
+    // The reel's entry is ahead again: Forward opens the post once more.
+    window.history.forward();
+    expect(await screen.findByRole('dialog', { name: 'Creator reel viewer' })).toBeInTheDocument();
+  }, 15_000);
+
+  // Next post replaces the reel's entry, which stays the reel's own.
+  it('goes Back after Forward from a reel that had moved on to another post', async () => {
+    const secondItem = { ...item, id: 'item-2', title: 'Second Frame', generationId: 'gen-2' };
+    render(<CreatorContentTabs initialData={{ ...initialData, items: [item, secondItem] }} profilePath="/creators/creator-name" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Campaign Frame' }));
+    const opened = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+    fireEvent.click(within(opened).getByRole('button', { name: 'Next post' }));
+    await waitFor(() => expect(window.location.search).toBe('?post=item-2'));
+
+    window.history.back();
+    await waitFor(() => {
+      expect(queryReel()).not.toBeInTheDocument();
+      expect(window.location.search).toBe('');
+    });
+    window.history.forward();
+    const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+    expect(window.location.search).toBe('?post=item-2');
+
+    // Stubbed: the dialog goes in the click itself, and a real Back would still be on its
+    // way when the next test starts.
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
     fireEvent.click(within(reel).getByRole('button', { name: 'Creator' }));
     await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
-    expect(window.location.search).toBe('');
+    expect(back).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  // The page mounts on the reel's own entry: a reload, or a Back from a page the reel
+  // linked to ("Post details", a commenter's page), where the page mounts again.
+  it('goes Back from a reel whose own entry the page mounted on', async () => {
+    window.history.replaceState(createReelEntryState('post'), '', '/creators/creator-name?post=item-1');
+    renderCreatorPage();
+    const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    fireEvent.click(within(reel).getByRole('button', { name: 'Creator' }));
+    await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(replaceState).not.toHaveBeenCalled();
+  }, 15_000);
+
+  // A linked post's entry (a shared link), and every entry from before the reel marked
+  // its own: opened by address, so Close replaces it, also once Back has reached it.
+  it('replaces the entry of a post Back reached on an entry the reel did not push', async () => {
+    window.history.replaceState(null, '', '/creators/creator-name?post=item-1');
+    window.history.pushState(null, '', '/creators/creator-name');
+    renderCreatorPage();
+
+    window.history.back();
+    const reel = await screen.findByRole('dialog', { name: 'Creator reel viewer' });
+    expect(window.location.search).toBe('?post=item-1');
+
+    const back = vi.spyOn(window.history, 'back');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    fireEvent.click(within(reel).getByRole('button', { name: 'Creator' }));
+    await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
+    expect(back).not.toHaveBeenCalled();
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/creators/creator-name#creator-creations');
   }, 15_000);
 });
