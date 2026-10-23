@@ -647,7 +647,9 @@ describe('OwnerProfileMediaHub', () => {
     // Holds back the details read of a creation until the returned call sends it.
     const holdDetails = (generationId: string) => {
       const answer = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
-      let send: () => void = () => undefined;
+      let send: () => void = () => {
+        throw new Error(`No details read of ${generationId} was held`);
+      };
       vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
         String(input).includes(`/api/generations?includeArchived=false&id=${generationId}`)
           ? new Promise<Response>((resolve) => {
@@ -704,6 +706,35 @@ describe('OwnerProfileMediaHub', () => {
       noPreview();
     });
 
+    // Opened by address on the page's own entry (a reload, or Back from a page
+    // it linked to), its Close goes Back too; a page of the list can land first.
+    it('stays closed until the popstate of the Back that closes it, when more creations load meanwhile', async () => {
+      const answerPage = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
+          const page = await (await answerPage(input)).json();
+          return url.includes('cursor=')
+            ? response({ generations: [{ ...page.generations[0], id: 'older-generation', title: 'Older frame' }], pagination: { hasMore: false, nextCursor: null } })
+            : response({ ...page, pagination: { hasMore: true, nextCursor: 'page-2' } });
+        }
+        return answerPage(input);
+      }));
+      window.history.replaceState(createReelEntryState('generation'), '', '/profile?tab=creations&generation=raw-generation');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
+
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      await settle();
+      expect(back).toHaveBeenCalledTimes(1);
+      noPreview();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Load more creations' }));
+      expect(await screen.findByRole('button', { name: /open older frame/i })).toBeInTheDocument();
+      noPreview();
+    });
+
     it('stays closed when its details come after the Close, and Forward opens it again with them', async () => {
       const sendDetails = holdDetails('raw-generation');
       const preview = await openRawFrameFromItsTile();
@@ -716,9 +747,7 @@ describe('OwnerProfileMediaHub', () => {
 
       noPreview();
       expect(window.location.search).toBe('?tab=creations');
-      act(() => {
-        window.history.forward();
-      });
+      window.history.forward();
       const reopened = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
       expect(within(reopened).getByText('Owner-only creation prompt')).toBeInTheDocument();
     });
@@ -740,7 +769,7 @@ describe('OwnerProfileMediaHub', () => {
         const url = String(input);
         if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
           const page = await (await answerPage(input)).json();
-          return { ok: true, json: async () => ({ ...page, generations: [...page.generations, secondCreation] }) } as Response;
+          return response({ ...page, generations: [...page.generations, secondCreation] });
         }
         if (url.includes('/api/generations?includeArchived=false&id=second-generation')) {
           return response({ generations: [{ ...secondCreation, prompt: 'Second creation prompt', input_media: [] }] });
@@ -761,6 +790,23 @@ describe('OwnerProfileMediaHub', () => {
       expect(screen.getByRole('dialog', { name: /second frame creation preview/i })).toHaveTextContent('Second creation prompt');
       expect(screen.queryByRole('dialog', { name: /raw frame creation preview/i })).not.toBeInTheDocument();
       expect(window.location.search).toBe('?tab=creations&generation=second-generation');
+    });
+
+    // The viewer moves no focus, so Enter on a tile can press it again behind
+    // it. A second entry naming the same creation left its Close going Back
+    // onto the first, which still named it.
+    it('pushes no second entry when the tile of the open creation is pressed again', async () => {
+      const preview = await openRawFrameFromItsTile();
+      await within(preview).findByText('Owner-only creation prompt');
+      const pushState = vi.spyOn(window.history, 'pushState');
+
+      fireEvent.click(screen.getByRole('button', { name: /open raw frame/i }));
+      await settle();
+      expect(pushState).not.toHaveBeenCalled();
+
+      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+      await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
+      noPreview();
     });
   });
 

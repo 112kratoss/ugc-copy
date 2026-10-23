@@ -7,9 +7,11 @@ import { act, useMemo, useSyncExternalStore } from 'react';
  * to the router (`next/dist/client/components/app-router.js`), whose state comes
  * from a promise (`app-router-instance.js`). So a handler that sets the page's
  * state and then writes the history draws the page once with its new state and
- * the old query. Back and Forward reach the readers with the popstate, before
- * the page's own handler (Next listens from hydration). A page that mounts
- * reads the address bar. `address-bar-search-params.ts` runs ahead of Next.
+ * the old query. Back and Forward reach the readers in the popstate, ahead of
+ * the page's own handler, as in a production build (Next listens from
+ * hydration, and React renders a popstate's update at once; a dev build takes
+ * longer). A page that mounts reads the address bar.
+ * `address-bar-search-params.ts` runs ahead of Next.
  *
  *   vi.mock('next/navigation', async () => {
  *     const { useRouterSearchParams } = await import('./fixtures/router-search-params');
@@ -27,9 +29,9 @@ function deliver() {
   listeners.forEach((listener) => listener());
 }
 
-// Patched once, when the mock first loads, as Next patches them once at
-// hydration: a spy a test puts on either method wraps this one, and restoring
-// the spy puts it back.
+// Patched and listened to once, when the mock first loads (Next does both at
+// hydration): this popstate listener runs ahead of any page's own, and a spy a
+// test puts on either method wraps this one (restoring the spy puts it back).
 for (const method of ['pushState', 'replaceState'] as const) {
   const write = window.history[method];
   window.history[method] = function writeThenTellRouter(this: History, ...args: Parameters<History['pushState']>) {
@@ -43,17 +45,12 @@ for (const method of ['pushState', 'replaceState'] as const) {
     });
   };
 }
+window.addEventListener('popstate', deliver);
 
 function subscribe(onChange: () => void) {
-  const onPopState = () => {
-    routerSearch = window.location.search;
-    onChange();
-  };
   listeners.add(onChange);
-  window.addEventListener('popstate', onPopState);
   return () => {
     listeners.delete(onChange);
-    window.removeEventListener('popstate', onPopState);
   };
 }
 
