@@ -6456,6 +6456,85 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       });
     });
 
+    // A Remove runs once its question is answered, and the composer's handler wrote back the draft it
+    // was drawn with when Remove was pressed: what landed while the question was open went with it
+    // (the redundant-UI leftovers' review, 2026-10-23).
+    describe('a Remove answered after the draft has moved on', () => {
+      const askToRemove = (tree: renderer.ReactTestRenderer, name: string) => {
+        renderer.act(() => { labelled(tree.root, `Open details for ${name}`).props.onPress(); });
+        renderer.act(() => { labelled(tree.root, `Remove ${name}`).props.onPress(); });
+        expect(nativeAlertState.alert.mock.lastCall?.[0]).toBe('Remove reference?');
+      };
+      const answerRemove = async () => {
+        const buttons = nativeAlertState.alert.mock.lastCall![2] as Array<{ text: string; onPress?: () => void }>;
+        await renderer.act(async () => {
+          buttons.find((button) => button.text === 'Remove')?.onPress?.();
+          await Promise.resolve();
+        });
+        await settle();
+      };
+      const girlDraft = (video: Record<string, unknown> = {}) => savedDrafts({ video: {
+        model: 'seedance-2',
+        catalogRevision: 'parity-rev',
+        prompt: '@girl waves',
+        references: [stagedMedia('girl')],
+        ...video,
+      } });
+
+      beforeEach(() => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo()]);
+      });
+
+      it('keeps a picture that finished uploading while it was asked', async () => {
+        memory.set(ordinaryKey, girlDraft());
+        vi.mocked(pickMediaList).mockResolvedValueOnce([pickedImage('bottle.png')] as never);
+        let finishUpload!: (media: UploadedMedia) => void;
+        vi.mocked(uploadPickedMedia).mockImplementationOnce(() => new Promise((resolve) => { finishUpload = resolve; }));
+        const sheets = captureActionSheets();
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        renderer.act(() => { labelled(tree.root, 'Add References').props.onPress(); });
+        await renderer.act(async () => { void sheets[0].actions.find((action) => action.label === 'Image')!.onPress?.(); });
+        await settle();
+        askToRemove(tree, 'Girl');
+        await renderer.act(async () => { finishUpload(uploaded('bottle.png')); });
+        await settle();
+        expect(storedDrafts().video.references.map((media: { displayName: string }) => media.displayName)).toEqual(['Girl', 'bottle']);
+
+        await answerRemove();
+        expect(storedDrafts().video).toMatchObject({ prompt: 'waves', references: [expect.objectContaining({ displayName: 'bottle', handle: '@bottle' })] });
+        expect(labelled(tree.root, 'Open details for bottle')).toBeTruthy();
+        expect(text(tree)).toContain('Girl and @girl were removed from this draft.');
+      });
+
+      it('keeps a Seedance check that came back while it was asked', async () => {
+        const asset = (status: 'processing' | 'active') => ({
+          success: true, assetId: 'asset-voice', assetType: 'Audio', status, rawStatus: status, error: null, sourceUrl: null, lastCheckedAt: '2026-10-23T00:00:00.000Z',
+        });
+        memory.set(ordinaryKey, girlDraft({ referenceAudios: [stagedMedia('voice', 'audio', { handle: undefined })] }));
+        authState.api.createSeedanceAsset.mockResolvedValue(asset('processing'));
+        authState.api.getSeedanceAsset.mockResolvedValue(asset('active'));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        // Seedance is still processing the track, and the screen asks again in four seconds.
+        await renderer.act(async () => { labelled(tree.root, 'Prepare for Seedance for Voice').props.onPress(); });
+        await settle();
+        expect(labelled(tree.root, 'Check status for Voice')).toBeTruthy();
+        askToRemove(tree, 'Girl');
+        await renderer.act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+        await settle();
+        expect(authState.api.getSeedanceAsset).toHaveBeenCalledWith('asset-voice');
+        expect(labelled(tree.root, 'Prepare again for Voice')).toBeTruthy();
+
+        await answerRemove();
+        expect(storedDrafts().video.references).toEqual([]);
+        expect(storedDrafts().video.referenceAudios).toEqual([
+          expect.objectContaining({ id: 'voice', seedanceAsset: expect.objectContaining({ assetId: 'asset-voice', status: 'active' }) }),
+        ]);
+        expect(labelled(tree.root, 'Prepare again for Voice')).toBeTruthy();
+      });
+    });
+
     it('asks for no motion quote until both inputs are attached, and says what to add', async () => {
       vi.mocked(pickMedia)
         .mockResolvedValueOnce({ uri: 'file:///dancer.png', fileName: 'dancer.png', mimeType: 'image/png', fileSize: 2048 } as never)

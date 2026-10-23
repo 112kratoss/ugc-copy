@@ -450,6 +450,103 @@ function referenceVideoSlot(model: CreatorCatalogModel | null, draft: VideoCreat
   return activeCatalogInputSlots(model, draft, shape)?.find((slot) => slot.role === 'reference' && slot.kind === 'video') ?? null;
 }
 
+/**
+ * Whether a video draft's words name a handle: the single shot's prompt or a story's shots, whichever is
+ * on screen, as a switch between the two brings the other back as the words the run reads.
+ */
+function videoDraftTextNames(draft: VideoCreationDraft, handle?: string | null) {
+  return promptContainsHandle(draft.prompt, handle)
+    || draft.multiPrompts.some((shot) => promptContainsHandle(shot.prompt, handle));
+}
+
+/**
+ * Those words with a reference's @handle renamed, or taken out when it is removed, and nothing when no
+ * words name it. Left in the words off screen, a mention named nothing once they came back (redundant-UI
+ * audit, 2026-10-21).
+ */
+function withVideoMentionReplaced(
+  draft: VideoCreationDraft,
+  handle: string | null | undefined,
+  replacement = '',
+): Partial<Pick<VideoCreationDraft, 'prompt' | 'multiPrompts'>> {
+  if (!handle || !videoDraftTextNames(draft, handle)) return {};
+  const replaced = (text: string) => (promptContainsHandle(text, handle) ? replacePromptHandle(text, handle, replacement) : text);
+  return {
+    prompt: replaced(draft.prompt),
+    multiPrompts: draft.multiPrompts.map((shot) => {
+      const prompt = replaced(shot.prompt);
+      return prompt === shot.prompt ? shot : { ...shot, prompt };
+    }),
+  };
+}
+
+/**
+ * A video draft with one of its references, clips, frames or subjects renamed, its @handle renamed in
+ * the words that name it. Like `withoutVideoReference`, it is made from the draft it is handed, the
+ * draft as it is when the change is applied.
+ */
+function withVideoReferenceRenamed(draft: VideoCreationDraft, id: string, displayName: string): VideoCreationDraft {
+  const subjects = videoSubjects(draft);
+  const subject = subjects.find((item) => item.id === id);
+  if (subject) {
+    const renamedSubject = renameSubjectDraft(subject, displayName, videoDraftHandles(draft));
+    return {
+      ...draft,
+      ...withVideoMentionReplaced(draft, subject.handle, renamedSubject.handle),
+      subjects: subjects.map((item) => (item.id === id ? renamedSubject : item)),
+    };
+  }
+  const reference = [...draft.references, ...draft.referenceVideos].find((media) => media.id === id);
+  if (reference) {
+    const nextName = renameMediaDraft(reference, displayName);
+    // Two references renamed alike would otherwise answer to one @mention.
+    const renamed = nextName.handle
+      ? withUniqueReferenceHandle(nextName, [...draft.references, ...draft.referenceVideos, ...subjects.map(subjectAsReference)]
+        .filter((media) => media.id !== id))
+      : nextName;
+    const withRenamed = (items: MediaDraft[]) => items.map((media) => (media.id === id ? renamed : media));
+    const mention = withVideoMentionReplaced(draft, reference.handle, renamed.handle ?? '');
+    return draft.references.some((media) => media.id === id)
+      ? { ...draft, ...mention, references: withRenamed(draft.references) }
+      : { ...draft, ...mention, referenceVideos: withRenamed(draft.referenceVideos) };
+  }
+  return {
+    ...draft,
+    startFrame: draft.startFrame?.id === id ? renameMediaDraft(draft.startFrame, displayName) : draft.startFrame,
+    endFrame: draft.endFrame?.id === id ? renameMediaDraft(draft.endFrame, displayName) : draft.endFrame,
+  };
+}
+
+/**
+ * A video draft without one of its references, clips, tracks, frames or subjects, and without its
+ * @handle in the words the run reads. Made from the draft it is handed: a Remove answers once its
+ * question is, and the draft from when it was asked put back the pictures that had finished
+ * uploading and the Seedance checks that had come back since.
+ */
+function withoutVideoReference(draft: VideoCreationDraft, id: string): VideoCreationDraft {
+  const subjects = videoSubjects(draft);
+  const subject = subjects.find((item) => item.id === id);
+  if (subject) {
+    return { ...draft, ...withVideoMentionReplaced(draft, subject.handle), subjects: subjects.filter((item) => item.id !== id) };
+  }
+  if (draft.startFrame?.id === id || draft.endFrame?.id === id) {
+    return {
+      ...draft,
+      startFrame: draft.startFrame?.id === id ? null : draft.startFrame,
+      endFrame: draft.endFrame?.id === id ? null : draft.endFrame,
+    };
+  }
+  const media = [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios].find((item) => item.id === id);
+  const without = (items: MediaDraft[]) => items.filter((item) => item.id !== id);
+  return {
+    ...draft,
+    ...withVideoMentionReplaced(draft, media?.handle),
+    references: without(draft.references),
+    referenceVideos: without(draft.referenceVideos),
+    referenceAudios: without(draft.referenceAudios),
+  };
+}
+
 function isFrameRole(role: CatalogInputSlot['role']) {
   return role === 'startFrame' || role === 'endFrame';
 }
@@ -1453,6 +1550,16 @@ function IdentityCreationScreen({
   const normalizeCatalogDraft = <T extends CreationDraft>(draft: T): T => {
     const model = catalog ? getCatalogModel(catalog, draft.model) : null;
     return (model ? applyCatalogModelDefaults(draft, model, catalog?.revision ?? null) : draft) as T;
+  };
+
+  /**
+   * A change the video composer makes, worked out from the draft as it is when React applies it. Its
+   * handlers close over the draft it was drawn with, and a whole draft handed back from one that answers
+   * later put that draft back: Remove runs once its question is answered, and pictures that finished
+   * uploading or a Seedance check that came back while it was open went with it.
+   */
+  const updateVideoDraft = (update: (draft: VideoCreationDraft) => VideoCreationDraft) => {
+    setVideoDraft((current) => normalizeCatalogDraft(update(current)));
   };
 
   /**
@@ -2823,7 +2930,7 @@ function IdentityCreationScreen({
               onEnhanceLevelChange={setEnhanceLevel}
               canUndoEnhance={canUndoEnhance}
               onUndoEnhance={handleUndoEnhance}
-              onChange={(draft) => replaceDraft(draft)}
+              onChange={updateVideoDraft}
               onUploadImages={() => uploadImageReferences('video')}
               onUploadStart={() => uploadSingleImage('start')}
               onUploadEnd={() => uploadSingleImage('end')}
@@ -3928,7 +4035,8 @@ function CompactShotEditor({
   promptMessage: string | null;
   notes: ShotEnhancementNotes | null;
   onEnhanceShot: (shotId: string) => void;
-  onChange: (draft: VideoCreationDraft) => void;
+  /** The video composer's: a change made to the draft as it is when it is applied. */
+  onChange: (update: (draft: VideoCreationDraft) => VideoCreationDraft) => void;
   onFocus: () => void;
   onBlur: () => void;
 }) {
@@ -3957,10 +4065,11 @@ function CompactShotEditor({
 
   const updateSelected = (patch: Partial<{ prompt: string; duration: number }>) => {
     if (!selectedShot) return;
-    onChange({
-      ...draft,
-      multiPrompts: draft.multiPrompts.map((shot) => shot.id === selectedShot.id ? { ...shot, ...patch } : shot),
-    });
+    const { id } = selectedShot;
+    onChange((current) => ({
+      ...current,
+      multiPrompts: current.multiPrompts.map((shot) => shot.id === id ? { ...shot, ...patch } : shot),
+    }));
   };
 
   return (
@@ -3977,7 +4086,7 @@ function CompactShotEditor({
           disabled={atShotCap}
           onPress={() => {
             const id = `shot-${Date.now().toString(36)}`;
-            onChange({ ...draft, multiPrompts: [...draft.multiPrompts, { id, prompt: '', duration: 5 }] });
+            onChange((current) => ({ ...current, multiPrompts: [...current.multiPrompts, { id, prompt: '', duration: 5 }] }));
             setSelectedId(id);
           }}
           style={({ pressed }) => ({ minHeight: 48, borderRadius: 16, paddingHorizontal: 13, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: atShotCap ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
@@ -4053,9 +4162,10 @@ function CompactShotEditor({
             accessibilityState={{ disabled: draft.multiPrompts.length <= 1 }}
             disabled={draft.multiPrompts.length <= 1}
             onPress={() => {
-              const index = draft.multiPrompts.findIndex((shot) => shot.id === selectedShot.id);
-              const nextShots = draft.multiPrompts.filter((shot) => shot.id !== selectedShot.id);
-              onChange({ ...draft, multiPrompts: nextShots });
+              const { id } = selectedShot;
+              const index = draft.multiPrompts.findIndex((shot) => shot.id === id);
+              const nextShots = draft.multiPrompts.filter((shot) => shot.id !== id);
+              onChange((current) => ({ ...current, multiPrompts: current.multiPrompts.filter((shot) => shot.id !== id) }));
               setSelectedId(nextShots[Math.max(0, index - 1)]?.id ?? nextShots[0]?.id ?? '');
             }}
             style={({ pressed }) => ({ width: 48, height: 48, position: 'absolute', right: 6, top: 6, borderRadius: 24, backgroundColor: pressed ? theme.colors.pressed : hexWithAlpha(theme.colors.surfaceInset, 0.78), alignItems: 'center', justifyContent: 'center', opacity: draft.multiPrompts.length <= 1 ? 0.35 : 1 })}
@@ -4124,7 +4234,11 @@ function VideoCreatorComposer({
   onEnhanceLevelChange: (level: PromptEnhancementLevel) => void;
   canUndoEnhance: boolean;
   onUndoEnhance: () => void;
-  onChange: (draft: VideoCreationDraft) => void;
+  /**
+   * A change to the draft, made to it as it is when it is applied: a handler that answers later, as a
+   * confirmed Remove does, would otherwise hand back the draft this composer was drawn with.
+   */
+  onChange: (update: (draft: VideoCreationDraft) => VideoCreationDraft) => void;
   onUploadImages: () => void;
   onUploadStart: () => void;
   onUploadEnd: () => void;
@@ -4387,54 +4501,15 @@ function VideoCreatorComposer({
     restorePromptFocus(focusDelay);
   };
 
-  // Whether the draft's words name a handle: the single shot's prompt or a story's shots, whichever is on
-  // screen, as a switch between the two brings the other back as the words the run reads.
-  const draftTextNames = (handle?: string | null) => promptContainsHandle(draft.prompt, handle)
-    || draft.multiPrompts.some((shot) => promptContainsHandle(shot.prompt, handle));
-  // Those words with a reference's @handle renamed, or taken out when it is removed, and nothing when no
-  // words name it. Left in the words off screen, a mention named nothing once they came back (redundant-UI
-  // audit, 2026-10-21).
-  const withMentionReplaced = (handle: string | null | undefined, replacement = ''): Partial<Pick<VideoCreationDraft, 'prompt' | 'multiPrompts'>> => {
-    if (!handle || !draftTextNames(handle)) return {};
-    const replaced = (text: string) => (promptContainsHandle(text, handle) ? replacePromptHandle(text, handle, replacement) : text);
-    return {
-      prompt: replaced(draft.prompt),
-      multiPrompts: draft.multiPrompts.map((shot) => {
-        const prompt = replaced(shot.prompt);
-        return prompt === shot.prompt ? shot : { ...shot, prompt };
-      }),
-    };
-  };
+  const draftTextNames = (handle?: string | null) => videoDraftTextNames(draft, handle);
 
+  // Each change is made to the draft as it is when it is applied: a Remove answers once its question is,
+  // and the draft from when it was asked put back what had landed in the meantime. The notices say what
+  // the question asked about.
   const renameSelectedReference = (displayName: string) => {
     if (!selectedReference) return;
-    if (selectedSubject) {
-      const renamedSubject = renameSubjectDraft(selectedSubject, displayName, videoDraftHandles(draft));
-      onChange({
-        ...draft,
-        ...withMentionReplaced(selectedSubject.handle, renamedSubject.handle),
-        subjects: subjects.map((subject) => (subject.id === selectedSubject.id ? renamedSubject : subject)),
-      });
-      return;
-    }
-    const nextName = renameMediaDraft(selectedReference, displayName);
-    // Two references renamed alike would otherwise answer to one @mention.
-    const renamed = nextName.handle
-      ? withUniqueReferenceHandle(nextName, [...draft.references, ...draft.referenceVideos, ...subjects.map(subjectAsReference)]
-        .filter((media) => media.id !== selectedReference.id))
-      : nextName;
-    const withRenamed = (items: MediaDraft[]) => items.map((media) => (media.id === selectedReference.id ? renamed : media));
-    const mention = withMentionReplaced(selectedReference.handle, renamed.handle ?? '');
-    if (draft.references.some((media) => media.id === selectedReference.id)) {
-      onChange({ ...draft, ...mention, references: withRenamed(draft.references) });
-      return;
-    }
-    if (draft.referenceVideos.some((media) => media.id === selectedReference.id)) {
-      onChange({ ...draft, ...mention, referenceVideos: withRenamed(draft.referenceVideos) });
-      return;
-    }
-    if (draft.startFrame?.id === selectedReference.id) onChange({ ...draft, startFrame: renameMediaDraft(selectedReference, displayName) });
-    if (draft.endFrame?.id === selectedReference.id) onChange({ ...draft, endFrame: renameMediaDraft(selectedReference, displayName) });
+    const { id } = selectedReference;
+    onChange((current) => withVideoReferenceRenamed(current, id, displayName));
   };
 
   // A reference, clip or track, with its @handle taken out of the words the run reads. A frame
@@ -4442,45 +4517,28 @@ function VideoCreatorComposer({
   const removeReference = (media: MediaDraft) => {
     if (draft.startFrame?.id === media.id || draft.endFrame?.id === media.id) {
       onReferenceNotice(`${media.displayName} was removed from this draft.`);
-      onChange({
-        ...draft,
-        startFrame: draft.startFrame?.id === media.id ? null : draft.startFrame,
-        endFrame: draft.endFrame?.id === media.id ? null : draft.endFrame,
-      });
-      return;
+    } else {
+      const handleUsed = draftTextNames(media.handle);
+      onReferenceNotice(handleUsed && media.handle
+        ? `${media.displayName} and ${media.handle} were removed from this draft.`
+        : `${media.displayName} was removed from this draft.`);
     }
-    const handleUsed = draftTextNames(media.handle);
-    onReferenceNotice(handleUsed && media.handle
-      ? `${media.displayName} and ${media.handle} were removed from this draft.`
-      : `${media.displayName} was removed from this draft.`);
-    const without = (items: MediaDraft[]) => items.filter((item) => item.id !== media.id);
-    onChange({
-      ...draft,
-      ...withMentionReplaced(media.handle),
-      references: without(draft.references),
-      referenceVideos: without(draft.referenceVideos),
-      referenceAudios: without(draft.referenceAudios),
-    });
+    onChange((current) => withoutVideoReference(current, media.id));
   };
 
   const removeSelectedReference = () => {
     if (!selectedReference) return;
+    const { id } = selectedReference;
     if (selectedSubject) {
       const handleUsed = draftTextNames(selectedSubject.handle);
       onReferenceNotice(handleUsed
         ? `${selectedSubject.displayName} and ${selectedSubject.handle} were removed from this draft.`
         : `${selectedSubject.displayName} was removed from this draft.`);
-      onChange({
-        ...draft,
-        ...withMentionReplaced(selectedSubject.handle),
-        subjects: subjects.filter((subject) => subject.id !== selectedSubject.id),
-      });
-    } else if ([...draft.references, ...draft.referenceVideos].some((media) => media.id === selectedReference.id)) {
+      onChange((current) => withoutVideoReference(current, id));
+    } else if ([...draft.references, ...draft.referenceVideos].some((media) => media.id === id)) {
       removeReference(selectedReference);
-    } else if (draft.startFrame?.id === selectedReference.id) {
-      onChange({ ...draft, startFrame: null });
-    } else if (draft.endFrame?.id === selectedReference.id) {
-      onChange({ ...draft, endFrame: null });
+    } else if (draft.startFrame?.id === id || draft.endFrame?.id === id) {
+      onChange((current) => withoutVideoReference(current, id));
     }
     setReferenceId(null);
   };
@@ -4500,7 +4558,7 @@ function VideoCreatorComposer({
               accessibilityRole="button"
               accessibilityLabel={option.label}
               accessibilityState={{ selected: draft.isMultiShot === option.value }}
-              onPress={() => onChange({ ...draft, isMultiShot: option.value, referenceMode: option.value ? 'frames' : draft.referenceMode })}
+              onPress={() => onChange((current) => ({ ...current, isMultiShot: option.value, referenceMode: option.value ? 'frames' : current.referenceMode }))}
               hitSlop={verticalHitSlop(40)}
               style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: 14, backgroundColor: draft.isMultiShot === option.value ? hexWithAlpha(theme.colors.image, 0.14) : pressed ? theme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
@@ -4673,7 +4731,7 @@ function VideoCreatorComposer({
               {railAudios.map((media) => (
                 <View key={media.id} onLayout={reusableItemLayout(media.id)} style={{ width: 72, gap: 4 }}>
                   <ReferenceMediaPreview media={media} size={72} />
-                  <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange({ ...draft, referenceAudios: draft.referenceAudios.filter((item) => item.id !== media.id) })} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+                  <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange((current) => ({ ...current, referenceAudios: current.referenceAudios.filter((item) => item.id !== media.id) }))} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                     <Text maxFontSizeMultiplier={appTheme.typeScale.control} style={{ color: theme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
                   </Pressable>
                   {preparesSeedanceAssets ? (
@@ -4702,10 +4760,10 @@ function VideoCreatorComposer({
               </Text>
             ) : null}
             {preparedVoiceLimit > 0 ? (
-              <PreparedReferenceIds title="Prepared voice IDs" accessibilityLabel="Prepared voice ID" placeholder="Paste prepared voice ID" items={draft.preparedAudioIds} max={preparedVoiceLimit} onChange={(items) => onChange({ ...draft, preparedAudioIds: items })} />
+              <PreparedReferenceIds title="Prepared voice IDs" accessibilityLabel="Prepared voice ID" placeholder="Paste prepared voice ID" items={draft.preparedAudioIds} max={preparedVoiceLimit} onChange={(items) => onChange((current) => ({ ...current, preparedAudioIds: items }))} />
             ) : null}
             {characterLimit > 0 ? (
-              <PreparedReferenceIds title="Prepared character IDs" accessibilityLabel="Prepared character ID" placeholder="Paste prepared character ID" items={draft.characterIds} max={characterLimit} onChange={(items) => onChange({ ...draft, characterIds: items })} />
+              <PreparedReferenceIds title="Prepared character IDs" accessibilityLabel="Prepared character ID" placeholder="Paste prepared character ID" items={draft.characterIds} max={characterLimit} onChange={(items) => onChange((current) => ({ ...current, characterIds: items }))} />
             ) : null}
           </View>
         ) : null}
