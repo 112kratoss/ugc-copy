@@ -109,7 +109,10 @@ interface OwnerPost {
 
 interface OwnerGeneration {
   id: string;
-  /** `expiresAt`: when the signed addresses of a private output stop holding; null for ones that do not expire. */
+  /**
+   * `expiresAt`: when the signed addresses of a private output stop holding; null for ones that do not
+   * expire. A sound comes with no media at all, though its file is signed as a picture's is.
+   */
   media?: { renditionUrl?: string | null; expiresAt?: string | null } | null;
   output_url: string | null;
   /** Set when the only source is gone; the API withholds every address. */
@@ -238,7 +241,8 @@ function getAdditionalGenerationMedia(generation: OwnerGeneration): MediaDetails
  */
 function withGenerationDetails(shown: OwnerGeneration, details: OwnerGeneration, now: number): OwnerGeneration {
   const expiresAt = shown.media?.expiresAt ? Date.parse(shown.media.expiresAt) : null;
-  if (!shown.output_url || (expiresAt !== null && !(expiresAt > now))) return { ...shown, ...details };
+  // With no media (a sound), nothing says how long the addresses on screen hold: the details' are taken.
+  if (!shown.output_url || !shown.media || (expiresAt !== null && !(expiresAt > now))) return { ...shown, ...details };
   return {
     ...shown,
     ...details,
@@ -612,18 +616,21 @@ export default function OwnerProfileMediaHub({
   // the list has not.
   const readGenerationDetails = useCallback(async (generationId: string) => {
     let answered: OwnerGeneration | undefined;
+    let read = false;
     try {
       const response = await fetch(`/api/generations?includeArchived=false&id=${encodeURIComponent(generationId)}&limit=1`, { headers: authHeaders });
       const payload = await response.json();
       const first = Array.isArray(payload.generations) ? payload.generations[0] as OwnerGeneration | undefined : undefined;
+      read = response.ok;
       if (response.ok && first?.id === generationId) answered = first;
     } catch (error) {
       console.error('Failed to load full creation details:', error);
     }
     const request = addressGenerationRef.current;
     if (!answered) {
-      // Nothing to open it with: a later page of the list does not pop it open either.
-      if (request?.id === generationId) request.opened = true;
+      // Read and not found: nothing to open it with, and a later page of the list does not pop it
+      // open either. A refused or failed read says nothing about it, so the list still may.
+      if (read && request?.id === generationId) request.opened = true;
       return;
     }
     const details = answered;

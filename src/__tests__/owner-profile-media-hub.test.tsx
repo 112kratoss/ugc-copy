@@ -871,25 +871,41 @@ describe('OwnerProfileMediaHub', () => {
       }],
     });
     // Answers the list's first page, the page after it, and each details read (none for an id
-    // `details` leaves out); returns the ids the details were read for.
-    const answerCreations = (first: Row[], second: Row[] | null, details: Record<string, ReturnType<typeof detailsOf>>) => {
+    // `details` leaves out, a refused read for one it marks 'failed'); returns the ids the details
+    // were read for. `listAfter` holds the list's answers until it settles.
+    const answerCreations = (
+      first: Row[],
+      second: Row[] | null,
+      details: Record<string, ReturnType<typeof detailsOf> | 'failed'>,
+      listAfter?: Promise<unknown>,
+    ) => {
       const answerElse = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
       const detailsReads: string[] = [];
       vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
         const url = String(input);
         if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
-          return url.includes('cursor=page-2')
+          const answer = () => (url.includes('cursor=page-2')
             ? response({ generations: second ?? [], pagination: { hasMore: false, nextCursor: null } })
-            : response({ generations: first, pagination: { hasMore: Boolean(second), nextCursor: second ? 'page-2' : null } });
+            : response({ generations: first, pagination: { hasMore: Boolean(second), nextCursor: second ? 'page-2' : null } }));
+          return listAfter ? listAfter.then(answer) : answer();
         }
         const read = /\/api\/generations\?includeArchived=false&id=([^&]+)&limit=1$/.exec(url);
         if (read) {
           detailsReads.push(read[1]);
-          return response({ generations: details[read[1]] ? [details[read[1]]] : [] });
+          const answer = details[read[1]];
+          if (answer === 'failed') return response({ error: 'Too many requests.' }, false);
+          return response({ generations: answer ? [answer] : [] });
         }
         return answerElse(input);
       }));
       return detailsReads;
+    };
+    const held = () => {
+      let release!: () => void;
+      const settled = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { settled, release };
     };
 
     it('reads the details of a creation its address opened', async () => {
@@ -939,6 +955,65 @@ describe('OwnerProfileMediaHub', () => {
       expect(await screen.findByRole('button', { name: /open far frame/i })).toBeInTheDocument();
       await settle();
       noPreview();
+    });
+
+    // The details opened it before the list came, so the list's row (signed by another read) must
+    // not open it again: the viewer would change its media and load it again.
+    it('leaves the creation its details opened as they opened it when the list brings it', async () => {
+      const row = summaryRow('gen-linked', 'Linked frame');
+      const list = held();
+      answerCreations([row], null, { 'gen-linked': detailsOf(row) }, list.settled);
+      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-linked');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      const preview = await screen.findByRole('dialog', { name: /linked frame creation preview/i });
+      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-linked.jpg', 'details'));
+
+      list.release();
+      expect(await screen.findByRole('button', { name: /open linked frame/i })).toBeInTheDocument();
+      await settle();
+      expect(screen.getByTestId('preview-src')).toHaveTextContent(signed('gen-linked.jpg', 'details'));
+    });
+
+    // A refused read (the per-user limit Studio's polling shares, a server error) says nothing about
+    // the creation, so the list still opens it, as before the details were read at once.
+    it('opens the creation from the list when its details read is refused', async () => {
+      const row = summaryRow('gen-linked', 'Linked frame');
+      const list = held();
+      const reads = answerCreations([row], null, { 'gen-linked': 'failed' }, list.settled);
+      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-linked');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await waitFor(() => expect(reads).toEqual(['gen-linked']));
+      await settle();
+      noPreview();
+
+      list.release();
+      const preview = await screen.findByRole('dialog', { name: /linked frame creation preview/i });
+      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-linked.jpg', 'list'));
+    });
+
+    // The server describes no media for a sound, though its file is signed as a picture's is: with
+    // nothing saying how long the address on screen holds, the details' fresh one is taken.
+    it("takes the details' address for a sound, whose media the list does not describe", async () => {
+      const soundRow = (read: string) => ({
+        ...summaryRow('gen-sound', 'Sound take'),
+        output_url: signed('gen-sound.mp3', read),
+        preview_url: null,
+        media: null,
+        category: 'audio',
+        model: 'audio-model',
+      }) as unknown as Row;
+      const row = soundRow('list');
+      answerCreations([row], null, {
+        'gen-sound': { ...detailsOf(row), ...soundRow('details'), output_urls: [signed('gen-sound.mp3', 'details')] } as unknown as ReturnType<typeof detailsOf>,
+      });
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      await screen.findByRole('button', { name: /open public post/i });
+      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /open sound take/i }));
+
+      const preview = await screen.findByRole('dialog', { name: /sound take creation preview/i });
+      expect(await within(preview).findByText('Sound take prompt')).toBeInTheDocument();
+      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-sound.mp3', 'details'));
     });
 
     it('keeps the media on screen when the details of the open creation come signed again', async () => {
