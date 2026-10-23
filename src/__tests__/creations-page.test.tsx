@@ -434,6 +434,45 @@ describe('CreationsPage', () => {
     });
   });
 
+  // The preview's own Escape listens on the window; the Escape that answered
+  // "Delete this creation?" used to close the preview behind it as well.
+  it('keeps the preview open when Escape answers its delete question', async () => {
+    navigationState.searchParams = new URLSearchParams('generation=gen-notification');
+    const notificationGeneration = makeGeneration({
+      id: 'gen-notification',
+      title: 'Notification image',
+      prompt: 'A product image opened from an alert.',
+      input_media: [],
+      paywallPrefill: null,
+    });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === GENERATIONS_PAGE_URL) return Promise.resolve(jsonResponse({ generations: [] }));
+      if (url === generationDetailUrl('gen-notification')) {
+        return Promise.resolve(jsonResponse({ generations: [notificationGeneration] }));
+      }
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+        return Promise.resolve(jsonResponse({ posts: [] }));
+      }
+      if (url === '/api/profile') return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    const preview = await screen.findByRole('dialog', { name: 'Notification image' });
+    fireEvent.click(within(preview).getByRole('button', { name: 'Delete creation' }));
+    const question = await screen.findByRole('alertdialog', { name: 'Delete this creation?' });
+    const cancel = within(question).getByRole('button', { name: 'Cancel' });
+    await waitFor(() => expect(cancel).toHaveFocus());
+
+    fireEvent.keyDown(cancel, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('dialog', { name: 'Notification image' })).toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'DELETE')).toBe(false);
+  });
+
   it('shows cached workspace content immediately while refreshing in the background', async () => {
     window.sessionStorage.setItem('magicbooklet:creations-cache:v1:user-1', JSON.stringify({
       fetchedAt: Date.now(),

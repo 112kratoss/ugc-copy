@@ -14,7 +14,7 @@ import {
 } from '@/lib/post-composer-resource-cards';
 import type { PostResourceAttachment, PostResourceItemType } from '@/lib/post-resource-bundles';
 import { isUploadCancelledError } from '@/lib/upload-queue';
-import { readFeedbackSnapshot, type ConfirmationRequest } from '@/components/feedback-state';
+import type { ConfirmationRequest } from '@/components/feedback-state';
 import { useConfirmation } from '@/components/useConfirmation';
 
 import { getResourceCardTypeLabel, ResourceTypeIcon } from './ResourceCardsSection';
@@ -224,12 +224,6 @@ function ResourceCardEditorDialogContent({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // A confirmation drawn over the editor has the keyboard: its Escape
-      // (which it has already taken by the time the window hears it) is its
-      // own Cancel, and its Tab stays among its buttons.
-      if (event.defaultPrevented || readFeedbackSnapshot().confirmation) {
-        return;
-      }
       if (event.key === 'Escape') {
         event.preventDefault();
         void requestClose();

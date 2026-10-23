@@ -237,15 +237,74 @@ describe('feedback viewport', () => {
     act(() => first.abort());
     expect(screen.getByRole('alertdialog', { name: 'Second?' })).toBeInTheDocument();
   });
+
+  // A modal under the question listens on the window or the document: one
+  // Escape closed the creation preview along with "Delete this creation?".
+  it('keeps every key from what is beneath it while it is up', async () => {
+    const heard: string[] = [];
+    const onWindow = (event: KeyboardEvent) => heard.push(`window ${event.key}`);
+    const onDocumentCapture = (event: KeyboardEvent) => heard.push(`document ${event.key}`);
+    window.addEventListener('keydown', onWindow);
+    document.addEventListener('keydown', onDocumentCapture, true);
+    try {
+      render(<FeedbackViewport />);
+      let answer: Promise<boolean> | null = null;
+      act(() => {
+        answer = requestConfirmation({ title: 'Delete?', message: 'Gone for good.', confirmLabel: 'Delete', tone: 'danger' });
+      });
+      const cancel = within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' });
+      await waitFor(() => expect(cancel).toHaveFocus());
+
+      // A Tab that does not wrap, and any other key, are the question's too.
+      fireEvent.keyDown(cancel, { key: 'Tab' });
+      fireEvent.keyDown(cancel, { key: 'ArrowRight' });
+      expect(cancel).toHaveFocus();
+      fireEvent.keyDown(cancel, { key: 'Escape' });
+      await expect(answer).resolves.toBe(false);
+      expect(heard).toEqual([]);
+
+      // Answered, it lets the page have its keys back.
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(heard).toEqual(['document Escape', 'window Escape']);
+    } finally {
+      window.removeEventListener('keydown', onWindow);
+      document.removeEventListener('keydown', onDocumentCapture, true);
+    }
+  });
+
+  // The reel's "Use 25 credits" spent them after Back had closed the reel.
+  it('answers "cancel" by itself when Back leaves the address it was asked at, and only then', async () => {
+    window.history.replaceState(null, '', '/showcase?post=post-1');
+    try {
+      render(<FeedbackViewport />);
+      let answer: Promise<boolean> | null = null;
+      act(() => {
+        answer = requestConfirmation({ title: 'Unlock this recipe?', message: '25 credits.', confirmLabel: 'Use 25 credits' });
+      });
+      await screen.findByRole('alertdialog', { name: 'Unlock this recipe?' });
+
+      // The same page (a guard entry coming off, a hash): the question stays.
+      act(() => {
+        window.history.replaceState(null, '', '/showcase?post=post-1#comments');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      expect(screen.getByRole('alertdialog', { name: 'Unlock this recipe?' })).toBeInTheDocument();
+
+      act(() => {
+        window.history.replaceState(null, '', '/showcase');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await expect(answer).resolves.toBe(false);
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    } finally {
+      window.history.replaceState(null, '', '/');
+    }
+  });
 });
 
 describe('a question a component asks with useConfirmation', () => {
-  afterEach(() => {
-    resetFeedbackState();
-  });
-
-  function Asker({ onAnswer }: { onAnswer: (confirmed: boolean) => void }) {
-    const askToConfirm = useConfirmation();
+  function Asker({ onAnswer, scope }: { onAnswer: (confirmed: boolean) => void; scope?: unknown }) {
+    const askToConfirm = useConfirmation(scope);
     return (
       <button
         type="button"
@@ -307,6 +366,29 @@ describe('a question a component asks with useConfirmation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close editor' }));
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
     await waitFor(() => expect(onAnswer).toHaveBeenLastCalledWith(true));
+  });
+
+  // The creator page's editor: a save that finished while "Discard your
+  // profile changes?" was up closed the editor and left the question.
+  it('is answered "cancel" when its scope changes, and not before', async () => {
+    const onAnswer = vi.fn();
+    const view = (editing: boolean) => (
+      <>
+        <Asker onAnswer={onAnswer} scope={editing} />
+        <FeedbackViewport />
+      </>
+    );
+    const { rerender } = render(view(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close editor' }));
+    await screen.findByRole('alertdialog', { name: 'Discard changes?' });
+    rerender(view(true));
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument();
+    expect(onAnswer).not.toHaveBeenCalled();
+
+    rerender(view(false));
+    await waitFor(() => expect(onAnswer).toHaveBeenCalledWith(false));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 });
 

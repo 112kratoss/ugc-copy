@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, AtSign, BadgeCheck, CheckCircle2, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus, Globe2, MapPin, Minus, Plus, RotateCcw } from 'lucide-react';
@@ -20,7 +20,7 @@ import {
 import { uploadProfileMediaWithSignedIntent } from '@/lib/profile-media-upload';
 import { supabase } from '@/lib/supabase';
 import type { ConfirmationRequest } from '@/components/feedback-state';
-import { publishNavigationStart } from '@/components/navigation-progress-state';
+import { publishNavigationStartTo } from '@/components/navigation-progress-state';
 import { useConfirmation } from '@/components/useConfirmation';
 
 interface CreatorProfileCardProps {
@@ -297,6 +297,18 @@ export default function CreatorProfileCard({
   // Where the editor itself is going once Back has taken the guard entry off.
   const afterLeaveGuardPopRef = useRef<(() => void) | null>(null);
   const askToConfirm = useConfirmation();
+
+  // Every way out (a save, Skip for now, a confirmed link, a confirmed Back)
+  // steps off the guard entry before it moves on: left under the next page,
+  // it would be a Back that goes nowhere.
+  const leaveEditor = useCallback((navigate: () => void) => {
+    if (!leaveGuardEntryRef.current) {
+      navigate();
+      return;
+    }
+    afterLeaveGuardPopRef.current = navigate;
+    window.history.back();
+  }, []);
 
   const validateProfileImage = (file: File, field: 'avatarUrl' | 'coverUrl') => {
     if (!file.type.startsWith('image/')) {
@@ -638,17 +650,10 @@ export default function CreatorProfileCard({
           window.setTimeout(() => {
             allowDirtyNavigationRef.current = false;
           }, 0);
-          publishNavigationStart();
+          publishNavigationStartTo(href);
           router.push(href);
         };
-        if (leaveGuardEntryRef.current) {
-          // Off the guard entry first, then on: left under the next page, it
-          // would be a Back that goes nowhere.
-          afterLeaveGuardPopRef.current = follow;
-          window.history.back();
-          return;
-        }
-        follow();
+        leaveEditor(follow);
       });
     };
 
@@ -658,7 +663,7 @@ export default function CreatorProfileCard({
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('click', handleDocumentClick, true);
     };
-  }, [askToConfirm, isDirty, router]);
+  }, [askToConfirm, isDirty, leaveEditor, router]);
 
   // Back, and a phone browser's back swipe, leave through history, which
   // neither the click guard nor `beforeunload` sees. While the page's form is
@@ -700,25 +705,13 @@ export default function CreatorProfileCard({
         // Asked and answered: the page this Back reaches may be another site.
         allowDirtyNavigationRef.current = true;
         // Off the guard entry, then the Back that was asked for.
-        afterLeaveGuardPopRef.current = () => window.history.back();
-        window.history.back();
+        leaveEditor(() => window.history.back());
       });
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [askToConfirm]);
-
-  // The editor's own ways out (a save, Skip for now) step off the guard entry
-  // before they move on, for the same reason as a confirmed link.
-  const leaveEditor = (navigate: () => void) => {
-    if (!leaveGuardEntryRef.current) {
-      navigate();
-      return;
-    }
-    afterLeaveGuardPopRef.current = navigate;
-    window.history.back();
-  };
+  }, [askToConfirm, leaveEditor]);
 
   const focusFirstInvalidField = (errors: ProfileFieldErrors) => {
     const fieldOrder: Array<keyof ProfileFieldErrors> = [

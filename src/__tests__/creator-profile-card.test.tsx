@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
 import FeedbackViewport from '@/components/FeedbackViewport';
-import { resetFeedbackState } from '@/components/feedback-state';
+import { readNavigationToken } from '@/components/navigation-progress-state';
 import type { EditableCreatorProfile } from '@/lib/profile';
 
 const supabaseMocks = vi.hoisted(() => ({
@@ -84,7 +84,6 @@ describe('CreatorProfileCard', () => {
   });
 
   afterEach(() => {
-    resetFeedbackState();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -355,6 +354,27 @@ describe('CreatorProfileCard', () => {
       expect(click.defaultPrevented).toBe(true);
       await waitFor(() => expect(routerMocks.push).toHaveBeenCalledWith('/showcase?tab=new'));
       expect(back.mock.invocationCallOrder[0]).toBeLessThan(routerMocks.push.mock.invocationCallOrder[0]);
+    });
+
+    // The bar finishes on a change of pathname: announced for a link that only
+    // changed the search (the Profile tab from /profile?next=…), it crept on
+    // for its 12 s failsafe.
+    it('announces the navigation a "leave" starts only when it changes page', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      answerBackLater();
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
+      typeName('New Name');
+      const samePage = addPageLink(`${window.location.pathname}?tab=new`);
+      const otherPage = addPageLink('/showcase');
+      const before = readNavigationToken();
+
+      fireEvent.click(samePage);
+      await waitFor(() => expect(routerMocks.push).toHaveBeenCalledTimes(1));
+      expect(readNavigationToken()).toBe(before);
+
+      fireEvent.click(otherPage);
+      await waitFor(() => expect(routerMocks.push).toHaveBeenLastCalledWith('/showcase'));
+      expect(readNavigationToken()).toBe(before + 1);
     });
 
     it('asks nothing for a click that opens a new tab', () => {

@@ -26,7 +26,7 @@ import {
 
 import { useAuth } from '@/components/AuthProvider';
 import type { ConfirmationRequest } from '@/components/feedback-state';
-import { publishNavigationStart } from '@/components/navigation-progress-state';
+import { publishNavigationStartTo } from '@/components/navigation-progress-state';
 import { useConfirmation } from '@/components/useConfirmation';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import {
@@ -87,7 +87,7 @@ import type { EditablePostDraft } from './post-editor-types';
 
 const LEAVE_WITH_UNSAVED_CHANGES: ConfirmationRequest = {
   title: 'Leave this post?',
-  message: 'Your unsaved changes will be discarded.',
+  message: 'Your changes haven’t been saved and will be lost.',
   confirmLabel: 'Leave without saving',
   cancelLabel: 'Keep editing',
   tone: 'danger',
@@ -2527,7 +2527,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             event.preventDefault();
             void askToConfirm(LEAVE_WITH_UNSAVED_CHANGES).then((confirmed) => {
               if (!confirmed) return;
-              publishNavigationStart();
+              publishNavigationStartTo(backHref);
               router.push(backHref);
             });
           }}

@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedbackViewport from '@/components/FeedbackViewport';
 import PostComments from '@/components/PostComments';
-import { resetFeedbackState } from '@/components/feedback-state';
 import type { PostComment, PostCommentsPage } from '@/lib/post-comments-client';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
@@ -148,7 +147,6 @@ describe('PostComments', () => {
     });
 
     afterEach(() => {
-        resetFeedbackState();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });

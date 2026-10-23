@@ -176,6 +176,7 @@ export function requestConfirmation(
   }
   if (listeners.size === 0) {
     return Promise.resolve(
+      // eslint-disable-next-line no-alert -- the answer when nothing draws the app's dialog
       typeof window !== 'undefined' ? window.confirm(`${request.title}\n\n${request.message}`) : false,
     );
   }

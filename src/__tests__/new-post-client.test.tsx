@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import NewPostClient from '@/app/post/new/NewPostClient';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import FeedbackViewport from '@/components/FeedbackViewport';
-import { resetFeedbackState } from '@/components/feedback-state';
 import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 
 const mockPush = vi.fn();
@@ -214,7 +213,6 @@ describe('NewPostClient', () => {
   });
 
   afterEach(() => {
-    resetFeedbackState();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -353,6 +351,10 @@ describe('NewPostClient', () => {
     const keep = within(question).getByRole('button', { name: 'Keep editing' });
     const discard = within(question).getByRole('button', { name: 'Discard changes' });
     await waitFor(() => expect(keep).toHaveFocus());
+
+    // A Tab that does not wrap never reaches the editor's trap beneath.
+    fireEvent.keyDown(keep, { key: 'Tab' });
+    expect(keep).toHaveFocus();
 
     discard.focus();
     fireEvent.keyDown(discard, { key: 'Tab' });
@@ -3517,7 +3519,7 @@ describe('NewPostClient', () => {
       });
       fireEvent.click(back);
       const question = await screen.findByRole('alertdialog', { name: 'Leave this post?' });
-      expect(question).toHaveAccessibleDescription('Your unsaved changes will be discarded.');
+      expect(question).toHaveAccessibleDescription('Your changes haven’t been saved and will be lost.');
       expect(linkRouter.push).toHaveBeenCalledTimes(1);
 
       fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }));

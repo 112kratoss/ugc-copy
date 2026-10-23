@@ -644,9 +644,9 @@ button:disabled,
   align-items: center;
   justify-content: center;
   margin-bottom: 1rem;
-  border: 1px solid rgba(255, 124, 139, 0.24);
+  border: 1px solid color-mix(in srgb, var(--ui-accent-danger) 24%, transparent);
   border-radius: var(--ui-radius-pill);
-  background: rgba(255, 124, 139, 0.12);
+  background: color-mix(in srgb, var(--ui-accent-danger) 12%, transparent);
   color: var(--ui-accent-danger);
 }
 
@@ -687,7 +687,7 @@ button:disabled,
     border-bottom-width: 1px;
     border-radius: var(--ui-radius-2xl);
     padding: 1.5rem;
-    animation-name: ui-confirm-pop-in;
+    animation-name: ui-rise;
   }
 
   .ui-confirm-actions {
@@ -712,18 +712,6 @@ button:disabled,
   }
   to {
     transform: translateY(0);
-  }
-}
-
-/* A modal is not anchored to its trigger, so it grows from its own centre. */
-@keyframes ui-confirm-pop-in {
-  from {
-    opacity: 0;
-    transform: translateY(0.5rem) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 

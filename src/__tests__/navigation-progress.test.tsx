@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedbackViewport from '@/components/FeedbackViewport';
 import NavigationProgress from '@/components/NavigationProgress';
-import { requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
-import { publishNavigationStart } from '@/components/navigation-progress-state';
+import { requestConfirmation } from '@/components/feedback-state';
+import { publishNavigationStart, publishNavigationStartTo } from '@/components/navigation-progress-state';
 
 let mockedPathname = '/feed';
 
@@ -148,13 +148,22 @@ describe('NavigationProgress', () => {
         expect(screen.queryByRole('progressbar')).toBeNull();
     });
 
+    // The bar finishes when the pathname changes, so a push that only changes
+    // the search or the hash would leave it creeping until its failsafe.
+    it('is raised for a push to another page, and not for one that only changes the search or hash', () => {
+        render(<NavigationProgress />);
+
+        act(() => publishNavigationStartTo('/feed?tab=recent'));
+        act(() => publishNavigationStartTo('/feed#comments'));
+        expect(bar()).toBeNull();
+
+        act(() => publishNavigationStartTo('/showcase?tab=new'));
+        expect(bar()).toBeInTheDocument();
+    });
+
     // The composer's Back link and the profile editor's leave guard hold the
     // click and ask; the bar crept over the question and on after a "stay".
     describe('a link that asks before it goes', () => {
-        afterEach(() => {
-            resetFeedbackState();
-        });
-
         function renderGuardedLink() {
             render(
                 <>
@@ -178,6 +187,7 @@ describe('NavigationProgress', () => {
         }
 
         it('takes the bar down while the question is up, and keeps it down after a "stay"', async () => {
+            vi.useFakeTimers();
             renderGuardedLink();
 
             fireEvent.click(screen.getByText('Back to Explore'));
@@ -186,8 +196,9 @@ describe('NavigationProgress', () => {
             expect(bar()).toBeNull();
 
             fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+            // Long enough for the bar's creep to have ticked twice.
             await act(async () => {
-                await new Promise((resolve) => setTimeout(resolve, 300));
+                await vi.advanceTimersByTimeAsync(300);
             });
             expect(screen.queryByRole('alertdialog')).toBeNull();
             expect(bar()).toBeNull();

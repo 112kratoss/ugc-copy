@@ -217,6 +217,11 @@ function Toast({ toast }: { toast: ToastRecord }) {
   );
 }
 
+/** The page an address names: a change of hash alone stays on it. */
+function readAddress() {
+  return `${window.location.pathname}${window.location.search}`;
+}
+
 function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) {
   const { id, request } = confirmation;
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -234,8 +239,17 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
     // there scrolled the backdrop to it, so the sheet jumped into place in one
     // frame instead of sliding up.
     const focusFrame = window.requestAnimationFrame(() => cancelRef.current?.focus({ preventScroll: true }));
+    // Where it was asked: a Back that leaves this address has left the page
+    // the question was about (the reel it would unlock, the creator it would
+    // block), and its answer would act for a page that is gone.
+    const askedAt = readAddress();
 
+    // Every key is the question's while it is up: heard first (on the window,
+    // in the capture phase) and kept from everything beneath it, so a modal
+    // under it never takes its Escape for its own or pulls Tab back into
+    // itself.
     const handleKeyDown = (event: KeyboardEvent) => {
+      event.stopPropagation();
       if (event.key === 'Escape') {
         event.preventDefault();
         resolveConfirmation(id, false);
@@ -262,10 +276,18 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
       }
     };
 
-    document.addEventListener('keydown', handleKeyDown);
+    const handlePopState = () => {
+      if (readAddress() !== askedAt) {
+        resolveConfirmation(id, false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('popstate', handlePopState);
     return () => {
       window.cancelAnimationFrame(focusFrame);
-      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('popstate', handlePopState);
       previouslyFocusedRef.current?.focus();
     };
   }, [id]);

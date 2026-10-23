@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MatureContentSetting from '@/app/profile/MatureContentSetting';
 import FeedbackViewport from '@/components/FeedbackViewport';
-import { resetFeedbackState } from '@/components/feedback-state';
 
 type SentRequest = { url: string; init?: RequestInit };
 
@@ -48,7 +47,6 @@ describe('MatureContentSetting', () => {
   });
 
   afterEach(() => {
-    resetFeedbackState();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });

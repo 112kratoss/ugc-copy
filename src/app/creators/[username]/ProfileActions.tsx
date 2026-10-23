@@ -11,7 +11,7 @@ import { toEditableCreatorProfile } from '@/lib/profile';
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
 import { ShowcaseFeedbackMenu } from '@/app/showcase/ShowcaseFeedInteraction';
 import ProfileShareButton from '@/components/ProfileShareButton';
-import { readFeedbackSnapshot, type ConfirmationRequest } from '@/components/feedback-state';
+import type { ConfirmationRequest } from '@/components/feedback-state';
 import { useConfirmation } from '@/components/useConfirmation';
 import {
   blockCreatorAfterConfirmation,
@@ -71,7 +71,8 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
   const editorDialogRef = useRef<HTMLDivElement | null>(null);
   const editorTitleId = useId();
   const followStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const askToConfirm = useConfirmation();
+  // Its one question is about the open editor.
+  const askToConfirm = useConfirmation(isEditing);
 
   const clearFollowStatusTimer = () => {
     if (followStatusTimerRef.current) {
@@ -230,12 +231,6 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
   };
 
   const onEditorKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    // A confirmation drawn over the editor has the keyboard: its Escape (which
-    // it has already taken by the time the window hears it) is its own
-    // Cancel, and its Tab stays among its buttons.
-    if (event.defaultPrevented || readFeedbackSnapshot().confirmation) {
-      return;
-    }
     if (event.key === 'Escape') {
       event.preventDefault();
       void requestCloseEditor();

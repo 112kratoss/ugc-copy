@@ -16,6 +16,17 @@ export function publishNavigationStart() {
   listeners.forEach((listener) => listener(navigationToken));
 }
 
+/**
+ * `publishNavigationStart` before a push to `href`, when the push leaves the
+ * current page. One that changes only the search or the hash never changes
+ * the pathname the bar waits for, so it would creep until its failsafe; link
+ * clicks are filtered the same way.
+ */
+export function publishNavigationStartTo(href: string) {
+  if (new URL(href, window.location.href).pathname === window.location.pathname) return;
+  publishNavigationStart();
+}
+
 export function readNavigationToken() {
   return navigationToken;
 }
