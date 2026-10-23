@@ -27,7 +27,7 @@ npm run typecheck:tests    # separate project for src/__tests__/ (tsconfig.tests
 npm test                   # vitest run — all unit/integration tests in src/__tests__/
 npm run test:quiet         # the same suite with the dot reporter and output only from failing tests (agents, long sessions)
 npx vitest run src/__tests__/<file>.test.ts   # single test file
-npm run test:e2e           # Playwright, tests/e2e/ — boots its own dev server on :3100 with E2E auth bypass
+npm run test:e2e           # Playwright, tests/e2e/ — boots its own dev server on :3100 with E2E auth bypass and CI's placeholder env (never a checkout's .env files)
 # also available: backfill:* (media/preview/fingerprint backfills), perf:load / perf:lighthouse,
 # db:inspect:performance, db:benchmark:scaling, eval:enhancer (prompt-enhancer eval), ops:guest-acceptance
 ```
@@ -115,7 +115,7 @@ Three Vercel crons run every 10 min under `CRON_SECRET` bearer auth: `/api/cron/
 
 All web unit/integration tests live flat in `src/__tests__/` (~1,050 files; `ugc-mobile/__tests__/` holds ~360 more) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production, and its dev server answers the server-side Supabase reads of the pages specs draw with a stub (`tests/e2e/support/supabase-server-stub.cjs`). Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
 
-The four E2E gotchas (a second `next dev` blocks Playwright's own server, the auth bypass needs its cookie, two open pages reload each other after a compile, a compile spends the timeout of whatever waits while it runs) and how a page's server reads join that stub are `.claude/rules/e2e.md`, loaded with `tests/e2e/`.
+The four E2E gotchas (a second `next dev` in the same checkout blocks Playwright's own server, the auth bypass needs its cookie, two open pages reload each other after a compile, a compile spends the timeout of whatever waits while it runs), where the dev server's env comes from, and how a page's server reads join that stub are `.claude/rules/e2e.md`, loaded with `tests/e2e/`.
 
 ## Conventions and cautions
 

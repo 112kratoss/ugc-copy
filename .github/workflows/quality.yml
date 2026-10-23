@@ -137,7 +137,9 @@ jobs:
       # production build. The Supabase project below is a placeholder with no
       # DNS record: the dev server answers the reads of the pages specs draw
       # that read on the server (tests/e2e/support/supabase-server-stub.cjs),
-      # and every other read fails.
+      # and every other read fails. playwright.config.ts gives the dev server
+      # a copy of this env over any other, so a local run gets the same
+      # (e2e-smoke-readiness.test.ts keeps the two equal).
       - name: Run E2E smoke tests
         run: npm run test:e2e
         env:

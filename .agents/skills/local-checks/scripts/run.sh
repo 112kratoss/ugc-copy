@@ -56,7 +56,16 @@ if [ "$MOBILE" = 1 ]; then
 fi
 if [ "$E2E" = 1 ]; then
   say "-- e2e smoke"
-  if pgrep -f "next dev" > /dev/null; then say "test:e2e           skipped: a next dev is running and Playwright's own server refuses to start"; FAILED=1
+  # The env comes from playwright.config.ts, not the shell. Next allows one next dev per checkout (it
+  # locks .next/dev/lock), so only a server of this checkout stops Playwright's own, which also needs
+  # port 3100 free; a server of another worktree has a .next of its own.
+  here="$(pwd -P)"; same=""
+  for pid in $(pgrep -f "next dev"); do
+    if [ "$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" = "$here" ]; then same="$pid"; break; fi
+  done
+  port="$(lsof -nP -iTCP:3100 -sTCP:LISTEN -t 2>/dev/null | head -1)"
+  if [ -n "$same" ]; then say "test:e2e           skipped: a next dev of this checkout is running (pid $same); stop it and rerun"; FAILED=1
+  elif [ -n "$port" ]; then say "test:e2e           skipped: port 3100 is taken (pid $port, in $(lsof -a -p "$port" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'))"; FAILED=1
   else step "test:e2e" npm run test:e2e; fi
 fi
 if [ "$FAILED" = 0 ]; then say "== ALL GREEN | $(date '+%H:%M:%S')"; else say "== FAILED | $(date '+%H:%M:%S')"; fi
