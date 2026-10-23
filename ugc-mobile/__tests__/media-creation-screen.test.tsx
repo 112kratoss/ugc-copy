@@ -2391,6 +2391,29 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(blurredScrollView.props.contentContainerStyle.paddingBottom).toBe(basePaddingBottom);
   });
 
+  // The page's end was padded for the bar alone, and a blocker stacks above the bar: two lines and the
+  // Get credits button covered the page's last row on the Pixel 9a (redundant-UI audit, 2026-10-21).
+  it.each(['image', 'video'] as const)('pads the end of the %s page by the bar and whatever stacks above it', (tool) => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool={tool} />);
+    });
+    const paddingBottom = () => tree!.root.find((node) => String(node.type) === 'scrollview').props.contentContainerStyle.paddingBottom;
+    const layOutBar = (height: number) => renderer.act(() => {
+      tree!.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'creator-persistent-bar')[0]
+        .props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 360, height } } });
+    });
+    const base = paddingBottom();
+
+    // The bar alone is 72pt; a two-line blocker and the 7pt gap over it make 129.
+    layOutBar(72);
+    expect(paddingBottom()).toBe(base);
+    layOutBar(129);
+    expect(paddingBottom()).toBe(base + 57);
+    layOutBar(72);
+    expect(paddingBottom()).toBe(base);
+  });
+
   it('shows the authoritative server quote in the persistent bar', async () => {
     vi.useFakeTimers();
     authState.api.quoteGenerationModel.mockResolvedValue({

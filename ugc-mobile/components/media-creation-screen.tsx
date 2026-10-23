@@ -1014,6 +1014,8 @@ function IdentityCreationScreen({
   const loadCatalogDetails = catalogQuery.loadDetails;
   const [parametersVisible, setParametersVisible] = useState(false);
   const [workspaceVisible, setWorkspaceVisible] = useState(false);
+  // What the persistent bar stacks over the page's end, a blocker over it included, as last laid out.
+  const [persistentBarHeight, setPersistentBarHeight] = useState(PERSISTENT_BAR_HEIGHT);
   const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
   const modelSelectionTouched = useRef<Record<CreatorToolId, boolean>>({ image: false, video: false, motion: false });
   const activeGenerationRequestKeyRef = useRef<string | null>(null);
@@ -1365,6 +1367,10 @@ function IdentityCreationScreen({
   const outputUrls = useMemo(() => (status ? getGenerationOutputs(status) : []), [status]);
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
+  const persistentBarBottom = bottomInset + 8;
+  // The page scrolls on under the bar, so its end clears the bar's whole stack: padded for the bar
+  // alone, a two-line blocker over it covered the last row (redundant-UI audit, 2026-10-21).
+  const contentBottom = persistentBarBottom + persistentBarHeight + PERSISTENT_BAR_CLEARANCE;
   const isCompact = width < 380;
   const meta = TOOL_META[activeTool];
   // Both branches must clear the status bar: the tab navigator does not apply a
@@ -2732,7 +2738,6 @@ function IdentityCreationScreen({
       : isGenerating || activeGenerationStatus || (pollingInterrupted && generationTool === activeTool)
         ? 'progress'
         : 'generate';
-    const contentBottom = bottomInset + 108;
 
     return withReferenceLinkRenewal(
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -2867,7 +2872,8 @@ function IdentityCreationScreen({
         </KeyboardAvoidingArea>
 
         <CreatorPersistentBar
-          bottom={bottomInset + 8}
+          bottom={persistentBarBottom}
+          onHeightChange={setPersistentBarHeight}
           summary={parameterSummary}
           blocker={persistentAction === 'generate' ? blocker : null}
           quoteStatus={creatorQuoteStatus}
@@ -3009,7 +3015,6 @@ function IdentityCreationScreen({
       : isGenerating || activeGenerationStatus || (pollingInterrupted && generationTool === 'image')
         ? 'progress'
         : 'generate';
-    const imageContentBottom = bottomInset + 108;
     const maxImageReferences = catalogInputLimit(
       selectedImageModel,
       imageDraft,
@@ -3030,7 +3035,7 @@ function IdentityCreationScreen({
           contentContainerStyle={{
             paddingTop: contentTopPadding,
             paddingHorizontal: isCompact ? 16 : 20,
-            paddingBottom: imageContentBottom,
+            paddingBottom: contentBottom,
             gap: 14,
           }}
         >
@@ -3150,7 +3155,8 @@ function IdentityCreationScreen({
         </KeyboardAvoidingArea>
 
         <CreatorPersistentBar
-          bottom={bottomInset + 8}
+          bottom={persistentBarBottom}
+          onHeightChange={setPersistentBarHeight}
           summary={parameterSummary || 'Settings'}
           blocker={persistentAction === 'generate' ? blocker : null}
           quoteStatus={creatorQuoteStatus}
@@ -5507,8 +5513,14 @@ function ReferenceDetailsOverlay({
   );
 }
 
+/** The persistent bar's row with nothing stacked over it (its `minHeight`). */
+const PERSISTENT_BAR_HEIGHT = 72;
+/** The room left between the page's last row and the bar's stack at the end of the scroll. */
+const PERSISTENT_BAR_CLEARANCE = 28;
+
 function CreatorPersistentBar({
   bottom,
+  onHeightChange,
   summary,
   blocker,
   quoteStatus,
@@ -5522,6 +5534,8 @@ function CreatorPersistentBar({
   onAction,
 }: {
   bottom: number;
+  /** The height of everything the bar stacks, a blocker over it included, each time it is laid out. */
+  onHeightChange: (height: number) => void;
   summary: string;
   blocker: string | null;
   quoteStatus: 'idle' | 'pending' | 'ready' | 'error';
@@ -5550,7 +5564,7 @@ function CreatorPersistentBar({
           : retryLabel;
   const actionDisabled = disabled && !(action === 'generate' && quoteStatus === 'error');
   return (
-    <View testID="creator-persistent-bar" pointerEvents="box-none" style={{ position: 'absolute', left: 14, right: 14, bottom, zIndex: 8, gap: 7 }}>
+    <View testID="creator-persistent-bar" pointerEvents="box-none" onLayout={(event) => onHeightChange(Math.ceil(event.nativeEvent.layout.height))} style={{ position: 'absolute', left: 14, right: 14, bottom, zIndex: 8, gap: 7 }}>
       {blocker ? (
         <View testID="creator-contextual-blocker" accessibilityRole="alert" style={{ minHeight: 40, borderRadius: 14, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.28), backgroundColor: theme.colors.panelSoft, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.amber }} />
@@ -5560,7 +5574,7 @@ function CreatorPersistentBar({
           {blocker.startsWith('Insufficient credits') ? <GetCreditsButton onPress={() => router.push('/(tabs)/pricing' as never)} /> : null}
         </View>
       ) : null}
-      <View style={{ minHeight: 72, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, boxShadow: theme.shadow.floating.boxShadow }}>
+      <View style={{ minHeight: PERSISTENT_BAR_HEIGHT, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, boxShadow: theme.shadow.floating.boxShadow }}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Generation parameters. ${summary}`}
