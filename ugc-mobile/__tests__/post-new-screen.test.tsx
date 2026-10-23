@@ -1194,6 +1194,41 @@ describe('mobile external post composer', () => {
     expect(collectText(tree.root)).not.toContain('Unlisted');
   });
 
+  // An edited post's media with no original name is named by its id, which the card showed: a UUID, or
+  // "<post id>:cover" for a post older than its media rows (review of the redundant-UI leftovers).
+  it('names an edited post’s media by kind where it has no file name', async () => {
+    paramsState.params = { postId: 'post-legacy' };
+    postEditState.post = {
+      id: 'post-legacy',
+      title: 'Legacy post',
+      description: null,
+      body: 'Existing story',
+      postFormat: 'media',
+      generationId: null,
+      category: 'image',
+      visibility: 'public',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      mediaUrl: 'https://cdn.example.com/legacy.png',
+      mediaKind: 'image',
+      mediaItems: [
+        { id: 'post-legacy:cover', mediaKey: 'cover', url: 'https://cdn.example.com/legacy.png', previewUrl: null, originalName: null, contentType: 'image/png', mediaKind: 'image' },
+        { id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301', mediaKey: 'row-2', url: 'https://cdn.example.com/clip.mp4', previewUrl: null, originalName: null, contentType: 'video/mp4', mediaKind: 'video' },
+        { id: 'row-3', mediaKey: 'row-3', url: 'https://cdn.example.com/street.png', previewUrl: null, originalName: 'Street.png', contentType: 'image/png', mediaKind: 'image' },
+      ],
+      resourceBundleInput: null,
+      hasPaidOrders: false,
+    };
+    const tree = await renderScreen();
+
+    const cardLines = (label: string) => collectText(tree.root.findAll((node) => (
+      node.props.accessibilityLabel === label && typeof node.props.accessibilityValue?.text === 'string'
+    ))[0]);
+    expect(cardLines('Cover')).toEqual(['Cover', 'Image']);
+    expect(cardLines('Media 2')).toEqual(['Media 2', 'Video']);
+    expect(cardLines('Media 3')).toEqual(['Media 3', 'Street.png']);
+  });
+
   it('restores a draft an older build saved as unlisted as Private', async () => {
     paramsState.params = {};
     storageState.values.set('magicbooklet.post.drafts.v1', JSON.stringify({
@@ -1418,6 +1453,35 @@ describe('mobile external post composer', () => {
     expect(formData.get('category')).toBe('video');
     expect(JSON.parse(String(formData.get('mediaItems'))).map((item: { originalName: string }) => item.originalName))
       .toEqual(['clip.mp4', 'still.png']);
+  });
+
+  // Android's system photo picker hands a picture over under its media id, and a card's second line read
+  // "1000333161.jpg" (redundant-UI audit, 2026-10-21). The file's name still goes to the server as it was.
+  it('names a card by its kind where its file name says nothing', async () => {
+    paramsState.params = {};
+    await uploadManualMedia([
+      { uri: 'file:///1000333161.jpg', fileName: '1000333161.jpg', mimeType: 'image/jpeg', fileSize: 1024, width: 1024, height: 1024 },
+      { uri: 'file:///1000333162.mp4', fileName: '1000333162.mp4', mimeType: 'video/mp4', type: 'video', fileSize: 4096, duration: 8000, width: 1080, height: 1920 },
+      { uri: 'file:///still.png', fileName: 'still.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+    ] as never);
+    const tree = await renderScreen();
+    await choosePreparedMedia(tree);
+
+    const cardLines = (label: string) => collectText(tree.root.findAll((node) => (
+      node.props.accessibilityLabel === label && typeof node.props.accessibilityValue?.text === 'string'
+    ))[0]);
+    expect(cardLines('Cover')).toEqual(['Cover', 'Image']);
+    expect(cardLines('Media 2')).toEqual(['Media 2', 'Video']);
+    expect(cardLines('Media 3')).toEqual(['Media 3', 'still.png']);
+
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Picker names'));
+    authState.api.createPost.mockResolvedValueOnce({ postId: 'post-picker-names' });
+    await renderer.act(async () => {
+      await mutationState.options?.mutationFn?.('public');
+    });
+    const formData = authState.api.createPost.mock.calls.at(-1)?.[0] as unknown as FormData;
+    expect(JSON.parse(String(formData.get('mediaItems'))).map((item: { originalName: string }) => item.originalName))
+      .toEqual(['1000333161.jpg', '1000333162.mp4', 'still.png']);
   });
 
   describe('media the post cannot take', () => {

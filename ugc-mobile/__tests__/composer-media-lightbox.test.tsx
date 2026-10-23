@@ -32,3 +32,29 @@ it('plays video media instead of its poster while preserving image previews', ()
     renderer.act(() => tree?.unmount());
   }
 });
+
+// The card's second line said "Image" where the picker named a picture after its media id, and the
+// lightbox it opens still captioned it "1 of 3 · 1000333161.jpg" (review of the redundant-UI leftovers).
+it('captions a slot by its file name only where the name says something', () => {
+  let tree: renderer.ReactTestRenderer | undefined;
+  renderer.act(() => {
+    tree = renderer.create(<ComposerMediaLightbox
+      items={[
+        { id: 'media-1', uri: 'file:///1000333161.jpg', mediaKind: 'image', type: 'image/jpeg', name: '1000333161.jpg' },
+        { id: 'media-2', uri: 'file:///still.png', mediaKind: 'image', type: 'image/png', name: 'still.png' },
+        // An edited post's items with no original name are named by their ids (app/post/new.tsx).
+        { id: 'post-1:cover', uri: 'https://media.test/cover.png', mediaKind: 'image', type: 'image/png', name: 'post-1:cover', existingId: 'post-1:cover' },
+        { id: 'row-1', uri: 'https://media.test/clip.mp4', mediaKind: 'video', type: 'video/mp4', name: 'row-1', existingId: 'row-1' },
+      ]}
+      activeIndex={0}
+      onClose={vi.fn()}
+      onNavigate={vi.fn()}
+    />);
+  });
+  try {
+    expect(tree!.root.findByType('lightbox' as never).props.items.map((item: { caption: string | null }) => item.caption))
+      .toEqual([null, 'still.png', null, null]);
+  } finally {
+    renderer.act(() => tree?.unmount());
+  }
+});

@@ -2391,6 +2391,36 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(blurredScrollView.props.contentContainerStyle.paddingBottom).toBe(basePaddingBottom);
   });
 
+  // The page's end was padded for the bar alone, and a blocker stacks above the bar: two lines and the
+  // Get credits button covered the page's last row on the Pixel 9a (redundant-UI audit, 2026-10-21). A
+  // padding that followed the bar both ways dropped with the credits blocker while a re-quote was pending,
+  // and a scroll view at its end keeps its offset as content grows, so the row went under it again.
+  it.each(['image', 'video'] as const)('keeps room at the end of the %s page for the bar and its tallest blocker, and only adds to it', (tool) => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool={tool} />);
+    });
+    const paddingBottom = () => tree!.root.find((node) => String(node.type) === 'scrollview').props.contentContainerStyle.paddingBottom;
+    const bar = () => tree!.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'creator-persistent-bar')[0];
+    const layOutBar = (height: number) => renderer.act(() => {
+      bar().props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 360, height } } });
+    });
+    const base = paddingBottom();
+
+    // From the start: the bar's offset, the bar (72), the tallest blocker with its gap (59) and 28 to spare.
+    expect(base).toBe(bar().props.style.bottom + 72 + 59 + 28);
+    // Nothing over the bar, or two lines beside Get credits at the default text size: the room holds.
+    layOutBar(72);
+    expect(paddingBottom()).toBe(base);
+    layOutBar(131);
+    expect(paddingBottom()).toBe(base);
+    // A larger text size makes the stack taller; the end follows it out, and not back in.
+    layOutBar(170);
+    expect(paddingBottom()).toBe(base + 39);
+    layOutBar(72);
+    expect(paddingBottom()).toBe(base + 39);
+  });
+
   it('shows the authoritative server quote in the persistent bar', async () => {
     vi.useFakeTimers();
     authState.api.quoteGenerationModel.mockResolvedValue({
@@ -6115,12 +6145,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
       };
 
-      const story = () => savedDrafts({ video: {
+      const story = (video: Record<string, unknown> = {}) => savedDrafts({ video: {
         model: 'kling-3.0-video',
         catalogRevision: 'parity-rev',
         isMultiShot: true,
         multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', '@turn spins in', 4)],
         referenceVideos: [stagedMedia('turn', 'video', { durationSeconds: 3 })],
+        ...video,
       } });
 
       it('draws the clips a Kling 3.0 story sends, beside the rail’s own count', async () => {
@@ -6156,6 +6187,59 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         // Its mention goes from the shot that named it, as from a single shot's prompt.
         expect(storedDrafts().video).toMatchObject({ referenceVideos: [], multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', 'spins in', 4)] });
         expect(text(tree)).toContain('Turn and @turn were removed from this draft.');
+      });
+
+      // A draft keeps both sets of words, the single shot's prompt and the story's shots, and only the ones
+      // on screen lost a clip's mention when it was removed or renamed: switched to the other, the run named
+      // a clip it no longer had, "Unknown element mention: @turn" (redundant-UI audit, 2026-10-21).
+      describe('the words a switch between single shot and story brings back', () => {
+        // The story above, with the single shot's prompt naming the clip too.
+        const bothNaming = (video: Record<string, unknown> = {}) => story({ prompt: 'Close on @turn at dusk', ...video });
+
+        beforeEach(() => {
+          catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        });
+
+        it('lose a removed clip’s mention from a story’s hidden prompt', async () => {
+          memory.set(ordinaryKey, bothNaming());
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          await removeFromDetails(tree, 'Turn');
+
+          expect(storedDrafts().video).toMatchObject({
+            referenceVideos: [],
+            prompt: 'Close on at dusk',
+            multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', 'spins in', 4)],
+          });
+          renderer.act(() => { labelled(tree.root, 'Single shot').props.onPress(); });
+          await settle();
+          expect(text(tree)).not.toContain('Unknown element mention: @turn');
+        });
+
+        it('lose a removed clip’s mention from the shots a single shot hides, and say so before and after', async () => {
+          memory.set(ordinaryKey, bothNaming({ isMultiShot: false, prompt: 'Close on the door at dusk' }));
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          await removeFromDetails(tree, 'Turn');
+
+          expect(nativeAlertState.alert.mock.lastCall?.[1]).toBe('Turn and @turn will be removed from this draft.');
+          expect(storedDrafts().video).toMatchObject({
+            prompt: 'Close on the door at dusk',
+            multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', 'spins in', 4)],
+          });
+          expect(text(tree)).toContain('Turn and @turn were removed from this draft.');
+        });
+
+        it('rename a clip’s mention in both', async () => {
+          memory.set(ordinaryKey, bothNaming());
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          renderer.act(() => { labelled(tree.root, 'Open details for Turn').props.onPress(); });
+          renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Reference name for Turn' }).props.onChangeText('Spin'); });
+          await settle();
+
+          expect(storedDrafts().video).toMatchObject({
+            prompt: 'Close on @spin at dusk',
+            multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', '@spin spins in', 4)],
+          });
+        });
       });
 
       it('renames a story clip’s mention in the shot that names it', async () => {
@@ -6481,6 +6565,18 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(hasLabel(tree.root, 'Open details for bravo')).toBe(false);
         expect(blocker(tree)).toBe('Added 2 of 3. Could not add bravo.png. Upload failed with status 500.');
         expect(storedDrafts().image.references.map((media: { fileName: string }) => media.fileName)).toEqual(['alpha.png', 'charlie.png']);
+      });
+
+      // Android's system photo picker hands a picture over under its media id, and a pick that did not
+      // arrive was named by it: "Could not add 1000333161.jpg" (redundant-UI audit, 2026-10-21).
+      it('that did not arrive are counted by kind where their file names say nothing', async () => {
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('1000333161.jpg'), pickedImage('bravo.png'), pickedImage('1000333162.jpg')] as never);
+        vi.mocked(uploadPickedMedia).mockRejectedValue(new Error('Upload failed with status 500.'));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
+        await settle();
+        expect(blocker(tree)).toBe('Could not add bravo.png and 2 pictures. Upload failed with status 500.');
       });
 
       it('show on the add tile how far their bytes have got', async () => {
@@ -6965,6 +7061,17 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
         expect(uploadPickedMedia).not.toHaveBeenCalled();
         expect(blocker(tree)).toBe(refusal);
+      });
+
+      // The picker's media id stood in quotes for the clip's name: '"1000333163.mp4" is over 100 MB'.
+      it('for motion over 100 MB are called this video where the file name says nothing', async () => {
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///1000333163.mp4', fileName: '1000333163.mp4', mimeType: 'video/mp4', duration: 12_000, fileSize: 101 * 1024 * 1024 } as never);
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add motion video').props.onPress(); });
+        await settle();
+        expect(uploadPickedMedia).not.toHaveBeenCalled();
+        expect(blocker(tree)).toBe('This video is over 100 MB. Please upload a smaller video.');
       });
 
       it('for motion are held to the length the model’s slot publishes', async () => {

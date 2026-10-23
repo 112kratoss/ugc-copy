@@ -13,6 +13,7 @@ import type {
   VideoGenerationRequest,
   VideoMultiPromptInput,
 } from './types';
+import { nameSaysNothing } from './media-file-names';
 import { readSeedanceAssetCollections, type SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 
 export const IMAGE_MODELS = {
@@ -700,14 +701,10 @@ export function placeName(word: string, from: number, held: ReadonlyArray<Mentio
   return `${word} ${place}`;
 }
 
-// A file name nobody would call a picture by. Android's photo picker hands a picture over under its
-// media id ("1000333161.jpg"), or a random UUID where it cannot read a name, and a pick with no name is
-// uploaded under the time. Upload names are ASCII (lib/media.ts), so a name with a letter says something.
-const NAMELESS_FILE = /^(?:[^a-z]*|[0-9a-f]{8}(?:[ _-]?[0-9a-f]{4}){3}[ _-]?[0-9a-f]{12})$/i;
-
 /**
  * Picked pictures, named for the draft they join. A picture keeps the name its file gives it; one whose
- * file name says nothing is named by its place among the draft's references ("Reference 3" for the
+ * file name says nothing (`nameSaysNothing`: a media id, a UUID, the time a pick with no name is uploaded
+ * under) is named by its place among the draft's references ("Reference 3" for the
  * third), the number the server's legend gives it ("attached reference image 3"), and passes over a
  * place that another reference, `others` (a video's clips and subjects) or a picture picked with it
  * already answers to.
@@ -717,7 +714,7 @@ export function nameUnnamedReferences(
   references: ReadonlyArray<Mentionable>,
   others: ReadonlyArray<Mentionable> = [],
 ): MediaDraft[] {
-  const named = added.filter((media) => !NAMELESS_FILE.test(media.displayName.trim()));
+  const named = added.filter((media) => !nameSaysNothing(media.displayName));
   return added.reduce<MediaDraft[]>((result, media, index) => [
     ...result,
     named.includes(media)

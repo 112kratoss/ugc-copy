@@ -61,6 +61,10 @@ vi.mock('@/components/media-preview', () => ({
   MediaPreview: (props: MockProps) => React.createElement('media-preview', props),
 }));
 
+vi.mock('@/components/skeleton', () => ({
+  DetailSkeleton: (props: MockProps) => React.createElement('detail-skeleton', props),
+}));
+
 vi.mock('@/components/recoverable-video-preview', () => ({
   RecoverableVideoPreview: (props: MockProps) => React.createElement('video-player', props),
 }));
@@ -515,8 +519,9 @@ describe('when the unlock does not load (03-5)', () => {
 
     expect(statusBlocks(tree)).toEqual([{ title: 'Recipe unavailable', body: 'It may have been removed by moderation, or belong to another account.' }]);
     expect(buttonLabels(tree)).not.toContain('Retry');
-    expect(textValues(tree)).toContain('This recipe could not be opened.');
-    expect(textValues(tree)).not.toContain('Loading your purchased resources.');
+    // The notice is the page: a heading over it said "Recipe" and "This recipe could not be opened."
+    expect(byType(tree, 'section-title')).toHaveLength(0);
+    expect(byType(tree, 'detail-skeleton')).toHaveLength(0);
   });
 
   it('calls anything else a connection problem, and retries', () => {
@@ -525,10 +530,21 @@ describe('when the unlock does not load (03-5)', () => {
       const tree = renderScreen();
 
       expect(statusBlocks(tree)).toEqual([{ title: 'Could not load your recipe', body: 'Check your connection, then try again.' }]);
-      expect(textValues(tree)).not.toContain('Loading your purchased resources.');
+      expect(byType(tree, 'section-title')).toHaveLength(0);
+      expect(byType(tree, 'detail-skeleton')).toHaveLength(0);
       pressButton(tree, 'Retry');
     }
     expect(detailRefetch).toHaveBeenCalledTimes(2);
+  });
+
+  // Under the Your Recipe header the page read "Recipe" until the recipe was in (redundant-UI audit, 2026-10-21).
+  // The screen shows the skeleton whenever it has no recipe and no failure, which covers a load in progress.
+  it('draws only the skeleton while it loads, under the header that names the page', () => {
+    const tree = renderScreen();
+
+    expect(byType(tree, 'detail-skeleton')).toHaveLength(1);
+    expect(byType(tree, 'section-title')).toHaveLength(0);
+    expect(statusBlocks(tree)).toEqual([]);
   });
 
   it('leaves a loaded unlock on screen when a refresh fails', () => {

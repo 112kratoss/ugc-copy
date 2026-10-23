@@ -122,23 +122,25 @@ export default function MarketplaceAssetScreen() {
     }
   };
 
-  const isUnlockGone = detailQuery.error instanceof ApiError && detailQuery.error.status === 404;
+  // A refresh that fails leaves the recipe on screen, as Your Recipe does; only one that never loaded
+  // is a failure to show. Drawn over a loaded recipe, the notice sat above its live Unlock button.
+  const loadError = detail ? null : detailQuery.error;
+  const isUnlockGone = loadError instanceof ApiError && loadError.status === 404;
 
   return (
     <Screen>
-      <SectionTitle
-        eyebrow="Recipe details"
-        title={detail?.title ?? 'Recipe'}
-        // Without the error branch this still read "Loading recipe details."
-        // directly above a failure notice, so the page contradicted itself.
-        body={detail
-          ? `${resourceLabel(detail.resourceKinds)} · ${detail.seller?.name ?? detail.creator?.name ?? 'Creator'}`
-          : detailQuery.isError
-            ? 'This recipe could not be opened.'
-            : 'Loading recipe details.'}
-      />
+      {/* The header names the page, so its heading is the recipe's title: until the recipe is in the
+          skeleton is the page, and after a failure the notice is. Both read "Recipe" under the Recipe
+          header (redundant-UI audit, 2026-10-21). */}
+      {detail ? (
+        <SectionTitle
+          eyebrow="Recipe details"
+          title={detail.title}
+          body={`${resourceLabel(detail.resourceKinds)} · ${detail.seller?.name ?? detail.creator?.name ?? 'Creator'}`}
+        />
+      ) : null}
 
-      {detailQuery.error ? (
+      {loadError ? (
         // A 404 is the unlock being gone (a removed listing opened from an
         // alert), not a connection problem; the two used to show together.
         isUnlockGone ? (
@@ -247,7 +249,7 @@ export default function MarketplaceAssetScreen() {
             )}
           </Card>
         </>
-      ) : !detailQuery.isLoading && !detailQuery.error ? (
+      ) : !detailQuery.isLoading && !loadError ? (
         <StatusBlock title="Recipe unavailable" body="This resource may be unlisted, private, or removed." />
       ) : null}
     </Screen>
