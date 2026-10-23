@@ -9,11 +9,15 @@ description: Run this repo's CI-equivalent local gate before opening or merging 
 .agents/skills/local-checks/scripts/run.sh
 ```
 
-Flags: `--web-only`, `--mobile-only`, `--build` (production build and `build:verify`), `--e2e` (Playwright smoke), `--ci-like` (hides `ugc-mobile/node_modules` for the web job and restores it after, because a root test that reaches into the app's packages passes here and fails on the runner), `--out <dir>` (logs; default under `$TMPDIR`).
+Start it from inside the checkout to check, the primary one or a worktree: it checks the checkout its own copy sits in, and refuses, having run nothing, when the current directory is in no checkout or in another one (the parent folder's `.claude/skills/local-checks` leads to the primary checkout's copy). From elsewhere: `(cd <checkout> && .agents/skills/local-checks/scripts/run.sh …)`.
+
+Flags: `--web-only`, `--mobile-only`, `--build` (production build and `build:verify`, with the env of Quality's Build step: below), `--e2e` (Playwright smoke), `--ci-like` (hides `ugc-mobile/node_modules` for the web job and restores it after, because a root test that reaches into the app's packages passes here and fails on the runner), `--out <dir>` (logs; default under `$TMPDIR`).
 
 What it runs, in the order of `.github/workflows/quality.yml`: web `vitest run --reporter=dot --silent=passed-only` (the same suite as `npm test`, output only from failing tests), `lint`, `typecheck`, `typecheck:scripts`, `typecheck:tests`, the perf self-tests, then with `--build` the build pair; mobile `npm test` and `npm run typecheck` in `ugc-mobile`; with `--e2e`, `npm run test:e2e`.
 
 `--e2e` runs the suite as Quality's E2E job does, from any checkout and with nothing exported: `playwright.config.ts` gives its own dev server on port 3100 the placeholder project and keys, none of the app's variables from the shell and none of the checkout's `.env*` files (the primary checkout's `.env.local` points at production), and runs one worker; how is in `.claude/rules/e2e.md`, "The dev server's env". So `npm run test:e2e` alone is the same run.
+
+`--build` builds as Quality's Build step does, from any checkout with nothing exported, and runs `build:verify` (which reads no env) the same way: with that step's `env:`, read from `.github/workflows/quality.yml` (no env read, no build); none of the app's other variables from the shell (those `.env.example` lists, the E2E bypass flags, `NODE_ENV`); none of the checkout's `.env*` files but `.env.example` (the E2E server's guard, `tests/e2e/support/no-env-files.cjs`, as the build's whole `NODE_OPTIONS`); and without `.next/cache/fetch-cache`, as CI's checkout has no `.next`. So a worktree needs no `.env.local`, and the primary checkout's, which can point at production, is never read; its `.next` then holds that placeholder build, so run `npm run build` again before a `next start`.
 
 It prints one line per step (`name exit code seconds`) and, for a failing step, the last forty lines of its log; full logs sit in the out dir. The exit code is 0 only when every step passed. Read the summary, not the logs, unless a step failed.
 

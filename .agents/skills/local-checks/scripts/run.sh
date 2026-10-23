@@ -2,7 +2,25 @@
 # The Quality workflow's laptop-runnable steps, in CI's order, one verdict line per step.
 #   run.sh [--web-only|--mobile-only] [--build] [--e2e] [--ci-like] [--out <dir>]
 set -u
-cd "$(git rev-parse --show-toplevel)" || exit 1
+# It checks the checkout it sits in, and starts only from inside that checkout. Outside any checkout
+# `git rev-parse` prints nothing and `cd ""` stays put, so a run from the folder above the repo ran vitest there
+# (2026-10-23); from another checkout it would check that one, with this copy's steps. A git hook's GIT_DIR
+# would make --show-toplevel answer the folder it is asked from.
+unset GIT_DIR GIT_WORK_TREE
+ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)"
+HERE="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$ROOT" ] || [ "$HERE" != "$ROOT" ]; then
+  if [ -z "$HERE" ]; then
+    echo "run.sh: refused, nothing run: $PWD is in no git checkout. Start the copy in the checkout to check from inside it:" >&2
+    echo "  (cd \"${ROOT:-<checkout>}\" && .agents/skills/local-checks/scripts/run.sh $*)" >&2
+  else
+    echo "run.sh: refused, nothing run: this copy checks ${ROOT:-no checkout}, and the current directory is in $HERE. Start the copy in the checkout to check from inside it:" >&2
+    echo "  (cd \"$HERE\" && .agents/skills/local-checks/scripts/run.sh $*)   # the current directory's checkout" >&2
+    if [ -n "$ROOT" ]; then echo "  (cd \"$ROOT\" && .agents/skills/local-checks/scripts/run.sh $*)   # this copy's checkout" >&2; fi
+  fi
+  exit 2
+fi
+cd "$ROOT" || exit 1
 BUILD=0; E2E=0; WEB=1; MOBILE=1; CILIKE=0; OUT="${TMPDIR:-/tmp}/local-checks-$(date +%Y%m%d-%H%M%S)"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -30,6 +48,38 @@ MOBILE_NM="ugc-mobile/node_modules"; HIDDEN="ugc-mobile/.node_modules-hidden-$$"
 restore() { if [ -d "$HIDDEN" ] && [ ! -e "$MOBILE_NM" ]; then mv "$HIDDEN" "$MOBILE_NM"; fi; }
 trap restore EXIT
 trap 'restore; say "== interrupted"; exit 130' INT TERM HUP
+# The build pair runs as on CI's runner, from any checkout: with the env of quality.yml's Build step, read from
+# the workflow (build:verify, CI's next step, sets none and reads none), and with none of the app's other
+# variables (those .env.example lists, the E2E bypass flags, and NODE_ENV, which `next build` keeps if it
+# inherits one) or .env files. A worktree has no .env.local, so without the step's placeholders prerendering
+# fails ("supabaseUrl is required"); the primary checkout's can point at production, and `next build` runs the
+# app's server code to prerender. The .env guard is the E2E server's, in every node process of the build through
+# NODE_OPTIONS, which holds it alone, quoted as a checkout's path can hold a space. CI's runner sets none; Next
+# rebuilds it for the build's workers and glues a `--require <file>` given before the guard onto the guard's
+# path; and npm replaces it with an npm `node-options` setting unless that says the same.
+CI_BUILD_ENV=()
+read_ci_build_env() {
+  local pair
+  while IFS= read -r pair; do CI_BUILD_ENV+=("$pair"); done < <(awk -v sq="'" '
+    /^ *- name: / { build = ($0 ~ /- name: Build *$/); next }
+    build && /^ *env: *$/ { inenv = 1; next }
+    inenv && /^ +[A-Z][A-Z0-9_]*: / {
+      sub(/^ +/, ""); i = index($0, ": "); value = substr($0, i + 2); q = substr(value, 1, 1)
+      if ((q == "\"" || q == sq) && length(value) > 1 && substr(value, length(value)) == q) value = substr(value, 2, length(value) - 2)
+      print substr($0, 1, i - 1) "=" value; next
+    }
+    inenv { exit }
+  ' .github/workflows/quality.yml 2>/dev/null)
+  [ "${#CI_BUILD_ENV[@]}" -gt 0 ]
+}
+ci_build() (
+  for name in NODE_ENV E2E_AUTH_BYPASS NEXT_PUBLIC_E2E_AUTH_BYPASS NPM_CONFIG_NODE_OPTIONS \
+    $(sed -n 's/^#\{0,1\} \{0,1\}\([A-Z][A-Z0-9_]*\)=.*/\1/p' .env.example); do unset "$name"; done
+  for pair in "${CI_BUILD_ENV[@]}"; do export "$pair"; done
+  export NODE_OPTIONS="--require=\"$ROOT/tests/e2e/support/no-env-files.cjs\""
+  export npm_config_node_options="$NODE_OPTIONS"
+  exec "$@"
+)
 say "== $(git rev-parse --short HEAD) $(git diff HEAD --shortstat | sed 's/^ *//') | $(date '+%Y-%m-%d %H:%M:%S') | logs: $OUT"
 if [ "$WEB" = 1 ]; then
   say "-- web job"
@@ -45,7 +95,13 @@ if [ "$WEB" = 1 ]; then
   step "perf self-tests"   sh -c 'npm run perf:load:self-test && npm run perf:lighthouse:self-test'
   if [ "$BUILD" = 1 ]; then
     if pgrep -f "next dev" > /dev/null; then say "build              skipped: a next dev is running and shares .next"; FAILED=1
-    else step "build" npm run build && step "build:verify" npm run build:verify; fi
+    elif ! read_ci_build_env; then say "build              refused: no env read from the Build step of .github/workflows/quality.yml"; FAILED=1
+    else
+      # CI's checkout has no .next, and earlier builds keep unstable_cache entries here under keys that do not
+      # name the project (a build of the primary checkout may have read production).
+      rm -rf .next/cache/fetch-cache
+      step "build" ci_build npm run build && step "build:verify" ci_build npm run build:verify
+    fi
   fi
   restore
 fi
