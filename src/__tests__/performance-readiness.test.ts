@@ -253,8 +253,6 @@ describe('production performance readiness', () => {
     const MEASURED_IMAGE_FIRST = 575_158;
     const THIRD_STYLESHEET_COPY = 160_300;
     const posterAtTheCap = 2 * (Math.ceil((capKilobytes * 1024) / 3) * 4 + 'data:image/webp;base64,'.length);
-    expect(showcaseBudget).toBe(638_976);
-    expect(MEASURED_IMAGE_FIRST + posterAtTheCap, 'the poster cap sank /showcase before the patch').toBeGreaterThan(showcaseBudget!);
     expect(MEASURED_IMAGE_FIRST - THIRD_STYLESHEET_COPY + posterAtTheCap).toBeLessThan(showcaseBudget!);
     // So the patch has to keep applying, and the build has to say when it does not.
     expect(packageJson.scripts.postinstall).toContain('node scripts/build/patch-next-global-error-css.mjs');

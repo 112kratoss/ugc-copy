@@ -273,10 +273,8 @@ export default function ShowcaseDetailBody({
     />
   );
 
-  const showsMobileCta = Boolean(bundle && lockedViewer);
-
   return (
-    <div className={`min-h-screen overflow-x-clip bg-[#050506] py-6 text-white${showsMobileCta ? ' canonical-post-cta-room' : ''}`}>
+    <div className={`min-h-screen overflow-x-clip bg-[#050506] py-6 text-white${lockedViewer ? ' canonical-post-cta-room' : ''}`}>
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute left-[8%] top-[-18%] h-[34rem] w-[34rem] rounded-full bg-blue-600/10 blur-[150px] mix-blend-screen" />
         <div className="absolute bottom-[-18%] right-[-8%] h-[34rem] w-[34rem] rounded-full bg-emerald-500/10 blur-[150px] mix-blend-screen" />
@@ -494,7 +492,7 @@ export default function ShowcaseDetailBody({
         </div>
       </div>
 
-      {bundle && showsMobileCta ? (
+      {bundle && lockedViewer ? (
         // Above the app shell's bottom navigation, which floats over the page's
         // bottom edge below 768px (z-60) and was drawn over the whole CTA there.
         <Link

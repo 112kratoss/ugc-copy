@@ -48,8 +48,13 @@ function navTop(page: Page) {
 }
 
 // A tall page's end, scrolled to, is clear of the bar fixed over it. The page is made tall by a
-// spacer at the end of its own root, which React removes with the page.
+// spacer at the end of its own root, which React removes with the page. The root is a server
+// render, so the spacer waits for React to take it over: hydration throws away a node added before.
 async function expectEndClearOf(page: Page, contentSelector: string, bar: Locator, name: string) {
+  await page.waitForFunction((selector) => {
+    const content = document.querySelector(selector);
+    return Boolean(content && Object.keys(content).some((key) => key.startsWith('__reactFiber$')));
+  }, contentSelector, COLD_PAGE);
   await page.locator(contentSelector).evaluate((content) => {
     const spacer = document.createElement('div');
     spacer.style.height = '1600px';
