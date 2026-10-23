@@ -6483,6 +6483,18 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(storedDrafts().image.references.map((media: { fileName: string }) => media.fileName)).toEqual(['alpha.png', 'charlie.png']);
       });
 
+      // Android's system photo picker hands a picture over under its media id, and a pick that did not
+      // arrive was named by it: "Could not add 1000333161.jpg" (redundant-UI audit, 2026-10-21).
+      it('that did not arrive are counted by kind where their file names say nothing', async () => {
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('1000333161.jpg'), pickedImage('bravo.png'), pickedImage('1000333162.jpg')] as never);
+        vi.mocked(uploadPickedMedia).mockRejectedValue(new Error('Upload failed with status 500.'));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
+        await settle();
+        expect(blocker(tree)).toBe('Could not add bravo.png and 2 pictures. Upload failed with status 500.');
+      });
+
       it('show on the add tile how far their bytes have got', async () => {
         vi.mocked(pickMediaList).mockResolvedValue([pickedImage('alpha.png', 4096)] as never);
         let finish: () => void = () => undefined;
@@ -6965,6 +6977,17 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
         expect(uploadPickedMedia).not.toHaveBeenCalled();
         expect(blocker(tree)).toBe(refusal);
+      });
+
+      // The picker's media id stood in quotes for the clip's name: '"1000333163.mp4" is over 100 MB'.
+      it('for motion over 100 MB are called this video where the file name says nothing', async () => {
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///1000333163.mp4', fileName: '1000333163.mp4', mimeType: 'video/mp4', duration: 12_000, fileSize: 101 * 1024 * 1024 } as never);
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add motion video').props.onPress(); });
+        await settle();
+        expect(uploadPickedMedia).not.toHaveBeenCalled();
+        expect(blocker(tree)).toBe('This video is over 100 MB. Please upload a smaller video.');
       });
 
       it('for motion are held to the length the model’s slot publishes', async () => {

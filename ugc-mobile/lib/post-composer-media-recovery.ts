@@ -1,3 +1,4 @@
+import { listFilesInSentence } from './media-file-names';
 import type { PostComposerDraft, PostComposerMediaItem } from './post-new-view-model';
 
 /**
@@ -139,14 +140,30 @@ export function applyPostComposerMediaRecoveryToDraft(
   };
 }
 
+const COMPOSER_MEDIA_NOUNS = { image: ['an image', 'images'], video: ['a video', 'videos'] } as const;
+
+/**
+ * Items named at the start of a sentence: by their file names, or by kind where a name says nothing, as
+ * Android's photo picker names a picture after its media id ("1000333161.jpg").
+ */
+function listItems(items: PostComposerMediaItem[]) {
+  return listFilesInSentence(
+    items.map((item) => ({ fileName: item.name, kind: item.mediaKind })),
+    COMPOSER_MEDIA_NOUNS,
+    { sentenceStart: true },
+  );
+}
+
 /** The message shown when recovery could not save everything. */
 export function describeLostRecoveryMedia(lost: PostComposerMediaItem[]): string | null {
   if (lost.length === 0) {
     return null;
   }
 
-  const names = lost.map((item) => item.name).filter(Boolean);
-  const subject = lost.length === 1 ? 'One item' : `${lost.length} items`;
-  const detail = names.length > 0 ? ` (${names.join(', ')})` : '';
-  return `${subject}${detail} could not be restored and ${lost.length === 1 ? 'was' : 'were'} removed. Add ${lost.length === 1 ? 'it' : 'them'} again before publishing.`;
+  return `${listItems(lost)} could not be restored and ${lost.length === 1 ? 'was' : 'were'} removed. Add ${lost.length === 1 ? 'it' : 'them'} again before publishing.`;
+}
+
+/** The message shown when items still on the device could not be uploaded again; they stay in the draft. */
+export function describeFailedRecoveryReuploads(failed: PostComposerMediaItem[]): string {
+  return `${listItems(failed)} could not be re-uploaded. Remove and re-add ${failed.length === 1 ? 'it' : 'them'}, or try opening this draft again.`;
 }

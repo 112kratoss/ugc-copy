@@ -37,8 +37,10 @@ import {
   loadPersistedPostComposerDraft,
   persistPostComposerDraft,
 } from '@/lib/post-composer-draft-resume';
+import { readableFileName } from '@/lib/media-file-names';
 import {
   applyPostComposerMediaRecoveryToDraft,
+  describeFailedRecoveryReuploads,
   describeLostRecoveryMedia,
   planPostComposerMediaRecovery,
   type MediaVerification,
@@ -2720,11 +2722,10 @@ function NewPostComposer() {
       if (failedReupload.length > 0) {
         // Kept in the draft, but publishing would fail on the reclaimed path,
         // so the user is told rather than left to discover it at publish time.
-        const names = failedReupload.map((item) => item.name).filter(Boolean).join(', ');
         setMessage({
           tone: 'danger',
           title: 'Could not restore some media',
-          body: `${names || 'Some media'} could not be re-uploaded. Remove and re-add ${failedReupload.length === 1 ? 'it' : 'them'}, or try opening this draft again.`,
+          body: describeFailedRecoveryReuploads(failedReupload),
         });
       }
     } finally {
@@ -4715,8 +4716,10 @@ function MediaGalleryCard({
         <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>
           {isDragging ? getComposerMediaLabel(drag.to) : label}
         </Text>
+        {/* The file's name where it says something; Android's photo picker names a picture after its
+            media id ("1000333161.jpg"), and an edited post's item with no name of its own after its id. */}
         <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>
-          {item.name}
+          {readableFileName(item.name) ?? (item.mediaKind === 'video' ? 'Video' : 'Image')}
         </Text>
       </View>
     </View>

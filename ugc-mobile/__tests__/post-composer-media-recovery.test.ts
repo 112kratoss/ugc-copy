@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyPostComposerMediaRecovery,
   applyPostComposerMediaRecoveryToDraft,
+  describeFailedRecoveryReuploads,
   describeLostRecoveryMedia,
   planPostComposerMediaRecovery,
   type MediaVerification,
@@ -173,11 +174,33 @@ describe('describeLostRecoveryMedia', () => {
   });
 
   it('names what was dropped so the user can replace it', () => {
-    expect(describeLostRecoveryMedia([mediaItem({ name: 'clip.mp4' })]))
-      .toContain('clip.mp4');
+    expect(describeLostRecoveryMedia([mediaItem({ name: 'clip.mp4', mediaKind: 'video', type: 'video/mp4' })]))
+      .toBe('clip.mp4 could not be restored and was removed. Add it again before publishing.');
     expect(describeLostRecoveryMedia([
       mediaItem({ id: 'a', name: 'a.jpg' }),
       mediaItem({ id: 'b', name: 'b.jpg' }),
-    ])).toContain('2 items');
+    ])).toBe('a.jpg and b.jpg could not be restored and were removed. Add them again before publishing.');
+  });
+
+  // Android's photo picker hands a picture over under its media id, and the notice read "One item
+  // (1000333162.jpg) could not be restored" (redundant-UI audit, 2026-10-21).
+  it('calls an item whose file name says nothing by its kind', () => {
+    expect(describeLostRecoveryMedia([mediaItem({ name: '1000333162.jpg' })]))
+      .toBe('An image could not be restored and was removed. Add it again before publishing.');
+    expect(describeLostRecoveryMedia([
+      mediaItem({ id: 'a', name: '1000333161.mp4', mediaKind: 'video', type: 'video/mp4' }),
+      mediaItem({ id: 'b', name: 'clip.mp4', mediaKind: 'video', type: 'video/mp4' }),
+      // An edited post's item with no original name is named by its id (app/post/new.tsx).
+      mediaItem({ id: 'c', name: '3f2504e0-4f89-11d3-9a0c-0305e82c3301' }),
+    ])).toBe('clip.mp4, a video and an image could not be restored and were removed. Add them again before publishing.');
+  });
+});
+
+describe('describeFailedRecoveryReuploads', () => {
+  it('names the media the restore could not upload again', () => {
+    expect(describeFailedRecoveryReuploads([mediaItem({ name: 'cover.png' })]))
+      .toBe('cover.png could not be re-uploaded. Remove and re-add it, or try opening this draft again.');
+    expect(describeFailedRecoveryReuploads([mediaItem({ id: 'a', name: '1000333161.jpg' }), mediaItem({ id: 'b', name: '1000333162.jpg' })]))
+      .toBe('2 images could not be re-uploaded. Remove and re-add them, or try opening this draft again.');
   });
 });

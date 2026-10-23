@@ -1420,6 +1420,35 @@ describe('mobile external post composer', () => {
       .toEqual(['clip.mp4', 'still.png']);
   });
 
+  // Android's system photo picker hands a picture over under its media id, and a card's second line read
+  // "1000333161.jpg" (redundant-UI audit, 2026-10-21). The file's name still goes to the server as it was.
+  it('names a card by its kind where its file name says nothing', async () => {
+    paramsState.params = {};
+    await uploadManualMedia([
+      { uri: 'file:///1000333161.jpg', fileName: '1000333161.jpg', mimeType: 'image/jpeg', fileSize: 1024, width: 1024, height: 1024 },
+      { uri: 'file:///1000333162.mp4', fileName: '1000333162.mp4', mimeType: 'video/mp4', type: 'video', fileSize: 4096, duration: 8000, width: 1080, height: 1920 },
+      { uri: 'file:///still.png', fileName: 'still.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+    ] as never);
+    const tree = await renderScreen();
+    await choosePreparedMedia(tree);
+
+    const cardLines = (label: string) => collectText(tree.root.findAll((node) => (
+      node.props.accessibilityLabel === label && typeof node.props.accessibilityValue?.text === 'string'
+    ))[0]);
+    expect(cardLines('Cover')).toEqual(['Cover', 'Image']);
+    expect(cardLines('Media 2')).toEqual(['Media 2', 'Video']);
+    expect(cardLines('Media 3')).toEqual(['Media 3', 'still.png']);
+
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Picker names'));
+    authState.api.createPost.mockResolvedValueOnce({ postId: 'post-picker-names' });
+    await renderer.act(async () => {
+      await mutationState.options?.mutationFn?.('public');
+    });
+    const formData = authState.api.createPost.mock.calls.at(-1)?.[0] as unknown as FormData;
+    expect(JSON.parse(String(formData.get('mediaItems'))).map((item: { originalName: string }) => item.originalName))
+      .toEqual(['1000333161.jpg', '1000333162.mp4', 'still.png']);
+  });
+
   describe('media the post cannot take', () => {
     const MB = 1024 * 1024;
 

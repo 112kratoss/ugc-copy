@@ -133,6 +133,7 @@ import {
   videoSubjects,
 } from '@/lib/media-creation-view-model';
 import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '@/lib/media';
+import { listFilesInSentence, readableFileName } from '@/lib/media-file-names';
 import { isUploadCancelledError, runWeightedUploadQueue, type WeightedUploadQueueResult } from '@/lib/upload-file';
 import { invalidateProfileCreations } from '@/lib/profile-media-query';
 import { signedStorageUrlExpiresAt } from '@/lib/media-url-expiry';
@@ -647,14 +648,16 @@ function uploadPercentLabel(progress: UploadProgress) {
   return progress.percent === null ? '…' : `${progress.percent}%`;
 }
 
+const PICK_NOUNS = { image: ['a picture', 'pictures'], video: ['a clip', 'clips'], audio: ['a track', 'tracks'] } as const;
+
 /**
  * Names the picks that did not arrive. The ones that did are kept, so only these need adding again;
- * the loop this replaced dropped every finished upload when one failed.
+ * the loop this replaced dropped every finished upload when one failed. A pick whose file name says
+ * nothing (Android's photo picker hands a picture over under its media id) is counted by its kind.
  */
 function uploadFailureMessage(failures: ReadonlyArray<{ item: PickedUpload; error: unknown }>, added: number): string | null {
   if (failures.length === 0) return null;
-  const names = failures.map(({ item }) => item.fileName?.trim() || (item.kind === 'video' ? 'a clip' : item.kind === 'audio' ? 'a track' : 'a picture'));
-  const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  const listed = listFilesInSentence(failures.map(({ item }) => item), PICK_NOUNS);
   const lead = added > 0 ? `Added ${added} of ${added + failures.length}. ` : '';
   if (failures.every(({ error }) => isUploadCancelledError(error))) return `${lead}Upload cancelled.`;
   const reason = failures.map(({ error }) => error).find((error) => !isUploadCancelledError(error));
@@ -674,7 +677,10 @@ const MOTION_CLIP_DEFAULT_MAX_SECONDS = 30;
 function motionClipRefusal(picked: { fileName?: string | null; fileSize?: number | null; duration?: number | null }, maxSeconds: number) {
   const seconds = assetDurationSeconds(picked.duration);
   if (seconds !== null && seconds > maxSeconds) return `Reference video exceeds ${maxSeconds}s. Please choose a shorter clip.`;
-  if ((picked.fileSize ?? 0) > MOTION_CLIP_MAX_BYTES) return `"${picked.fileName?.trim() || 'This video'}" is over 100 MB. Please upload a smaller video.`;
+  if ((picked.fileSize ?? 0) > MOTION_CLIP_MAX_BYTES) {
+    const name = readableFileName(picked.fileName);
+    return `${name ? `"${name}"` : 'This video'} is over 100 MB. Please upload a smaller video.`;
+  }
   return null;
 }
 
