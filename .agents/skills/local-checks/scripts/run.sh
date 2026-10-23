@@ -4,13 +4,20 @@
 set -u
 # It checks the checkout it sits in, and starts only from inside that checkout. Outside any checkout
 # `git rev-parse` prints nothing and `cd ""` stays put, so a run from the folder above the repo ran vitest there
-# (2026-10-23); from another checkout it would check that one, with this copy's steps.
+# (2026-10-23); from another checkout it would check that one, with this copy's steps. A git hook's GIT_DIR
+# would make --show-toplevel answer the folder it is asked from.
+unset GIT_DIR GIT_WORK_TREE
 ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)"
 HERE="$(git rev-parse --show-toplevel 2>/dev/null)"
 if [ -z "$ROOT" ] || [ "$HERE" != "$ROOT" ]; then
-  if [ -z "$HERE" ]; then echo "run.sh: refused, nothing run: $PWD is in no git checkout." >&2
-  else echo "run.sh: refused, nothing run: this copy checks ${ROOT:-no checkout}, and the current directory is in $HERE." >&2; fi
-  echo "Start the copy in the checkout to check from inside it: (cd \"${ROOT:-<checkout>}\" && .agents/skills/local-checks/scripts/run.sh $*)" >&2
+  if [ -z "$HERE" ]; then
+    echo "run.sh: refused, nothing run: $PWD is in no git checkout. Start the copy in the checkout to check from inside it:" >&2
+    echo "  (cd \"${ROOT:-<checkout>}\" && .agents/skills/local-checks/scripts/run.sh $*)" >&2
+  else
+    echo "run.sh: refused, nothing run: this copy checks ${ROOT:-no checkout}, and the current directory is in $HERE. Start the copy in the checkout to check from inside it:" >&2
+    echo "  (cd \"$HERE\" && .agents/skills/local-checks/scripts/run.sh $*)   # the current directory's checkout" >&2
+    if [ -n "$ROOT" ]; then echo "  (cd \"$ROOT\" && .agents/skills/local-checks/scripts/run.sh $*)   # this copy's checkout" >&2; fi
+  fi
   exit 2
 fi
 cd "$ROOT" || exit 1
@@ -42,12 +49,14 @@ restore() { if [ -d "$HIDDEN" ] && [ ! -e "$MOBILE_NM" ]; then mv "$HIDDEN" "$MO
 trap restore EXIT
 trap 'restore; say "== interrupted"; exit 130' INT TERM HUP
 # The build pair runs as on CI's runner, from any checkout: with the env of quality.yml's Build step, read from
-# the workflow, and none of the app's other variables (.env.example lists them all), no NODE_ENV (`next build`
-# keeps one it inherits) and no .env file. A worktree
-# has no .env.local, so without the step's placeholders prerendering fails ("supabaseUrl is required"); the
-# primary checkout's can point at production, and `next build` runs the app's server code to prerender. The
-# .env guard is the E2E server's, loaded into every node process of the build through NODE_OPTIONS (quoted:
-# a checkout's path can hold a space).
+# the workflow (build:verify, CI's next step, sets none and reads none), and with none of the app's other
+# variables (those .env.example lists, the E2E bypass flags, and NODE_ENV, which `next build` keeps if it
+# inherits one) or .env files. A worktree has no .env.local, so without the step's placeholders prerendering
+# fails ("supabaseUrl is required"); the primary checkout's can point at production, and `next build` runs the
+# app's server code to prerender. The .env guard is the E2E server's, in every node process of the build through
+# NODE_OPTIONS, which holds it alone, quoted as a checkout's path can hold a space. CI's runner sets none; Next
+# rebuilds it for the build's workers and glues a `--require <file>` given before the guard onto the guard's
+# path; and npm replaces it with an npm `node-options` setting unless that says the same.
 CI_BUILD_ENV=()
 read_ci_build_env() {
   local pair
@@ -64,9 +73,11 @@ read_ci_build_env() {
   [ "${#CI_BUILD_ENV[@]}" -gt 0 ]
 }
 ci_build() (
-  for name in NODE_ENV $(sed -n 's/^#\{0,1\} \{0,1\}\([A-Z][A-Z0-9_]*\)=.*/\1/p' .env.example); do unset "$name"; done
+  for name in NODE_ENV E2E_AUTH_BYPASS NEXT_PUBLIC_E2E_AUTH_BYPASS NPM_CONFIG_NODE_OPTIONS \
+    $(sed -n 's/^#\{0,1\} \{0,1\}\([A-Z][A-Z0-9_]*\)=.*/\1/p' .env.example); do unset "$name"; done
   for pair in "${CI_BUILD_ENV[@]}"; do export "$pair"; done
-  export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require=\"$ROOT/tests/e2e/support/no-env-files.cjs\""
+  export NODE_OPTIONS="--require=\"$ROOT/tests/e2e/support/no-env-files.cjs\""
+  export npm_config_node_options="$NODE_OPTIONS"
   exec "$@"
 )
 say "== $(git rev-parse --short HEAD) $(git diff HEAD --shortstat | sed 's/^ *//') | $(date '+%Y-%m-%d %H:%M:%S') | logs: $OUT"

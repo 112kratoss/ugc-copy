@@ -66,8 +66,10 @@ function shellEnv(extra: Record<string, string> = {}) {
   return { ...Object.fromEntries(env), ...extra } as unknown as NodeJS.ProcessEnv;
 }
 
+/** git with a throwaway identity, and none of a laptop's commit signing or hooks. */
 function git(cwd: string, ...args: string[]) {
-  const result = spawnSync('git', ['-c', 'user.name=gate', '-c', 'user.email=gate@example.com', ...args], {
+  const config = ['user.name=gate', 'user.email=gate@example.com', 'commit.gpgsign=false', 'core.hooksPath=/dev/null'];
+  const result = spawnSync('git', [...config.flatMap((entry) => ['-c', entry]), ...args], {
     cwd,
     env: shellEnv(),
     encoding: 'utf8',
@@ -75,8 +77,8 @@ function git(cwd: string, ...args: string[]) {
   expect(result.status, result.stderr).toBe(0);
 }
 
-// Each npm or npx call writes what it was asked, where, with which env, and whether the .env guard was loaded
-// into it, then succeeds without doing anything.
+// Each npm or npx call writes what it was asked, where, with which env, and which preloads NODE_OPTIONS loaded
+// into it (the .env guard, or the one a test's shell names), then succeeds without doing anything.
 const RECORD_CALL = `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
@@ -85,10 +87,11 @@ fs.writeFileSync(path.join(process.env.GATE_CALLS, process.hrtime.bigint() + '.j
   cwd: process.cwd(),
   env: process.env,
   guard: globalThis.__e2eNoEnvFiles === true,
+  shellPreload: globalThis.__shellPreload === true,
 }));
 `;
 
-type Call = { command: string; cwd: string; env: Record<string, string>; guard: boolean };
+type Call = { command: string; cwd: string; env: Record<string, string>; guard: boolean; shellPreload: boolean };
 
 /** A git checkout holding the gate and the files it reads, beside a folder of stubs (pgrep finds no next dev). */
 function setUp(workflow = read('.github/workflows/quality.yml')) {
@@ -184,16 +187,30 @@ describe('the local gate', () => {
     expect(gate.status).toBe(2);
     expect(gate.stderr)
       .toContain(`refused, nothing run: this copy checks ${setup.checkout}, and the current directory is in ${other}.`);
+    // Either may be the one meant, so it names both rather than steer to one.
+    expect(gate.stderr).toContain(`(cd "${other}" && .agents/skills/local-checks/scripts/run.sh --web-only)   # the current directory's checkout`);
+    expect(gate.stderr).toContain(`(cd "${setup.checkout}" && .agents/skills/local-checks/scripts/run.sh --web-only)   # this copy's checkout`);
     expect(gate.calls).toEqual([]);
   });
 
-  // The refusals above would pass for a gate that never runs anything.
-  it.each(['.', 'src/lib'])('runs every step at the root of its own checkout, started from %s in it', SLOW, (folder) => {
+  // The refusals above would pass for a gate that never runs anything. A git hook exports GIT_DIR, which makes
+  // --show-toplevel answer the folder it is asked from.
+  it.each([
+    { from: '.', hook: false },
+    { from: 'src/lib', hook: false },
+    { from: '.', hook: true },
+  ])('runs every step at the root of its own checkout, started from $from in it (from a git hook: $hook)', SLOW, ({ from, hook }) => {
     const setup = setUp();
-    const cwd = path.join(setup.checkout, folder);
+    const cwd = path.join(setup.checkout, from);
     fs.mkdirSync(cwd, { recursive: true });
 
-    const gate = runGate(cwd, path.join(setup.checkout, GATE), ['--web-only', '--out', path.join(setup.dir, 'out')], setup);
+    const gate = runGate(
+      cwd,
+      path.join(setup.checkout, GATE),
+      ['--web-only', '--out', path.join(setup.dir, 'out')],
+      setup,
+      hook ? { GIT_DIR: path.join(setup.checkout, '.git') } : {},
+    );
 
     expect(gate.status, gate.stdout + gate.stderr).toBe(0);
     expect(gate.stdout).toMatch(/^== ALL GREEN/m);
@@ -215,7 +232,13 @@ describe('the local gate', () => {
   it('builds with the env of quality.yml\'s Build step and none of the app\'s variables from the shell', SLOW, () => {
     const setup = setUp();
     const ci = ciBuildEnv();
-    const shell = Object.fromEntries([...appEnvNames(), ...Object.keys(ci)].map((name) => [name, `from-the-shell-${name}`]));
+    // The E2E bypass flags are kept out of .env.example (e2e-smoke-readiness.test.ts), and a production build
+    // refuses them.
+    const shell = Object.fromEntries([...appEnvNames(), ...Object.keys(ci), 'E2E_AUTH_BYPASS', 'NEXT_PUBLIC_E2E_AUTH_BYPASS']
+      .map((name) => [name, `from-the-shell-${name}`]));
+    // A preload of the shell's, in the form Next's worker rebuild glues onto the guard's path.
+    const preload = path.join(setup.dir, 'shell-preload.cjs');
+    fs.writeFileSync(preload, 'globalThis.__shellPreload = true;\n');
     fs.mkdirSync(path.join(setup.checkout, '.next/cache/fetch-cache'), { recursive: true });
     fs.mkdirSync(path.join(setup.checkout, '.next/cache/images'), { recursive: true });
 
@@ -224,24 +247,34 @@ describe('the local gate', () => {
       path.join(setup.checkout, GATE),
       ['--web-only', '--build', '--out', path.join(setup.dir, 'out')],
       setup,
-      // `next build` keeps a NODE_ENV it inherits; CI's runner sets none.
-      { ...shell, NODE_ENV: 'development', NODE_OPTIONS: '--max-old-space-size=4096' },
+      {
+        ...shell,
+        // `next build` keeps a NODE_ENV it inherits; CI's runner sets none.
+        NODE_ENV: 'development',
+        NODE_OPTIONS: `--max-old-space-size=4096 --require ${JSON.stringify(preload)}`,
+        // npm hands its scripts this setting as their NODE_OPTIONS, from the env or any npmrc.
+        npm_config_node_options: 'from-the-shell-npm_config_node_options',
+        NPM_CONFIG_NODE_OPTIONS: 'from-the-shell-NPM_CONFIG_NODE_OPTIONS',
+      },
     );
     const builds = gate.calls.filter((call) => /^npm run build(:verify)?$/.test(call.command));
+    const guardOnly = `--require=${JSON.stringify(path.join(setup.checkout, GUARD))}`;
 
     expect(gate.status, gate.stdout + gate.stderr).toBe(0);
     expect(builds.map((call) => call.command)).toEqual(['npm run build', 'npm run build:verify']);
     // The steps before them get the shell's env as it is, so a value from the shell is seen where it arrives.
     expect(gate.calls[0].env.NEXT_PUBLIC_SUPABASE_URL).toBe('from-the-shell-NEXT_PUBLIC_SUPABASE_URL');
     expect(gate.calls[0].env.NODE_ENV).toBe('development');
+    expect(gate.calls[0].shellPreload).toBe(true);
     for (const build of builds) {
       expect(Object.fromEntries(Object.keys(ci).map((name) => [name, build.env[name]]))).toEqual(ci);
       expect(Object.entries(build.env).filter(([, value]) => value.startsWith('from-the-shell-'))).toEqual([]);
       expect(build.env.NODE_ENV).toBeUndefined();
-      // Quoted, as a checkout's path can hold a space (this one's does); node loaded it into the stub.
-      expect(build.env.NODE_OPTIONS)
-        .toBe(`--max-old-space-size=4096 --require=${JSON.stringify(path.join(setup.checkout, GUARD))}`);
+      // The guard alone, quoted as a checkout's path can hold a space (this one's does), and loaded by node.
+      expect(build.env.NODE_OPTIONS).toBe(guardOnly);
+      expect(build.env.npm_config_node_options).toBe(guardOnly);
       expect(build.guard).toBe(true);
+      expect(build.shellPreload).toBe(false);
     }
     // CI's checkout has no .next; earlier builds keep unstable_cache entries here under keys that do not name
     // the project.
@@ -310,19 +343,27 @@ describe('the local gate', () => {
       .toEqual({ applied: [null, null, null, null], sentryToken: false, example: true });
   });
 
-  // A build's workers read the env files again (they found none in the main process, so nothing marks the env as
+  // A build's workers read the env files again (the main process found none, so nothing marks the env as
   // processed). Next starts them with NODE_OPTIONS rebuilt from its own (next/dist/lib/worker.js), which has to
-  // keep the guard, quoted.
+  // keep the gate's, the guard alone, quoted.
   it('hands the guard on to the build\'s workers', () => {
-    const guard = path.join(tempDir(), GUARD);
+    const dir = tempDir();
+    const guard = path.join(dir, GUARD);
     fs.mkdirSync(path.dirname(guard), { recursive: true });
     fs.copyFileSync(path.join(repoRoot, GUARD), guard);
-    const nodeOptions = `--max-old-space-size=4096 --require=${JSON.stringify(guard)}`;
-    const script = `
+    const nodeOptions = `--require=${JSON.stringify(guard)}`;
+    // A file, not `node -e`: Next folds node's own arguments (execArgv) in too.
+    const script = path.join(dir, 'worker-node-options.cjs');
+    fs.writeFileSync(script, `
       const { formatNodeOptions, getParsedNodeOptions } = require(${JSON.stringify(fromNext.resolve('next/dist/server/lib/utils.js'))});
       console.log(JSON.stringify(formatNodeOptions(getParsedNodeOptions()).nodeOptions));
-    `;
+    `);
+    const child = spawnSync(process.execPath, [script], {
+      env: { PATH: process.env.PATH ?? '', NODE_OPTIONS: nodeOptions } as unknown as NodeJS.ProcessEnv,
+      encoding: 'utf8',
+    });
 
-    expect(runNode(script, { NODE_OPTIONS: nodeOptions })).toContain(`--require=${JSON.stringify(guard)}`);
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toBe(nodeOptions);
   });
 });
