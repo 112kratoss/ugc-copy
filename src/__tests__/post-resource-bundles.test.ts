@@ -9,11 +9,13 @@ import {
   formatPostResourceItemCountSummary,
   formatPostResourcePriceLabel,
   getBundleAccessLabel,
+  getPostResourceBundleLengthError,
   normalizePostResourceItems,
   normalizePostResourceSections,
   resolvePostRemixCapability,
   sanitizePostResourceBundleLockedPreview,
   validatePostResourceBundleInput,
+  type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
 
 describe('post resource bundle validation', () => {
@@ -535,6 +537,112 @@ describe('post resource bundle validation', () => {
       capability: 'unsupported',
       target: null,
     });
+  });
+});
+
+// Both composers cap the public summary and the package preview at 180
+// characters and a card's unlocked description at 120. The server now holds
+// every route to the same numbers, except for a value already stored, which
+// a whole-draft save sends back unchanged.
+describe('recipe copy length', () => {
+  function recipe({
+    accessMode = 'paid',
+    summary = 'A reusable lighting setup for portraits.',
+    previewText = 'Includes the prompt and the light plan.',
+    cardDescription = 'The prompt behind the portrait.',
+  }: {
+    accessMode?: PostResourceBundleInput['accessMode'];
+    summary?: string;
+    previewText?: string;
+    cardDescription?: string;
+  } = {}): PostResourceBundleInput {
+    return {
+      accessMode,
+      priceUsdCents: 900,
+      summary,
+      previewText,
+      resources: {
+        sections: [
+          { id: 'card-1', title: 'Portrait prompt', kind: 'global', description: cardDescription, sortOrder: 0 },
+          { id: 'card-2', title: 'Light plan', kind: 'global', description: null, sortOrder: 1 },
+        ],
+        items: [{
+          type: 'prompt',
+          role: 'primary',
+          sectionId: 'card-1',
+          title: 'Portrait prompt',
+          description: null,
+          textContent: 'Soft key light from the left, warm rim light behind.',
+          externalUrl: null,
+          storagePath: null,
+          contentType: null,
+          sizeBytes: null,
+          workflowSnapshot: null,
+          sortOrder: 0,
+          isPrimary: true,
+          remixUse: 'none',
+        }],
+      },
+    };
+  }
+
+  it('accepts copy exactly at the limits', () => {
+    expect(getPostResourceBundleLengthError(recipe({
+      summary: 's'.repeat(180),
+      previewText: 'p'.repeat(180),
+      cardDescription: 'u'.repeat(120),
+    }))).toBeNull();
+  });
+
+  it.each([
+    ['the public summary', { summary: 's'.repeat(181) }, 'resourceSummary', 'Public summaries are limited to 180 characters.'],
+    ['the package preview', { previewText: 'p'.repeat(181) }, 'resourcePreview', 'Package previews are limited to 180 characters.'],
+    ["a card's unlocked description", { cardDescription: 'u'.repeat(121) }, 'resourceCards', 'Unlocked descriptions are limited to 120 characters.'],
+  ] as const)('refuses %s past its limit', (_label, copy, field, error) => {
+    expect(getPostResourceBundleLengthError(recipe(copy))).toEqual({ error, field });
+  });
+
+  it('measures the copy as it is stored, without surrounding whitespace', () => {
+    expect(getPostResourceBundleLengthError(recipe({ summary: `  ${'s'.repeat(180)}\n` }))).toBeNull();
+  });
+
+  it('lets a value already stored come back unchanged', () => {
+    const stored = recipe({
+      summary: 's'.repeat(200),
+      previewText: 'p'.repeat(200),
+      cardDescription: 'u'.repeat(150),
+    });
+
+    expect(getPostResourceBundleLengthError(stored, stored)).toBeNull();
+  });
+
+  // A blank summary field is sent as the preview, so a stored preview can come
+  // back as the summary without anyone typing it.
+  it('lets a stored preview come back as the summary', () => {
+    const longPreview = 'p'.repeat(200);
+
+    expect(getPostResourceBundleLengthError(
+      recipe({ summary: longPreview, previewText: longPreview }),
+      recipe({ summary: '', previewText: longPreview }),
+    )).toBeNull();
+  });
+
+  it('refuses a stored value once it is changed into a different over-limit one', () => {
+    expect(getPostResourceBundleLengthError(
+      recipe({ cardDescription: 'v'.repeat(150) }),
+      recipe({ cardDescription: 'u'.repeat(150) }),
+    )).toMatchObject({ field: 'resourceCards' });
+  });
+
+  it('has nothing to measure when the save stores no recipe', () => {
+    expect(getPostResourceBundleLengthError(null)).toBeNull();
+    expect(getPostResourceBundleLengthError(recipe({ accessMode: 'none', summary: 's'.repeat(400) }))).toBeNull();
+  });
+
+  // The database write reruns validatePostResourceBundleInput on every save,
+  // so a cap there would turn an unchanged stored value into a failed save.
+  it('stays out of the structural validation', () => {
+    expect(validatePostResourceBundleInput(recipe({ summary: 's'.repeat(400) }))).toBeNull();
   });
 });
 

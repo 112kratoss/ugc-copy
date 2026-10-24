@@ -246,6 +246,112 @@ describe('preparePostCreationSubmission', () => {
     });
   });
 
+  // The quick-publish dialog caps the caption it sends as the description at
+  // 1,000; the create route held it to nothing.
+  it('rejects a description longer than the limit and accepts one exactly at it', async () => {
+    function buildFormData(description: string) {
+      const formData = new FormData();
+      formData.set('postFormat', 'text');
+      formData.set('title', 'Lighting notes');
+      formData.set('body', 'Key light at forty-five degrees, fill at half.');
+      formData.set('visibility', 'public');
+      formData.set('description', description);
+      return formData;
+    }
+
+    const rejected = await preparePostCreationSubmission({
+      formData: buildFormData('d'.repeat(1001)),
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(rejected).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Descriptions are limited to 1000 characters.', field: 'description' },
+    });
+
+    const accepted = await preparePostCreationSubmission({
+      formData: buildFormData('d'.repeat(1000)),
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(accepted).toMatchObject({ ok: true, submission: { description: 'd'.repeat(1000) } });
+  });
+
+  describe('recipe copy length', () => {
+    function buildFormData({
+      summary = 'A reusable lighting setup for portraits.',
+      previewText = 'Includes the prompt and the light plan.',
+      cardDescription = 'The prompt behind the portrait.',
+    }: { summary?: string; previewText?: string; cardDescription?: string }) {
+      const formData = new FormData();
+      formData.set('postFormat', 'text');
+      formData.set('title', 'Lighting notes');
+      formData.set('body', 'Key light at forty-five degrees, fill at half.');
+      formData.set('visibility', 'public');
+      formData.set('resourceBundle', JSON.stringify({
+        accessMode: 'free',
+        summary,
+        previewText,
+        resources: {
+          promptText: null,
+          notesMarkdown: null,
+          attachments: [],
+          allowRemix: false,
+          sections: [{
+            id: 'card-1',
+            title: 'Portrait prompt',
+            publicTitle: 'Portrait prompt',
+            kind: 'global',
+            description: cardDescription,
+            sortOrder: 0,
+            resourceType: 'prompt',
+          }],
+          items: [{
+            id: 'card-1-item-1',
+            type: 'prompt',
+            role: 'primary',
+            sectionId: 'card-1',
+            title: 'Portrait prompt',
+            textContent: 'Soft key light from the left, warm rim light behind.',
+            sortOrder: 0,
+            remixUse: 'none',
+          }],
+        },
+      }));
+      return formData;
+    }
+
+    // Both composers cap these; a client that does not must not get past them.
+    it.each([
+      ['public summary', { summary: 's'.repeat(181) }, 'resourceSummary', 'Public summaries are limited to 180 characters.'],
+      ['package preview', { previewText: 'p'.repeat(181) }, 'resourcePreview', 'Package previews are limited to 180 characters.'],
+      ["card's unlocked description", { cardDescription: 'u'.repeat(121) }, 'resourceCards', 'Unlocked descriptions are limited to 120 characters.'],
+    ] as const)('rejects a recipe whose %s is longer than the composers allow', async (_label, copy, field, error) => {
+      const result = await preparePostCreationSubmission({
+        formData: buildFormData(copy),
+        userId: 'user-1',
+        sourceToolCatalog,
+      });
+
+      expect(result).toEqual({ ok: false, status: 400, body: { error, field } });
+    });
+
+    it('accepts recipe copy exactly at those limits', async () => {
+      const result = await preparePostCreationSubmission({
+        formData: buildFormData({
+          summary: 's'.repeat(180),
+          previewText: 'p'.repeat(180),
+          cardDescription: 'u'.repeat(120),
+        }),
+        userId: 'user-1',
+        sourceToolCatalog,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+    });
+  });
+
   // Text posts used to be handed a title derived from their body, so an author
   // could publish one without ever naming it. Every format is named explicitly
   // now, and the body is no longer a fallback for any of them.

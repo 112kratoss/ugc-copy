@@ -1,0 +1,157 @@
+{
+  "$comment": [
+    "The public-post quality rule the server applies before a post goes public (getPublicPostQualityError in src/lib/marketplace-trust.ts).",
+    "The app checks the same rule before step 2 says Ready to publish, so it cannot promise a post the server will refuse.",
+    "Each suite holds its own code to these cases: src/__tests__/marketplace-trust.test.ts (server) and ugc-mobile/__tests__/post-new-view-model.test.ts (app).",
+    "A text post (no media) also needs a body of at least minTextLength characters that is not placeholder text. Private posts are not checked."
+  ],
+  "version": 1,
+  "placeholderTokens": [
+    "asdf",
+    "demo",
+    "draft",
+    "example",
+    "foo",
+    "ipsum",
+    "lorem",
+    "placeholder",
+    "sample",
+    "test",
+    "testing",
+    "todo",
+    "untitled"
+  ],
+  "minTextLength": 18,
+  "messages": {
+    "placeholder_title": "Replace the placeholder title with something specific to this post.",
+    "needs_text": "Add useful text so viewers can understand the post before publishing."
+  },
+  "cases": [
+    {
+      "title": "Neon skyline study",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
+    },
+    {
+      "title": "Product demo with Kling 3.0",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Sample",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "My TEST render",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Untitled",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Draft",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "lorem ipsum",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "aaaaaa",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "ababab",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "abcabcabc",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Sdfds",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
+    },
+    {
+      "title": "Sdfds",
+      "body": "Sfd",
+      "hasMedia": false,
+      "expected": "needs_text"
+    },
+    {
+      "title": "Prompt teardown",
+      "body": "A useful text breakdown",
+      "hasMedia": false,
+      "expected": null
+    },
+    {
+      "title": "Prompt teardown",
+      "body": "Too short body",
+      "hasMedia": false,
+      "expected": "needs_text"
+    },
+    {
+      "title": "Prompt teardown",
+      "body": "test test test test test",
+      "hasMedia": false,
+      "expected": "needs_text"
+    },
+    {
+      "title": "Testing lights",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Latest drafting tips",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
+    },
+    {
+      "title": "Demo-day reel",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "https://example.com",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
+    },
+    {
+      "title": "!!!",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    }
+  ]
+}

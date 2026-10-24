@@ -1,10 +1,47 @@
 import { describe, expect, it } from 'vitest';
 
+import publicPostQuality from '../../contracts/public-post-quality-v1.json';
 import {
   assessMarketplaceListingQuality,
   formatBundleAccessLabel,
   getCreatorPublishReadinessError,
+  getPublicPostQualityError,
 } from '@/lib/marketplace-trust';
+
+type PublicPostQualityMessageKey = keyof typeof publicPostQuality.messages;
+
+// The app checks this rule before its composer says "Ready to publish"
+// (ugc-mobile/__tests__/post-new-view-model.test.ts holds it to the same file),
+// so the server's answer and the fixture must not drift apart.
+describe('the public-post quality rule, held to contracts/public-post-quality-v1.json', () => {
+  it.each(publicPostQuality.cases)(
+    'answers title "$title", body "$body", media $hasMedia with $expected',
+    ({ title, body, hasMedia, expected }) => {
+      expect(getPublicPostQualityError({ title, body, hasMedia })).toBe(
+        expected === null ? null : publicPostQuality.messages[expected as PublicPostQualityMessageKey],
+      );
+    },
+  );
+
+  it.each(publicPostQuality.placeholderTokens)('treats "%s" in a title as a placeholder', (token) => {
+    expect(getPublicPostQualityError({ title: `Neon ${token} reel`, hasMedia: true }))
+      .toBe(publicPostQuality.messages.placeholder_title);
+  });
+
+  it('asks a post without media for at least the fixture\'s minimum of useful text', () => {
+    const text = 'Lighting breakdown for portraits';
+    expect(getPublicPostQualityError({
+      title: 'Portrait lighting',
+      body: text.slice(0, publicPostQuality.minTextLength - 1),
+      hasMedia: false,
+    })).toBe(publicPostQuality.messages.needs_text);
+    expect(getPublicPostQualityError({
+      title: 'Portrait lighting',
+      body: text.slice(0, publicPostQuality.minTextLength),
+      hasMedia: false,
+    })).toBeNull();
+  });
+});
 
 const basePost = {
   title: 'Three-scene product hook',

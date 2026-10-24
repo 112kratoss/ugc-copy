@@ -13,6 +13,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import {
+  getPostResourceBundleLengthError,
   isPostResourceBundleAccessMode,
   normalizePostResourceAttachments,
   normalizePostResourceItems,
@@ -20,6 +21,7 @@ import {
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
+import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import {
   getMarketplaceQualityErrorForPostBundle,
   updatePostWithResourceBundleAtomically,
@@ -55,10 +57,11 @@ import {
 import { type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { POST_VIDEO_DURATION_LIMIT_MESSAGE, POST_VIDEO_MAX_DURATION_SECONDS } from '@/lib/post-video-limits';
-import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
+import { isCreatorProfileCheckError, isCreatorProfileReadinessError } from '@/lib/marketplace-trust';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
+  getPublicUgcRecipeTextFields,
   getPublicUgcSafetyViolation,
   PUBLIC_UGC_SAFETY_ERROR,
 } from '@/lib/public-ugc-safety';
@@ -250,6 +253,12 @@ export type PostUpdateRouteResult =
         ownerPath: string;
         resourceBundlePath: string;
         resourceBundleStatus: 'draft' | 'published' | null;
+        /**
+         * The post's media rows after the save, in order. A media save gives
+         * every row a new id, so an editor that stays open needs these for its
+         * next save. Absent only when they could not be read back.
+         */
+        mediaItems?: Array<{ id: string; mediaKey: string }>;
       };
     }
   | {
@@ -259,6 +268,8 @@ export type PostUpdateRouteResult =
         error: string;
         field?: string;
         code?: string;
+        actionHref?: string;
+        actionLabel?: string;
       };
     }
   | {
@@ -1228,6 +1239,15 @@ export async function updateOwnerPostForRoute({
     if (resourceBundleError) {
       return { ok: false, status: 400, body: { error: resourceBundleError } };
     }
+    const resourceBundleLengthError = hasResourceBundlePayload
+      ? getPostResourceBundleLengthError(
+          resourceBundle,
+          existingBundle ? buildStoredBundleForQualityCheck(existingBundle) : null,
+        )
+      : null;
+    if (resourceBundleLengthError) {
+      return { ok: false, status: 400, body: resourceBundleLengthError };
+    }
 
     const canonicalResourceFilePaths: string[] = [];
     const resourceConsumptionClaims: UploadConsumptionClaim[] = [];
@@ -1307,6 +1327,20 @@ export async function updateOwnerPostForRoute({
     const nextDescription = Object.prototype.hasOwnProperty.call(body, 'description')
       ? normalizeText(body.description)
       : post.description;
+    // Grandfathered as the title is: only a changed description is held to the
+    // cap. Both sides are trimmed, as a submitted one is, because an older row
+    // may keep whitespace and a save that leaves the field out carries it.
+    if (
+      nextDescription
+      && normalizeText(nextDescription) !== normalizeText(post.description)
+      && nextDescription.length > DESCRIPTION_MAX_LENGTH
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: `Descriptions are limited to ${DESCRIPTION_MAX_LENGTH} characters.`, field: 'description' },
+      };
+    }
     const frozenSoldBundleForRepublish = nextVisibility === 'public'
       && !hasResourceBundlePayload
       && existingBundle
@@ -1332,8 +1366,7 @@ export async function updateOwnerPostForRoute({
           description: nextDescription,
           body: nextBody,
           prompt: post.prompt,
-          resourcePrompt: bundleForSafetyCheck?.resources?.promptText ?? null,
-          resourceNotes: bundleForSafetyCheck?.resources?.notesMarkdown ?? null,
+          ...getPublicUgcRecipeTextFields(bundleForSafetyCheck),
         })
       : null;
     if (safetyViolation) {
@@ -1450,7 +1483,18 @@ export async function updateOwnerPostForRoute({
       return {
         ok: false,
         status: isCreatorProfileCheckError(marketplaceQualityError) ? 500 : 400,
-        body: { error: marketplaceQualityError },
+        body: {
+          error: marketplaceQualityError,
+          // What create and publish attach to the same refusal, so a client
+          // offers the same way to fix the profile whichever route refused.
+          ...(isCreatorProfileReadinessError(marketplaceQualityError)
+            ? {
+                field: 'profile',
+                actionHref: '/profile',
+                actionLabel: 'Complete profile and return',
+              }
+            : {}),
+        },
       };
     }
 
@@ -1744,6 +1788,20 @@ export async function updateOwnerPostForRoute({
       }
     }
 
+    // replace_post_media deletes and re-inserts every row, so the ids a client
+    // holds are stale after any media save; it has to learn the new ones here.
+    // The save is already committed, so a failed read leaves them out rather
+    // than reporting the edit as failed.
+    let savedMediaItems: Array<{ id: string; mediaKey: string }> | null = null;
+    try {
+      savedMediaItems = (await loadOwnedPostMedia(adminSupabase, postId)).map((row) => ({
+        id: row.id,
+        mediaKey: normalizePostMediaKey(row.media_key) ?? defaultPostMediaKey(row.sort_order),
+      }));
+    } catch (mediaReadError) {
+      logBackendWarning('failed_to_read_post_media_after_update', { error: mediaReadError });
+    }
+
     return {
       ok: true,
       body: {
@@ -1757,6 +1815,7 @@ export async function updateOwnerPostForRoute({
             ? `/post/${postId}/edit#recipe`
             : `/showcase/${postId}#recipe`,
         resourceBundleStatus: updatedPost.bundleStatus,
+        ...(savedMediaItems ? { mediaItems: savedMediaItems } : {}),
       },
     };
   } catch (error) {

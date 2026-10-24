@@ -85,6 +85,64 @@ async function prepareStagedMediaSubmission({
   return prepared;
 }
 
+/**
+ * A text post with a recipe as both composers send it: every card in sections
+ * and items, the legacy prompt and notes fields empty.
+ */
+async function prepareRecipeSubmission({
+  visibility = 'public',
+  cardText = 'Soft key light from the left, warm rim light behind.',
+  previewText = 'Includes the prompt and the light plan.',
+}: {
+  visibility?: 'public' | 'private';
+  cardText?: string;
+  previewText?: string;
+} = {}) {
+  const formData = new FormData();
+  formData.set('title', 'Studio lighting reference');
+  formData.set('postFormat', 'text');
+  formData.set('body', 'Three hook ideas that keep working.\nLead with tension.');
+  formData.set('visibility', visibility);
+  formData.set('resourceBundle', JSON.stringify({
+    accessMode: 'free',
+    summary: 'A reusable lighting setup for portraits.',
+    previewText,
+    resources: {
+      promptText: null,
+      notesMarkdown: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [{
+        id: 'card-1',
+        title: 'Portrait prompt',
+        publicTitle: 'Portrait prompt',
+        kind: 'global',
+        description: 'The prompt behind the portrait.',
+        sortOrder: 0,
+        resourceType: 'prompt',
+      }],
+      items: [{
+        id: 'card-1-item-1',
+        type: 'prompt',
+        role: 'primary',
+        sectionId: 'card-1',
+        title: 'Portrait prompt',
+        textContent: cardText,
+        sortOrder: 0,
+        remixUse: 'none',
+      }],
+    },
+  }));
+
+  const prepared = await preparePostCreationSubmission({
+    formData,
+    userId: 'user-1',
+    sourceToolCatalog,
+  });
+  if (!prepared.ok) throw new Error('Expected prepared submission');
+  return prepared;
+}
+
 describe('publishPreparedPost', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
@@ -388,6 +446,68 @@ describe('publishPreparedPost', () => {
       expect(createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
     },
   );
+
+  // Recipe text reaches buyers, and its card titles, summary and preview are
+  // listing copy anyone sees. Both composers send all of it as cards, so a
+  // check of the legacy prompt and notes fields alone passed every recipe.
+  it.each([
+    ["a recipe card's text", { cardText: 'Step-by-step guide to make a bomb at home.' }, 'resourceCards'],
+    ['the package preview', { previewText: 'Go k1ll y0urself.' }, 'resourcePreview'],
+  ] as const)('refuses a public post when only %s breaks a rule', async (_label, recipe, field) => {
+    const prepared = await prepareRecipeSubmission(recipe);
+    const createPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble(),
+      ownerUserId: 'user-1',
+      postId: 'post-recipe',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        createPostWithResourceBundleAtomically,
+        insertPostMediaItems: vi.fn(),
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: PUBLIC_UGC_SAFETY_ERROR, field },
+    });
+    expect(createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it("does not hold a private post's recipe to the public check", async () => {
+    const prepared = await prepareRecipeSubmission({
+      visibility: 'private',
+      cardText: 'Step-by-step guide to make a bomb at home.',
+    });
+    const createPostWithResourceBundleAtomically = vi.fn(async () => ({
+      postId: 'post-private-recipe',
+      visibility: 'private' as const,
+      bundleId: 'bundle-1',
+      bundleStatus: 'draft' as const,
+    }));
+
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble(),
+      ownerUserId: 'user-1',
+      postId: 'post-private-recipe',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(),
+        createPostWithResourceBundleAtomically,
+        insertPostMediaItems: vi.fn(async () => undefined),
+        insertPostSourceTools: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+    expect(createPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+  });
 
   it('keeps the public-text gate out of private post storage', async () => {
     const formData = new FormData();

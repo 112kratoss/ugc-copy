@@ -40,10 +40,12 @@ import {
   type GenerationShowcaseCategory,
 } from '@/lib/generation-post-media';
 import {
+  getPostResourceBundleLengthError,
   stripDerivedGenerationReferenceItems,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
+import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import {
   isCreatorProfileCheckError,
   isCreatorProfileReadinessError,
@@ -52,6 +54,7 @@ import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { requestPostEmbedding } from '@/lib/feed-embeddings';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import {
+  getPublicUgcRecipeTextFields,
   getPublicUgcSafetyViolation,
   PUBLIC_UGC_SAFETY_ERROR,
 } from '@/lib/public-ugc-safety';
@@ -335,9 +338,15 @@ type ExistingGenerationPostContent = {
   body: string | null;
   category: string | null;
   /** The stored recipe's text, which a visibility flip may publish with the post. */
-  resourcePromptText: string | null;
-  resourceNotesMarkdown: string | null;
+  resourceBundle: PostResourceBundleInput | null;
 };
+
+const STORED_RECIPE_TEXT_COLUMNS = 'access_mode, summary, preview_text, prompt_text, notes_markdown, attachments, resource_sections, resource_items';
+
+type StoredRecipeTextRow = Pick<
+  StoredGenerationBundleRow,
+  'access_mode' | 'summary' | 'preview_text' | 'prompt_text' | 'notes_markdown' | 'attachments' | 'resource_sections' | 'resource_items'
+>;
 
 /**
  * The content a visibility-only request must carry forward. The post row is
@@ -363,24 +372,25 @@ async function loadExistingGenerationPostContent({
   if (error) {
     throw error;
   }
-  const post = data as (Omit<ExistingGenerationPostContent, 'resourcePromptText' | 'resourceNotesMarkdown'> & { id: string }) | null;
+  const post = data as (Omit<ExistingGenerationPostContent, 'resourceBundle'> & { id: string }) | null;
   if (!post) {
     return null;
   }
 
   // The posts trigger republishes a stored recipe with the post when it
   // passes the quality gate, so a flip to public can expose recipe text that
-  // was saved while the post was private and never safety-checked.
+  // was saved while the post was private and never safety-checked: its cards,
+  // summary and preview as well as the legacy prompt and notes.
   const { data: bundle, error: bundleError } = await supabase
     .from('post_resource_bundles')
-    .select('prompt_text, notes_markdown')
+    .select(STORED_RECIPE_TEXT_COLUMNS)
     .eq('post_id', post.id)
     .eq('owner_user_id', ownerUserId)
     .maybeSingle();
   if (bundleError) {
     throw bundleError;
   }
-  const bundleText = bundle as { prompt_text: string | null; notes_markdown: string | null } | null;
+  const storedRecipe = bundle as StoredRecipeTextRow | null;
 
   return {
     is_nsfw: post.is_nsfw,
@@ -389,8 +399,20 @@ async function loadExistingGenerationPostContent({
     prompt: post.prompt,
     body: post.body,
     category: post.category,
-    resourcePromptText: bundleText?.prompt_text ?? null,
-    resourceNotesMarkdown: bundleText?.notes_markdown ?? null,
+    resourceBundle: storedRecipe
+      ? {
+          accessMode: storedRecipe.access_mode,
+          summary: storedRecipe.summary,
+          previewText: storedRecipe.preview_text,
+          resources: {
+            promptText: storedRecipe.prompt_text,
+            notesMarkdown: storedRecipe.notes_markdown,
+            attachments: Array.isArray(storedRecipe.attachments) ? storedRecipe.attachments : [],
+            sections: Array.isArray(storedRecipe.resource_sections) ? storedRecipe.resource_sections : [],
+            items: Array.isArray(storedRecipe.resource_items) ? storedRecipe.resource_items : [],
+          } as NonNullable<PostResourceBundleInput['resources']>,
+        }
+      : null,
   };
 }
 
@@ -571,6 +593,12 @@ export async function publishGenerationToShowcaseForRoute({
   if (resourceBundleValidationError) {
     return { ok: false, status: 400, body: { error: resourceBundleValidationError } };
   }
+  // Measured on what the client wrote; the generation's merged references are
+  // the server's own.
+  const resourceBundleLengthError = getPostResourceBundleLengthError(requestedResourceBundle);
+  if (resourceBundleLengthError) {
+    return { ok: false, status: 400, body: resourceBundleLengthError };
+  }
   let frozenSoldBundleForRepublish: PostResourceBundleInput | null = null;
   if (effectiveVisibility === 'public' && !effectiveHasResourceBundlePayload && !isCanonicalTemplateResult) {
     try {
@@ -685,6 +713,14 @@ export async function publishGenerationToShowcaseForRoute({
       body: { error: `Post text is limited to ${BODY_MAX_LENGTH} characters.`, field: 'body' },
     };
   }
+  const submittedDescription = normalizeTextValue(description);
+  if (submittedDescription && submittedDescription.length > DESCRIPTION_MAX_LENGTH) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: `Descriptions are limited to ${DESCRIPTION_MAX_LENGTH} characters.`, field: 'description' },
+    };
+  }
 
   const safetyViolation = shouldExposePost
     ? getPublicUgcSafetyViolation({
@@ -697,12 +733,7 @@ export async function publishGenerationToShowcaseForRoute({
         // Recipe text is distributed to buyers like the caption is. A compose
         // submission carries it in the request; a visibility-only flip may
         // republish the stored one.
-        resourcePrompt: effectiveResourceBundle?.resources?.promptText
-          ?? existingPost?.resourcePromptText
-          ?? null,
-        resourceNotes: effectiveResourceBundle?.resources?.notesMarkdown
-          ?? existingPost?.resourceNotesMarkdown
-          ?? null,
+        ...getPublicUgcRecipeTextFields(effectiveResourceBundle ?? existingPost?.resourceBundle),
       })
     : null;
   if (safetyViolation) {

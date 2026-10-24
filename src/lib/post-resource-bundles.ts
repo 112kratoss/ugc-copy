@@ -1259,6 +1259,66 @@ export function validatePostResourceBundleInput(
   return null;
 }
 
+export const POST_RESOURCE_SUMMARY_MAX_LENGTH = 180;
+export const POST_RESOURCE_PREVIEW_MAX_LENGTH = 180;
+/** A card's "Unlocked description", stored as its section's description. */
+export const POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH = 120;
+
+export interface PostResourceBundleLengthError {
+  error: string;
+  field: 'resourcePreview' | 'resourceSummary' | 'resourceCards';
+}
+
+/**
+ * The lengths both composers cap recipe copy at, for the routes to hold every
+ * client to. It stays out of validatePostResourceBundleInput because the
+ * database write reruns that on each save, and a value stored before these
+ * limits must still save when it comes back unchanged: one equal to a stored
+ * value passes. The preview and the summary are compared with both stored ones,
+ * because a composer sends a blank summary as the preview.
+ */
+export function getPostResourceBundleLengthError(
+  bundle: PostResourceBundleInput | null | undefined,
+  stored?: PostResourceBundleInput | null,
+): PostResourceBundleLengthError | null {
+  if (bundle?.accessMode !== 'free' && bundle?.accessMode !== 'paid') {
+    return null;
+  }
+
+  const storedListingCopy = new Set([stored?.summary, stored?.previewText].map(normalizeTextValue));
+  const storedCardDescriptions = new Set(
+    normalizePostResourceSections(stored?.resources?.sections).map((section) => section.description),
+  );
+  const exceeds = (value: string | null, limit: number, storedValues: Set<string | null>) => (
+    value !== null && value.length > limit && !storedValues.has(value)
+  );
+
+  if (exceeds(normalizeTextValue(bundle.previewText), POST_RESOURCE_PREVIEW_MAX_LENGTH, storedListingCopy)) {
+    return {
+      error: `Package previews are limited to ${POST_RESOURCE_PREVIEW_MAX_LENGTH} characters.`,
+      field: 'resourcePreview',
+    };
+  }
+
+  if (exceeds(normalizeTextValue(bundle.summary), POST_RESOURCE_SUMMARY_MAX_LENGTH, storedListingCopy)) {
+    return {
+      error: `Public summaries are limited to ${POST_RESOURCE_SUMMARY_MAX_LENGTH} characters.`,
+      field: 'resourceSummary',
+    };
+  }
+
+  if (normalizePostResourceSections(bundle.resources?.sections).some((section) => (
+    exceeds(section.description, POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH, storedCardDescriptions)
+  ))) {
+    return {
+      error: `Unlocked descriptions are limited to ${POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH} characters.`,
+      field: 'resourceCards',
+    };
+  }
+
+  return null;
+}
+
 function buildPostResourceCardPreviews(
   sections: PostResourceSection[],
   items: PostResourceItem[]

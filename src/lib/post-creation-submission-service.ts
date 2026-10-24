@@ -2,7 +2,9 @@ import { parseNsfwFlag } from '@/lib/nsfw-content';
 import path from 'node:path';
 
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
+import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import {
+  getPostResourceBundleLengthError,
   isPostResourceBundleAccessMode,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
@@ -346,7 +348,7 @@ function parseResourceBundle(
   value: FormDataEntryValue | null,
   ownerUserId: string,
   mediaKeys: Iterable<string>
-): { bundle: PostResourceBundleInput | null; error: string | null } {
+): { bundle: PostResourceBundleInput | null; error: string | null; field?: string } {
   if (typeof value !== 'string' || !value.trim()) {
     return {
       bundle: null,
@@ -369,6 +371,15 @@ function parseResourceBundle(
       return {
         bundle: null,
         error: validationError,
+      };
+    }
+
+    const lengthError = getPostResourceBundleLengthError(parsed);
+    if (lengthError) {
+      return {
+        bundle: null,
+        error: lengthError.error,
+        field: lengthError.field,
       };
     }
 
@@ -509,6 +520,9 @@ export async function preparePostCreationSubmission({
 
   const title = submittedTitle;
   const description = normalizeText(formData.get('description'));
+  if (description && description.length > DESCRIPTION_MAX_LENGTH) {
+    return badRequest(`Descriptions are limited to ${DESCRIPTION_MAX_LENGTH} characters.`, 'description');
+  }
   const sourceTool = hasSubmittedMedia ? normalizeText(formData.get('sourceTool')) : null;
   const sourceToolSlugRaw = normalizeText(formData.get('sourceToolSlug'));
   const normalizedSourceTool = normalizeSourceToolInputWithCatalog(sourceToolCatalog, {
@@ -538,13 +552,17 @@ export async function preparePostCreationSubmission({
 
   const sourceTools = normalizeSourceToolSelectionsWithCatalog(sourceToolCatalog, sourceToolsInput);
   const sourceKind = postFormat === 'text' ? 'manual' : 'external';
-  const { bundle: resourceBundle, error: resourceBundleError } = parseResourceBundle(
+  const {
+    bundle: resourceBundle,
+    error: resourceBundleError,
+    field: resourceBundleErrorField,
+  } = parseResourceBundle(
     formData.get('resourceBundle'),
     userId,
     submittedMediaItems.map((item) => item.mediaKey)
   );
   if (resourceBundleError) {
-    return badRequest(resourceBundleError);
+    return badRequest(resourceBundleError, resourceBundleErrorField);
   }
 
   return {
