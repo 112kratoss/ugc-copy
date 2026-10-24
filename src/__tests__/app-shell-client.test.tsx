@@ -1,18 +1,21 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { UNDERSCORE_NOT_FOUND_ROUTE } from 'next/dist/shared/lib/entry-constants';
 import { NOT_FOUND_SEGMENT_KEY } from 'next/dist/shared/lib/segment';
-import type { ComponentPropsWithoutRef, ReactNode } from 'react';
+import { useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellClient from '@/components/AppShellClient';
+import FeedbackViewport from '@/components/FeedbackViewport';
+import type { ConfirmationRequest } from '@/components/feedback-state';
+import { useLeaveGuard } from '@/lib/use-leave-guard';
 
 let mockedPathname = '/';
 /** The root layout's selected segment: the route's first segment. */
 let mockedSegment: string | null = null;
 let mockedScrollY = 0;
 let mockedReducedMotion = false;
-/** Hrefs the mocked Link would have navigated to: its handler left the click alone. */
+/** Hrefs the mocked Link and Form would have navigated to: their handlers left the click or the submit alone. */
 const navigations: string[] = [];
 /** How many times a shell link has been drawn. */
 let linkRenders = 0;
@@ -20,10 +23,31 @@ const scrollToMock = vi.fn((options: ScrollToOptions | number) => {
   mockedScrollY = typeof options === 'number' ? options : options.top ?? 0;
 });
 
+const routerMocks = vi.hoisted(() => ({ push: vi.fn() }));
+
 vi.mock('next/navigation', () => ({
   usePathname: () => mockedPathname,
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => routerMocks,
   useSelectedLayoutSegment: () => mockedSegment,
+}));
+
+vi.mock('next/form', () => ({
+  default: ({ onSubmit, ...props }: ComponentPropsWithoutRef<'form'>) => (
+    <form
+      {...props}
+      onSubmit={(event) => {
+        // Next's Form runs the handler first and, unless it prevented the
+        // submit, navigates to the action with the fields as its query.
+        onSubmit?.(event);
+        if (!event.defaultPrevented) {
+          const query = new URLSearchParams();
+          new FormData(event.currentTarget).forEach((value, name) => query.append(name, String(value)));
+          navigations.push(`${String(props.action)}?${query}`);
+        }
+        event.preventDefault();
+      }}
+    />
+  ),
 }));
 
 vi.mock('next/link', () => ({
@@ -582,5 +606,125 @@ describe('AppShellClient', () => {
 
     expect(screen.getByRole('main')).toHaveTextContent('Referral content');
     expect(screen.queryByRole('navigation', { name: 'Primary mobile navigation' })).not.toBeInTheDocument();
+  });
+
+  // The post composer asks before its work is lost (useLeaveGuard): one tap on
+  // Home in the bottom navigation used to drop a typed post and its files.
+  describe('over a page with unsaved work', () => {
+    const LEAVE_POST: ConfirmationRequest = {
+      title: 'Leave this post?',
+      message: 'Your changes haven’t been saved and will be lost.',
+      confirmLabel: 'Leave without saving',
+      cancelLabel: 'Keep editing',
+      tone: 'danger',
+    };
+
+    /** Unsaved while its field holds text, as the composer is. */
+    function PostDraft() {
+      const [text, setText] = useState('');
+      useLeaveGuard({ isDirty: text !== '', question: LEAVE_POST, historyKey: 'shellTestLeaveGuard' });
+      return <input aria-label="Post text" value={text} onChange={(event) => setText(event.target.value)} />;
+    }
+
+    const shellWith = (page: ReactNode) => (
+      <>
+        <AppShellClient>{page}</AppShellClient>
+        <FeedbackViewport />
+      </>
+    );
+
+    function renderPostDraft() {
+      mockedPathname = '/post/new';
+      // An entry of the page's own, for its guard to mark.
+      window.history.pushState(null, '', '/post/new');
+      return render(shellWith(<PostDraft />));
+    }
+
+    const writePost = () => fireEvent.change(screen.getByLabelText('Post text'), { target: { value: 'A sunset reel' } });
+    const answer = async (label: 'Keep editing' | 'Leave without saving') => {
+      const question = await screen.findByRole('alertdialog', { name: 'Leave this post?' });
+      fireEvent.click(within(question).getByRole('button', { name: label }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    };
+
+    beforeEach(() => {
+      routerMocks.push.mockReset();
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('asks before the side and bottom navigation and the top bar leave, and follows a link only on a leave', async () => {
+      const back = vi.spyOn(window.history, 'back');
+      renderPostDraft();
+      writePost();
+      const bottomNavigation = () => screen.getByRole('navigation', { name: 'Primary mobile navigation' });
+
+      for (const link of [
+        within(screen.getByRole('complementary', { name: 'Primary navigation' })).getByRole('link', { name: 'Explore' }),
+        within(bottomNavigation()).getByRole('link', { name: 'Home' }),
+        screen.getByRole('link', { name: 'New creation' }),
+        screen.getByRole('link', { name: 'Open alerts' }),
+      ]) {
+        fireEvent.click(link);
+        await answer('Keep editing');
+      }
+
+      // Held before the links' own handlers ran: none of them navigated.
+      expect(navigations).toEqual([]);
+      expect(routerMocks.push).not.toHaveBeenCalled();
+      expect(back).not.toHaveBeenCalled();
+      expect(screen.getByLabelText('Post text')).toHaveValue('A sunset reel');
+
+      fireEvent.click(within(bottomNavigation()).getByRole('link', { name: 'Home' }));
+      await answer('Leave without saving');
+
+      // Off the page's guard entry, then the tab chosen.
+      await waitFor(() => expect(routerMocks.push).toHaveBeenCalledWith('/'));
+      expect(back.mock.invocationCallOrder[0]).toBeLessThan(routerMocks.push.mock.invocationCallOrder[0]);
+      expect(navigations).toEqual([]);
+    });
+
+    it('asks before the top bar search leaves, and searches on a leave', async () => {
+      renderPostDraft();
+      const searchField = screen.getByRole('searchbox', { name: 'Search creators, posts, and recipes' });
+      const searchForm = searchField.closest('form')!;
+      fireEvent.change(searchField, { target: { value: 'neon city' } });
+
+      // Nothing to lose yet: the search goes at once.
+      fireEvent.submit(searchForm);
+      expect(navigations).toEqual(['/search?q=neon+city']);
+
+      writePost();
+      fireEvent.submit(searchForm);
+      await answer('Keep editing');
+      expect(navigations).toEqual(['/search?q=neon+city']);
+
+      fireEvent.submit(searchForm);
+      await answer('Leave without saving');
+
+      // Off the page's guard entry, then the search submitted again.
+      await waitFor(() => expect(navigations).toEqual(['/search?q=neon+city', '/search?q=neon+city']));
+    });
+
+    // A link in the drawer closes it as it navigates, but the guard holds the
+    // click before that handler runs, and the leave comes later by the router.
+    it('closes the drawer when a link in it leaves', async () => {
+      const view = renderPostDraft();
+      writePost();
+      fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Navigation' })).getByRole('link', { name: 'Explore' }));
+      await answer('Leave without saving');
+      await waitFor(() => expect(routerMocks.push).toHaveBeenCalledWith('/showcase'));
+
+      // The router draws Explore under the shell.
+      mockedPathname = '/showcase';
+      view.rerender(shellWith(<div>Explore content</div>));
+
+      expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
+      expect(document.body.style.overflow).toBe('');
+    });
   });
 });
