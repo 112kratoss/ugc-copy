@@ -3577,6 +3577,36 @@ describe('NewPostClient', () => {
       await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/showcase'));
       expect(linkRouter.push).toHaveBeenCalledTimes(1);
     });
+
+    // Decision D4 (2026-10-24): the shell's links, outside the composer, ask too.
+    it('asks before a link elsewhere on the page leaves unsaved changes', async () => {
+      render(
+        <>
+          <a href="/home">Home</a>
+          <NewPostClient />
+          <FeedbackViewport />
+        </>
+      );
+      fireEvent.change(screen.getByRole('textbox', { name: /^story/i }), {
+        target: { value: 'Words not yet published.' },
+      });
+
+      fireEvent.click(screen.getByRole('link', { name: 'Home' }));
+      const question = await screen.findByRole('alertdialog', { name: 'Leave this post?' });
+      expect(mockPush).not.toHaveBeenCalled();
+
+      fireEvent.click(within(question).getByRole('button', { name: 'Leave without saving' }));
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/home'));
+    });
+
+    it('puts a guard entry on the browser history only while there is unsaved work', () => {
+      render(<NewPostClient />);
+      expect(window.history.state?.postComposerLeaveGuard).toBeUndefined();
+
+      const story = screen.getByRole('textbox', { name: /^story/i });
+      fireEvent.change(story, { target: { value: 'Words not yet published.' } });
+      expect(window.history.state?.postComposerLeaveGuard).toBeTruthy();
+    });
   });
 
   // The app's step 1 order and names (decision D1, 2026-10-24).

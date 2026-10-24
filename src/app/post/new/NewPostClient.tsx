@@ -27,8 +27,6 @@ import {
 
 import { useAuth } from '@/components/AuthProvider';
 import type { ConfirmationRequest } from '@/components/feedback-state';
-import { publishNavigationStartTo } from '@/components/navigation-progress-state';
-import { useConfirmation } from '@/components/useConfirmation';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import {
   assessMarketplaceListingQuality,
@@ -45,6 +43,7 @@ import {
 } from '@/lib/post-video-limits';
 import { getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
+import { useLeaveGuard } from '@/lib/use-leave-guard';
 import {
   getPostResourceKinds,
   normalizePostResourceItems,
@@ -633,7 +632,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const router = useRouter();
   const searchParams = useSearchParams();
   const { session } = useAuth();
-  const askToConfirm = useConfirmation();
   const [isNsfw, setIsNsfw] = useState(initialPost?.isNsfw === true);
   const generationId = initialPost?.generationId ?? searchParams.get('generationId');
   const isEditMode = Boolean(initialPost);
@@ -934,15 +932,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     () => !isSameComposerSnapshot(composerSnapshot, savedSnapshot),
     [composerSnapshot, savedSnapshot]
   );
-  useEffect(() => {
-    if (!hasUnsavedWork) return;
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [hasUnsavedWork]);
+  // One guard for every way out while there is unsaved work: Back and the
+  // phone's back swipe, every link on the page (the shell's, and this page's
+  // own Back link), the shell's search, and a reload or a closed tab. Never
+  // rename the key: open tabs keep their history entries across a deploy.
+  const { leave: leaveComposer } = useLeaveGuard({
+    isDirty: hasUnsavedWork,
+    question: LEAVE_WITH_UNSAVED_CHANGES,
+    historyKey: 'postComposerLeaveGuard',
+  });
   const trimmedBody = body.trim();
   const bodyCount = body.length;
   const titleCount = title.trim().length;
@@ -2204,7 +2202,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     if (options.redirect) {
       const nextPath = nextPost.showcasePath ?? nextPost.ownerPath;
       if (nextPath) {
-        router.push(nextPath);
+        // Through the guard, so no guard entry is left under the post for Back
+        // to land on.
+        leaveComposer(() => router.push(nextPath));
       }
     }
   };
@@ -2682,20 +2682,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       <div className="studio-shell relative z-10 pt-12 pb-28 sm:pt-16 lg:pb-16">
         <Link
           href={backHref}
-          // beforeunload covers a reload or a closed tab, not this in-app link,
-          // which left with the work unasked. onNavigate, not onClick: a
-          // Cmd-click opens a tab and loses nothing. The answer comes after
-          // the click has been handled, so the click is always held and a
-          // "leave" navigates by itself.
-          onNavigate={(event) => {
-            if (!hasUnsavedWork) return;
-            event.preventDefault();
-            void askToConfirm(LEAVE_WITH_UNSAVED_CHANGES).then((confirmed) => {
-              if (!confirmed) return;
-              publishNavigationStartTo(backHref);
-              router.push(backHref);
-            });
-          }}
+          // The leave guard holds this link's click like any other while there
+          // is unsaved work, so it needs no question of its own.
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" />
