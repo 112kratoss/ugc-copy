@@ -10,6 +10,7 @@ import {
   getMediaAwaitingUpload,
   planPostComposerMediaRecovery,
   saveMayHaveConsumedUploads,
+  saveRefusedForStaleMediaIds,
   withSavedPostMedia,
   type MediaVerification,
 } from '@/lib/post-composer-media-recovery';
@@ -234,6 +235,18 @@ describe('a save that may have used the staged uploads', () => {
     ['a check the composer made before sending', new Error('Add a title for your post.')],
   ])('keeps them after %s', (_label, error) => {
     expect(saveMayHaveConsumedUploads(error)).toBe(false);
+  });
+
+  it('tells a refusal for stale media ids apart, and keeps the uploads after it', () => {
+    const stale = new ApiError('An existing media item no longer belongs to this post.', 400, {
+      error: 'An existing media item no longer belongs to this post.',
+      field: 'mediaItems',
+    });
+    expect(saveRefusedForStaleMediaIds(stale)).toBe(true);
+    expect(saveMayHaveConsumedUploads(stale)).toBe(false);
+    expect(saveRefusedForStaleMediaIds(new ApiError('Add a title for your post.', 400, { field: 'title' }))).toBe(false);
+    expect(saveRefusedForStaleMediaIds(new ApiError('Failed to update post.', 500, { field: 'mediaItems' }))).toBe(false);
+    expect(saveRefusedForStaleMediaIds(new Error('An existing media item no longer belongs to this post.'))).toBe(false);
   });
 
   const sent = mediaItem({ id: 'sent', storagePath: 'uploads/user-1/sent.jpg' });

@@ -150,6 +150,21 @@ export function applyPostComposerMediaRecoveryToDraft(
  * to go again. Every other refusal is decided before anything moves, and the
  * same uploads can be sent again. The web composer's rule (`readSaveResponse`).
  */
+/**
+ * True for an edit refused, before anything was written, because it named its
+ * media by rows the post no longer has: the rows were re-inserted under new ids
+ * since the composer read them (an earlier save that finished after its
+ * deadline, or an edit from the web). The server marks it `field: 'mediaItems'`;
+ * the uploads are untouched, and the next save reads the rows back.
+ */
+export function saveRefusedForStaleMediaIds(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 400) return false;
+  const details = typeof error.details === 'object' && error.details !== null
+    ? error.details as { field?: unknown }
+    : {};
+  return details.field === 'mediaItems';
+}
+
 export function saveMayHaveConsumedUploads(error: unknown): boolean {
   if (!(error instanceof ApiError)) return false;
   const details = typeof error.details === 'object' && error.details !== null

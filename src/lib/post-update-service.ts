@@ -592,7 +592,7 @@ async function parseSubmittedEditMediaItems(params: {
   value: unknown;
   postId: string;
   ownerUserId: string;
-}): Promise<{ items: SubmittedEditMediaItem[] | null; error: string | null }> {
+}): Promise<{ items: SubmittedEditMediaItem[] | null; error: string | null; staleMediaIds?: true }> {
   if (params.value === undefined) {
     return { items: null, error: null };
   }
@@ -626,7 +626,9 @@ async function parseSubmittedEditMediaItems(params: {
     if (typeof descriptor.existingId === 'string') {
       const existingRow = existingRowsMap.get(descriptor.existingId);
       if (!existingRow) {
-        return { items: null, error: 'An existing media item no longer belongs to this post.' };
+        // The rows were re-inserted under new ids since the editor read them
+        // (a save that went through, or an edit from the other client).
+        return { items: null, error: 'An existing media item no longer belongs to this post.', staleMediaIds: true };
       }
       const mediaKey = normalizePostMediaKey(existingRow.media_key) ?? defaultPostMediaKey(existingRow.sort_order);
       const requestedMediaKey = descriptor.mediaKey == null ? mediaKey : normalizePostMediaKey(descriptor.mediaKey);
@@ -652,7 +654,7 @@ async function parseSubmittedEditMediaItems(params: {
     // against. Reusing a removed row's key for a different upload would make
     // those scopes silently point at different content.
     if (existingMediaKeys.has(mediaKey)) {
-      return { items: null, error: 'New uploads must use a new post media key.' };
+      return { items: null, error: 'New uploads must use a new post media key.', staleMediaIds: true };
     }
     submittedMediaKeys.add(mediaKey);
 
@@ -1173,14 +1175,24 @@ export async function updateOwnerPostForRoute({
       : requestBody;
     const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(body, 'resourceBundle');
 
-    const { items: submittedMediaItems, error: submittedMediaItemsError } = await parseSubmittedEditMediaItems({
+    const {
+      items: submittedMediaItems,
+      error: submittedMediaItemsError,
+      staleMediaIds,
+    } = await parseSubmittedEditMediaItems({
       adminSupabase,
       value: body.mediaItems,
       postId,
       ownerUserId,
     });
     if (submittedMediaItemsError) {
-      return { ok: false, status: 400, body: { error: submittedMediaItemsError } };
+      // `field: 'mediaItems'` tells a client its media ids are stale: it reads
+      // the post's rows back and saves again instead of repeating the refusal.
+      return {
+        ok: false,
+        status: 400,
+        body: { error: submittedMediaItemsError, ...(staleMediaIds ? { field: 'mediaItems' } : {}) },
+      };
     }
 
     const availableMediaKeys = submittedMediaItems

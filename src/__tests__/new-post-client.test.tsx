@@ -4184,6 +4184,43 @@ describe('NewPostClient', () => {
       expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
     });
 
+    // The rows were re-inserted since the page last named them (an earlier save
+    // that finished late, or an edit from the app): the server refuses the old
+    // ids with `field: 'mediaItems'`, and the next save reads the rows back.
+    it('reads the rows back after a refusal that says its media ids are stale', async () => {
+      enqueueResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: 'An existing media item no longer belongs to this post.', field: 'mediaItems' }),
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          post: { ...createMediaPost(), mediaItems: [{ ...createMediaPost().mediaItems![0], id: 'row-a-read-back' }] },
+        }),
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-saved-twice', visibility: 'public' }),
+      });
+
+      render(<NewPostClient initialPost={createMediaPost()} />);
+      fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), {
+        target: { value: 'A post saved more than once, typo fixed' },
+      });
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(postRouteBodies()).toHaveLength(1));
+      expect(postRouteBodies()[0].mediaItems).toEqual([{ existingId: 'row-as-rendered' }]);
+
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(postRouteBodies()).toHaveLength(2));
+      expect(fetchMock.mock.calls.some(([url, init]) => (
+        String(url) === '/api/posts/post-saved-twice' && !(init as RequestInit | undefined)?.method
+      ))).toBe(true);
+      expect(postRouteBodies()[1].mediaItems).toEqual([{ existingId: 'row-a-read-back' }]);
+    });
+
     it('keeps the upload of a picture added while the save was on its way', async () => {
       let answerFirstSave: (value: unknown) => void = () => {};
       enqueueResponse({ ok: true, json: () => new Promise((resolve) => { answerFirstSave = resolve; }) });

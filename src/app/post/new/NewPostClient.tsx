@@ -2461,6 +2461,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           // A failure after the write leaves the rows re-inserted too.
           if (sendsMedia) savedMediaRowsStaleRef.current = true;
         }
+        // Refused before anything was written, for ids the post's rows no longer
+        // have (an earlier save that finished late, or an edit from the app):
+        // the uploads are untouched, and the next save reads the rows back.
+        if (!response.ok && data.field === 'mediaItems' && sendsMedia) {
+          savedMediaRowsStaleRef.current = true;
+        }
         if (!response.ok || !data.success) {
           throw getSubmissionError(data, 'Failed to save post.');
         }

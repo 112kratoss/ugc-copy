@@ -46,6 +46,7 @@ import {
   getMediaAwaitingUpload,
   planPostComposerMediaRecovery,
   saveMayHaveConsumedUploads,
+  saveRefusedForStaleMediaIds,
   withSavedPostMedia,
   type MediaVerification,
 } from '@/lib/post-composer-media-recovery';
@@ -2414,6 +2415,9 @@ function NewPostComposer() {
           setDraft((current) => forgetConsumedMediaUploads(current, submittedDraft));
           // The same edit may have re-inserted every media row under a new id.
           if (sentPostMedia) savedMediaIdsStaleRef.current = true;
+        } else if (sentPostMedia && saveRefusedForStaleMediaIds(error)) {
+          // Refused before anything was written; the uploads stand, the ids do not.
+          savedMediaIdsStaleRef.current = true;
         }
         throw error;
       }

@@ -2043,6 +2043,30 @@ describe('mobile external post composer', () => {
       ]);
     });
 
+    // The server marks a refusal for ids the post's rows no longer have (an edit
+    // from the web re-inserted them): nothing was written, so the new picture's
+    // upload stands, and the next save names the rows the post holds now.
+    it('reads the rows back after a refusal that says its media ids are stale, and keeps the upload', async () => {
+      await failFirstSave(new ApiError('An existing media item no longer belongs to this post.', 400, {
+        error: 'An existing media item no longer belongs to this post.',
+        field: 'mediaItems',
+      }));
+      authState.api.getOwnerPost.mockResolvedValueOnce({
+        success: true,
+        post: { ...gallery, mediaItems: [mediaRow('row-9', 'media-first', 'first.png')] },
+      });
+      authState.api.updatePost.mockResolvedValueOnce(saved);
+
+      expect(await save()).toBeNull();
+
+      expect(authState.api.getOwnerPost).toHaveBeenCalledWith('post-gallery');
+      expect(sentMedia()).toEqual([
+        { existingId: 'row-9', mediaKey: 'media-first' },
+        expect.objectContaining({ storagePath: 'uploads/cover.png' }),
+      ]);
+      expect(uploadPickedMedia).not.toHaveBeenCalled();
+    });
+
     it('reads nothing back after a refusal decided before anything was written', async () => {
       const { newKey } = await failFirstSave(new ApiError('Add a title for your post.', 400, {
         error: 'Add a title for your post.',

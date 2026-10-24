@@ -1842,7 +1842,51 @@ describe('updateOwnerPostForRoute', () => {
     expect(result).toEqual({
       ok: false,
       status: 400,
-      body: { error: 'New uploads must use a new post media key.' },
+      // A key the post already holds is a client naming its media by stale
+      // rows: the field tells it to read them back before saving again.
+      body: { error: 'New uploads must use a new post media key.', field: 'mediaItems' },
+    });
+    expect(copied).toEqual([]);
+    expect(updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('tells a client its media ids are stale when it names a row the post no longer has', async () => {
+    const postMedia = [{
+      id: 'media-reinserted',
+      media_key: 'proof-a',
+      storage_path: 'posts/post-1/a.jpg',
+      external_url: null,
+      media_kind: 'image',
+      content_type: 'image/jpeg',
+      original_name: 'a.jpg',
+      width: null,
+      height: null,
+      duration_seconds: null,
+      sort_order: 0,
+    }];
+    const { client, copied } = createSupabaseMock({ bundle: null, postMedia });
+    const updatePostWithResourceBundleAtomically = vi.fn();
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      // The id this row had before a save re-inserted it.
+      body: { mediaItems: [{ existingId: 'media-before-the-save' }] },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically,
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'An existing media item no longer belongs to this post.', field: 'mediaItems' },
     });
     expect(copied).toEqual([]);
     expect(updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
