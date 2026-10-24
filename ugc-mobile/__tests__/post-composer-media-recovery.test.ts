@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import { ApiError } from '@/lib/api-client';
 import {
   applyPostComposerMediaRecovery,
   applyPostComposerMediaRecoveryToDraft,
   describeFailedRecoveryReuploads,
   describeLostRecoveryMedia,
+  forgetConsumedMediaUploads,
+  getMediaAwaitingUpload,
   planPostComposerMediaRecovery,
+  saveMayHaveConsumedUploads,
   type MediaVerification,
 } from '@/lib/post-composer-media-recovery';
 import { buildCreatePostFormData, getDefaultPostComposerDraft, type PostComposerMediaItem } from '@/lib/post-new-view-model';
@@ -193,6 +197,56 @@ describe('describeLostRecoveryMedia', () => {
       // An edited post's item with no original name is named by its id (app/post/new.tsx).
       mediaItem({ id: 'c', name: '3f2504e0-4f89-11d3-9a0c-0305e82c3301' }),
     ])).toBe('clip.mp4, a video and an image could not be restored and were removed. Add them again before publishing.');
+  });
+});
+
+// The server moves each staged upload into the post, deleting the staged copy,
+// before it checks the Made with catalog: that refusal, a server error, and a
+// request whose answer never came may all follow the move, and a second finalize
+// of a moved upload is refused. The web's rule (readSaveResponse in
+// src/app/post/new/NewPostClient.tsx); every other refusal comes first.
+describe('a save that may have used the staged uploads', () => {
+  const url = 'https://magicbooklet.com/api/posts';
+
+  it.each([
+    ['no answer at all', new ApiError('Network request failed.', 0, { url, cause: 'Network request failed' })],
+    ['a deadline that ran out after the request left', new ApiError('Network request failed.', 0, { url, cause: 'Request timed out', timedOut: true })],
+    ['a server error', new ApiError('Failed to publish post.', 500, { error: 'Failed to publish post.' })],
+    ['a gateway error page', new ApiError('Request failed with status 504', 504, '<html>Gateway Timeout</html>')],
+    ['the Made with refusal', new ApiError('Choose a tool from the list.', 400, { error: 'Choose a tool from the list.', field: 'sourceTools' })],
+  ])('counts %s as having used them', (_label, error) => {
+    expect(saveMayHaveConsumedUploads(error)).toBe(true);
+  });
+
+  it.each([
+    ['a refusal decided before the move', new ApiError('Add a title for your post.', 400, { error: 'Add a title for your post.', field: 'title' })],
+    ['the profile refusal', new ApiError('Complete your profile before publishing publicly.', 400, { error: 'Complete your profile before publishing publicly.', field: 'profile' })],
+    ['a refusal with no field', new ApiError('Replace the placeholder title with something specific to this post.', 400, { error: 'Replace the placeholder title with something specific to this post.' })],
+    ['a request that never left the device', new ApiError('Network request failed.', 0, { url, cause: 'Request timed out before it was sent', timedOut: true, sent: false })],
+    ['a check the composer made before sending', new Error('Add a title for your post.')],
+  ])('keeps them after %s', (_label, error) => {
+    expect(saveMayHaveConsumedUploads(error)).toBe(false);
+  });
+
+  const sent = mediaItem({ id: 'sent', storagePath: 'uploads/user-1/sent.jpg' });
+  const saved = mediaItem({ id: 'saved', existingId: 'row-1', storagePath: null, uri: 'https://cdn.example.com/saved.jpg' });
+  const draft = { ...getDefaultPostComposerDraft(), mode: 'upload' as const, proofMode: 'media' as const, title: 'Gallery' };
+
+  it('forgets the paths the save sent, and keeps saved media and media added since', () => {
+    const later = mediaItem({ id: 'later', storagePath: 'uploads/user-1/later.jpg' });
+    const submitted = { ...draft, mediaItems: [sent, saved] };
+    const current = { ...draft, mediaItems: [sent, saved, later] };
+
+    const result = forgetConsumedMediaUploads(current, submitted);
+    expect(result.mediaItems).toEqual([{ ...sent, storagePath: null }, saved, later]);
+    // The next publish uploads the forgotten one again, from the file on the device.
+    expect(getMediaAwaitingUpload(result.mediaItems)).toEqual([{ ...sent, storagePath: null }]);
+  });
+
+  it('changes nothing when the save sent no new upload', () => {
+    const current = { ...draft, mediaItems: [saved] };
+    expect(forgetConsumedMediaUploads(current, current)).toBe(current);
+    expect(getMediaAwaitingUpload(current.mediaItems)).toEqual([]);
   });
 });
 

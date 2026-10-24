@@ -62,6 +62,7 @@ const mutationState = vi.hoisted(() => ({
       visibility?: 'public' | 'unlisted' | 'private',
       context?: { submittedDraft?: unknown } | void
     ) => void;
+    onError?: (error: unknown, visibility?: 'public' | 'unlisted' | 'private', context?: unknown) => void;
   },
 }));
 const queryClientState = vi.hoisted(() => ({ invalidateQueries: vi.fn(), setQueryData: vi.fn() }));
@@ -277,6 +278,7 @@ vi.mock('@/lib/media', async (importOriginal) => ({
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 
 import NewPostScreen from '../app/post/new';
+import { ApiError } from '../lib/api-client';
 import { pickMediaList, pickResourceDocument, uploadPickedMedia, uploadResourceDocument } from '@/lib/media';
 import { buildPostResourceBundleInput, getDefaultPostComposerDraft, type PostComposerDraft } from '../lib/post-new-view-model';
 
@@ -396,6 +398,7 @@ describe('mobile external post composer', () => {
     routerState.canGoBack.mockReturnValue(false);
     generationState.item = null;
     authState.api.createPost.mockReset();
+    authState.api.updatePost.mockReset();
     queryClientState.invalidateQueries.mockClear();
     queryClientState.setQueryData.mockClear();
     mutationState.mutate.mockClear();
@@ -438,22 +441,45 @@ describe('mobile external post composer', () => {
     expect(text).toContain('Next');
     expect(findPressableByAccessibilityLabel(tree.root, 'Next')).toBeTruthy();
     expect(text).not.toContain('Review & publish');
-    expect(text).not.toContain('Optional resources');
+    expect(text).not.toContain('Recipe');
     expect(text).not.toContain('Publish');
   });
 
-  it('moves to the optional resource step without losing generation details', async () => {
+  it('moves to the optional recipe step without losing generation details', async () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     const text = collectText(tree.root);
     expect(text).toContain('Review & publish');
-    expect(text).toContain('Step 2 of 2 · resources optional');
+    expect(text).toContain('Step 2 of 2 · recipe optional');
     expect(text).toContain('Ready to publish');
-    expect(text).toContain('Share free');
-    expect(text).toContain('Sell resources');
-    expect(text).toContain('Post without resources');
+    expect(text).toContain('Recipe');
+    expect(text).toContain('Free recipe');
+    expect(text).toContain('Reward useful work');
+    expect(text).toContain('Paid recipe');
+    expect(text).toContain('Set a token price');
+    expect(findPressableByText(tree.root, 'No recipe').props.accessibilityState).toEqual({ selected: true });
     expect(text).toContain('Publish public');
     expect(text).not.toContain('What is this creation about?');
+  });
+
+  // Product decision 1 (2026-10-17): the recipe noun is "Recipe", everywhere.
+  // An app creator who tapped "Add a recipe" landed on a step about resources.
+  it('says recipe, never resources, anywhere on step 2', async () => {
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+    const words = () => [
+      ...collectText(tree.root),
+      ...tree.root.findAll((node) => typeof node.props?.accessibilityLabel === 'string').map((node) => node.props.accessibilityLabel as string),
+      ...tree.root.findAll((node) => typeof node.props?.accessibilityHint === 'string').map((node) => node.props.accessibilityHint as string),
+    ].join('\n');
+
+    expect(words()).not.toMatch(/resources/i);
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
+    expect(words()).not.toMatch(/resources/i);
+    expect(collectText(tree.root)).toContain('Free recipe');
+    renderer.act(() => findPressableByText(tree.root, 'Paid recipe').props.onPress());
+    expect(words()).not.toMatch(/resources/i);
+    expect(collectText(tree.root)).toContain('Paid recipe · 900 tokens');
   });
 
   it('uses header back to return to details and preserve state', async () => {
@@ -467,7 +493,7 @@ describe('mobile external post composer', () => {
   it('opens directly on resources when focus=resources is requested', async () => {
     paramsState.params = { generationId: 'gen-1', focus: 'resources' };
     const tree = await renderScreen();
-    expect(collectText(tree.root)).toContain('Step 2 of 2 · resources optional');
+    expect(collectText(tree.root)).toContain('Step 2 of 2 · recipe optional');
   });
 
   it('waits for the creator to request media instead of opening an unstable system picker during navigation', async () => {
@@ -486,11 +512,11 @@ describe('mobile external post composer', () => {
     await choosePreparedMedia(tree);
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     expect(collectText(tree.root)).toContain('Add a title for your post.');
-    expect(collectText(tree.root)).not.toContain('Optional resources');
+    expect(collectText(tree.root)).not.toContain('Recipe');
 
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Neon skyline study'));
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    expect(collectText(tree.root)).toContain('Optional resources');
+    expect(collectText(tree.root)).toContain('Recipe');
   });
 
   it('shows all required field errors inline in visual order', async () => {
@@ -516,7 +542,7 @@ describe('mobile external post composer', () => {
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Prompt teardown'));
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     const text = collectText(tree.root);
-    expect(text).toContain('Step 2 of 2 · resources optional');
+    expect(text).toContain('Step 2 of 2 · recipe optional');
     expect(text).toContain('Prompt teardown');
     expect(text).not.toContain('Add at least one image or video to continue.');
   });
@@ -533,7 +559,7 @@ describe('mobile external post composer', () => {
   it('builds a free prompt resource in a focused editor sheet', async () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     expect(collectText(tree.root)).toContain('Prompt or script');
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
@@ -549,7 +575,7 @@ describe('mobile external post composer', () => {
   it('shows resource-link validation in the editor before Save', async () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'External link').props.onPress());
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'https://').props.onChangeText('example.com/resource'));
@@ -561,7 +587,7 @@ describe('mobile external post composer', () => {
   it('shows buyer-preview quality guidance next to the package preview', async () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Exact reusable prompt'));
@@ -575,7 +601,7 @@ describe('mobile external post composer', () => {
   it('places listing-quality guidance beside a non-empty public summary', async () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Exact reusable prompt'));
@@ -609,7 +635,7 @@ describe('mobile external post composer', () => {
 
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Source assets').props.onPress());
     await renderer.act(async () => {
@@ -649,7 +675,7 @@ describe('mobile external post composer', () => {
 
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Source assets').props.onPress());
     await renderer.act(async () => {
@@ -718,7 +744,7 @@ describe('mobile external post composer', () => {
 
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Reference media').props.onPress());
     await renderer.act(async () => {
@@ -735,7 +761,7 @@ describe('mobile external post composer', () => {
   it('keeps resource edits isolated until Save and confirms dirty discard', async () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Unsaved prompt'));
@@ -774,7 +800,7 @@ describe('mobile external post composer', () => {
     async function openResourceKinds() {
       const tree = await renderScreen();
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-      renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
       // Nothing has been asked of the keyboard or the back key by the page alone.
       expect(keyboardState.dismiss).not.toHaveBeenCalled();
       expect(backHandlerState.listeners.size).toBe(0);
@@ -1109,7 +1135,7 @@ describe('mobile external post composer', () => {
     renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Title, required').props.onChangeText('Accessible resource post'));
     renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Post text, required').props.onChangeText('A useful public text post with enough detail.'));
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     expect(findTextInputByAccessibilityLabel(tree.root, 'Public package summary, optional')).toBeTruthy();
     expect(findTextInputByAccessibilityLabel(tree.root, 'Package preview, required')).toBeTruthy();
   });
@@ -1117,7 +1143,7 @@ describe('mobile external post composer', () => {
   it('supports a paid token price and shows estimated creator earnings', async () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Sell resources').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Paid recipe').props.onPress());
     const price = findTextInputByPlaceholder(tree.root, '100');
     renderer.act(() => price.props.onChangeText('50'));
     const text = collectText(tree.root);
@@ -1135,7 +1161,7 @@ describe('mobile external post composer', () => {
     await choosePreparedMedia(tree);
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Two studies'));
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
     expect(collectText(tree.root)).toContain('Applies to');
@@ -1291,9 +1317,12 @@ describe('mobile external post composer', () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     const text = collectText(tree.root);
-    expect(text).toContain('Purchased resources are protected');
-    expect(text).toContain('Existing package preserved');
-    expect(text).not.toContain('Post without resources');
+    expect(text).toContain('Purchased recipe is protected');
+    expect(text).toContain('People have already unlocked this recipe, so its access mode, price, and contents cannot be changed. Visibility changes still apply to the post.');
+    expect(text).toContain('Existing recipe preserved');
+    expect(text).toContain('Paid recipe · 100 tokens · 1 item');
+    expect(text).not.toContain('No recipe');
+    expect(text.join('\n')).not.toMatch(/resources/i);
   });
 
   it('routes a successful post back to the profile Posts tab', async () => {
@@ -1357,6 +1386,9 @@ describe('mobile external post composer', () => {
       expect(queryClientState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['showcase-post', 'post-edit-1'] });
       expect(queryClientState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['owner-text-post', 'post-edit-1'] });
       expect(queryClientState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['seller-dashboard-posts', 'user-123'] });
+      // The post page's recipe is kept for a minute, and showed the price and
+      // cards from before the save on the way back.
+      expect(queryClientState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['post-resource-bundle', 'post-edit-1'] });
       // Reopening the editor from there must not prefill from the copy loaded
       // before the save.
       expect(queryOptionsState.options.find((options) => options.queryKey[0] === 'post-edit')?.gcTime).toBe(0);
@@ -1665,6 +1697,369 @@ describe('mobile external post composer', () => {
     });
   });
 
+  // Every public post needs a claimed handle and a display name. The server says
+  // so with `field: 'profile'` on all three routes, and the banner had no way on:
+  // Close, Save draft, find Edit profile, come back.
+  describe('a refusal for an incomplete profile', () => {
+    const PROFILE_MESSAGE = 'Complete your profile before publishing publicly: choose a custom handle and add your display name.';
+    const profileRefusal = () => new ApiError(PROFILE_MESSAGE, 400, {
+      error: PROFILE_MESSAGE,
+      field: 'profile',
+      actionHref: '/profile',
+      actionLabel: 'Complete profile and return',
+    });
+    const completeProfileButtons = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Complete profile'
+    ));
+
+    it('offers Complete profile, which opens profile editing over the composer', async () => {
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => mutationState.options?.onError?.(profileRefusal(), 'public'));
+
+      expect(collectText(tree.root)).toContain('Could not publish');
+      expect(collectText(tree.root)).toContain(PROFILE_MESSAGE);
+      renderer.act(() => completeProfileButtons(tree)[0].props.onPress());
+      // Pushed over the composer, which stays where it is: saving the profile
+      // comes back to the post as it was left.
+      expect(routerState.push).toHaveBeenCalledWith('/edit-profile');
+      expect(routerState.replace).not.toHaveBeenCalled();
+      expect(navigationState.dispatch).not.toHaveBeenCalled();
+    });
+
+    it('offers it when an edit is refused for the same reason', async () => {
+      paramsState.params = { postId: 'post-going-public' };
+      postEditState.post = {
+        id: 'post-going-public',
+        title: 'Neon skyline study',
+        description: null,
+        body: '',
+        postFormat: 'media',
+        generationId: null,
+        category: 'image',
+        visibility: 'private',
+        sourceTool: null,
+        sourceToolSlug: null,
+        mediaUrl: 'https://cdn.example.com/neon.png',
+        mediaKind: 'image',
+        mediaItems: [],
+        resourceBundleInput: null,
+        hasPaidOrders: false,
+      };
+      const tree = await renderScreen();
+      renderer.act(() => mutationState.options?.onError?.(profileRefusal(), 'public'));
+
+      expect(collectText(tree.root)).toContain('Could not save');
+      expect(completeProfileButtons(tree)).toHaveLength(1);
+    });
+
+    it('offers nothing for a refusal of another kind', async () => {
+      const tree = await renderScreen();
+      renderer.act(() => mutationState.options?.onError?.(new ApiError('Add a title for your post.', 400, {
+        error: 'Add a title for your post.',
+        field: 'title',
+      }), 'public'));
+
+      expect(collectText(tree.root)).toContain('Add a title for your post.');
+      expect(completeProfileButtons(tree)).toHaveLength(0);
+    });
+  });
+
+  // The server refuses a public post with a placeholder title, or a text post
+  // without enough useful text (contracts/public-post-quality-v1.json), and the
+  // summary said "Ready to publish" for it.
+  describe('the public-post rule on step 2', () => {
+    it('says what to fix and keeps Publish public off, while Save private still goes', async () => {
+      paramsState.params = {};
+      await uploadManualMedia();
+      const tree = await renderScreen();
+      await choosePreparedMedia(tree);
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Product demo with Kling 3.0'));
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      let text = collectText(tree.root);
+      expect(text).toContain('Needs attention');
+      expect(text).toContain('Replace the placeholder title with something specific to this post.');
+      expect(text).not.toContain('Ready to publish');
+      expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);
+
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Visibility: Public').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Private').props.onPress());
+      text = collectText(tree.root);
+      expect(text).toContain('Ready to publish');
+      expect(findPressableByAccessibilityLabel(tree.root, 'Save private').props.disabled).toBe(false);
+    });
+
+    it('asks a public text post for useful text', async () => {
+      paramsState.params = {};
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Prompt teardown'));
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share a prompt, idea, breakdown, or useful note…').props.onChangeText('Too short body'));
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(collectText(tree.root)).toContain('Add useful text so viewers can understand the post before publishing.');
+      expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);
+    });
+  });
+
+  // The server moves each staged upload into the post before it checks the Made
+  // with catalog, so that refusal comes after the move, and so can a server
+  // error or an answer that never arrived. A retry that sent the same paths was
+  // refused every time ("That upload was already consumed").
+  describe('a publish that may have used the uploads', () => {
+    async function failFirstPublish(error: unknown) {
+      paramsState.params = {};
+      await uploadManualMedia();
+      const tree = await renderScreen();
+      await choosePreparedMedia(tree);
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Neon skyline study'));
+      authState.api.createPost.mockRejectedValueOnce(error);
+      await renderer.act(async () => {
+        await mutationState.options?.mutationFn?.('public').catch(() => undefined);
+      });
+      return tree;
+    }
+
+    const sentStoragePaths = () => {
+      const formData = authState.api.createPost.mock.calls.at(-1)?.[0] as unknown as FormData;
+      return (JSON.parse(String(formData.get('mediaItems'))) as Array<{ storagePath?: string }>).map((item) => item.storagePath);
+    };
+
+    async function publishAgain() {
+      authState.api.createPost.mockResolvedValueOnce({ postId: 'post-retried' });
+      await renderer.act(async () => {
+        await mutationState.options?.mutationFn?.('public');
+      });
+    }
+
+    it.each([
+      ['no answer came back', new ApiError('Network request failed. Please check your connection and try again.', 0, {
+        url: 'https://magicbooklet.com/api/posts',
+        cause: 'Network request failed',
+      })],
+      ['the deadline ran out after it was sent', new ApiError('Network request failed. Please check your connection and try again.', 0, {
+        url: 'https://magicbooklet.com/api/posts',
+        cause: 'Request timed out after 310000ms',
+        timedOut: true,
+      })],
+      ['a server error', new ApiError('Failed to publish post.', 500, { error: 'Failed to publish post.' })],
+      ['the Made with refusal', new ApiError('Choose a tool from the list or create one.', 400, {
+        error: 'Choose a tool from the list or create one.',
+        field: 'sourceTools',
+      })],
+    ])('uploads the files again from the device after %s', async (_label, error) => {
+      await failFirstPublish(error);
+      expect(sentStoragePaths()).toEqual(['uploads/cover.png']);
+
+      vi.mocked(uploadPickedMedia).mockClear();
+      vi.mocked(uploadPickedMedia).mockImplementation(async (_uri, options) => ({
+        signedUrl: 'https://storage.example.com/signed',
+        storagePath: 'uploads/cover-again.png',
+        mimeType: options?.mimeType ?? 'image/png',
+        fileName: options?.fileName ?? 'cover.png',
+        kind: 'image',
+        durationSeconds: null,
+        sizeBytes: null,
+      }));
+      await publishAgain();
+
+      expect(uploadPickedMedia).toHaveBeenCalledTimes(1);
+      expect(uploadPickedMedia).toHaveBeenCalledWith('file:///cover.png', expect.objectContaining({
+        fileName: 'cover.png',
+        mimeType: 'image/png',
+        kind: 'image',
+      }));
+      expect(sentStoragePaths()).toEqual(['uploads/cover-again.png']);
+    });
+
+    it('sends the same uploads again after a refusal decided before they were used', async () => {
+      await failFirstPublish(new ApiError('Add a title for your post.', 400, { error: 'Add a title for your post.', field: 'title' }));
+      vi.mocked(uploadPickedMedia).mockClear();
+      await publishAgain();
+
+      expect(uploadPickedMedia).not.toHaveBeenCalled();
+      expect(sentStoragePaths()).toEqual(['uploads/cover.png']);
+    });
+  });
+
+  // "Made with Manual" showed under posts nobody attributed: the composer stamped
+  // its own placeholder as the tool. The web sends none.
+  describe('a post nobody attributed', () => {
+    const sourceFields = (formData: FormData) => [formData.get('sourceTool'), formData.get('sourceToolSlug'), formData.get('sourceTools')];
+
+    it('sends no tool for a text post', async () => {
+      paramsState.params = {};
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Prompt teardown'));
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share a prompt, idea, breakdown, or useful note…').props.onChangeText('A useful text breakdown'));
+      authState.api.createPost.mockResolvedValueOnce({ postId: 'post-text' });
+      await renderer.act(async () => {
+        await mutationState.options?.mutationFn?.('public');
+      });
+
+      expect(sourceFields(authState.api.createPost.mock.calls.at(-1)?.[0] as unknown as FormData)).toEqual([null, null, null]);
+    });
+
+    it('sends no tool for a media post, after a turn as a text post too', async () => {
+      paramsState.params = {};
+      await uploadManualMedia();
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Media post').props.onPress());
+      await choosePreparedMedia(tree);
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Neon skyline study'));
+      authState.api.createPost.mockResolvedValueOnce({ postId: 'post-media' });
+      await renderer.act(async () => {
+        await mutationState.options?.mutationFn?.('public');
+      });
+
+      expect(sourceFields(authState.api.createPost.mock.calls.at(-1)?.[0] as unknown as FormData)).toEqual([null, null, null]);
+    });
+
+    it('leaves an edited post that had no tool without one', async () => {
+      paramsState.params = { postId: 'post-web-media' };
+      postEditState.post = {
+        id: 'post-web-media',
+        title: 'Web media post',
+        description: null,
+        body: 'Made on the web',
+        postFormat: 'mixed',
+        generationId: null,
+        category: 'image',
+        visibility: 'public',
+        sourceTool: null,
+        sourceToolSlug: null,
+        sourceTools: [],
+        mediaUrl: 'https://cdn.example.com/web-media.png',
+        mediaKind: 'image',
+        mediaItems: [],
+        resourceBundleInput: null,
+        hasPaidOrders: false,
+      };
+      authState.api.updatePost.mockResolvedValueOnce({ success: true, postId: 'post-web-media', visibility: 'public' });
+      const tree = await renderScreen();
+
+      expect(collectText(tree.root)).toContain('Add tool and model');
+      expect(collectText(tree.root)).not.toContain('Manual');
+      await renderer.act(async () => {
+        await mutationState.options?.mutationFn?.('public');
+      });
+      const payload = authState.api.updatePost.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+      expect(payload).toMatchObject({ title: 'Web media post', body: 'Made on the web' });
+      for (const key of ['sourceTool', 'sourceToolSlug', 'sourceTools']) {
+        expect(payload).not.toHaveProperty(key);
+      }
+    });
+  });
+
+  describe('From this creation', () => {
+    const toggle = (tree: renderer.ReactTestRenderer, label: string) => tree.root.findAll((node) => (
+      node.props?.label === label && typeof node.props.onValueChange === 'function'
+    ))[0];
+
+    it('offers the creation’s references on a new post', async () => {
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
+
+      expect(toggle(tree, 'Include creation references')).toBeTruthy();
+      expect(toggle(tree, 'Include exact prompt')).toBeTruthy();
+    });
+
+    // Only the publish route copies a creation's inputs; on an edit the toggle
+    // did nothing, while the package could promise references it never got.
+    it('does not offer the references on an edit, and reads a prompt card made on the web as included', async () => {
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = {
+        id: 'post-from-creation',
+        title: 'Hero product image',
+        description: null,
+        body: '',
+        postFormat: 'media',
+        generationId: 'gen-1',
+        category: 'image',
+        visibility: 'public',
+        sourceTool: 'Magicbooklet',
+        sourceToolSlug: 'magicbooklet',
+        mediaUrl: 'https://cdn.example.com/output.png',
+        mediaKind: 'image',
+        mediaItems: [],
+        resourceBundleInput: {
+          accessMode: 'free',
+          previewText: 'Includes the exact reusable prompt.',
+          resources: {
+            // As the web composer saves it: titled by its kind, found by its text.
+            items: [{ id: 'web-prompt', type: 'prompt', title: 'Prompt or script', textContent: 'Exact glossy product prompt', sortOrder: 0 }],
+          },
+        },
+        hasPaidOrders: false,
+      };
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(toggle(tree, 'Include creation references')).toBeUndefined();
+      expect(toggle(tree, 'Include exact prompt').props.value).toBe(true);
+    });
+
+    it('switches Include exact prompt off when its card is removed, and back on with Undo', async () => {
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
+      renderer.act(() => toggle(tree, 'Include exact prompt').props.onValueChange(true));
+      expect(toggle(tree, 'Include exact prompt').props.value).toBe(true);
+
+      // The last card going switches the recipe off; choosing it again shows the toggle as the cards leave it.
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Remove Exact generation prompt').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
+      expect(toggle(tree, 'Include exact prompt').props.value).toBe(false);
+
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Undo removing Exact generation prompt').props.onPress());
+      expect(toggle(tree, 'Include exact prompt').props.value).toBe(true);
+    });
+  });
+
+  // Share on something not yet public opens its editor; saved still private,
+  // the share was dropped without a word.
+  describe('opened from Share on a private post', () => {
+    const privatePost = {
+      id: 'post-private-share',
+      title: 'Private post',
+      description: null,
+      body: '',
+      postFormat: 'media',
+      generationId: null,
+      category: 'image',
+      visibility: 'private',
+      sourceTool: null,
+      sourceToolSlug: null,
+      mediaUrl: 'https://cdn.example.com/private.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      resourceBundleInput: null,
+      hasPaidOrders: false,
+    };
+
+    it('starts on Public', async () => {
+      paramsState.params = { postId: 'post-private-share', shareAfterPublish: '1' };
+      postEditState.post = privatePost;
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(findPressableByAccessibilityLabel(tree.root, 'Visibility: Public')).toBeTruthy();
+    });
+
+    it('keeps Private when the editor was opened to edit', async () => {
+      paramsState.params = { postId: 'post-private-share' };
+      postEditState.post = privatePost;
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(findPressableByAccessibilityLabel(tree.root, 'Visibility: Private')).toBeTruthy();
+    });
+  });
+
   // A guest can generate and press Post to feed. Sent to sign-in with no way
   // back, they finished on Home, without the creation they were posting.
   describe('signed out', () => {
@@ -1733,7 +2128,7 @@ describe('mobile external post composer', () => {
       paramsState.params = { generationId: 'gen-1', focus: 'resources' };
       const tree = await renderScreen();
 
-      expect(collectText(tree.root)).toContain('Step 2 of 2 · resources optional');
+      expect(collectText(tree.root)).toContain('Step 2 of 2 · recipe optional');
       const pictureUrls = tree.root
         .findAll((node) => String(node.type) === 'stable-media-image')
         .map((node) => node.props.url);

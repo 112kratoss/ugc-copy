@@ -5,6 +5,7 @@ import {
   AccountDeletingError,
   ApiError,
   GENERATION_START_TIMEOUT_MS,
+  POST_CREATE_TIMEOUT_MS,
   SessionMergedError,
   SessionRejectedError,
   UpgradeRequiredError,
@@ -544,6 +545,38 @@ describe('mobile api client caching', () => {
       for (const start of [unified, perKind, templateRun]) {
         expect(await start).toMatchObject({ name: 'ApiError', status: 0 });
       }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The create route may run its whole 300 s budget (`maxDuration` in
+  // src/app/api/posts/route.ts); at the usual deadline a post still being
+  // created read as a failure.
+  it('waits out the create route’s budget before calling a new post unconfirmed', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      if (init?.signal) signals.push(init.signal);
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')), { once: true });
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+      requestTimeoutMs: 100,
+    });
+    try {
+      const created = api.createPost(new FormData()).catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(signals).toHaveLength(1);
+      expect(signals[0].aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(POST_CREATE_TIMEOUT_MS - 300_000);
+      expect(POST_CREATE_TIMEOUT_MS).toBeGreaterThan(300_000);
+      expect(signals[0].aborted).toBe(true);
+      expect(isRequestTimeoutError(await created)).toBe(true);
     } finally {
       vi.useRealTimers();
     }

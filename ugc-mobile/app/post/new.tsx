@@ -38,10 +38,14 @@ import {
   persistPostComposerDraft,
 } from '@/lib/post-composer-draft-resume';
 import {
+  applyPostComposerMediaRecovery,
   applyPostComposerMediaRecoveryToDraft,
   describeFailedRecoveryReuploads,
   describeLostRecoveryMedia,
+  forgetConsumedMediaUploads,
+  getMediaAwaitingUpload,
   planPostComposerMediaRecovery,
+  saveMayHaveConsumedUploads,
   type MediaVerification,
 } from '@/lib/post-composer-media-recovery';
 import {
@@ -52,8 +56,8 @@ import {
   applyCreationPromptResource,
   createPostComposerResourceCard,
   createMadeWithRow,
-  deriveCreationPackageFromResourceCards,
   getComposerVisibility,
+  getDefaultCreationPackageDraft,
   getDefaultPostComposerDraft,
   getPostComposerDetailErrors,
   getPostComposerPackageStatus,
@@ -78,6 +82,7 @@ import {
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
   type PostComposerValidationOptions,
+  hasCreationPromptCard,
   hasGenerationReferences,
   upsertOptimisticOwnerPostInfiniteData,
   type PostComposerDraft,
@@ -199,7 +204,7 @@ function PostComposerHeader({
             {isEditMode ? 'Edit post' : isResources ? 'Review & publish' : 'Create post'}
           </AppText>
           <AppText variant="caption" color="muted">
-            {isResources ? 'Step 2 of 2 · resources optional' : 'Step 1 of 2 · post details'}
+            {isResources ? 'Step 2 of 2 · recipe optional' : 'Step 1 of 2 · post details'}
           </AppText>
         </View>
         {isResources ? <HeaderIconButton label="Close post composer" icon="close" onPress={onClose} /> : null}
@@ -322,7 +327,7 @@ function PostDetailsPage({
         <StatusBlock
           tone="neutral"
           title="Creation media is fixed"
-          body="This post stays connected to its generated media. The title, story, visibility, and resources are yours to change."
+          body="This post stays connected to its generated media. The title, story, visibility, and recipe are yours to change."
         />
       ) : null}
 
@@ -511,6 +516,7 @@ function PostResourcesPage({
   draft,
   selectedGeneration,
   isTemplateBacked,
+  isEditMode,
   resourceEditingLocked,
   packageStatus,
   publishValidation,
@@ -525,6 +531,8 @@ function PostResourcesPage({
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
   isTemplateBacked: boolean;
+  /** Only the publish route copies a creation's references; an edit has no such step. */
+  isEditMode: boolean;
   resourceEditingLocked: boolean;
   packageStatus: ReturnType<typeof getPostComposerPackageStatus>;
   publishValidation: PostComposerValidationResult;
@@ -573,17 +581,17 @@ function PostResourcesPage({
   }
 
   if (resourceEditingLocked) {
-    const resourceCount = draft.resource.cards.length;
-    const packageDescription = `${draft.resource.accessMode === 'paid' ? `${getPostComposerPriceTokens(draft.resource)} token paid package` : 'Resource package'} · ${resourceCount} ${resourceCount === 1 ? 'resource' : 'resources'}`;
+    const itemCount = draft.resource.cards.length;
+    const packageDescription = `${draft.resource.accessMode === 'paid' ? `Paid recipe · ${getPostComposerPriceTokens(draft.resource)} tokens` : 'Recipe'} · ${itemCount} ${itemCount === 1 ? 'item' : 'items'}`;
     return (
       <View style={{ gap: 16 }}>
         <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
         <StatusBlock
-          title="Purchased resources are protected"
-          body="People have already unlocked this package, so its access mode, price, and contents cannot be changed. Visibility changes still apply to the post."
+          title="Purchased recipe is protected"
+          body="People have already unlocked this recipe, so its access mode, price, and contents cannot be changed. Visibility changes still apply to the post."
           tone="neutral"
         />
-        <ReadinessRow label="Existing package preserved" body={packageDescription} state="ready" />
+        <ReadinessRow label="Existing recipe preserved" body={packageDescription} state="ready" />
       </View>
     );
   }
@@ -592,7 +600,10 @@ function PostResourcesPage({
     <View style={{ gap: 18 }}>
       <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
       <View style={{ gap: 8 }}>
-        <AppText heading variant="sectionTitle">Optional resources</AppText>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <AppText heading variant="sectionTitle">Recipe</AppText>
+          <AppText variant="caption" color="faint">Optional</AppText>
+        </View>
         <AppText variant="bodySm" color="muted">
           Share reusable prompts, files, links, or guidance for free or at a token price.
         </AppText>
@@ -600,14 +611,14 @@ function PostResourcesPage({
 
       <View style={{ flexDirection: 'row', gap: 10 }}>
         <ResourceAccessChoice
-          label="Share free"
+          label="Free recipe"
           body="Reward useful work"
           active={draft.resource.accessMode === 'free'}
           accent="workflow"
           onPress={() => onResourceChange({ accessMode: 'free' })}
         />
         <ResourceAccessChoice
-          label="Sell resources"
+          label="Paid recipe"
           body="Set a token price"
           active={draft.resource.accessMode === 'paid'}
           accent="commerce"
@@ -631,14 +642,14 @@ function PostResourcesPage({
         })}
       >
         <AppText variant="label" color={draft.resource.accessMode === 'none' ? 'text' : 'muted'}>
-          Post without resources
+          No recipe
         </AppText>
       </Pressable>
 
       {resourceActive && selectedGeneration ? (
         <ComposerFieldShell>
           <CompactFieldLabel label="From this creation" optional />
-          {hasGenerationReferences(selectedGeneration) ? (
+          {hasGenerationReferences(selectedGeneration) && !isEditMode ? (
             <ToggleRow
               label="Include creation references"
               body="Attach the saved input media as reusable references."
@@ -649,8 +660,8 @@ function PostResourcesPage({
           ) : null}
           <ToggleRow
             label="Include exact prompt"
-            body="Add the original generation prompt as a resource card."
-            value={draft.creationPackage.attachPromptResource}
+            body="Add the original generation prompt to the recipe."
+            value={hasCreationPromptCard(draft.resource.cards, selectedGeneration)}
             onValueChange={onTogglePromptResource}
             accent="workflow"
             disabled={!selectedGeneration.prompt?.trim()}
@@ -876,10 +887,10 @@ function PostPublishSummary({
     || null;
   const visibilityLabel = draft.visibility === 'public' ? 'Public' : 'Private';
   const resourceLabel = draft.resource.accessMode === 'paid'
-    ? `${getPostComposerPriceTokens(draft.resource)} tokens`
+    ? `Paid recipe · ${getPostComposerPriceTokens(draft.resource)} tokens`
     : draft.resource.accessMode === 'free'
-      ? 'Free resources'
-      : 'No resources';
+      ? 'Free recipe'
+      : 'No recipe';
   const ready = validation.valid;
   return (
     <View
@@ -1601,7 +1612,7 @@ function ResourceComposerContent({
                 />
                 <ComposerInput
                   accessibilityLabel={`${card.type === 'prompt' ? 'Prompt or script' : card.type === 'settings' ? 'Settings' : card.type === 'guide' ? 'Guide or notes' : 'Resource content'}, required`}
-                  accessibilityHint="This protected content is revealed only after the resource package is unlocked."
+                  accessibilityHint="This protected content is revealed only after the recipe is unlocked."
                   value={card.textContent}
                   onChangeText={(textContent) => onChange({ textContent })}
                   placeholder="This content is revealed only after unlock"
@@ -1909,7 +1920,13 @@ function NewPostComposer() {
     category: 'image',
     madeWithRows: [createMadeWithRow()],
   }));
-  const [message, setMessage] = useState<{ tone: 'danger' | 'success' | 'neutral'; title: string; body?: string } | null>(null);
+  const [message, setMessage] = useState<{
+    tone: 'danger' | 'success' | 'neutral';
+    title: string;
+    body?: string;
+    /** A way on from the message, drawn as a button under it. */
+    action?: 'complete-profile';
+  } | null>(null);
   const [detailErrors, setDetailErrors] = useState<PostComposerDetailErrors>({});
   const [isPickingMedia, setIsPickingMedia] = useState(false);
   const [isRecoveringDraftMedia, setIsRecoveringDraftMedia] = useState(false);
@@ -2088,8 +2105,10 @@ function NewPostComposer() {
         // field: copying it into the Story turned a media post into a mixed one
         // on its first save here and showed the same text twice on the web.
         caption: mode === 'text' ? '' : post.body || '',
-        sourceTool: post.sourceTool || 'Manual',
-        sourceToolSlug: post.sourceToolSlug || 'manual',
+        // A post with no tool opens with none: a "Manual" filled in here was
+        // sent with the save and printed "Made with Manual" under it.
+        sourceTool: post.sourceTool || '',
+        sourceToolSlug: post.sourceToolSlug || '',
         madeWithRows: post.sourceTools?.length
           ? post.sourceTools.map((sourceTool, index) => createMadeWithRow({
               id: `mw-existing-${index}`,
@@ -2100,13 +2119,14 @@ function NewPostComposer() {
               createTool: sourceTool.createTool === true,
               createModel: sourceTool.createModel === true,
             }))
-          : [createMadeWithRow({
-              toolLabel: post.sourceTool || 'Manual',
-              toolSlug: post.sourceToolSlug || 'manual',
-            })],
+          : post.sourceTool
+            ? [createMadeWithRow({ toolLabel: post.sourceTool, toolSlug: post.sourceToolSlug || '' })]
+            : [createMadeWithRow()],
         category: post.category || 'image',
-        // An old unlisted post opens as the private post its save stores.
-        visibility: getComposerVisibility(post.visibility),
+        // An old unlisted post opens as the private post its save stores. Share
+        // on a post that is not public opens it here to publish it, and only a
+        // public result is shared: left on Private, a save dropped the share.
+        visibility: shareAfterPublish ? 'public' : getComposerVisibility(post.visibility),
         isNsfw: post.isNsfw === true,
         selectedGenerationId: post.generationId || null,
         upload: post.mediaUrl ? {
@@ -2137,10 +2157,10 @@ function NewPostComposer() {
                 existingId: `${post.id}:cover`,
               }]
             : [],
-        // Read the toggle state back out of the loaded bundle — resetting it
-        // to defaults showed "Include exact prompt" OFF for a post already
-        // sharing its prompt, and flipping that toggle deleted the card.
-        creationPackage: deriveCreationPackageFromResourceCards(hydratedResourceCards),
+        // "Include exact prompt" reads the loaded cards (`hasCreationPromptCard`),
+        // and an edit attaches no creation references: only the publish route
+        // copies them, so the editor does not offer them.
+        creationPackage: getDefaultCreationPackageDraft(),
         resource: resourceBundleInput ? {
           accessMode: resourceBundleInput.accessMode || 'none',
           cardAuthoringMode: 'cards',
@@ -2176,7 +2196,7 @@ function NewPostComposer() {
       });
       setHasPrefilledEdit(true);
     }
-  }, [postId, postQuery.data, hasPrefilledEdit]);
+  }, [postId, postQuery.data, hasPrefilledEdit, shareAfterPublish]);
 
   useEffect(() => () => {
     for (const controller of activeUploadControllersRef.current) {
@@ -2203,7 +2223,8 @@ function NewPostComposer() {
         const restoredDraft: PostComposerDraft = {
           ...persisted.draft,
           // An older build could save a draft as unlisted, which is private now.
-          visibility: getComposerVisibility(persisted.draft.visibility),
+          // Opened from Share, the post is being published, as in the prefill.
+          visibility: shareAfterPublish && isEditMode ? 'public' : getComposerVisibility(persisted.draft.visibility),
           // Drafts saved by older builds can carry duplicate card ids; dedupe
           // them before they become React keys and edit/remove targets.
           resource: sanitizePostComposerResourceCardIds(
@@ -2247,6 +2268,7 @@ function NewPostComposer() {
     hasHydratedPersistedDraft,
     hasPrefilledEdit,
     isEditMode,
+    shareAfterPublish,
     user,
   ]);
 
@@ -2263,6 +2285,72 @@ function NewPostComposer() {
     return () => clearTimeout(timer);
   }, [composerStep, draft, draftStorageId, hasHydratedPersistedDraft]);
 
+  /**
+   * Uploads again, from the device, the new media whose staged uploads a failed
+   * save may have used (`forgetConsumedMediaUploads`), ahead of the save that
+   * sends them, under the same progress and Cancel as a pick. What uploads stays
+   * in the draft, so a refusal after this sends it again rather than uploading
+   * it once more.
+   */
+  const uploadMediaAwaitingUpload = async (target: PostComposerDraft): Promise<PostComposerDraft> => {
+    const pending = getMediaAwaitingUpload(target.mediaItems);
+    if (pending.length === 0) return target;
+
+    const controller = new AbortController();
+    activeUploadControllersRef.current.add(controller);
+    const reuploaded = new Map<string, { storagePath: string }>();
+    const progressByIndex = new Map<number, { bytesSent: number; totalBytes: number }>();
+    const showProgress = () => {
+      const totals = [...progressByIndex.values()].reduce(
+        (sum, progress) => ({
+          bytesSent: sum.bytesSent + progress.bytesSent,
+          totalBytes: sum.totalBytes + progress.totalBytes,
+        }),
+        { bytesSent: 0, totalBytes: 0 }
+      );
+      setMediaUploadProgress({
+        ...totals,
+        completed: reuploaded.size,
+        percent: totals.totalBytes > 0 ? Math.round((totals.bytesSent / totals.totalBytes) * 100) : 0,
+        total: pending.length,
+      });
+    };
+    showProgress();
+
+    try {
+      for (const [index, item] of pending.entries()) {
+        const uploaded = await uploadPickedMedia(item.uri, {
+          api,
+          fileName: item.name,
+          mimeType: item.type,
+          kind: item.mediaKind,
+          durationSeconds: item.durationSeconds ?? null,
+          signal: controller.signal,
+          onProgress: (progress) => {
+            progressByIndex.set(index, { bytesSent: progress.bytesSent, totalBytes: progress.totalBytes });
+            showProgress();
+          },
+        });
+        reuploaded.set(item.id, { storagePath: uploaded.storagePath });
+        showProgress();
+      }
+    } finally {
+      activeUploadControllersRef.current.delete(controller);
+      setMediaUploadProgress(null);
+      if (reuploaded.size > 0) {
+        setDraft((current) => ({
+          ...current,
+          mediaItems: applyPostComposerMediaRecovery(current.mediaItems, { reuploaded, lost: new Set() }),
+        }));
+      }
+    }
+
+    return {
+      ...target,
+      mediaItems: applyPostComposerMediaRecovery(target.mediaItems, { reuploaded, lost: new Set() }),
+    };
+  };
+
   const publishMutation = useMutation({
     mutationFn: async (targetVisibility?: PostComposerDraft['visibility']) => {
       const effectiveDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
@@ -2277,20 +2365,30 @@ function NewPostComposer() {
         throw new Error(validation.message);
       }
 
-      if (postId) {
-        const isGen = Boolean(postQuery.data?.post?.generationId);
-        const payload = buildUpdatePostPayload(isGen, effectiveDraft, {
-          preserveSoldResourceBundle: hasPaidOrders,
-        });
-        return api.updatePost(postId, payload);
-      }
+      const submittedDraft = await uploadMediaAwaitingUpload(effectiveDraft);
+      try {
+        if (postId) {
+          const isGen = Boolean(postQuery.data?.post?.generationId);
+          const payload = buildUpdatePostPayload(isGen, submittedDraft, {
+            preserveSoldResourceBundle: hasPaidOrders,
+          });
+          return await api.updatePost(postId, payload);
+        }
 
-      if (effectiveDraft.mode === 'creation') {
-        if (!selectedGeneration) throw new Error('Choose a finished creation before publishing.');
-        return api.publishGeneration(buildPublishGenerationPostPayload(selectedGeneration, effectiveDraft));
-      }
+        if (submittedDraft.mode === 'creation') {
+          if (!selectedGeneration) throw new Error('Choose a finished creation before publishing.');
+          return await api.publishGeneration(buildPublishGenerationPostPayload(selectedGeneration, submittedDraft));
+        }
 
-      return api.createPost(buildCreatePostFormData(effectiveDraft));
+        return await api.createPost(buildCreatePostFormData(submittedDraft));
+      } catch (error) {
+        // Sending the same staged paths after the server may have moved them
+        // was refused on every retry; the next publish uploads those files again.
+        if (saveMayHaveConsumedUploads(error)) {
+          setDraft((current) => forgetConsumedMediaUploads(current, submittedDraft));
+        }
+        throw error;
+      }
     },
     onMutate: (targetVisibility?: PostComposerDraft['visibility']) => {
       const submittedDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
@@ -2389,10 +2487,15 @@ function NewPostComposer() {
       }
     },
     onError: (error) => {
+      // A public post needs a claimed handle and a display name, and the server
+      // says which refusal that is on all three routes.
+      const needsProfile = error instanceof ApiError
+        && (error.details as { field?: unknown } | null | undefined)?.field === 'profile';
       setMessage({
         tone: 'danger',
         title: isEditMode ? 'Could not save' : 'Could not publish',
         body: error instanceof Error ? error.message : 'Try again.',
+        ...(needsProfile ? { action: 'complete-profile' as const } : {}),
       });
       scrollRef.current?.scrollTo({ y: 0, animated: true });
     },
@@ -2507,8 +2610,6 @@ function NewPostComposer() {
       mode,
       proofMode: mode === 'text' ? 'text' as const : 'media' as const,
       category: mode === 'text' ? 'text' as const : draft.category === 'text' ? 'image' as const : draft.category,
-      sourceTool: mode === 'text' ? 'Manual' : draft.sourceTool === 'Manual' ? 'Other' : draft.sourceTool,
-      sourceToolSlug: mode === 'text' ? 'manual' : draft.sourceToolSlug === 'manual' ? 'other' : draft.sourceToolSlug,
       madeWithRows: draft.madeWithRows.length > 0 ? draft.madeWithRows : [createMadeWithRow()],
     };
     setDraft(next);
@@ -3250,6 +3351,13 @@ function NewPostComposer() {
     publishMutation.mutate(draft.visibility);
   };
 
+  // Pushed over the composer, which stays as it is: the profile editor goes
+  // back to it when it saves or closes, and the draft is kept on the device too.
+  const openProfileEditor = () => {
+    setMessage(null);
+    router.push('/edit-profile' as never);
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       {/* On iOS 26 the back swipe completes the pop natively before the
@@ -3296,7 +3404,16 @@ function NewPostComposer() {
         }}
       >
         {message ? (
-          <StatusBlock tone={message.tone} title={message.title} body={message.body} />
+          <View style={{ gap: 8 }}>
+            <StatusBlock tone={message.tone} title={message.title} body={message.body} />
+            {message.action === 'complete-profile' ? (
+              <SecondaryButton
+                label="Complete profile"
+                accessibilityHint="Opens your profile. This post stays here."
+                onPress={openProfileEditor}
+              />
+            ) : null}
+          </View>
         ) : null}
 
         {recoveryUploadProgress ? (
@@ -3367,6 +3484,7 @@ function NewPostComposer() {
             draft={draft}
             selectedGeneration={selectedGeneration}
             isTemplateBacked={isTemplateBacked}
+            isEditMode={isEditMode}
             resourceEditingLocked={hasPaidOrders}
             packageStatus={packageStatus}
             publishValidation={publishValidation}
@@ -4770,7 +4888,7 @@ function validateCurrentDraft(
         ...draft,
         resource: { ...draft.resource, accessMode: 'none' },
       }
-    : draft, options);
+    : draft, { ...options, hasSoldRecipe: preserveSoldResourceBundle });
   if (!result.valid) return result;
   if (draft.mode === 'creation' && !selectedGeneration && !skipGenerationSelection) {
     return { valid: false, message: 'Choose a finished creation before publishing.' };
@@ -4841,5 +4959,7 @@ async function invalidateEditedPostCaches(queryClient: QueryClient, userId: stri
     queryClient.invalidateQueries({ queryKey: ['showcase-post', postId] }),
     queryClient.invalidateQueries({ queryKey: ['owner-text-post', postId] }),
     queryClient.invalidateQueries({ queryKey: ['seller-dashboard-posts', userId] }),
+    // The post page keeps its recipe for a minute, and showed the price and cards from before the save.
+    queryClient.invalidateQueries({ queryKey: ['post-resource-bundle', postId] }),
   ]);
 }

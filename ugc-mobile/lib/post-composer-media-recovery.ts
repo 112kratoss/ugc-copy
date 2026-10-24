@@ -1,3 +1,4 @@
+import { ApiError } from './api-client';
 import { listFilesInSentence } from './media-file-names';
 import type { PostComposerDraft, PostComposerMediaItem } from './post-new-view-model';
 
@@ -138,6 +139,49 @@ export function applyPostComposerMediaRecoveryToDraft(
     upload: cover ? { uri: cover.uri, name: cover.name, type: cover.type } : null,
     category: draft.mode === 'upload' && cover ? cover.mediaKind : draft.category,
   };
+}
+
+/**
+ * Whether a failed save may have used the staged uploads it sent. The server
+ * moves each one into the post, deleting the staged copy, before it checks the
+ * Made with catalog: that refusal (`field: 'sourceTools'`) comes after the
+ * move, a server error can, and so can a request whose answer never came back.
+ * A second save of a moved upload is refused every time, so those uploads have
+ * to go again. Every other refusal is decided before anything moves, and the
+ * same uploads can be sent again. The web composer's rule (`readSaveResponse`).
+ */
+export function saveMayHaveConsumedUploads(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const details = typeof error.details === 'object' && error.details !== null
+    ? error.details as { field?: unknown; sent?: unknown }
+    : {};
+  // No answer: only a request that never left the device has certainly done nothing.
+  if (error.status === 0) return details.sent !== false;
+  return error.status >= 500 || details.field === 'sourceTools';
+}
+
+/**
+ * Forgets the staged paths a failed save sent (`submitted`), on the draft as it
+ * is now. Those items keep their local files, which the next publish uploads
+ * again (`getMediaAwaitingUpload`); saved media and anything added since keep
+ * what they have.
+ */
+export function forgetConsumedMediaUploads(draft: PostComposerDraft, submitted: PostComposerDraft): PostComposerDraft {
+  const sentPaths = new Set(submitted.mediaItems.flatMap((item) => (
+    !item.existingId && item.storagePath ? [item.storagePath] : []
+  )));
+  if (sentPaths.size === 0) return draft;
+  return {
+    ...draft,
+    mediaItems: draft.mediaItems.map((item) => (
+      !item.existingId && item.storagePath && sentPaths.has(item.storagePath) ? { ...item, storagePath: null } : item
+    )),
+  };
+}
+
+/** New media with no staged upload: the next publish uploads them from the device first. */
+export function getMediaAwaitingUpload(items: PostComposerMediaItem[]): PostComposerMediaItem[] {
+  return items.filter((item) => !item.existingId && !item.storagePath);
 }
 
 const COMPOSER_MEDIA_NOUNS = { image: ['an image', 'images'], video: ['a video', 'videos'] } as const;
