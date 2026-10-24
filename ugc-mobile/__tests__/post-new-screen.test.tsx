@@ -433,14 +433,18 @@ describe('mobile external post composer', () => {
     expect(text).toContain('Title');
     expect(findPressableByAccessibilityLabel(tree.root, 'Made with')).toBeTruthy();
     expect(text).toContain('Story');
-    expect(text).toContain('Review & publish');
+    // The forward button only moves to step 2; "Review & publish" is step 2's
+    // title, and on this button it read as if the tap would publish.
+    expect(text).toContain('Next');
+    expect(findPressableByAccessibilityLabel(tree.root, 'Next')).toBeTruthy();
+    expect(text).not.toContain('Review & publish');
     expect(text).not.toContain('Optional resources');
     expect(text).not.toContain('Publish');
   });
 
   it('moves to the optional resource step without losing generation details', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     const text = collectText(tree.root);
     expect(text).toContain('Review & publish');
     expect(text).toContain('Step 2 of 2 · resources optional');
@@ -455,7 +459,7 @@ describe('mobile external post composer', () => {
   it('uses header back to return to details and preserve state', async () => {
     const tree = await renderScreen();
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share the idea, process, or story behind it…').props.onChangeText('A concise story'));
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Back to post details').props.onPress());
     expect(findTextInputByPlaceholder(tree.root, 'Share the idea, process, or story behind it…').props.value).toBe('A concise story');
   });
@@ -480,19 +484,19 @@ describe('mobile external post composer', () => {
     await uploadManualMedia();
     const tree = await renderScreen();
     await choosePreparedMedia(tree);
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     expect(collectText(tree.root)).toContain('Add a title for your post.');
     expect(collectText(tree.root)).not.toContain('Optional resources');
 
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Neon skyline study'));
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     expect(collectText(tree.root)).toContain('Optional resources');
   });
 
   it('shows all required field errors inline in visual order', async () => {
     paramsState.params = {};
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     const text = collectText(tree.root);
     expect(text).toContain('Add at least one image or video to continue.');
     // Titles are optional now, so an empty one must not block or warn.
@@ -510,7 +514,7 @@ describe('mobile external post composer', () => {
     expect(labeledTextInputs).toEqual(['Title, required', 'Post text, required']);
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share a prompt, idea, breakdown, or useful note…').props.onChangeText('A useful text breakdown'));
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Prompt teardown'));
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     const text = collectText(tree.root);
     expect(text).toContain('Step 2 of 2 · resources optional');
     expect(text).toContain('Prompt teardown');
@@ -528,7 +532,7 @@ describe('mobile external post composer', () => {
 
   it('builds a free prompt resource in a focused editor sheet', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     expect(collectText(tree.root)).toContain('Prompt or script');
@@ -544,7 +548,7 @@ describe('mobile external post composer', () => {
 
   it('shows resource-link validation in the editor before Save', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'External link').props.onPress());
@@ -556,7 +560,7 @@ describe('mobile external post composer', () => {
 
   it('shows buyer-preview quality guidance next to the package preview', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
@@ -570,7 +574,7 @@ describe('mobile external post composer', () => {
 
   it('places listing-quality guidance beside a non-empty public summary', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
@@ -604,7 +608,7 @@ describe('mobile external post composer', () => {
     } as never);
 
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Source assets').props.onPress());
@@ -644,7 +648,7 @@ describe('mobile external post composer', () => {
     }));
 
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Source assets').props.onPress());
@@ -713,7 +717,7 @@ describe('mobile external post composer', () => {
     } as never);
 
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Reference media').props.onPress());
@@ -730,7 +734,7 @@ describe('mobile external post composer', () => {
 
   it('keeps resource edits isolated until Save and confirms dirty discard', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
@@ -769,7 +773,7 @@ describe('mobile external post composer', () => {
     /** The Resources step with "Add a resource" open on its list of kinds. */
     async function openResourceKinds() {
       const tree = await renderScreen();
-      renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
       renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
       // Nothing has been asked of the keyboard or the back key by the page alone.
       expect(keyboardState.dismiss).not.toHaveBeenCalled();
@@ -956,7 +960,7 @@ describe('mobile external post composer', () => {
     };
 
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     expect(findTextInputByAccessibilityLabel(tree.root, 'Public package summary, optional').props.value)
       .toBe('A compact public summary for the existing package.');
     expect(findTextInputByAccessibilityLabel(tree.root, 'Package preview, required').props.value)
@@ -1024,7 +1028,7 @@ describe('mobile external post composer', () => {
     };
 
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Remove Private prompt to remove').props.onPress());
 
     const context = mutationState.options?.onMutate?.('public') as {
@@ -1088,7 +1092,7 @@ describe('mobile external post composer', () => {
     };
 
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Edit Mixed resource kit').props.onPress());
 
     expect(collectText(tree.root)).toContain('archive.zip');
@@ -1104,7 +1108,7 @@ describe('mobile external post composer', () => {
     expect(findTextInputByAccessibilityLabel(tree.root, 'Post text, required')).toBeTruthy();
     renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Title, required').props.onChangeText('Accessible resource post'));
     renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Post text, required').props.onChangeText('A useful public text post with enough detail.'));
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     expect(findTextInputByAccessibilityLabel(tree.root, 'Public package summary, optional')).toBeTruthy();
     expect(findTextInputByAccessibilityLabel(tree.root, 'Package preview, required')).toBeTruthy();
@@ -1112,7 +1116,7 @@ describe('mobile external post composer', () => {
 
   it('supports a paid token price and shows estimated creator earnings', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Sell resources').props.onPress());
     const price = findTextInputByPlaceholder(tree.root, '100');
     renderer.act(() => price.props.onChangeText('50'));
@@ -1130,7 +1134,7 @@ describe('mobile external post composer', () => {
     const tree = await renderScreen();
     await choosePreparedMedia(tree);
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Two studies'));
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
@@ -1142,14 +1146,14 @@ describe('mobile external post composer', () => {
 
   it('publishes without forcing a resource package', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Publish public').props.onPress());
     expect(mutationState.mutate).toHaveBeenCalledWith('public');
   });
 
   it('changes visibility from a compact sheet', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Visibility: Public').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Private').props.onPress());
     expect(findPressableByAccessibilityLabel(tree.root, 'Visibility: Private')).toBeTruthy();
@@ -1158,7 +1162,7 @@ describe('mobile external post composer', () => {
   // A post is public or private (product decisions 2026-10-17, item 12).
   it('offers Public and Private only', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Visibility: Public').props.onPress());
 
     const text = collectText(tree.root);
@@ -1188,7 +1192,7 @@ describe('mobile external post composer', () => {
       hasPaidOrders: false,
     };
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
 
     expect(findPressableByAccessibilityLabel(tree.root, 'Visibility: Private')).toBeTruthy();
     expect(collectText(tree.root)).not.toContain('Unlisted');
@@ -1246,7 +1250,7 @@ describe('mobile external post composer', () => {
     }));
     const tree = await renderScreen();
     expect(collectText(tree.root)).toContain('Draft restored');
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
 
     expect(findPressableByAccessibilityLabel(tree.root, 'Visibility: Private')).toBeTruthy();
     expect(findPressableByAccessibilityLabel(tree.root, 'Save private')).toBeTruthy();
@@ -1285,7 +1289,7 @@ describe('mobile external post composer', () => {
       hasPaidOrders: true,
     };
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     const text = collectText(tree.root);
     expect(text).toContain('Purchased resources are protected');
     expect(text).toContain('Existing package preserved');
@@ -1530,7 +1534,7 @@ describe('mobile external post composer', () => {
       const tree = await renderScreen();
       await choosePreparedMedia(tree);
       renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Kept still'));
-      renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
 
       expect(findPressableByAccessibilityLabel(tree.root, 'Retry 1 media upload')).toBeTruthy();
       expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);

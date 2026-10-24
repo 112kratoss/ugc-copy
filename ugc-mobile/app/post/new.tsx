@@ -1139,7 +1139,7 @@ function PostComposerFooter({
       {step === 'details' ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Review and publish"
+          accessibilityLabel="Next"
           onPress={onNext}
           style={({ pressed }) => ({
             minHeight: 54,
@@ -1151,7 +1151,7 @@ function PostComposerFooter({
             backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
           })}
         >
-          <AppText variant="button" color="onPrimary">Review & publish</AppText>
+          <AppText variant="button" color="onPrimary">Next</AppText>
           <ChevronRight size={19} color={theme.colors.onPrimary} />
         </Pressable>
       ) : (
