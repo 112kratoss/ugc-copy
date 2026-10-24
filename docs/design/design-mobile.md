@@ -498,23 +498,34 @@ Rules:
 
 ### Post composer
 
-`app/post/new.tsx`. One vertical page, no wizard, in this order:
+`app/post/new.tsx`. Two steps. The header names the step ("Step 1 of 2 · post details", "Step 2 of 2 · resources optional") over a two-part progress bar. "Mark as NSFW / mature" sits at the top of both.
 
-1. **Made With:** attribution.
-2. **Title.**
-3. **Proof:** the media or text being posted. Generated media stays attached as it is.
-4. **Story:** the public content shown in Explore.
-5. **Unlock:** optional gated resources, free or paid.
-6. **Publish:** who can see it.
+**Step 1, "Create post"** (or "Edit post"):
 
-Then the footer with the publish action.
+1. **Post format:** Media post or Text post. It is shown only for a new post that doesn't come from a generation.
+2. **Proof:** the pictures or videos being posted, cover first and up to five. A generation's media stays attached as it is.
+3. **Title:** required.
+4. **Made with:** optional attribution (tool and model), collapsed until opened.
+5. **Story:** optional; the idea, process or story behind the post.
+
+A text post has no proof, Made with or Story: its title comes first, then its post text, both required. The footer's **Next** checks the details. It stays pressable: a missing field gets its message inline and the focus, and the composer stays on step 1.
+
+**Step 2, "Review & publish"** (or "Edit post"):
+
+1. **Summary:** the cover and title (the title goes back to step 1 to edit), "Ready to publish" or "Needs attention", and chips for the visibility and the resources.
+2. **Optional resources:** Share free, Sell resources (a token price), or Post without resources. A package from a creation can also carry its references and exact prompt.
+
+The footer holds the visibility (Public or Private) and the publish action: Publish public, Save private, or Save changes when editing. The header's back arrow returns to step 1 with everything kept, and Close leaves from either step.
 
 Rules:
 
-- "Post to feed" after generating and "Post this creation" in the reel both open the composer for review. Neither publishes immediately.
+- "Post to feed" after generating and "Post this creation" in the reel both open the composer at step 1. Neither publishes immediately.
+- Only step 2 publishes. Step 1's button is Next, never a publish word. It once carried step 2's title and read as if the tap would publish.
 - Generation references and exact prompts attach only when the creator chooses them.
 - Marketplace details appear only once a free or paid package is chosen.
+- A template result posts its final media only, and a package people have already bought cannot change; step 2 says so in place of the resource choices.
 - Removing something offers Undo just above the footer, where it stays in reach.
+- A restored draft reopens on the step it was left on, and the reel's Manage recipe and the seller dashboard's Edit listing open step 2 (`focus=resources`), as long as the details are complete; otherwise step 1 opens with the missing fields marked.
 - After publishing, the share sheet is offered, then Profile opens on Posts with the new post in view.
 
 ### Create workspace
