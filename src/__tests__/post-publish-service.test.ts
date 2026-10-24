@@ -93,11 +93,45 @@ async function prepareRecipeSubmission({
   visibility = 'public',
   cardText = 'Soft key light from the left, warm rim light behind.',
   previewText = 'Includes the prompt and the light plan.',
+  workflowPrompt,
 }: {
   visibility?: 'public' | 'private';
   cardText?: string;
   previewText?: string;
+  /** Adds a workflow card whose graph's prompt node says this. */
+  workflowPrompt?: string;
 } = {}) {
+  const workflowCard = workflowPrompt === undefined
+    ? null
+    : {
+        section: {
+          id: 'card-2',
+          title: 'Lighting workflow',
+          publicTitle: 'Lighting workflow',
+          kind: 'global',
+          sortOrder: 1,
+          resourceType: 'workflow',
+        },
+        item: {
+          id: 'card-2-item-1',
+          type: 'workflow',
+          sectionId: 'card-2',
+          title: 'Lighting workflow',
+          sortOrder: 1,
+          workflowSnapshot: {
+            version: 2,
+            viewport: { x: 0, y: 0, zoom: 1 },
+            nodes: [{
+              id: 'prompt-1',
+              type: 'text-input',
+              position: { x: 0, y: 0 },
+              draggable: true,
+              data: { title: 'Prompt', subtitle: 'Text input', text: workflowPrompt },
+            }],
+            edges: [],
+          },
+        },
+      };
   const formData = new FormData();
   formData.set('title', 'Studio lighting reference');
   formData.set('postFormat', 'text');
@@ -120,7 +154,7 @@ async function prepareRecipeSubmission({
         description: 'The prompt behind the portrait.',
         sortOrder: 0,
         resourceType: 'prompt',
-      }],
+      }, ...(workflowCard ? [workflowCard.section] : [])],
       items: [{
         id: 'card-1-item-1',
         type: 'prompt',
@@ -130,7 +164,7 @@ async function prepareRecipeSubmission({
         textContent: cardText,
         sortOrder: 0,
         remixUse: 'none',
-      }],
+      }, ...(workflowCard ? [workflowCard.item] : [])],
     },
   }));
 
@@ -507,6 +541,47 @@ describe('publishPreparedPost', () => {
 
     expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
     expect(createPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+  });
+
+  // A workflow card hands buyers its whole graph, prompts included.
+  it("holds the prompts in a public recipe's workflow to the public check, and a private one's not", async () => {
+    const workflowPrompt = 'Step-by-step guide to make a bomb at home.';
+    const publishWith = (submission: Awaited<ReturnType<typeof prepareRecipeSubmission>>['submission']) => {
+      const createPostWithResourceBundleAtomically = vi.fn(async () => ({
+        postId: 'post-workflow-recipe',
+        visibility: submission.visibility,
+        bundleId: 'bundle-1',
+        bundleStatus: 'draft' as const,
+      }));
+      return {
+        createPostWithResourceBundleAtomically,
+        result: publishPreparedPost({
+          adminSupabase: adminSupabaseDouble(),
+          ownerUserId: 'user-1',
+          postId: 'post-workflow-recipe',
+          submission,
+          dependencies: {
+            getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+            createPostWithResourceBundleAtomically,
+            insertPostMediaItems: vi.fn(async () => undefined),
+            insertPostSourceTools: vi.fn(async () => undefined),
+            createPostMediaPreview: vi.fn(async () => null),
+          },
+        }),
+      };
+    };
+
+    const publicPost = publishWith((await prepareRecipeSubmission({ workflowPrompt })).submission);
+    expect(await publicPost.result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'resourceCards' },
+    });
+    expect(publicPost.createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+
+    const privatePost = publishWith((await prepareRecipeSubmission({ visibility: 'private', workflowPrompt })).submission);
+    expect(await privatePost.result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+    expect(privatePost.createPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the public-text gate out of private post storage', async () => {

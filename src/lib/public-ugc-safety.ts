@@ -137,12 +137,60 @@ export function getPublicUgcSafetyViolation(
   return null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function readEach(list: unknown, key: string): unknown[] {
+  return Array.isArray(list) ? list.map((entry) => (isRecord(entry) ? entry[key] : null)) : [];
+}
+
+/**
+ * The creator's words in a recipe's workflow graph (`SerializedWorkflowCanvasGraph`
+ * in `workflow-canvas.ts`), which a buyer receives whole and the canvas shows:
+ * node titles and subtitles, prompt and note text, multi-shot prompts, dialogue
+ * lines, the music mood, an approval step's label, an upload's label and
+ * guidance, and reference element names. The graph is stored exactly as the
+ * client sent it, with no normalizer, so it is read as raw JSON, and each key
+ * on every node whatever its type: a stored type is no promise about the keys
+ * beside it. Ids, handles, model ids, voices, language codes, control values,
+ * run state and media locations are left out, as they are not prose a creator
+ * writes for a reader. A new free-text field on a workflow node belongs here.
+ */
+function getWorkflowGraphTexts(graph: unknown): string[] {
+  if (!isRecord(graph) || !Array.isArray(graph.nodes)) {
+    return [];
+  }
+
+  return graph.nodes.flatMap((node) => {
+    const data = isRecord(node) ? node.data : null;
+    if (!isRecord(data)) {
+      return [];
+    }
+
+    const templateInput: Record<string, unknown> = isRecord(data.templateInput) ? data.templateInput : {};
+    return [
+      data.title,
+      data.subtitle,
+      data.text,
+      data.label,
+      data.mood,
+      templateInput.label,
+      templateInput.guidance,
+      ...readEach(data.multiPrompts, 'prompt'),
+      ...readEach(data.dialogueTurns, 'text'),
+      ...readEach(data.elements, 'displayName'),
+    ].filter((text): text is string => typeof text === 'string');
+  });
+}
+
 /**
  * Every text a recipe stores, as the safety check's fields. Both composers
  * write each card into `resources.sections` and `resources.items` and leave
  * the legacy prompt and notes fields empty, so those two alone let any card
  * through. Card titles, the summary and the preview are also listing copy
- * that anyone sees before unlocking.
+ * that anyone sees before unlocking. Links count as text: the check reads a
+ * URL's path as words, so a slug can carry what a caption would be refused for.
  */
 export function getPublicUgcRecipeTextFields(
   bundle: PostResourceBundleInput | null | undefined,
@@ -157,13 +205,24 @@ export function getPublicUgcRecipeTextFields(
     resourcePrompt: resources.promptText,
     resourceNotes: resources.notesMarkdown,
     // Read through the same normalizers the stored payload is built with, so
-    // the check sees exactly the text that is saved.
+    // the check sees exactly the text that is saved. The recipe's own link and
+    // graph are stored in columns beside the cards, and buyers receive both.
     resourceCards: [
       ...normalizePostResourceSections(resources.sections)
         .flatMap((section) => [section.title, section.publicTitle, section.description]),
       ...normalizePostResourceItems(resources.items, resources)
-        .flatMap((item) => [item.title, item.description, item.textContent]),
-      ...normalizePostResourceAttachments(resources.attachments).map((attachment) => attachment.label),
+        .flatMap((item) => [
+          item.title,
+          item.description,
+          item.textContent,
+          item.externalUrl,
+          ...getWorkflowGraphTexts(item.workflowSnapshot),
+        ]),
+      ...normalizePostResourceAttachments(resources.attachments)
+        .flatMap((attachment) => [attachment.label, attachment.url]),
+      // The stored column keeps only a string, as `normalizeText` does on save.
+      typeof resources.workflowShareUrl === 'string' ? resources.workflowShareUrl : null,
+      ...getWorkflowGraphTexts(resources.workflowSnapshot),
     ],
     resourcePreview: bundle.previewText,
     resourceSummary: bundle.summary,
