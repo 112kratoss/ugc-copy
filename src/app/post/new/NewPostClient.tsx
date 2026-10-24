@@ -5,7 +5,7 @@ import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
@@ -13,6 +13,7 @@ import {
   BadgePlus,
   BookText,
   Check,
+  ChevronDown,
   Film,
   GripVertical,
   ImageIcon,
@@ -126,7 +127,6 @@ interface CreatedPostState {
 interface ComposerSnapshot {
   title: string;
   body: string;
-  description: string;
   visibility: PostVisibility;
   isNsfw: boolean;
   mediaIds: string[];
@@ -145,7 +145,6 @@ interface ComposerSnapshot {
 function isSameComposerSnapshot(a: ComposerSnapshot, b: ComposerSnapshot): boolean {
   return a.title === b.title
     && a.body === b.body
-    && a.description === b.description
     && a.visibility === b.visibility
     && a.isNsfw === b.isNsfw
     && a.resourceAccessMode === b.resourceAccessMode
@@ -196,6 +195,41 @@ interface ComposerMediaItem {
   durationSeconds?: number | null;
 }
 
+/** A media row of a saved post, as an edit's answer or the owner read lists it. */
+interface SavedMediaRow {
+  id: string;
+  mediaKey: string;
+}
+
+/**
+ * The rows listed in `value`, or null when it lists none. A row read back
+ * without a key carries the positional one the server derives for it.
+ */
+function readSavedMediaRows(value: unknown): SavedMediaRow[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return value.flatMap((row: unknown, index) => {
+    const { id, mediaKey } = (row ?? {}) as { id?: unknown; mediaKey?: unknown };
+    return typeof id === 'string'
+      ? [{ id, mediaKey: typeof mediaKey === 'string' && mediaKey ? mediaKey : defaultPostMediaKey(index) }]
+      : [];
+  });
+}
+
+/**
+ * Media the post now holds is named by its row id from here on, and its staged
+ * upload, which the save used up, is never sent again.
+ */
+function withSavedMediaRows(items: ComposerMediaItem[], rows: SavedMediaRow[]): ComposerMediaItem[] {
+  const idsByKey = new Map(rows.map((row) => [row.mediaKey, row.id]));
+  return items.map((item) => {
+    const savedId = idsByKey.get(item.mediaKey);
+    return savedId ? { ...item, existingId: savedId, storagePath: null } : item;
+  });
+}
+
 /**
  * Aggregate byte progress for the one upload bar. Files upload as soon as they
  * are added, and publish uploads only what did not make it, so this bar is the
@@ -237,6 +271,18 @@ function buildProfileRepairHref(): string {
   return '/profile?source=post-composer';
 }
 
+/** The section a server refusal is written in, by the field it names. */
+function getRefusalSection(field: string | undefined): ComposerError['section'] {
+  if (field === 'sourceTools') {
+    return 'post';
+  }
+  // The recipe's cards, preview and summary (a safety rule or a length cap).
+  if (field === 'resourceCards' || field === 'resourcePreview' || field === 'resourceSummary') {
+    return 'resources';
+  }
+  return 'publish';
+}
+
 function getSubmissionError(
   data: { error?: string; field?: string; actionHref?: string; actionLabel?: string },
   fallback: string
@@ -245,7 +291,7 @@ function getSubmissionError(
   const needsProfileRepair = data.field === 'profile' || isCreatorProfileReadinessError(message);
   return new ComposerSubmissionError(
     message,
-    data.field === 'sourceTools' ? 'post' : 'publish',
+    getRefusalSection(data.field),
     needsProfileRepair
       ? {
           href: buildProfileRepairHref(),
@@ -272,18 +318,40 @@ type SaveResponseBody = Record<string, unknown> & {
 async function readSaveResponse(
   response: Response
 ): Promise<{ data: SaveResponseBody; stagedMediaConsumed: boolean }> {
-  if (response.status >= 500) {
-    const data = await response.json().catch(() => ({})) as SaveResponseBody;
-    return { data, stagedMediaConsumed: true };
+  const data = await readResponseBody(response);
+  return { data, stagedMediaConsumed: response.status >= 500 || (!response.ok && data.field === 'sourceTools') };
+}
+
+/**
+ * A refusal's body. A proxy's or gateway's error page is HTML, and reading it
+ * as JSON put a parse error where the refusal belongs; the caller's fallback
+ * message says it instead. An answer that says it succeeded must be JSON.
+ */
+async function readResponseBody(response: Response): Promise<SaveResponseBody> {
+  if (response.ok) {
+    return await response.json() as SaveResponseBody;
   }
-  const data = await response.json() as SaveResponseBody;
-  return { data, stagedMediaConsumed: !response.ok && data.field === 'sourceTools' };
+  return await response.json().catch(() => ({})) as SaveResponseBody;
+}
+
+/** The post's media rows as they are now, for a save whose ids may be out of date. */
+async function readBackSavedMediaRows(postId: string, accessToken: string): Promise<SavedMediaRow[]> {
+  const response = await fetch(`/api/posts/${postId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  }).catch(() => null);
+  const data = response?.ok
+    ? await response.json().catch(() => null) as { post?: { mediaItems?: unknown } } | null
+    : null;
+  const rows = readSavedMediaRows(data?.post?.mediaItems);
+  if (!rows) {
+    throw new ComposerSubmissionError('Could not check this post’s media before saving. Try again.', 'publish');
+  }
+  return rows;
 }
 
 interface GenerationDraft {
   id: string;
   title: string;
-  description: string;
   prompt: string;
   outputUrl: string | null;
   category: PostMediaCategory;
@@ -627,7 +695,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   // post" for an empty title, and echoing that back on save trips the
   // marketplace placeholder gate.
   const [title, setTitle] = useState(initialPost ? (initialPost.rawTitle ?? initialPost.title ?? '') : '');
-  const [description, setDescription] = useState(initialPost?.description ?? '');
   const [body, setBody] = useState(initialPost?.body ?? '');
   const [madeWithRows, setMadeWithRows] = useState<MadeWithRow[]>(() => {
     if (initialPost?.sourceTools && initialPost.sourceTools.length > 0) {
@@ -676,7 +743,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [sourceToolsData, setSourceToolsData] = useState<SourceToolOption[]>([]);
   const [visibility, setVisibility] = useState<PostVisibility>(() => getComposerVisibility(initialPost?.visibility));
   const [category, setCategory] = useState<PostMediaCategory>(initialCategory);
-  const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost?.description));
+  // Folded into one row that sums it up, as the app's.
+  const [isMadeWithOpen, setIsMadeWithOpen] = useState(false);
+  const madeWithPanelId = useId();
   const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
   // One card is one thing a buyer receives. The serialization lives in
   // post-composer-resource-cards.ts, which the mobile composer mirrors.
@@ -705,7 +774,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       ? {
           id: initialPost.generationId,
           title: initialPost.title,
-          description: initialPost.description,
           prompt: initialPost.prompt,
           outputUrl: initialPost.mediaUrl,
           category: initialCategory,
@@ -726,6 +794,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const storySectionRef = useRef<HTMLDivElement | null>(null);
   const resourceSectionRef = useRef<HTMLDivElement | null>(null);
   const publishSectionRef = useRef<HTMLDivElement | null>(null);
+  const savedPanelRef = useRef<HTMLDivElement | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
 
   // One object URL per picked file, kept until the file leaves the list. The
   // URLs were rebuilt for every file on every change (a reorder, an upload
@@ -816,13 +886,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [generationLoadAttempt, setGenerationLoadAttempt] = useState(0);
   const [linkedPostRedirectId, setLinkedPostRedirectId] = useState<string | null>(null);
   // Unsaved work is any field that differs from the post as loaded, or as last
-  // saved. The old check read only the title, the hidden Explore description and
-  // new files, so a typed body, a recipe, or any edit to an existing post was
-  // lost without a prompt. (The app autosaves a draft instead.)
+  // saved. The old check read only the title and new files, so a typed body, a
+  // recipe, or any edit to an existing post was lost without a prompt. (The app
+  // autosaves a draft instead.)
   const composerSnapshot = useMemo<ComposerSnapshot>(() => ({
     title,
     body,
-    description,
     visibility,
     isNsfw,
     mediaIds: mediaItems.map((item) => item.id),
@@ -845,7 +914,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     includeGenerationReferences,
   }), [
     body,
-    description,
     includeGenerationReferences,
     isNsfw,
     madeWithRows,
@@ -880,7 +948,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const titleCount = title.trim().length;
   const hasMediaProof = proofMode === 'media' && (mediaItems.length > 0 || hasGeneratedProof);
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
-  const displayVisibility = visibility;
+  // An edit's buttons speak from the visibility the post has, which only a save
+  // changes; a new post's state follows the button pressed last.
+  const savedVisibility = savedSnapshot.visibility;
+  const displayVisibility = isEditMode ? savedVisibility : visibility;
   const generationPaywallPrefill = prefilledGeneration?.paywallPrefill ?? null;
   const hasGenerationPaywallPrefill = hasUsableGenerationPaywallPrefill(generationPaywallPrefill);
   // "From this creation", as the app offers it: only once the creation itself
@@ -978,20 +1049,28 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       label: 'Title added',
       complete: hasTitle,
     },
-    {
-      label: 'Proof added',
-      complete: hasMediaProof || trimmedBody.length >= 24,
-    },
-    {
-      label: proofMode === 'text' ? 'Story ready' : 'Caption optional',
-      complete: proofMode !== 'text' || trimmedBody.length > 0,
-    },
+    proofMode === 'text'
+      ? {
+          // The server's own bar for a public post without media.
+          label: 'Post text added',
+          complete: !getPublicPostQualityError({ body: trimmedBody, hasMedia: false }),
+        }
+      : {
+          label: 'Media added',
+          complete: hasMediaProof,
+        },
+    ...(proofMode === 'text' ? [] : [{ label: 'Story optional', complete: true }]),
     {
       label: 'Recipe optional',
       complete: resourceAccessMode === 'none' || isResourceEditingLocked || hasResourceContent || resourceAllowRemix,
     },
   ];
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
+  const bodyFieldLabel = proofMode === 'text' ? 'Post text' : 'Story';
+  const primaryMadeWith = madeWithRows.find((row) => row.toolLabel.trim());
+  const madeWithSummary = primaryMadeWith
+    ? [primaryMadeWith.toolLabel.trim(), primaryMadeWith.modelLabel.trim()].filter(Boolean).join(' · ')
+    : 'Add tool and model';
 
   useEffect(() => () => {
     const urls = objectUrlsRef.current;
@@ -1145,7 +1224,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         const nextGeneration: GenerationDraft = {
           id: generation.id,
           title: typeof generation.title === 'string' ? generation.title : '',
-          description: typeof generation.description === 'string' ? generation.description : '',
           prompt: typeof generation.prompt === 'string' ? generation.prompt : '',
           outputUrl: typeof generation.output_url === 'string' ? generation.output_url : null,
           category: formatGeneratedCategory(generation.category),
@@ -1171,11 +1249,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         // rejects a post the composer never flagged.
         const prefillTitle = nextGeneration.title.slice(0, TITLE_MAX_LENGTH);
         setTitle((current) => current || prefillTitle);
-        setDescription((current) => current || nextGeneration.description);
         setSavedSnapshot((saved) => ({
           ...saved,
           title: saved.title || prefillTitle,
-          description: saved.description || nextGeneration.description,
         }));
       } catch (loadError) {
         if (!cancelled) {
@@ -1327,6 +1403,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resetFeedback();
   };
 
+  // Not a submit button: Enter in a field submits through the form's first
+  // submit button, and on an edit that has to be the one that keeps the
+  // post's visibility.
+  const submitVisibilityChange = (targetVisibility: PostVisibility) => {
+    submitWithVisibility(targetVisibility);
+    formRef.current?.requestSubmit();
+  };
+
   const resetFeedback = () => {
     setCreatedPost(null);
     setError(null);
@@ -1359,6 +1443,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   // upload does not guarantee the new state has committed, and reading it too
   // early made publish upload the same file a second time.
   const stagedPathsRef = useRef(new Map<string, string>());
+  // An edit save that sends media re-inserts every media row of the post under
+  // a new id, so the ids this page holds stop naming them. The save's answer
+  // lists the new rows; when it does not (a server from before it did, or a
+  // save that failed after it may have written), the next save reads them back.
+  const savedMediaRowsStaleRef = useRef(false);
 
   const publishCombinedEagerProgress = () => {
     const files = [...eagerProgressRef.current.values()];
@@ -1790,8 +1879,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }[section];
 
     window.requestAnimationFrame(() => {
-      target.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      target.current?.focus({ preventScroll: true });
+      const node = target.current;
+      if (!node) {
+        return;
+      }
+      // The message rather than the section's top: a section holding media is
+      // taller than a phone's screen.
+      const message = node.querySelector('[role="alert"]');
+      (message ?? node).scrollIntoView({ behavior: 'smooth', block: message ? 'center' : 'start' });
+      node.focus({ preventScroll: true });
     });
   };
 
@@ -2083,12 +2179,22 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     return uploadResourceFile(file, session.access_token, options);
   };
 
+  // An edit stays on this page once saved. Its panel is drawn at the end of the
+  // form, and the phone bar that pressed save hides itself.
+  useEffect(() => {
+    if (!createdPost || !isEditMode) {
+      return;
+    }
+    savedPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    savedPanelRef.current?.focus({ preventScroll: true });
+  }, [createdPost, isEditMode]);
 
   const completePublish = (nextPost: CreatedPostState, options: { redirect?: boolean } = {}) => {
     setCreatedPost(nextPost);
     // The form as it was submitted is now what the server holds; anything typed
-    // while the save was in flight still counts as unsaved.
-    setSavedSnapshot(composerSnapshot);
+    // while the save was in flight still counts as unsaved. The visibility comes
+    // from the press, which set it in the same click this snapshot may predate.
+    setSavedSnapshot({ ...composerSnapshot, visibility: submitVisibilityRef.current });
     trackProductEvent(isEditMode ? 'post_update_success' : 'post_publish_success', {
       visibility: nextPost.visibility,
       recipe_access: nextPost.resourceAccessMode,
@@ -2131,13 +2237,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return;
     }
 
+    // Only a text post gets here without media.
     if (!trimmedBody && !hasMediaProof) {
-      stopWithError('Add a story or media before publishing.', 'story');
-      return;
-    }
-
-    if (proofMode === 'text' && !trimmedBody) {
-      stopWithError('Write the story before publishing a text post.', 'story');
+      stopWithError('Write the post text before publishing.', 'story');
       return;
     }
 
@@ -2147,7 +2249,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (bodyCount > BODY_MAX_LENGTH) {
-      stopWithError(`Story posts are limited to ${BODY_MAX_LENGTH} characters.`, 'story');
+      stopWithError(`${bodyFieldLabel} is limited to ${BODY_MAX_LENGTH} characters.`, 'story');
       return;
     }
 
@@ -2246,13 +2348,19 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       while (activeEagerUploadsRef.current.size > 0) {
         await Promise.all([...activeEagerUploadsRef.current.values()].map((wait) => wait.settled));
       }
-      const itemsWithStagedPaths = mediaItems
+      let itemsWithStagedPaths = mediaItems
         .filter((item) => !removedMediaIdsRef.current.has(item.id))
         .map((item) => (
           !item.storagePath && stagedPathsRef.current.has(item.id)
             ? { ...item, storagePath: stagedPathsRef.current.get(item.id)! }
             : item
         ));
+      if (savedMediaRowsStaleRef.current && isEditMode && initialPost && !generationId) {
+        const savedRows = await readBackSavedMediaRows(initialPost.id, session.access_token);
+        savedMediaRowsStaleRef.current = false;
+        itemsWithStagedPaths = withSavedMediaRows(itemsWithStagedPaths, savedRows);
+        setMediaItems((current) => withSavedMediaRows(current, savedRows));
+      }
       const mediaItemsForSubmit = generationId
         ? undefined
         : await uploadComposerMedia(itemsWithStagedPaths);
@@ -2274,7 +2382,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             visibility: effectiveVisibility,
             isNsfw,
             title: title.trim() || undefined,
-            description: description.trim() || undefined,
             body: trimmedBody || undefined,
             category: inferredCategory ?? undefined,
             sourceTools: sourceToolsForSubmit.length > 0 ? sourceToolsForSubmit : undefined,
@@ -2291,7 +2398,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           }),
         });
 
-        const data = await response.json();
+        const data = await readResponseBody(response);
 
         if (!response.ok || !data.success) {
           throw getSubmissionError(data, 'Failed to publish post.');
@@ -2313,6 +2420,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       }
 
       if (isEditMode && initialPost) {
+        // A text post has none to send, and an empty list is refused (the app
+        // sends none either).
+        const sendsMedia = Boolean(mediaItemsForSubmit?.length);
         let response: Response;
         try {
           response = await fetch(`/api/posts/${initialPost.id}`, {
@@ -2323,13 +2433,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             },
             body: JSON.stringify({
               title: title.trim() || null,
-              description: description.trim() || null,
               body: trimmedBody || null,
               sourceTools: sourceToolsForSubmit.length > 0 ? sourceToolsForSubmit : undefined,
               visibility: effectiveVisibility,
               isNsfw,
               category: inferredCategory ?? undefined,
-              mediaItems: mediaItemsForSubmit,
+              ...(sendsMedia ? { mediaItems: mediaItemsForSubmit } : {}),
               // A sold package is frozen, and the update path treats an absent
               // key as "keep what is stored" — sending `{accessMode:'none'}` here
               // would delete a bundle people have already paid for.
@@ -2342,15 +2451,30 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           // The request may have reached the server and consumed its staged
           // media, so the safe assumption is that the paths are gone.
           forgetStagedMediaPaths();
+          if (sendsMedia) savedMediaRowsStaleRef.current = true;
           throw networkError;
         }
 
         const { data, stagedMediaConsumed } = await readSaveResponse(response);
         if (stagedMediaConsumed) {
           forgetStagedMediaPaths();
+          // A failure after the write leaves the rows re-inserted too.
+          if (sendsMedia) savedMediaRowsStaleRef.current = true;
         }
         if (!response.ok || !data.success) {
           throw getSubmissionError(data, 'Failed to save post.');
+        }
+
+        if (sendsMedia) {
+          const savedRows = readSavedMediaRows(data.mediaItems);
+          const sentIds = new Set(itemsWithStagedPaths.map((item) => item.id));
+          sentIds.forEach((id) => stagedPathsRef.current.delete(id));
+          savedMediaRowsStaleRef.current = !savedRows;
+          setMediaItems((current) => {
+            // Media added while this save was on its way keeps its own upload.
+            const sent = current.map((item) => (sentIds.has(item.id) ? { ...item, storagePath: null } : item));
+            return savedRows ? withSavedMediaRows(sent, savedRows) : sent;
+          });
         }
 
         completePublish({
@@ -2370,7 +2494,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
       const formData = new FormData();
       formData.set('title', title);
-      formData.set('description', description);
       formData.set('body', body);
       if (primarySourceTool.label) {
         formData.set('sourceTool', primarySourceTool.label);
@@ -2430,24 +2553,33 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           : null,
       }, { redirect: true });
     } catch (submitError) {
+      const section = submitError instanceof ComposerSubmissionError ? submitError.section : 'publish';
       trackProductEvent(isEditMode ? 'post_update_failed' : 'post_publish_failed', {
         visibility: effectiveVisibility,
         recipe_access: resourceAccessMode,
-        error_section: submitError instanceof ComposerSubmissionError ? submitError.section : 'publish',
+        error_section: section,
       });
       setError({
-        section: submitError instanceof ComposerSubmissionError ? submitError.section : 'publish',
+        section,
         message: submitError instanceof Error ? submitError.message : 'Failed to publish post.',
         actionHref: submitError instanceof ComposerSubmissionError ? submitError.actionHref : undefined,
         actionLabel: submitError instanceof ComposerSubmissionError ? submitError.actionLabel : undefined,
       });
+      // The server refuses a post-section field only over Made With, whose
+      // rows are folded away by default.
+      if (section === 'post') {
+        setIsMadeWithOpen(true);
+      }
+      // The bar that pressed publish can be a screen away from the section.
+      focusComposerSection(section);
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const createdPostHasResources = createdPost ? createdPost.resourceAccessMode !== 'none' : false;
-  const primaryPostPath = createdPost?.showcasePath ?? createdPost?.ownerPath ?? null;
+  // On an edit, the owner path is the page already open.
+  const primaryPostPath = createdPost?.showcasePath ?? (isEditMode ? null : createdPost?.ownerPath ?? null);
   const primaryPostLabel = createdPost?.resourceBundleStatus === 'draft'
     ? 'Continue editing'
     : createdPost?.showcasePath
@@ -2479,6 +2611,33 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           : isEditMode || entrySurface === 'creations'
             ? 'Back to studio'
             : 'Back to Explore';
+  // A new post is saved private or published public. An edit keeps the post's
+  // visibility with Save changes, and the other button is the one that changes it.
+  const primarySubmit: { target: PostVisibility; label: string; detail: string } = isEditMode
+    ? {
+        target: savedVisibility,
+        label: 'Save changes',
+        detail: savedVisibility === 'public' ? 'Stays visible in Explore.' : 'Stays private in Studio.',
+      }
+    : { target: 'public', label: 'Publish public', detail: 'Visible in Explore.' };
+  const secondarySubmit: { target: PostVisibility; label: string; detail: string } = !isEditMode
+    ? { target: 'private', label: 'Save private', detail: 'Saved privately in Studio.' }
+    : savedVisibility === 'public'
+      ? { target: 'private', label: 'Make private', detail: 'Saved privately in Studio.' }
+      : { target: 'public', label: 'Publish publicly', detail: 'Visible in Explore.' };
+  const pressSecondarySubmit = () => (
+    isEditMode ? submitVisibilityChange(secondarySubmit.target) : submitWithVisibility(secondarySubmit.target)
+  );
+  // A press sets the visibility it submits with, so the one in flight is the
+  // button whose target matches.
+  const getPendingLabel = (target: PostVisibility) => {
+    if (!isSubmitting || visibility !== target) {
+      return null;
+    }
+    return target === 'public' && !(isEditMode && savedVisibility === 'public') ? 'Publishing…' : 'Saving…';
+  };
+  const primaryPendingLabel = getPendingLabel(primarySubmit.target);
+  const secondaryPendingLabel = getPendingLabel(secondarySubmit.target);
 
   return (
     <div className="ui-page ui-page-ambient min-h-screen">
@@ -2494,24 +2653,26 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         <div className="fixed inset-x-4 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+1rem)] z-40 lg:hidden">
           <div className="flex items-center gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
             <button
-              type="submit"
-              form="post-composer-form"
+              type={isEditMode ? 'button' : 'submit'}
+              form={isEditMode ? undefined : 'post-composer-form'}
               disabled={isSubmitting || isLoadingGeneration}
-              onClick={() => submitWithVisibility('private')}
+              onClick={pressSecondarySubmit}
               className="inline-flex flex-1 shrink-0 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Save private
+              {secondaryPendingLabel ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {secondaryPendingLabel ?? secondarySubmit.label}
             </button>
             <button
               type="submit"
               form="post-composer-form"
               disabled={isSubmitting || isLoadingGeneration}
-              onClick={() => submitWithVisibility('public')}
+              onClick={() => submitWithVisibility(primarySubmit.target)}
               className="ui-focus-ring inline-flex min-h-12 flex-1 shrink-0 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
-              Publish public
+              {primaryPendingLabel
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : isEditMode ? <Check className="h-4 w-4" /> : <BadgePlus className="h-4 w-4" />}
+              {primaryPendingLabel ?? primarySubmit.label}
             </button>
           </div>
         </div>
@@ -2564,7 +2725,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
             {/* noValidate: the browser's own bubble (a price of 95 against step=10)
                 blocked submit before the composer could name the rule. */}
-            <form id="post-composer-form" noValidate className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
+            <form id="post-composer-form" ref={formRef} noValidate className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
               {initialPost?.archivedAt ? (
                 <div className="rounded-[24px] border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
                   This post is archived. It stays out of public surfaces until you restore it from My Studio.
@@ -2577,231 +2738,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 data-composer-section="post"
                 className="rounded-3xl border border-white/8 bg-[linear-gradient(180deg,rgba(17,24,39,0.82),rgba(9,11,16,0.9))] p-5 outline-none sm:p-6"
               >
-                <label className="block">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      Title <span className="text-sky-300">Required</span>
-                    </span>
-                    {/* aria-hidden so the input's accessible name stays "Title, maximum N
-                        characters" instead of churning on every keystroke; the limit itself
-                        is announced once via aria-label. */}
-                    <span
-                      aria-hidden="true"
-                      className={`text-xs ${titleCount > TITLE_MAX_LENGTH ? 'text-rose-300' : 'text-zinc-500'}`}
-                    >
-                      {titleCount}/{TITLE_MAX_LENGTH}
-                    </span>
-                  </div>
-                  <input
-                    value={title}
-                    onChange={(event) => {
-                      setTitle(event.target.value);
-                      resetFeedback();
-                    }}
-                    maxLength={TITLE_MAX_LENGTH}
-                    aria-label={`Title, required, maximum ${TITLE_MAX_LENGTH} characters`}
-                    aria-required="true"
-                    placeholder="Give your post a title"
-                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                  />
-                </label>
-
-                {proofMode === 'media' ? (
-                  <div className="mt-5 rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-100/75">Made With</div>
-                        <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
-                          Add the tool and model you used.{hasGeneratedProof ? ' magicbooklet is already set.' : ''}
-                        </p>
-                        <p className="mt-1 text-xs leading-5 text-zinc-500">
-                          Popular tools appear first. Search to find more editors, workflows, API platforms, or older tools.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="mt-4 space-y-3">
-                      {madeWithRows.map((row, index) => {
-                        const selectedTool = sourceToolsData.find((t) =>
-                          row.toolSlug ? t.slug === row.toolSlug : t.label === row.toolLabel
-                        );
-                        const provisionalToolRows = madeWithRows.filter((candidate) => candidate.createTool);
-                        const toolOptions: CreatableComboboxOption[] = [
-                          ...sourceToolsData.map((tool) => ({
-                            value: tool.slug,
-                            label: tool.label,
-                            keywords: [
-                              ...(tool.aliases ?? []),
-                              tool.toolType ?? 'platform',
-                              ...(tool.capabilities ?? []),
-                              tool.providerSlug ?? '',
-                            ],
-                            meta: tool.status && tool.status !== 'current'
-                              ? 'Historical'
-                              : tool.toolType === 'api-marketplace'
-                                ? 'API platform'
-                                : tool.toolType === 'editor'
-                                  ? 'Editor'
-                                  : tool.toolType === 'workflow'
-                                    ? 'Workflow'
-                                    : 'AI platform',
-                            hiddenUntilSearch: Boolean(
-                              (tool.catalogTier && tool.catalogTier !== 'featured')
-                              || (tool.status && tool.status !== 'current')
-                            ),
-                          })),
-                          ...provisionalToolRows
-                            .filter((candidate, candidateIndex, candidates) => (
-                              candidates.findIndex((item) => item.toolSlug === candidate.toolSlug) === candidateIndex
-                              && !sourceToolsData.some((tool) => tool.slug === candidate.toolSlug)
-                            ))
-                            .map((candidate) => ({
-                              value: candidate.toolSlug,
-                              label: candidate.toolLabel,
-                              provisional: true,
-                            })),
-                        ];
-                        const catalogModels = selectedTool?.models ?? [];
-                        const provisionalModelRows = madeWithRows.filter((candidate) => (
-                          candidate.toolSlug === row.toolSlug
-                          && candidate.createModel
-                          && candidate.modelLabel
-                        ));
-                        const modelOptions: CreatableComboboxOption[] = [
-                          ...catalogModels.map((model) => ({
-                            value: model.slug,
-                            label: model.label,
-                            keywords: [
-                              ...(model.aliases ?? []),
-                              ...(model.capabilities ?? []),
-                              model.providerSlug ?? '',
-                            ],
-                            meta: model.status && model.status !== 'current' ? 'Historical' : undefined,
-                            hiddenUntilSearch: Boolean(model.status && model.status !== 'current'),
-                          })),
-                          ...provisionalModelRows
-                            .filter((candidate, candidateIndex, candidates) => (
-                              candidates.findIndex((item) => item.modelSlug === candidate.modelSlug) === candidateIndex
-                              && !catalogModels.some((model) => model.slug === candidate.modelSlug)
-                            ))
-                            .map((candidate) => ({
-                              value: candidate.modelSlug,
-                              label: candidate.modelLabel,
-                              provisional: true,
-                            })),
-                        ];
-                        const toolIsCatalogEntry = Boolean(selectedTool);
-                        const modelIsCatalogEntry = Boolean(catalogModels.some((model) => model.slug === row.modelSlug));
-
-                        return (
-                          <div key={row.id} className="flex flex-wrap items-center gap-2">
-                            <CreatableCombobox
-                              ariaLabel={`Tool ${index + 1}`}
-                              value={row.toolLabel}
-                              options={toolOptions}
-                              placeholder="Choose or search tool"
-                              disabled={hasGeneratedProof}
-                              allowCustomEdit={!toolIsCatalogEntry && !row.createTool}
-                              onSelect={(option) => {
-                                if (!option) {
-                                  updateMadeWithRow(row.id, {
-                                    toolLabel: '',
-                                    toolSlug: '',
-                                    modelLabel: '',
-                                    modelSlug: '',
-                                    createTool: false,
-                                    createModel: false,
-                                  });
-                                  return;
-                                }
-                                updateMadeWithRow(row.id, {
-                                  toolLabel: option.label,
-                                  toolSlug: option.value,
-                                  modelLabel: '',
-                                  modelSlug: '',
-                                  createTool: option.provisional === true,
-                                  createModel: false,
-                                });
-                              }}
-                              onCreate={(label) => {
-                                updateMadeWithRow(row.id, {
-                                  toolLabel: label,
-                                  toolSlug: slugifySourceTool(label) ?? '',
-                                  modelLabel: '',
-                                  modelSlug: '',
-                                  createTool: true,
-                                  createModel: false,
-                                });
-                              }}
-                              onCustomEdit={(label) => {
-                                updateMadeWithRow(row.id, {
-                                  toolLabel: label,
-                                  toolSlug: slugifySourceTool(label) ?? '',
-                                  createTool: false,
-                                });
-                              }}
-                            />
-                            <CreatableCombobox
-                              ariaLabel={`Model for ${row.toolLabel || `tool ${index + 1}`}`}
-                              value={row.modelLabel}
-                              options={modelOptions}
-                              placeholder="Any model"
-                              emptyOptionLabel="Any model"
-                              disabled={hasGeneratedProof || !row.toolLabel}
-                              allowCustomEdit={Boolean(row.modelLabel && !modelIsCatalogEntry && !row.createModel)}
-                              onSelect={(option) => {
-                                updateMadeWithRow(row.id, {
-                                  modelLabel: option?.label ?? '',
-                                  modelSlug: option?.value ?? '',
-                                  createModel: option?.provisional === true,
-                                });
-                              }}
-                              onCreate={(label) => {
-                                updateMadeWithRow(row.id, {
-                                  modelLabel: label,
-                                  modelSlug: slugifySourceTool(label) ?? '',
-                                  createModel: true,
-                                });
-                              }}
-                              onCustomEdit={(label) => {
-                                updateMadeWithRow(row.id, {
-                                  modelLabel: label,
-                                  modelSlug: slugifySourceTool(label) ?? '',
-                                  createModel: false,
-                                });
-                              }}
-                            />
-                            {!hasGeneratedProof && madeWithRows.length > 1 ? (
-                              <button
-                                type="button"
-                                onClick={() => removeMadeWithRow(row.id)}
-                                className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
-                                aria-label={`Remove tool ${index + 1}`}
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                      {!hasGeneratedProof && madeWithRows.length < 5 ? (
-                        <button
-                          type="button"
-                          onClick={addMadeWithRow}
-                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                        >
-                          <Plus className="h-4 w-4" />
-                          Add another tool
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-
-                {renderSectionError('post')}
-
-                <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-t border-white/8 pt-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h2 className="text-xl font-semibold text-white">Proof</h2>
+                    <h2 className="text-xl font-semibold text-white">Media</h2>
                     <p className="mt-1 text-xs text-zinc-400">
                       {hasGeneratedProof
                         ? 'Attached media is locked in.'
@@ -3171,12 +3110,251 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       <div>
                         <div className="text-sm font-semibold text-white">This will be a text post</div>
                         <p className="mt-1 text-xs text-zinc-400">
-                          Write your tip or guide in the story section below.
+                          Write your tip or guide in Post text below.
                         </p>
                       </div>
                     </div>
                   </div>
                 )}
+
+                {renderSectionError('post')}
+
+                <label className="mt-6 block border-t border-white/8 pt-5">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                      Title <span className="text-sky-300">Required</span>
+                    </span>
+                    {/* aria-hidden so the input's accessible name stays "Title, maximum N
+                        characters" instead of churning on every keystroke; the limit itself
+                        is announced once via aria-label. */}
+                    <span
+                      aria-hidden="true"
+                      className={`text-xs ${titleCount > TITLE_MAX_LENGTH ? 'text-rose-300' : 'text-zinc-500'}`}
+                    >
+                      {titleCount}/{TITLE_MAX_LENGTH}
+                    </span>
+                  </div>
+                  <input
+                    value={title}
+                    onChange={(event) => {
+                      setTitle(event.target.value);
+                      resetFeedback();
+                    }}
+                    maxLength={TITLE_MAX_LENGTH}
+                    aria-label={`Title, required, maximum ${TITLE_MAX_LENGTH} characters`}
+                    aria-required="true"
+                    placeholder="What is this creation about?"
+                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                  />
+                </label>
+
+                {proofMode === 'media' ? (
+                  <div className="mt-5">
+                    <button
+                      type="button"
+                      aria-expanded={isMadeWithOpen}
+                      aria-controls={isMadeWithOpen ? madeWithPanelId : undefined}
+                      onClick={() => setIsMadeWithOpen((open) => !open)}
+                      className="flex min-h-14 w-full items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition hover:bg-white/[0.06]"
+                    >
+                      <Sparkles className="h-5 w-5 shrink-0 text-sky-200" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold text-white">
+                          Made with <span className="font-normal text-zinc-500">Optional</span>
+                        </span>
+                        <span className="mt-0.5 block truncate text-xs text-zinc-400">{madeWithSummary}</span>
+                      </span>
+                      <ChevronDown
+                        className={`h-4 w-4 shrink-0 text-zinc-400 transition-transform duration-150 ${isMadeWithOpen ? 'rotate-180' : ''}`}
+                      />
+                    </button>
+                    {isMadeWithOpen ? (
+                      <div id={madeWithPanelId} className="mt-3 rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                        <p className="max-w-2xl text-sm leading-6 text-zinc-300">
+                          Add the tool and model you used.{hasGeneratedProof ? ' magicbooklet is already set.' : ''}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-zinc-500">
+                          Popular tools appear first. Search to find more editors, workflows, API platforms, or older tools.
+                        </p>
+                        <div className="mt-4 space-y-3">
+                          {madeWithRows.map((row, index) => {
+                            const selectedTool = sourceToolsData.find((t) =>
+                              row.toolSlug ? t.slug === row.toolSlug : t.label === row.toolLabel
+                            );
+                            const provisionalToolRows = madeWithRows.filter((candidate) => candidate.createTool);
+                            const toolOptions: CreatableComboboxOption[] = [
+                              ...sourceToolsData.map((tool) => ({
+                                value: tool.slug,
+                                label: tool.label,
+                                keywords: [
+                                  ...(tool.aliases ?? []),
+                                  tool.toolType ?? 'platform',
+                                  ...(tool.capabilities ?? []),
+                                  tool.providerSlug ?? '',
+                                ],
+                                meta: tool.status && tool.status !== 'current'
+                                  ? 'Historical'
+                                  : tool.toolType === 'api-marketplace'
+                                    ? 'API platform'
+                                    : tool.toolType === 'editor'
+                                      ? 'Editor'
+                                      : tool.toolType === 'workflow'
+                                        ? 'Workflow'
+                                        : 'AI platform',
+                                hiddenUntilSearch: Boolean(
+                                  (tool.catalogTier && tool.catalogTier !== 'featured')
+                                  || (tool.status && tool.status !== 'current')
+                                ),
+                              })),
+                              ...provisionalToolRows
+                                .filter((candidate, candidateIndex, candidates) => (
+                                  candidates.findIndex((item) => item.toolSlug === candidate.toolSlug) === candidateIndex
+                                  && !sourceToolsData.some((tool) => tool.slug === candidate.toolSlug)
+                                ))
+                                .map((candidate) => ({
+                                  value: candidate.toolSlug,
+                                  label: candidate.toolLabel,
+                                  provisional: true,
+                                })),
+                            ];
+                            const catalogModels = selectedTool?.models ?? [];
+                            const provisionalModelRows = madeWithRows.filter((candidate) => (
+                              candidate.toolSlug === row.toolSlug
+                              && candidate.createModel
+                              && candidate.modelLabel
+                            ));
+                            const modelOptions: CreatableComboboxOption[] = [
+                              ...catalogModels.map((model) => ({
+                                value: model.slug,
+                                label: model.label,
+                                keywords: [
+                                  ...(model.aliases ?? []),
+                                  ...(model.capabilities ?? []),
+                                  model.providerSlug ?? '',
+                                ],
+                                meta: model.status && model.status !== 'current' ? 'Historical' : undefined,
+                                hiddenUntilSearch: Boolean(model.status && model.status !== 'current'),
+                              })),
+                              ...provisionalModelRows
+                                .filter((candidate, candidateIndex, candidates) => (
+                                  candidates.findIndex((item) => item.modelSlug === candidate.modelSlug) === candidateIndex
+                                  && !catalogModels.some((model) => model.slug === candidate.modelSlug)
+                                ))
+                                .map((candidate) => ({
+                                  value: candidate.modelSlug,
+                                  label: candidate.modelLabel,
+                                  provisional: true,
+                                })),
+                            ];
+                            const toolIsCatalogEntry = Boolean(selectedTool);
+                            const modelIsCatalogEntry = Boolean(catalogModels.some((model) => model.slug === row.modelSlug));
+
+                            return (
+                              <div key={row.id} className="flex flex-wrap items-center gap-2">
+                                <CreatableCombobox
+                                  ariaLabel={`Tool ${index + 1}`}
+                                  value={row.toolLabel}
+                                  options={toolOptions}
+                                  placeholder="Choose or search tool"
+                                  disabled={hasGeneratedProof}
+                                  allowCustomEdit={!toolIsCatalogEntry && !row.createTool}
+                                  onSelect={(option) => {
+                                    if (!option) {
+                                      updateMadeWithRow(row.id, {
+                                        toolLabel: '',
+                                        toolSlug: '',
+                                        modelLabel: '',
+                                        modelSlug: '',
+                                        createTool: false,
+                                        createModel: false,
+                                      });
+                                      return;
+                                    }
+                                    updateMadeWithRow(row.id, {
+                                      toolLabel: option.label,
+                                      toolSlug: option.value,
+                                      modelLabel: '',
+                                      modelSlug: '',
+                                      createTool: option.provisional === true,
+                                      createModel: false,
+                                    });
+                                  }}
+                                  onCreate={(label) => {
+                                    updateMadeWithRow(row.id, {
+                                      toolLabel: label,
+                                      toolSlug: slugifySourceTool(label) ?? '',
+                                      modelLabel: '',
+                                      modelSlug: '',
+                                      createTool: true,
+                                      createModel: false,
+                                    });
+                                  }}
+                                  onCustomEdit={(label) => {
+                                    updateMadeWithRow(row.id, {
+                                      toolLabel: label,
+                                      toolSlug: slugifySourceTool(label) ?? '',
+                                      createTool: false,
+                                    });
+                                  }}
+                                />
+                                <CreatableCombobox
+                                  ariaLabel={`Model for ${row.toolLabel || `tool ${index + 1}`}`}
+                                  value={row.modelLabel}
+                                  options={modelOptions}
+                                  placeholder="Any model"
+                                  emptyOptionLabel="Any model"
+                                  disabled={hasGeneratedProof || !row.toolLabel}
+                                  allowCustomEdit={Boolean(row.modelLabel && !modelIsCatalogEntry && !row.createModel)}
+                                  onSelect={(option) => {
+                                    updateMadeWithRow(row.id, {
+                                      modelLabel: option?.label ?? '',
+                                      modelSlug: option?.value ?? '',
+                                      createModel: option?.provisional === true,
+                                    });
+                                  }}
+                                  onCreate={(label) => {
+                                    updateMadeWithRow(row.id, {
+                                      modelLabel: label,
+                                      modelSlug: slugifySourceTool(label) ?? '',
+                                      createModel: true,
+                                    });
+                                  }}
+                                  onCustomEdit={(label) => {
+                                    updateMadeWithRow(row.id, {
+                                      modelLabel: label,
+                                      modelSlug: slugifySourceTool(label) ?? '',
+                                      createModel: false,
+                                    });
+                                  }}
+                                />
+                                {!hasGeneratedProof && madeWithRows.length > 1 ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeMadeWithRow(row.id)}
+                                    className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3 text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                                    aria-label={`Remove tool ${index + 1}`}
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                          {!hasGeneratedProof && madeWithRows.length < 5 ? (
+                            <button
+                              type="button"
+                              onClick={addMadeWithRow}
+                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
+                            >
+                              <Plus className="h-4 w-4" />
+                              Add another tool
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               <div
@@ -3185,30 +3363,19 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 data-composer-section="story"
                 className="rounded-3xl border border-white/8 bg-black/20 p-5 outline-none"
               >
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-white">Story</h2>
-                    <p className="mt-1 text-xs text-zinc-400">
-                      The public content visible in Explore.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsDetailsOpen((current) => !current)}
-                    className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                  >
-                    {isDetailsOpen ? 'Hide description' : 'Add Explore description'}
-                  </button>
-                </div>
-
-                {renderSectionError('story')}
-
-                <label className="mt-5 block">
+                <label className="block">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                      {proofMode === 'text' ? 'Post body' : 'Caption'}
+                      {bodyFieldLabel}{' '}
+                      {proofMode === 'text'
+                        ? <span className="text-sky-300">Required</span>
+                        : <span className="font-normal normal-case tracking-normal text-zinc-600">Optional</span>}
                     </span>
-                    <span className={`text-xs ${bodyCount > BODY_MAX_LENGTH ? 'text-rose-300' : 'text-zinc-500'}`}>
+                    {/* aria-hidden for the same reason as the title's counter. */}
+                    <span
+                      aria-hidden="true"
+                      className={`text-xs ${bodyCount > BODY_MAX_LENGTH ? 'text-rose-300' : 'text-zinc-500'}`}
+                    >
                       {bodyCount}/{BODY_MAX_LENGTH}
                     </span>
                   </div>
@@ -3218,35 +3385,31 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       setBody(event.target.value);
                       resetFeedback();
                     }}
+                    aria-label={`${bodyFieldLabel}, ${proofMode === 'text' ? 'required' : 'optional'}, maximum ${BODY_MAX_LENGTH} characters`}
+                    aria-required={proofMode === 'text' ? 'true' : undefined}
                     placeholder={
                       proofMode === 'text'
-                        ? 'Write the post content...'
-                        : 'Write an optional caption...'
+                        ? 'Share a prompt, idea, breakdown, or useful note…'
+                        : 'Share the idea, process, or story behind it…'
                     }
                     rows={proofMode === 'text' ? 8 : 6}
                     className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                   />
                 </label>
 
-                {isDetailsOpen ? (
-                  <label className="mt-5 block">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Explore description</div>
-                    <textarea
-                      value={description}
-                      onChange={(event) => {
-                        setDescription(event.target.value);
-                        resetFeedback();
-                      }}
-                      placeholder="Optional: give the post a short one-line setup for Explore and previews."
-                      rows={3}
-                      className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
-                    />
-                  </label>
-                ) : null}
+                {renderSectionError('story')}
               </div>
 
               <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-2xl border border-white/10 p-4 text-sm text-zinc-200">
-                <input type="checkbox" checked={isNsfw} onChange={(event) => setIsNsfw(event.target.checked)} className="mt-1" />
+                <input
+                  type="checkbox"
+                  checked={isNsfw}
+                  onChange={(event) => {
+                    setIsNsfw(event.target.checked);
+                    resetFeedback();
+                  }}
+                  className="mt-1"
+                />
                 <span><span className="block font-semibold">Mark as NSFW / mature</span><span className="mt-1 block text-zinc-400">Cover this post’s media and text until viewers choose to reveal them. Community rules still apply.</span></span>
               </label>
               <div
@@ -3505,7 +3668,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               </div>
 
               {createdPost ? (
-                <div className="rounded-[28px] border border-emerald-500/20 bg-emerald-500/10 p-5">
+                <div
+                  ref={savedPanelRef}
+                  tabIndex={-1}
+                  className="rounded-[28px] border border-emerald-500/20 bg-emerald-500/10 p-5 outline-none"
+                >
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="text-sm font-semibold text-white">
                       {isEditMode
@@ -3533,24 +3700,26 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             ? 'Your post is live.'
                             : 'Your post is saved with limited visibility.'}
                   </p>
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    {primaryPostPath ? (
-                      <Link
-                        href={primaryPostPath}
-                        className="rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
-                      >
-                        {primaryPostLabel}
-                      </Link>
-                    ) : null}
-                    {createdPostHasResources && createdPost.resourceBundlePath ? (
-                      <Link
-                        href={createdPost.resourceBundlePath}
-                        className="rounded-full border border-emerald-300/30 bg-emerald-400/15 px-4 py-2.5 text-sm font-semibold text-emerald-50 transition hover:border-emerald-200/40 hover:bg-emerald-400/20"
-                      >
-                        Open recipe section
-                      </Link>
-                    ) : null}
-                  </div>
+                  {primaryPostPath || (createdPostHasResources && createdPost.resourceBundlePath) ? (
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      {primaryPostPath ? (
+                        <Link
+                          href={primaryPostPath}
+                          className="rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                        >
+                          {primaryPostLabel}
+                        </Link>
+                      ) : null}
+                      {createdPostHasResources && createdPost.resourceBundlePath ? (
+                        <Link
+                          href={createdPost.resourceBundlePath}
+                          className="rounded-full border border-emerald-300/30 bg-emerald-400/15 px-4 py-2.5 text-sm font-semibold text-emerald-50 transition hover:border-emerald-200/40 hover:bg-emerald-400/20"
+                        >
+                          Open recipe section
+                        </Link>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -3581,22 +3750,28 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 <div className="mt-5">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <button
-                      type="submit"
+                      type={isEditMode ? 'button' : 'submit'}
                       disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                      onClick={() => submitWithVisibility('private')}
+                      onClick={pressSecondarySubmit}
                       className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-5 text-left transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-70"
                     >
-                      <div className="text-sm font-semibold text-zinc-200">Save private</div>
-                      <p className="mt-1.5 text-xs leading-5 text-zinc-500">Saved privately in Studio.</p>
+                      <div className="flex items-center gap-2 text-sm font-semibold text-zinc-200">
+                        {secondaryPendingLabel ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        {secondaryPendingLabel ?? secondarySubmit.label}
+                      </div>
+                      <p className="mt-1.5 text-xs leading-5 text-zinc-500">{secondarySubmit.detail}</p>
                     </button>
                     <button
                       type="submit"
                       disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                      onClick={() => submitWithVisibility('public')}
+                      onClick={() => submitWithVisibility(primarySubmit.target)}
                       className="ui-focus-ring rounded-2xl bg-[var(--ui-primary)] px-5 py-5 text-left transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
                     >
-                      <div className="text-sm font-extrabold text-[var(--ui-primary-on)]">Publish public</div>
-                      <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Explore.</p>
+                      <div className="flex items-center gap-2 text-sm font-extrabold text-[var(--ui-primary-on)]">
+                        {primaryPendingLabel ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        {primaryPendingLabel ?? primarySubmit.label}
+                      </div>
+                      <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">{primarySubmit.detail}</p>
                     </button>
                   </div>
                 </div>
