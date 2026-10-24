@@ -1126,6 +1126,40 @@ export function buildCreatePostFormData(draft: PostComposerDraft) {
   return formData;
 }
 
+/**
+ * The media a loaded post holds, as an edit opens it: each item named by its row
+ * (`existingId`) and the key it was saved under, which a save sends back.
+ */
+export function hydratePostComposerMediaItems(
+  post: Pick<OwnerPostListItem, 'id' | 'title' | 'mediaUrl' | 'mediaKind' | 'mediaItems'>,
+): PostComposerMediaItem[] {
+  if (post.mediaItems?.length) {
+    return post.mediaItems.map((item) => ({
+      id: item.id,
+      mediaKey: item.mediaKey ?? item.id,
+      uri: item.url,
+      previewUrl: item.previewUrl ?? item.url,
+      name: item.originalName || item.id,
+      type: item.contentType || (item.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg'),
+      mediaKind: item.mediaKind,
+      existingId: item.id,
+    }));
+  }
+
+  return post.mediaUrl
+    ? [{
+        id: 'existing-cover',
+        mediaKey: `${post.id}:cover`,
+        uri: post.mediaUrl,
+        previewUrl: post.mediaUrl,
+        name: post.title || 'media',
+        type: post.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg',
+        mediaKind: post.mediaKind === 'video' ? 'video' : 'image',
+        existingId: `${post.id}:cover`,
+      }]
+    : [];
+}
+
 export function buildPostComposerMediaItemsPayload(draft: PostComposerDraft): PostComposerMediaItemPayload[] {
   return draft.mediaItems
     .slice(0, MAX_MEDIA_ITEMS)

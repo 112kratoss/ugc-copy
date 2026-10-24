@@ -46,6 +46,7 @@ import {
   getMediaAwaitingUpload,
   planPostComposerMediaRecovery,
   saveMayHaveConsumedUploads,
+  withSavedPostMedia,
   type MediaVerification,
 } from '@/lib/post-composer-media-recovery';
 import {
@@ -72,6 +73,7 @@ import {
   MADE_WITH_LABEL_MAX_LENGTH,
   TITLE_MAX_LENGTH,
   hydratePostComposerAllowRemix,
+  hydratePostComposerMediaItems,
   hydratePostComposerResourceCards,
   migratePostComposerResourceDraftToCards,
   sanitizePostComposerResourceCardIds,
@@ -1975,6 +1977,13 @@ function NewPostComposer() {
   // server does; stays null for new posts, where nothing is grandfathered.
   const initialTitleRef = useRef<string | null>(null);
   const initialDraftSignatureRef = useRef<string | null>(null);
+  // An edit save that sends media re-inserts every media row of the post under a
+  // new id, and can go through and still fail. From then on the ids the draft
+  // holds may name rows that are gone, so every later save reads the rows back
+  // first (`readBackSavedMedia`): past the client's deadline the server can still
+  // be finishing, and a retry that read the rows before it did is refused once it
+  // has, which a read on the next press puts right.
+  const savedMediaIdsStaleRef = useRef(false);
   const draftStorageId = user ? getPostComposerDraftStorageId({
     userId: user.id,
     postId,
@@ -2134,29 +2143,7 @@ function NewPostComposer() {
           name: post.title || 'media',
           type: post.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg',
         } : null,
-        mediaItems: post.mediaItems?.length
-          ? post.mediaItems.map((item) => ({
-              id: item.id,
-              mediaKey: item.mediaKey ?? item.id,
-              uri: item.url,
-              previewUrl: item.previewUrl ?? item.url,
-              name: item.originalName || item.id,
-              type: item.contentType || (item.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg'),
-              mediaKind: item.mediaKind,
-              existingId: item.id,
-            }))
-          : post.mediaUrl
-            ? [{
-                id: 'existing-cover',
-                mediaKey: `${post.id}:cover`,
-                uri: post.mediaUrl,
-                previewUrl: post.mediaUrl,
-                name: post.title || 'media',
-                type: post.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg',
-                mediaKind: post.mediaKind === 'video' ? 'video' : 'image',
-                existingId: `${post.id}:cover`,
-              }]
-            : [],
+        mediaItems: hydratePostComposerMediaItems(post),
         // "Include exact prompt" reads the loaded cards (`hasCreationPromptCard`),
         // and an edit attaches no creation references: only the publish route
         // copies them, so the editor does not offer them.
@@ -2217,10 +2204,10 @@ function NewPostComposer() {
     const baselineSignature = getPostComposerDraftSignature(draft);
     initialDraftSignatureRef.current = baselineSignature;
 
-    void loadPersistedPostComposerDraft(draftStorageId!).then((persisted) => {
+    void loadPersistedPostComposerDraft(draftStorageId!).then(async (persisted) => {
       if (!active) return;
       if (persisted) {
-        const restoredDraft: PostComposerDraft = {
+        const keptDraft: PostComposerDraft = {
           ...persisted.draft,
           // An older build could save a draft as unlisted, which is private now.
           // Opened from Share, the post is being published, as in the prefill.
@@ -2231,19 +2218,32 @@ function NewPostComposer() {
             migratePostComposerResourceDraftToCards(persisted.draft.resource),
           ),
         };
+        // A kept edit names its media by the ids from when it was kept, and a
+        // save since then (one that went through and then failed included)
+        // re-inserted every row under a new id. Only a post whose saves send
+        // media is checked: one made from a creation keeps the creation's.
+        const editedPost = isEditMode && !postQuery.data?.post?.generationId ? postQuery.data?.post : undefined;
+        const deviceFiles = editedPost ? await findDeviceFiles(keptDraft.mediaItems) : new Set<string>();
+        if (!active) return;
+        const { draft: restoredDraft, lost: lostOnRestore } = editedPost
+          ? withSavedPostMedia(keptDraft, editedPost, (uri) => deviceFiles.has(uri))
+          : { draft: keptDraft, lost: [] as PostComposerMediaItem[] };
         const details = getPostComposerDetailErrors(restoredDraft, { grandfatheredTitle: initialTitleRef.current });
         const canOpenReview = Object.keys(details).length === 0;
         setDraft(restoredDraft);
         setComposerStep(persisted.step === 'resources' && canOpenReview ? 'resources' : 'details');
         setDetailErrors(canOpenReview ? {} : details);
-        setMessage({
-          tone: 'neutral',
-          title: 'Draft restored',
-          body: 'Your unfinished post was recovered on this device.',
-        });
+        const lostMessage = describeLostRecoveryMedia(lostOnRestore);
+        setMessage(lostMessage
+          ? { tone: 'danger', title: 'Some media could not be restored', body: lostMessage }
+          : {
+              tone: 'neutral',
+              title: 'Draft restored',
+              body: 'Your unfinished post was recovered on this device.',
+            });
         // Deliberately not awaited: the draft is already usable, and verifying
         // its uploads is a background repair the user should not wait behind.
-        void recoverRestoredDraftMedia(restoredDraft);
+        void recoverRestoredDraftMedia(restoredDraft, lostOnRestore);
       } else if (focusTarget === 'resources') {
         const details = getPostComposerDetailErrors(draft, { grandfatheredTitle: initialTitleRef.current });
         if (Object.keys(details).length === 0) {
@@ -2351,6 +2351,27 @@ function NewPostComposer() {
     };
   };
 
+  /**
+   * The draft with its media named by the rows the post holds now, read with the
+   * owner read the prefill uses (`savedMediaIdsStaleRef`). When the post cannot
+   * be read the save stops here: an id the post no longer has is refused on
+   * every save, so none that may be stale goes. Media that is on neither the
+   * post nor the device leaves the draft, and the save stops to say so.
+   */
+  const readBackSavedMedia = async (editedPostId: string, target: PostComposerDraft): Promise<PostComposerDraft> => {
+    const post = (await api.getOwnerPost(editedPostId).catch(() => null))?.post;
+    if (!post || !Array.isArray(post.mediaItems)) {
+      throw new Error('Could not check this post\'s media before saving. Try again.');
+    }
+    const deviceFiles = await findDeviceFiles(target.mediaItems);
+    const hasDeviceFile = (uri: string) => deviceFiles.has(uri);
+    const named = withSavedPostMedia(target, post, hasDeviceFile);
+    setDraft((current) => withSavedPostMedia(current, post, hasDeviceFile).draft);
+    const lostMessage = describeLostRecoveryMedia(named.lost);
+    if (lostMessage) throw new Error(lostMessage);
+    return named.draft;
+  };
+
   const publishMutation = useMutation({
     mutationFn: async (targetVisibility?: PostComposerDraft['visibility']) => {
       const effectiveDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
@@ -2365,13 +2386,18 @@ function NewPostComposer() {
         throw new Error(validation.message);
       }
 
-      const submittedDraft = await uploadMediaAwaitingUpload(effectiveDraft);
+      const draftToSave = postId && savedMediaIdsStaleRef.current
+        ? await readBackSavedMedia(postId, effectiveDraft)
+        : effectiveDraft;
+      const submittedDraft = await uploadMediaAwaitingUpload(draftToSave);
+      let sentPostMedia = false;
       try {
         if (postId) {
           const isGen = Boolean(postQuery.data?.post?.generationId);
           const payload = buildUpdatePostPayload(isGen, submittedDraft, {
             preserveSoldResourceBundle: hasPaidOrders,
           });
+          sentPostMedia = 'mediaItems' in payload;
           return await api.updatePost(postId, payload);
         }
 
@@ -2386,6 +2412,8 @@ function NewPostComposer() {
         // was refused on every retry; the next publish uploads those files again.
         if (saveMayHaveConsumedUploads(error)) {
           setDraft((current) => forgetConsumedMediaUploads(current, submittedDraft));
+          // The same edit may have re-inserted every media row under a new id.
+          if (sentPostMedia) savedMediaIdsStaleRef.current = true;
         }
         throw error;
       }
@@ -2687,7 +2715,11 @@ function NewPostComposer() {
    * re-upload phase runs through the same progress banner and cancel button as
    * a normal media pick, so several large videos never upload invisibly.
    */
-  const recoverRestoredDraftMedia = async (restored: PostComposerDraft) => {
+  const recoverRestoredDraftMedia = async (
+    restored: PostComposerDraft,
+    // Dropped before this ran; a notice of more drops names them too, as it replaces theirs.
+    alreadyLost: PostComposerMediaItem[] = [],
+  ) => {
     const staged = restored.mediaItems.filter((item) => !item.existingId && item.storagePath);
     if (staged.length === 0) return;
 
@@ -2811,9 +2843,10 @@ function NewPostComposer() {
         return;
       }
 
-      const lostMessage = describeLostRecoveryMedia(
-        restored.mediaItems.filter((item) => lost.has(item.id)),
-      );
+      const lostMessage = describeLostRecoveryMedia([
+        ...alreadyLost,
+        ...restored.mediaItems.filter((item) => lost.has(item.id)),
+      ]);
       if (lostMessage) {
         setMessage({ tone: 'danger', title: 'Some media could not be restored', body: lostMessage });
         return;
@@ -4894,6 +4927,32 @@ function validateCurrentDraft(
     return { valid: false, message: 'Choose a finished creation before publishing.' };
   }
   return result;
+}
+
+/**
+ * The files still on this device of the media with no staged upload, which is
+ * where a new upload of them would be read from. A remote URL is media the post
+ * held, not a device file.
+ */
+async function findDeviceFiles(items: PostComposerMediaItem[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  const uris = items.flatMap((item) => (
+    !item.storagePath && item.uri && !/^https?:\/\//i.test(item.uri) ? [item.uri] : []
+  ));
+  if (uris.length === 0) return found;
+  try {
+    const { File: ExpoFile } = await import('expo-file-system');
+    for (const uri of uris) {
+      try {
+        if (new ExpoFile(uri).exists) found.add(uri);
+      } catch {
+        // An unreadable local file is treated as gone, which is what it is.
+      }
+    }
+  } catch {
+    // With no file system to ask, no file counts as still there.
+  }
+  return found;
 }
 
 function getGenerationPreviewImageUrl(item: GenerationListItem) {

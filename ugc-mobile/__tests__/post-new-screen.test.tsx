@@ -49,6 +49,8 @@ const sourceToolsState = vi.hoisted(() => ({
   }] as SourceToolOption[],
 }));
 const postEditState = vi.hoisted(() => ({ post: null as Record<string, unknown> | null }));
+// The files still on the device, by uri; anything else reads as gone.
+const deviceFileState = vi.hoisted(() => ({ uris: new Set<string>() }));
 // The creation the composer is opened on, when a case needs one other than `generationItem`.
 const generationState = vi.hoisted(() => ({ item: null as Record<string, unknown> | null }));
 const mutationState = vi.hoisted(() => ({
@@ -276,11 +278,25 @@ vi.mock('@/lib/media', async (importOriginal) => ({
   uploadResourceDocument: vi.fn(),
 }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
+vi.mock('expo-file-system', () => ({
+  File: class {
+    constructor(readonly uri: string) {}
+
+    get exists() {
+      return deviceFileState.uris.has(this.uri);
+    }
+  },
+}));
 
 import NewPostScreen from '../app/post/new';
 import { ApiError } from '../lib/api-client';
 import { pickMediaList, pickResourceDocument, uploadPickedMedia, uploadResourceDocument } from '@/lib/media';
-import { buildPostResourceBundleInput, getDefaultPostComposerDraft, type PostComposerDraft } from '../lib/post-new-view-model';
+import {
+  buildPostResourceBundleInput,
+  getDefaultPostComposerDraft,
+  type PostComposerDraft,
+  type PostComposerMediaItem,
+} from '../lib/post-new-view-model';
 
 function collectText(root: renderer.ReactTestInstance) {
   return root
@@ -399,6 +415,8 @@ describe('mobile external post composer', () => {
     generationState.item = null;
     authState.api.createPost.mockReset();
     authState.api.updatePost.mockReset();
+    authState.api.getOwnerPost.mockReset();
+    deviceFileState.uris.clear();
     queryClientState.invalidateQueries.mockClear();
     queryClientState.setQueryData.mockClear();
     mutationState.mutate.mockClear();
@@ -1871,6 +1889,8 @@ describe('mobile external post composer', () => {
         kind: 'image',
       }));
       expect(sentStoragePaths()).toEqual(['uploads/cover-again.png']);
+      // A new post has no rows to read back.
+      expect(authState.api.getOwnerPost).not.toHaveBeenCalled();
     });
 
     it('sends the same uploads again after a refusal decided before they were used', async () => {
@@ -1880,6 +1900,288 @@ describe('mobile external post composer', () => {
 
       expect(uploadPickedMedia).not.toHaveBeenCalled();
       expect(sentStoragePaths()).toEqual(['uploads/cover.png']);
+    });
+  });
+
+  // An edit save that sends media deletes and re-inserts every media row of the
+  // post (`replace_post_media`), so every id changes, and it can go through and
+  // still fail: the Made with refusal comes after the write, a server error can,
+  // and the 30 s deadline can run out while the server finishes a large video.
+  // The retry sent the old ids and was refused on every press ("An existing media
+  // item no longer belongs to this post."), and the draft kept on the device took
+  // them into every reopening.
+  describe('an edit that may have saved before it failed', () => {
+    const mediaRow = (id: string, mediaKey: string, name: string) => ({
+      id,
+      mediaKey,
+      url: `https://cdn.example.com/${name}`,
+      previewUrl: null,
+      originalName: name,
+      contentType: 'image/png',
+      mediaKind: 'image',
+    });
+    const gallery = {
+      id: 'post-gallery',
+      title: 'Neon skyline study',
+      description: null,
+      body: 'Frames from one evening',
+      postFormat: 'mixed',
+      generationId: null,
+      category: 'image',
+      visibility: 'public',
+      sourceTool: null,
+      sourceToolSlug: null,
+      sourceTools: [],
+      mediaUrl: 'https://cdn.example.com/first.png',
+      mediaKind: 'image',
+      mediaItems: [mediaRow('row-1', 'media-first', 'first.png')],
+      resourceBundleInput: null,
+      hasPaidOrders: false,
+    };
+    const saved = { success: true, postId: 'post-gallery', visibility: 'public' };
+    // The post once a save of the cover and the new picture went through: every row re-inserted.
+    const savedGallery = (newKey: string) => ({
+      success: true,
+      post: { ...gallery, mediaItems: [mediaRow('row-9', 'media-first', 'first.png'), mediaRow('row-10', newKey, 'cover.png')] },
+    });
+    const noAnswer = () => new ApiError('Network request failed. Please check your connection and try again.', 0, {
+      url: 'https://magicbooklet.com/api/posts/post-gallery',
+      cause: 'Network request failed',
+    });
+
+    const sentMedia = () => (
+      authState.api.updatePost.mock.calls.at(-1)?.[1] as { mediaItems?: Array<Record<string, unknown>> } | undefined
+    )?.mediaItems;
+    const mediaCardLabels = (tree: renderer.ReactTestRenderer) => tree.root
+      .findAll((node) => String(node.type) === 'view' && typeof node.props.accessibilityValue?.text === 'string')
+      .map((node) => node.props.accessibilityLabel as string);
+
+    /** Presses Save; the error it stopped with, or null. */
+    async function save() {
+      let failure: unknown = null;
+      await renderer.act(async () => {
+        failure = await mutationState.options?.mutationFn?.('public').then(() => null, (error: unknown) => error);
+      });
+      return failure;
+    }
+
+    async function waitUntil(check: () => boolean) {
+      for (let attempt = 0; attempt < 20 && !check(); attempt += 1) {
+        await renderer.act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      }
+      expect(check()).toBe(true);
+    }
+
+    async function failFirstSave(error: unknown) {
+      paramsState.params = { postId: 'post-gallery' };
+      postEditState.post = gallery;
+      await uploadManualMedia();
+      const tree = await renderScreen();
+      await choosePreparedMedia(tree);
+      authState.api.updatePost.mockRejectedValueOnce(error);
+      expect(await save()).toBe(error);
+      const [kept, added] = sentMedia() ?? [];
+      expect(kept).toEqual({ existingId: 'row-1', mediaKey: 'media-first' });
+      expect(added).toMatchObject({ storagePath: 'uploads/cover.png' });
+      vi.mocked(uploadPickedMedia).mockClear();
+      return { tree, newKey: String(added.mediaKey) };
+    }
+
+    it.each([
+      ['the Made with refusal that follows the write', new ApiError('Choose a tool from the list or create one.', 400, {
+        error: 'Choose a tool from the list or create one.',
+        field: 'sourceTools',
+      })],
+      ['a server error', new ApiError('Failed to update post.', 500, { error: 'Failed to update post.' })],
+      ['the deadline running out while the server finished', new ApiError('Network request failed. Please check your connection and try again.', 0, {
+        url: 'https://magicbooklet.com/api/posts/post-gallery',
+        cause: 'Request timed out after 30000ms',
+        timedOut: true,
+      })],
+    ])('saves again under the rows the post holds now after %s', async (_label, error) => {
+      const { newKey } = await failFirstSave(error);
+      authState.api.getOwnerPost.mockResolvedValueOnce(savedGallery(newKey));
+      authState.api.updatePost.mockResolvedValueOnce(saved);
+
+      expect(await save()).toBeNull();
+
+      expect(authState.api.getOwnerPost).toHaveBeenCalledWith('post-gallery');
+      expect(sentMedia()).toEqual([
+        { existingId: 'row-9', mediaKey: 'media-first' },
+        { existingId: 'row-10', mediaKey: newKey },
+      ]);
+      // The post already holds the new picture, so nothing goes up again.
+      expect(uploadPickedMedia).not.toHaveBeenCalled();
+    });
+
+    // Past the client's deadline the server can still be finishing: a retry read
+    // the rows from before that save went through, and was refused once it had.
+    it('reads the rows again on the press after a retry refused for ids the post no longer has', async () => {
+      const { newKey } = await failFirstSave(new ApiError('Network request failed. Please check your connection and try again.', 0, {
+        url: 'https://magicbooklet.com/api/posts/post-gallery',
+        cause: 'Request timed out after 30000ms',
+        timedOut: true,
+      }));
+      // Not saved yet as far as the read can tell, so the picture goes up again from the phone.
+      deviceFileState.uris.add('file:///cover.png');
+      authState.api.getOwnerPost.mockResolvedValueOnce({ success: true, post: gallery });
+      authState.api.updatePost.mockRejectedValueOnce(new ApiError('An existing media item no longer belongs to this post.', 400, {
+        error: 'An existing media item no longer belongs to this post.',
+      }));
+      expect(await save()).toBeInstanceOf(ApiError);
+
+      authState.api.getOwnerPost.mockResolvedValueOnce(savedGallery(newKey));
+      authState.api.updatePost.mockResolvedValueOnce(saved);
+      expect(await save()).toBeNull();
+
+      expect(authState.api.getOwnerPost).toHaveBeenCalledTimes(2);
+      expect(sentMedia()).toEqual([
+        { existingId: 'row-9', mediaKey: 'media-first' },
+        { existingId: 'row-10', mediaKey: newKey },
+      ]);
+    });
+
+    it('reads nothing back after a refusal decided before anything was written', async () => {
+      const { newKey } = await failFirstSave(new ApiError('Add a title for your post.', 400, {
+        error: 'Add a title for your post.',
+        field: 'title',
+      }));
+      authState.api.updatePost.mockResolvedValueOnce(saved);
+
+      expect(await save()).toBeNull();
+
+      expect(authState.api.getOwnerPost).not.toHaveBeenCalled();
+      expect(sentMedia()).toEqual([
+        { existingId: 'row-1', mediaKey: 'media-first' },
+        expect.objectContaining({ mediaKey: newKey, storagePath: 'uploads/cover.png' }),
+      ]);
+    });
+
+    it('stops the save, keeping the draft, when the post cannot be read back, and reads again on the next press', async () => {
+      const { tree, newKey } = await failFirstSave(new ApiError('Failed to update post.', 500, { error: 'Failed to update post.' }));
+      authState.api.getOwnerPost.mockRejectedValueOnce(noAnswer());
+
+      const failure = await save();
+
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe("Could not check this post's media before saving. Try again.");
+      // Neither the ids that may be stale nor an upload went anywhere.
+      expect(authState.api.updatePost).toHaveBeenCalledTimes(1);
+      expect(uploadPickedMedia).not.toHaveBeenCalled();
+      renderer.act(() => mutationState.options?.onError?.(failure, 'public'));
+      expect(collectText(tree.root)).toContain('Could not save');
+      expect(collectText(tree.root)).toContain("Could not check this post's media before saving. Try again.");
+      expect(mediaCardLabels(tree)).toEqual(['Cover', 'Media 2']);
+
+      authState.api.getOwnerPost.mockResolvedValueOnce(savedGallery(newKey));
+      authState.api.updatePost.mockResolvedValueOnce(saved);
+      expect(await save()).toBeNull();
+
+      expect(authState.api.getOwnerPost).toHaveBeenCalledTimes(2);
+      expect(sentMedia()).toEqual([
+        { existingId: 'row-9', mediaKey: 'media-first' },
+        { existingId: 'row-10', mediaKey: newKey },
+      ]);
+    });
+
+    describe('in a draft kept on the device', () => {
+      // As the edit prefill loads an item the post holds.
+      const loadedItem = (id: string, mediaKey: string, name: string): PostComposerMediaItem => ({
+        id,
+        mediaKey,
+        uri: `https://cdn.example.com/${name}`,
+        previewUrl: `https://cdn.example.com/${name}`,
+        name,
+        type: 'image/png',
+        mediaKind: 'image',
+        existingId: id,
+      });
+      // Added on this phone; its upload was forgotten after a save that may have used it.
+      const addedItem = (mediaKey: string, name: string): PostComposerMediaItem => ({
+        id: mediaKey,
+        mediaKey,
+        uri: `file:///${name}`,
+        previewUrl: `file:///${name}`,
+        name,
+        type: 'image/png',
+        mediaKind: 'image',
+        storagePath: null,
+      });
+
+      function keepDraft(mediaItems: PostComposerMediaItem[]) {
+        storageState.values.set('magicbooklet.post.drafts.v1', JSON.stringify({
+          'user-123:edit:post-gallery': {
+            draft: {
+              ...getDefaultPostComposerDraft(),
+              mode: 'upload',
+              proofMode: 'media',
+              title: 'Neon skyline study',
+              caption: 'Frames from one evening',
+              category: 'image',
+              mediaItems,
+            },
+            step: 'details',
+            updatedAt: new Date().toISOString(),
+          },
+        }));
+      }
+
+      it('names its media by the rows the post holds now', async () => {
+        // Kept after a save that went through and then failed, with the ids from before it.
+        keepDraft([loadedItem('row-1', 'media-first', 'first.png'), addedItem('media-added', 'added.png')]);
+        paramsState.params = { postId: 'post-gallery' };
+        postEditState.post = { ...gallery, mediaItems: [mediaRow('row-9', 'media-first', 'first.png'), mediaRow('row-10', 'media-added', 'added.png')] };
+        authState.api.updatePost.mockResolvedValueOnce(saved);
+        const tree = await renderScreen();
+        await waitUntil(() => collectText(tree.root).includes('Draft restored'));
+
+        expect(await save()).toBeNull();
+
+        expect(sentMedia()).toEqual([
+          { existingId: 'row-9', mediaKey: 'media-first' },
+          { existingId: 'row-10', mediaKey: 'media-added' },
+        ]);
+        expect(uploadPickedMedia).not.toHaveBeenCalled();
+        // The post the editor loaded is what the draft is checked against.
+        expect(authState.api.getOwnerPost).not.toHaveBeenCalled();
+      });
+
+      it('drops what the post no longer holds unless it can go again from the device', async () => {
+        deviceFileState.uris.add('file:///later.png');
+        keepDraft([
+          loadedItem('row-1', 'media-first', 'first.png'),
+          // Removed from the post on the web since this draft was kept.
+          loadedItem('row-2', 'media-removed', 'removed.png'),
+          addedItem('media-later', 'later.png'),
+        ]);
+        paramsState.params = { postId: 'post-gallery' };
+        postEditState.post = gallery;
+        vi.mocked(uploadPickedMedia).mockImplementation(async (_uri, options) => ({
+          signedUrl: 'https://storage.example.com/signed',
+          storagePath: 'uploads/later-again.png',
+          mimeType: options?.mimeType ?? 'image/png',
+          fileName: options?.fileName ?? 'later.png',
+          kind: 'image',
+          durationSeconds: null,
+          sizeBytes: null,
+        }));
+        authState.api.updatePost.mockResolvedValueOnce(saved);
+        const tree = await renderScreen();
+        await waitUntil(() => collectText(tree.root).includes('Some media could not be restored'));
+
+        expect(collectText(tree.root)).toContain('removed.png could not be restored and was removed. Add it again before publishing.');
+        expect(mediaCardLabels(tree)).toEqual(['Cover', 'Media 2']);
+        expect(await save()).toBeNull();
+
+        expect(uploadPickedMedia).toHaveBeenCalledTimes(1);
+        expect(uploadPickedMedia).toHaveBeenCalledWith('file:///later.png', expect.objectContaining({ fileName: 'later.png' }));
+        expect(sentMedia()).toEqual([
+          { existingId: 'row-1', mediaKey: 'media-first' },
+          expect.objectContaining({ mediaKey: 'media-later', storagePath: 'uploads/later-again.png' }),
+        ]);
+      });
     });
   });
 

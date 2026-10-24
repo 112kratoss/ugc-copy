@@ -1,6 +1,6 @@
 import { ApiError } from './api-client';
 import { listFilesInSentence } from './media-file-names';
-import type { PostComposerDraft, PostComposerMediaItem } from './post-new-view-model';
+import { hydratePostComposerMediaItems, type PostComposerDraft, type PostComposerMediaItem } from './post-new-view-model';
 
 /**
  * Recovers a restored draft's staged media.
@@ -182,6 +182,52 @@ export function forgetConsumedMediaUploads(draft: PostComposerDraft, submitted: 
 /** New media with no staged upload: the next publish uploads them from the device first. */
 export function getMediaAwaitingUpload(items: PostComposerMediaItem[]): PostComposerMediaItem[] {
   return items.filter((item) => !item.existingId && !item.storagePath);
+}
+
+/**
+ * Names the draft's media by what the post holds now. An edit save that sends
+ * media deletes and re-inserts every media row of the post, so every id changes,
+ * and the save can go through and still fail (`saveMayHaveConsumedUploads`); a
+ * draft kept on the device from before such a save holds the old ids too. The
+ * server refuses an id it no longer has on every save. Media is matched by its
+ * key: what the post holds takes its row's id and drops its staged upload, which
+ * that save used; what it does not hold goes as a new upload while it has a
+ * staged upload or its file on the device, and is `lost` otherwise. Items that
+ * change nothing stay the same objects, so a kept draft that matches the post
+ * does not count as edited. The web composer's `withSavedMediaRows`.
+ */
+export function withSavedPostMedia(
+  draft: PostComposerDraft,
+  post: Parameters<typeof hydratePostComposerMediaItems>[0],
+  hasDeviceFile: (uri: string) => boolean,
+): { draft: PostComposerDraft; lost: PostComposerMediaItem[] } {
+  const savedIdsByKey = new Map(hydratePostComposerMediaItems(post).flatMap((item) => (
+    item.existingId ? [[item.mediaKey ?? item.id, item.existingId] as const] : []
+  )));
+  const lost: PostComposerMediaItem[] = [];
+  const mediaItems = draft.mediaItems.map((item) => {
+    const savedId = savedIdsByKey.get(item.mediaKey ?? item.id);
+    if (savedId) {
+      return savedId === item.existingId && !item.storagePath
+        ? item
+        : { ...item, existingId: savedId, ...(item.storagePath ? { storagePath: null } : {}) };
+    }
+    if (item.storagePath || (item.uri && hasDeviceFile(item.uri))) {
+      return item.existingId ? { ...item, existingId: null } : item;
+    }
+    lost.push(item);
+    return item;
+  });
+
+  return {
+    draft: lost.length > 0
+      ? applyPostComposerMediaRecoveryToDraft({ ...draft, mediaItems }, {
+          reuploaded: new Map(),
+          lost: new Set(lost.map((item) => item.id)),
+        })
+      : { ...draft, mediaItems },
+    lost,
+  };
 }
 
 const COMPOSER_MEDIA_NOUNS = { image: ['an image', 'images'], video: ['a video', 'videos'] } as const;
