@@ -3896,6 +3896,24 @@ describe('NewPostClient', () => {
       expect(JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body)).visibility).toBe('public');
     });
 
+    // Enter in a field presses the form's default button: the first submit
+    // button in document order whose form is the composer's (the phone bar
+    // comes before the form). jsdom does not submit on Enter, so this reads
+    // which button that is.
+    it('makes Enter do nothing on a new post, and save changes on an edit', () => {
+      const defaultButtonOf = (form: HTMLFormElement) => Array.from(document.querySelectorAll('button'))
+        .find((button) => button.type === 'submit' && button.form === form);
+
+      const created = render(<NewPostClient />);
+      const newPostForm = document.getElementById('post-composer-form') as HTMLFormElement;
+      expect(defaultButtonOf(newPostForm)?.disabled).toBe(true);
+      created.unmount();
+
+      render(<NewPostClient initialPost={createEditablePost('public')} />);
+      const editForm = document.getElementById('post-composer-form') as HTMLFormElement;
+      expect(defaultButtonOf(editForm)).toHaveAccessibleName(/^save changes/i);
+    });
+
     it('says what the pressed button is doing until the save answers', async () => {
       let answer: (value: unknown) => void = () => {};
       enqueueResponse({ ok: true, json: () => new Promise((resolve) => { answer = resolve; }) });

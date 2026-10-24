@@ -209,6 +209,25 @@ describe('useLeaveGuard', () => {
     expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
+  // The layout's "Skip to content" (`#main-content`) is the first link a
+  // keyboard reaches; a fragment of this page leaves nothing behind.
+  it('lets a link to a place on this page through without asking', () => {
+    render(
+      <>
+        <DraftPage />
+        <FeedbackViewport />
+      </>
+    );
+    typeDraft('A first line');
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+
+    fireEvent(addLink('/drafts/new#main-content'), click);
+
+    expect(click.defaultPrevented).toBe(false);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(routerMocks.push).not.toHaveBeenCalled();
+  });
+
   it('asks with the words of its latest render', async () => {
     const view = render(
       <>

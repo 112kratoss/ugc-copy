@@ -246,11 +246,9 @@ export function useLeaveGuard({
 
       const destination = new URL(anchor.href);
       const current = new URL(window.location.href);
-      if (
-        destination.pathname === current.pathname
-        && destination.search === current.search
-        && destination.hash === current.hash
-      ) {
+      // A link to a place on this page (the layout's "Skip to content", a
+      // section anchor) leaves nothing behind, whatever its fragment.
+      if (destination.pathname === current.pathname && destination.search === current.search) {
         return;
       }
 

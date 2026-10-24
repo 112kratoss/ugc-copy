@@ -2641,6 +2641,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
   return (
     <div className="ui-page ui-page-ambient min-h-screen">
+      {/* Enter in a field submits through the form's first submit button in
+          document order, which was the phone bar's "Save private": a title
+          and Enter saved a new post privately and left the page. A disabled
+          first button makes Enter do nothing on a new post, where both actions
+          decide who sees it; an edit's first is "Save changes", which keeps
+          the post's visibility. */}
+      {!isEditMode ? (
+        <button type="submit" form="post-composer-form" disabled hidden aria-hidden="true" tabIndex={-1} />
+      ) : null}
       <div className="fixed inset-0 hidden pointer-events-none">
         <div className="absolute left-[-10%] top-[-8%] h-[40%] w-[32%] rounded-full bg-sky-500/12 blur-[140px]" />
         <div className="absolute bottom-[-12%] right-[-8%] h-[36%] w-[30%] rounded-full bg-emerald-500/10 blur-[160px]" />
