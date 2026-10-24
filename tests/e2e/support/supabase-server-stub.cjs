@@ -13,7 +13,8 @@
 // The data is one creator, owned by the E2E user (`workflow-user`, src/lib/e2e-auth.ts), who has
 // published nothing: the profiles row in fixtures/creator-profile.json, which the specs read too. And
 // one post page's: a text post with a free recipe, by a creator of its own
-// (fixtures/post-with-recipe.json).
+// (fixtures/post-with-recipe.json). And one post editor's: an image post of the E2E user's with one
+// picture and no recipe (fixtures/post-composer-saved-twice.json).
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -30,6 +31,10 @@ const creator = require('../fixtures/creator-profile.json');
 // (src/lib/public-posts.ts) and its recipe in getPostResourceBundleDetailByPostId.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const recipePost = require('../fixtures/post-with-recipe.json');
+// An image post the E2E user owns, with one picture and no recipe: the post editor,
+// /post/<id>/edit, reads it in getOwnerPostDetail (src/lib/owner-posts.ts).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const ownPost = require('../fixtures/post-composer-saved-twice.json');
 
 const HOST = 'example.supabase.co';
 
@@ -106,6 +111,48 @@ const READS = [
     filters: { id: `in.(${recipePost.post.id})` },
     answer: () => json([recipePost.post], { 'content-range': '0-0/1' }),
   },
+  {
+    // fetchOwnerPostRow: the post by id and owner. maybeSingle() asks for a list.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `eq.${ownPost.post.id}`, user_id: `eq.${ownPost.post.user_id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? ownPost.post : [ownPost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // loadPostMediaItemsMap: its one picture.
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: `in.(${ownPost.post.id})` },
+    answer: () => json(ownPost.media, { 'content-range': `0-${ownPost.media.length - 1}/${ownPost.media.length}` }),
+  },
+  {
+    // loadSourceToolsMap: no Made with rows.
+    methods: ['GET'],
+    path: '/rest/v1/post_source_tools',
+    filters: { post_id: `in.(${ownPost.post.id})` },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // loadBundleMap: no recipe, in the compact summaries...
+    methods: ['POST'],
+    path: '/rest/v1/rpc/get_owner_post_bundle_summaries',
+    body: { p_post_ids: [ownPost.post.id] },
+    answer: () => json([]),
+  },
+  {
+    // ...nor in the listing fields read beside them (loadBundleListingFields)...
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: `in.(${ownPost.post.id})` },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...nor in the editor's recipe (getPostResourceBundleDetailByPostId).
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: `eq.${ownPost.post.id}` },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
 ];
 
 // A JSON body as supabase-js sends it (a string in init), or null for one this cannot read
@@ -126,7 +173,8 @@ async function answer(method, url, input, init) {
     if (!Object.entries(read.filters ?? {}).every(([key, value]) => url.searchParams.get(key) === value)) continue;
     if (read.body) {
       const body = await readJsonBody(input, init);
-      if (!body || !Object.entries(read.body).every(([key, value]) => body[key] === value)) continue;
+      // By their JSON, so that a list of ids (p_post_ids) matches the same list.
+      if (!body || !Object.entries(read.body).every(([key, value]) => JSON.stringify(body[key]) === JSON.stringify(value))) continue;
     }
     const accept = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('accept') ?? '';
     return read.answer({ method, wantsObject: accept.includes('application/vnd.pgrst.object+json') });
