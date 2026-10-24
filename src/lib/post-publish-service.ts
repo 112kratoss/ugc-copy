@@ -35,6 +35,7 @@ import type { VideoProbeResult } from '@/lib/video-rendition';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import {
+  getPublicUgcRecipeTextFields,
   getPublicUgcSafetyViolation,
   PUBLIC_UGC_SAFETY_ERROR,
 } from '@/lib/public-ugc-safety';
@@ -161,8 +162,7 @@ export async function publishPreparedPost({
         title: submission.title,
         description: submission.description,
         body: submission.body,
-        resourcePrompt: submission.resourceBundle?.resources?.promptText ?? null,
-        resourceNotes: submission.resourceBundle?.resources?.notesMarkdown ?? null,
+        ...getPublicUgcRecipeTextFields(submission.resourceBundle),
       })
     : null;
 

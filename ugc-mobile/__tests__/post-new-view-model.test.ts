@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import publicPostQuality from '../../contracts/public-post-quality-v1.json';
 import {
   buildCreatePostFormData,
   buildOptimisticOwnerPostListItem,
@@ -7,13 +8,15 @@ import {
   buildPostResourceBundleInput,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
+  createMadeWithRow,
   createPostComposerResourceCard,
-  deriveCreationPackageFromResourceCards,
   applyCreationPromptResource,
   getComposerVisibility,
   getDefaultPostComposerDraft,
   getExplicitPublishGeneration,
   getPostComposerDetailErrors,
+  getPublicPostQualityError,
+  hasCreationPromptCard,
   TITLE_MAX_LENGTH,
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
@@ -31,6 +34,7 @@ import {
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
+  type PostComposerDraft,
 } from '../lib/post-new-view-model';
 import { normalizeAuthReturnTo } from '../lib/auth-navigation';
 import type { GenerationListItem } from '../lib/types';
@@ -211,7 +215,6 @@ describe('post new view model', () => {
       },
       creationPackage: {
         attachGenerationReferences: true,
-        attachPromptResource: true,
       },
     };
 
@@ -326,7 +329,9 @@ describe('post new view model', () => {
   });
 
   it('grandfathers a pre-limit title while it stays unchanged, like the server does', () => {
-    const grandfathered = 'g'.repeat(TITLE_MAX_LENGTH + 9);
+    // A real title: a run of one letter is a placeholder to the public-post rule.
+    const grandfathered = 'Long cinematic lighting breakdown with every camera move '.repeat(2).trim();
+    expect(grandfathered.length).toBeGreaterThan(TITLE_MAX_LENGTH);
     const draft = {
       ...getDefaultPostComposerDraft(),
       mode: 'text' as const,
@@ -378,51 +383,59 @@ describe('post new view model', () => {
     });
   });
 
-  // The "From this creation" toggles must read their state back out of the
-  // loaded bundle: resetting them to defaults showed "Include exact prompt"
-  // OFF for a post already sharing its prompt, and flipping that toggle
-  // deleted the very card the post was sharing.
-  it('derives the creation package toggles from hydrated resource cards', () => {
-    const promptCard = createPostComposerResourceCard('prompt', {
-      id: 'creation-prompt',
-      title: 'Exact generation prompt',
-      textContent: 'venom hero shot',
-    });
-    const referenceCard = createPostComposerResourceCard('reference_media', {
-      id: 'hydrated-item-gen-input-1',
-      title: 'Reference image 1',
-      attachments: [{
-        id: 'gen-input-1',
-        kind: 'file',
-        label: 'Reference image 1',
-        url: '',
-        storagePath: 'generation_inputs/user-1/gen-7/00-reference_image.jpg',
-        contentType: 'image/jpeg',
-        sizeBytes: null,
-        resourceType: 'reference_image',
-        role: 'style_reference',
-        remixUse: 'none',
-      }],
+  // "Include exact prompt" reads its state from the recipe's cards: resetting it
+  // to defaults on an edit showed it OFF for a post already sharing its prompt,
+  // and flipping it deleted the very card the post was sharing. The card is
+  // found by its text, as on the web: matched by the app's own card id, a
+  // prompt card made on the web read OFF, and switching it on added a second
+  // copy of the prompt.
+  describe("the creation's prompt card", () => {
+    const item = generation({ prompt: 'venom hero shot' });
+    // As the web makes it: the card type's own title and a random id.
+    const webCard = createPostComposerResourceCard('prompt', { textContent: 'venom hero shot' });
+
+    it('is recognised by its text, wherever it was made', () => {
+      expect(hasCreationPromptCard([webCard], item)).toBe(true);
+      expect(hasCreationPromptCard([createPostComposerResourceCard('prompt', {
+        id: 'creation-prompt',
+        title: 'Exact generation prompt',
+        textContent: '  venom hero shot ',
+      })], item)).toBe(true);
+      // A hand-written prompt, or the prompt's text on a card of another kind, is not it.
+      expect(hasCreationPromptCard([createPostComposerResourceCard('prompt', { textContent: 'my own prompt' })], item)).toBe(false);
+      expect(hasCreationPromptCard([createPostComposerResourceCard('guide', { textContent: 'venom hero shot' })], item)).toBe(false);
+      expect(hasCreationPromptCard([webCard], generation({ prompt: null }))).toBe(false);
+      expect(hasCreationPromptCard([], item)).toBe(false);
     });
 
-    expect(deriveCreationPackageFromResourceCards([promptCard, referenceCard])).toEqual({
-      attachPromptResource: true,
-      attachGenerationReferences: true,
+    it('is not added twice, and switching it off takes the one made elsewhere', () => {
+      const draft = {
+        ...getDefaultPostComposerDraft(),
+        mode: 'creation' as const,
+        title: 'Venom hero',
+        selectedGenerationId: item.id,
+        resource: { ...getDefaultPostComposerDraft().resource, accessMode: 'free' as const, cards: [webCard] },
+      };
+
+      expect(applyCreationPromptResource(draft, item, true).resource.cards).toEqual([webCard]);
+      expect(applyCreationPromptResource(draft, item, false).resource.cards).toEqual([]);
     });
-    expect(deriveCreationPackageFromResourceCards([referenceCard])).toEqual({
-      attachPromptResource: false,
-      attachGenerationReferences: true,
-    });
-    // A hand-authored prompt card is not the creation-package card.
-    expect(deriveCreationPackageFromResourceCards([
-      createPostComposerResourceCard('prompt', { textContent: 'my own prompt' }),
-    ])).toEqual({
-      attachPromptResource: false,
-      attachGenerationReferences: false,
-    });
-    expect(deriveCreationPackageFromResourceCards([])).toEqual({
-      attachPromptResource: false,
-      attachGenerationReferences: false,
+
+    // The trash button takes only the card; the state read from the cards goes with it.
+    it('reads as gone once its card is removed', () => {
+      const guide = createPostComposerResourceCard('guide', { title: 'Lighting notes', textContent: 'Key light at 45 degrees.' });
+      const draft = applyCreationPromptResource({
+        ...getDefaultPostComposerDraft(),
+        mode: 'creation',
+        title: 'Venom hero',
+        selectedGenerationId: item.id,
+        resource: { ...getDefaultPostComposerDraft().resource, accessMode: 'free', cards: [guide] },
+      }, item, true);
+      expect(getPostComposerPackageStatus(draft, item).label).toBe('Prompt recipe ready');
+
+      const withoutPrompt = { ...draft, resource: { ...draft.resource, cards: [guide] } };
+      expect(hasCreationPromptCard(withoutPrompt.resource.cards, item)).toBe(false);
+      expect(getPostComposerPackageStatus(withoutPrompt, item).label).toBe('Free recipe ready');
     });
   });
 
@@ -457,7 +470,9 @@ describe('post new view model', () => {
   });
 
   // The caption is a Story kept from the media format, which text mode does not
-  // show: it is neither the body nor the description of a text post.
+  // show: it is neither the body nor the description of a text post. A text
+  // post names no tool, as on the web, even from a draft an older build gave
+  // "Manual".
   it('builds FormData for text posts in the public post order', () => {
     const formData = buildCreatePostFormData({
       ...getDefaultPostComposerDraft(),
@@ -468,6 +483,7 @@ describe('post new view model', () => {
       caption: 'Extra caption',
       category: 'text',
       sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
       visibility: 'public',
     });
 
@@ -476,8 +492,6 @@ describe('post new view model', () => {
     expect(entries).toEqual([
       ['title', 'Text post title'],
       ['body', 'Main text content'],
-      ['sourceTool', 'Manual'],
-      ['sourceToolSlug', 'manual'],
       ['visibility', 'public'],
       ['isNsfw', 'false'],
       ['postFormat', 'text'],
@@ -1092,17 +1106,17 @@ describe('post new view model', () => {
     expect(validatePostComposerDraft({
       ...baseDraft,
       resource: { ...baseDraft.resource, priceTokens: '5' },
-    })).toMatchObject({ valid: false, message: 'Paid resources must cost at least 10 tokens.' });
+    })).toMatchObject({ valid: false, message: 'Paid recipes must cost at least 10 tokens.' });
     expect(validatePostComposerDraft({
       ...baseDraft,
       resource: { ...baseDraft.resource, priceTokens: '15' },
-    })).toMatchObject({ valid: false, message: 'Resource prices must use increments of 10 tokens.' });
+    })).toMatchObject({ valid: false, message: 'Recipe prices must use increments of 10 tokens.' });
     expect(getPostComposerPackageStatus({
       ...baseDraft,
       resource: { ...baseDraft.resource, priceTokens: '15' },
     })).toMatchObject({
       label: 'Set a valid price',
-      body: 'Resource prices must use increments of 10 tokens.',
+      body: 'Recipe prices must use increments of 10 tokens.',
       state: 'warning',
     });
     expect(validatePostComposerDraft({
@@ -1264,7 +1278,7 @@ describe('post new view model', () => {
       resourceBundle: { accessMode: 'none' },
     });
     expect(payload).not.toHaveProperty('includeGenerationReferences');
-    expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No resource package configured.');
+    expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No recipe added.');
   });
 
   it('requests generation references only when the explicit creation package toggle is enabled', () => {
@@ -1319,7 +1333,7 @@ describe('post new view model', () => {
     const payload = buildPublishGenerationPostPayload(item, draft);
 
     expect(payload).not.toHaveProperty('includeGenerationReferences');
-    expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No resource package configured.');
+    expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No recipe added.');
   });
 
   it('prefills a free resource package from a creation prompt when enabled', () => {
@@ -1342,7 +1356,7 @@ describe('post new view model', () => {
       },
     }, item, true);
 
-    expect(draft.creationPackage.attachPromptResource).toBe(true);
+    expect(hasCreationPromptCard(draft.resource.cards, item)).toBe(true);
     expect(draft.resource.accessMode).toBe('free');
     expect(draft.resource.promptText).toBe('Exact cinematic product prompt');
     expect(draft.resource.previewText).toBe('Includes the exact reusable prompt.');
@@ -1386,7 +1400,6 @@ describe('post new view model', () => {
       sourceToolSlug: 'magicbooklet',
       creationPackage: {
         attachGenerationReferences: true,
-        attachPromptResource: false,
       },
     };
 
@@ -1414,7 +1427,7 @@ describe('post new view model', () => {
         promptText: 'Prompt',
         previewText: 'Prompt included.',
       },
-    }, item)).toBe('Free resource package will appear in post details.');
+    }, item)).toBe('The free recipe will appear in post details.');
 
     expect(getPostComposerPreviewStatusLabel({
       ...getDefaultPostComposerDraft(),
@@ -1427,7 +1440,7 @@ describe('post new view model', () => {
         promptText: 'Prompt',
         previewText: 'Prompt included.',
       },
-    }, item)).toBe('Paid resource package will appear in post details.');
+    }, item)).toBe('The paid recipe will appear in post details.');
   });
 
   it('adds structured source tool metadata for uploaded media posts', () => {
@@ -1494,8 +1507,10 @@ describe('post new view model', () => {
       body: 'Uploaded from phone',
       category: 'image',
       postFormat: 'mixed',
-      sourceTool: 'Manual',
-      sourceToolSlug: 'manual',
+      // Made with was never opened, so the tile names no tool, as the server stores none.
+      sourceTool: null,
+      sourceToolSlug: null,
+      sourceTools: [],
       mediaItems: [{
         id: 'media-1',
         url: 'file:///tmp/cover.png',
@@ -1617,13 +1632,16 @@ describe('post new view model', () => {
 
       const payload = buildUpdatePostPayload(false, draft);
       expect(payload).not.toHaveProperty('description');
+      // A text post names no tool, as on the web: the "Manual" an older build
+      // gave every unattributed draft is not sent.
+      expect(payload).not.toHaveProperty('sourceTool');
+      expect(payload).not.toHaveProperty('sourceToolSlug');
+      expect(payload).not.toHaveProperty('sourceTools');
       expect(payload).toMatchObject({
         title: 'New Title',
         body: 'New Content',
         visibility: 'private',
         category: 'video',
-        sourceTool: 'Manual',
-        sourceToolSlug: 'manual',
         resourceBundle: {
           accessMode: 'free',
           summary: 'Prompt',
@@ -1663,11 +1681,12 @@ describe('post new view model', () => {
         body: 'Media Caption',
         visibility: 'private',
         category: 'image',
-        sourceTools: [{
-          toolLabel: 'Manual',
-          toolSlug: 'manual',
-        }],
       });
+      // An untouched Made with sends no tool, so the stored one stays as it is:
+      // this used to stamp "Manual" on a post that had none.
+      expect(payload).not.toHaveProperty('sourceTool');
+      expect(payload).not.toHaveProperty('sourceToolSlug');
+      expect(payload).not.toHaveProperty('sourceTools');
     });
 
     // A post written on the web can carry an Explore description the app has
@@ -1691,6 +1710,211 @@ describe('post new view model', () => {
         body: 'The story',
       });
     });
+  });
+});
+
+const COVER_ITEM = {
+  id: 'media-1',
+  uri: 'file:///cover.jpg',
+  name: 'cover.jpg',
+  type: 'image/jpeg',
+  mediaKind: 'image' as const,
+  storagePath: 'uploads/user-1/cover.jpg',
+};
+
+function mediaPostDraft(overrides: Partial<PostComposerDraft> = {}): PostComposerDraft {
+  return {
+    ...getDefaultPostComposerDraft(),
+    mode: 'upload',
+    proofMode: 'media',
+    category: 'image',
+    title: 'Neon skyline study',
+    mediaItems: [COVER_ITEM],
+    ...overrides,
+  };
+}
+
+function textPostDraft(overrides: Partial<PostComposerDraft> = {}): PostComposerDraft {
+  return {
+    ...getDefaultPostComposerDraft(),
+    mode: 'text',
+    proofMode: 'text',
+    category: 'text',
+    title: 'Prompt teardown',
+    contentText: 'Too short body',
+    ...overrides,
+  };
+}
+
+// The server refuses a public post with a placeholder title, or a text post
+// without enough useful text, and step 2 used to say "Ready to publish" for it.
+describe('the public-post rule, checked before step 2 says Ready to publish', () => {
+  const messages = publicPostQuality.messages as Record<string, string>;
+
+  it('answers every case of the shared fixture as the server does', () => {
+    for (const testCase of publicPostQuality.cases) {
+      expect(getPublicPostQualityError(testCase), JSON.stringify(testCase))
+        .toBe(testCase.expected === null ? null : messages[testCase.expected]);
+    }
+  });
+
+  it('refuses each placeholder word the server refuses, and takes text from the server’s length', () => {
+    for (const token of publicPostQuality.placeholderTokens) {
+      expect(getPublicPostQualityError({ title: `Studio ${token} reel`, body: '', hasMedia: true }), token)
+        .toBe(messages.placeholder_title);
+    }
+    const sentence = 'Lighting breakdown for a product reel';
+    expect(getPublicPostQualityError({
+      title: 'Prompt teardown',
+      body: sentence.slice(0, publicPostQuality.minTextLength),
+      hasMedia: false,
+    })).toBeNull();
+    expect(getPublicPostQualityError({
+      title: 'Prompt teardown',
+      body: sentence.slice(0, publicPostQuality.minTextLength - 1),
+      hasMedia: false,
+    })).toBe(messages.needs_text);
+  });
+
+  it('keeps a public post the server would refuse from validating', () => {
+    expect(validatePostComposerDraft(mediaPostDraft({ title: 'Product demo with Kling 3.0' })))
+      .toEqual({ valid: false, message: messages.placeholder_title });
+    expect(validatePostComposerDraft(textPostDraft())).toEqual({ valid: false, message: messages.needs_text });
+    expect(validatePostComposerDraft(textPostDraft({ contentText: 'A useful text breakdown' }))).toEqual({ valid: true });
+    expect(validatePostComposerDraft(mediaPostDraft())).toEqual({ valid: true });
+  });
+
+  it('leaves a private post alone', () => {
+    expect(validatePostComposerDraft(mediaPostDraft({ title: 'Product demo with Kling 3.0', visibility: 'private' })))
+      .toEqual({ valid: true });
+    expect(validatePostComposerDraft(textPostDraft({ visibility: 'private' }))).toEqual({ valid: true });
+  });
+
+  // With a recipe the server judges the post as a listing instead, whose own
+  // text rule takes a long enough title in place of text; a placeholder title
+  // fails both.
+  it('holds a post with a recipe to the title half of the rule', () => {
+    const recipe = {
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free' as const,
+      previewText: 'Includes the reusable lighting prompt.',
+      cards: [createPostComposerResourceCard('prompt', {
+        title: 'Lighting prompt',
+        textContent: 'Use a large softbox at camera left.',
+      })],
+    };
+
+    expect(validatePostComposerDraft(textPostDraft({ title: 'Sunset prompt pack', resource: recipe }))).toEqual({ valid: true });
+    expect(validatePostComposerDraft(textPostDraft({ title: 'Sample pack', resource: recipe })))
+      .toEqual({ valid: false, message: messages.placeholder_title });
+  });
+});
+
+// The composer stamped "Manual" on every media post nobody attributed, and on
+// any web post it edited, so both post pages said "Made with Manual". The web
+// sends no tool when Made with is empty, and none for a text post.
+describe('Made with sends only what the creator chose', () => {
+  const sourceFields = (formData: FormData) => ({
+    sourceTool: formData.get('sourceTool'),
+    sourceToolSlug: formData.get('sourceToolSlug'),
+    sourceTools: formData.get('sourceTools'),
+  });
+  const noSourceFields = { sourceTool: null, sourceToolSlug: null, sourceTools: null };
+
+  it('starts a draft with no tool', () => {
+    const draft = getDefaultPostComposerDraft();
+    expect(draft.sourceTool).toBe('');
+    expect(draft.sourceToolSlug).toBe('');
+    expect(draft.madeWithRows.map((row) => row.toolLabel)).toEqual(['']);
+  });
+
+  it('sends no tool for a post whose Made with was never filled in', () => {
+    const draft = mediaPostDraft();
+    expect(sourceFields(buildCreatePostFormData(draft))).toEqual(noSourceFields);
+    for (const key of ['sourceTool', 'sourceToolSlug', 'sourceTools']) {
+      expect(buildUpdatePostPayload(false, draft)).not.toHaveProperty(key);
+    }
+    expect(buildOptimisticOwnerPostListItem('post-1', draft)).toMatchObject({ sourceTool: null, sourceToolSlug: null, sourceTools: [] });
+  });
+
+  it('sends nothing for the Manual placeholder an older build saved in a draft, and only the chosen tool beside it', () => {
+    const legacy = mediaPostDraft({
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      madeWithRows: [createMadeWithRow({ toolLabel: 'Manual', toolSlug: 'manual' })],
+    });
+    expect(sourceFields(buildCreatePostFormData(legacy))).toEqual(noSourceFields);
+    expect(buildUpdatePostPayload(false, legacy)).not.toHaveProperty('sourceTools');
+    expect(buildUpdatePostPayload(false, legacy)).not.toHaveProperty('sourceTool');
+
+    const chosen = { ...legacy, madeWithRows: [...legacy.madeWithRows, createMadeWithRow({ toolLabel: 'Runway', toolSlug: 'runway' })] };
+    expect(sourceFields(buildCreatePostFormData(chosen))).toEqual({
+      sourceTool: 'Runway',
+      sourceToolSlug: 'runway',
+      sourceTools: JSON.stringify([{ toolLabel: 'Runway', toolSlug: 'runway' }]),
+    });
+    expect(buildUpdatePostPayload(false, chosen)).toMatchObject({
+      sourceTool: 'Runway',
+      sourceToolSlug: 'runway',
+      sourceTools: [{ toolLabel: 'Runway', toolSlug: 'runway' }],
+    });
+  });
+
+  it('sends no tool for a text post, even one a chosen tool was left on', () => {
+    const text = textPostDraft({
+      contentText: 'A useful text breakdown',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      madeWithRows: [createMadeWithRow({ toolLabel: 'Runway', toolSlug: 'runway' })],
+    });
+    expect(sourceFields(buildCreatePostFormData(text))).toEqual(noSourceFields);
+    for (const key of ['sourceTool', 'sourceToolSlug', 'sourceTools']) {
+      expect(buildUpdatePostPayload(false, text)).not.toHaveProperty(key);
+    }
+  });
+
+  it('does not offer Manual in the bundled tool list, which the server’s catalog has no match for', () => {
+    expect(POST_COMPOSER_SOURCE_OPTIONS.map((tool) => tool.slug)).not.toContain('manual');
+  });
+});
+
+// Product decision 1 (2026-10-17): the recipe noun is "Recipe", everywhere.
+describe('recipe words on step 2', () => {
+  const card = createPostComposerResourceCard('prompt', { title: 'Lighting prompt', textContent: 'Use a large softbox at camera left.' });
+  const withRecipe = (accessMode: 'free' | 'paid', overrides: Partial<PostComposerDraft['resource']> = {}) => mediaPostDraft({
+    resource: {
+      ...getDefaultPostComposerDraft().resource,
+      accessMode,
+      previewText: 'Includes the reusable lighting prompt.',
+      cards: [card],
+      ...overrides,
+    },
+  });
+
+  it('names the package states in recipe words', () => {
+    expect(getPostComposerPackageStatus(mediaPostDraft())).toMatchObject({ label: 'Recipe optional', body: 'No recipe added.' });
+    expect(getPostComposerPackageStatus(withRecipe('free'))).toMatchObject({
+      label: 'Free recipe ready',
+      body: 'The free recipe will appear in post details.',
+      state: 'ready',
+    });
+    expect(getPostComposerPackageStatus(withRecipe('paid'))).toMatchObject({
+      label: 'Paid recipe ready',
+      body: 'The paid recipe will appear in post details.',
+      state: 'ready',
+    });
+    expect(getPostComposerPackageStatus(withRecipe('free', { cards: [] }))).toMatchObject({
+      label: 'Finish the recipe',
+      body: 'Add a buyer preview and at least one prompt, workflow, file, note, or remix link.',
+      state: 'warning',
+    });
+  });
+
+  it('says recipe in its checks', () => {
+    expect(validatePostComposerDraft(withRecipe('free', { cards: [] })))
+      .toEqual({ valid: false, message: 'Add at least one item to the recipe.' });
+    expect(validatePostComposerDraft(withRecipe('paid', { priceTokens: '5' })))
+      .toEqual({ valid: false, message: 'Paid recipes must cost at least 10 tokens.' });
   });
 });
 

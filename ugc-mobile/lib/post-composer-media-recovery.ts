@@ -1,5 +1,6 @@
+import { ApiError } from './api-client';
 import { listFilesInSentence } from './media-file-names';
-import type { PostComposerDraft, PostComposerMediaItem } from './post-new-view-model';
+import { hydratePostComposerMediaItems, type PostComposerDraft, type PostComposerMediaItem } from './post-new-view-model';
 
 /**
  * Recovers a restored draft's staged media.
@@ -137,6 +138,110 @@ export function applyPostComposerMediaRecoveryToDraft(
     mediaItems,
     upload: cover ? { uri: cover.uri, name: cover.name, type: cover.type } : null,
     category: draft.mode === 'upload' && cover ? cover.mediaKind : draft.category,
+  };
+}
+
+/**
+ * Whether a failed save may have used the staged uploads it sent. The server
+ * moves each one into the post, deleting the staged copy, before it checks the
+ * Made with catalog: that refusal (`field: 'sourceTools'`) comes after the
+ * move, a server error can, and so can a request whose answer never came back.
+ * A second save of a moved upload is refused every time, so those uploads have
+ * to go again. Every other refusal is decided before anything moves, and the
+ * same uploads can be sent again. The web composer's rule (`readSaveResponse`).
+ */
+/**
+ * True for an edit refused, before anything was written, because it named its
+ * media by rows the post no longer has: the rows were re-inserted under new ids
+ * since the composer read them (an earlier save that finished after its
+ * deadline, or an edit from the web). The server marks it `field: 'mediaItems'`;
+ * the uploads are untouched, and the next save reads the rows back.
+ */
+export function saveRefusedForStaleMediaIds(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 400) return false;
+  const details = typeof error.details === 'object' && error.details !== null
+    ? error.details as { field?: unknown }
+    : {};
+  return details.field === 'mediaItems';
+}
+
+export function saveMayHaveConsumedUploads(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const details = typeof error.details === 'object' && error.details !== null
+    ? error.details as { field?: unknown; sent?: unknown }
+    : {};
+  // No answer: only a request that never left the device has certainly done nothing.
+  if (error.status === 0) return details.sent !== false;
+  return error.status >= 500 || details.field === 'sourceTools';
+}
+
+/**
+ * Forgets the staged paths a failed save sent (`submitted`), on the draft as it
+ * is now. Those items keep their local files, which the next publish uploads
+ * again (`getMediaAwaitingUpload`); saved media and anything added since keep
+ * what they have.
+ */
+export function forgetConsumedMediaUploads(draft: PostComposerDraft, submitted: PostComposerDraft): PostComposerDraft {
+  const sentPaths = new Set(submitted.mediaItems.flatMap((item) => (
+    !item.existingId && item.storagePath ? [item.storagePath] : []
+  )));
+  if (sentPaths.size === 0) return draft;
+  return {
+    ...draft,
+    mediaItems: draft.mediaItems.map((item) => (
+      !item.existingId && item.storagePath && sentPaths.has(item.storagePath) ? { ...item, storagePath: null } : item
+    )),
+  };
+}
+
+/** New media with no staged upload: the next publish uploads them from the device first. */
+export function getMediaAwaitingUpload(items: PostComposerMediaItem[]): PostComposerMediaItem[] {
+  return items.filter((item) => !item.existingId && !item.storagePath);
+}
+
+/**
+ * Names the draft's media by what the post holds now. An edit save that sends
+ * media deletes and re-inserts every media row of the post, so every id changes,
+ * and the save can go through and still fail (`saveMayHaveConsumedUploads`); a
+ * draft kept on the device from before such a save holds the old ids too. The
+ * server refuses an id it no longer has on every save. Media is matched by its
+ * key: what the post holds takes its row's id and drops its staged upload, which
+ * that save used; what it does not hold goes as a new upload while it has a
+ * staged upload or its file on the device, and is `lost` otherwise. Items that
+ * change nothing stay the same objects, so a kept draft that matches the post
+ * does not count as edited. The web composer's `withSavedMediaRows`.
+ */
+export function withSavedPostMedia(
+  draft: PostComposerDraft,
+  post: Parameters<typeof hydratePostComposerMediaItems>[0],
+  hasDeviceFile: (uri: string) => boolean,
+): { draft: PostComposerDraft; lost: PostComposerMediaItem[] } {
+  const savedIdsByKey = new Map(hydratePostComposerMediaItems(post).flatMap((item) => (
+    item.existingId ? [[item.mediaKey ?? item.id, item.existingId] as const] : []
+  )));
+  const lost: PostComposerMediaItem[] = [];
+  const mediaItems = draft.mediaItems.map((item) => {
+    const savedId = savedIdsByKey.get(item.mediaKey ?? item.id);
+    if (savedId) {
+      return savedId === item.existingId && !item.storagePath
+        ? item
+        : { ...item, existingId: savedId, ...(item.storagePath ? { storagePath: null } : {}) };
+    }
+    if (item.storagePath || (item.uri && hasDeviceFile(item.uri))) {
+      return item.existingId ? { ...item, existingId: null } : item;
+    }
+    lost.push(item);
+    return item;
+  });
+
+  return {
+    draft: lost.length > 0
+      ? applyPostComposerMediaRecoveryToDraft({ ...draft, mediaItems }, {
+          reuploaded: new Map(),
+          lost: new Set(lost.map((item) => item.id)),
+        })
+      : { ...draft, mediaItems },
+    lost,
   };
 }
 

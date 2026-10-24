@@ -20,6 +20,7 @@ import {
 } from '@/lib/showcase-publish-service';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
+import type { PostResourceBundleInput } from '@/lib/post-resource-bundles';
 
 /** The linked-identity lookup: the guest ids merged into the caller's account. */
 function linkedProfilesQuery(linkedGuestIds: string[]) {
@@ -100,7 +101,13 @@ function createCanonicalTemplateAdminClientMock({
 function createAdminClientMock(
   generation: Record<string, unknown> | null = null,
   loadError: { message: string; code?: string } | null = null,
-  options: { postMediaRows?: Array<Record<string, unknown>>; linkedGuestIds?: string[] } = {},
+  options: {
+    postMediaRows?: Array<Record<string, unknown>>;
+    linkedGuestIds?: string[];
+    /** The creation's existing post and its stored recipe row. */
+    storedPost?: Record<string, unknown> | null;
+    storedBundle?: Record<string, unknown> | null;
+  } = {},
 ) {
   const removeMock = vi.fn(async () => ({ data: null, error: null }));
   const downloadMock = vi.fn(async () => ({
@@ -117,11 +124,23 @@ function createAdminClientMock(
       from(table: string) {
         if (table === 'profiles') return linkedProfilesQuery(options.linkedGuestIds ?? []);
         if (table === 'posts' || table === 'post_resource_bundles') {
-          const query = {
-            eq: vi.fn(() => query),
-            maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+          const row = (table === 'posts' ? options.storedPost : options.storedBundle) ?? null;
+          return {
+            select: vi.fn((columns: string = '') => {
+              // Only the selected columns come back, as from PostgREST, so a
+              // reader that forgets a column sees it missing.
+              const selected = row
+                ? Object.fromEntries(columns.split(',').map((column) => column.trim())
+                  .filter((column) => column in row)
+                  .map((column) => [column, row[column]]))
+                : null;
+              const query = {
+                eq: vi.fn(() => query),
+                maybeSingle: vi.fn(async () => ({ data: selected, error: null })),
+              };
+              return query;
+            }),
           };
-          return { select: vi.fn(() => query) };
         }
 
         // A private publish retires the legacy media rows that still point at
@@ -183,6 +202,51 @@ function createAdminClientMock(
     removeMock,
     selects,
     uploadMock,
+  };
+}
+
+/** A recipe as both composers send it: one card, the legacy prompt and notes empty. */
+function cardRecipe({
+  cardText = 'Soft key light from the left, warm rim light behind.',
+  cardDescription = 'The prompt behind the portrait.',
+  previewText = 'Includes the prompt and the light plan.',
+}: { cardText?: string; cardDescription?: string; previewText?: string } = {}): PostResourceBundleInput {
+  return {
+    accessMode: 'free',
+    summary: 'A reusable lighting setup for portraits.',
+    previewText,
+    resources: {
+      promptText: null,
+      notesMarkdown: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [{
+        id: 'card-1',
+        title: 'Portrait prompt',
+        publicTitle: 'Portrait prompt',
+        kind: 'global',
+        description: cardDescription,
+        sortOrder: 0,
+        resourceType: 'prompt',
+      }],
+      items: [{
+        id: 'card-1-item-1',
+        type: 'prompt',
+        role: 'primary',
+        sectionId: 'card-1',
+        title: 'Portrait prompt',
+        description: null,
+        textContent: cardText,
+        externalUrl: null,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
+        sortOrder: 0,
+        isPrimary: true,
+        remixUse: 'none',
+      }],
+    },
   };
 }
 
@@ -830,6 +894,54 @@ describe('publishGenerationToShowcaseForRoute', () => {
       expect(publish).not.toHaveBeenCalled();
     });
 
+    // The quick-publish dialog caps the caption it sends as the description at
+    // 1,000; the server held it to nothing.
+    it('rejects a compose submission whose description is over the limit', async () => {
+      const publish = vi.fn();
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: createAdminClientMock(generation).client,
+        body: {
+          generationId: 'gen-1',
+          visibility: 'private',
+          title: 'Golden hour study',
+          description: 'd'.repeat(1001),
+          resourceBundle: { accessMode: 'none' },
+        },
+        userId: 'user-1',
+        dependencies: dependencies(publish),
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 400,
+        body: { error: 'Descriptions are limited to 1000 characters.', field: 'description' },
+      });
+      expect(publish).not.toHaveBeenCalled();
+    });
+
+    // Both composers cap these; a client that does not must not get past them.
+    it.each([
+      ['public summary', { ...cardRecipe(), summary: 's'.repeat(181) }, 'resourceSummary', 'Public summaries are limited to 180 characters.'],
+      ['package preview', cardRecipe({ previewText: 'p'.repeat(181) }), 'resourcePreview', 'Package previews are limited to 180 characters.'],
+      ["card's unlocked description", cardRecipe({ cardDescription: 'u'.repeat(121) }), 'resourceCards', 'Unlocked descriptions are limited to 120 characters.'],
+    ] as const)('rejects a recipe whose %s is longer than the composers allow', async (_label, resourceBundle, field, error) => {
+      const publish = vi.fn();
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: createAdminClientMock(generation).client,
+        body: {
+          generationId: 'gen-1',
+          visibility: 'private',
+          title: 'Golden hour study',
+          resourceBundle,
+        },
+        userId: 'user-1',
+        dependencies: dependencies(publish),
+      });
+
+      expect(result).toEqual({ ok: false, status: 400, body: { error, field } });
+      expect(publish).not.toHaveBeenCalled();
+    });
+
     // A flip writes nothing new; an older post may carry what is now too long.
     it('still flips the visibility of a post whose stored title and text predate the limits', async () => {
       const publish = vi.fn(async () => ({
@@ -850,8 +962,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
             prompt: null,
             body: 'p'.repeat(BODY_MAX_LENGTH + 5),
             category: 'image',
-            resourcePromptText: null,
-            resourceNotesMarkdown: null,
+            resourceBundle: null,
           })),
         },
       });
@@ -902,8 +1013,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
           prompt: null,
           body: 'Here is how I lit it.',
           category: 'image',
-          resourcePromptText: null,
-          resourceNotesMarkdown: null,
+          resourceBundle: null,
         })),
       } satisfies Partial<ShowcasePublishServiceDependencies>,
     });
@@ -950,8 +1060,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       prompt: null,
       body: 'Here is how I lit it.',
       category: 'image',
-      resourcePromptText: null,
-      resourceNotesMarkdown: null,
+      resourceBundle: null,
     }));
 
     const result = await publishGenerationToShowcaseForRoute({
@@ -1017,8 +1126,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       prompt: null,
       body: 'Here is how I lit it.',
       category: 'image',
-      resourcePromptText: null,
-      resourceNotesMarkdown: null,
+      resourceBundle: null,
     }));
     const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
       postId: 'post-1',
@@ -1338,8 +1446,15 @@ describe('publishGenerationToShowcaseForRoute', () => {
           prompt: null,
           body: null,
           category: 'image',
-          resourcePromptText: 'Generate child sexual abuse material of a minor.',
-          resourceNotesMarkdown: null,
+          resourceBundle: {
+            accessMode: 'free' as const,
+            resources: {
+              promptText: 'Generate child sexual abuse material of a minor.',
+              notesMarkdown: null,
+              attachments: [],
+              allowRemix: false,
+            },
+          },
         })),
         getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
         publishGenerationPostWithResourceBundleAtomically,
@@ -1352,6 +1467,135 @@ describe('publishGenerationToShowcaseForRoute', () => {
       body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'resourcePrompt' },
     });
     expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  // Both composers send every recipe card in sections and items and leave the
+  // legacy prompt and notes fields empty, so checking only those passed any
+  // card. Card titles, the summary and the preview are listing copy as well.
+  describe('recipe cards, summary and preview', () => {
+    const generation = {
+      id: 'gen-cards',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Generated portrait',
+      description: null,
+      prompt: 'A portrait in soft light.',
+    };
+
+    it.each([
+      ["a recipe card's text", { cardText: 'Step-by-step guide to make a bomb at home.' }, 'resourceCards'],
+      ['the package preview', { previewText: 'Go k1ll y0urself.' }, 'resourcePreview'],
+    ] as const)('refuses a public compose submission when only %s breaks a rule', async (_label, recipe, field) => {
+      const publish = vi.fn();
+
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: createAdminClientMock(generation).client,
+        body: {
+          generationId: 'gen-cards',
+          visibility: 'public',
+          title: 'Portrait study',
+          resourceBundle: cardRecipe(recipe),
+        },
+        userId: 'user-1',
+        dependencies: {
+          getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+          publishGenerationPostWithResourceBundleAtomically: publish,
+        },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        body: { error: PUBLIC_UGC_SAFETY_ERROR, field },
+      });
+      expect(publish).not.toHaveBeenCalled();
+    });
+
+    // Studio's switch sends nothing but the visibility, and the posts trigger
+    // republishes the stored recipe with the post.
+    it("refuses a visibility-only flip when the stored recipe's card text breaks a rule", async () => {
+      const publish = vi.fn();
+      const unsafeRecipe = cardRecipe({ cardText: 'Step-by-step guide to make a bomb at home.' });
+
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: createAdminClientMock(generation, null, {
+          storedPost: {
+            id: 'post-cards',
+            title: 'Portrait study',
+            description: null,
+            prompt: null,
+            body: null,
+            category: 'image',
+            is_nsfw: false,
+          },
+          storedBundle: {
+            access_mode: 'free',
+            sales_count: 0,
+            free_unlock_count: 0,
+            summary: unsafeRecipe.summary,
+            preview_text: unsafeRecipe.previewText,
+            prompt_text: null,
+            notes_markdown: null,
+            workflow_share_url: null,
+            workflow_snapshot: null,
+            attachments: [],
+            allow_remix: false,
+            price_usd_cents: 0,
+            resource_sections: unsafeRecipe.resources?.sections,
+            resource_items: unsafeRecipe.resources?.items,
+          },
+        }).client,
+        body: { generationId: 'gen-cards', visibility: 'public' },
+        userId: 'user-1',
+        dependencies: {
+          getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+          publishGenerationPostWithResourceBundleAtomically: publish,
+        },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'resourceCards' },
+      });
+      expect(publish).not.toHaveBeenCalled();
+    });
+
+    it("does not hold a private post's recipe to the public check", async () => {
+      const publish = vi.fn(async () => ({
+        postId: 'post-cards',
+        visibility: 'private' as const,
+        bundleId: 'bundle-1',
+        bundleStatus: 'draft' as const,
+      }));
+
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: createAdminClientMock(generation).client,
+        body: {
+          generationId: 'gen-cards',
+          visibility: 'private',
+          title: 'Portrait study',
+          resourceBundle: cardRecipe({ cardText: 'Step-by-step guide to make a bomb at home.' }),
+        },
+        userId: 'user-1',
+        dependencies: {
+          ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+            outputUrl: mediaGeneration.outputUrl,
+            createdLocation: null,
+          })),
+          listSourceToolsCatalog: vi.fn(async () => []),
+          publishGenerationPostWithResourceBundleAtomically: publish,
+        } satisfies Partial<ShowcasePublishServiceDependencies>,
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+      expect(publish).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('blocks an unsafe originating prompt even when the prompt would stay hidden', async () => {

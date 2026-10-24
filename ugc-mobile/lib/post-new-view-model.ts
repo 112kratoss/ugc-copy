@@ -185,9 +185,13 @@ export interface PostComposerResourceDraft {
   priceTokens: string;
 }
 
+/**
+ * "From this creation" choices that live outside the recipe's cards. Whether the
+ * exact prompt is included is read from the cards themselves
+ * (`hasCreationPromptCard`).
+ */
 export interface PostComposerCreationPackageDraft {
   attachGenerationReferences: boolean;
-  attachPromptResource: boolean;
 }
 
 export interface PostComposerDraft {
@@ -257,11 +261,10 @@ const IMAGE: SourceToolCapability[] = ['image'];
 const VIDEO: SourceToolCapability[] = ['video'];
 const IMAGE_VIDEO: SourceToolCapability[] = ['image', 'video'];
 
+// No "Manual": the server's catalog has no such tool, and the composer sends no
+// placeholder row (`getSourceRowsForSubmit`), so offering it here offline let a
+// creator choose a tool that was never sent.
 export const POST_COMPOSER_SOURCE_OPTIONS: SourceToolOption[] = [
-  fallbackSourceTool({
-    slug: 'manual', label: 'Manual', media: ['image', 'video'], toolType: 'workflow',
-    capabilities: IMAGE_VIDEO, catalogTier: 'featured', aliases: ['camera', 'handmade', 'traditional'],
-  }),
   fallbackSourceTool({
     slug: 'magicbooklet', label: 'Magicbooklet', media: ['image', 'video'], toolType: 'platform',
     capabilities: IMAGE_VIDEO, catalogTier: 'featured', aliases: ['magic booklet', 'creator studio'],
@@ -737,31 +740,26 @@ function inferResourceCardType(items: PostResourceItem[]): PostComposerResourceC
 export function getDefaultCreationPackageDraft(): PostComposerCreationPackageDraft {
   return {
     attachGenerationReferences: false,
-    attachPromptResource: false,
   };
 }
 
+function isCreationPromptCard(card: PostComposerResourceCardDraft, prompt: string) {
+  return Boolean(prompt) && card.type === 'prompt' && card.textContent.trim() === prompt;
+}
+
 /**
- * Reads the "From this creation" toggle state back out of a loaded bundle.
- *
- * The edit prefill used to reset the creation package to defaults, so a post
- * that already shared its exact prompt showed "Include exact prompt" OFF —
- * and flipping the mislabeled toggle once deleted the very card the post was
- * sharing. The prompt toggle round-trips through the card the toggle itself
- * creates (section id `creation-prompt`); reference attachment is recognised
- * by any reference-media card carrying files, which covers both the copies
- * attached at publish time and the server-merged generation references.
+ * Whether the recipe carries the creation's exact prompt, which is what
+ * "Include exact prompt" shows. Read from the cards by their text, as the web
+ * composer does: found by the app's own card id, a prompt card made on the web
+ * read as missing and switching the toggle on added a second copy, and the
+ * card's trash button left the toggle on.
  */
-export function deriveCreationPackageFromResourceCards(
+export function hasCreationPromptCard(
   cards: PostComposerResourceCardDraft[] | null | undefined,
-): PostComposerCreationPackageDraft {
-  const list = cards ?? [];
-  return {
-    attachPromptResource: list.some((card) => card.id === 'creation-prompt'),
-    attachGenerationReferences: list.some((card) => (
-      card.type === 'reference_media' && card.attachments.length > 0
-    )),
-  };
+  generation: GenerationListItem | null | undefined,
+): boolean {
+  const prompt = generation?.prompt?.trim() ?? '';
+  return (cards ?? []).some((card) => isCreationPromptCard(card, prompt));
 }
 
 export function getDefaultPostComposerDraft(): PostComposerDraft {
@@ -772,12 +770,10 @@ export function getDefaultPostComposerDraft(): PostComposerDraft {
     description: '',
     contentText: '',
     caption: '',
-    sourceTool: 'Manual',
-    sourceToolSlug: 'manual',
-    madeWithRows: [createMadeWithRow({
-      toolLabel: 'Manual',
-      toolSlug: 'manual',
-    })],
+    // A post names a tool only when its creator chooses one, as on the web.
+    sourceTool: '',
+    sourceToolSlug: '',
+    madeWithRows: [createMadeWithRow()],
     category: 'text',
     visibility: 'public',
     selectedGenerationId: null,
@@ -893,7 +889,6 @@ export function buildUpdatePostPayload(
   } else {
     const body = draft.mode === 'text' ? draft.contentText.trim() : getCreatePostBody(draft);
     const sourceTools = !isTextProof(draft) || draft.mode === 'upload' ? buildSourceToolsPayload(draft) : [];
-    const primarySourceTool = sourceTools[0];
     const mediaItems = buildPostComposerMediaItemsPayload(draft);
 
     return {
@@ -903,13 +898,27 @@ export function buildUpdatePostPayload(
       visibility: draft.visibility,
     isNsfw: draft.isNsfw === true,
       category: draft.category,
-      sourceTool: (primarySourceTool?.toolLabel ?? draft.sourceTool).trim(),
-      sourceToolSlug: (primarySourceTool?.toolSlug ?? draft.sourceToolSlug).trim(),
-      ...(sourceTools.length > 0 ? { sourceTools } : {}),
+      // With no row the stored attribution stays as it is, as on the web's edit.
+      ...buildSourceToolFields(sourceTools),
       ...(mediaItems.length > 0 ? { mediaItems } : {}),
       ...resourceBundlePatch,
     };
   }
+}
+
+/** The source fields a save sends: none at all when no tool was chosen. */
+function buildSourceToolFields(sourceTools: PostComposerSourceToolSelection[]): {
+  sourceTool?: string;
+  sourceToolSlug?: string;
+  sourceTools?: PostComposerSourceToolSelection[];
+} {
+  const primary = sourceTools[0];
+  if (!primary) return {};
+  return {
+    sourceTool: primary.toolLabel,
+    ...(primary.toolSlug ? { sourceToolSlug: primary.toolSlug } : {}),
+    sourceTools,
+  };
 }
 
 export type PostComposerValidationOptions = {
@@ -920,7 +929,61 @@ export type PostComposerValidationOptions = {
    * other fields without first rewriting an old title.
    */
   grandfatheredTitle?: string | null;
+  /**
+   * The post keeps a recipe people have bought, which the save leaves as it is.
+   * Its own checks are skipped (the screen validates such a draft as having no
+   * recipe), but the server still judges the post as a listing.
+   */
+  hasSoldRecipe?: boolean;
 };
+
+const PUBLIC_POST_PLACEHOLDER_TITLE_ERROR = 'Replace the placeholder title with something specific to this post.';
+const PUBLIC_POST_NEEDS_TEXT_ERROR = 'Add useful text so viewers can understand the post before publishing.';
+const PUBLIC_POST_MIN_TEXT_LENGTH = 18;
+
+/**
+ * The server's public-post rule (`getPublicPostQualityError` in the web app's
+ * src/lib/marketplace-trust.ts): a public post may not carry a placeholder
+ * title, and one without media needs some useful text. Copied because the app
+ * cannot import the web's code; contracts/public-post-quality-v1.json holds
+ * both to the same answers.
+ */
+export function getPublicPostQualityError(input: {
+  title?: string | null;
+  body?: string | null;
+  hasMedia?: boolean | null;
+}): string | null {
+  const title = input.title?.trim() ?? '';
+  const body = input.body?.trim() ?? '';
+
+  if (title && isPlaceholderMarketplaceText(title)) {
+    return PUBLIC_POST_PLACEHOLDER_TITLE_ERROR;
+  }
+
+  if (!input.hasMedia && (body.length < PUBLIC_POST_MIN_TEXT_LENGTH || isPlaceholderMarketplaceText(body))) {
+    return PUBLIC_POST_NEEDS_TEXT_ERROR;
+  }
+
+  return null;
+}
+
+/**
+ * The public-post rule as the server applies it to this draft, so step 2 never
+ * says "Ready to publish" for a post the server will refuse. A private post is
+ * not checked. A post with a recipe is judged as a listing instead, whose text
+ * rule takes a long enough title in place of text, so only the title half
+ * holds there: a placeholder title fails both.
+ */
+function getDraftPublicPostQualityError(draft: PostComposerDraft, options: PostComposerValidationOptions): string | null {
+  if (draft.visibility !== 'public') return null;
+  const error = getPublicPostQualityError({
+    title: draft.title,
+    body: getCreatePostBody(draft),
+    hasMedia: !isTextProof(draft),
+  });
+  const judgedAsListing = draft.resource.accessMode !== 'none' || options.hasSoldRecipe === true;
+  return judgedAsListing && error !== PUBLIC_POST_PLACEHOLDER_TITLE_ERROR ? null : error;
+}
 
 export function validatePostComposerDraft(
   draft: PostComposerDraft,
@@ -931,10 +994,15 @@ export function validatePostComposerDraft(
     return detailsValidation;
   }
 
+  const publicPostQualityError = getDraftPublicPostQualityError(draft, options);
+  if (publicPostQualityError) {
+    return { valid: false, message: publicPostQualityError };
+  }
+
   if (draft.resource.accessMode !== 'none') {
     const resourceBundle = buildPostResourceBundleInput(draft.resource);
     if (!resourceBundle) {
-      return { valid: false, message: 'Add at least one unlockable resource.' };
+      return { valid: false, message: 'Add at least one item to the recipe.' };
     }
 
     // The builder has a compatibility fallback for older callers, but the
@@ -954,10 +1022,10 @@ export function validatePostComposerDraft(
     if (draft.resource.accessMode === 'paid') {
       const priceTokens = getPriceTokens(draft.resource);
       if (priceTokens < MIN_RESOURCE_PRICE_TOKENS) {
-        return { valid: false, message: `Paid resources must cost at least ${MIN_RESOURCE_PRICE_TOKENS} tokens.` };
+        return { valid: false, message: `Paid recipes must cost at least ${MIN_RESOURCE_PRICE_TOKENS} tokens.` };
       }
       if (priceTokens % 10 !== 0) {
-        return { valid: false, message: 'Resource prices must use increments of 10 tokens.' };
+        return { valid: false, message: 'Recipe prices must use increments of 10 tokens.' };
       }
     }
   }
@@ -1030,12 +1098,9 @@ export function buildCreatePostFormData(draft: PostComposerDraft) {
   const sourceTools = !isTextProof(draft) || draft.mode === 'upload' || draft.mode === 'creation'
     ? buildSourceToolsPayload(draft)
     : [];
-  const primarySourceTool = sourceTools[0];
-  formData.append('sourceTool', (primarySourceTool?.toolLabel ?? draft.sourceTool).trim());
-  const primarySourceToolSlug = primarySourceTool?.toolSlug ?? draft.sourceToolSlug;
-  if (primarySourceToolSlug.trim()) {
-    formData.append('sourceToolSlug', primarySourceToolSlug.trim());
-  }
+  const { sourceTool, sourceToolSlug } = buildSourceToolFields(sourceTools);
+  if (sourceTool) formData.append('sourceTool', sourceTool);
+  if (sourceToolSlug) formData.append('sourceToolSlug', sourceToolSlug);
   if (sourceTools.length > 0) {
     formData.append('sourceTools', JSON.stringify(sourceTools));
   }
@@ -1059,6 +1124,40 @@ export function buildCreatePostFormData(draft: PostComposerDraft) {
   }
 
   return formData;
+}
+
+/**
+ * The media a loaded post holds, as an edit opens it: each item named by its row
+ * (`existingId`) and the key it was saved under, which a save sends back.
+ */
+export function hydratePostComposerMediaItems(
+  post: Pick<OwnerPostListItem, 'id' | 'title' | 'mediaUrl' | 'mediaKind' | 'mediaItems'>,
+): PostComposerMediaItem[] {
+  if (post.mediaItems?.length) {
+    return post.mediaItems.map((item) => ({
+      id: item.id,
+      mediaKey: item.mediaKey ?? item.id,
+      uri: item.url,
+      previewUrl: item.previewUrl ?? item.url,
+      name: item.originalName || item.id,
+      type: item.contentType || (item.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg'),
+      mediaKind: item.mediaKind,
+      existingId: item.id,
+    }));
+  }
+
+  return post.mediaUrl
+    ? [{
+        id: 'existing-cover',
+        mediaKey: `${post.id}:cover`,
+        uri: post.mediaUrl,
+        previewUrl: post.mediaUrl,
+        name: post.title || 'media',
+        type: post.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg',
+        mediaKind: post.mediaKind === 'video' ? 'video' : 'image',
+        existingId: `${post.id}:cover`,
+      }]
+    : [];
 }
 
 export function buildPostComposerMediaItemsPayload(draft: PostComposerDraft): PostComposerMediaItemPayload[] {
@@ -1120,16 +1219,17 @@ export function buildOptimisticOwnerPostListItem(
     body: getCreatePostBody(draft),
     category: getSubmittedPostCategory(draft),
     postFormat: getCreatePostFormat(draft),
+    // What the create request sends, so the tile names no tool the server will not store.
     sourceLabel: primarySourceTool?.modelLabel
       ? `${primarySourceTool.toolLabel} · ${primarySourceTool.modelLabel}`
-      : primarySourceTool?.toolLabel ?? trimOrUndefined(draft.sourceTool),
+      : primarySourceTool?.toolLabel,
     publicPath: draft.visibility === 'private' ? null : `/showcase/${postId}`,
     ownerPath: `/showcase/${postId}`,
     bundle: null,
     archivedAt: null,
     generationId: null,
-    sourceTool: primarySourceTool?.toolLabel ?? trimOrUndefined(draft.sourceTool) ?? null,
-    sourceToolSlug: primarySourceTool?.toolSlug ?? trimOrUndefined(draft.sourceToolSlug) ?? null,
+    sourceTool: primarySourceTool?.toolLabel ?? null,
+    sourceToolSlug: primarySourceTool?.toolSlug ?? null,
     sourceTools,
   };
 }
@@ -1382,18 +1482,18 @@ export function getPostComposerPreviewStatusLabel(
   }
 
   if (draft.resource.accessMode === 'paid') {
-    return 'Paid resource package will appear in post details.';
+    return 'The paid recipe will appear in post details.';
   }
 
   if (draft.resource.accessMode === 'free') {
-    return 'Free resource package will appear in post details.';
+    return 'The free recipe will appear in post details.';
   }
 
   if (willAttachGenerationReferences(selectedGeneration, draft)) {
     return 'Creation references will appear in post details.';
   }
 
-  return 'No resource package configured.';
+  return 'No recipe added.';
 }
 
 export function applyCreationPromptResource(
@@ -1401,44 +1501,39 @@ export function applyCreationPromptResource(
   selectedGeneration: GenerationListItem | null | undefined,
   enabled: boolean
 ): PostComposerDraft {
-  const creationPackage = getCreationPackageDraft(draft);
+  const prompt = selectedGeneration?.prompt?.trim() ?? '';
+  const cards = draft.resource.cards ?? [];
   if (!enabled) {
     return {
       ...draft,
-      creationPackage: {
-        ...creationPackage,
-        attachPromptResource: false,
-      },
       resource: {
         ...draft.resource,
         cardAuthoringMode: 'cards',
-        cards: (draft.resource.cards ?? []).filter((card) => card.id !== 'creation-prompt'),
+        cards: cards.filter((card) => !isCreationPromptCard(card, prompt)),
       },
     };
   }
 
-  const prompt = selectedGeneration?.prompt?.trim() ?? '';
-
   return {
     ...draft,
-    creationPackage: {
-      ...creationPackage,
-      attachPromptResource: true,
-    },
     resource: {
       ...draft.resource,
       cardAuthoringMode: 'cards',
       accessMode: draft.resource.accessMode === 'none' ? 'free' : draft.resource.accessMode,
       promptText: draft.resource.promptText.trim() ? draft.resource.promptText : prompt,
       previewText: draft.resource.previewText.trim() ? draft.resource.previewText : 'Includes the exact reusable prompt.',
-      cards: [
-        ...(draft.resource.cards ?? []).filter((card) => card.id !== 'creation-prompt'),
-        createPostComposerResourceCard('prompt', {
-          id: 'creation-prompt',
-          title: 'Exact generation prompt',
-          textContent: prompt,
-        }),
-      ],
+      // A card made on the web, or by an earlier save, is the prompt already.
+      // A new one takes its own id, so it cannot collide with an earlier card
+      // whose text was edited away from the prompt.
+      cards: cards.some((card) => isCreationPromptCard(card, prompt))
+        ? cards
+        : [
+            ...cards,
+            createPostComposerResourceCard('prompt', {
+              title: 'Exact generation prompt',
+              textContent: prompt,
+            }),
+          ],
     },
   };
 }
@@ -1455,7 +1550,7 @@ export function getPostComposerPackageStatus(
     const buyerPreviewReady = Boolean(draft.resource.previewText.trim())
       && (draft.visibility !== 'public' || hasUsefulBuyerPreview(draft.resource));
     const ready = Boolean(resourceBundle && buyerPreviewReady);
-    const promptResource = getCreationPackageDraft(draft).attachPromptResource && draft.resource.promptText.trim();
+    const promptResource = hasCreationPromptCard(draft.resource.cards, selectedGeneration);
     const priceTokens = getPriceTokens(draft.resource);
     const priceNeedsMinimum = draft.resource.accessMode === 'paid' && priceTokens < MIN_RESOURCE_PRICE_TOKENS;
     const priceNeedsIncrement = draft.resource.accessMode === 'paid' && priceTokens >= MIN_RESOURCE_PRICE_TOKENS && priceTokens % 10 !== 0;
@@ -1463,7 +1558,7 @@ export function getPostComposerPackageStatus(
       return {
         id: 'unlock',
         label: 'Set a valid price',
-        body: `Paid resources must cost at least ${MIN_RESOURCE_PRICE_TOKENS} tokens.`,
+        body: `Paid recipes must cost at least ${MIN_RESOURCE_PRICE_TOKENS} tokens.`,
         state: 'warning',
       };
     }
@@ -1471,7 +1566,7 @@ export function getPostComposerPackageStatus(
       return {
         id: 'unlock',
         label: 'Set a valid price',
-        body: 'Resource prices must use increments of 10 tokens.',
+        body: 'Recipe prices must use increments of 10 tokens.',
         state: 'warning',
       };
     }
@@ -1479,16 +1574,16 @@ export function getPostComposerPackageStatus(
       id: 'unlock',
       label: ready
         ? promptResource
-          ? 'Prompt resource ready'
+          ? 'Prompt recipe ready'
           : draft.resource.accessMode === 'paid'
-            ? 'Paid package ready'
-            : 'Free package ready'
-        : 'Resource package needs resources',
+            ? 'Paid recipe ready'
+            : 'Free recipe ready'
+        : 'Finish the recipe',
       body: ready
         ? promptResource
           ? draft.resource.previewText.trim()
           : getPostComposerPreviewStatusLabel(draft, selectedGeneration)
-        : 'Add a buyer preview and at least one prompt, workflow, file, note, or remix resource.',
+        : 'Add a buyer preview and at least one prompt, workflow, file, note, or remix link.',
       state: ready ? 'ready' : 'warning',
     };
   }
@@ -1504,8 +1599,8 @@ export function getPostComposerPackageStatus(
 
   return {
     id: 'unlock',
-    label: 'Resource package optional',
-    body: 'No resource package configured.',
+    label: 'Recipe optional',
+    body: 'No recipe added.',
     state: 'neutral',
   };
 }
@@ -1705,7 +1800,9 @@ function buildSourceToolsPayload(
       .filter((row) => row.toolLabel);
   }
 
-  const toolLabel = draft.sourceTool.trim();
+  // Only a creation falls back to the draft's own tool (Magicbooklet, with the
+  // creation's model); any other post with no row names no tool.
+  const toolLabel = item ? draft.sourceTool.trim() : '';
   if (!toolLabel) {
     return [];
   }
@@ -1725,23 +1822,23 @@ function buildSourceToolsPayload(
   }];
 }
 
+/**
+ * The rows a post is attributed to. "Manual" was this composer's own stand-in
+ * for a post nobody attributed: older builds started every draft with it and
+ * wrote it into every edit of a post without a tool. No catalog has such a
+ * tool, and a post that sent it read "Made with Manual" on both post pages, so
+ * that row is never sent, even from a draft saved by an older build.
+ */
 function getSourceRowsForSubmit(draft: PostComposerDraft): PostComposerMadeWithRow[] {
-  const rows = draft.madeWithRows ?? [];
-  const nonEmptyRows = rows.filter((row) => row.toolLabel.trim());
-  const hasExplicitRows = nonEmptyRows.some((row) => {
-    const isDefaultManual = row.toolLabel.trim() === 'Manual'
-      && (row.toolSlug.trim() === 'manual' || !row.toolSlug.trim())
-      && !row.modelLabel.trim()
-      && !row.createTool
-      && !row.createModel;
-    return !isDefaultManual;
-  });
+  return (draft.madeWithRows ?? []).filter((row) => row.toolLabel.trim() && !isManualPlaceholderRow(row));
+}
 
-  if (hasExplicitRows || draft.sourceTool.trim() === 'Manual') {
-    return nonEmptyRows;
-  }
-
-  return [];
+function isManualPlaceholderRow(row: PostComposerMadeWithRow) {
+  return row.toolLabel.trim() === 'Manual'
+    && (row.toolSlug.trim() === 'manual' || !row.toolSlug.trim())
+    && !row.modelLabel.trim()
+    && !row.createTool
+    && !row.createModel;
 }
 
 function getPriceUsdCents(value: string) {

@@ -188,6 +188,67 @@ function blobOfSize(sizeBytes: number, type: string): Blob {
   return blob;
 }
 
+/** A recipe as both composers send it: one card, the legacy prompt and notes empty. */
+function composerRecipe({
+  cardText = 'Soft key light from the left, warm rim light behind.',
+  cardDescription = 'The prompt behind the portrait.',
+  summary = 'A reusable lighting setup for portraits.',
+  previewText = 'Includes the prompt and the light plan.',
+}: { cardText?: string; cardDescription?: string; summary?: string; previewText?: string } = {}) {
+  return {
+    accessMode: 'free' as const,
+    summary,
+    previewText,
+    resources: {
+      promptText: null,
+      notesMarkdown: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [{
+        id: 'card-1',
+        title: 'Portrait prompt',
+        publicTitle: 'Portrait prompt',
+        kind: 'global',
+        description: cardDescription,
+        sortOrder: 0,
+        resourceType: 'prompt',
+      }],
+      items: [{
+        id: 'card-1-item-1',
+        type: 'prompt',
+        role: 'primary',
+        sectionId: 'card-1',
+        title: 'Portrait prompt',
+        textContent: cardText,
+        sortOrder: 0,
+        remixUse: 'none',
+      }],
+    },
+  };
+}
+
+/** The `post_resource_bundles` row that recipe is stored as. */
+function storedRecipeRow(recipe: ReturnType<typeof composerRecipe>) {
+  return {
+    id: 'bundle-1',
+    access_mode: recipe.accessMode,
+    status: 'draft',
+    sales_count: 0,
+    free_unlock_count: 0,
+    summary: recipe.summary,
+    preview_text: recipe.previewText,
+    prompt_text: null,
+    notes_markdown: null,
+    workflow_share_url: null,
+    workflow_snapshot: null,
+    attachments: [],
+    allow_remix: false,
+    price_usd_cents: 0,
+    resource_sections: recipe.resources.sections,
+    resource_items: recipe.resources.items,
+  };
+}
+
 describe('updateOwnerPostForRoute', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
@@ -343,6 +404,7 @@ describe('updateOwnerPostForRoute', () => {
         ownerPath: '/post/post-1/edit',
         resourceBundlePath: '/post/post-1/edit#recipe',
         resourceBundleStatus: 'draft',
+        mediaItems: [],
       },
     });
     expect(rpcCalls).toEqual([
@@ -990,6 +1052,98 @@ describe('updateOwnerPostForRoute', () => {
     expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
 
+  // Both composers send every recipe card in sections and items and leave the
+  // legacy prompt and notes fields empty, so checking only those passed any
+  // card. Card titles, the summary and the preview are listing copy as well.
+  describe('recipe cards, summary and preview', () => {
+    function createDependencies() {
+      return {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }: { patch: Record<string, unknown> }) => ({
+          postId: 'post-1',
+          visibility: patch.visibility as 'public' | 'private',
+          bundleId: 'bundle-1',
+          bundleStatus: 'draft' as const,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      } satisfies PostUpdateDependencies;
+    }
+
+    it.each([
+      ["a recipe card's text", { cardText: 'Step-by-step guide to make a bomb at home.' }, 'resourceCards'],
+      ['the package preview', { previewText: 'Go k1ll y0urself.' }, 'resourcePreview'],
+    ] as const)('refuses a public save when only %s breaks a rule', async (_label, recipe, field) => {
+      const { client } = createSupabaseMock({ bundle: null });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Helpful launch proof',
+          body: 'A public proof post with enough detail for visitors.',
+          visibility: 'public',
+          resourceBundle: composerRecipe(recipe),
+        },
+        dependencies,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        body: { error: PUBLIC_UGC_SAFETY_ERROR, field },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    it("refuses making a post public when its stored recipe's card text breaks a rule", async () => {
+      const { client } = createSupabaseMock({
+        bundle: storedRecipeRow(composerRecipe({ cardText: 'Step-by-step guide to make a bomb at home.' })),
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'public' },
+        dependencies,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'resourceCards' },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    it("does not hold a private post's recipe to the public check", async () => {
+      const { client } = createSupabaseMock({ bundle: null });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Helpful launch proof',
+          body: 'A draft post with an unlock package.',
+          visibility: 'private',
+          resourceBundle: composerRecipe({ cardText: 'Step-by-step guide to make a bomb at home.' }),
+        },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('generation-backed posts', () => {
     const generatedPost = {
       id: 'post-1',
@@ -1400,6 +1554,147 @@ describe('updateOwnerPostForRoute', () => {
     expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
 
+  // Create and publish already name the field and the way to fix it; an edit
+  // that makes a post public sent the sentence alone, so a client had nothing
+  // to offer but the text.
+  it('answers an incomplete profile with the same repair action create and publish send', async () => {
+    const { client } = createSupabaseMock({ bundle: null });
+    const dependencies = {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => (
+        'Complete your profile before publishing publicly: choose a custom handle and add your display name.'
+      )),
+      updatePostWithResourceBundleAtomically: vi.fn(),
+      replacePostSourceTools: vi.fn(async () => undefined),
+      replacePostMediaItems: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+    } satisfies PostUpdateDependencies;
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        title: 'Helpful launch proof',
+        body: 'A public proof post with enough detail for visitors.',
+        visibility: 'public',
+      },
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: {
+        error: 'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+        field: 'profile',
+        actionHref: '/profile',
+        actionLabel: 'Complete profile and return',
+      },
+    });
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  // replace_post_media deletes and re-inserts every row, so a save gives each
+  // item a new id. A page that stays open after saving needs those ids, and to
+  // know which new upload became which row, for its next save.
+  it("answers a saved edit with the post's media rows as they now are, in order", async () => {
+    const postMedia: Array<Record<string, unknown>> = [{
+      id: 'media-a',
+      media_key: 'proof-a',
+      storage_path: 'posts/post-1/a.jpg',
+      preview_storage_path: null,
+      external_url: null,
+      media_kind: 'image',
+      content_type: 'image/jpeg',
+      original_name: 'a.jpg',
+      width: null,
+      height: null,
+      duration_seconds: null,
+      sort_order: 0,
+    }];
+    const { client } = createSupabaseMock({
+      bundle: null,
+      postMedia,
+      downloadedMedia: blobOfSize(1024, 'image/jpeg'),
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'image',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: 'posts/post-1/a.jpg',
+        output_url: null,
+        review_status: 'visible',
+      },
+    });
+    const updatePostWithResourceBundleAtomically = vi.fn<
+      NonNullable<PostUpdateDependencies['updatePostWithResourceBundleAtomically']>
+    >(async ({ mediaItems }) => {
+      // What the RPC leaves behind: the same keys and order, every row new.
+      postMedia.splice(0, postMedia.length, ...(mediaItems ?? []).map((item) => ({
+        id: `saved-${item.mediaKey}`,
+        media_key: item.mediaKey,
+        storage_path: item.storagePath,
+        external_url: null,
+        media_kind: item.mediaKind,
+        content_type: item.contentType,
+        original_name: item.originalName,
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: item.sortOrder,
+      })));
+      return {
+        postId: 'post-1',
+        visibility: 'private' as const,
+        bundleId: null,
+        bundleStatus: null,
+      };
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [
+          {
+            mediaKey: 'proof-new',
+            storagePath: 'uploads/user-1/new.jpg',
+            contentType: 'image/jpeg',
+            originalName: 'new.jpg',
+          },
+          { existingId: 'media-a', mediaKey: 'proof-a' },
+        ],
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically,
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('Expected the edit to save');
+    expect(result.body.mediaItems).toEqual([
+      { id: 'saved-proof-new', mediaKey: 'proof-new' },
+      { id: 'saved-proof-a', mediaKey: 'proof-a' },
+    ]);
+  });
+
   it('preserves stable media keys when existing proof media is reordered', async () => {
     const postMedia = [
       {
@@ -1547,7 +1842,51 @@ describe('updateOwnerPostForRoute', () => {
     expect(result).toEqual({
       ok: false,
       status: 400,
-      body: { error: 'New uploads must use a new post media key.' },
+      // A key the post already holds is a client naming its media by stale
+      // rows: the field tells it to read them back before saving again.
+      body: { error: 'New uploads must use a new post media key.', field: 'mediaItems' },
+    });
+    expect(copied).toEqual([]);
+    expect(updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('tells a client its media ids are stale when it names a row the post no longer has', async () => {
+    const postMedia = [{
+      id: 'media-reinserted',
+      media_key: 'proof-a',
+      storage_path: 'posts/post-1/a.jpg',
+      external_url: null,
+      media_kind: 'image',
+      content_type: 'image/jpeg',
+      original_name: 'a.jpg',
+      width: null,
+      height: null,
+      duration_seconds: null,
+      sort_order: 0,
+    }];
+    const { client, copied } = createSupabaseMock({ bundle: null, postMedia });
+    const updatePostWithResourceBundleAtomically = vi.fn();
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      // The id this row had before a save re-inserted it.
+      body: { mediaItems: [{ existingId: 'media-before-the-save' }] },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically,
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'An existing media item no longer belongs to this post.', field: 'mediaItems' },
     });
     expect(copied).toEqual([]);
     expect(updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
@@ -2398,6 +2737,193 @@ describe('updateOwnerPostForRoute', () => {
 
       expect(result.ok).toBe(true);
       expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalled();
+    });
+  });
+
+  // Limits the clients enforce, held on the server too. As with titles, a value
+  // stored before them comes back unchanged in every whole-draft save and must
+  // never block one.
+  describe('description and recipe copy length', () => {
+    function buildDependencies() {
+      return {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: 'bundle-1',
+          bundleStatus: 'draft' as const,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      } satisfies PostUpdateDependencies;
+    }
+
+    function postWithDescription(description: string | null) {
+      return {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Lighting notes',
+        description,
+        prompt: null,
+        body: 'A draft post with an unlock package.',
+        category: 'text',
+        post_format: 'text',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'manual',
+        archived_at: null,
+        showcase_asset_path: null,
+        output_url: null,
+        review_status: 'visible',
+      };
+    }
+
+    it('rejects an edit that sets a description longer than the limit', async () => {
+      const { client } = createSupabaseMock({ post: postWithDescription(null), bundle: null });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { description: 'd'.repeat(1001), visibility: 'private' },
+        dependencies,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        body: { error: 'Descriptions are limited to 1000 characters.', field: 'description' },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    it('still saves a post whose stored description exceeds the limit when it comes back unchanged', async () => {
+      const longStoredDescription = 'd'.repeat(1040);
+      const { client } = createSupabaseMock({ post: postWithDescription(longStoredDescription), bundle: null });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { title: 'Lighting notes, retitled', description: longStoredDescription, visibility: 'private' },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalled();
+    });
+
+    // An older row may keep the whitespace a submitted value is trimmed of.
+    it.each([
+      ['a save that leaves the description out', {}],
+      ['a save that sends it back trimmed', { description: 'd'.repeat(1040) }],
+    ])('still saves a stored over-limit description with surrounding whitespace on %s', async (_label, sent) => {
+      const { client } = createSupabaseMock({ post: postWithDescription(` ${'d'.repeat(1040)}\n`), bundle: null });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { title: 'Lighting notes, retitled', visibility: 'private', ...sent },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
+    it.each([
+      ['public summary', composerRecipe({ summary: 's'.repeat(181) }), 'resourceSummary', 'Public summaries are limited to 180 characters.'],
+      ['package preview', composerRecipe({ previewText: 'p'.repeat(181) }), 'resourcePreview', 'Package previews are limited to 180 characters.'],
+      ["card's unlocked description", composerRecipe({ cardDescription: 'u'.repeat(121) }), 'resourceCards', 'Unlocked descriptions are limited to 120 characters.'],
+    ] as const)('rejects a recipe whose %s is longer than the composers allow', async (_label, resourceBundle, field, error) => {
+      const { client } = createSupabaseMock({ bundle: storedRecipeRow(composerRecipe()) });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'private', resourceBundle },
+        dependencies,
+      });
+
+      expect(result).toEqual({ ok: false, status: 400, body: { error, field } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    it('still saves a recipe whose stored copy exceeds those limits when it comes back unchanged', async () => {
+      const storedRecipe = composerRecipe({
+        summary: 's'.repeat(200),
+        previewText: 'p'.repeat(200),
+        cardDescription: 'u'.repeat(150),
+      });
+      const { client } = createSupabaseMock({ bundle: storedRecipeRow(storedRecipe) });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          visibility: 'private',
+          resourceBundle: { ...storedRecipe, resources: { ...storedRecipe.resources, allowRemix: true } },
+        },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalled();
+    });
+
+    // A composer whose summary field is blank sends the preview in its place,
+    // so a stored preview can come back as the summary without anyone typing.
+    it('still saves a stored preview that comes back as the summary', async () => {
+      const longStoredPreview = 'p'.repeat(200);
+      const { client } = createSupabaseMock({
+        bundle: storedRecipeRow(composerRecipe({ summary: '', previewText: longStoredPreview })),
+      });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          visibility: 'private',
+          resourceBundle: composerRecipe({ summary: longStoredPreview, previewText: longStoredPreview }),
+        },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects a stored over-limit value once it is changed into a different over-limit one', async () => {
+      const { client } = createSupabaseMock({
+        bundle: storedRecipeRow(composerRecipe({ cardDescription: 'u'.repeat(150) })),
+      });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          visibility: 'private',
+          resourceBundle: composerRecipe({ cardDescription: 'v'.repeat(150) }),
+        },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 400, body: { field: 'resourceCards' } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
     });
   });
 });

@@ -34,6 +34,7 @@ import {
 } from './app-shell-nav';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
 import AlertsBadge from '@/components/AlertsBadge';
+import { holdForLeaveGuard } from '@/lib/use-leave-guard';
 
 const NAV_GROUPS = [
   { label: 'Create', ids: ['home', 'create', 'studio', 'showcase'] },
@@ -275,6 +276,15 @@ const AppShellFrame = memo(function AppShellFrame({
   // and after hydration, at every address (see AppShellClient below).
   const pathname = isNotFoundRoute || isHomeBeforeMount ? '' : routePathname;
   const [mobileOpen, setMobileOpen] = useState(false);
+  // The drawer goes with the page it opened over. A link in it closes it as
+  // it navigates, but a page with unsaved work holds the click before that
+  // handler runs (src/lib/use-leave-guard.ts), and a leave comes later, by the
+  // router.
+  const [drawerPathname, setDrawerPathname] = useState(routePathname);
+  if (drawerPathname !== routePathname) {
+    setDrawerPathname(routePathname);
+    setMobileOpen(false);
+  }
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
@@ -460,6 +470,12 @@ const AppShellFrame = memo(function AppShellFrame({
           {activeItem?.id !== 'search' ? (
             <Form
               action="/search"
+              // Not a link, so a page's leave guard is asked here: a page with
+              // unsaved work asks first, and a leave submits the search again.
+              onSubmit={(event) => {
+                const form = event.currentTarget;
+                if (holdForLeaveGuard(() => form.requestSubmit())) event.preventDefault();
+              }}
               className="app-shell-search mx-auto min-w-0 basis-md items-center gap-2.5 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 transition focus-within:border-[var(--ui-border-strong)] focus-within:bg-[var(--ui-surface-3)]"
             >
               <button

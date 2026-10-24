@@ -498,22 +498,22 @@ Rules:
 
 ### Post composer
 
-`app/post/new.tsx`. Two steps. The header names the step ("Step 1 of 2 · post details", "Step 2 of 2 · resources optional") over a two-part progress bar. "Mark as NSFW / mature" sits at the top of both.
+`app/post/new.tsx`. Two steps. The header names the step ("Step 1 of 2 · post details", "Step 2 of 2 · recipe optional") over a two-part progress bar. "Mark as NSFW / mature" sits at the top of both.
 
 **Step 1, "Create post"** (or "Edit post"):
 
 1. **Post format:** Media post or Text post. It is shown only for a new post that doesn't come from a generation.
 2. **Media** ("Upload images or videos"): the pictures or videos being posted, cover first and up to five. A generation's media stays attached as it is.
 3. **Title:** required.
-4. **Made with:** optional attribution (tool and model), collapsed until opened. For a generation it is fixed to Magicbooklet and the model, and read-only.
+4. **Made with:** optional attribution (tool and model), collapsed until opened. For a generation it is fixed to Magicbooklet and the model, and read-only. A post names a tool only when one is chosen: an empty Made with sends none, as on the web, and neither does a text post.
 5. **Story:** optional; the idea, process or story behind the post.
 
 A text post has no media, Made with or Story: its title comes first, then its post text, both required. The footer's **Next** checks the details. It stays pressable: a missing field gets its message inline and the focus, and the composer stays on step 1.
 
 **Step 2, "Review & publish"** (or "Edit post"):
 
-1. **Summary:** the cover and title (the title goes back to step 1 to edit), "Ready to publish" or "Needs attention", and chips for the visibility and the resources.
-2. **Optional resources:** Share free, Sell resources (a token price), or Post without resources. A package from a creation can also carry its references and exact prompt.
+1. **Summary:** the cover and title (the title goes back to step 1 to edit), "Ready to publish" or "Needs attention", and chips for the visibility and the recipe ("No recipe", "Free recipe", "Paid recipe · 900 tokens"). A public post is held to the server's public-post rule first (`contracts/public-post-quality-v1.json`): a placeholder title, or a text post without enough useful text, reads "Needs attention" in the rule's words. A private post is not checked.
+2. **Recipe** (optional): Free recipe, Paid recipe (a token price), or No recipe. A new post's recipe from a creation can also carry the creation's references and its exact prompt; an edit offers the exact prompt only, because only publishing copies references. "Include exact prompt" reads the cards by their text, as the web does, so a prompt card made on the web counts and removing the card switches it off.
 
 The footer holds the visibility (Public or Private) and the publish action: Publish public, Save private, or Save changes when editing. Unlike Next, the publish action waits: it is disabled while the summary says "Needs attention", while media is being picked, and while a failed upload waits for Retry or Remove failed.
 
@@ -524,11 +524,13 @@ Rules:
 - "Post to feed" after generating and "Post this creation" in the reel both open the composer at step 1. Neither publishes immediately.
 - Only step 2 publishes. Step 1's button is Next, never a publish word. It once carried step 2's title and read as if the tap would publish.
 - Generation references and exact prompts attach only when the creator chooses them.
-- Marketplace details appear only once a free or paid package is chosen.
-- A template result posts its final media only, and a package people have already bought cannot change; step 2 says so in place of the resource choices.
+- Marketplace details appear only once a free or paid recipe is chosen.
+- A template result posts its final media only, and a recipe people have already bought cannot change; step 2 says so in place of the recipe choices.
+- A refusal for an incomplete profile (a public post needs a claimed handle and a display name) offers Complete profile under the message. It opens Edit profile over the composer, which is there as it was when the profile saves or closes.
+- When a save may have used the staged uploads (no answer, a server error, or the Made with refusal, which the server makes after moving them), the next publish uploads the new media again from the device, under the usual progress and Cancel. After any other refusal it sends the same uploads again.
 - Removing something offers Undo just above the footer, where it stays in reach.
 - A saved draft reopens on the step it was left on. Without one, the Recipe action (in the reel's rail and on the profile's creations; spoken "Manage recipe" or "Add a recipe") and the seller dashboard's Edit listing open step 2 (`focus=resources`). Either way, step 2 opens only when the details are complete; otherwise step 1 opens with the missing fields marked.
-- After publishing, Profile opens on Posts with the new post in view; a saved edit returns to the screen that opened it. The share sheet comes first only when the composer was opened from Share on something not yet public (`shareAfterPublish=1`) and the post ended up public.
+- After publishing, Profile opens on Posts with the new post in view; a saved edit returns to the screen that opened it. The share sheet comes first only when the composer was opened from Share on something not yet public (`shareAfterPublish=1`, which opens an edit on Public) and the post ended up public.
 
 ### Create workspace
 

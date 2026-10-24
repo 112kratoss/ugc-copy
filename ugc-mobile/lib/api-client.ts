@@ -522,6 +522,15 @@ const GENERATION_START_REQUEST_OPTIONS: RequestOptions = { timeoutMs: GENERATION
  * the account survived while it was being erased.
  */
 export const ACCOUNT_DELETION_TIMEOUT_MS = 120_000;
+/**
+ * Creating a post may take the create route's whole budget (`maxDuration`,
+ * 300 s, in src/app/api/posts/route.ts; the single-file path still transcodes
+ * before it answers). Given up on at the usual 30 s, a post still being created
+ * read as a failure. This deadline outlasts that budget, so the route's own
+ * answer, a 504 from the platform included, arrives first.
+ */
+export const POST_CREATE_TIMEOUT_MS = 310_000;
+const POST_CREATE_REQUEST_OPTIONS: RequestOptions = { timeoutMs: POST_CREATE_TIMEOUT_MS };
 const REQUEST_ID_HEADER = 'x-request-id';
 const FEED_INSTALLATION_ID_HEADER = 'x-magicbooklet-installation-id';
 
@@ -1479,7 +1488,7 @@ export function createApiClient({
     publishGeneration: (body: Record<string, unknown>) =>
       request<CreatePostResponse>('/api/showcase/publish', { method: 'POST', body: JSON.stringify(body) }),
     createPost: (body: FormData) =>
-      request<CreatePostResponse>('/api/posts', { method: 'POST', body }),
+      request<CreatePostResponse>('/api/posts', { method: 'POST', body }, POST_CREATE_REQUEST_OPTIONS),
     listSourceTools: () =>
       request<{ tools: SourceToolOption[] }>('/api/source-tools'),
     fetchModelCatalogCurrent: (query: string, etag?: string) => readCatalogTransport(`/current?${query}`, etag),

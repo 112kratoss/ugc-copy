@@ -10,7 +10,10 @@ import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 
-const mockPush = vi.fn();
+// One router object for every render: the composer's effects list the router
+// as a dependency, and a fresh object per render reruns them on every render.
+const routerMock = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+const mockPush = routerMock.push;
 const fetchMock = vi.fn();
 const temporaryUploadMock = vi.hoisted(() => vi.fn());
 const directResourceUploadMock = vi.hoisted(() => vi.fn(async (...args: unknown[]) => {
@@ -22,9 +25,7 @@ const searchParamsState = vi.hoisted(() => ({
 }));
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mockPush,
-  }),
+  useRouter: () => routerMock,
   useSearchParams: () => searchParamsState.value,
 }));
 
@@ -190,6 +191,7 @@ function createLegacyPrivateResourcePost(): EditablePostDraft {
 describe('NewPostClient', () => {
   beforeEach(() => {
     mockPush.mockReset();
+    routerMock.replace.mockReset();
     fetchMock.mockReset();
     temporaryUploadMock.mockReset();
     directResourceUploadMock.mockReset();
@@ -217,28 +219,16 @@ describe('NewPostClient', () => {
     vi.restoreAllMocks();
   });
 
+  // The order of the fields is held by 'puts media first, then the title…'.
   it('puts the public post hierarchy in the main composer path', () => {
     render(<NewPostClient />);
 
     expect(screen.getByRole('heading', { name: /create post/i })).toBeInTheDocument();
     expect(screen.getByText(/Share your work/i)).toBeInTheDocument();
-
-    const titleInput = screen.getByRole('textbox', { name: /^title/i });
-    const captionInput = screen.getByRole('textbox', { name: /caption/i });
-    const proofHeading = screen.getByRole('heading', { name: /^proof$/i });
-    const mediaToggle = screen.getByRole('button', { name: /^media$/i });
-
-    expect(titleInput).toBeInTheDocument();
-    expect(captionInput).toBeInTheDocument();
-    expect(
-      titleInput.compareDocumentPosition(proofHeading) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(
-      titleInput.compareDocumentPosition(mediaToggle) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(
-      titleInput.compareDocumentPosition(captionInput) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: /^title/i })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /^story/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^media$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^media$/i })).toBeInTheDocument();
   });
 
   it('caps the title input at the limit and shows a live counter', () => {
@@ -263,7 +253,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A note that stands on its own for the community.' },
     });
     fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
@@ -665,7 +655,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A breakdown with a supporting still attached to it.' },
     });
     fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
@@ -826,9 +816,9 @@ describe('NewPostClient', () => {
     }} />);
 
     await waitFor(() => {
-      expect(screen.getAllByRole('button', { name: /publish public/i })[0]).toBeEnabled();
+      expect(screen.getAllByRole('button', { name: /^save changes/i })[0]).toBeEnabled();
     });
-    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-gen-sold-1', expect.objectContaining({ method: 'PUT' }));
@@ -1034,7 +1024,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient initialPost={createLegacyPrivateResourcePost()} />);
 
     expect(screen.getByText('Secret client launch prompt')).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -1060,7 +1050,7 @@ describe('NewPostClient', () => {
       target: { value: 'Reusable launch prompt' },
     });
     fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
-    fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -1098,7 +1088,7 @@ describe('NewPostClient', () => {
     fireEvent.change(preview, {
       target: { value: 'An updated package preview that remains distinct from its summary.' },
     });
-    fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const payload = JSON.parse(String((fetchMock.mock.calls[1][1] as { body: string }).body));
@@ -1117,7 +1107,7 @@ describe('NewPostClient', () => {
     };
 
     render(<NewPostClient initialPost={initialPost} />);
-    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
 
     const summary = screen.getByLabelText(/public package summary, optional/i);
     const preview = screen.getByLabelText(/package preview, required/i);
@@ -1255,7 +1245,7 @@ describe('NewPostClient', () => {
     }} />);
 
     expect(screen.getByText(/direct remix access is ready/i)).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -1318,7 +1308,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A note that is long enough to publish on its own.' },
     });
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
@@ -1333,7 +1323,7 @@ describe('NewPostClient', () => {
 
     const titleInput = screen.getByRole('textbox', { name: /^title/i });
     expect(titleInput).toHaveAttribute('aria-required', 'true');
-    expect(titleInput).toHaveAttribute('placeholder', 'Give your post a title');
+    expect(titleInput).toHaveAttribute('placeholder', 'What is this creation about?');
     expect(screen.queryByPlaceholderText(/title \(optional\)/i)).not.toBeInTheDocument();
 
     // The publish checklist has to agree, or the composer reads "ready" while
@@ -1353,19 +1343,9 @@ describe('NewPostClient', () => {
     expect(screen.getByRole('button', { name: /add media/i })).toBeInTheDocument();
 
     const checklist = screen.getByLabelText(/publish checklist/i);
-    expect(checklist).toHaveTextContent(/proof added/i);
-    expect(checklist).toHaveTextContent(/caption optional/i);
+    expect(checklist).toHaveTextContent(/media added/i);
+    expect(checklist).toHaveTextContent(/story optional/i);
     expect(checklist).toHaveTextContent(/recipe optional/i);
-  });
-
-  it('keeps optional description hidden until the user asks for it', () => {
-    render(<NewPostClient />);
-
-    expect(screen.queryByPlaceholderText(/optional: give the post a short one-line setup/i)).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /add explore description/i }));
-
-    expect(screen.getByPlaceholderText(/optional: give the post a short one-line setup/i)).toBeInTheDocument();
   });
 
   it('shows section-local validation feedback near the failing composer section', () => {
@@ -1411,6 +1391,7 @@ describe('NewPostClient', () => {
 
   it('renders searchable Made With comboboxes fetched from the API', async () => {
     render(<NewPostClient />);
+    openMadeWith();
 
     expect(screen.getByText(/made with/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add another tool/i })).toBeInTheDocument();
@@ -1424,6 +1405,7 @@ describe('NewPostClient', () => {
 
   it('keeps historical tools out of the default list but finds them by alias', async () => {
     render(<NewPostClient />);
+    openMadeWith();
 
     const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
     fireEvent.focus(toolPicker);
@@ -1448,6 +1430,7 @@ describe('NewPostClient', () => {
     });
 
     const { container } = render(<NewPostClient />);
+    openMadeWith();
     const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
 
     fireEvent.change(toolPicker, { target: { value: 'Pika Labs' } });
@@ -1488,6 +1471,7 @@ describe('NewPostClient', () => {
 
   it('supports keyboard selection and Escape in the Made With combobox', async () => {
     render(<NewPostClient />);
+    openMadeWith();
 
     const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
     fireEvent.focus(toolPicker);
@@ -1515,6 +1499,7 @@ describe('NewPostClient', () => {
     });
 
     const { container } = render(<NewPostClient />);
+    openMadeWith();
     const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
     fireEvent.change(toolPicker, { target: { value: 'Pika Labs' } });
     fireEvent.click(await screen.findByRole('option', { name: /create “pika labs”/i }));
@@ -1546,6 +1531,7 @@ describe('NewPostClient', () => {
     });
 
     const { container } = render(<NewPostClient />);
+    openMadeWith();
 
     const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
     fireEvent.focus(toolPicker);
@@ -1618,13 +1604,14 @@ describe('NewPostClient', () => {
       resourceBundle: { accessMode: 'none' },
       hasPaidOrders: false,
     }} />);
+    openMadeWith();
 
     const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
     fireEvent.change(toolPicker, { target: { value: 'Pika Studio' } });
     fireEvent.blur(toolPicker);
 
     fillRequiredTitle();
-    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^publish publicly/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -1658,7 +1645,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'Lead with a concrete before-and-after in the first line.' },
     });
     fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
@@ -1734,7 +1721,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'Keep the hook direct and make the benefit visible instantly.' },
     });
     fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
@@ -1809,7 +1796,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A compact breakdown for a multi-part creative.' },
     });
     fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
@@ -2031,7 +2018,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByLabelText(/package preview, required/i), {
       target: { value: 'The prompt behind the newly added output.' },
     });
-    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -2129,7 +2116,7 @@ describe('NewPostClient', () => {
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     expect(screen.queryByLabelText('Post media order')).not.toBeInTheDocument();
     expect(screen.queryByText(/selected output/i)).not.toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A useful text proof with enough detail for the community to learn from.' },
     });
 
@@ -2173,8 +2160,13 @@ describe('NewPostClient', () => {
   // Deliberately not "test"/"sample"/"draft": those are placeholder tokens that
   // getPublicPostQualityError rejects, which would block publishing here for a
   // reason that has nothing to do with what each test is asserting.
+  // Made with is folded into one row until it is opened.
+  function openMadeWith() {
+    fireEvent.click(screen.getByRole('button', { name: /^made with/i }));
+  }
+
   function fillRequiredTitle(value = 'Neon skyline color study') {
-    fireEvent.change(screen.getByPlaceholderText(/Give your post a title/i), { target: { value } });
+    fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), { target: { value } });
   }
 
   function renderComposerWithTwoImages() {
@@ -2689,7 +2681,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A private draft note.' },
     });
     fillRequiredTitle();
@@ -2718,7 +2710,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A public note for the community.' },
     });
     fillRequiredTitle();
@@ -2748,7 +2740,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'test' },
     });
     fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
@@ -2824,7 +2816,7 @@ describe('NewPostClient', () => {
     );
 
     expect(screen.queryByRole('button', { name: /make public/i })).not.toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^publish publicly/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -2855,8 +2847,9 @@ describe('NewPostClient', () => {
     render(<NewPostClient initialPost={postSavedAsUnlisted} />);
 
     expect(screen.getByRole('heading', { name: /update post/i })).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: /save private/i }).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByRole('button', { name: /publish public/i }).length).toBeGreaterThanOrEqual(1);
+    // It is private now: Save changes keeps it so, Publish publicly makes it public.
+    expect(screen.getAllByRole('button', { name: /^save changes/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole('button', { name: /^publish publicly/i }).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole('button', { name: /unlisted/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /make public|make private/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/unlisted|shareable by link/i)).not.toBeInTheDocument();
@@ -2878,7 +2871,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient initialPost={postSavedAsUnlisted} />);
 
-    fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -3173,16 +3166,68 @@ describe('NewPostClient', () => {
         hasPaidOrders: false,
       }} />);
       attachFile(container, new File(['png-bytes'], 'added.png', { type: 'image/png' }));
-      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
       await waitFor(() => {
         expect(screen.getByText(/failed to update post/i)).toBeInTheDocument();
       });
 
+      // The retry reads the post's media back first: this save wrote none.
+      enqueueResponse({ ok: true, json: async () => ({ success: true, post: { mediaItems: [] } }) });
       enqueueResponse({ ok: true, json: async () => ({ success: true, postId: 'post-edit-retry', visibility: 'public' }) });
-      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
-      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
 
       expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+    });
+
+    // An edit is refused over Made With only after the post and its media are
+    // saved, so the picture is in the post under its key: uploading it again
+    // under that key is refused.
+    it('names media a failed edit save already wrote instead of uploading it again', async () => {
+      enqueueResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: 'You reached the source tool creation limit of 10 per 24 hours.',
+          field: 'sourceTools',
+        }),
+      });
+
+      const { container } = render(<NewPostClient initialPost={{
+        id: 'post-edit-written',
+        generationId: null,
+        title: 'An existing post with a real title',
+        description: '',
+        prompt: '',
+        body: '',
+        visibility: 'public',
+        category: 'image',
+        postFormat: 'media',
+        sourceKind: 'external',
+        sourceTool: null,
+        mediaUrl: null,
+        mediaKind: null,
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      }} />);
+      attachFile(container, new File(['png-bytes'], 'added.png', { type: 'image/png' }));
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+      expect(await screen.findByText(/creation limit/i)).toBeInTheDocument();
+
+      const firstSave = JSON.parse(String((fetchMock.mock.calls[1][1] as { body: string }).body));
+      const addedKey = firstSave.mediaItems[0].mediaKey as string;
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, post: { mediaItems: [{ id: 'row-written', mediaKey: addedKey }] } }),
+      });
+      enqueueResponse({ ok: true, json: async () => ({ success: true, postId: 'post-edit-written', visibility: 'public' }) });
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+
+      const retry = JSON.parse(String((fetchMock.mock.calls[3][1] as { body: string }).body));
+      expect(retry.mediaItems).toEqual([{ existingId: 'row-written' }]);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
     });
 
     function rejectWhenAborted(signal: AbortSignal | undefined) {
@@ -3422,7 +3467,7 @@ describe('NewPostClient', () => {
       render(<NewPostClient />);
       expect(leaveWouldPrompt()).toBe(false);
 
-      const caption = screen.getByRole('textbox', { name: /caption/i });
+      const caption = screen.getByRole('textbox', { name: /^story/i });
       fireEvent.change(caption, { target: { value: 'A tip typed before its title.' } });
       expect(leaveWouldPrompt()).toBe(true);
 
@@ -3441,7 +3486,7 @@ describe('NewPostClient', () => {
       fireEvent.click(nsfw);
       expect(leaveWouldPrompt()).toBe(false);
 
-      const caption = screen.getByRole('textbox', { name: /caption/i });
+      const caption = screen.getByRole('textbox', { name: /^story/i });
       fireEvent.change(caption, { target: { value: 'An edited caption.' } });
       expect(leaveWouldPrompt()).toBe(true);
       fireEvent.change(caption, { target: { value: 'The saved caption.' } });
@@ -3485,12 +3530,12 @@ describe('NewPostClient', () => {
       });
 
       render(<NewPostClient initialPost={createSavedPost()} />);
-      fireEvent.change(screen.getByRole('textbox', { name: /caption/i }), {
+      fireEvent.change(screen.getByRole('textbox', { name: /^story/i }), {
         target: { value: 'An edited caption.' },
       });
       expect(leaveWouldPrompt()).toBe(true);
 
-      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
       expect(await screen.findByText('Changes saved')).toBeInTheDocument();
       expect(leaveWouldPrompt()).toBe(false);
     });
@@ -3514,7 +3559,7 @@ describe('NewPostClient', () => {
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
       expect(linkRouter.push).toHaveBeenCalledTimes(1);
 
-      fireEvent.change(screen.getByRole('textbox', { name: /caption/i }), {
+      fireEvent.change(screen.getByRole('textbox', { name: /^story/i }), {
         target: { value: 'Words not yet published.' },
       });
       fireEvent.click(back);
@@ -3531,6 +3576,828 @@ describe('NewPostClient', () => {
       fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave without saving' }));
       await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/showcase'));
       expect(linkRouter.push).toHaveBeenCalledTimes(1);
+    });
+
+    // Decision D4 (2026-10-24): the shell's links, outside the composer, ask too.
+    it('asks before a link elsewhere on the page leaves unsaved changes', async () => {
+      render(
+        <>
+          <a href="/home">Home</a>
+          <NewPostClient />
+          <FeedbackViewport />
+        </>
+      );
+      fireEvent.change(screen.getByRole('textbox', { name: /^story/i }), {
+        target: { value: 'Words not yet published.' },
+      });
+
+      fireEvent.click(screen.getByRole('link', { name: 'Home' }));
+      const question = await screen.findByRole('alertdialog', { name: 'Leave this post?' });
+      expect(mockPush).not.toHaveBeenCalled();
+
+      fireEvent.click(within(question).getByRole('button', { name: 'Leave without saving' }));
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/home'));
+    });
+
+    it('puts a guard entry on the browser history only while there is unsaved work', () => {
+      render(<NewPostClient />);
+      expect(window.history.state?.postComposerLeaveGuard).toBeUndefined();
+
+      const story = screen.getByRole('textbox', { name: /^story/i });
+      fireEvent.change(story, { target: { value: 'Words not yet published.' } });
+      expect(window.history.state?.postComposerLeaveGuard).toBeTruthy();
+    });
+  });
+
+  // The app's step 1 order and names (decision D1, 2026-10-24).
+  describe('the app’s order and names', () => {
+    function expectInOrder(elements: HTMLElement[]) {
+      elements.slice(1).forEach((element, index) => {
+        expect(
+          elements[index].compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING,
+          `${elements[index].textContent || elements[index].getAttribute('aria-label')} comes before ${element.textContent || element.getAttribute('aria-label')}`,
+        ).toBeTruthy();
+      });
+    }
+
+    it('puts media first, then the title, Made with, the story, NSFW, the recipe and publishing', () => {
+      render(<NewPostClient />);
+
+      expectInOrder([
+        screen.getByRole('heading', { name: /^media$/i }),
+        screen.getByRole('button', { name: /^media$/i }),
+        screen.getByRole('textbox', { name: /^title/i }),
+        screen.getByRole('button', { name: /^made with/i }),
+        screen.getByRole('textbox', { name: /^story/i }),
+        screen.getByRole('checkbox', { name: /mark as nsfw/i }),
+        screen.getByRole('heading', { name: /^recipe$/i }),
+        screen.getByRole('heading', { name: /^publish$/i }),
+      ]);
+      expect(screen.queryByRole('heading', { name: /proof/i })).not.toBeInTheDocument();
+    });
+
+    it('asks what the creation is about, and names the text Story or Post text', () => {
+      render(<NewPostClient />);
+
+      expect(screen.getByRole('textbox', { name: /^title/i })).toHaveAttribute('placeholder', 'What is this creation about?');
+      expect(screen.getByRole('textbox', { name: /^story, optional/i })).toHaveAttribute(
+        'placeholder',
+        'Share the idea, process, or story behind it…',
+      );
+      expect(screen.queryByRole('textbox', { name: /caption/i })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      expect(screen.getByRole('textbox', { name: /^post text, required/i })).toHaveAttribute(
+        'placeholder',
+        'Share a prompt, idea, breakdown, or useful note…',
+      );
+      const titleInput = screen.getByRole('textbox', { name: /^title/i });
+      expect(
+        titleInput.compareDocumentPosition(screen.getByRole('textbox', { name: /^post text/i })) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /^made with/i })).not.toBeInTheDocument();
+    });
+
+    it('folds Made with into one row that sums it up', async () => {
+      render(<NewPostClient />);
+
+      const madeWith = screen.getByRole('button', { name: /^made with/i });
+      expect(madeWith).toHaveAttribute('aria-expanded', 'false');
+      expect(madeWith).toHaveTextContent(/add tool and model/i);
+      expect(screen.queryByRole('combobox', { name: 'Tool 1' })).not.toBeInTheDocument();
+
+      fireEvent.click(madeWith);
+      expect(madeWith).toHaveAttribute('aria-expanded', 'true');
+      const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
+      fireEvent.focus(toolPicker);
+      fireEvent.click(await screen.findByRole('option', { name: 'Higgsfield' }));
+      const modelPicker = screen.getByRole('combobox', { name: /model for higgsfield/i });
+      fireEvent.focus(modelPicker);
+      fireEvent.click(await screen.findByRole('option', { name: 'Soul' }));
+
+      fireEvent.click(madeWith);
+      expect(screen.queryByRole('combobox', { name: 'Tool 1' })).not.toBeInTheDocument();
+      expect(madeWith).toHaveTextContent('Higgsfield · Soul');
+    });
+
+    it('opens Made with when the server refuses a tool in it', async () => {
+      enqueueResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: 'You reached the source tool creation limit of 10 per 24 hours.',
+          field: 'sourceTools',
+        }),
+      });
+
+      const { container } = render(<NewPostClient />);
+      fireEvent.change(container.querySelector('input[type="file"]')!, {
+        target: { files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })] },
+      });
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/creation limit/i);
+      expect(screen.getByRole('button', { name: /^made with/i })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('combobox', { name: 'Tool 1' })).toBeInTheDocument();
+    });
+
+    it('lists media in the checklist, and a text post’s text once it meets the public rule', () => {
+      render(<NewPostClient />);
+      const checklist = screen.getByLabelText(/publish checklist/i);
+      expect(checklist).toHaveTextContent(/media added/i);
+      expect(checklist).not.toHaveTextContent(/proof/i);
+
+      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      const isTicked = () => Boolean(
+        within(checklist).getByText(/^post text added$/i).parentElement?.parentElement?.querySelector('.lucide-check'),
+      );
+      const text = screen.getByRole('textbox', { name: /^post text/i });
+      // getPublicPostQualityError asks a post without media for 18 characters.
+      fireEvent.change(text, { target: { value: 'Seventeen letters' } });
+      expect(isTicked()).toBe(false);
+      fireEvent.change(text, { target: { value: 'Eighteen letters!!' } });
+      expect(isTicked()).toBe(true);
+    });
+  });
+
+  // Decision D2: the web's Explore description is gone, and nothing sends one.
+  describe('no Explore description', () => {
+    it('offers no Explore description and sends none with a new post', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          postId: 'post-no-description',
+          showcasePath: '/showcase/post-no-description',
+          resourceBundlePath: null,
+          visibility: 'public',
+          resourceBundleStatus: null,
+        }),
+      });
+
+      render(<NewPostClient />);
+      expect(screen.queryByRole('button', { name: /explore description/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/explore description/i)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
+        target: { value: 'A note that stands on its own for the community.' },
+      });
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      expect((fetchMock.mock.calls[1][1] as { body: FormData }).body.has('description')).toBe(false);
+    });
+
+    it('sends no description when publishing a creation that has one', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-described-1' });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          generations: [{
+            id: 'gen-described-1',
+            output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+            category: 'image',
+            model: 'nano-banana-2',
+            title: 'A described creation',
+            description: 'The creation’s own description.',
+            prompt: 'A still life in morning light.',
+            paywallPrefill: null,
+          }],
+        }),
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-described-1',
+          showcasePath: '/showcase/post-described-1',
+          resourceBundlePath: null,
+          visibility: 'public',
+          resourceBundleStatus: null,
+        }),
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('A described creation'));
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      const payload = JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body));
+      expect(payload).toMatchObject({ generationId: 'gen-described-1', title: 'A described creation' });
+      expect(payload).not.toHaveProperty('description');
+    });
+
+    it('leaves a stored description alone when an edit is saved', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-described-2', visibility: 'public' }),
+      });
+
+      render(<NewPostClient initialPost={{
+        id: 'post-described-2',
+        generationId: null,
+        title: 'A described text post',
+        description: 'A description written before the field went away.',
+        prompt: '',
+        body: 'A text post long enough to pass the public quality rule.',
+        visibility: 'public',
+        category: 'text',
+        postFormat: 'text',
+        sourceKind: 'manual',
+        sourceTool: null,
+        mediaUrl: null,
+        mediaKind: null,
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      }} />);
+      expect(screen.queryByDisplayValue('A description written before the field went away.')).not.toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      expect(JSON.parse(String((fetchMock.mock.calls[1][1] as { body: string }).body))).not.toHaveProperty('description');
+    });
+  });
+
+  // Decision D3: an edit saves with "Save changes" and keeps the post's
+  // visibility; the other button is the one that changes it.
+  describe('saving an edit keeps its visibility', () => {
+    function createEditablePost(visibility: 'public' | 'private'): EditablePostDraft {
+      return {
+        id: `post-${visibility}-edit`,
+        generationId: null,
+        title: 'A text post with a real title',
+        description: '',
+        prompt: '',
+        body: 'A text post long enough to pass the public quality rule.',
+        visibility,
+        category: 'text',
+        postFormat: 'text',
+        sourceKind: 'manual',
+        sourceTool: null,
+        mediaUrl: null,
+        mediaKind: null,
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      };
+    }
+
+    function enqueueSaved(visibility: 'public' | 'private') {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: `post-${visibility}-edit`, visibility }),
+      });
+    }
+
+    function sentVisibility() {
+      return JSON.parse(String((fetchMock.mock.calls[1][1] as { body: string }).body)).visibility;
+    }
+
+    it('saves a public post as public, and makes it private only when asked', async () => {
+      enqueueSaved('public');
+      render(<NewPostClient initialPost={createEditablePost('public')} />);
+
+      expect(screen.queryByRole('button', { name: /save private|publish public/i })).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: /^make private/i })).not.toHaveLength(0);
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      expect(sentVisibility()).toBe('public');
+    });
+
+    it('makes a public post private with Make private', async () => {
+      enqueueSaved('private');
+      render(<NewPostClient initialPost={createEditablePost('public')} />);
+
+      fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      expect(sentVisibility()).toBe('private');
+      // Saved now as private, so the buttons speak from there.
+      fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), { target: { value: 'A renamed text post' } });
+      expect(screen.getAllByRole('button', { name: /^publish publicly/i })).not.toHaveLength(0);
+      expect(screen.queryByRole('button', { name: /^make private/i })).not.toBeInTheDocument();
+    });
+
+    it('saves a private post as private, and publishes it only when asked', async () => {
+      enqueueSaved('private');
+      enqueueSaved('public');
+      render(<NewPostClient initialPost={createEditablePost('private')} />);
+
+      expect(screen.queryByRole('button', { name: /make private/i })).not.toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      expect(sentVisibility()).toBe('private');
+
+      fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), { target: { value: 'A renamed text post' } });
+      fireEvent.click(screen.getAllByRole('button', { name: /^publish publicly/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      expect(JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body)).visibility).toBe('public');
+    });
+
+    // Enter in a field presses the form's default button: the first submit
+    // button in document order whose form is the composer's (the phone bar
+    // comes before the form). jsdom does not submit on Enter, so this reads
+    // which button that is.
+    it('makes Enter do nothing on a new post, and save changes on an edit', () => {
+      const defaultButtonOf = (form: HTMLFormElement) => Array.from(document.querySelectorAll('button'))
+        .find((button) => button.type === 'submit' && button.form === form);
+
+      const created = render(<NewPostClient />);
+      const newPostForm = document.getElementById('post-composer-form') as HTMLFormElement;
+      expect(defaultButtonOf(newPostForm)?.disabled).toBe(true);
+      created.unmount();
+
+      render(<NewPostClient initialPost={createEditablePost('public')} />);
+      const editForm = document.getElementById('post-composer-form') as HTMLFormElement;
+      expect(defaultButtonOf(editForm)).toHaveAccessibleName(/^save changes/i);
+    });
+
+    it('says what the pressed button is doing until the save answers', async () => {
+      let answer: (value: unknown) => void = () => {};
+      enqueueResponse({ ok: true, json: () => new Promise((resolve) => { answer = resolve; }) });
+      render(<NewPostClient initialPost={createEditablePost('private')} />);
+
+      fireEvent.click(screen.getAllByRole('button', { name: /^publish publicly/i })[0]);
+      expect(await screen.findAllByRole('button', { name: /^publishing…/i })).not.toHaveLength(0);
+      expect(screen.queryByRole('button', { name: /^saving…/i })).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: /^save changes/i }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+
+      await act(async () => {
+        answer({ success: true, postId: 'post-private-edit', visibility: 'public' });
+      });
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+    });
+
+    it('says Saving… on Save changes, and Publishing… on a new post’s Publish public', async () => {
+      let answerEdit: (value: unknown) => void = () => {};
+      enqueueResponse({ ok: true, json: () => new Promise((resolve) => { answerEdit = resolve; }) });
+      const { unmount } = render(<NewPostClient initialPost={createEditablePost('public')} />);
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+      expect(await screen.findAllByRole('button', { name: /^saving…/i })).not.toHaveLength(0);
+      await act(async () => {
+        answerEdit({ success: true, postId: 'post-public-edit', visibility: 'public' });
+      });
+      unmount();
+
+      let answerNew: (value: unknown) => void = () => {};
+      enqueueResponse({ ok: true, json: () => new Promise((resolve) => { answerNew = resolve; }) });
+      render(<NewPostClient />);
+      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
+        target: { value: 'A note that stands on its own for the community.' },
+      });
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /^publish public/i })[0]);
+      expect(await screen.findAllByRole('button', { name: /^publishing…/i })).not.toHaveLength(0);
+      await act(async () => {
+        answerNew({ postId: 'post-new-pending', showcasePath: '/showcase/post-new-pending', visibility: 'public' });
+      });
+    });
+  });
+
+  describe('the publish answer and the saved panel', () => {
+    it('says the publish failed, not how its answer failed to parse, when the answer is an error page', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-error-page-1' });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          generations: [{
+            id: 'gen-error-page-1',
+            output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+            category: 'image',
+            model: 'nano-banana-2',
+            title: 'A creation behind a gateway',
+            description: '',
+            prompt: 'A still life in morning light.',
+            paywallPrefill: null,
+          }],
+        }),
+      });
+      enqueueResponse({
+        ok: false,
+        status: 504,
+        json: async () => {
+          throw new SyntaxError('Unexpected token \'<\', "<!DOCTYPE "... is not valid JSON');
+        },
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('A creation behind a gateway'));
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Failed to publish post.');
+      expect(alert).not.toHaveTextContent(/unexpected token|not valid json/i);
+    });
+
+    it('leaves the editor link out of the saved panel when the editor is this page', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-private-saved',
+          visibility: 'private',
+          showcasePath: null,
+          ownerPath: '/post/post-private-saved/edit',
+          resourceBundlePath: null,
+          resourceBundleStatus: null,
+        }),
+      });
+
+      render(<NewPostClient initialPost={{
+        id: 'post-private-saved',
+        generationId: null,
+        title: 'A private text post',
+        description: '',
+        prompt: '',
+        body: 'A private note kept for later.',
+        visibility: 'private',
+        category: 'text',
+        postFormat: 'text',
+        sourceKind: 'manual',
+        sourceTool: null,
+        mediaUrl: null,
+        mediaKind: null,
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      }} />);
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /open editor|continue editing/i })).not.toBeInTheDocument();
+    });
+  });
+
+  // The edit route re-inserts a post's media rows on every save that sends
+  // them (replace_post_media), so the ids the page was rendered with name
+  // nothing after the first save, and a picture added in that save is in the
+  // post under its key: sending it again as a new upload was refused.
+  describe('saving an edit more than once', () => {
+    function createMediaPost(): EditablePostDraft {
+      return {
+        id: 'post-saved-twice',
+        generationId: null,
+        title: 'A post saved more than once',
+        description: '',
+        prompt: '',
+        body: 'The saved story.',
+        visibility: 'public',
+        category: 'image',
+        postFormat: 'mixed',
+        sourceKind: 'external',
+        sourceTool: null,
+        mediaUrl: '/proof.png',
+        mediaKind: 'image',
+        mediaItems: [{
+          id: 'row-as-rendered',
+          mediaKey: 'proof-a',
+          url: '/proof.png',
+          mediaKind: 'image',
+          contentType: 'image/png',
+          originalName: 'proof.png',
+          width: null,
+          height: null,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      };
+    }
+
+    function postRouteBodies() {
+      return fetchMock.mock.calls
+        .filter(([url, init]) => String(url) === '/api/posts/post-saved-twice' && (init as RequestInit | undefined)?.method === 'PUT')
+        .map(([, init]) => JSON.parse(String((init as { body: string }).body)) as { mediaItems?: unknown[] });
+    }
+
+    /** The key the composer minted for the picture added before the first save. */
+    function addedMediaKey() {
+      const [firstSave] = postRouteBodies();
+      return (firstSave.mediaItems?.[1] as { mediaKey: string }).mediaKey;
+    }
+
+    // A public post keeps its visibility through the button that saves it.
+    function saveButton() {
+      return screen.getAllByRole('button', { name: /^save changes/i })[0];
+    }
+
+    async function addPictureAndSave(container: HTMLElement) {
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(fileInput, {
+          target: { files: [new File(['added'], 'added.png', { type: 'image/png' })] },
+        });
+      });
+      fireEvent.click(saveButton());
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+      expect(postRouteBodies()[0].mediaItems).toEqual([
+        { existingId: 'row-as-rendered' },
+        expect.objectContaining({ storagePath: 'uploads/user-1/added.png', originalName: 'added.png' }),
+      ]);
+    }
+
+    async function editTitleAndSaveAgain() {
+      fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), {
+        target: { value: 'A post saved more than once, typo fixed' },
+      });
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(postRouteBodies()).toHaveLength(2));
+    }
+
+    it('names every saved picture by the id the last save answered with, the one it added included', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-saved-twice',
+          visibility: 'public',
+          showcasePath: '/showcase/post-saved-twice',
+          mediaItems: [
+            { id: 'row-a-after-first-save', mediaKey: 'proof-a' },
+            { id: 'row-b-after-first-save', mediaKey: addedMediaKey() },
+          ],
+        }),
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-saved-twice', visibility: 'public', mediaItems: [] }),
+      });
+
+      const { container } = render(<NewPostClient initialPost={createMediaPost()} />);
+      await addPictureAndSave(container);
+      await editTitleAndSaveAgain();
+
+      expect(postRouteBodies()[1].mediaItems).toEqual([
+        { existingId: 'row-a-after-first-save' },
+        { existingId: 'row-b-after-first-save' },
+      ]);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    // A server from before the save answer listed its rows: the page reads the
+    // post back before the next save instead of sending ids that name nothing.
+    it('reads the saved rows back before the next save when the answer does not list them', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-saved-twice', visibility: 'public' }),
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          post: {
+            ...createMediaPost(),
+            mediaItems: [
+              { ...createMediaPost().mediaItems![0], id: 'row-a-read-back' },
+              { ...createMediaPost().mediaItems![0], id: 'row-b-read-back', mediaKey: addedMediaKey(), sortOrder: 1 },
+            ],
+          },
+        }),
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-saved-twice', visibility: 'public' }),
+      });
+
+      const { container } = render(<NewPostClient initialPost={createMediaPost()} />);
+      await addPictureAndSave(container);
+      // One save, one request: nothing is read back until another save needs it.
+      expect(fetchMock.mock.calls.filter(([url]) => String(url) === '/api/posts/post-saved-twice')).toHaveLength(1);
+
+      await editTitleAndSaveAgain();
+
+      const readBack = fetchMock.mock.calls.find(([url, init]) => (
+        String(url) === '/api/posts/post-saved-twice' && !(init as RequestInit | undefined)?.method
+      ));
+      expect(readBack?.[1]).toEqual({ headers: { Authorization: 'Bearer test-token' } });
+      expect(postRouteBodies()[1].mediaItems).toEqual([
+        { existingId: 'row-a-read-back' },
+        { existingId: 'row-b-read-back' },
+      ]);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+    });
+
+    // The rows were re-inserted since the page last named them (an earlier save
+    // that finished late, or an edit from the app): the server refuses the old
+    // ids with `field: 'mediaItems'`, and the next save reads the rows back.
+    it('reads the rows back after a refusal that says its media ids are stale', async () => {
+      enqueueResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: 'An existing media item no longer belongs to this post.', field: 'mediaItems' }),
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          post: { ...createMediaPost(), mediaItems: [{ ...createMediaPost().mediaItems![0], id: 'row-a-read-back' }] },
+        }),
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-saved-twice', visibility: 'public' }),
+      });
+
+      render(<NewPostClient initialPost={createMediaPost()} />);
+      fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), {
+        target: { value: 'A post saved more than once, typo fixed' },
+      });
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(postRouteBodies()).toHaveLength(1));
+      expect(postRouteBodies()[0].mediaItems).toEqual([{ existingId: 'row-as-rendered' }]);
+
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(postRouteBodies()).toHaveLength(2));
+      expect(fetchMock.mock.calls.some(([url, init]) => (
+        String(url) === '/api/posts/post-saved-twice' && !(init as RequestInit | undefined)?.method
+      ))).toBe(true);
+      expect(postRouteBodies()[1].mediaItems).toEqual([{ existingId: 'row-a-read-back' }]);
+    });
+
+    it('keeps the upload of a picture added while the save was on its way', async () => {
+      let answerFirstSave: (value: unknown) => void = () => {};
+      enqueueResponse({ ok: true, json: () => new Promise((resolve) => { answerFirstSave = resolve; }) });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-saved-twice', visibility: 'public', mediaItems: [] }),
+      });
+
+      const { container } = render(<NewPostClient initialPost={createMediaPost()} />);
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(postRouteBodies()).toHaveLength(1));
+
+      await act(async () => {
+        fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+          target: { files: [new File(['late'], 'late.png', { type: 'image/png' })] },
+        });
+      });
+      await act(async () => {
+        answerFirstSave({
+          success: true,
+          postId: 'post-saved-twice',
+          visibility: 'public',
+          mediaItems: [{ id: 'row-a-after-first-save', mediaKey: 'proof-a' }],
+        });
+      });
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+
+      await editTitleAndSaveAgain();
+      expect(postRouteBodies()[1].mediaItems).toEqual([
+        { existingId: 'row-a-after-first-save' },
+        expect.objectContaining({ storagePath: 'uploads/user-1/late.png', originalName: 'late.png' }),
+      ]);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+    });
+
+    // An empty list is refused ("Media posts need at least one image or
+    // video."), so a text post sends none, as the app's edit does.
+    it('sends no media list for a text post', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-text-edit', visibility: 'public' }),
+      });
+
+      render(<NewPostClient initialPost={{
+        id: 'post-text-edit',
+        generationId: null,
+        title: 'A text post with a real title',
+        description: '',
+        prompt: '',
+        body: 'A text post long enough to pass the public quality rule.',
+        visibility: 'public',
+        category: 'text',
+        postFormat: 'text',
+        sourceKind: 'manual',
+        sourceTool: null,
+        mediaUrl: null,
+        mediaKind: null,
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      }} />);
+
+      fireEvent.click(saveButton());
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      const payload = JSON.parse(String((fetchMock.mock.calls[1][1] as { body: string }).body));
+      expect(payload).not.toHaveProperty('mediaItems');
+    });
+  });
+
+  // Below 1024px people save from the bar fixed to the bottom of the screen,
+  // and both a refusal and the saved panel are drawn far from it, at the end
+  // of the form: the spinner stopped and nothing visible changed.
+  describe('where a save’s outcome shows', () => {
+    function createTextPost(): EditablePostDraft {
+      return {
+        id: 'post-outcome',
+        generationId: null,
+        title: 'A text post with a real title',
+        description: '',
+        prompt: '',
+        body: 'A text post long enough to pass the public quality rule.',
+        visibility: 'public',
+        category: 'text',
+        postFormat: 'text',
+        sourceKind: 'manual',
+        sourceTool: null,
+        mediaUrl: null,
+        mediaKind: null,
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      };
+    }
+
+    it('focuses the section a refusal is written in when the phone bar pressed publish', async () => {
+      enqueueResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: 'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+          field: 'profile',
+        }),
+      });
+
+      render(<NewPostClient />);
+      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
+        target: { value: 'A note that stands on its own for the community.' },
+      });
+      fillRequiredTitle();
+      // The phone bar comes first in the page.
+      const phoneBarPublish = screen.getAllByRole('button', { name: /publish public/i })[0];
+      phoneBarPublish.focus();
+      fireEvent.click(phoneBarPublish);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(/custom handle/i);
+      await waitFor(() => expect(alert.closest('[data-composer-section]')).toHaveFocus());
+    });
+
+    it('writes a refusal of the recipe’s text in the Recipe section, and focuses it', async () => {
+      enqueueResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: 'This content cannot be shared publicly because it may violate the community safety rules. Revise it or keep the post private.',
+          field: 'resourceCards',
+        }),
+      });
+
+      render(<NewPostClient initialPost={createTextPost()} />);
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(/community safety rules/i);
+      const section = alert.closest('[data-composer-section]');
+      expect(section).toHaveAttribute('data-composer-section', 'resources');
+      await waitFor(() => expect(section).toHaveFocus());
+    });
+
+    it('focuses the saved panel after an edit is saved', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-outcome', visibility: 'public' }),
+      });
+
+      render(<NewPostClient initialPost={createTextPost()} />);
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+
+      const saved = await screen.findByText('Changes saved');
+      await waitFor(() => expect(saved.closest('[tabindex="-1"]')).toHaveFocus());
+    });
+
+    it('saves again after a change to NSFW alone', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-outcome', visibility: 'public' }),
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-outcome', visibility: 'public' }),
+      });
+
+      render(<NewPostClient initialPost={createTextPost()} />);
+      const saveButtons = () => screen.getAllByRole('button', { name: /^save changes/i });
+      fireEvent.click(saveButtons()[0]);
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+      expect(saveButtons().every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /mark as nsfw/i }));
+      expect(screen.queryByText('Changes saved')).not.toBeInTheDocument();
+      expect(saveButtons()[0]).toBeEnabled();
+
+      fireEvent.click(saveButtons()[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      expect(JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body))).toMatchObject({ isNsfw: true });
     });
   });
 
@@ -3656,7 +4523,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.change(screen.getByRole('textbox', { name: /post body/i }), {
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A text post long enough to pass the public quality rule.' },
     });
     fillRequiredTitle();
