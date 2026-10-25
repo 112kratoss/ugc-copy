@@ -15,6 +15,13 @@ import { getCreatorProfileReadiness } from '@/lib/profile';
 // One rule for the server and both composers (contracts/public-post-quality-v1.json).
 import { isPlaceholderText } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
+// The public-post rule lives with the placeholder rule, in the module the app
+// composer reads as well; the routes and the web composer import it from here.
+export {
+  getPublicPostQualityError,
+  PUBLIC_POST_PLACEHOLDER_TITLE_ERROR,
+} from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
+
 const CREATOR_PROFILE_READINESS_ERROR_PREFIX = 'Complete your profile before publishing';
 export const CREATOR_PROFILE_CHECK_ERROR = 'Could not verify your creator profile right now. Try again.';
 
@@ -198,25 +205,6 @@ export function getMarketplaceQualityError(input: MarketplaceQualityInput): stri
   }
 
   return `Improve this recipe before publishing: ${assessment.issues[0].message}`;
-}
-
-export function getPublicPostQualityError(input: {
-  title?: string | null;
-  body?: string | null;
-  hasMedia?: boolean | null;
-}): string | null {
-  const title = normalizeText(input.title);
-  const body = normalizeText(input.body);
-
-  if (title && isPlaceholderText(title)) {
-    return 'Replace the placeholder title with something specific to this post.';
-  }
-
-  if (!input.hasMedia && (body.length < 18 || isPlaceholderText(body))) {
-    return 'Add useful text so viewers can understand the post before publishing.';
-  }
-
-  return null;
 }
 
 function normalizeText(value: string | null | undefined): string {

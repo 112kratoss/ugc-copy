@@ -1,11 +1,11 @@
 /**
  * The words of a post the web and the app must agree on, in one copy shared
- * by relative import: the placeholder rule the server applies before a post or
- * a recipe listing goes public (`src/lib/marketplace-trust.ts`, mirrored by the
- * app composer's step 2 in `lib/post-new-view-model.ts`), the title both
- * composers suggest for a creation, and the handle they suggest to a creator
- * who has none yet. contracts/public-post-quality-v1.json holds the rule's
- * cases for both suites.
+ * by relative import: the placeholder rule and the public-post rule the server
+ * applies before a post or a recipe listing goes public
+ * (`src/lib/marketplace-trust.ts`, and the app composer's step 2 in
+ * `lib/post-new-view-model.ts`), the title both composers suggest for a
+ * creation, and the handle they suggest to a creator who has none yet.
+ * contracts/public-post-quality-v1.json holds the rule's cases for both suites.
  *
  * Metro, Next.js and Vitest all compile this file, so it stays free of React
  * Native, Expo and Node imports (see this folder's tsconfig.json).
@@ -32,9 +32,15 @@ export const PLACEHOLDER_WORDS: readonly string[] = [
 ];
 
 /**
+ * Stand-ins no real text uses, so they make any title, caption, preview or
+ * prompt a placeholder wherever they appear: "Lorem ipsum dolor sit amet…".
+ */
+export const DECISIVE_PLACEHOLDER_WORDS: readonly string[] = ['asdf', 'ipsum', 'lorem'];
+
+/**
  * Words that name nothing by themselves, so they cannot turn a stand-in into a
- * title: "Demo video", "My test render" and "Untitled creation" are still
- * placeholders. Numbers count the same ("test 2").
+ * title or a text: "Demo video", "My test render", "Untitled recipe" and "This
+ * is a test post" are still placeholders. Numbers count the same ("test 2").
  */
 export const PLACEHOLDER_FILLER_WORDS: readonly string[] = [
   'a',
@@ -43,6 +49,31 @@ export const PLACEHOLDER_FILLER_WORDS: readonly string[] = [
   'my',
   'this',
   'new',
+  'i',
+  'me',
+  'we',
+  'our',
+  'your',
+  'it',
+  'is',
+  'are',
+  'was',
+  'be',
+  'of',
+  'for',
+  'and',
+  'or',
+  'to',
+  'in',
+  'on',
+  'at',
+  'with',
+  'just',
+  'only',
+  'here',
+  'some',
+  'one',
+  'again',
   'post',
   'image',
   'images',
@@ -60,23 +91,28 @@ export const PLACEHOLDER_FILLER_WORDS: readonly string[] = [
   'title',
   'file',
   'upload',
+  'recipe',
+  'prompt',
+  'workflow',
 ];
 
 const PLACEHOLDER_WORD_SET: ReadonlySet<string> = new Set(PLACEHOLDER_WORDS);
+const DECISIVE_PLACEHOLDER_WORD_SET: ReadonlySet<string> = new Set(DECISIVE_PLACEHOLDER_WORDS);
 const PLACEHOLDER_FILLER_WORD_SET: ReadonlySet<string> = new Set(PLACEHOLDER_FILLER_WORDS);
 
 /**
- * Lowercased words with links and ASCII punctuation taken out. Only ASCII is
- * taken out: a title in Hindi or Japanese is words too, and the earlier
- * `[^a-z0-9]` cut refused every such title as empty.
+ * Lowercased words, with links and everything that is not a letter, a mark or
+ * a digit taken out: punctuation and symbols of any script (curly quotes, "…",
+ * "—"), emoji and invisible characters. Letters of every script are kept, so a
+ * title in Hindi or Japanese is words. Hermes compiles these Unicode property
+ * escapes (its compiler rejects an unknown property by name).
  */
 function toComparableWords(value: string): string[] {
-  const comparable = value
+  return value
     .toLowerCase()
     .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[\x00-\x2f\x3a-\x40\x5b-\x60\x7b-\x7f]+/g, ' ')
-    .trim();
-  return comparable ? comparable.split(/\s+/) : [];
+    .split(/[^\p{L}\p{M}\p{N}]+/u)
+    .filter(Boolean);
 }
 
 function isFillerWord(word: string): boolean {
@@ -84,13 +120,18 @@ function isFillerWord(word: string): boolean {
 }
 
 /**
- * Text a public post or listing may not carry: nothing but punctuation and
- * links, only stand-in words (with filler around them), or keyboard mash
- * ("aaaaaa", "ababab", "abcabcabc").
+ * Text a public post or listing may not carry: no letters or digits at all,
+ * a decisive stand-in anywhere, only stand-in and filler words, or keyboard
+ * mash ("aaaaaa", "ababab", "abcabcabc"). The database applies the same rule
+ * (`public.marketplace_text_is_placeholder`), held to the same word lists.
  */
 export function isPlaceholderText(value: string): boolean {
   const words = toComparableWords(value);
   if (words.length === 0) {
+    return true;
+  }
+
+  if (words.some((word) => DECISIVE_PLACEHOLDER_WORD_SET.has(word))) {
     return true;
   }
 
@@ -101,21 +142,38 @@ export function isPlaceholderText(value: string): boolean {
     return true;
   }
 
+  // Mash is judged on Latin letters and digits only: a repeated vowel sign in
+  // "दादा दादी" or a row of emoji after "Lol" is not keyboard mash. Any repeat
+  // of one to three characters has at most three distinct ones.
   const compact = words.join('');
-  if (compact.length >= 6) {
-    if (new Set(compact).size <= 3) {
-      return true;
-    }
+  return /^[a-z0-9]{6,}$/.test(compact) && new Set(compact).size <= 3;
+}
 
-    for (let size = 1; size <= 3; size += 1) {
-      const pattern = compact.slice(0, size);
-      if (pattern.repeat(Math.ceil(compact.length / size)).slice(0, compact.length) === compact) {
-        return true;
-      }
-    }
+export const PUBLIC_POST_PLACEHOLDER_TITLE_ERROR = 'Replace the placeholder title with something specific to this post.';
+export const PUBLIC_POST_NEEDS_TEXT_ERROR = 'Add useful text so viewers can understand the post before publishing.';
+const PUBLIC_POST_MIN_TEXT_LENGTH = 18;
+
+/**
+ * The public-post rule: a public post may not carry a placeholder title, and
+ * one without media needs some useful text.
+ */
+export function getPublicPostQualityError(input: {
+  title?: string | null;
+  body?: string | null;
+  hasMedia?: boolean | null;
+}): string | null {
+  const title = input.title?.trim() ?? '';
+  const body = input.body?.trim() ?? '';
+
+  if (title && isPlaceholderText(title)) {
+    return PUBLIC_POST_PLACEHOLDER_TITLE_ERROR;
   }
 
-  return false;
+  if (!input.hasMedia && (body.length < PUBLIC_POST_MIN_TEXT_LENGTH || isPlaceholderText(body))) {
+    return PUBLIC_POST_NEEDS_TEXT_ERROR;
+  }
+
+  return null;
 }
 
 export type CreationTitleSuggestionInput = {
@@ -127,6 +185,8 @@ export type CreationTitleSuggestionInput = {
   prompt?: string | null;
   model?: string | null;
   category?: string | null;
+  /** `'motion'` for a motion transfer, whose stored category is 'video' and model 'kling-2.6'/'kling-3.0'. */
+  creationMode?: string | null;
   hasRecipe: boolean;
 };
 
@@ -152,6 +212,17 @@ const RECIPE_TITLE_BY_KIND: Record<CreationKind, string> = {
   audio: 'Audio recipe',
 };
 
+/**
+ * The titles a suggestion can name a creation by when its prompt gives none,
+ * lowercased. Many posts can carry the same one, so the search gates
+ * (`src/lib/sitemap-entries.ts`, `src/lib/showcase-seo.ts`) treat them as
+ * placeholders and compose a page title of their own.
+ */
+export const GENERIC_SUGGESTED_TITLES: readonly string[] = [
+  ...Object.values(TITLE_BY_KIND),
+  ...Object.values(RECIPE_TITLE_BY_KIND),
+].map((title) => title.toLowerCase());
+
 const SUGGESTED_TITLE_MAX_WORDS = 8;
 const SUGGESTED_TITLE_MAX_LENGTH = 60;
 
@@ -161,10 +232,15 @@ const TRAILING_JOINER_WORDS: ReadonlySet<string> = new Set([
   'over', 'than', 'that', 'the', 'to', 'under', 'while', 'with', 'without',
 ]);
 
-function readCreationKind(model: string | null | undefined, category: string | null | undefined): CreationKind {
+function readCreationKind(
+  model: string | null | undefined,
+  category: string | null | undefined,
+  creationMode: string | null | undefined,
+): CreationKind {
   const normalizedCategory = category?.trim().toLowerCase();
-  // Motion control creations carry no category of their own, only the model.
-  if (normalizedCategory === 'motion' || model?.toLowerCase().includes('motion')) {
+  // A motion transfer says so in its creation mode; older rows only in a
+  // category of 'motion' or a provider model id such as 'kling-2.6/motion-control'.
+  if (creationMode === 'motion' || normalizedCategory === 'motion' || model?.toLowerCase().includes('motion')) {
     return 'motion';
   }
   if (normalizedCategory === 'video' || normalizedCategory === 'audio') {
@@ -248,8 +324,10 @@ function titleFromPrompt(prompt: string | null | undefined): string {
  * passes the placeholder rule, and the creator can edit it like any title.
  */
 export function suggestCreationPostTitle(input: CreationTitleSuggestionInput): CreationTitleSuggestion {
-  const kind = readCreationKind(input.model, input.category);
-  if (!input.hasRecipe) {
+  const kind = readCreationKind(input.model, input.category, input.creationMode);
+  // A motion prompt tells the model how to move ("No distortion, the
+  // character's movements are consistent with the video."), not what is shown.
+  if (!input.hasRecipe && kind !== 'motion') {
     const fromPrompt = titleFromPrompt(input.prompt);
     if (fromPrompt) {
       return { title: fromPrompt, source: 'prompt' };
@@ -257,6 +335,31 @@ export function suggestCreationPostTitle(input: CreationTitleSuggestionInput): C
   }
 
   return { title: input.hasRecipe ? RECIPE_TITLE_BY_KIND[kind] : TITLE_BY_KIND[kind], source: 'kind' };
+}
+
+/**
+ * The title once a recipe is turned on or off. A title cut from the prompt is
+ * swapped for the recipe's kind title while a recipe is on (a recipe keeps the
+ * prompt private) and back when the recipe goes; any other title stays. It is
+ * compared with the prompt itself, not with what a composer prefilled, so the
+ * rule holds in an editor too, and for a title an earlier save copied onto the
+ * creation as its own.
+ */
+export function followTitleForRecipe(
+  title: string,
+  creation: Omit<CreationTitleSuggestionInput, 'hasRecipe'>,
+  hadRecipe: boolean,
+  hasRecipe: boolean,
+): string {
+  if (hadRecipe === hasRecipe) {
+    return title;
+  }
+  const fromPrompt = suggestCreationPostTitle({ ...creation, hasRecipe: false });
+  const forRecipe = suggestCreationPostTitle({ ...creation, hasRecipe: true });
+  if (hasRecipe) {
+    return fromPrompt.source === 'prompt' && title === fromPrompt.title ? forRecipe.title : title;
+  }
+  return title === forRecipe.title ? fromPrompt.title : title;
 }
 
 /** The line under a title that is still the composer's suggestion, in the same words on the web and in the app. */
@@ -274,10 +377,15 @@ const GENERATED_HANDLE_PATTERN = /^creator-[a-f0-9]{8}$/;
  * A handle to offer a creator who still has the signup placeholder
  * (`creator-xxxxxxxx`), from their name, else their email's local part:
  * "Athul S" → "athul-s". Empty when neither gives three usable characters
- * (a name in another script). The server still decides whether it is free
- * or reserved; this only saves typing.
+ * (a name in another script). `isUsable` lets the caller pass over a handle it
+ * knows is reserved, so "Support" with maya@… still gives "maya". The server
+ * still decides whether it is free; this only saves typing.
  */
-export function suggestProfileHandle(displayName?: string | null, email?: string | null): string {
+export function suggestProfileHandle(
+  displayName?: string | null,
+  email?: string | null,
+  isUsable: (handle: string) => boolean = () => true,
+): string {
   for (const source of [displayName, email?.split('@')[0]]) {
     const handle = (source ?? '')
       .normalize('NFKD')
@@ -288,7 +396,7 @@ export function suggestProfileHandle(displayName?: string | null, email?: string
       .replace(/^-+/, '')
       .slice(0, 24)
       .replace(/-+$/, '');
-    if (SUGGESTED_HANDLE_PATTERN.test(handle) && !GENERATED_HANDLE_PATTERN.test(handle)) {
+    if (SUGGESTED_HANDLE_PATTERN.test(handle) && !GENERATED_HANDLE_PATTERN.test(handle) && isUsable(handle)) {
       return handle;
     }
   }

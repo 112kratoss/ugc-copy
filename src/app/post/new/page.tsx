@@ -1,4 +1,5 @@
 import { RequireAuth } from '@/components/RouteAuthBoundary';
+import { getServerAuthState, getServerPublicIdentity } from '@/lib/supabase-server';
 
 import NewPostClient from './NewPostClient';
 
@@ -31,10 +32,13 @@ export function buildNewPostReturnPath(
 export default async function NewPostPage({ searchParams }: NewPostPageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const returnTo = buildNewPostReturnPath(resolvedSearchParams);
+  // The same cached read RequireAuth makes: the handle and name it holds say
+  // whether the composer must ask for them before a public post.
+  const auth = await getServerAuthState();
 
   return (
     <RequireAuth returnTo={returnTo}>
-      <NewPostClient />
+      <NewPostClient initialPublicIdentity={getServerPublicIdentity(auth)} />
     </RequireAuth>
   );
 }

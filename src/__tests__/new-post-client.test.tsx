@@ -46,11 +46,11 @@ vi.mock('@/lib/temporary-media-upload', () => ({
 // a public post. Unread (null) leaves the decision to the server, as these
 // tests always had it; the identity tests answer it themselves.
 const loadOwnProfileMock = vi.hoisted(() => vi.fn());
-const savePublicIdentityMock = vi.hoisted(() => vi.fn());
+const claimPublicIdentityMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/public-identity', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/public-identity')>(),
   loadOwnProfile: loadOwnProfileMock,
-  savePublicIdentity: savePublicIdentityMock,
+  claimPublicIdentity: claimPublicIdentityMock,
 }));
 
 vi.mock('@/lib/signed-url-upload', async () => {
@@ -206,7 +206,7 @@ describe('NewPostClient', () => {
     fetchMock.mockReset();
     loadOwnProfileMock.mockReset();
     loadOwnProfileMock.mockResolvedValue(null);
-    savePublicIdentityMock.mockReset();
+    claimPublicIdentityMock.mockReset();
     temporaryUploadMock.mockReset();
     directResourceUploadMock.mockReset();
     directResourceUploadMock.mockResolvedValue({ error: null });
@@ -4481,6 +4481,62 @@ describe('NewPostClient', () => {
       expect(titleInput).toHaveValue('Window still, morning light');
     });
 
+    it('takes a template’s name as the creation’s own title', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({
+        title: null,
+        origin: 'template',
+        prompt: '',
+        model: 'template-workflow',
+        template: { runId: 'run-1', templateId: 'template-1', templateTitle: 'Ghost rider' },
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Ghost rider'));
+      expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
+    });
+
+    // A motion prompt says how to move ("No distortion, …"), not what is shown.
+    it('names a motion transfer by its kind, never by its motion prompt', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({
+        title: null,
+        category: 'video',
+        model: 'kling-3.0',
+        creationMode: 'motion',
+        prompt: 'No distortion, the character’s movements are consistent with the video.',
+        output_url: 'https://proxy.example.com/generated_videos/user-1/output.mp4',
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Motion transfer'));
+      expect(screen.getByText('Suggested. Edit it if you like.')).toBeInTheDocument();
+    });
+
+    // A post saved with the prompt's opening as its title would otherwise carry
+    // it into a recipe's public post when the recipe is added later.
+    it('swaps a title cut from the prompt for the recipe’s in an edit too, without calling it a suggestion', async () => {
+      enqueueCreation({ title: null });
+      render(<NewPostClient initialPost={{
+        ...createGenerationRecipePost(),
+        id: 'post-gen-plain-1',
+        generationId: 'gen-recipe-1',
+        title: 'Product still lit like a window display',
+        rawTitle: 'Product still lit like a window display',
+        prompt: 'A product still lit like a window display.',
+        visibility: 'private',
+        resourceBundle: { accessMode: 'none' } as EditablePostDraft['resourceBundle'],
+      }} />);
+      const titleInput = screen.getByRole('textbox', { name: /^title/i });
+      expect(titleInput).toHaveValue('Product still lit like a window display');
+      await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/generations'))).toBe(true));
+      expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      expect(titleInput).toHaveValue('Image recipe');
+      expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
+    });
+
     it('adds the exact prompt as a card and sends the saved references with the recipe', async () => {
       searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
       enqueueCreation();
@@ -4639,13 +4695,13 @@ describe('NewPostClient', () => {
 
       expect(await screen.findByText('Add your name and handle to publish publicly.')).toBeInTheDocument();
       expect(screen.getByText('Add a display name for your public profile.')).toBeInTheDocument();
-      expect(savePublicIdentityMock).not.toHaveBeenCalled();
+      expect(claimPublicIdentityMock).not.toHaveBeenCalled();
       expect(postsCalls()).toHaveLength(0);
     });
 
     it('saves them first, then publishes the post', async () => {
       loadOwnProfileMock.mockResolvedValue(placeholderProfile);
-      savePublicIdentityMock.mockResolvedValue({
+      claimPublicIdentityMock.mockResolvedValue({
         ok: true,
         profile: { ...placeholderProfile, username: 'maya-k', displayName: 'Maya K' },
       });
@@ -4659,9 +4715,9 @@ describe('NewPostClient', () => {
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
       await waitFor(() => expect(postsCalls()).toHaveLength(1));
-      expect(savePublicIdentityMock).toHaveBeenCalledWith({ displayName: 'Maya K', username: 'maya-k' }, 'test-token');
+      expect(claimPublicIdentityMock).toHaveBeenCalledWith({ displayName: 'Maya K', username: 'maya-k' }, 'test-token');
       const postCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url) === '/api/posts');
-      expect(savePublicIdentityMock.mock.invocationCallOrder[0])
+      expect(claimPublicIdentityMock.mock.invocationCallOrder[0])
         .toBeLessThan(fetchMock.mock.invocationCallOrder[postCallIndex]);
       // Saved: the fields give way to the post.
       await waitFor(() => expect(screen.queryByRole('textbox', { name: /^display name$/i })).not.toBeInTheDocument());
@@ -4669,7 +4725,7 @@ describe('NewPostClient', () => {
 
     it('shows a taken handle on its field and publishes nothing', async () => {
       loadOwnProfileMock.mockResolvedValue(placeholderProfile);
-      savePublicIdentityMock.mockResolvedValue({
+      claimPublicIdentityMock.mockResolvedValue({
         ok: false,
         errors: { username: 'That username is already taken.' },
         message: 'That username is already taken.',
@@ -4681,7 +4737,7 @@ describe('NewPostClient', () => {
       fireEvent.change(screen.getByRole('textbox', { name: /^handle$/i }), { target: { value: 'maya' } });
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
-      await waitFor(() => expect(savePublicIdentityMock).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(claimPublicIdentityMock).toHaveBeenCalledTimes(1));
       expect(await screen.findByRole('textbox', { name: /^handle$/i })).toHaveAttribute('aria-invalid', 'true');
       expect(screen.getAllByText('That username is already taken.').length).toBeGreaterThanOrEqual(1);
       expect(postsCalls()).toHaveLength(0);
@@ -4695,7 +4751,7 @@ describe('NewPostClient', () => {
       await screen.findByRole('textbox', { name: /^display name$/i });
       fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
       await waitFor(() => expect(postsCalls()).toHaveLength(1));
-      expect(savePublicIdentityMock).not.toHaveBeenCalled();
+      expect(claimPublicIdentityMock).not.toHaveBeenCalled();
       unmount();
 
       loadOwnProfileMock.mockResolvedValue({ ...placeholderProfile, username: 'maya-k', displayName: 'Maya K' });
@@ -4703,6 +4759,54 @@ describe('NewPostClient', () => {
       await waitFor(() => expect(loadOwnProfileMock).toHaveBeenCalledTimes(2));
       expect(screen.queryByRole('textbox', { name: /^display name$/i })).not.toBeInTheDocument();
       expect(screen.queryByText('Name and handle')).not.toBeInTheDocument();
+    });
+
+    // The pages read the two fields with the rest of the server render, so the
+    // fields are there from the first paint and nothing is fetched for them.
+    it('starts from what the server render read and does not read the profile again', () => {
+      const { unmount } = render(
+        <NewPostClient initialPublicIdentity={{ username: 'creator-a1b2c3d4', displayName: null }} />,
+      );
+      writeTextPost();
+      expect(screen.getByRole('textbox', { name: /^display name$/i })).toBeInTheDocument();
+      expect(screen.getByText('Name and handle')).toBeInTheDocument();
+      unmount();
+
+      render(<NewPostClient initialPublicIdentity={{ username: 'maya-k', displayName: 'Maya K' }} />);
+      writeTextPost();
+      expect(screen.queryByRole('textbox', { name: /^display name$/i })).not.toBeInTheDocument();
+      expect(loadOwnProfileMock).not.toHaveBeenCalled();
+    });
+
+    // A profile that could not be read here is the server's to judge, and when
+    // it refuses the post for it, the same fields take the creator through.
+    it('asks for them after the server refuses a post for the profile', async () => {
+      enqueueResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: 'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+          field: 'profile',
+          actionHref: '/profile',
+        }),
+      });
+      claimPublicIdentityMock.mockResolvedValue({
+        ok: true,
+        profile: { ...placeholderProfile, username: 'maya-k', displayName: 'Maya K' },
+      });
+      enqueueResponse(createdPost);
+      render(<NewPostClient />);
+      writeTextPost();
+      expect(screen.queryByRole('textbox', { name: /^display name$/i })).not.toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      fireEvent.change(await screen.findByRole('textbox', { name: /^display name$/i }), { target: { value: 'Maya K' } });
+      fireEvent.change(screen.getByRole('textbox', { name: /^handle$/i }), { target: { value: 'maya-k' } });
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(postsCalls()).toHaveLength(2));
+      expect(claimPublicIdentityMock).toHaveBeenCalledWith({ displayName: 'Maya K', username: 'maya-k' }, 'test-token');
+      await waitFor(() => expect(screen.queryByRole('textbox', { name: /^display name$/i })).not.toBeInTheDocument());
     });
   });
 });

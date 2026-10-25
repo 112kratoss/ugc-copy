@@ -24,7 +24,9 @@ import {
   normalizeUsernameInput,
   PROFILE_DISPLAY_NAME_MAX_LENGTH,
   PROFILE_USERNAME_MAX_LENGTH,
+  PROFILE_USERNAME_RULE,
 } from '@/lib/edit-profile-form';
+import { invalidateWelcomeCredits } from '@/lib/use-onboarding-destination';
 import {
   getInitialPublicIdentity,
   isPublicIdentityReady,
@@ -308,7 +310,8 @@ function PostDetailsPage({
   const attribution = primaryAttribution
     ? `${primaryAttribution.toolLabel}${primaryAttribution.modelLabel ? ` · ${primaryAttribution.modelLabel}` : ''}`
     : 'Add tool and model';
-  const titleSuggestionHint = getCreationTitleSuggestionHint(draft, selectedGeneration);
+  // "Suggested" speaks only of a new post's starting title, never of an edit's saved one.
+  const titleSuggestionHint = getCreationTitleSuggestionHint(draft, isEditMode ? null : selectedGeneration);
   const titleField = (
     <ComposerFieldShell>
       <CompactFieldLabel label="Title" required valueLength={draft.title.length} maxLength={TITLE_MAX_LENGTH} />
@@ -525,7 +528,7 @@ function PublicIdentityCard({
       <CompactFieldLabel label="Handle" required />
       <ComposerInput
         accessibilityLabel="Handle, required"
-        accessibilityHint="Your profile link: 3 to 24 lowercase letters, numbers or hyphens."
+        accessibilityHint={`Your profile link: ${PROFILE_USERNAME_RULE}`}
         value={value.username}
         onChangeText={(username) => onChange({ ...value, username: normalizeUsernameInput(username).slice(0, PROFILE_USERNAME_MAX_LENGTH) })}
         placeholder="your-handle"
@@ -535,7 +538,7 @@ function PublicIdentityCard({
       />
       {errors.username
         ? <FieldErrorText message={errors.username} />
-        : <AppText variant="caption" color="muted">3–24 lowercase letters, numbers or hyphens.</AppText>}
+        : <AppText variant="caption" color="muted">{PROFILE_USERNAME_RULE}</AppText>}
     </ComposerFieldShell>
   );
 }
@@ -1962,7 +1965,7 @@ export default function NewPostScreen() {
 
 function NewPostComposer() {
   const theme = useAppTheme();
-  const { user, isLoading: authLoading, api } = useAuth();
+  const { user, isLoading: authLoading, api, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
   const navigation = useNavigation();
   const params = useLocalSearchParams<{
@@ -2008,19 +2011,15 @@ function NewPostComposer() {
     queryFn: api.getProfile,
     staleTime: 1000 * 60 * 5,
   });
-  const [identity, setIdentity] = useState<PublicIdentityDraft>({ displayName: '', username: '' });
-  const [identityEdited, setIdentityEdited] = useState(false);
+  // The fields follow the profile and the sign-in until the creator types.
+  const [identityEdits, setIdentityEdits] = useState<PublicIdentityDraft | null>(null);
   const [identitySaveErrors, setIdentitySaveErrors] = useState<PublicIdentityErrors>({});
   const [isSavingIdentity, setIsSavingIdentity] = useState(false);
+  const identity = identityEdits ?? getInitialPublicIdentity(profileQuery.data, user);
   const needsPublicIdentity = draft.visibility === 'public'
     && Boolean(profileQuery.data)
     && !isPublicIdentityReady(profileQuery.data);
   const identityProblems = needsPublicIdentity ? validatePublicIdentity(identity, profileQuery.data?.username) : {};
-  // The profile's or the sign-in's values until the creator types.
-  useEffect(() => {
-    if (!needsPublicIdentity || identityEdited) return;
-    setIdentity(getInitialPublicIdentity(profileQuery.data, user));
-  }, [identityEdited, needsPublicIdentity, profileQuery.data, user]);
   const [isPickingMedia, setIsPickingMedia] = useState(false);
   const [isRecoveringDraftMedia, setIsRecoveringDraftMedia] = useState(false);
   const [isPickingResourceFile, setIsPickingResourceFile] = useState(false);
@@ -3486,7 +3485,12 @@ function NewPostComposer() {
       setIsSavingIdentity(true);
       let saved: Awaited<ReturnType<typeof api.updateProfile>>;
       try {
-        saved = await api.updateProfile({ username: identity.username.trim(), displayName: identity.displayName.trim() });
+        // Read again first: a profile finished elsewhere since this screen read
+        // it keeps its own name and handle, and nothing is saved over them.
+        const current = await api.getProfile().catch(() => null);
+        saved = current && isPublicIdentityReady(current)
+          ? current
+          : await api.updateProfile({ username: identity.username.trim(), displayName: identity.displayName.trim() });
       } catch (error) {
         const { errors, message: saveMessage } = readPublicIdentitySaveError(error);
         setIdentitySaveErrors(errors);
@@ -3494,7 +3498,13 @@ function NewPostComposer() {
         setIsSavingIdentity(false);
         return;
       }
-      queryClient.setQueryData(profileQueryKey(user?.id), saved);
+      // Merged, not replaced: the save's answer has no stats or sales totals,
+      // which the profile header and the seller total read from the same entry.
+      queryClient.setQueryData<typeof saved>(profileQueryKey(user?.id), (cached) => (cached ? { ...cached, ...saved } : saved));
+      // As Edit profile does after the same claim: the welcome card stops
+      // asking for the identity, and the account's own profile is read again.
+      void invalidateWelcomeCredits(queryClient);
+      void refreshProfile();
       setIdentitySaveErrors({});
       setIsSavingIdentity(false);
     }
@@ -3639,12 +3649,11 @@ function NewPostComposer() {
           {needsPublicIdentity ? (
             <PublicIdentityCard
               value={identity}
-              // A field the creator has not touched shows no error yet; the summary says what is missing.
-              errors={{ ...(identityEdited ? identityProblems : {}), ...identitySaveErrors }}
+              // Until the creator types, the summary says what is missing, not the fields.
+              errors={{ ...(identityEdits ? identityProblems : {}), ...identitySaveErrors }}
               editable={!isSavingIdentity && !publishMutation.isPending}
               onChange={(next) => {
-                setIdentityEdited(true);
-                setIdentity(next);
+                setIdentityEdits(next);
                 setIdentitySaveErrors({});
               }}
             />

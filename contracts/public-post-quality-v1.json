@@ -1,9 +1,9 @@
 {
   "$comment": [
-    "The public-post quality rule the server applies before a post goes public (getPublicPostQualityError in src/lib/marketplace-trust.ts).",
+    "The public-post quality rule the server applies before a post goes public (getPublicPostQualityError, which src/lib/marketplace-trust.ts re-exports from the shared module below).",
     "The app checks the same rule before step 2 says Ready to publish, so it cannot promise a post the server will refuse.",
-    "Both read the words rule from one shared module, ugc-mobile/lib/post-publish-policy/post-publish-policy.ts, which lists placeholderTokens and fillerTokens in code; each suite holds its side to these cases: src/__tests__/marketplace-trust.test.ts (server) and ugc-mobile/__tests__/post-new-view-model.test.ts (app).",
-    "A title is a placeholder only when every word in it is a placeholder token, a filler token or a number, and at least one is a placeholder token: 'Demo video' is one, 'Product demo' is not. Text with no letters or digits left once links and ASCII punctuation are removed is a placeholder too, and so is keyboard mash ('ababab'); letters of any script count.",
+    "Both read the rule from one shared module, ugc-mobile/lib/post-publish-policy/post-publish-policy.ts, which lists placeholderTokens, decisivePlaceholderTokens and fillerTokens in code; the database's public.marketplace_text_is_placeholder applies the same rule to recipe posts and is held to these lists by src/__tests__/marketplace-placeholder-sql-migration.test.ts. Each suite holds its side to these cases: src/__tests__/marketplace-trust.test.ts (server) and ugc-mobile/__tests__/post-new-view-model.test.ts (app).",
+    "Text is a placeholder when nothing is left once links and everything but letters, marks and digits are removed (punctuation, symbols and emoji of any script); when it holds a decisive token anywhere ('Lorem ipsum dolor sit amet'); when every word is a placeholder token, a filler token or a number and at least one is a placeholder token ('Demo video', 'This is a test post', but not 'Product demo'); or when it is keyboard mash of Latin letters and digits ('ababab'). Letters of any script count as words.",
     "A text post (no media) also needs a body of at least minTextLength characters that is not placeholder text. Private posts are not checked."
   ],
   "version": 1,
@@ -22,6 +22,11 @@
     "todo",
     "untitled"
   ],
+  "decisivePlaceholderTokens": [
+    "asdf",
+    "ipsum",
+    "lorem"
+  ],
   "fillerTokens": [
     "a",
     "an",
@@ -29,6 +34,31 @@
     "my",
     "this",
     "new",
+    "i",
+    "me",
+    "we",
+    "our",
+    "your",
+    "it",
+    "is",
+    "are",
+    "was",
+    "be",
+    "of",
+    "for",
+    "and",
+    "or",
+    "to",
+    "in",
+    "on",
+    "at",
+    "with",
+    "just",
+    "only",
+    "here",
+    "some",
+    "one",
+    "again",
     "post",
     "image",
     "images",
@@ -45,7 +75,10 @@
     "creation",
     "title",
     "file",
-    "upload"
+    "upload",
+    "recipe",
+    "prompt",
+    "workflow"
   ],
   "minTextLength": 18,
   "messages": {
@@ -238,6 +271,84 @@
       "body": "",
       "hasMedia": true,
       "expected": "placeholder_title"
+    },
+    {
+      "title": "Untitled recipe",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Test prompt",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Just testing it again",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Lorem ipsum dolor sit amet",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Prompt teardown",
+      "body": "Lorem ipsum dolor sit amet, consectetur adipiscing elit",
+      "hasMedia": false,
+      "expected": "needs_text"
+    },
+    {
+      "title": "Prompt teardown",
+      "body": "This is a test post",
+      "hasMedia": false,
+      "expected": "needs_text"
+    },
+    {
+      "title": "…",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "🔥🔥",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "“Untitled”",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Test…",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Demo ✨",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Lol 😂😂😂",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
+    },
+    {
+      "title": "दादा दादी",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
     }
   ]
 }

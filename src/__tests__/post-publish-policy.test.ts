@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  followTitleForRecipe,
+  GENERIC_SUGGESTED_TITLES,
   isPlaceholderText,
   suggestCreationPostTitle,
   suggestProfileHandle,
@@ -63,11 +65,60 @@ describe('the title suggested for a post of a creation', () => {
     expect(suggest(null, { category: null, model: 'kling-2.6/motion-control' }).title).toBe('Motion transfer');
   });
 
+  // A motion prompt says how to move, not what is shown: "No distortion, the
+  // character's movements are consistent with the video."
+  it('names a motion transfer by its kind, never by its prompt', () => {
+    const motionPrompt = 'No distortion, the character’s movements are consistent with the video.';
+    expect(suggest(motionPrompt, { category: 'video', model: 'kling-3.0-motion', creationMode: 'motion' }))
+      .toEqual({ title: 'Motion transfer', source: 'kind' });
+    expect(suggest(motionPrompt, { category: 'video', model: 'kling-3.0/video', creationMode: 'motion' }).title)
+      .toBe('Motion transfer');
+    expect(suggest(motionPrompt, { category: 'motion', model: null, hasRecipe: true }).title).toBe('Motion transfer recipe');
+  });
+
   it('only suggests titles the public-post rule takes', () => {
     for (const prompt of ['test test', 'Demo video of a', 'asdf', 'Untitled creation', '!!!', 'Lorem ipsum dolor']) {
       const { title } = suggest(prompt);
       expect(isPlaceholderText(title), `${prompt} → ${title}`).toBe(false);
     }
+    expect(suggest('Lorem ipsum dolor')).toEqual({ title: 'AI image', source: 'kind' });
+  });
+
+  // The search gates compose a page title of their own for these, as many
+  // posts can carry the same one.
+  it('lists every kind title for the search gates, lowercased', () => {
+    expect(GENERIC_SUGGESTED_TITLES).toEqual(expect.arrayContaining([
+      'ai image', 'ai video', 'motion transfer', 'ai audio',
+      'image recipe', 'video recipe', 'motion transfer recipe', 'audio recipe',
+    ]));
+    expect(GENERIC_SUGGESTED_TITLES).toHaveLength(8);
+  });
+});
+
+// A title cut from the prompt would publish part of a prompt a recipe keeps
+// private, so turning a recipe on swaps it, and turning it off brings it back.
+describe('the title once a recipe is turned on or off', () => {
+  const creation = {
+    prompt: 'A product still lit like a window display, soft morning light, 85mm',
+    model: 'nano-banana-2',
+    category: 'image',
+  };
+  const fromPrompt = 'Product still lit like a window display';
+
+  it('swaps the prompt’s title for the kind title and back', () => {
+    expect(followTitleForRecipe(fromPrompt, creation, false, true)).toBe('Image recipe');
+    expect(followTitleForRecipe('Image recipe', creation, true, false)).toBe(fromPrompt);
+  });
+
+  it('keeps anything the creator typed, and changes nothing while the recipe stays as it was', () => {
+    expect(followTitleForRecipe('Window still', creation, false, true)).toBe('Window still');
+    expect(followTitleForRecipe('Window still', creation, true, false)).toBe('Window still');
+    expect(followTitleForRecipe(fromPrompt, creation, true, true)).toBe(fromPrompt);
+    expect(followTitleForRecipe('AI image', creation, false, true)).toBe('AI image');
+  });
+
+  it('turns a kind title into the plain one when a prompt gives no title', () => {
+    expect(followTitleForRecipe('Image recipe', { ...creation, prompt: null }, true, false)).toBe('AI image');
   });
 });
 
@@ -87,5 +138,12 @@ describe('the handle suggested to a creator who has none', () => {
     expect(suggestProfileHandle('Al')).toBe('');
     expect(suggestProfileHandle('creator-1a2b3c4d')).toBe('');
     expect(suggestProfileHandle('  --Neon  Lab--  ')).toBe('neon-lab');
+  });
+
+  // A reserved handle ("admin", "support") would only be refused at save.
+  it('passes over a handle the caller cannot use, to the email, then to none', () => {
+    const notAdmin = (handle: string) => handle !== 'admin';
+    expect(suggestProfileHandle('Admin', 'maya.k@example.com', notAdmin)).toBe('maya-k');
+    expect(suggestProfileHandle('Admin', 'admin@example.com', notAdmin)).toBe('');
   });
 });

@@ -281,6 +281,14 @@ describe('post new view model', () => {
       expect(getCreationPostTitleSuggestion(untitled, 'paid')).toEqual({ title: 'Video recipe', source: 'kind' });
       expect(getCreationPostTitleSuggestion(generation({ title: null, prompt: null, model: 'kling-2.6/motion-control', category: null })))
         .toEqual({ title: 'Motion transfer', source: 'kind' });
+      // A motion prompt says how to move, not what is shown; the creation mode says it is one.
+      expect(getCreationPostTitleSuggestion(generation({
+        title: null,
+        prompt: 'No distortion, the character’s movements are consistent with the video.',
+        model: 'kling-3.0/video',
+        category: 'video',
+        creationMode: 'motion',
+      }))).toEqual({ title: 'Motion transfer', source: 'kind' });
     });
 
     it('swaps an untouched suggestion when a recipe is turned on or off, and never a typed title', () => {
@@ -1827,9 +1835,10 @@ describe('the public-post rule, checked before step 2 says Ready to publish', ()
         .toBe(messages.placeholder_title);
       expect(getPublicPostQualityError({ title: `My ${token} video 2`, body: '', hasMedia: true }), token)
         .toBe(messages.placeholder_title);
-      // "Product demo" or "Free sample pack" is a real title that uses the word.
+      // "Product demo" or "Free sample pack" is a real title that uses the word;
+      // "lorem", "ipsum" and "asdf" are stand-ins wherever they appear.
       expect(getPublicPostQualityError({ title: `Studio ${token} reel`, body: '', hasMedia: true }), token)
-        .toBeNull();
+        .toBe(publicPostQuality.decisivePlaceholderTokens.includes(token) ? messages.placeholder_title : null);
     }
     const sentence = 'Lighting breakdown for a product reel';
     expect(getPublicPostQualityError({

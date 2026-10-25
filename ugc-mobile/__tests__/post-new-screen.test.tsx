@@ -28,6 +28,7 @@ const shareState = vi.hoisted(() => ({
 const authState = vi.hoisted(() => ({
   user: { id: 'user-123', email: 'creator@example.com', user_metadata: {} as Record<string, unknown> },
   isLoading: false,
+  refreshProfile: vi.fn(async () => undefined),
   api: {
     getProfile: vi.fn(),
     updateProfile: vi.fn(),
@@ -285,6 +286,9 @@ vi.mock('@/lib/media', async (importOriginal) => ({
   uploadResourceDocument: vi.fn(),
 }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
+// The module's real imports reach expo-crypto, which reads __DEV__ as it loads.
+const welcomeCreditsState = vi.hoisted(() => ({ invalidate: vi.fn(async () => undefined) }));
+vi.mock('@/lib/use-onboarding-destination', () => ({ invalidateWelcomeCredits: welcomeCreditsState.invalidate }));
 vi.mock('expo-file-system', () => ({
   File: class {
     constructor(readonly uri: string) {}
@@ -422,6 +426,11 @@ describe('mobile external post composer', () => {
     generationState.item = null;
     profileState.profile = null;
     authState.user.user_metadata = {};
+    authState.refreshProfile.mockClear();
+    welcomeCreditsState.invalidate.mockClear();
+    // Publish public reads the profile again before saving a name and handle.
+    authState.api.getProfile.mockReset();
+    authState.api.getProfile.mockImplementation(async () => profileState.profile);
     authState.api.updateProfile.mockReset();
     authState.api.createPost.mockReset();
     authState.api.updatePost.mockReset();
@@ -1513,6 +1522,32 @@ describe('mobile external post composer', () => {
       const tree = await renderScreen();
       expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Hero product image');
     });
+
+    // An edit's title is the post's own, even when it reads as the suggestion would.
+    it('calls nothing a suggestion on an edit', async () => {
+      generationState.item = { ...generationItem, title: null };
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = {
+        id: 'post-from-creation',
+        title: 'Exact glossy product prompt',
+        description: null,
+        body: '',
+        postFormat: 'media',
+        generationId: 'gen-1',
+        category: 'image',
+        visibility: 'public',
+        sourceTool: 'Magicbooklet',
+        sourceToolSlug: 'magicbooklet',
+        mediaUrl: 'https://cdn.example.com/output.png',
+        mediaKind: 'image',
+        mediaItems: [],
+        resourceBundleInput: null,
+        hasPaidOrders: false,
+      };
+      const tree = await renderScreen();
+      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Exact glossy product prompt');
+      expect(collectText(tree.root)).not.toContain('Suggested from your prompt. Edit it if you like.');
+    });
   });
 
   // The category used to follow only the first media added; a reorder kept it,
@@ -1788,9 +1823,33 @@ describe('mobile external post composer', () => {
       });
 
       expect(authState.api.updateProfile).toHaveBeenCalledWith({ username: 'mayak', displayName: 'Maya K' });
-      expect(queryClientState.setQueryData).toHaveBeenCalledWith(['profile', 'user-123'], expect.objectContaining({ username: 'mayak' }));
       expect(mutationState.mutate).toHaveBeenCalledWith('public');
       expect(order).toEqual(['profile', 'publish']);
+      // Merged into the shared profile entry, whose stats the save's answer lacks.
+      const [key, update] = queryClientState.setQueryData.mock.calls.at(-1) as [unknown, (cached: unknown) => unknown];
+      expect(key).toEqual(['profile', 'user-123']);
+      expect(update({ ...placeholderProfile, stats: { posts: 3 } }))
+        .toEqual({ ...placeholderProfile, username: 'mayak', displayName: 'Maya K', stats: { posts: 3 } });
+      // As Edit profile does: the welcome card and the account's profile are read again.
+      expect(welcomeCreditsState.invalidate).toHaveBeenCalledWith(queryClientState);
+      expect(authState.refreshProfile).toHaveBeenCalledTimes(1);
+    });
+
+    // A profile finished elsewhere since the screen read it keeps its own name and handle.
+    it('saves nothing over a profile finished meanwhile, and publishes', async () => {
+      profileState.profile = placeholderProfile;
+      const finished = { ...placeholderProfile, username: 'maya', displayName: 'Maya' };
+      authState.api.getProfile.mockResolvedValue(finished);
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+
+      expect(authState.api.updateProfile).not.toHaveBeenCalled();
+      expect(mutationState.mutate).toHaveBeenCalledWith('public');
+      const [, update] = queryClientState.setQueryData.mock.calls.at(-1) as [unknown, (cached: unknown) => unknown];
+      expect(update(placeholderProfile)).toEqual(finished);
     });
 
     it('shows a taken handle on its field and publishes nothing', async () => {

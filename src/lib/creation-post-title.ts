@@ -1,5 +1,6 @@
 import {
   describeTitleSuggestion,
+  followTitleForRecipe,
   suggestCreationPostTitle,
   type CreationTitleSuggestion,
 } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
@@ -10,6 +11,7 @@ export type CreationTitleSource = {
   prompt?: string | null;
   model?: string | null;
   category?: string | null;
+  creationMode?: string | null;
 };
 
 export type CreationPostTitleSuggestion = {
@@ -28,7 +30,12 @@ export function readCreationTitleSource(generation: unknown): CreationTitleSourc
     return null;
   }
   const record = generation as Record<string, unknown>;
-  return { prompt: readText(record.prompt), model: readText(record.model), category: readText(record.category) };
+  return {
+    prompt: readText(record.prompt),
+    model: readText(record.model),
+    category: readText(record.category),
+    creationMode: readText(record.creationMode),
+  };
 }
 
 /**
@@ -66,29 +73,20 @@ export function getCreationTitleSuggestionHint(
 }
 
 /**
- * The title once a recipe is turned on or off. A suggestion may come from the
- * prompt only while the post has no recipe, so one nobody has edited becomes
- * the suggestion for the new state; a typed title, or the creation's own, stays.
+ * The title once a recipe is turned on or off: a title cut from the prompt
+ * becomes the recipe's kind title while a recipe keeps the prompt private, and
+ * comes back when it goes (`followTitleForRecipe`); anything typed stays.
  */
 export function followCreationTitleSuggestion({
   title,
-  ownTitle,
   source,
   hadRecipe,
   hasRecipe,
 }: {
   title: string;
-  ownTitle: string | null | undefined;
   source: CreationTitleSource | null | undefined;
   hadRecipe: boolean;
   hasRecipe: boolean;
 }): string {
-  if (hadRecipe === hasRecipe) {
-    return title;
-  }
-  const previous = getCreationPostTitleSuggestion(ownTitle, source, hadRecipe);
-  if (!previous || previous.source === 'creation' || previous.title !== title) {
-    return title;
-  }
-  return getCreationPostTitleSuggestion(ownTitle, source, hasRecipe)?.title ?? title;
+  return source ? followTitleForRecipe(title, source, hadRecipe, hasRecipe) : title;
 }

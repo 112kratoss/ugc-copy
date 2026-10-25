@@ -19,7 +19,7 @@ import {
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
 import {
   getInitialPublicIdentity,
-  savePublicIdentity,
+  claimPublicIdentity,
   validatePublicIdentity,
   type PublicIdentityDraft,
   type PublicIdentityErrors,
@@ -224,12 +224,9 @@ export default function PublishToShowcaseModal({
   onPublished,
 }: PublishToShowcaseModalProps) {
   const [isNsfw, setIsNsfw] = useState(false);
-  const creationPrompt = creation?.prompt ?? null;
-  const creationModel = creation?.model ?? null;
-  const creationCategory = creation?.category ?? null;
-  const [publishTitle, setPublishTitle] = useState(() => getDefaultPublishTitle(
-    getCreationPostTitleSuggestion(defaultTitle, creation, false)?.title ?? defaultTitle,
-  ));
+  const [publishTitle, setPublishTitle] = useState(() => getDefaultPublishTitle(defaultTitle));
+  // Set once the creator types a title: a suggestion is never put over theirs.
+  const titleTouchedRef = useRef(false);
   const [publishDescription, setPublishDescription] = useState(() =>
     getDefaultPublishDescription(defaultDescription)
   );
@@ -240,13 +237,12 @@ export default function PublishToShowcaseModal({
   const [needsProfileRepair, setNeedsProfileRepair] = useState(false);
   const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
   const [profileLoadState, setProfileLoadState] = useState<ProfileLoadState>('idle');
-  const [profileRefreshRevision, setProfileRefreshRevision] = useState(0);
   const { user } = useAuth();
-  const [identity, setIdentity] = useState<PublicIdentityDraft>({ displayName: '', username: '' });
+  // The name and handle follow the profile and the sign-in until the creator
+  // types; a later answer never puts the starting values back over theirs.
+  const [identityEdits, setIdentityEdits] = useState<PublicIdentityDraft | null>(null);
   const [identityErrors, setIdentityErrors] = useState<PublicIdentityErrors>({});
-  // Set once the creator types in a field: a profile refresh (the window
-  // regaining focus) must not put the starting values back over theirs.
-  const identityTouchedRef = useRef(false);
+  const identity = identityEdits ?? getInitialPublicIdentity(profile, user);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
@@ -257,11 +253,11 @@ export default function PublishToShowcaseModal({
   const generationReferenceCount = Math.max(0, Math.round(paywallPrefill?.referenceCount ?? 0));
   const hasGenerationReferences = generationReferenceCount > 0;
   const isPaidRecipe = recipeAccess === 'paid';
-  const titleSuggestionHint = getCreationTitleSuggestionHint(
-    publishTitle,
-    getCreationPostTitleSuggestion(defaultTitle, creation, recipeAccess !== 'none'),
-    recipeAccess !== 'none',
-  );
+  // A creation's details can arrive after the dialog opened (the motion page
+  // reads them in the background), so the suggestion is derived, not set once.
+  const titleSuggestion = getCreationPostTitleSuggestion(defaultTitle, creation, recipeAccess !== 'none');
+  const suggestedTitle = titleSuggestion && titleSuggestion.source !== 'creation' ? titleSuggestion.title : null;
+  const titleSuggestionHint = getCreationTitleSuggestionHint(publishTitle, titleSuggestion, recipeAccess !== 'none');
   const activeAccessIndex = Math.max(
     0,
     RECIPE_ACCESS_OPTIONS.findIndex((option) => option.value === recipeAccess)
@@ -298,16 +294,10 @@ export default function PublishToShowcaseModal({
     }
 
     // Opening a generation starts a fresh publish draft from its supplied
-    // defaults. With no title of its own, the creation starts from a suggestion
-    // for a post without a recipe, which is how a fresh publish starts.
+    // defaults; the suggestion below fills an untitled one.
     setIsNsfw(false);
-    setPublishTitle(getDefaultPublishTitle(
-      getCreationPostTitleSuggestion(
-        defaultTitle,
-        { prompt: creationPrompt, model: creationModel, category: creationCategory },
-        false,
-      )?.title ?? defaultTitle,
-    ));
+    setPublishTitle(getDefaultPublishTitle(defaultTitle));
+    titleTouchedRef.current = false;
     setPublishDescription(getDefaultPublishDescription(defaultDescription));
     // A fresh publish starts with no recipe attached; the creator opts in.
     setRecipeAccess('none');
@@ -316,16 +306,18 @@ export default function PublishToShowcaseModal({
     setFormError(null);
     setNeedsProfileRepair(false);
     setIdentityErrors({});
-    identityTouchedRef.current = false;
-  }, [creationCategory, creationModel, creationPrompt, defaultDescription, defaultTitle, generationId, isOpen]);
+    setIdentityEdits(null);
+  }, [defaultDescription, defaultTitle, generationId, isOpen]);
 
-  // The name and handle start from the profile, else from the sign-in.
+  // An untitled creation starts from the suggestion once its details are
+  // known. Only an empty, untyped title takes it: arriving late never wipes
+  // anything the creator did, and a recipe switch swaps it in its own handler.
   useEffect(() => {
-    if (!needsPublicIdentity || identityTouchedRef.current) {
+    if (!isOpen || !suggestedTitle || titleTouchedRef.current) {
       return;
     }
-    setIdentity(getInitialPublicIdentity(profile, user));
-  }, [needsPublicIdentity, profile, user]);
+    setPublishTitle((current) => (current.trim() ? current : getDefaultPublishTitle(suggestedTitle)));
+  }, [isOpen, suggestedTitle]);
 
   useEffect(() => {
     if (!isOpen || !generationId) {
@@ -366,20 +358,7 @@ export default function PublishToShowcaseModal({
       });
 
     return () => controller.abort();
-  }, [accessToken, generationId, isOpen, profileRefreshRevision]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    const refreshProfileAfterRepair = () => {
-      setProfileRefreshRevision((current) => current + 1);
-    };
-
-    window.addEventListener('focus', refreshProfileAfterRepair);
-    return () => window.removeEventListener('focus', refreshProfileAfterRepair);
-  }, [isOpen]);
+  }, [accessToken, generationId, isOpen]);
 
   useEffect(() => {
     if (!isOpen || !generationId) {
@@ -503,7 +482,7 @@ export default function PublishToShowcaseModal({
     setFormError(null);
 
     if (savesIdentity) {
-      const saved = await savePublicIdentity(identity, accessToken);
+      const saved = await claimPublicIdentity(identity, accessToken);
       if (!saved.ok) {
         setIdentityErrors(saved.errors);
         setFormError(saved.message);
@@ -663,7 +642,10 @@ export default function PublishToShowcaseModal({
               id="publish-title-input"
               type="text"
               value={publishTitle}
-              onChange={(event) => setPublishTitle(event.target.value)}
+              onChange={(event) => {
+                titleTouchedRef.current = true;
+                setPublishTitle(event.target.value);
+              }}
               placeholder="Give your creation a name"
               className="w-full rounded-2xl border border-white/10 bg-black px-4 py-3 text-white transition-colors placeholder:text-zinc-600 focus:border-emerald-400/50 focus:outline-none"
               maxLength={TITLE_MAX_LENGTH}
@@ -680,8 +662,7 @@ export default function PublishToShowcaseModal({
               errors={identityErrors}
               disabled={isPublishing}
               onChange={(next) => {
-                identityTouchedRef.current = true;
-                setIdentity(next);
+                setIdentityEdits(next);
                 setIdentityErrors({});
               }}
             />
@@ -819,7 +800,6 @@ export default function PublishToShowcaseModal({
                                   // recipe: a recipe keeps the prompt private.
                                   setPublishTitle((current) => followCreationTitleSuggestion({
                                     title: current,
-                                    ownTitle: defaultTitle,
                                     source: creation,
                                     hadRecipe: recipeAccess !== 'none',
                                     hasRecipe: option.value !== 'none',

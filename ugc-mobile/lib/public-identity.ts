@@ -40,19 +40,24 @@ function readSignInName(metadata: Record<string, unknown> | null | undefined): s
 
 /**
  * Where the fields start: what the profile already has, else the name the
- * sign-in gave and a handle made from it. A reserved handle is left for the
- * creator to choose.
+ * sign-in gave (or the email's local part, as onboarding does) and a handle
+ * made from it, passing over a reserved one.
  */
 export function getInitialPublicIdentity(
   profile: Pick<ProfileResponse, 'username' | 'displayName'> | null | undefined,
   user: SignedInUser,
 ): PublicIdentityDraft {
-  const displayName = profile?.displayName?.trim() || readSignInName(user?.user_metadata);
+  const displayName = profile?.displayName?.trim()
+    || readSignInName(user?.user_metadata)
+    || user?.email?.split('@')[0]?.trim()
+    || '';
   if (isClaimedProfileUsername(profile?.username)) {
     return { displayName, username: normalizeUsername(profile?.username ?? '') ?? '' };
   }
-  const suggested = suggestProfileHandle(displayName, user?.email ?? null);
-  return { displayName, username: suggested && !readLocalUsernameRejection(suggested) ? suggested : '' };
+  return {
+    displayName,
+    username: suggestProfileHandle(displayName, user?.email ?? null, (handle) => !readLocalUsernameRejection(handle)),
+  };
 }
 
 /** The profile editor's own verdicts on the two fields, so both forms say one thing. */

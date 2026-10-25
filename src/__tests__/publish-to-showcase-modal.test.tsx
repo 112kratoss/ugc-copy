@@ -348,6 +348,27 @@ describe('PublishToShowcaseModal', () => {
       expect(calls('/api/showcase/publish')).toHaveLength(0);
       expect(screen.getByRole('button', { name: /^public post$/i })).toBeEnabled();
     });
+
+    // The profile is read again at the press: a handle claimed in another tab
+    // since the window opened is never replaced by the window's older values.
+    it('saves nothing over a profile finished meanwhile, and publishes', async () => {
+      answer({});
+      render(<PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="Broadcast" />);
+      fireEvent.change(await screen.findByRole('textbox', { name: /^display name$/i }), { target: { value: 'Maya K' } });
+      fireEvent.change(screen.getByRole('textbox', { name: /^handle$/i }), { target: { value: 'maya-k' } });
+
+      vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => new Response(
+        JSON.stringify(String(url) === '/api/profile'
+          ? { ...placeholderProfile, username: 'maya', displayName: 'Maya' }
+          : { success: true }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ));
+      fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+      await waitFor(() => expect(calls('/api/showcase/publish')).toHaveLength(1));
+      expect(calls('/api/profile', 'PATCH')).toHaveLength(0);
+      expect(JSON.parse(String(getPublishRequest().body)).visibility).toBe('public');
+    });
   });
 
   it('says whom a public post goes out as when the profile is ready', async () => {
@@ -400,6 +421,33 @@ describe('PublishToShowcaseModal', () => {
       render(<PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="Broadcast" creation={creation} />);
       expect(screen.getByRole('textbox', { name: /^title$/i })).toHaveValue('Broadcast');
       expect(screen.queryByText(/^Suggested/)).toBeNull();
+    });
+
+    // The motion page reads a creation's details after the window can open.
+    it('suggests nothing until the creation’s details arrive, then fills the empty title', () => {
+      const { rerender } = render(
+        <PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="" creation={null} />,
+      );
+      const title = screen.getByRole('textbox', { name: /^title$/i });
+      expect(title).toHaveValue('');
+
+      rerender(<PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="" creation={creation} />);
+      expect(title).toHaveValue('Product still lit like a window display');
+    });
+
+    it('keeps what the creator typed and chose when the details arrive late', () => {
+      const { rerender } = render(
+        <PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="" creation={null} paywallPrefill={prefill} />,
+      );
+      const title = screen.getByRole('textbox', { name: /^title$/i });
+      fireEvent.change(title, { target: { value: 'Window still' } });
+      fireEvent.click(screen.getByRole('radio', { name: 'Paid' }));
+
+      rerender(
+        <PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="" creation={creation} paywallPrefill={prefill} />,
+      );
+      expect(title).toHaveValue('Window still');
+      expect(screen.getByRole('radio', { name: 'Paid' })).toBeChecked();
     });
   });
 

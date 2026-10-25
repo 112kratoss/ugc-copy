@@ -22,7 +22,10 @@ import type {
 } from '@/lib/types';
 import {
   describeTitleSuggestion,
+  followTitleForRecipe,
+  getPublicPostQualityError,
   isPlaceholderText,
+  PUBLIC_POST_PLACEHOLDER_TITLE_ERROR,
   suggestCreationPostTitle,
 } from '@/lib/post-publish-policy/post-publish-policy';
 
@@ -942,36 +945,8 @@ export type PostComposerValidationOptions = {
   hasSoldRecipe?: boolean;
 };
 
-const PUBLIC_POST_PLACEHOLDER_TITLE_ERROR = 'Replace the placeholder title with something specific to this post.';
-const PUBLIC_POST_NEEDS_TEXT_ERROR = 'Add useful text so viewers can understand the post before publishing.';
-const PUBLIC_POST_MIN_TEXT_LENGTH = 18;
-
-/**
- * The server's public-post rule (`getPublicPostQualityError` in the web app's
- * src/lib/marketplace-trust.ts): a public post may not carry a placeholder
- * title, and one without media needs some useful text. This wrapper is copied
- * because the app cannot import the web's code; what counts as placeholder
- * text is the one shared `isPlaceholderText`, and
- * contracts/public-post-quality-v1.json holds both to the same answers.
- */
-export function getPublicPostQualityError(input: {
-  title?: string | null;
-  body?: string | null;
-  hasMedia?: boolean | null;
-}): string | null {
-  const title = input.title?.trim() ?? '';
-  const body = input.body?.trim() ?? '';
-
-  if (title && isPlaceholderText(title)) {
-    return PUBLIC_POST_PLACEHOLDER_TITLE_ERROR;
-  }
-
-  if (!input.hasMedia && (body.length < PUBLIC_POST_MIN_TEXT_LENGTH || isPlaceholderText(body))) {
-    return PUBLIC_POST_NEEDS_TEXT_ERROR;
-  }
-
-  return null;
-}
+// The server's public-post rule, from the module the web's routes read too.
+export { getPublicPostQualityError };
 
 /**
  * The public-post rule as the server applies it to this draft, so step 2 never
@@ -1689,19 +1664,18 @@ export function getCreationPostTitleSuggestion(
   if (ownTitle.trim()) {
     return { title: ownTitle, source: 'creation' };
   }
-  return suggestCreationPostTitle({
-    prompt: item.prompt,
-    model: item.model,
-    category: item.category,
-    hasRecipe: accessMode !== 'none',
-  });
+  return suggestCreationPostTitle({ ...readCreationTitleSource(item), hasRecipe: accessMode !== 'none' });
+}
+
+function readCreationTitleSource(item: GenerationListItem) {
+  return { prompt: item.prompt, model: item.model, category: item.category, creationMode: item.creationMode };
 }
 
 /**
- * A suggested title follows the recipe. It may come from the prompt only while
- * the post has no recipe, so a change that turns a recipe on or off swaps a
- * suggestion nobody has edited for the matching one. A title the creator typed
- * is never touched.
+ * A title cut from the prompt follows the recipe, as on the web
+ * (`followTitleForRecipe`): it becomes the recipe's kind title while a recipe
+ * keeps the prompt private, and comes back when the recipe goes. Compared with
+ * the prompt itself, so it holds in an edit too. Any other title stays.
  */
 export function followCreationTitleSuggestion(
   previous: PostComposerDraft,
@@ -1709,11 +1683,13 @@ export function followCreationTitleSuggestion(
   generation: GenerationListItem | null | undefined,
 ): PostComposerDraft {
   if (!generation || next.mode !== 'creation' || next.title !== previous.title) return next;
-  const hadRecipe = previous.resource.accessMode !== 'none';
-  const hasRecipe = next.resource.accessMode !== 'none';
-  if (hadRecipe === hasRecipe) return next;
-  if (previous.title !== getCreationPostTitleSuggestion(generation, previous.resource.accessMode).title) return next;
-  return { ...next, title: getCreationPostTitleSuggestion(generation, next.resource.accessMode).title };
+  const title = followTitleForRecipe(
+    next.title,
+    readCreationTitleSource(generation),
+    previous.resource.accessMode !== 'none',
+    next.resource.accessMode !== 'none',
+  );
+  return title === next.title ? next : { ...next, title };
 }
 
 /** The line under the title while it is still the composer's suggestion; null once the creator has changed it. */
