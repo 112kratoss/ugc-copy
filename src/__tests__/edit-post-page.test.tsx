@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 const getOwnerPostDetailMock = vi.hoisted(() => vi.fn());
 const getServerAuthStateMock = vi.hoisted(() => vi.fn());
+const getServerPublicIdentityMock = vi.hoisted(() => vi.fn());
 
 vi.mock('next/headers', () => ({
   headers: vi.fn(async () => new Headers({ 'x-vercel-ip-country': 'US' })),
@@ -23,6 +24,7 @@ vi.mock('@/lib/owner-posts', () => ({
 
 vi.mock('@/lib/supabase-server', () => ({
   getServerAuthState: getServerAuthStateMock,
+  getServerPublicIdentity: getServerPublicIdentityMock,
 }));
 
 vi.mock('@/components/AuthProvider', () => ({
@@ -46,6 +48,7 @@ describe('EditPostPage', () => {
       session,
       credits: 12,
     });
+    getServerPublicIdentityMock.mockReturnValue({ username: 'maya-k', displayName: 'Maya K' });
     getOwnerPostDetailMock.mockResolvedValue({
       id: 'post-1',
       generationId: 'generation-1',
@@ -84,5 +87,8 @@ describe('EditPostPage', () => {
       initialCredits: 12,
       hasResolvedInitialState: true,
     });
+    // The handle and name read with the session say whether a public save must ask for them.
+    expect(getServerPublicIdentityMock).toHaveBeenCalledWith(expect.objectContaining({ session }));
+    expect(result.props.children.props.initialPublicIdentity).toEqual({ username: 'maya-k', displayName: 'Maya K' });
   });
 });

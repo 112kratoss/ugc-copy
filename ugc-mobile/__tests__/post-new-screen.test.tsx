@@ -26,9 +26,12 @@ const shareState = vi.hoisted(() => ({
   dismissedAction: 'dismissedAction',
 }));
 const authState = vi.hoisted(() => ({
-  user: { id: 'user-123', email: 'creator@example.com' },
+  user: { id: 'user-123', email: 'creator@example.com', user_metadata: {} as Record<string, unknown> },
   isLoading: false,
+  refreshProfile: vi.fn(async () => undefined),
   api: {
+    getProfile: vi.fn(),
+    updateProfile: vi.fn(),
     listGenerations: vi.fn(),
     listSourceTools: vi.fn(),
     getOwnerPost: vi.fn(),
@@ -49,6 +52,8 @@ const sourceToolsState = vi.hoisted(() => ({
   }] as SourceToolOption[],
 }));
 const postEditState = vi.hoisted(() => ({ post: null as Record<string, unknown> | null }));
+// The signed-in account's profile as the shared `['profile', id]` query reads it; null is unread.
+const profileState = vi.hoisted(() => ({ profile: null as Record<string, unknown> | null }));
 // The files still on the device, by uri; anything else reads as gone.
 const deviceFileState = vi.hoisted(() => ({ uris: new Set<string>() }));
 // The creation the composer is opened on, when a case needs one other than `generationItem`.
@@ -154,6 +159,9 @@ vi.mock('@tanstack/react-query', () => ({
     }
     if (options.queryKey[0] === 'post-source-tools') {
       return { data: { tools: sourceToolsState.tools }, error: null, isLoading: false, isSuccess: true };
+    }
+    if (options.queryKey[0] === 'profile') {
+      return { data: profileState.profile, error: null, isLoading: false, isSuccess: Boolean(profileState.profile) };
     }
     return { data: null, error: null, isLoading: false, isSuccess: false };
   },
@@ -278,6 +286,9 @@ vi.mock('@/lib/media', async (importOriginal) => ({
   uploadResourceDocument: vi.fn(),
 }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
+// The module's real imports reach expo-crypto, which reads __DEV__ as it loads.
+const welcomeCreditsState = vi.hoisted(() => ({ invalidate: vi.fn(async () => undefined) }));
+vi.mock('@/lib/use-onboarding-destination', () => ({ invalidateWelcomeCredits: welcomeCreditsState.invalidate }));
 vi.mock('expo-file-system', () => ({
   File: class {
     constructor(readonly uri: string) {}
@@ -332,10 +343,10 @@ function findTextInputByAccessibilityLabel(root: renderer.ReactTestInstance, lab
   return input;
 }
 
-async function renderScreen() {
+async function renderScreen(options: { createNodeMock?: (element: React.ReactElement) => unknown } = {}) {
   let tree: renderer.ReactTestRenderer | undefined;
   await renderer.act(async () => {
-    tree = renderer.create(<NewPostScreen />);
+    tree = renderer.create(<NewPostScreen />, options.createNodeMock ? { createNodeMock: options.createNodeMock } : undefined);
     await Promise.resolve();
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -413,6 +424,14 @@ describe('mobile external post composer', () => {
     routerState.canGoBack.mockReset();
     routerState.canGoBack.mockReturnValue(false);
     generationState.item = null;
+    profileState.profile = null;
+    authState.user.user_metadata = {};
+    authState.refreshProfile.mockClear();
+    welcomeCreditsState.invalidate.mockClear();
+    // Publish public reads the profile again before saving a name and handle.
+    authState.api.getProfile.mockReset();
+    authState.api.getProfile.mockImplementation(async () => profileState.profile);
+    authState.api.updateProfile.mockReset();
     authState.api.createPost.mockReset();
     authState.api.updatePost.mockReset();
     authState.api.getOwnerPost.mockReset();
@@ -1456,10 +1475,36 @@ describe('mobile external post composer', () => {
   });
 
   describe('title prefill from a creation', () => {
-    it('starts untitled when the creation has no title, rather than from its prompt', async () => {
+    // Typing a title was the step people stopped at. The prompt may suggest it
+    // only while the post has no recipe: a recipe keeps the prompt private.
+    it('starts from a title suggested by the prompt, says so, and swaps it once a recipe keeps the prompt private', async () => {
       generationState.item = { ...generationItem, title: null };
       const tree = await renderScreen();
-      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('');
+      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Exact glossy product prompt');
+      expect(collectText(tree.root)).toContain('Suggested from your prompt. Edit it if you like.');
+
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
+      let context: { submittedDraft?: PostComposerDraft } | void = undefined;
+      renderer.act(() => {
+        context = mutationState.options?.onMutate?.('public') as typeof context;
+      });
+      expect((context as { submittedDraft?: PostComposerDraft } | undefined)?.submittedDraft?.title).toBe('Image recipe');
+    });
+
+    it('keeps a typed title when a recipe is turned on', async () => {
+      generationState.item = { ...generationItem, title: null };
+      const tree = await renderScreen();
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Glossy hero shot'));
+      expect(collectText(tree.root)).not.toContain('Suggested from your prompt. Edit it if you like.');
+
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
+      let context: { submittedDraft?: PostComposerDraft } | void = undefined;
+      renderer.act(() => {
+        context = mutationState.options?.onMutate?.('public') as typeof context;
+      });
+      expect((context as { submittedDraft?: PostComposerDraft } | undefined)?.submittedDraft?.title).toBe('Glossy hero shot');
     });
 
     it('takes the template title when the creation has none', async () => {
@@ -1476,6 +1521,32 @@ describe('mobile external post composer', () => {
     it('takes the creation’s own title first', async () => {
       const tree = await renderScreen();
       expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Hero product image');
+    });
+
+    // An edit's title is the post's own, even when it reads as the suggestion would.
+    it('calls nothing a suggestion on an edit', async () => {
+      generationState.item = { ...generationItem, title: null };
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = {
+        id: 'post-from-creation',
+        title: 'Exact glossy product prompt',
+        description: null,
+        body: '',
+        postFormat: 'media',
+        generationId: 'gen-1',
+        category: 'image',
+        visibility: 'public',
+        sourceTool: 'Magicbooklet',
+        sourceToolSlug: 'magicbooklet',
+        mediaUrl: 'https://cdn.example.com/output.png',
+        mediaKind: 'image',
+        mediaItems: [],
+        resourceBundleInput: null,
+        hasPaidOrders: false,
+      };
+      const tree = await renderScreen();
+      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Exact glossy product prompt');
+      expect(collectText(tree.root)).not.toContain('Suggested from your prompt. Edit it if you like.');
     });
   });
 
@@ -1715,6 +1786,117 @@ describe('mobile external post composer', () => {
     });
   });
 
+  // A new account has the placeholder handle and no name, which the server
+  // refuses a public post for once the media is up. Step 2 asks for both,
+  // filled in from the sign-in, and Publish public saves them first.
+  describe('a name and handle on step 2 of a public post', () => {
+    const placeholderProfile = { id: 'user-123', username: 'creator-a1b2c3d4', displayName: null };
+    const publishPublic = (tree: renderer.ReactTestRenderer) => findPressableByAccessibilityLabel(tree.root, 'Publish public');
+
+    it('starts from the sign-in, waits for both, then saves them before publishing', async () => {
+      profileState.profile = placeholderProfile;
+      authState.user.user_metadata = { full_name: 'Maya K' };
+      const order: string[] = [];
+      authState.api.updateProfile.mockImplementation(async (body: Record<string, unknown>) => {
+        order.push('profile');
+        return { ...placeholderProfile, ...body };
+      });
+      mutationState.mutate.mockImplementation(() => order.push('publish'));
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(collectText(tree.root)).toContain('Your name and handle');
+      expect(findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.value).toBe('Maya K');
+      expect(findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.value).toBe('maya-k');
+      expect(publishPublic(tree).props.disabled).toBe(false);
+
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText(''));
+      expect(collectText(tree.root)).toContain('Add your name and handle to publish publicly.');
+      expect(collectText(tree.root)).toContain('Add a display name for your public profile.');
+      expect(publishPublic(tree).props.disabled).toBe(true);
+
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya K'));
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('@Maya.K'));
+      expect(findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.value).toBe('mayak');
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+
+      expect(authState.api.updateProfile).toHaveBeenCalledWith({ username: 'mayak', displayName: 'Maya K' });
+      expect(mutationState.mutate).toHaveBeenCalledWith('public');
+      expect(order).toEqual(['profile', 'publish']);
+      // Merged into the shared profile entry, whose stats the save's answer lacks.
+      const [key, update] = queryClientState.setQueryData.mock.calls.at(-1) as [unknown, (cached: unknown) => unknown];
+      expect(key).toEqual(['profile', 'user-123']);
+      expect(update({ ...placeholderProfile, stats: { posts: 3 } }))
+        .toEqual({ ...placeholderProfile, username: 'mayak', displayName: 'Maya K', stats: { posts: 3 } });
+      // As Edit profile does: the welcome card and the account's profile are read again.
+      expect(welcomeCreditsState.invalidate).toHaveBeenCalledWith(queryClientState);
+      expect(authState.refreshProfile).toHaveBeenCalledTimes(1);
+    });
+
+    // A profile finished elsewhere since the screen read it keeps its own name and handle.
+    it('saves nothing over a profile finished meanwhile, and publishes', async () => {
+      profileState.profile = placeholderProfile;
+      const finished = { ...placeholderProfile, username: 'maya', displayName: 'Maya' };
+      authState.api.getProfile.mockResolvedValue(finished);
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+
+      expect(authState.api.updateProfile).not.toHaveBeenCalled();
+      expect(mutationState.mutate).toHaveBeenCalledWith('public');
+      const [, update] = queryClientState.setQueryData.mock.calls.at(-1) as [unknown, (cached: unknown) => unknown];
+      expect(update(placeholderProfile)).toEqual(finished);
+    });
+
+    it('shows a taken handle on its field, brings it into view and publishes nothing', async () => {
+      profileState.profile = placeholderProfile;
+      authState.api.updateProfile.mockRejectedValue(new ApiError('That username is already taken.', 409, {
+        error: 'That username is already taken.',
+        fieldErrors: { username: 'That username is already taken.' },
+      }));
+      const scrollTo = vi.fn();
+      const tree = await renderScreen({ createNodeMock: (element) => (element.type === 'scrollview' ? { scrollTo } : null) });
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya K'));
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya'));
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+
+      const text = collectText(tree.root);
+      expect(text).toContain('Your name and handle were not saved');
+      expect(text.filter((line) => line === 'That username is already taken.').length).toBeGreaterThanOrEqual(1);
+      expect(mutationState.mutate).not.toHaveBeenCalled();
+      // The banner and the card are at the top of step 2, above a price the creator may have scrolled to.
+      expect(scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: true });
+    });
+
+    it('asks nothing of a profile that can already publish, or of a private post', async () => {
+      profileState.profile = { id: 'user-123', username: 'maya-k', displayName: 'Maya K' };
+      let tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      expect(collectText(tree.root)).not.toContain('Your name and handle');
+      tree.unmount();
+
+      profileState.profile = placeholderProfile;
+      tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      expect(collectText(tree.root)).toContain('Your name and handle');
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Visibility: Public').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Private').props.onPress());
+      expect(collectText(tree.root)).not.toContain('Your name and handle');
+      await renderer.act(async () => {
+        findPressableByAccessibilityLabel(tree.root, 'Save private').props.onPress();
+      });
+      expect(authState.api.updateProfile).not.toHaveBeenCalled();
+      expect(mutationState.mutate).toHaveBeenCalledWith('private');
+    });
+  });
+
   // Every public post needs a claimed handle and a display name. The server says
   // so with `field: 'profile'` on all three routes, and the banner had no way on:
   // Close, Save draft, find Edit profile, come back.
@@ -1792,7 +1974,7 @@ describe('mobile external post composer', () => {
       await uploadManualMedia();
       const tree = await renderScreen();
       await choosePreparedMedia(tree);
-      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Product demo with Kling 3.0'));
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Demo video'));
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
 
       let text = collectText(tree.root);

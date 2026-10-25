@@ -33,6 +33,7 @@ import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
@@ -340,7 +341,13 @@ function isPaywallPrefill(value: unknown): value is GenerationPaywallPrefill {
     return Boolean(value) && typeof value === 'object' && Array.isArray((value as { resourceKinds?: unknown }).resourceKinds);
 }
 
-type CreationPublishDefaults = { generationId: string; title: string; paywallPrefill: GenerationPaywallPrefill | null };
+type CreationPublishDefaults = {
+    generationId: string;
+    title: string;
+    paywallPrefill: GenerationPaywallPrefill | null;
+    /** What the modal suggests a title from when the creation has none. */
+    creation: CreationTitleSource | null;
+};
 
 /**
  * The creation's own title and recipe, for the quick-publish modal: opened without
@@ -348,7 +355,7 @@ type CreationPublishDefaults = { generationId: string; title: string; paywallPre
  * recipe. Read from the owner's library entry, as Studio reads it.
  */
 async function loadCreationPublishDefaults(generationId: string, accessToken: string | null | undefined): Promise<CreationPublishDefaults> {
-    const fallback: CreationPublishDefaults = { generationId, title: '', paywallPrefill: null };
+    const fallback: CreationPublishDefaults = { generationId, title: '', paywallPrefill: null, creation: null };
     if (!accessToken) return fallback;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
@@ -367,6 +374,7 @@ async function loadCreationPublishDefaults(generationId: string, accessToken: st
             generationId,
             title: typeof generation?.title === 'string' ? generation.title : '',
             paywallPrefill: isPaywallPrefill(generation?.paywallPrefill) ? generation.paywallPrefill : null,
+            creation: readCreationTitleSource(generation),
         };
     } catch {
         // Without them the modal still publishes the media; nothing is lost but the prefill.
@@ -5622,6 +5630,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 generationId={latestGenerationId}
                 accessToken={session?.access_token ?? null}
                 defaultTitle={publishDefaults?.generationId === latestGenerationId ? publishDefaults.title : ''}
+                creation={publishDefaults?.generationId === latestGenerationId ? publishDefaults.creation : null}
                 paywallPrefill={publishDefaults?.generationId === latestGenerationId ? publishDefaults.paywallPrefill : null}
                 shareAfterPublish={latestGenerationId ? {
                     title: shareTitle,

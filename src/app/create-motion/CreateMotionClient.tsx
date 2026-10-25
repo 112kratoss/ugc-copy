@@ -28,6 +28,7 @@ import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
@@ -164,6 +165,8 @@ interface MotionPublishPrefill {
     generationId: string;
     title: string;
     paywallPrefill: GenerationPaywallPrefill | null;
+    /** What the modal suggests a title from when the creation has none. */
+    creation: CreationTitleSource | null;
 }
 
 /** A run that reached a failed status. Its hold is always returned. */
@@ -199,6 +202,7 @@ function readPublishPrefill(generationId: string, payload: unknown): MotionPubli
         paywallPrefill: isRecord(prefill) && Array.isArray(prefill.resourceKinds) && typeof prefill.allowRemix === 'boolean'
             ? prefill as unknown as GenerationPaywallPrefill
             : null,
+        creation: readCreationTitleSource(generation),
     };
 }
 
@@ -1941,6 +1945,7 @@ export default function CreateMotionClient({
                 generationId={latestGenerationId}
                 accessToken={session?.access_token ?? null}
                 defaultTitle={publishPrefill?.generationId === latestGenerationId ? publishPrefill.title : ''}
+                creation={publishPrefill?.generationId === latestGenerationId ? publishPrefill.creation : null}
                 paywallPrefill={publishPrefill?.generationId === latestGenerationId ? publishPrefill.paywallPrefill : null}
                 shareAfterPublish={latestGenerationId ? {
                     title: shareTitle,

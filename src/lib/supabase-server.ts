@@ -59,6 +59,12 @@ export interface ServerAuthState {
   /** The profile's display name, when the row was read with the session. */
   displayName?: string | null;
   /**
+   * The profile's handle, absent when the row was not read. With the display
+   * name it says whether a public post can go out under them, so the post
+   * composer asks for the two before publishing without a read of its own.
+   */
+  username?: string | null;
+  /**
    * Whether the account has been told, on record, that creators can see who
    * saved its posts (`profiles.saver_notice_seen_at`): the web's saver notice
    * starts from it, so a page load never asks for it on its own. Absent when
@@ -173,7 +179,7 @@ export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
   const adminSupabase = createServiceClient();
   const { data: profile } = await adminSupabase
     .from('profiles')
-    .select('credits, promotional_credits, display_name, saver_notice_seen_at')
+    .select('credits, promotional_credits, display_name, saver_notice_seen_at, username')
     .eq('id', user.id)
     .maybeSingle();
   const credits: number | null = profile?.credits ?? null;
@@ -184,5 +190,17 @@ export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
     marketplaceSpendableCredits: getMarketplaceSpendableCredits(credits, profile?.promotional_credits),
     displayName: typeof profile?.display_name === 'string' ? profile.display_name : null,
     ...(profile ? { saverNoticeSeen: typeof profile.saver_notice_seen_at === 'string' } : {}),
+    ...(profile ? { username: typeof profile.username === 'string' ? profile.username : null } : {}),
   };
 });
+
+/**
+ * The handle and name the post composer judges public-publish readiness by,
+ * or null when the profile row was not read with the session (then the
+ * composer reads it itself).
+ */
+export function getServerPublicIdentity(
+  auth: ServerAuthState,
+): { username: string | null; displayName: string | null } | null {
+  return auth.username === undefined ? null : { username: auth.username, displayName: auth.displayName ?? null };
+}

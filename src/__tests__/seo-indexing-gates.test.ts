@@ -94,6 +94,9 @@ describe('showcase detail indexability', () => {
             { title: 'Sunset skincare hook', expected: true },
             { title: 'Untitled Creation', expected: false },
             { title: 'test', expected: false },
+            // What the composers suggest when a prompt gives no title.
+            { title: 'AI image', expected: false },
+            { title: 'Motion transfer recipe', expected: false },
             { title: null, expected: false },
         ];
 
@@ -141,6 +144,8 @@ describe('hasMeaningfulTitle', () => {
         ['Untitled Creation', false],
         ['UNTITLED', false],
         ['test', false],
+        ['AI video', false],
+        ['Image recipe', false],
         ['ab', false],
         ['', false],
         [null, false],

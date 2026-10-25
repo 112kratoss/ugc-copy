@@ -2,7 +2,7 @@ import { headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
 
 import { getOwnerPostDetail } from '@/lib/owner-posts';
-import { getServerAuthState } from '@/lib/supabase-server';
+import { getServerAuthState, getServerPublicIdentity } from '@/lib/supabase-server';
 import { AuthProvider } from '@/components/AuthProvider';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import NewPostClient from '@/app/post/new/NewPostClient';
@@ -73,7 +73,7 @@ export default async function EditPostPage({ params, searchParams }: EditPostPag
       initialCredits={auth.credits}
       hasResolvedInitialState
     >
-      <NewPostClient initialPost={toEditablePostDraft(post)} />
+      <NewPostClient initialPost={toEditablePostDraft(post)} initialPublicIdentity={getServerPublicIdentity(auth)} />
     </AuthProvider>
   );
 }

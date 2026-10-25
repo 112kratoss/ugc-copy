@@ -1,4 +1,5 @@
 import type { PublicPostDetail } from '@/lib/public-posts';
+import { GENERIC_SUGGESTED_TITLES } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
 /**
  * Search-facing presentation for a single creation.
@@ -17,6 +18,9 @@ const PLACEHOLDER_TITLES = new Set([
     'new post',
     'creation',
     'test',
+    // What the composers suggest for a creation whose prompt gives no title
+    // ("AI image", "Image recipe"): shared by many posts, so never a page title.
+    ...GENERIC_SUGGESTED_TITLES,
 ]);
 
 const MIN_TITLE_LENGTH = 3;

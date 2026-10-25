@@ -28,6 +28,11 @@ vi.mock('@/app/post/new/NewPostClient', () => ({
   default: () => <div>Post composer</div>,
 }));
 
+vi.mock('@/lib/supabase-server', () => ({
+  getServerAuthState: async () => ({ session: null, credits: null }),
+  getServerPublicIdentity: () => null,
+}));
+
 describe('creator auth return paths', () => {
 
   it('carries the remix pair through sign-in on every media tool', async () => {

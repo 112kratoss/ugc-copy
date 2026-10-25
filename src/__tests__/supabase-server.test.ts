@@ -185,7 +185,7 @@ describe('getServerAuthState', () => {
 
     expect(mocks.profileQuery.select).toHaveBeenCalledTimes(3);
     for (const [columns] of mocks.profileQuery.select.mock.calls) {
-      expect(columns).toBe('credits, promotional_credits, display_name, saver_notice_seen_at');
+      expect(columns).toBe('credits, promotional_credits, display_name, saver_notice_seen_at, username');
     }
   });
 

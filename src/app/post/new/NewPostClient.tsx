@@ -26,14 +26,31 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
+import PublicIdentityFields from '@/components/PublicIdentityFields';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import {
   assessMarketplaceListingQuality,
   getPublicPostQualityError,
   isCreatorProfileReadinessError,
+  PUBLIC_POST_PLACEHOLDER_TITLE_ERROR,
 } from '@/lib/marketplace-trust';
 import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
+import {
+  followCreationTitleSuggestion,
+  getCreationPostTitleSuggestion,
+  getCreationTitleSuggestionHint,
+} from '@/lib/creation-post-title';
+import {
+  claimPublicIdentity,
+  getInitialPublicIdentity,
+  isPublicIdentityReady,
+  loadOwnProfile,
+  validatePublicIdentity,
+  type PublicIdentityDraft,
+  type PublicIdentityErrors,
+  type PublicIdentityProfile,
+} from '@/lib/public-identity';
 import { createClientPostMediaKey, defaultPostMediaKey } from '@/lib/post-media-key';
 import {
   POST_VIDEO_DURATION_LIMIT_MESSAGE,
@@ -351,7 +368,11 @@ async function readBackSavedMediaRows(postId: string, accessToken: string): Prom
 interface GenerationDraft {
   id: string;
   title: string;
+  /** A template result's template name, which counts as its own title when it has none. */
+  templateTitle: string;
   prompt: string;
+  /** `'motion'` for a motion transfer, whose category reads 'video'. */
+  creationMode: string | null;
   outputUrl: string | null;
   category: PostMediaCategory;
   model: string;
@@ -626,12 +647,17 @@ function hasUsableGenerationPaywallPrefill(prefill: GenerationPaywallPrefill | n
 
 interface NewPostClientProps {
   initialPost?: EditablePostDraft | null;
+  /**
+   * The profile's handle and name as the page's server render read them, or
+   * null when it did not (the composer then reads them itself).
+   */
+  initialPublicIdentity?: PublicIdentityProfile | null;
 }
 
-export default function NewPostClient({ initialPost = null }: NewPostClientProps) {
+export default function NewPostClient({ initialPost = null, initialPublicIdentity = null }: NewPostClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { session } = useAuth();
+  const { session, user } = useAuth();
   const [isNsfw, setIsNsfw] = useState(initialPost?.isNsfw === true);
   const generationId = initialPost?.generationId ?? searchParams.get('generationId');
   const isEditMode = Boolean(initialPost);
@@ -745,6 +771,40 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [isMadeWithOpen, setIsMadeWithOpen] = useState(false);
   const madeWithPanelId = useId();
   const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
+  // Read by the creation load below, which suggests a title for the recipe
+  // state at the moment the creation arrives.
+  const resourceAccessModeRef = useRef(resourceAccessMode);
+  useEffect(() => {
+    resourceAccessModeRef.current = resourceAccessMode;
+  }, [resourceAccessMode]);
+  // A public post needs a claimed handle and a display name. Known from the
+  // server render, so a creator without them is asked beside the publish
+  // buttons from the start and the post saves them first, instead of being
+  // refused once everything is uploaded.
+  const [composerProfile, setComposerProfile] = useState<PublicIdentityProfile | null>(initialPublicIdentity);
+  // Set when the server refused a public post for the profile although it
+  // could not be read here: the fields then show, as they do in the window.
+  const [profileRefused, setProfileRefused] = useState(false);
+  // The fields follow the profile and the sign-in until the creator types.
+  const [identityEdits, setIdentityEdits] = useState<PublicIdentityDraft | null>(null);
+  const [identityErrors, setIdentityErrors] = useState<PublicIdentityErrors>({});
+  const identity = identityEdits ?? getInitialPublicIdentity(composerProfile, user);
+  const needsPublicIdentity = profileRefused || (composerProfile !== null && !isPublicIdentityReady(composerProfile));
+  // Only when the server render could not say: read it here instead.
+  const shouldReadProfile = initialPublicIdentity === null;
+  useEffect(() => {
+    const accessToken = session?.access_token;
+    if (!shouldReadProfile || !accessToken) {
+      return;
+    }
+    const controller = new AbortController();
+    void loadOwnProfile(accessToken, controller.signal).then((profile) => {
+      if (profile && !controller.signal.aborted) {
+        setComposerProfile(profile);
+      }
+    });
+    return () => controller.abort();
+  }, [session?.access_token, shouldReadProfile]);
   // One card is one thing a buyer receives. The serialization lives in
   // post-composer-resource-cards.ts, which the mobile composer mirrors.
   const [resourceCards, setResourceCards] = useState<PostComposerResourceCardDraft[]>(
@@ -772,7 +832,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       ? {
           id: initialPost.generationId,
           title: initialPost.title,
+          templateTitle: '',
           prompt: initialPost.prompt,
+          creationMode: null,
           outputUrl: initialPost.mediaUrl,
           category: initialCategory,
           model: 'magicbooklet',
@@ -944,6 +1006,41 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const trimmedBody = body.trim();
   const bodyCount = body.length;
   const titleCount = title.trim().length;
+  const hasRecipe = resourceAccessMode !== 'none';
+  const creationTitleSource = prefilledGeneration
+    ? {
+        prompt: prefilledGeneration.prompt,
+        model: prefilledGeneration.model,
+        category: prefilledGeneration.category,
+        creationMode: prefilledGeneration.creationMode,
+      }
+    : null;
+  // "Suggested" speaks only of a new post's starting title, never of an edit's saved one.
+  const titleSuggestionHint = !isEditMode && creationTitleSource
+    ? getCreationTitleSuggestionHint(
+      title,
+      getCreationPostTitleSuggestion(
+        prefilledGeneration?.title || prefilledGeneration?.templateTitle,
+        creationTitleSource,
+        hasRecipe,
+      ),
+      hasRecipe,
+    )
+    : null;
+  // Every change of the recipe's mode goes through here, so a title cut from
+  // the prompt follows it, in an edit too: the prompt may give the title only
+  // while the post has no recipe, which keeps the prompt private.
+  const changeResourceAccessMode = (nextMode: PostResourceBundleAccessMode) => {
+    if (creationTitleSource) {
+      setTitle((current) => followCreationTitleSuggestion({
+        title: current,
+        source: creationTitleSource,
+        hadRecipe: hasRecipe,
+        hasRecipe: nextMode !== 'none',
+      }));
+    }
+    setResourceAccessMode(nextMode);
+  };
   const hasMediaProof = proofMode === 'media' && (mediaItems.length > 0 || hasGeneratedProof);
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
   // An edit's buttons speak from the visibility the post has, which only a save
@@ -1062,6 +1159,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       label: 'Recipe optional',
       complete: resourceAccessMode === 'none' || isResourceEditingLocked || hasResourceContent || resourceAllowRemix,
     },
+    ...(needsPublicIdentity
+      ? [{ label: 'Name and handle', complete: Object.keys(validatePublicIdentity(identity, composerProfile?.username)).length === 0 }]
+      : []),
   ];
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
   const bodyFieldLabel = proofMode === 'text' ? 'Post text' : 'Story';
@@ -1222,7 +1322,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         const nextGeneration: GenerationDraft = {
           id: generation.id,
           title: typeof generation.title === 'string' ? generation.title : '',
+          templateTitle: typeof generation.template?.templateTitle === 'string' ? generation.template.templateTitle : '',
           prompt: typeof generation.prompt === 'string' ? generation.prompt : '',
+          creationMode: typeof generation.creationMode === 'string' ? generation.creationMode : null,
           outputUrl: typeof generation.output_url === 'string' ? generation.output_url : null,
           category: formatGeneratedCategory(generation.category),
           model: typeof generation.model === 'string' ? generation.model : 'magicbooklet',
@@ -1244,8 +1346,20 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         setCategory(nextGeneration.category);
         // maxLength caps typing, not a programmatic prefill, so trim here too —
         // otherwise a long generation title submits over-limit and the server
-        // rejects a post the composer never flagged.
-        const prefillTitle = nextGeneration.title.slice(0, TITLE_MAX_LENGTH);
+        // rejects a post the composer never flagged. A new post of a creation
+        // with no title starts from a suggestion, as the app composer does.
+        const prefillTitle = isEditMode
+          ? nextGeneration.title.slice(0, TITLE_MAX_LENGTH)
+          : getCreationPostTitleSuggestion(
+            nextGeneration.title || nextGeneration.templateTitle,
+            {
+              prompt: nextGeneration.prompt,
+              model: nextGeneration.model,
+              category: nextGeneration.category,
+              creationMode: nextGeneration.creationMode,
+            },
+            resourceAccessModeRef.current !== 'none',
+          )?.title ?? '';
         setTitle((current) => current || prefillTitle);
         setSavedSnapshot((saved) => ({
           ...saved,
@@ -2159,7 +2273,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     // package. Keep remix-only packages alive, but do not leave the form in a
     // paid/free mode that cannot be submitted without a second hidden action.
     if (nextCards.length === 0 && !resourceAllowRemix) {
-      setResourceAccessMode('none');
+      changeResourceAccessMode('none');
     }
     resetFeedback();
   };
@@ -2266,8 +2380,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         hasMedia: hasMediaProof,
       });
       if (publicPostQualityError) {
-        stopWithError(publicPostQualityError, 'story');
+        // The title's half of the rule is answered beside the title.
+        stopWithError(publicPostQualityError, publicPostQualityError === PUBLIC_POST_PLACEHOLDER_TITLE_ERROR ? 'post' : 'story');
         return;
+      }
+
+      if (needsPublicIdentity) {
+        const identityProblems = validatePublicIdentity(identity, composerProfile?.username);
+        if (identityProblems.displayName || identityProblems.username) {
+          setIdentityErrors(identityProblems);
+          stopWithError('Add your name and handle to publish publicly.', 'publish');
+          return;
+        }
       }
     }
 
@@ -2330,7 +2454,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
       if (!submittedMarketplaceAssessment.eligible) {
         const firstIssue = submittedMarketplaceAssessment.issues[0];
-        stopWithError(`Improve this recipe before publishing: ${firstIssue?.message ?? 'Finish the marketplace checklist.'}`, firstIssue?.field === 'post' || firstIssue?.field === 'title' ? 'story' : 'resources');
+        stopWithError(
+          `Improve this recipe before publishing: ${firstIssue?.message ?? 'Finish the marketplace checklist.'}`,
+          firstIssue?.field === 'title' ? 'post' : firstIssue?.field === 'post' ? 'story' : 'resources',
+        );
         return;
       }
 
@@ -2339,6 +2466,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
     try {
       setIsSubmitting(true);
+      if (effectiveVisibility === 'public' && needsPublicIdentity) {
+        const saved = await claimPublicIdentity(identity, session.access_token);
+        if (!saved.ok) {
+          setIdentityErrors(saved.errors);
+          // Through the catch, so the attempt is counted as failed, as the
+          // server's own refusal for the profile was.
+          throw new ComposerSubmissionError(saved.message, 'publish');
+        }
+        setComposerProfile({ username: saved.profile.username, displayName: saved.profile.displayName });
+        setProfileRefused(false);
+        setIdentityErrors({});
+      }
       // An add-time upload may still be running. Letting it finish means its
       // storagePath is already stamped, so publish skips that file instead of
       // uploading it a second time.
@@ -2571,6 +2710,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         actionHref: submitError instanceof ComposerSubmissionError ? submitError.actionHref : undefined,
         actionLabel: submitError instanceof ComposerSubmissionError ? submitError.actionLabel : undefined,
       });
+      // Refused for the profile: ask for the name and handle here, as the
+      // publish window does, beside the link to the profile.
+      if (submitError instanceof ComposerSubmissionError && submitError.actionHref === buildProfileRepairHref()) {
+        setProfileRefused(true);
+      }
       // The server refuses a post-section field only over Made With, whose
       // rows are folded away by default.
       if (section === 'post') {
@@ -3149,6 +3293,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     placeholder="What is this creation about?"
                     className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                   />
+                  {titleSuggestionHint ? (
+                    <span className="mt-2 block text-xs leading-5 text-zinc-500">{titleSuggestionHint}</span>
+                  ) : null}
                 </label>
 
                 {proofMode === 'media' ? (
@@ -3470,7 +3617,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     checked={resourceAccessMode !== 'none'}
                     disabled={isResourceEditingLocked}
                     onChange={(e) => {
-                      setResourceAccessMode(e.target.checked ? 'free' : 'none');
+                      changeResourceAccessMode(e.target.checked ? 'free' : 'none');
                       resetFeedback();
                     }}
                     className="h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50"
@@ -3530,7 +3677,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                   key={mode.value}
                                   type="button"
                                   onClick={() => {
-                                    setResourceAccessMode(mode.value);
+                                    changeResourceAccessMode(mode.value);
                                     trackProductEvent('recipe_access_mode_selected', {
                                       access_mode: mode.value,
                                       entry_surface: entrySurface ?? 'direct',
@@ -3749,6 +3896,21 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 </div>
 
                 {renderSectionError('publish')}
+
+                {needsPublicIdentity ? (
+                  <div className="mt-5">
+                    <PublicIdentityFields
+                      idPrefix="composer-identity"
+                      value={identity}
+                      errors={identityErrors}
+                      disabled={isSubmitting}
+                      onChange={(next) => {
+                        setIdentityEdits(next);
+                        setIdentityErrors({});
+                      }}
+                    />
+                  </div>
+                ) : null}
 
                 <div className="mt-5">
                   <div className="grid gap-3 sm:grid-cols-2">
