@@ -3,19 +3,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  isPublicIdentityRefusal,
   PostLifecycleRequestError,
   requestPostArchive,
   requestPostDelete,
   requestPostRestore,
   requestPostVisibilityChange,
   type PostVisibility,
+  type PostVisibilityChangeResult,
 } from '@/lib/post-lifecycle-client';
 import {
   getPostLifecycleConfirmation,
   type PostLifecycleSubject,
 } from '@/lib/post-lifecycle-policy';
+import type { ProfileApiResponse } from '@/lib/profile';
+import type { SignedInUser } from '@/lib/public-identity';
 
-import { pushToast, requestConfirmation } from './feedback-state';
+import { pushToast, requestConfirmation, requestPublicIdentity } from './feedback-state';
 
 export interface PostLifecycleTarget extends PostLifecycleSubject {
   id: string;
@@ -42,6 +46,11 @@ export interface PostLifecycleEvent {
 
 export interface UsePostLifecycleOptions {
   accessToken: string | null;
+  /**
+   * The signed-in account: its sign-in name fills the name and handle a
+   * creator is asked for on the way to a public post.
+   */
+  signedInUser?: SignedInUser;
   /** Signed-out viewers are sent here instead of to a request. */
   onAuthRequired: () => void;
   /**
@@ -54,6 +63,11 @@ export interface UsePostLifecycleOptions {
   onRemoved?: (postId: string) => void;
   /** After any action the server accepted. */
   onSettled?: (event: PostLifecycleEvent) => void;
+  /**
+   * The creator gave the name and handle a public post needs on the way to
+   * making one public, and they are saved: for a surface that shows the profile.
+   */
+  onPublicIdentitySaved?: (profile: ProfileApiResponse) => void;
 }
 
 const VISIBILITY_TOAST: Record<PostVisibility, string> = {
@@ -81,16 +95,27 @@ function describeError(error: unknown, fallback: string): string {
  */
 export function usePostLifecycle({
   accessToken,
+  signedInUser,
   onAuthRequired,
   onPatch,
   onRemoved,
   onSettled,
+  onPublicIdentitySaved,
 }: UsePostLifecycleOptions) {
   const [pending, setPending] = useState<Record<string, PostLifecycleActionType>>({});
   const pendingRef = useRef(pending);
   useEffect(() => {
     pendingRef.current = pending;
   }, [pending]);
+
+  // The page's token as it stands: the name-and-handle question can stay up
+  // while the session refreshes, and what it saves and sends afterwards must
+  // not go out with the click's token, which may have expired by then.
+  const accessTokenRef = useRef(accessToken);
+  useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
+  const readAccessToken = useCallback(() => accessTokenRef.current, []);
 
   const beginAction = useCallback((postId: string, action: PostLifecycleActionType): boolean => {
     if (pendingRef.current[postId]) {
@@ -139,13 +164,44 @@ export function usePostLifecycle({
       bundleStatus: post.bundle ? (next === 'public' ? 'published' : 'draft') : null,
     });
 
+    const sendChange = (token: string) => requestPostVisibilityChange({ post, visibility: next, accessToken: token });
+
     try {
-      const result = await requestPostVisibilityChange({ post, visibility: next, accessToken });
+      let result: PostVisibilityChangeResult;
+      let savedIdentity = false;
+      try {
+        result = await sendChange(accessToken);
+      } catch (error) {
+        // A public post needs a claimed handle and a display name, which the
+        // server checks before anything else. They are asked for here and
+        // saved, and the change goes out once more, where it used to end in a
+        // toast that sent the creator off to their profile. The post stays
+        // public and busy on the surface while the question is up.
+        if (next !== 'public' || !isPublicIdentityRefusal(error)) {
+          throw error;
+        }
+        const identity = await requestPublicIdentity({ getAccessToken: readAccessToken, signedInUser });
+        if (identity.status === 'unavailable') {
+          throw error;
+        }
+        if (identity.status === 'cancelled') {
+          onPatch(post.id, { visibility: post.visibility, bundleStatus: previousBundleStatus });
+          return false;
+        }
+        onPublicIdentitySaved?.(identity.profile);
+        savedIdentity = true;
+        result = await sendChange(accessTokenRef.current ?? accessToken);
+      }
       onPatch(post.id, {
         visibility: result.visibility,
         bundleStatus: post.bundle ? result.resourceBundleStatus ?? previousBundleStatus : null,
       });
-      pushToast({ tone: 'success', message: VISIBILITY_TOAST[result.visibility] });
+      pushToast({
+        tone: 'success',
+        message: savedIdentity
+          ? `Name and handle saved. ${VISIBILITY_TOAST[result.visibility]}`
+          : VISIBILITY_TOAST[result.visibility],
+      });
       onSettled?.({
         type: 'visibility',
         postId: post.id,
@@ -161,7 +217,7 @@ export function usePostLifecycle({
     } finally {
       endAction(post.id);
     }
-  }, [accessToken, beginAction, endAction, onAuthRequired, onPatch, onSettled]);
+  }, [accessToken, beginAction, endAction, onAuthRequired, onPatch, onPublicIdentitySaved, onSettled, readAccessToken, signedInUser]);
 
   const archive = useCallback(async (post: PostLifecycleTarget): Promise<boolean> => {
     if (!accessToken) {

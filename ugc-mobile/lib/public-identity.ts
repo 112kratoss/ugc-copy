@@ -6,7 +6,7 @@ import {
   readUsernameRejection,
   validateProfileField,
 } from '@/lib/edit-profile-form';
-import { ApiError } from '@/lib/api-client';
+import { ApiError, type MagicbookletApiClient } from '@/lib/api-client';
 import type { ProfileResponse } from '@/lib/types';
 
 /**
@@ -71,6 +71,33 @@ export function validatePublicIdentity(
   const username = validateProfileField('username', draft.username, { savedUsername });
   if (username) errors.username = username;
   return errors;
+}
+
+/**
+ * The server's refusal of a public post whose owner has no claimed handle or
+ * no display name yet: `field: 'profile'` on the create, publish and update
+ * routes alike, checked before anything else, so nothing has moved.
+ */
+export function isPublicIdentityRefusal(error: unknown): boolean {
+  return error instanceof ApiError
+    && (error.details as { field?: unknown } | null | undefined)?.field === 'profile';
+}
+
+/**
+ * The step before a public post, as the web's `claimPublicIdentity` takes it:
+ * the profile is read again first, and one that can publish by now (finished
+ * on another device since this screen read it) keeps its own name and handle,
+ * with nothing saved over them. Otherwise the two fields are saved. Throws
+ * what the save throws; `readPublicIdentitySaveError` says what it means.
+ */
+export async function claimPublicIdentity(
+  api: Pick<MagicbookletApiClient, 'getProfile' | 'updateProfile'>,
+  draft: PublicIdentityDraft,
+): Promise<ProfileResponse> {
+  const current = await api.getProfile().catch(() => null);
+  return current && isPublicIdentityReady(current)
+    ? current
+    : api.updateProfile({ username: draft.username.trim(), displayName: draft.displayName.trim() });
 }
 
 /**

@@ -66,6 +66,8 @@
 @source "../components/PostComments.tsx";
 @source "../components/PostVisibilityMenu.tsx";
 @source "../components/ProfileShareButton.tsx";
+@source "../components/PublicIdentityDialog.tsx";
+@source "../components/PublicIdentityFields.tsx";
 @source "../components/PublicShareButton.tsx";
 @source "../components/QuickStartsCard.tsx";
 @source "../components/RecoverableMediaVideo.tsx";
@@ -93,8 +95,10 @@
 @source "../components/templates/useTemplatePosterRecovery.ts";
 @source "../components/useAnchoredMenu.ts";
 @source "../components/useConfirmation.ts";
+@source "../components/useHandleAvailability.ts";
 @source "../components/useInlineMediaPlayback.ts";
 @source "../components/useMediaLoadingPreferences.ts";
+@source "../components/useModalQuestion.ts";
 @source "../components/useOptimisticPostSave.ts";
 @source "../components/usePostLifecycle.ts";
 @source "../components/useShareAction.ts";
@@ -694,6 +698,12 @@ button:disabled,
     flex-direction: row;
     flex-wrap: wrap;
     justify-content: flex-end;
+  }
+
+  /* The name-and-handle question: the confirmation's sheet and card, wide
+   * enough for its two fields side by side. */
+  .ui-confirm-dialog.ui-identity-dialog {
+    max-width: 34rem;
   }
 }
 
