@@ -393,6 +393,29 @@ describe('checking the handle as it is typed', () => {
     act(() => tree.unmount());
   });
 
+  it('says a handle the save found taken until another one is typed', async () => {
+    // Free when it was checked, claimed by someone else before the save.
+    harness.api.updateProfile.mockReset().mockRejectedValue(taken);
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath-makes');
+    await letTheCheckAnswer();
+    await act(async () => {
+      findButton(tree, 'primary-button', 'Save creator name').props.onPress();
+      await settle();
+    });
+
+    expect(handleLine(tree)).toEqual({ text: 'That handle was just claimed. Try another one.', color: 'danger' });
+    expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(true);
+
+    await typeHandle(tree, 'sarath-makes-2');
+    await letTheCheckAnswer();
+    expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+    expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(false);
+
+    act(() => tree.unmount());
+  });
+
   it('refuses a reserved handle as it is typed, with no request', async () => {
     const tree = await openIdentityStep();
 
