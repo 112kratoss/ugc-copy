@@ -1,14 +1,18 @@
+import { formatCreditCost } from './generation-action-label';
 import type { ToolAccent } from './theme';
 import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, HomeShelfPrice, HomeShelfResponse } from './types';
 
 /**
  * Home's "Make this" shelf, as the app draws it: what the server sent
  * (`GET /api/home/shelf`), in words. The web draws the same shelf from
- * `src/components/HomeShelf.tsx`; the words both say are pinned to one answer
- * by `contracts/mobile-api-v1.json` (`getHomeShelf.copy`).
+ * `src/components/HomeShelf.tsx` with `src/lib/home-shelf-copy.ts`; the words
+ * both say are pinned to one answer by `contracts/mobile-api-v1.json`
+ * (`getHomeShelf.copy`).
  */
 
-const percent = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+// Two decimals, as Invite and every other referral surface prints the terms:
+// they are basis points over 100, and 725 bps is 7.25%, never "7.3%".
+const percent = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 
 const ACTION_IDS: ReadonlySet<string> = new Set<HomeShelfAction['id']>(['post', 'invite', 'earn']);
 const CREATION_TOOLS: ReadonlySet<string> = new Set<HomeShelfCreation['tool']>(['image', 'video', 'motion']);
@@ -31,31 +35,57 @@ export function readHomeShelfItems(response: HomeShelfResponse | null | undefine
   });
 }
 
-/** "15 credits", "Priced by clip length", or nothing when the price is unknown. */
+/**
+ * The answer to keep on screen while another identity's loads: the creations,
+ * which are the same for everyone, and none of the last person's offers.
+ */
+export function keepHomeShelfCreations(response: HomeShelfResponse | undefined): HomeShelfResponse | undefined {
+  if (!response) return undefined;
+  return { ...response, items: response.items.filter((item) => item.kind === 'creation') };
+}
+
+/** "15 credits" in the words the Generate button uses, "Priced by clip length", or nothing. */
 export function formatHomeShelfPrice(price: HomeShelfPrice | null): string | null {
   if (!price) return null;
   if (price.kind === 'clip-length') return 'Priced by clip length';
-  return `${price.credits} ${price.credits === 1 ? 'credit' : 'credits'}`;
+  return formatCreditCost(price.credits);
 }
 
 /**
  * One badge at most: a launch outranks the welcome credits, and "Free to try"
  * is said only to someone still owed them (signed out, or a guest).
  */
-export function homeShelfBadge(creation: HomeShelfCreation, offerFreeToTry: boolean): string | null {
+export function homeShelfBadge(
+  creation: Pick<HomeShelfCreation, 'badge' | 'fitsWelcomeCredits'>,
+  offerFreeToTry: boolean,
+): string | null {
   if (creation.badge === 'new-model') return 'New model';
   return offerFreeToTry && creation.fitsWelcomeCredits ? 'Free to try' : null;
 }
 
+/** "@handle", or the display name for a creator without one. */
+export function homeShelfCreatorLabel(creator: HomeShelfCreation['creator']): string | null {
+  return creator.username ? `@${creator.username}` : creator.name;
+}
+
 /** What a screen reader says for a creation card, in reading order. */
 export function homeShelfCreationLabel(creation: HomeShelfCreation): string {
-  const handle = creation.creator.username ? `@${creation.creator.username}` : creation.creator.name;
+  const handle = homeShelfCreatorLabel(creation.creator);
   return [
     creation.title,
     creation.modelName,
     formatHomeShelfPrice(creation.price),
     handle ? `by ${handle}` : null,
   ].filter(Boolean).join(', ');
+}
+
+/**
+ * The poster's cache identity: the feed's own key for the same media, so a
+ * pinned post that is also in the feed is fetched and stored once.
+ */
+export function homeShelfPosterCacheKey(creation: HomeShelfCreation): string {
+  const lead = (creation.post.mediaItems ?? []).slice().sort((left, right) => left.sortOrder - right.sortOrder)[0];
+  return lead?.previewCacheKey ?? creation.posterUrl;
 }
 
 export type HomeShelfActionIcon = 'send' | 'gift' | 'coins';
@@ -108,17 +138,27 @@ export function homeShelfActionCopy(action: HomeShelfAction): HomeShelfActionCop
   };
 }
 
-/** The row's last stop: the tools, for someone who would rather start from nothing. */
+/** The tools, for the row's last stop and for a shelf with nothing in it. */
 export const HOME_SHELF_START_BLANK_TOOLS = [
-  { id: 'image', label: 'Image', route: '/create/image' },
-  { id: 'video', label: 'Video', route: '/create/video' },
-  { id: 'motion', label: 'Motion', route: '/create/motion' },
-] as const;
+  { id: 'image', label: 'Image', route: '/create/image', accent: 'image' },
+  { id: 'video', label: 'Video', route: '/create/video', accent: 'video' },
+  { id: 'motion', label: 'Motion', route: '/create/motion', accent: 'motion' },
+] as const satisfies ReadonlyArray<{ id: string; label: string; route: string; accent: ToolAccent }>;
+
+/** "2 renders in progress", for the line under the shelf's title while something renders. */
+export function formatActiveRenders(count: number): string {
+  return `${count} render${count === 1 ? '' : 's'} in progress`;
+}
 
 /**
- * Card width for a phone: two cards and a sliver of the third across the
- * content column, so the row says it scrolls without a page control.
+ * A card's size: two cards and a sliver of the third across the content
+ * column, so the row says it scrolls without a page control. The height is a
+ * little over 4:5 so an offer's terms fit at the default text size, and grows
+ * with Dynamic Type up to the tier cap the cards' text follows, so larger text
+ * makes taller cards instead of clipped ones.
  */
-export function getHomeShelfCardWidth(contentWidth: number, gap: number): number {
-  return Math.round((contentWidth - gap) / 2.3);
+export function getHomeShelfCardSize(contentWidth: number, gap: number, fontScale = 1, maxFontScale = 1.6) {
+  const width = Math.round((contentWidth - gap) / 2.3);
+  const textScale = Math.min(Math.max(fontScale, 1), maxFontScale);
+  return { width, height: Math.round(width * 1.3 + (textScale - 1) * 150) };
 }

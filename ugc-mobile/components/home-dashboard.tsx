@@ -4,7 +4,7 @@ import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Crown, Plus, Search } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -38,7 +38,7 @@ import {
   type HomeFeedCard,
   type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
-import { readHomeShelfItems } from '@/lib/home-shelf-view-model';
+import { keepHomeShelfCreations, readHomeShelfItems } from '@/lib/home-shelf-view-model';
 import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
 import { useAppForeground } from '@/lib/app-foreground';
@@ -483,15 +483,16 @@ export function HomeDashboard() {
   const totalSalesUsdCents = profileQuery.data?.sales?.earningsUsdCents ?? null;
 
   // Home's "Make this" shelf. Keyed by identity: a member's answer carries
-  // their own offers, a guest's or a signed-out one the creations alone. The
-  // last answer stays up while a new identity's loads, so a sign-in does not
-  // empty the row; the first load holds the row's place instead.
+  // their own offers, a guest's or a signed-out one the creations alone, and a
+  // guest asks without its token so the edge's shared answer serves it. While a
+  // new identity's answer loads, the last one's creations stay up so the row
+  // keeps its height; its offers, which were someone else's, do not.
   const shelfQuery = useQuery({
     queryKey: ['home-shelf', identityUserId ?? 'signed-out'],
-    queryFn: () => api.getHomeShelf(),
+    queryFn: () => api.getHomeShelf({ auth: Boolean(user) }),
     enabled: !isAuthLoading,
     staleTime: 5 * 60 * 1000,
-    placeholderData: (previous) => previous,
+    placeholderData: keepHomeShelfCreations,
   });
   const shelfItems = useMemo(() => readHomeShelfItems(shelfQuery.data), [shelfQuery.data]);
 
@@ -1020,19 +1021,20 @@ export function HomeDashboard() {
               <GuestMergeBanner />
             </View>
 
-            {activeGenerationCount > 0 ? (
-              <View style={{ paddingHorizontal: horizontalPadding }}>
-                <ActiveRendersRow count={activeGenerationCount} />
-              </View>
-            ) : null}
-
             <HomeShelf
               items={shelfItems}
               isLoading={shelfQuery.isPending}
               offerFreeToTry={!user}
               horizontalPadding={horizontalPadding}
               contentWidth={contentWidth}
-              onMake={(creation) => remixItem(creation.post)}
+              activeRenders={activeGenerationCount}
+              pendingId={remixingItemId}
+              // One remix at a time: a second tap while the first is opening
+              // would stack a second creator over it.
+              onMake={(creation) => {
+                if (remixingItemId) return;
+                remixItem(creation.post);
+              }}
             />
 
             <View style={{ paddingHorizontal: horizontalPadding }}>
@@ -1270,38 +1272,6 @@ function TopBarControl({
         {children}
       </Pressable>
     </MotionView>
-  );
-}
-
-/**
- * Renders still running, and the way to them. The workspace slide used to
- * carry this; it has its own row now, drawn only while something runs. It is
- * labelled with what it shows and its hint says where it goes.
- */
-function ActiveRendersRow({ count }: { count: number }) {
-  const theme = useAppTheme();
-  const status = `${count} render${count === 1 ? '' : 's'} in progress`;
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={status}
-      accessibilityHint="Opens your creations"
-      onPress={() => router.push({ pathname: '/profile', params: { tab: 'Creations' } } as never)}
-      style={({ pressed }) => ({
-        minHeight: 44,
-        alignSelf: 'flex-start',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.success }} />
-      <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 12, fontWeight: '800', letterSpacing: 0.4 }}>
-        {status}
-      </Text>
-    </Pressable>
   );
 }
 

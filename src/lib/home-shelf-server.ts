@@ -14,6 +14,7 @@ import {
 import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
 import {
   HOME_SHELF_MAX_CREATIONS,
+  HOME_SHELF_MIN_CREATIONS,
   arrangeHomeShelf,
   selectHomeShelfActions,
   toHomeShelfCreation,
@@ -22,15 +23,16 @@ import {
   type HomeShelfItem,
   type HomeShelfPin,
   type HomeShelfPrice,
-  type HomeShelfViewer,
 } from '@/lib/home-shelf';
 import { HOME_SHELF_EARN_CARD_ENABLED, HOME_SHELF_PINS } from '@/lib/home-shelf-lineup';
+import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import { WELCOME_CREDIT_PROGRAM_KEY } from '@/lib/onboarding';
 import { POST_RESOURCE_CREATOR_SHARE_PERCENT } from '@/lib/post-resource-commerce';
 import { loadReferralProgramTerms } from '@/lib/referral-route-service';
 import { createServiceClient } from '@/lib/server-helpers';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
+import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 
 /**
  * Server side of the "Make this" shelf (`home-shelf.ts`): reads the pinned
@@ -39,22 +41,27 @@ import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
  * instead of throwing, as the other home loaders do: Home renders without it.
  */
 
-/**
- * How long a built shelf is reused. The pins change by deploy, so this only
- * bounds how stale a price, a moderation hide or an archive can be.
- */
+/** How long a built shelf is reused between rebuilds. */
 const HOME_SHELF_REVALIDATE_SECONDS = 300;
 
-export const HOME_SHELF_CACHE_TAG = 'home-shelf';
+const HOME_SHELF_CACHE_TAG = 'home-shelf';
 
-/** A creation card and the post behind it: the app's remix flow takes the post itself. */
-export interface HomeShelfCreationEntry {
-  creation: HomeShelfCreation;
-  post: ShowcaseFeedItem;
+/**
+ * Who asked. No id is a signed-out visitor; a guest's id is read for blocks
+ * but offered what a signed-out visitor is.
+ */
+export interface HomeShelfIdentity {
+  viewerUserId: string | null;
+  isAnonymous: boolean;
 }
 
+const SIGNED_OUT: HomeShelfIdentity = { viewerUserId: null, isAnonymous: false };
+
+/** A creation card with the post it came from: the app's remix flow takes the post itself. */
+export type HomeShelfCreationWithPost = HomeShelfCreation & { post: ShowcaseFeedItem };
+
 /** What `/api/home/shelf` sends per item: creations carry their post for the app. */
-export type HomeShelfApiItem = (HomeShelfCreation & { post: ShowcaseFeedItem }) | HomeShelfAction;
+export type HomeShelfApiItem = HomeShelfCreationWithPost | HomeShelfAction;
 
 interface ShelfGenerationRow {
   id: string;
@@ -63,12 +70,26 @@ interface ShelfGenerationRow {
   share_input_media_for_remix: boolean | null;
 }
 
+/** The published catalogs a card's model must be in: the web's and the app's. */
+interface ShelfCatalogs {
+  web: GenerationModelDescriptor[];
+  mobile: GenerationModelDescriptor[];
+}
+
 export interface HomeShelfCreationDependencies {
   getPosts: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
   loadGenerations: (generationIds: string[]) => Promise<ShelfGenerationRow[]>;
-  loadCatalogModels: () => Promise<GenerationModelDescriptor[]>;
+  loadCatalogs: () => Promise<ShelfCatalogs>;
   quote: typeof quotePublishedGenerationModel;
   loadWelcomeCredits: () => Promise<number | null>;
+}
+
+async function loadCatalogModels(platform: 'web' | 'mobile') {
+  const snapshot = await loadPublishedGenerationModelCatalog({
+    platform,
+    schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+  });
+  return snapshot.catalog.models;
 }
 
 const defaultCreationDependencies: HomeShelfCreationDependencies = {
@@ -82,12 +103,9 @@ const defaultCreationDependencies: HomeShelfCreationDependencies = {
     if (error) throw error;
     return (data ?? []) as ShelfGenerationRow[];
   },
-  async loadCatalogModels() {
-    const snapshot = await loadPublishedGenerationModelCatalog({
-      platform: 'web',
-      schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
-    });
-    return snapshot.catalog.models;
+  async loadCatalogs() {
+    const [web, mobile] = await Promise.all([loadCatalogModels('web'), loadCatalogModels('mobile')]);
+    return { web, mobile };
   },
   quote: quotePublishedGenerationModel,
   async loadWelcomeCredits() {
@@ -114,12 +132,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 function remixQuoteSettings(
   descriptor: GenerationModelDescriptor,
-  generation: ShelfGenerationRow,
+  stored: Record<string, unknown>,
 ): Record<string, unknown> {
-  const stored = isRecord(generation.workflow_settings) ? generation.workflow_settings : {};
-  // A viewer who is not the creator gets the settings without the creator's
-  // input media, unless the creator shared it for remixing.
-  const visible = sanitizeWorkflowSettingsForRemix(stored, generation.share_input_media_for_remix === true);
+  // Without shared inputs the remix opens without the creator's media.
+  const visible = sanitizeWorkflowSettingsForRemix(stored, false);
   const merged: Record<string, unknown> = {
     ...(isRecord(visible.settings) ? visible.settings : {}),
     ...visible,
@@ -138,133 +154,135 @@ function remixQuoteSettings(
   return merged;
 }
 
-async function priceShelfPost(
+/**
+ * The card's model and price, or null when the post should not be on the
+ * shelf: a generation with no saved recipe opens an editor on its default model
+ * (template outputs are saved that way), and a model missing from either
+ * published catalog would open a creator that cannot run it.
+ */
+async function describeShelfPost(
   post: ShowcaseFeedItem,
   generation: ShelfGenerationRow | undefined,
-  models: GenerationModelDescriptor[],
+  catalogs: ShelfCatalogs,
   quote: HomeShelfCreationDependencies['quote'],
-): Promise<{ modelName: string | null; price: HomeShelfPrice | null }> {
+): Promise<{ modelName: string; price: HomeShelfPrice | null } | null> {
   const kind = post.remixTarget;
   const stored = isRecord(generation?.workflow_settings) ? generation.workflow_settings : {};
-  const modelId = typeof stored.model === 'string' && stored.model.trim()
-    ? stored.model.trim()
-    : generation?.model ?? null;
-  const descriptor = models.find((model) => model.id === modelId && model.kind === kind);
-  const modelName = descriptor?.displayName ?? (post.model?.trim() || null);
+  const modelId = typeof stored.model === 'string' ? stored.model.trim() : '';
+  if (!generation || !modelId || (kind !== 'image' && kind !== 'video' && kind !== 'motion')) return null;
 
-  if (kind === 'motion') return { modelName, price: { kind: 'clip-length' } };
-  if (!descriptor || !generation || (kind !== 'image' && kind !== 'video')) return { modelName, price: null };
+  const descriptor = catalogs.web.find((model) => model.id === modelId && model.kind === kind);
+  const inAppCatalog = catalogs.mobile.some((model) => model.id === modelId && model.kind === kind);
+  if (!descriptor || !inAppCatalog) return null;
+
+  if (kind === 'motion') return { modelName: descriptor.displayName, price: { kind: 'clip-length' } };
+  // A creator who shared their inputs hands them to every remix, and the editor
+  // prices them; the shelf does not count them, so it shows no price rather
+  // than a lower one (and never "Free to try" on it).
+  if (generation.share_input_media_for_remix === true) return { modelName: descriptor.displayName, price: null };
 
   try {
-    // No input counts: the shelf prices what a viewer opens, and the creator's
-    // inputs travel only when shared. A model that needs an input of the
-    // viewer's own fails here and shows no price rather than a wrong one.
     const quoted = await quote({
       kind,
       modelId: descriptor.id,
-      settings: remixQuoteSettings(descriptor, generation),
+      settings: remixQuoteSettings(descriptor, stored),
     }, { platform: 'web' });
-    return { modelName, price: { kind: 'credits', credits: quoted.costCredits } };
+    return { modelName: descriptor.displayName, price: { kind: 'credits', credits: quoted.costCredits } };
   } catch {
-    return { modelName, price: null };
+    return { modelName: descriptor.displayName, price: null };
   }
 }
 
 /**
- * The qualifying pins as shelf cards, in pin order, at most
- * HOME_SHELF_MAX_CREATIONS of them. Uncached: `loadHomeShelfCreationEntries`
- * is the cached entry point.
+ * The qualifying pins as shelf cards with their posts, in pin order, at most
+ * HOME_SHELF_MAX_CREATIONS of them. Uncached: `loadHomeShelfCreations` is the
+ * cached entry point.
  */
-export async function buildHomeShelfCreationEntries(
+export async function buildHomeShelfCreations(
   pins: readonly HomeShelfPin[],
   dependencies: Partial<HomeShelfCreationDependencies> = {},
-): Promise<HomeShelfCreationEntry[]> {
+): Promise<HomeShelfCreationWithPost[]> {
   const resolved = { ...defaultCreationDependencies, ...dependencies };
   const uniquePins = pins.filter((pin, index) => (
     pin.postId && pins.findIndex((other) => other.postId === pin.postId) === index
   ));
   if (uniquePins.length === 0) return [];
 
+  // Started with the posts read: neither needs it.
+  const catalogsRead = resolved.loadCatalogs();
+  const welcomeRead = resolved.loadWelcomeCredits().catch((error) => {
+    logBackendError('home_shelf_welcome_credits_load_failed', { error });
+    return null;
+  });
   const posts = await resolved.getPosts(uniquePins.map((pin) => pin.postId));
   const postById = new Map(posts.map((post) => [post.id, post]));
   const generationIds = posts.flatMap((post) => (post.generationId ? [post.generationId] : []));
-  const [generations, models, welcomeCredits] = await Promise.all([
+  const [generations, catalogs, welcomeCredits] = await Promise.all([
     resolved.loadGenerations(generationIds),
-    resolved.loadCatalogModels(),
-    resolved.loadWelcomeCredits().catch((error) => {
-      logBackendError('home_shelf_welcome_credits_load_failed', { error });
-      return null;
-    }),
+    catalogsRead,
+    welcomeRead,
   ]);
   const generationById = new Map(generations.map((generation) => [generation.id, generation]));
 
-  const entries = await Promise.all(uniquePins.map(async (pin) => {
+  const creations = await Promise.all(uniquePins.map(async (pin) => {
     const post = postById.get(pin.postId);
     if (!post) return null;
-    const facts = await priceShelfPost(
+    const facts = await describeShelfPost(
       post,
       post.generationId ? generationById.get(post.generationId) : undefined,
-      models,
+      catalogs,
       resolved.quote,
     );
+    if (!facts) return null;
     const creation = toHomeShelfCreation(post, pin, { ...facts, welcomeCredits });
-    return creation ? { creation, post } : null;
+    return creation ? { ...creation, post } : null;
   }));
 
-  return entries
-    .filter((entry): entry is HomeShelfCreationEntry => entry !== null)
+  return creations
+    .filter((creation): creation is HomeShelfCreationWithPost => creation !== null)
     .slice(0, HOME_SHELF_MAX_CREATIONS);
 }
 
 /**
  * Shared by every viewer and both clients: the cards depend only on the pins,
- * so one build serves all of them for HOME_SHELF_REVALIDATE_SECONDS. The pins
- * are part of the key, so a deploy that changes them never reads an old build.
+ * so one build serves all of them between rebuilds. The pins are part of the
+ * key, so a deploy that changes them never reads an old build. The feed's tag
+ * is carried too: a moderation take-down, an archive or a delete invalidates
+ * it (`invalidateShowcaseFeedCache`), and drops the post from the shelf at once.
  */
-const loadCachedHomeShelfCreationEntries = unstable_cache(
-  async (pinsKey: string) => buildHomeShelfCreationEntries(JSON.parse(pinsKey) as HomeShelfPin[]),
+const loadCachedHomeShelfCreations = unstable_cache(
+  async (pinsKey: string) => buildHomeShelfCreations(JSON.parse(pinsKey) as HomeShelfPin[]),
   ['home-shelf-creations'],
-  { revalidate: HOME_SHELF_REVALIDATE_SECONDS, tags: [HOME_SHELF_CACHE_TAG] },
+  { revalidate: HOME_SHELF_REVALIDATE_SECONDS, tags: [HOME_SHELF_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG] },
 );
 
-export async function loadHomeShelfCreationEntries(): Promise<HomeShelfCreationEntry[]> {
-  if (HOME_SHELF_PINS.length === 0) return [];
+async function loadHomeShelfCreations(): Promise<HomeShelfCreationWithPost[]> {
+  if (HOME_SHELF_PINS.length < HOME_SHELF_MIN_CREATIONS) return [];
   try {
-    return await loadCachedHomeShelfCreationEntries(JSON.stringify(HOME_SHELF_PINS));
+    return await loadCachedHomeShelfCreations(JSON.stringify(HOME_SHELF_PINS));
   } catch (error) {
     logBackendError('home_shelf_creations_load_failed', { error });
     return [];
   }
 }
 
-/**
- * Who the viewer is to the shelf. A guest, or no identity at all, is signed
- * out; a member is asked to post until they have, which is read here.
- */
-export async function loadHomeShelfViewer({
-  viewerUserId,
-  isAnonymous,
-}: {
-  viewerUserId: string | null;
-  isAnonymous: boolean;
-}): Promise<HomeShelfViewer> {
-  if (!viewerUserId || isAnonymous) return { kind: 'signed-out' };
-
-  const { count, error } = await createServiceClient()
+/** Whether the member has a post on the feed: public, live, not hidden. */
+async function hasPublicPost(viewerUserId: string): Promise<boolean> {
+  const { data, error } = await createServiceClient()
     .from('posts')
-    .select('id', { count: 'exact', head: true })
+    .select('id')
     .eq('user_id', viewerUserId)
-    .is('archived_at', null);
+    .eq('visibility', 'public')
+    .eq('review_status', 'visible')
+    .is('archived_at', null)
+    .limit(1);
   if (error) throw error;
-
-  return { kind: 'member', hasPosted: (count ?? 0) > 0 };
+  return (data ?? []).length > 0;
 }
 
-export async function loadHomeShelfActions(viewer: HomeShelfViewer): Promise<HomeShelfAction[]> {
-  if (viewer.kind !== 'member') return [];
-
-  const terms = await loadReferralProgramTerms();
-  return selectHomeShelfActions(viewer, {
+async function loadMemberActions(viewerUserId: string): Promise<HomeShelfAction[]> {
+  const [hasPosted, terms] = await Promise.all([hasPublicPost(viewerUserId), loadReferralProgramTerms()]);
+  return selectHomeShelfActions({ kind: 'member', hasPosted }, {
     referral: terms
       ? { inviterPercent: terms.inviterPercent, inviteePercent: terms.inviteeFirstPurchasePercent }
       : null,
@@ -274,49 +292,53 @@ export async function loadHomeShelfActions(viewer: HomeShelfViewer): Promise<Hom
 }
 
 /**
- * The action cards for a viewer, or none when the viewer cannot be read: the
- * shelf's creations still render, and the offers wait for the next visit.
+ * The shelf for one viewer, each creation with its post. The shared build is
+ * filtered by the viewer's blocks both ways, as the feed is (and, like the
+ * feed, a block check that fails shows nothing rather than an unverified
+ * creator); a member's offers are read only when there is a shelf to put them in.
  */
-async function loadHomeShelfActionsSafely(identity: {
-  viewerUserId: string | null;
-  isAnonymous: boolean;
-}): Promise<HomeShelfAction[]> {
-  if (!identity.viewerUserId || identity.isAnonymous) return [];
-  try {
-    return await loadHomeShelfActions(await loadHomeShelfViewer(identity));
-  } catch (error) {
-    logBackendError('home_shelf_actions_load_failed', { error });
-    return [];
+async function loadHomeShelfForViewer(identity: HomeShelfIdentity): Promise<Array<HomeShelfCreationWithPost | HomeShelfAction>> {
+  const creations = await loadHomeShelfCreations();
+  if (creations.length < HOME_SHELF_MIN_CREATIONS || !identity.viewerUserId) {
+    return arrangeHomeShelf(creations, []);
   }
+
+  const viewerUserId = identity.viewerUserId;
+  const [blocked, actions] = await Promise.all([
+    loadBlockedCreatorIds({
+      adminSupabase: createServiceClient(),
+      creatorIds: creations.flatMap((creation) => (creation.post.creator?.id ? [creation.post.creator.id] : [])),
+      viewerUserId,
+    }).catch((error) => {
+      logBackendError('home_shelf_block_filter_failed', { error });
+      return null;
+    }),
+    identity.isAnonymous
+      ? Promise.resolve([])
+      : loadMemberActions(viewerUserId).catch((error) => {
+          // The offers wait for the next visit; the creations still render.
+          logBackendError('home_shelf_actions_load_failed', { error });
+          return [] as HomeShelfAction[];
+        }),
+  ]);
+  if (!blocked) return [];
+
+  const visible = creations.filter((creation) => !creation.post.creator?.id || !blocked.has(creation.post.creator.id));
+  return arrangeHomeShelf(visible, actions);
 }
 
-/** The shelf as the web pages render it. The signed-out page passes no viewer. */
-export async function loadHomeShelf(identity: {
-  viewerUserId: string | null;
-  isAnonymous: boolean;
-} = { viewerUserId: null, isAnonymous: false }): Promise<HomeShelfItem[]> {
-  const [entries, actions] = await Promise.all([
-    loadHomeShelfCreationEntries(),
-    loadHomeShelfActionsSafely(identity),
-  ]);
+function withoutPost({ post, ...creation }: HomeShelfCreationWithPost): HomeShelfCreation {
+  void post;
+  return creation;
+}
 
-  return arrangeHomeShelf(entries.map((entry) => entry.creation), actions);
+/** The shelf as the web pages render it; no full posts reach the client. The signed-out page passes no viewer. */
+export async function loadHomeShelf(identity: HomeShelfIdentity = SIGNED_OUT): Promise<HomeShelfItem[]> {
+  const items = await loadHomeShelfForViewer(identity);
+  return items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item));
 }
 
 /** The shelf as `/api/home/shelf` sends it to the app: each creation with its post. */
-export async function loadHomeShelfForApi(identity: {
-  viewerUserId: string | null;
-  isAnonymous: boolean;
-}): Promise<HomeShelfApiItem[]> {
-  const [entries, actions] = await Promise.all([
-    loadHomeShelfCreationEntries(),
-    loadHomeShelfActionsSafely(identity),
-  ]);
-  const postById = new Map(entries.map((entry) => [entry.creation.id, entry.post]));
-
-  return arrangeHomeShelf(entries.map((entry) => entry.creation), actions).flatMap((item): HomeShelfApiItem[] => {
-    if (item.kind !== 'creation') return [item];
-    const post = postById.get(item.id);
-    return post ? [{ ...item, post }] : [];
-  });
+export async function loadHomeShelfForApi(identity: HomeShelfIdentity): Promise<HomeShelfApiItem[]> {
+  return loadHomeShelfForViewer(identity);
 }

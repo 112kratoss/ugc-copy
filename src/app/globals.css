@@ -790,12 +790,27 @@ button:disabled,
   display: none;
 }
 
+/*
+ * No `display` here: these rules sit outside Tailwind's layers and would beat
+ * any layout utility on the element, so each kind of card names its own.
+ */
 .home-shelf-card {
   position: relative;
-  display: block;
   overflow: hidden;
   aspect-ratio: 4 / 5;
   border-radius: 1rem;
+}
+
+/* A creation: the poster fills it and the captions sit over the picture. */
+.home-shelf-card--media {
+  display: block;
+}
+
+/* An offer or the tools tile: what it says at the top, its action at the foot. */
+.home-shelf-card--stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 /* Touch scrolls the row natively; the arrows are for a mouse. */

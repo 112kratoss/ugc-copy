@@ -196,7 +196,7 @@ describe('remixShowcasePostForRoute', () => {
     );
     expect(serviceClient.fromMock).toHaveBeenCalledWith('generations');
     expect(serviceClient.selectMock).toHaveBeenCalledWith(
-      'id, user_id, is_public, share_input_media_for_remix, category, model, prompt, workflow_settings',
+      'id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings',
     );
     expect(serviceClient.eqMock).toHaveBeenCalledWith('id', 'gen-1');
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
@@ -271,6 +271,50 @@ describe('remixShowcasePostForRoute', () => {
       expect(notifyPostSocialActivity).not.toHaveBeenCalled();
     }
   );
+
+  // Since 2026-06-19 a motion transfer is stored as a video (category 'video')
+  // with creation_mode 'motion': the category alone sent its remix to the video
+  // creator, which restores neither the character nor the reference clip.
+  it('sends a motion transfer to the motion creator', async () => {
+    const serviceClient = createServiceClientMock({
+      generation: { ...PUBLIC_CREATOR_GENERATION, category: 'video', creation_mode: 'motion' },
+    });
+    const dependencies = createDependencies({
+      id: 'post-1',
+      generation_id: 'gen-1',
+      user_id: 'creator-1',
+      category: 'video',
+      visibility: 'public',
+      prompt: 'a prompt',
+      source_kind: 'magicbooklet',
+    });
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'user-1',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies,
+    });
+
+    expect(result.ok ? result.body.redirectTo : null).toBe('/create-motion?remix=gen-1&remixPost=post-1');
+  });
+
+  it('advertises a motion transfer post as a motion remix', () => {
+    expect(resolvePostRemixCapability({
+      generationId: 'gen-1',
+      postFormat: 'media',
+      category: 'video',
+      creationMode: 'motion',
+      sourceKind: 'magicbooklet',
+    })).toEqual({ capability: 'public', target: 'motion' });
+    expect(resolvePostRemixCapability({
+      generationId: 'gen-1',
+      postFormat: 'media',
+      category: 'video',
+      creationMode: null,
+      sourceKind: 'magicbooklet',
+    }).target).toBe('video');
+  });
 
   it('falls back to the post category when the generation row has none', async () => {
     const serviceClient = createServiceClientMock({

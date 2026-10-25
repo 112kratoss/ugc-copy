@@ -2373,8 +2373,7 @@
             "badge": null,
             "creator": {
               "username": "magicbooklet",
-              "name": "Magicbooklet Team",
-              "avatar": null
+              "name": "Magicbooklet Team"
             },
             "makeHref": "/create-video?remix=generation-1&remixPost=post-1",
             "post": {
@@ -2442,8 +2441,7 @@
             "badge": null,
             "creator": {
               "username": "magicbooklet",
-              "name": "Magicbooklet Team",
-              "avatar": null
+              "name": "Magicbooklet Team"
             },
             "makeHref": "/create-image?remix=generation-2&remixPost=post-2",
             "post": {
@@ -2510,8 +2508,7 @@
             "badge": "new-model",
             "creator": {
               "username": "magicbooklet",
-              "name": "Magicbooklet Team",
-              "avatar": null
+              "name": "Magicbooklet Team"
             },
             "makeHref": "/create-motion?remix=generation-3&remixPost=post-3",
             "post": {
@@ -2588,8 +2585,7 @@
                 "badge": null,
                 "creator": {
                   "username": "magicbooklet",
-                  "name": "Magicbooklet Team",
-                  "avatar": null
+                  "name": "Magicbooklet Team"
                 },
                 "makeHref": "/create-video?remix=generation-1&remixPost=post-1",
                 "post": {
@@ -2657,8 +2653,7 @@
                 "badge": null,
                 "creator": {
                   "username": "magicbooklet",
-                  "name": "Magicbooklet Team",
-                  "avatar": null
+                  "name": "Magicbooklet Team"
                 },
                 "makeHref": "/create-image?remix=generation-2&remixPost=post-2",
                 "post": {
@@ -2729,8 +2724,7 @@
                 "badge": "new-model",
                 "creator": {
                   "username": "magicbooklet",
-                  "name": "Magicbooklet Team",
-                  "avatar": null
+                  "name": "Magicbooklet Team"
                 },
                 "makeHref": "/create-motion?remix=generation-3&remixPost=post-3",
                 "post": {
@@ -2813,8 +2807,7 @@
                 "badge": null,
                 "creator": {
                   "username": "magicbooklet",
-                  "name": "Magicbooklet Team",
-                  "avatar": null
+                  "name": "Magicbooklet Team"
                 },
                 "makeHref": "/create-video?remix=generation-1&remixPost=post-1",
                 "post": {
@@ -2882,8 +2875,7 @@
                 "badge": null,
                 "creator": {
                   "username": "magicbooklet",
-                  "name": "Magicbooklet Team",
-                  "avatar": null
+                  "name": "Magicbooklet Team"
                 },
                 "makeHref": "/create-image?remix=generation-2&remixPost=post-2",
                 "post": {
@@ -2955,8 +2947,7 @@
                 "badge": "new-model",
                 "creator": {
                   "username": "magicbooklet",
-                  "name": "Magicbooklet Team",
-                  "avatar": null
+                  "name": "Magicbooklet Team"
                 },
                 "makeHref": "/create-motion?remix=generation-3&remixPost=post-3",
                 "post": {
@@ -3018,7 +3009,7 @@
         }
       },
       "copy": {
-        "description": "What both clients say on the shelf, for the actions in responseVariants and for each kind of price: src/components/HomeShelf.tsx and ugc-mobile/lib/home-shelf-view-model.ts are each held to it.",
+        "description": "What both clients say on the shelf: the actions in responseVariants, each kind of price, and which badge a card shows. src/lib/home-shelf-copy.ts and ugc-mobile/lib/home-shelf-view-model.ts are each held to it.",
         "actions": {
           "post": {
             "title": "Share your first post",
@@ -3056,6 +3047,45 @@
               "kind": "clip-length"
             },
             "label": "Priced by clip length"
+          }
+        ],
+        "badges": [
+          {
+            "badge": "new-model",
+            "fitsWelcomeCredits": true,
+            "offerFreeToTry": true,
+            "label": "New model"
+          },
+          {
+            "badge": "new-model",
+            "fitsWelcomeCredits": false,
+            "offerFreeToTry": false,
+            "label": "New model"
+          },
+          {
+            "badge": null,
+            "fitsWelcomeCredits": true,
+            "offerFreeToTry": true,
+            "label": "Free to try"
+          },
+          {
+            "badge": null,
+            "fitsWelcomeCredits": true,
+            "offerFreeToTry": false,
+            "label": null
+          },
+          {
+            "badge": null,
+            "fitsWelcomeCredits": false,
+            "offerFreeToTry": true,
+            "label": null
+          }
+        ],
+        "referralPercents": [
+          {
+            "inviterPercent": 7.25,
+            "inviteePercent": 0,
+            "body": "You get 7.25% of their top-ups in credits."
           }
         ]
       }

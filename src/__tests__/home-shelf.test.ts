@@ -91,7 +91,7 @@ describe('toHomeShelfCreation', () => {
       price: { kind: 'credits', credits: 15 },
       fitsWelcomeCredits: true,
       badge: 'new-model',
-      creator: { username: 'magicbooklet', name: 'Magicbooklet Team', avatar: null },
+      creator: { username: 'magicbooklet', name: 'Magicbooklet Team' },
       makeHref: '/create-video?remix=generation-1&remixPost=post-1',
     });
   });
@@ -127,6 +127,13 @@ describe('toHomeShelfCreation', () => {
     }), { postId: 'post-1' }, facts);
 
     expect(card?.posterUrl).toBe('https://cdn.example.test/first.webp');
+  });
+
+  it('takes the tool the remix opens, motion included', () => {
+    const card = toHomeShelfCreation(post({ creationMode: 'motion', remixTarget: 'motion' }), { postId: 'post-1' }, facts);
+
+    expect(card?.tool).toBe('motion');
+    expect(card?.makeHref).toBe('/create-motion?remix=generation-1&remixPost=post-1');
   });
 
   it('plays a clip only for video media', () => {

@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { getAppVersionRouteResponse } from '@/lib/app-version-route-adapter-service';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import { getCreditHistoryRouteResponse } from '@/lib/credit-history-route-adapter-service';
-import { formatHomeShelfPrice, homeShelfActionCopy } from '@/components/HomeShelf';
-import type { HomeShelfAction, HomeShelfPrice } from '@/lib/home-shelf';
+import type { HomeShelfAction, HomeShelfBadge, HomeShelfCreation, HomeShelfPrice } from '@/lib/home-shelf';
+import { formatHomeShelfPrice, homeShelfActionCopy, homeShelfBadge } from '@/lib/home-shelf-copy';
 import {
   getHomeShelfRouteResponse,
   type HomeShelfRouteResponse,
@@ -125,6 +125,8 @@ type MobileApiContractFixture = {
       copy: {
         actions: Record<HomeShelfAction['id'], { title: string; body: string; cta: string }>;
         prices: Array<{ price: HomeShelfPrice; label: string }>;
+        badges: Array<{ badge: HomeShelfBadge | null; fitsWelcomeCredits: boolean; offerFreeToTry: boolean; label: string | null }>;
+        referralPercents: Array<{ inviterPercent: number; inviteePercent: number; body: string }>;
       };
     };
     undoFeedFeedback: MobileApiContractEndpoint<ShowcaseFeedFeedbackUndoResponse> & {
@@ -611,6 +613,13 @@ describe('shared mobile API v1 contract fixture', () => {
     }
     for (const { price, label } of copy.prices) {
       expect(formatHomeShelfPrice(price)).toBe(label);
+    }
+    const creation: HomeShelfCreation = responseVariants.member.response.items.find((item) => item.kind === 'creation') as HomeShelfCreation;
+    for (const { badge, fitsWelcomeCredits, offerFreeToTry, label } of copy.badges) {
+      expect(homeShelfBadge({ ...creation, badge, fitsWelcomeCredits }, offerFreeToTry)).toBe(label);
+    }
+    for (const { inviterPercent, inviteePercent, body } of copy.referralPercents) {
+      expect(homeShelfActionCopy({ kind: 'action', id: 'invite', inviterPercent, inviteePercent }).body).toBe(body);
     }
   });
 

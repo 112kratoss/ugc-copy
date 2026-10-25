@@ -2,8 +2,9 @@ import { act, render, screen, within } from '@testing-library/react';
 import type { ComponentPropsWithoutRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import HomeShelf, { formatHomeShelfPrice, homeShelfActionCopy } from '@/components/HomeShelf';
+import HomeShelf, { HomeShelfPlaceholder } from '@/components/HomeShelf';
 import type { HomeShelfCreation, HomeShelfItem } from '@/lib/home-shelf';
+import { formatHomeShelfPrice, homeShelfActionCopy } from '@/lib/home-shelf-copy';
 
 vi.mock('next/link', () => ({
   default: ({ prefetch, ...props }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean }) => (
@@ -29,7 +30,7 @@ function creation(id: string, overrides: Partial<HomeShelfCreation> = {}): HomeS
     price: { kind: 'credits', credits: 15 },
     fitsWelcomeCredits: true,
     badge: null,
-    creator: { username: 'magicbooklet', name: 'Magicbooklet Team', avatar: null },
+    creator: { username: 'magicbooklet', name: 'Magicbooklet Team' },
     makeHref: `/create-video?remix=generation-${id}&remixPost=${id}`,
     ...overrides,
   };
@@ -37,31 +38,34 @@ function creation(id: string, overrides: Partial<HomeShelfCreation> = {}): HomeS
 
 const SHELF: HomeShelfItem[] = [creation('a'), creation('b'), creation('c')];
 
-type ObserverCallback = (entries: Array<{ target: Element; intersectionRatio: number }>) => void;
+type ObserverCallback = (entries: Array<{ target: Element; intersectionRatio: number; isIntersecting: boolean }>) => void;
 
-let observerCallback: ObserverCallback | null = null;
-let observed: Element[] = [];
+/** Every observer the page made: the shelf's watches its cards, a playing clip watches itself. */
+let observers: Array<{ callback: ObserverCallback; elements: Element[] }> = [];
 
-function stubMatchMedia(reduceMotion: boolean) {
+function stubMatchMedia({ reduceMotion = false, hover = true }: { reduceMotion?: boolean; hover?: boolean } = {}) {
   vi.stubGlobal('matchMedia', (query: string) => ({
-    matches: reduceMotion && query.includes('prefers-reduced-motion'),
+    matches: (query.includes('prefers-reduced-motion') && reduceMotion) || (query.includes('hover: hover') && hover),
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   }));
 }
 
 beforeEach(() => {
-  observerCallback = null;
-  observed = [];
-  stubMatchMedia(false);
+  observers = [];
+  stubMatchMedia();
   vi.stubGlobal('IntersectionObserver', class {
+    private readonly record: { callback: ObserverCallback; elements: Element[] };
     constructor(callback: ObserverCallback) {
-      observerCallback = callback;
+      this.record = { callback, elements: [] };
+      observers.push(this.record);
     }
     observe(element: Element) {
-      observed.push(element);
+      this.record.elements.push(element);
     }
-    disconnect() {}
+    disconnect() {
+      observers = observers.filter((record) => record !== this.record);
+    }
   });
 });
 
@@ -69,12 +73,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** Reports to the observer watching the shelf's cards how much of each is in view. */
 function reportVisible(ratios: Record<string, number>) {
+  const shelf = observers.find((record) => record.elements.some((element) => (element as HTMLElement).dataset.clipId));
   act(() => {
-    observerCallback?.(observed.map((target) => ({
-      target,
-      intersectionRatio: ratios[(target as HTMLElement).dataset.clipId ?? ''] ?? 0,
-    })));
+    shelf?.callback(shelf.elements.map((target) => {
+      const ratio = ratios[(target as HTMLElement).dataset.clipId ?? ''] ?? 0;
+      return { target, intersectionRatio: ratio, isIntersecting: ratio > 0 };
+    }));
   });
 }
 
@@ -130,7 +136,16 @@ describe('HomeShelf', () => {
   });
 
   it('plays nothing under Reduce Motion', () => {
-    stubMatchMedia(true);
+    stubMatchMedia({ reduceMotion: true });
+    const { container } = render(<HomeShelf items={SHELF} offerFreeToTry={false} />);
+
+    reportVisible({ a: 1, b: 1, c: 1 });
+
+    expect(container.querySelectorAll('video')).toHaveLength(0);
+  });
+
+  it('leaves clips to the feed on a touch screen', () => {
+    stubMatchMedia({ hover: false });
     const { container } = render(<HomeShelf items={SHELF} offerFreeToTry={false} />);
 
     reportVisible({ a: 1, b: 1, c: 1 });
@@ -154,6 +169,25 @@ describe('HomeShelf', () => {
     expect(hrefs.indexOf('/post/new')).toBe(hrefs.indexOf('/create-video?remix=generation-b&remixPost=b') + 1);
     expect(hrefs.indexOf('/invite')).toBe(hrefs.indexOf('/create-image') - 1);
   });
+
+  it('lays out offers and the tools tile as columns, and creations as pictures', () => {
+    const { container } = render(<HomeShelf items={[...SHELF, { kind: 'action', id: 'post' }]} offerFreeToTry={false} />);
+
+    // The shelf's named classes carry the display: a utility on these elements
+    // would lose to the unlayered rule in globals.css.
+    const offer = screen.getAllByRole('link').find((link) => link.getAttribute('href') === '/post/new')!;
+    expect(offer.className).toContain('home-shelf-card--stack');
+    expect(offer.className).not.toMatch(/(^|\s)flex(\s|$)/);
+    expect(container.querySelectorAll('.home-shelf-card--media')).toHaveLength(3);
+  });
+
+  it('holds the row with the same classes while it streams', () => {
+    const { container } = render(<HomeShelfPlaceholder />);
+
+    expect(container.querySelector('.home-shelf-track')).not.toBeNull();
+    expect(container.querySelectorAll('.home-shelf-card')).toHaveLength(4);
+    expect(container.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+  });
 });
 
 describe('formatHomeShelfPrice', () => {
@@ -166,11 +200,11 @@ describe('formatHomeShelfPrice', () => {
 });
 
 describe('homeShelfActionCopy', () => {
-  it('states the live referral terms, leaving out a side that earns nothing', () => {
+  it('states the live referral terms to the cent, leaving out a side that earns nothing', () => {
     expect(homeShelfActionCopy({ kind: 'action', id: 'invite', inviterPercent: 5, inviteePercent: 5 }).body)
       .toBe('You get 5% of their top-ups in credits. They get 5% extra on their first.');
-    expect(homeShelfActionCopy({ kind: 'action', id: 'invite', inviterPercent: 2.5, inviteePercent: 0 }).body)
-      .toBe('You get 2.5% of their top-ups in credits.');
+    expect(homeShelfActionCopy({ kind: 'action', id: 'invite', inviterPercent: 7.25, inviteePercent: 0 }).body)
+      .toBe('You get 7.25% of their top-ups in credits.');
   });
 
   it('states the creator share the sell page promises', () => {

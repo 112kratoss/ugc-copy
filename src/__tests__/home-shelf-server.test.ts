@@ -7,11 +7,17 @@ const getShowcaseFeedItemsByPostIdsMock = vi.fn();
 const loadReferralProgramTermsMock = vi.fn();
 const loadPublishedGenerationModelCatalogMock = vi.fn();
 const quotePublishedGenerationModelMock = vi.fn();
+const loadBlockedCreatorIdsMock = vi.fn();
+const unstableCacheOptions = vi.hoisted(() => [] as Array<{ tags?: string[] }>);
 const tableResults = new Map<string, unknown>();
+const tableReads: string[] = [];
 const pinsMock = vi.hoisted(() => ({ pins: [] as Array<{ postId: string }>, earn: false }));
 
 vi.mock('next/cache', () => ({
-  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  unstable_cache: (fn: (...args: unknown[]) => unknown, _keys: string[], options: { tags?: string[] }) => {
+    unstableCacheOptions.push(options);
+    return fn;
+  },
 }));
 
 vi.mock('@/lib/showcase-feed', () => ({
@@ -20,6 +26,10 @@ vi.mock('@/lib/showcase-feed', () => ({
 
 vi.mock('@/lib/referral-route-service', () => ({
   loadReferralProgramTerms: () => loadReferralProgramTermsMock(),
+}));
+
+vi.mock('@/lib/moderation-service', () => ({
+  loadBlockedCreatorIds: (options: unknown) => loadBlockedCreatorIdsMock(options),
 }));
 
 vi.mock('@/lib/generation-model-catalog-store', () => ({
@@ -39,12 +49,14 @@ vi.mock('@/lib/home-shelf-lineup', () => ({
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
     from: (table: string) => {
+      tableReads.push(table);
       const result = () => tableResults.get(table) ?? { data: null, error: null };
       const builder: Record<string, unknown> = {
         select: () => builder,
         in: () => builder,
         eq: () => builder,
         is: () => builder,
+        limit: () => builder,
         maybeSingle: () => Promise.resolve(result()),
         then: (resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown) => (
           Promise.resolve(result()).then(resolve, reject)
@@ -88,7 +100,7 @@ function post(id: string, overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFe
     remixCount: 0,
     commentCount: 0,
     createdAt: '2026-10-25T00:00:00.000Z',
-    creator: { id: 'user-1', username: 'magicbooklet', name: 'Magicbooklet Team', avatar: null },
+    creator: { id: `creator-${id}`, username: 'magicbooklet', name: 'Magicbooklet Team', avatar: null },
     sourceKind: 'magicbooklet',
     sourceTool: null,
     generationId: `gen-${id}`,
@@ -98,6 +110,16 @@ function post(id: string, overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFe
     remixTarget: 'video',
     ...overrides,
   } as ShowcaseFeedItem;
+}
+
+function generation(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: `gen-${id}`,
+    model: 'grok-imagine-video',
+    share_input_media_for_remix: false,
+    workflow_settings: { model: 'grok-imagine-video' },
+    ...overrides,
+  };
 }
 
 function descriptor(id: string, kind: 'image' | 'video' | 'motion', displayName: string): GenerationModelDescriptor {
@@ -118,27 +140,22 @@ const MODELS = [
   descriptor('nano-banana-2', 'image', 'Nano Banana 2'),
   descriptor('kling-3.0-motion', 'motion', 'Kling 3.0 Motion'),
 ];
+const BOTH_CATALOGS = async () => ({ web: MODELS, mobile: MODELS });
 
-describe('buildHomeShelfCreationEntries', () => {
+describe('buildHomeShelfCreations', () => {
   beforeEach(() => {
     vi.resetModules();
-    getShowcaseFeedItemsByPostIdsMock.mockReset();
     quotePublishedGenerationModelMock.mockReset();
-    loadPublishedGenerationModelCatalogMock.mockReset();
-    loadPublishedGenerationModelCatalogMock.mockResolvedValue({ catalog: { models: MODELS } });
     tableResults.clear();
   });
 
   it('prices each card from the settings its remix opens with', async () => {
-    const { buildHomeShelfCreationEntries } = await import('@/lib/home-shelf-server');
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
     quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 15 });
 
-    const entries = await buildHomeShelfCreationEntries([{ postId: 'boat' }], {
+    const creations = await buildHomeShelfCreations([{ postId: 'boat' }], {
       getPosts: async () => [post('boat')],
-      loadGenerations: async () => [{
-        id: 'gen-boat',
-        model: 'grok-imagine-video',
-        share_input_media_for_remix: false,
+      loadGenerations: async () => [generation('boat', {
         workflow_settings: {
           model: 'grok-imagine-video',
           duration: '6',
@@ -146,7 +163,8 @@ describe('buildHomeShelfCreationEntries', () => {
           resolution: '480p',
           referenceImageUrls: ['https://cdn.example.test/creator-input.png'],
         },
-      }],
+      })],
+      loadCatalogs: BOTH_CATALOGS,
       loadWelcomeCredits: async () => 25,
     });
 
@@ -155,86 +173,106 @@ describe('buildHomeShelfCreationEntries', () => {
       modelId: 'grok-imagine-video',
       settings: expect.objectContaining({ duration: 6, sound: false, resolution: '480p' }),
     }, { platform: 'web' });
-    // The creator's inputs stay theirs unless they shared them for remixing.
+    // The creator's inputs stay theirs: the remix opens without them.
     expect(quotePublishedGenerationModelMock.mock.calls[0][0].settings).not.toHaveProperty('referenceImageUrls');
-    expect(entries).toHaveLength(1);
-    expect(entries[0].creation).toMatchObject({
+    expect(creations).toHaveLength(1);
+    expect(creations[0]).toMatchObject({
       id: 'boat',
       modelName: 'Grok Imagine',
       price: { kind: 'credits', credits: 15 },
       fitsWelcomeCredits: true,
     });
-    expect(entries[0].post.id).toBe('boat');
-  });
-
-  it('names the model the generation stored, under the catalog id the editor uses', async () => {
-    const { buildHomeShelfCreationEntries } = await import('@/lib/home-shelf-server');
-    quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 8 });
-
-    const entries = await buildHomeShelfCreationEntries([{ postId: 'still' }], {
-      getPosts: async () => [post('still', {
-        category: 'image',
-        remixTarget: 'image',
-        mediaItems: [media({ mediaKind: 'image', feedStreamUrl: null })],
-      })],
-      // The provider's spelling on the row, the catalog's in the settings.
-      loadGenerations: async () => [{
-        id: 'gen-still',
-        model: 'nano-banana-2/provider',
-        share_input_media_for_remix: false,
-        workflow_settings: { model: 'nano-banana-2' },
-      }],
-      loadWelcomeCredits: async () => 25,
-    });
-
-    expect(quotePublishedGenerationModelMock.mock.calls[0][0]).toMatchObject({ kind: 'image', modelId: 'nano-banana-2' });
-    expect(entries[0].creation.modelName).toBe('Nano Banana 2');
+    expect(creations[0].post.id).toBe('boat');
   });
 
   it('prices motion by clip length without asking the quote', async () => {
-    const { buildHomeShelfCreationEntries } = await import('@/lib/home-shelf-server');
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
 
-    const entries = await buildHomeShelfCreationEntries([{ postId: 'dance' }], {
+    const creations = await buildHomeShelfCreations([{ postId: 'dance' }], {
       getPosts: async () => [post('dance', { category: 'video', creationMode: 'motion', remixTarget: 'motion' })],
-      loadGenerations: async () => [{
-        id: 'gen-dance',
-        model: 'kling-3.0-motion',
-        share_input_media_for_remix: false,
-        workflow_settings: { model: 'kling-3.0-motion' },
-      }],
+      loadGenerations: async () => [generation('dance', { model: 'kling-3.0', workflow_settings: { model: 'kling-3.0-motion' } })],
+      loadCatalogs: BOTH_CATALOGS,
       loadWelcomeCredits: async () => 25,
     });
 
     expect(quotePublishedGenerationModelMock).not.toHaveBeenCalled();
-    expect(entries[0].creation).toMatchObject({
+    expect(creations[0]).toMatchObject({
       tool: 'motion',
       modelName: 'Kling 3.0 Motion',
       price: { kind: 'clip-length' },
       fitsWelcomeCredits: false,
+      makeHref: '/create-motion?remix=gen-dance&remixPost=dance',
     });
   });
 
-  it('shows no price when the quote refuses, rather than a wrong one', async () => {
-    const { buildHomeShelfCreationEntries } = await import('@/lib/home-shelf-server');
-    quotePublishedGenerationModelMock.mockRejectedValue(new Error('Some model settings are no longer available.'));
+  it('shows no price when the creator shared their inputs, which the editor prices', async () => {
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
+    quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 7 });
 
-    const entries = await buildHomeShelfCreationEntries([{ postId: 'boat' }], {
+    const creations = await buildHomeShelfCreations([{ postId: 'boat' }], {
       getPosts: async () => [post('boat')],
-      loadGenerations: async () => [{
-        id: 'gen-boat',
-        model: 'grok-imagine-video',
-        share_input_media_for_remix: false,
-        workflow_settings: { model: 'grok-imagine-video' },
-      }],
+      loadGenerations: async () => [generation('boat', { share_input_media_for_remix: true })],
+      loadCatalogs: BOTH_CATALOGS,
       loadWelcomeCredits: async () => 25,
     });
 
-    expect(entries[0].creation.price).toBeNull();
-    expect(entries[0].creation.fitsWelcomeCredits).toBe(false);
+    expect(quotePublishedGenerationModelMock).not.toHaveBeenCalled();
+    expect(creations[0]).toMatchObject({ price: null, fitsWelcomeCredits: false });
+  });
+
+  it('leaves out a post with no saved recipe, whose editor would open on its default model', async () => {
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
+
+    const creations = await buildHomeShelfCreations([{ postId: 'template' }], {
+      getPosts: async () => [post('template')],
+      // Template outputs are saved with empty settings; the row's model column is the provider's.
+      loadGenerations: async () => [generation('template', { model: 'seedance-2-fast', workflow_settings: {} })],
+      loadCatalogs: BOTH_CATALOGS,
+      loadWelcomeCredits: async () => 25,
+    });
+
+    expect(creations).toEqual([]);
+  });
+
+  it('leaves out a model either client cannot run', async () => {
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
+    quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 10 });
+    const loadGenerations = async () => [generation('boat')];
+
+    const webOnly = await buildHomeShelfCreations([{ postId: 'boat' }], {
+      getPosts: async () => [post('boat')],
+      loadGenerations,
+      loadCatalogs: async () => ({ web: MODELS, mobile: MODELS.filter((model) => model.id !== 'grok-imagine-video') }),
+      loadWelcomeCredits: async () => 25,
+    });
+    const retired = await buildHomeShelfCreations([{ postId: 'boat' }], {
+      getPosts: async () => [post('boat')],
+      loadGenerations,
+      loadCatalogs: async () => ({ web: [], mobile: [] }),
+      loadWelcomeCredits: async () => 25,
+    });
+
+    expect(webOnly).toEqual([]);
+    expect(retired).toEqual([]);
+  });
+
+  it('shows no price when the quote refuses, rather than a wrong one', async () => {
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
+    quotePublishedGenerationModelMock.mockRejectedValue(new Error('Some model settings are no longer available.'));
+
+    const creations = await buildHomeShelfCreations([{ postId: 'boat' }], {
+      getPosts: async () => [post('boat')],
+      loadGenerations: async () => [generation('boat')],
+      loadCatalogs: BOTH_CATALOGS,
+      loadWelcomeCredits: async () => 25,
+    });
+
+    expect(creations[0].price).toBeNull();
+    expect(creations[0].fitsWelcomeCredits).toBe(false);
   });
 
   it('keeps pin order, drops pins that no longer qualify, and reads each post once', async () => {
-    const { buildHomeShelfCreationEntries } = await import('@/lib/home-shelf-server');
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
     quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 10 });
     const getPosts = vi.fn(async () => [
       post('c'),
@@ -242,42 +280,40 @@ describe('buildHomeShelfCreationEntries', () => {
       post('locked', { remixCapability: 'unlock_required' }),
     ]);
 
-    const entries = await buildHomeShelfCreationEntries(
+    const creations = await buildHomeShelfCreations(
       [{ postId: 'a' }, { postId: 'gone' }, { postId: 'locked' }, { postId: 'c' }, { postId: 'a' }],
       {
         getPosts,
-        loadGenerations: async () => [],
+        loadGenerations: async () => [generation('a'), generation('c'), generation('locked')],
+        loadCatalogs: BOTH_CATALOGS,
         loadWelcomeCredits: async () => null,
       },
     );
 
     expect(getPosts).toHaveBeenCalledWith(['a', 'gone', 'locked', 'c']);
-    expect(entries.map((entry) => entry.creation.id)).toEqual(['a', 'c']);
+    expect(creations.map((creation) => creation.id)).toEqual(['a', 'c']);
   });
 
   it('still builds the shelf when the welcome program cannot be read', async () => {
-    const { buildHomeShelfCreationEntries } = await import('@/lib/home-shelf-server');
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
     quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 7 });
 
-    const entries = await buildHomeShelfCreationEntries([{ postId: 'boat' }], {
+    const creations = await buildHomeShelfCreations([{ postId: 'boat' }], {
       getPosts: async () => [post('boat')],
-      loadGenerations: async () => [{
-        id: 'gen-boat',
-        model: 'grok-imagine-video',
-        share_input_media_for_remix: false,
-        workflow_settings: { model: 'grok-imagine-video' },
-      }],
+      loadGenerations: async () => [generation('boat')],
+      loadCatalogs: BOTH_CATALOGS,
       loadWelcomeCredits: async () => { throw new Error('credit_grant_programs is unavailable'); },
     });
 
-    expect(entries[0].creation.price).toEqual({ kind: 'credits', credits: 7 });
-    expect(entries[0].creation.fitsWelcomeCredits).toBe(false);
+    expect(creations[0].price).toEqual({ kind: 'credits', credits: 7 });
+    expect(creations[0].fitsWelcomeCredits).toBe(false);
   });
 });
 
 describe('loadHomeShelf', () => {
   beforeEach(() => {
     vi.resetModules();
+    unstableCacheOptions.length = 0;
     getShowcaseFeedItemsByPostIdsMock.mockReset();
     quotePublishedGenerationModelMock.mockReset();
     quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 12 });
@@ -285,35 +321,47 @@ describe('loadHomeShelf', () => {
     loadPublishedGenerationModelCatalogMock.mockResolvedValue({ catalog: { models: MODELS } });
     loadReferralProgramTermsMock.mockReset();
     loadReferralProgramTermsMock.mockResolvedValue({ inviterPercent: 5, inviteeFirstPurchasePercent: 5, attributionWindowDays: 30 });
+    loadBlockedCreatorIdsMock.mockReset();
+    loadBlockedCreatorIdsMock.mockResolvedValue(new Set());
     tableResults.clear();
-    tableResults.set('generations', { data: [], error: null });
+    tableReads.length = 0;
+    tableResults.set('generations', { data: [generation('a'), generation('b'), generation('c')], error: null });
     tableResults.set('credit_grant_programs', { data: { amount: 25, enabled: true }, error: null });
     pinsMock.pins = [{ postId: 'a' }, { postId: 'b' }, { postId: 'c' }];
     pinsMock.earn = false;
     getShowcaseFeedItemsByPostIdsMock.mockResolvedValue([post('a'), post('b'), post('c')]);
   });
 
-  it('gives a signed-out viewer the creations and no offers', async () => {
+  it('gives a signed-out viewer the creations and no offers, with no full posts', async () => {
     const { loadHomeShelf } = await import('@/lib/home-shelf-server');
 
     const items = await loadHomeShelf();
 
     expect(items.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+    expect(items.every((item) => !('post' in item))).toBe(true);
     expect(getShowcaseFeedItemsByPostIdsMock).toHaveBeenCalledWith({ postIds: ['a', 'b', 'c'], viewerUserId: null, countryCode: null });
+    expect(loadBlockedCreatorIdsMock).not.toHaveBeenCalled();
   });
 
-  it('treats a guest as signed out', async () => {
+  it("drops a take-down with the feed's own cache tag", async () => {
+    await import('@/lib/home-shelf-server');
+
+    expect(unstableCacheOptions[0]?.tags).toEqual(expect.arrayContaining(['showcase-feed:v3']));
+  });
+
+  it('treats a guest as signed out for offers, but still keeps its blocks', async () => {
     const { loadHomeShelf } = await import('@/lib/home-shelf-server');
 
     const items = await loadHomeShelf({ viewerUserId: 'guest-1', isAnonymous: true });
 
     expect(items.every((item) => item.kind === 'creation')).toBe(true);
     expect(loadReferralProgramTermsMock).not.toHaveBeenCalled();
+    expect(loadBlockedCreatorIdsMock).toHaveBeenCalledWith(expect.objectContaining({ viewerUserId: 'guest-1' }));
   });
 
-  it('asks a member with no posts to post, then to invite', async () => {
+  it('asks a member with no public post to post, then to invite', async () => {
     const { loadHomeShelf } = await import('@/lib/home-shelf-server');
-    tableResults.set('posts', { count: 0, error: null });
+    tableResults.set('posts', { data: [], error: null });
 
     const items = await loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false });
 
@@ -322,20 +370,50 @@ describe('loadHomeShelf', () => {
 
   it('offers a member who has posted only Invite while Earn is switched off', async () => {
     const { loadHomeShelf } = await import('@/lib/home-shelf-server');
-    tableResults.set('posts', { count: 3, error: null });
+    tableResults.set('posts', { data: [{ id: 'their-post' }], error: null });
 
     const items = await loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false });
 
     expect(items.map((item) => item.id)).toEqual(['a', 'b', 'c', 'invite']);
   });
 
-  it('keeps the creations when the viewer cannot be read', async () => {
+  it('keeps the creations when the offers cannot be read', async () => {
     const { loadHomeShelf } = await import('@/lib/home-shelf-server');
-    tableResults.set('posts', { count: null, error: new Error('posts is unavailable') });
+    tableResults.set('posts', { data: null, error: new Error('posts is unavailable') });
 
     const items = await loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false });
 
     expect(items.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it("leaves out a creator the member blocked, and shows no shelf it would leave too short", async () => {
+    const { loadHomeShelf } = await import('@/lib/home-shelf-server');
+    tableResults.set('posts', { data: [], error: null });
+    loadBlockedCreatorIdsMock.mockResolvedValue(new Set(['creator-b']));
+
+    const items = await loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false });
+
+    expect(items).toEqual([]);
+  });
+
+  it('shows nothing when the block check fails, as the feed does', async () => {
+    const { loadHomeShelf } = await import('@/lib/home-shelf-server');
+    tableResults.set('posts', { data: [], error: null });
+    loadBlockedCreatorIdsMock.mockRejectedValue(new Error('user_blocks is unavailable'));
+
+    await expect(loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false })).resolves.toEqual([]);
+  });
+
+  it("reads no member's offers when there is no shelf to put them in", async () => {
+    const { loadHomeShelf } = await import('@/lib/home-shelf-server');
+    getShowcaseFeedItemsByPostIdsMock.mockResolvedValue([post('a'), post('b')]);
+
+    const items = await loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false });
+
+    expect(items).toEqual([]);
+    expect(tableReads).not.toContain('posts');
+    expect(loadReferralProgramTermsMock).not.toHaveBeenCalled();
+    expect(loadBlockedCreatorIdsMock).not.toHaveBeenCalled();
   });
 
   it('renders no shelf when the posts cannot be read', async () => {
@@ -347,7 +425,7 @@ describe('loadHomeShelf', () => {
 
   it('sends the app each creation with its post', async () => {
     const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
-    tableResults.set('posts', { count: 0, error: null });
+    tableResults.set('posts', { data: [], error: null });
 
     const items = await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false });
 

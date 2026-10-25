@@ -1,6 +1,6 @@
 import { getPublicPostQualityError } from '@/lib/marketplace-trust';
 import { remixToolCreatePath, type RemixTool } from '@/lib/remix-tools';
-import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
+import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
 
 /**
  * The "Make this" shelf that opens Home on the web and in the app: real
@@ -10,7 +10,8 @@ import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
  * Pure module: no server reads, no React. `home-shelf-server.ts` gathers the
  * posts, prices and viewer facts and hands them here; the API route sends the
  * result to the app (`/api/home/shelf`, `contracts/mobile-api-v1.json`), and
- * the web pages render it directly.
+ * the web pages render it directly. What the cards say is in
+ * `home-shelf-copy.ts`, which the client component can import alone.
  */
 
 /** The response shape version `/api/home/shelf` sends. */
@@ -48,7 +49,6 @@ export type HomeShelfPrice =
 export interface HomeShelfCreator {
   username: string | null;
   name: string | null;
-  avatar: string | null;
 }
 
 export interface HomeShelfCreation {
@@ -82,8 +82,6 @@ export type HomeShelfAction =
   | { kind: 'action'; id: 'invite'; inviterPercent: number; inviteePercent: number }
   | { kind: 'action'; id: 'earn'; creatorSharePercent: number };
 
-export type HomeShelfActionId = HomeShelfAction['id'];
-
 export type HomeShelfItem = HomeShelfCreation | HomeShelfAction;
 
 /**
@@ -111,13 +109,6 @@ export interface HomeShelfActionFacts {
 
 const SHELF_TOOLS: ReadonlySet<string> = new Set<RemixTool>(['image', 'video', 'motion']);
 
-function leadMedia(item: ShowcaseFeedItem): ShowcaseMediaItem | null {
-  const media = item.mediaItems ?? [];
-  if (media.length === 0) return null;
-
-  return media.reduce((lead, candidate) => (candidate.sortOrder < lead.sortOrder ? candidate : lead));
-}
-
 export function buildHomeShelfMakeHref(tool: RemixTool, generationId: string, postId: string): string {
   const params = new URLSearchParams({ remix: generationId, remixPost: postId });
 
@@ -131,7 +122,8 @@ export function buildHomeShelfMakeHref(tool: RemixTool, generationId: string, po
  * archived, hidden by moderation, or have its remix put behind a recipe after
  * it was pinned, and a card that cannot be made is worse than no card. The
  * read it comes from (`getShowcaseFeedItemsByPostIds`) already drops posts that
- * are not public, archived or hidden by moderation.
+ * are not public, archived or hidden by moderation. The tool is the one the
+ * remix endpoint opens (`remixTarget`, motion included through creation mode).
  */
 export function toHomeShelfCreation(
   item: ShowcaseFeedItem,
@@ -145,7 +137,7 @@ export function toHomeShelfCreation(
   const tool = item.remixTarget;
   if (!tool || !SHELF_TOOLS.has(tool)) return null;
 
-  const media = leadMedia(item);
+  const media = getShowcaseItemMediaItems(item)[0];
   if (!media?.previewUrl || media.sourceUnavailableAt) return null;
 
   const title = item.title?.trim() ?? '';
@@ -171,7 +163,6 @@ export function toHomeShelfCreation(
     creator: {
       username: item.creator?.username ?? null,
       name: item.creator?.name ?? null,
-      avatar: item.creator?.avatar ?? null,
     },
     makeHref: buildHomeShelfMakeHref(shelfTool, item.generationId, item.id),
   };
@@ -212,18 +203,19 @@ export function selectHomeShelfActions(
 /**
  * The shelf in display order. Post or Earn takes the third place and Invite the
  * last, wherever they arrive in `actions`, so switching Earn off leaves Invite
- * at the end instead of promoting it into the row.
+ * at the end instead of promoting it into the row. Generic so the API can
+ * arrange creations that carry their post and get them back the same way.
  */
-export function arrangeHomeShelf(
-  creations: HomeShelfCreation[],
+export function arrangeHomeShelf<C extends HomeShelfCreation>(
+  creations: C[],
   actions: HomeShelfAction[],
-): HomeShelfItem[] {
+): Array<C | HomeShelfAction> {
   const shown = creations.slice(0, HOME_SHELF_MAX_CREATIONS);
   if (shown.length < HOME_SHELF_MIN_CREATIONS) return [];
 
   const lead = actions.find((action) => action.id === 'post' || action.id === 'earn');
   const trailing = actions.find((action) => action.id === 'invite');
-  const items: HomeShelfItem[] = [...shown];
+  const items: Array<C | HomeShelfAction> = [...shown];
   if (lead) items.splice(HOME_SHELF_LEAD_ACTION_INDEX, 0, lead);
   if (trailing) items.push(trailing);
 

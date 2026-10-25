@@ -90,7 +90,7 @@ const SHELF = ['boat', 'serum', 'dance'].map((id) => ({
   price: { kind: 'credits' as const, credits: 8 },
   fitsWelcomeCredits: true,
   badge: null,
-  creator: { username: 'magicbooklet', name: 'Magicbooklet Team', avatar: null },
+  creator: { username: 'magicbooklet', name: 'Magicbooklet Team' },
   makeHref: `/create-image?remix=generation-${id}&remixPost=${id}`,
 }));
 

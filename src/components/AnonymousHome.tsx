@@ -4,7 +4,7 @@ import { Suspense, use } from 'react';
 import { Text } from '@/components/DesignSystem';
 import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
 import HomeExperience from '@/components/HomeExperience';
-import HomeShelf from '@/components/HomeShelf';
+import HomeShelf, { HomeShelfPlaceholder } from '@/components/HomeShelf';
 import { JsonLd } from '@/components/JsonLd';
 import QuickStartsCard from '@/components/QuickStartsCard';
 import SignInWorkspaceCard from '@/components/SignInWorkspaceCard';
@@ -12,7 +12,8 @@ import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
 import type { HomeWhatsNewModel } from '@/lib/home-dashboard';
 import { loadHomeFeed, loadHomeWhatsNewModels } from '@/lib/home-dashboard-service';
-import type { HomeShelfItem } from '@/lib/home-shelf';
+import { HOME_SHELF_MIN_CREATIONS, type HomeShelfItem } from '@/lib/home-shelf';
+import { HOME_SHELF_PINS } from '@/lib/home-shelf-lineup';
 import { loadHomeShelf } from '@/lib/home-shelf-server';
 import { getFeedChip } from '@/lib/post-feed-chips';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
@@ -117,7 +118,7 @@ function AnonymousHero({ shelf }: { shelf: Promise<HomeShelfItem[]> }) {
           {siteConfig.tagline}
         </Text>
       </div>
-      <Suspense fallback={null}>
+      <Suspense fallback={HOME_SHELF_PINS.length >= HOME_SHELF_MIN_CREATIONS ? <HomeShelfPlaceholder /> : null}>
         <AnonymousShelfSection data={shelf} />
       </Suspense>
     </div>

@@ -117,7 +117,7 @@ function shelfCreation(id: string, overrides: Partial<Extract<HomeShelfItem, { k
     price: { kind: 'credits', credits: 15 },
     fitsWelcomeCredits: true,
     badge: null,
-    creator: { username: 'magicbooklet', name: 'Magicbooklet Team', avatar: null },
+    creator: { username: 'magicbooklet', name: 'Magicbooklet Team' },
     makeHref: `/create-video?remix=generation-${id}&remixPost=${id}`,
     ...overrides,
   };

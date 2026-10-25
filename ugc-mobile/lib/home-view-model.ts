@@ -1,5 +1,3 @@
-import type { OwnerPostListItem } from '@/lib/types';
-
 export function formatCompactCount(value: number | null | undefined) {
   const safeValue = Math.max(0, value ?? 0);
   if (safeValue >= 1_000_000) return `${trimOneDecimal(safeValue / 1_000_000)}M`;

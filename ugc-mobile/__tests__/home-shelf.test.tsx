@@ -15,12 +15,8 @@ vi.mock('react-native', () => ({
     style: typeof style === 'function' ? (style as (state: { pressed: boolean }) => unknown)({ pressed: false }) : style,
   }, children),
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
-  Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
-}));
-
-vi.mock('expo-image', () => ({
-  Image: (props: MockProps) => React.createElement('image', props),
+  useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
 }));
 
 vi.mock('expo-router', () => ({ router: { push: routerPush } }));
@@ -37,6 +33,18 @@ vi.mock('lucide-react-native', () => {
     Video: icon('Video'),
   };
 });
+
+// The poster, the bones and the type have suites of their own; here they are
+// the props the shelf hands them.
+vi.mock('@/components/media-preview', () => ({
+  StableMediaImage: (props: MockProps) => React.createElement('stable-image', props),
+}));
+vi.mock('@/components/skeleton', () => ({
+  SkeletonBone: (props: MockProps) => React.createElement('skeleton-bone', props),
+}));
+vi.mock('@/components/ui', () => ({
+  AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
+}));
 
 vi.mock('@/lib/motion', () => ({
   MotionView: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -70,6 +78,9 @@ const pressables = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node
 const allText = (node: renderer.ReactTestInstance) => node.findAll((child) => String(child.type) === 'text')
   .map((child) => child.props.children)
   .join(' | ');
+const byLabel = (tree: renderer.ReactTestRenderer, label: string) => (
+  pressables(tree).find((node) => String(node.props.accessibilityLabel).startsWith(label))!
+);
 
 function renderShelf(items: HomeShelfItem[], overrides: Partial<React.ComponentProps<typeof HomeShelf>> = {}) {
   const onMake = vi.fn();
@@ -80,6 +91,8 @@ function renderShelf(items: HomeShelfItem[], overrides: Partial<React.ComponentP
       offerFreeToTry={false}
       horizontalPadding={18}
       contentWidth={354}
+      activeRenders={0}
+      pendingId={null}
       onMake={onMake}
       {...overrides}
     />,
@@ -106,20 +119,19 @@ describe('the Make this shelf', () => {
       'New video',
       'New motion',
     ]);
-    // A row that scrolls sideways, held still: nothing in it turns by itself.
+    expect(allText(tree.root)).toContain('Make this');
     expect(tree.root.find((node) => String(node.type) === 'scrollview').props.horizontal).toBe(true);
   });
 
-  it('hands a creation to the screen to remix, and opens an offer\'s screen', () => {
+  it("hands a creation to the screen to remix, and opens an offer's screen", () => {
     const { tree, onMake } = renderShelf(shelf.responseVariants.member.response.items);
-    const byLabel = (label: string) => pressables(tree).find((node) => String(node.props.accessibilityLabel).startsWith(label))!;
 
     renderer.act(() => {
-      byLabel('Paper boat').props.onPress();
-      byLabel('Share your first post').props.onPress();
-      byLabel('Invite friends').props.onPress();
-      byLabel('New motion').props.onPress();
-      byLabel('See all creations').props.onPress();
+      byLabel(tree, 'Paper boat').props.onPress();
+      byLabel(tree, 'Share your first post').props.onPress();
+      byLabel(tree, 'Invite friends').props.onPress();
+      byLabel(tree, 'New motion').props.onPress();
+      byLabel(tree, 'See all creations').props.onPress();
     });
 
     expect(onMake).toHaveBeenCalledTimes(1);
@@ -137,34 +149,53 @@ describe('the Make this shelf', () => {
     expect(allText(member.root)).toContain('New model');
   });
 
-  it('holds its place while the first answer loads', () => {
+  it('holds its place with bones while the first answer loads', () => {
     const { tree } = renderShelf([], { isLoading: true });
 
-    expect(pressables(tree).map((node) => node.props.accessibilityLabel)).toEqual(['See all creations']);
-    const placeholders = tree.root.findAll((node) => String(node.type) === 'view' && node.props.accessible === false);
-    expect(placeholders).toHaveLength(3);
+    expect(pressables(tree)).toHaveLength(0);
+    const progress = tree.root.find((node) => String(node.type) === 'view' && node.props.accessibilityRole === 'progressbar');
+    expect(progress.props.accessibilityLabel).toBe('Loading creations');
+    expect(progress.findAll((node) => String(node.type) === 'skeleton-bone')).toHaveLength(3);
     expect(tree.root.find((node) => String(node.type) === 'scrollview').props.scrollEnabled).toBe(false);
   });
 
-  it('draws nothing when there is nothing to show', () => {
+  it('offers the three tools when there are no creations, in the same row', () => {
     const { tree } = renderShelf([]);
 
-    expect(tree.toJSON()).toBeNull();
+    expect(allText(tree.root)).toContain('Start creating');
+    expect(pressables(tree).map((node) => node.props.accessibilityLabel)).toEqual(['New image', 'New video', 'New motion']);
+    renderer.act(() => byLabel(tree, 'New video').props.onPress());
+    expect(routerPush).toHaveBeenCalledWith('/create/video');
+  });
+
+  it("puts renders in progress in the subtitle's place, opening Creations", () => {
+    const { tree } = renderShelf(shelf.response.items, { activeRenders: 2 });
+
+    const line = byLabel(tree, '2 renders in progress');
+    expect(line.props.accessibilityHint).toBe('Opens your creations');
+    expect(allText(tree.root)).not.toContain('Real creations, one tap to make your own');
+    renderer.act(() => line.props.onPress());
+    expect(routerPush).toHaveBeenCalledWith({ pathname: '/profile', params: { tab: 'Creations' } });
+  });
+
+  it('waits on the remix being opened: that card says so, and no card takes a second tap', () => {
+    const { tree } = renderShelf(shelf.response.items, { pendingId: 'post-1' });
+
+    const opening = byLabel(tree, 'Paper boat');
+    expect(opening.props.accessibilityState).toEqual({ disabled: true, busy: true });
+    expect(allText(opening)).toContain('Opening');
+    expect(byLabel(tree, 'Serum').props.disabled).toBe(true);
   });
 
   it('gives every control a full hit region', () => {
-    const { tree } = renderShelf(shelf.responseVariants.member.response.items);
-
-    for (const node of pressables(tree)) {
-      const style = (node.props.style ?? {}) as { height?: number; minHeight?: number };
-      const slop = (node.props.hitSlop ?? { top: 0, bottom: 0 }) as { top: number; bottom: number };
-      const drawn = style.height ?? style.minHeight;
-      if (drawn === undefined) {
-        // "See all" is a text link: its slop is sized for its line.
-        expect(slop.top + slop.bottom).toBeGreaterThan(0);
-        continue;
+    for (const items of [shelf.responseVariants.member.response.items, [] as HomeShelfItem[]]) {
+      const { tree } = renderShelf(items, { activeRenders: items.length ? 1 : 0 });
+      for (const node of pressables(tree)) {
+        const style = (node.props.style ?? {}) as { height?: number; minHeight?: number };
+        const slop = (node.props.hitSlop ?? { top: 0, bottom: 0 }) as { top: number; bottom: number };
+        const drawn = style.height ?? style.minHeight ?? 0;
+        expect(drawn + slop.top + slop.bottom, String(node.props.accessibilityLabel)).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
       }
-      expect(drawn + slop.top + slop.bottom, String(node.props.accessibilityLabel)).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
     }
   });
 });

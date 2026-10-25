@@ -733,6 +733,7 @@ export async function resolvePostRowsToFeedItems(
         generationId: post.generation_id,
         postFormat: post.post_format,
         category: post.category,
+        creationMode: post.creation_mode,
         sourceKind: normalizeShowcaseSourceKind(post.source_kind),
         resourceBundle: asset
           ? {
@@ -1496,6 +1497,7 @@ export async function attachViewerStateToFeed(
         generationId: item.generationId,
         postFormat: item.postFormat,
         category: item.category,
+        creationMode: item.creationMode,
         sourceKind: item.sourceKind,
         resourceBundle: item.asset
           ? {

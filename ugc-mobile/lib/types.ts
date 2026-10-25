@@ -1120,9 +1120,8 @@ export interface HomeShelfCreation {
   /** The price fits the welcome credits someone without an account is owed. */
   fitsWelcomeCredits: boolean;
   badge: 'new-model' | null;
-  creator: { username: string | null; name: string | null; avatar: string | null };
-  /** The web's create page for this remix; the app routes through `post`. */
-  makeHref: string;
+  creator: { username: string | null; name: string | null };
+  /** The post itself: Make this runs the feed's remix on it. */
   post: ShowcaseFeedItem;
 }
 

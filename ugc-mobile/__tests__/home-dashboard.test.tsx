@@ -3,7 +3,7 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { AccessibilityInfo, Alert, Share } from 'react-native';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { FeedVideoActivationStore } from '../lib/feed-video-activation';
 import type { PlaybackNetwork } from '../lib/playback-metrics';
@@ -12,27 +12,6 @@ type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 type SentEvent = { eventType: string; deliveryId?: string; durationMs?: number; clientEventId?: string };
 type NewestAnswer = { newestPostId: string | null; newestPublishedAt: string | null };
 type UndoAnswer = { ok: true; removed: boolean };
-
-// The header rail's pictures are `require`d at the screen's top level, as Metro
-// bundles them, and that call reaches Node's own loader, which would read a
-// .jpg as JavaScript. For this suite a .jpg is an asset number, as on a phone.
-const jpegRequires = await vi.hoisted(async () => {
-  const { default: Module } = await import('node:module');
-  const extensions = (Module as unknown as {
-    _extensions: Record<string, ((module: { exports: unknown }) => void) | undefined>;
-  })._extensions;
-  const previous = extensions['.jpg'];
-  extensions['.jpg'] = (module) => {
-    module.exports = 1;
-  };
-  return {
-    restore() {
-      if (previous) extensions['.jpg'] = previous;
-      else delete extensions['.jpg'];
-    },
-  };
-});
-afterAll(() => jpegRequires.restore());
 
 // One router object for every render: a new one per render hangs these suites.
 const routerState = vi.hoisted(() => ({
@@ -52,6 +31,8 @@ const queryState = vi.hoisted(() => ({
   // When the lane's pages were fetched (React Query's `dataUpdatedAt`).
   dataUpdatedAt: 1,
   refetch: vi.fn(() => Promise.resolve()),
+  // Every other query's refetch (the profile, the shelf), kept apart from the lane's.
+  otherRefetch: vi.fn(() => Promise.resolve()),
   client: {
     getQueriesData: vi.fn((): Array<[readonly unknown[], unknown]> => []),
     invalidateQueries: vi.fn(() => Promise.resolve()),
@@ -67,6 +48,13 @@ const authState = vi.hoisted(() => ({
       Promise.resolve({ newestPostId: null, newestPublishedAt: null })
     )),
     getShowcasePost: vi.fn(),
+    getHomeShelf: vi.fn(),
+    remixShowcasePost: vi.fn((_postId: string) => Promise.resolve({
+      success: true,
+      redirectTo: '/create-video?remix=generation-1&remixPost=post-1',
+      prefill: { prompt: 'A paper boat drifting slowly across a sunlit pond', settings: {} },
+    })),
+    unlockFreeBundle: vi.fn(),
     recordShowcaseFeedEvent: vi.fn((_request: SentEvent) => Promise.resolve()),
     shareShowcasePost: vi.fn((_postId: string, _options: { sourceSurface: string }) => Promise.resolve()),
     undoFeedFeedback: vi.fn((_body: Record<string, string>): Promise<UndoAnswer> => (
@@ -118,7 +106,7 @@ vi.mock('@tanstack/react-query', () => ({
     isSuccess: true,
     refetch: queryState.refetch,
   }),
-  useQuery: () => ({ data: undefined }),
+  useQuery: () => ({ data: undefined, isPending: false, refetch: queryState.otherRefetch }),
   useQueryClient: () => queryState.client,
 }));
 
@@ -163,13 +151,14 @@ vi.mock('react-native-safe-area-context', () => ({
 
 vi.mock('lucide-react-native', () => ({
   Crown: (props: MockProps) => React.createElement('crown-icon', props),
-  ImageIcon: (props: MockProps) => React.createElement('image-icon', props),
-  Play: (props: MockProps) => React.createElement('play-icon', props),
   Plus: (props: MockProps) => React.createElement('plus-icon', props),
-  Rocket: (props: MockProps) => React.createElement('rocket-icon', props),
   Search: (props: MockProps) => React.createElement('search-icon', props),
-  Sparkles: (props: MockProps) => React.createElement('sparkles-icon', props),
-  WandSparkles: (props: MockProps) => React.createElement('wand-sparkles-icon', props),
+}));
+
+// The shelf has a suite of its own (home-shelf.test.tsx); here it is the props
+// the screen hands it.
+vi.mock('@/components/home-shelf', () => ({
+  HomeShelf: (props: MockProps) => React.createElement('home-shelf', props),
 }));
 
 vi.mock('@/components/comments-sheet', () => ({
@@ -274,7 +263,7 @@ vi.mock('@/lib/use-showcase-save-mutation', () => ({
   useShowcaseSaveMutation: () => ({ toggleSave: vi.fn() }),
 }));
 
-// The viewer's runs in flight, which the workspace slide counts.
+// The viewer's runs in flight, which the renders row counts.
 const activeGenerationState = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock('@/lib/use-active-generations', () => ({
@@ -407,6 +396,12 @@ function mediaItem(id: string, deliveryId: string) {
     canRemix: false,
     recommendation: { deliveryId, position: 0, algorithmVersion: 'for-you-rules-v4' },
   };
+}
+
+/** A post as the shelf sends it: made in the app, remix open, and no feed delivery. */
+function shelfPost(id: string) {
+  const { recommendation: _delivery, ...post } = videoItem(id, 'unused');
+  return { ...post, generationId: `generation-${id}`, canRemix: true, remixCapability: 'public', remixTarget: 'video' };
 }
 
 function videoItem(id: string, deliveryId: string) {
@@ -553,6 +548,8 @@ describe('Home screen', () => {
     queryState.dataUpdatedAt = 1;
     // Back to each double's own answer after a test that changed it.
     queryState.refetch.mockReset();
+    queryState.otherRefetch.mockReset();
+    queryState.otherRefetch.mockImplementation(() => Promise.resolve());
     queryState.client.getQueriesData.mockReset();
     authState.api.getShowcaseFeedNewest.mockReset();
     authState.api.recordShowcaseFeedEvent.mockReset();
@@ -1086,54 +1083,100 @@ describe('Home screen', () => {
   });
 
   // 02-1: a guest's count used to open a Creations tab that only said "Sign in
-  // to view your creations"; it now opens the guest's own creations.
-  it("opens a guest's Creations from the workspace slide's render count", () => {
+  // to view your creations"; it now opens the guest's own creations. The count
+  // lived on the workspace slide until the shelf replaced it, and now takes the
+  // shelf's subtitle line (home-shelf.test.tsx presses it).
+  it("hands a guest's renders in progress to the shelf", () => {
     authState.user = null;
     authState.identityUserId = 'guest-1';
     activeGenerationState.count = 2;
     const { tree } = renderHome();
     const header = renderHeader(tree);
 
-    const rail = header.root.find((node) => String(node.type) === 'flash-list' && node.props.horizontal === true);
-    const workspace = (rail.props.data as Array<{ slide: { kind: string } }>).findIndex((item) => item.slide.kind === 'workspace');
-    expect(workspace).toBeGreaterThanOrEqual(0);
-    let slide: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      slide = renderer.create(rail.props.renderItem({ item: rail.props.data[workspace], index: workspace }) as React.ReactElement);
-    });
-    expect(slide!.root.findAllByProps({ children: '2 renders in progress' }).length).toBeGreaterThan(0);
-    const count = slide!.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === '2 renders in progress');
-    expect(count.props.accessibilityHint).toBe('Opens your creations');
-    press(slide!, '2 renders in progress');
+    expect(hostProps(header, 'home-shelf').activeRenders).toBe(2);
 
-    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/profile', params: { tab: 'Creations' } });
-
-    renderer.act(() => slide!.unmount());
     renderer.act(() => header.unmount());
     renderer.act(() => tree.unmount());
   });
 
-  // Android never clears a label that goes back to undefined: the emulator read
-  // "Open your creations" over "Creator workspace" once the renders were done.
-  it('says what the workspace slide shows when nothing is rendering', () => {
-    authState.user = null;
-    authState.identityUserId = 'guest-1';
+  it('hands the shelf no renders while nothing is rendering', () => {
     activeGenerationState.count = 0;
     const { tree } = renderHome();
     const header = renderHeader(tree);
 
-    const rail = header.root.find((node) => String(node.type) === 'flash-list' && node.props.horizontal === true);
-    const workspace = (rail.props.data as Array<{ slide: { kind: string } }>).findIndex((item) => item.slide.kind === 'workspace');
-    let slide: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      slide = renderer.create(rail.props.renderItem({ item: rail.props.data[workspace], index: workspace }) as React.ReactElement);
-    });
-    const status = slide!.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Creator workspace');
-    expect(status.props.disabled).toBe(true);
-    expect(status.props.accessibilityHint).toBeUndefined();
-    expect(status.findAllByProps({ children: 'Creator workspace' }).length).toBeGreaterThan(0);
+    expect(hostProps(header, 'home-shelf').activeRenders).toBe(0);
 
-    renderer.act(() => slide!.unmount());
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  // The shelf's Make this is the feed's Remix: the same requests and the same
+  // landing in the creator. A shelf post carries no feed delivery, so it files
+  // no remix_start into the ranker's telemetry.
+  it("runs the feed's remix for a shelf card", async () => {
+    const { tree } = renderHome();
+    const header = renderHeader(tree);
+    const shelf = hostProps(header, 'home-shelf');
+    expect(shelf.offerFreeToTry).toBe(false);
+
+    await renderer.act(async () => {
+      shelf.onMake({ id: 'post-1', post: shelfPost('post-1') });
+      await settlePromises();
+    });
+
+    expect(authState.api.remixShowcasePost).toHaveBeenCalledWith('post-1');
+    expect(authState.api.unlockFreeBundle).not.toHaveBeenCalled();
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+    expect(authState.api.recordShowcaseFeedEvent).not.toHaveBeenCalled();
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  it('opens one remix at a time from the shelf', async () => {
+    const opened = deferred<{ success: boolean; redirectTo: string; prefill: { prompt: string; settings: {} } }>();
+    authState.api.remixShowcasePost.mockImplementationOnce(() => opened.promise);
+    const { tree } = renderHome();
+    let header = renderHeader(tree);
+
+    renderer.act(() => {
+      hostProps(header, 'home-shelf').onMake({ id: 'post-1', post: shelfPost('post-1') });
+    });
+    // The screen re-renders with the remix pending: the shelf is told, and a
+    // second tap is not another request.
+    renderer.act(() => header.unmount());
+    header = renderHeader(tree);
+    expect(hostProps(header, 'home-shelf').pendingId).toBe('post-1');
+    renderer.act(() => {
+      hostProps(header, 'home-shelf').onMake({ id: 'post-2', post: shelfPost('post-2') });
+    });
+    expect(authState.api.remixShowcasePost).toHaveBeenCalledTimes(1);
+
+    await renderer.act(async () => {
+      opened.resolve({ success: true, redirectTo: '/create-video?remix=generation-post-1&remixPost=post-1', prefill: { prompt: '', settings: {} } });
+      await settlePromises();
+    });
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  it("sends a guest's Make this to sign in, and offers a guest the welcome credits", () => {
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    const { tree } = renderHome();
+    const header = renderHeader(tree);
+    const shelf = hostProps(header, 'home-shelf');
+    expect(shelf.offerFreeToTry).toBe(true);
+
+    renderer.act(() => {
+      shelf.onMake({ id: 'post-1', post: shelfPost('post-1') });
+    });
+
+    expect(authState.api.remixShowcasePost).not.toHaveBeenCalled();
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/post/post-1' } });
+
     renderer.act(() => header.unmount());
     renderer.act(() => tree.unmount());
   });

@@ -71,7 +71,7 @@ describe('the Make this shelf', () => {
    * indicator either, as App Store shelves do it.
    */
   it('peeks the next card instead of drawing a page control', () => {
-    expect(shelf).toContain('snapToInterval={cardWidth + SHELF_GAP}');
+    expect(shelf).toContain('snapToInterval={card.width + SHELF_GAP}');
     expect(shelf).toContain('showsHorizontalScrollIndicator={false}');
     expect(shelfSource).not.toContain('SlideDots');
   });
@@ -83,16 +83,21 @@ describe('the Make this shelf', () => {
 
   /** 44pt hit regions: the end tile's rows are drawn shorter and given the rest as slop. */
   it('keeps the end tile\'s rows at a full hit region', () => {
-    expect(startBlank).toContain('hitSlop={verticalHitSlop(START_BLANK_ROW_HEIGHT)}');
-    expect(startBlank).toContain('minHeight: START_BLANK_ROW_HEIGHT');
+    expect(startBlank).toContain('hitSlop={verticalHitSlop(ROW_HEIGHT)}');
+    expect(startBlank).toContain('minHeight: ROW_HEIGHT');
   });
 
   /**
-   * The row's place is held while the first answer loads, so the restored feed
-   * below it does not jump down once the shelf arrives.
+   * The row sits in the feed's list header, and FlashList anchors on its
+   * height: it keeps one height through loading, an empty answer (the tools in
+   * the cards' place) and the renders line taking the subtitle's.
    */
-  it('holds its place while it loads, and draws nothing with nothing to show', () => {
-    expect(shelf).toContain('if (!isLoading && items.length === 0) return null;');
+  it('keeps one height whatever it is showing', () => {
+    expect(shelf).not.toContain('return null');
+    expect(shelf).toContain('HOME_SHELF_START_BLANK_TOOLS.map((tool) => (');
+    expect(shelf).toContain("<View style={{ minHeight: 44, justifyContent: 'center' }}>");
+    expect(declaration(shelfSource, 'function ActiveRendersLine(')).toContain('minHeight: 44,');
     expect(dashboard).toContain('isLoading={shelfQuery.isPending}');
+    expect(dashboard).toContain('placeholderData: keepHomeShelfCreations,');
   });
 });

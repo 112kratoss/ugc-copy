@@ -3,11 +3,14 @@ import { describe, expect, it } from 'vitest';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   HOME_SHELF_START_BLANK_TOOLS,
+  formatActiveRenders,
   formatHomeShelfPrice,
-  getHomeShelfCardWidth,
+  getHomeShelfCardSize,
   homeShelfActionCopy,
   homeShelfBadge,
   homeShelfCreationLabel,
+  homeShelfPosterCacheKey,
+  keepHomeShelfCreations,
   readHomeShelfItems,
 } from '../lib/home-shelf-view-model';
 import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, HomeShelfPrice, HomeShelfResponse } from '../lib/types';
@@ -18,6 +21,8 @@ const endpoint = mobileApiContract.endpoints.getHomeShelf as unknown as {
   copy: {
     actions: Record<HomeShelfAction['id'], { title: string; body: string; cta: string }>;
     prices: Array<{ price: HomeShelfPrice; label: string }>;
+    badges: Array<{ badge: 'new-model' | null; fitsWelcomeCredits: boolean; offerFreeToTry: boolean; label: string | null }>;
+    referralPercents: Array<{ inviterPercent: number; inviteePercent: number; body: string }>;
   };
 };
 
@@ -51,6 +56,15 @@ describe('readHomeShelfItems', () => {
   });
 });
 
+describe('keepHomeShelfCreations', () => {
+  it("keeps the shared creations and none of the last person's offers", () => {
+    const kept = keepHomeShelfCreations(endpoint.responseVariants.member.response);
+
+    expect(kept?.items.map((item) => item.id)).toEqual(['post-1', 'post-2', 'post-3']);
+    expect(keepHomeShelfCreations(undefined)).toBeUndefined();
+  });
+});
+
 describe('the shelf says what the web says', () => {
   it('words each offer as the fixture pins', () => {
     const actions = [
@@ -71,6 +85,18 @@ describe('the shelf says what the web says', () => {
     }
     expect(formatHomeShelfPrice(null)).toBeNull();
   });
+
+  it('badges each card as the fixture pins', () => {
+    for (const { badge, fitsWelcomeCredits, offerFreeToTry, label } of endpoint.copy.badges) {
+      expect(homeShelfBadge({ badge, fitsWelcomeCredits }, offerFreeToTry)).toBe(label);
+    }
+  });
+
+  it('states the referral terms to the cent, as the fixture pins', () => {
+    for (const { inviterPercent, inviteePercent, body } of endpoint.copy.referralPercents) {
+      expect(homeShelfActionCopy({ kind: 'action', id: 'invite', inviterPercent, inviteePercent }).body).toBe(body);
+    }
+  });
 });
 
 describe('homeShelfActionCopy', () => {
@@ -78,23 +104,6 @@ describe('homeShelfActionCopy', () => {
     expect(homeShelfActionCopy({ kind: 'action', id: 'post' }).route).toBe('/post/new');
     expect(homeShelfActionCopy({ kind: 'action', id: 'invite', inviterPercent: 5, inviteePercent: 5 }).route).toBe('/invite');
     expect(homeShelfActionCopy({ kind: 'action', id: 'earn', creatorSharePercent: 85 }).route).toBe('/seller-dashboard');
-  });
-
-  it('leaves out a referral side that earns nothing', () => {
-    expect(homeShelfActionCopy({ kind: 'action', id: 'invite', inviterPercent: 2.5, inviteePercent: 0 }).body)
-      .toBe('You get 2.5% of their top-ups in credits.');
-  });
-});
-
-describe('homeShelfBadge', () => {
-  it('puts a launch before the welcome credits', () => {
-    expect(homeShelfBadge({ ...creations[0], badge: 'new-model' }, true)).toBe('New model');
-  });
-
-  it('says "Free to try" only to someone still owed the welcome credits', () => {
-    expect(homeShelfBadge(creations[0], true)).toBe('Free to try');
-    expect(homeShelfBadge(creations[0], false)).toBeNull();
-    expect(homeShelfBadge({ ...creations[0], fitsWelcomeCredits: false }, true)).toBeNull();
   });
 });
 
@@ -105,14 +114,43 @@ describe('homeShelfCreationLabel', () => {
   });
 });
 
+describe('homeShelfPosterCacheKey', () => {
+  it("shares the feed's cache key for the same media, and falls back to the poster", () => {
+    const withKey = {
+      ...creations[0],
+      post: { ...creations[0].post, mediaItems: [{ ...creations[0].post.mediaItems![0], previewCacheKey: 'media:post-1:preview' }] },
+    } as HomeShelfCreation;
+
+    expect(homeShelfPosterCacheKey(withKey)).toBe('media:post-1:preview');
+    expect(homeShelfPosterCacheKey(creations[0])).toBe(creations[0].posterUrl);
+  });
+});
+
 describe('the row', () => {
   it('fits two cards and a sliver of the third', () => {
-    const width = getHomeShelfCardWidth(354, 10);
+    const { width } = getHomeShelfCardSize(354, 10);
     expect(2 * width + 10).toBeLessThan(354);
     expect(3 * width + 2 * 10).toBeGreaterThan(354);
   });
 
+  it('grows taller with larger text, up to the cap its text follows', () => {
+    const base = getHomeShelfCardSize(354, 10, 1, 1.6);
+    const larger = getHomeShelfCardSize(354, 10, 1.4, 1.6);
+    const largest = getHomeShelfCardSize(354, 10, 3, 1.6);
+
+    expect(larger.width).toBe(base.width);
+    expect(larger.height).toBeGreaterThan(base.height);
+    expect(largest.height).toBe(getHomeShelfCardSize(354, 10, 1.6, 1.6).height);
+    // Smaller than default text keeps the default height.
+    expect(getHomeShelfCardSize(354, 10, 0.8).height).toBe(base.height);
+  });
+
   it('ends on the three creator tools', () => {
     expect(HOME_SHELF_START_BLANK_TOOLS.map((tool) => tool.route)).toEqual(['/create/image', '/create/video', '/create/motion']);
+  });
+
+  it('counts renders in progress in words', () => {
+    expect(formatActiveRenders(1)).toBe('1 render in progress');
+    expect(formatActiveRenders(2)).toBe('2 renders in progress');
   });
 });
