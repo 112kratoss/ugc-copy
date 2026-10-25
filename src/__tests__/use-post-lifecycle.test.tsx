@@ -12,6 +12,7 @@ const clientMocks = vi.hoisted(() => ({
 const feedbackMocks = vi.hoisted(() => ({
   pushToast: vi.fn(),
   requestConfirmation: vi.fn(),
+  requestPublicIdentity: vi.fn(),
 }));
 
 const policyMocks = vi.hoisted(() => ({
@@ -118,7 +119,7 @@ describe('usePostLifecycle', () => {
 
   it('puts the surface back and reports the server message when the request fails', async () => {
     clientMocks.requestPostVisibilityChange.mockRejectedValue(
-      new PostLifecycleRequestError('Complete your profile before publishing publicly.', { status: 400 }),
+      new PostLifecycleRequestError('Add a title before making this post public.', { status: 400 }),
     );
     const onPatch = vi.fn();
     const onSettled = vi.fn();
@@ -130,7 +131,7 @@ describe('usePostLifecycle', () => {
     await waitFor(() => {
       expect(feedbackMocks.pushToast).toHaveBeenCalledWith({
         tone: 'error',
-        message: 'Complete your profile before publishing publicly.',
+        message: 'Add a title before making this post public.',
       });
     });
     // Going public shows the recipe as live straight away (the server
@@ -140,6 +141,148 @@ describe('usePostLifecycle', () => {
       ['post-1', { visibility: 'private', bundleStatus: 'draft' }],
     ]);
     expect(onSettled).not.toHaveBeenCalled();
+    // Only the refusal for the name and handle is answered by asking for them.
+    expect(feedbackMocks.requestPublicIdentity).not.toHaveBeenCalled();
+  });
+
+  describe('a public change refused for the name and handle', () => {
+    const privatePost: PostLifecycleTarget = { ...basePost, visibility: 'private', bundle: null };
+    const profileRefusal = () => new PostLifecycleRequestError(
+      'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+      { status: 400, field: 'profile' },
+    );
+    const savedProfile = { id: 'user-1', username: 'maya-k', displayName: 'Maya K' };
+    const publicResult = { visibility: 'public', ownerPath: '/post/post-1/edit', showcasePath: '/showcase/post-1', resourceBundleStatus: null };
+
+    it('asks for both, saves them, and sends the change again', async () => {
+      clientMocks.requestPostVisibilityChange
+        .mockRejectedValueOnce(profileRefusal())
+        .mockResolvedValueOnce(publicResult);
+      feedbackMocks.requestPublicIdentity.mockResolvedValue({ status: 'saved', profile: savedProfile });
+      const onPatch = vi.fn();
+      const onSettled = vi.fn();
+      const onPublicIdentitySaved = vi.fn();
+      const signedInUser = { email: 'maya.k@example.com', user_metadata: { full_name: 'Maya Kapoor' } };
+      render(
+        <Harness
+          post={privatePost}
+          signedInUser={signedInUser}
+          onPatch={onPatch}
+          onSettled={onSettled}
+          onPublicIdentitySaved={onPublicIdentitySaved}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'go public' }));
+
+      await waitFor(() => {
+        expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ type: 'visibility', visibility: 'public' }));
+      });
+      // The question fills its fields from the sign-in, as the composers do.
+      expect(feedbackMocks.requestPublicIdentity).toHaveBeenCalledWith({ accessToken: 'token', signedInUser });
+      expect(onPublicIdentitySaved).toHaveBeenCalledWith(savedProfile);
+      expect(clientMocks.requestPostVisibilityChange).toHaveBeenCalledTimes(2);
+      // The surface stays public while it asks: it was never put back.
+      expect(onPatch.mock.calls).toEqual([
+        ['post-1', { visibility: 'public', bundleStatus: null }],
+        ['post-1', { visibility: 'public', bundleStatus: null }],
+      ]);
+      expect(feedbackMocks.pushToast).toHaveBeenCalledWith({ tone: 'success', message: 'Name and handle saved. Post is public.' });
+      expect(feedbackMocks.pushToast).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('status')).toHaveTextContent('idle');
+    });
+
+    it('holds the post as busy while it asks', async () => {
+      clientMocks.requestPostVisibilityChange.mockRejectedValueOnce(profileRefusal());
+      feedbackMocks.requestPublicIdentity.mockImplementation(() => new Promise(() => {}));
+      render(<Harness post={privatePost} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'go public' }));
+
+      await waitFor(() => {
+        expect(feedbackMocks.requestPublicIdentity).toHaveBeenCalledTimes(1);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('visibility');
+    });
+
+    it('puts the post back without a word when the creator cancels', async () => {
+      clientMocks.requestPostVisibilityChange.mockRejectedValueOnce(profileRefusal());
+      feedbackMocks.requestPublicIdentity.mockResolvedValue({ status: 'cancelled' });
+      const onPatch = vi.fn();
+      const onSettled = vi.fn();
+      render(<Harness post={privatePost} onPatch={onPatch} onSettled={onSettled} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'go public' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('status')).toHaveTextContent('idle');
+      });
+      expect(onPatch.mock.calls).toEqual([
+        ['post-1', { visibility: 'public', bundleStatus: null }],
+        ['post-1', { visibility: 'private', bundleStatus: null }],
+      ]);
+      expect(clientMocks.requestPostVisibilityChange).toHaveBeenCalledTimes(1);
+      expect(feedbackMocks.pushToast).not.toHaveBeenCalled();
+      expect(onSettled).not.toHaveBeenCalled();
+    });
+
+    it('reports the refusal when nothing can draw the question', async () => {
+      clientMocks.requestPostVisibilityChange.mockRejectedValueOnce(profileRefusal());
+      feedbackMocks.requestPublicIdentity.mockResolvedValue({ status: 'unavailable' });
+      render(<Harness post={privatePost} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'go public' }));
+
+      await waitFor(() => {
+        expect(feedbackMocks.pushToast).toHaveBeenCalledWith({
+          tone: 'error',
+          message: 'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+        });
+      });
+      expect(clientMocks.requestPostVisibilityChange).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks once: a second refusal after the save is reported, not asked again', async () => {
+      clientMocks.requestPostVisibilityChange
+        .mockRejectedValueOnce(profileRefusal())
+        .mockRejectedValueOnce(profileRefusal());
+      feedbackMocks.requestPublicIdentity.mockResolvedValue({ status: 'saved', profile: savedProfile });
+      const onPatch = vi.fn();
+      render(<Harness post={privatePost} onPatch={onPatch} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'go public' }));
+
+      await waitFor(() => {
+        expect(feedbackMocks.pushToast).toHaveBeenCalledWith(expect.objectContaining({ tone: 'error' }));
+      });
+      expect(feedbackMocks.requestPublicIdentity).toHaveBeenCalledTimes(1);
+      expect(onPatch).toHaveBeenLastCalledWith('post-1', { visibility: 'private', bundleStatus: null });
+    });
+
+    it('never asks when the post is going private', async () => {
+      clientMocks.requestPostVisibilityChange.mockRejectedValueOnce(profileRefusal());
+      render(<Harness />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'go private' }));
+
+      await waitFor(() => {
+        expect(feedbackMocks.pushToast).toHaveBeenCalledWith(expect.objectContaining({ tone: 'error' }));
+      });
+      expect(feedbackMocks.requestPublicIdentity).not.toHaveBeenCalled();
+    });
+
+    it('does not ask a creator whose profile can already publish', async () => {
+      clientMocks.requestPostVisibilityChange.mockResolvedValueOnce(publicResult);
+      render(<Harness post={privatePost} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'go public' }));
+
+      await waitFor(() => {
+        expect(feedbackMocks.pushToast).toHaveBeenCalledWith({ tone: 'success', message: 'Post is public.' });
+      });
+      expect(feedbackMocks.requestPublicIdentity).not.toHaveBeenCalled();
+      expect(clientMocks.requestPostVisibilityChange).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('asks first when policy says so and stops cleanly on cancel', async () => {

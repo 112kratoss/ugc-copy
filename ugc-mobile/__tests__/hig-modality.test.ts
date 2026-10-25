@@ -100,8 +100,9 @@ describe('HIG modality — sheets, alerts and the way out', () => {
     const broken = files
       .filter((entry) => entry.name !== 'components/sheet-chrome.tsx')
       .filter((entry) => entry.source.includes('<SheetGrabber'))
+      // `sheetMotion(drag, …)` folds the drag's offset into a hosted panel's transform.
       .filter((entry) => !entry.source.includes('useSheetDismissDrag')
-        || !(entry.source.includes('.dragStyle') || entry.source.includes('.translateY')))
+        || !(entry.source.includes('.dragStyle') || entry.source.includes('.translateY') || entry.source.includes('sheetMotion(drag')))
       .map((entry) => entry.name);
 
     expect(broken).toEqual([]);

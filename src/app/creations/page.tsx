@@ -699,11 +699,19 @@ export default function CreationsPage() {
         });
     }, [userId]);
 
+    // A name and handle given on the way to making a post public: the
+    // profile this page holds shows them from then on.
+    const applySavedPublicIdentity = useCallback((saved: ProfileApiResponse) => {
+        setProfile((current) => (current ? { ...current, ...saved } : saved));
+    }, []);
+
     const postLifecycle = usePostLifecycle({
         accessToken,
+        signedInUser: session?.user ?? null,
         onAuthRequired: redirectToSignIn,
         onPatch: patchPost,
         onRemoved: removePost,
+        onPublicIdentitySaved: applySavedPublicIdentity,
     });
 
     // A generation card's linked post is the full owner record when it is

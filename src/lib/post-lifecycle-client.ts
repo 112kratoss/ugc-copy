@@ -40,13 +40,26 @@ export type PostDeleteResult =
 export class PostLifecycleRequestError extends Error {
   readonly status: number;
   readonly code: string | null;
+  /** What the server refused, when it named it: `profile` is a public post's name and handle. */
+  readonly field: string | null;
 
-  constructor(message: string, options: { status: number; code?: string | null }) {
+  constructor(message: string, options: { status: number; code?: string | null; field?: string | null }) {
     super(message);
     this.name = 'PostLifecycleRequestError';
     this.status = options.status;
     this.code = options.code ?? null;
+    this.field = options.field ?? null;
   }
+}
+
+/**
+ * The server's refusal of a public post whose owner has no claimed handle or
+ * no display name yet. It checks them before anything else, so nothing has
+ * moved, and the owner surfaces answer it by asking for both and sending the
+ * change again, rather than with the profile link the refusal also carries.
+ */
+export function isPublicIdentityRefusal(error: unknown): boolean {
+  return error instanceof PostLifecycleRequestError && error.field === 'profile';
 }
 
 type FetchLike = typeof fetch;
@@ -91,6 +104,7 @@ async function sendLifecycleRequest(
     throw new PostLifecycleRequestError(readString(data, 'error') ?? fallbackError, {
       status: response.status,
       code: readString(data, 'code'),
+      field: readString(data, 'field'),
     });
   }
   return { response, data };

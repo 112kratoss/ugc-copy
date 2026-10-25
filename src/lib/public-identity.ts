@@ -28,7 +28,8 @@ export type PublicIdentityProfile = Pick<ProfileApiResponse, 'username' | 'displ
 /** The handle field's rule, in the words Edit profile and onboarding use. */
 export const PUBLIC_HANDLE_RULE = '3–24 lowercase letters, numbers, or hyphens.';
 
-type SignedInUser = {
+/** What the sign-in tells about the account: its email and the provider's name for it. */
+export type SignedInUser = {
   email?: string | null;
   user_metadata?: Record<string, unknown> | null;
 } | null | undefined;
@@ -91,6 +92,66 @@ export function validatePublicIdentity(
     errors.username = fieldErrors.username ?? reservedError ?? undefined;
   }
   return errors;
+}
+
+/**
+ * Whether a handle is worth a round trip to the server as it is typed (the
+ * app's `shouldCheckUsernameAvailability`): only once both fields pass the
+ * local rules, since `/api/profile/validate` judges the whole submission and a
+ * blank name comes back as a refusal that says nothing about the handle; and
+ * never for the account's own claimed handle, which nobody else can take.
+ */
+export function shouldCheckHandleAvailability(
+  draft: PublicIdentityDraft,
+  savedUsername: string | null | undefined,
+): boolean {
+  const errors = validatePublicIdentity(draft, savedUsername);
+  if (errors.displayName || errors.username) {
+    return false;
+  }
+  return normalizeUsername(draft.username) !== normalizeUsername(savedUsername);
+}
+
+export type HandleAvailabilityVerdict =
+  | { state: 'available' }
+  | { state: 'taken'; message: string };
+
+/**
+ * The server's word on a handle before anything is saved: available, or taken
+ * (or refused) in its own words. Null when it gave no verdict on the handle:
+ * offline, rate limited, a fault, or a refusal about the name. The save still
+ * judges, so the field just goes back to stating the rule.
+ */
+export async function checkHandleAvailability(
+  draft: PublicIdentityDraft,
+  accessToken: string | null | undefined,
+  signal?: AbortSignal,
+): Promise<HandleAvailabilityVerdict | null> {
+  try {
+    const response = await fetch('/api/profile/validate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({ username: draft.username.trim(), displayName: draft.displayName.trim() }),
+      signal,
+    });
+    if (response.ok) {
+      return { state: 'available' };
+    }
+    if (response.status !== 400 && response.status !== 409) {
+      return null;
+    }
+    const data = await response.json().catch(() => null) as
+      | { error?: string; fieldErrors?: PublicIdentityErrors }
+      | null;
+    const message = data?.fieldErrors?.username
+      ?? (response.status === 409 ? data?.error || 'That username is already taken.' : null);
+    return message ? { state: 'taken', message } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

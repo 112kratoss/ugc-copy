@@ -3904,6 +3904,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                       value={identity}
                       errors={identityErrors}
                       disabled={isSubmitting}
+                      accessToken={session?.access_token}
+                      savedUsername={composerProfile?.username}
                       onChange={(next) => {
                         setIdentityEdits(next);
                         setIdentityErrors({});

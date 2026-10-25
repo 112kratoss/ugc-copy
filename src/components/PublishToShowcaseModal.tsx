@@ -661,6 +661,8 @@ export default function PublishToShowcaseModal({
               value={identity}
               errors={identityErrors}
               disabled={isPublishing}
+              accessToken={accessToken}
+              savedUsername={profile?.username}
               onChange={(next) => {
                 setIdentityEdits(next);
                 setIdentityErrors({});

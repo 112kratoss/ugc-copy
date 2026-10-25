@@ -5,6 +5,9 @@
  * which keeps the root layout's hydration-pinned tree untouched.
  */
 
+import type { ProfileApiResponse } from '@/lib/profile';
+import type { SignedInUser } from '@/lib/public-identity';
+
 export type ToastTone = 'success' | 'error' | 'info';
 
 export interface ToastRecord {
@@ -39,13 +42,33 @@ export interface PendingConfirmation {
   request: ConfirmationRequest;
 }
 
+/** Asking for the name and handle a public post needs, and saving them. */
+export interface PublicIdentityRequest {
+  /** The profile is read and saved with it. */
+  accessToken: string;
+  /** Whose sign-in name fills the fields, as it fills the composers'. */
+  signedInUser?: SignedInUser;
+}
+
+export interface PendingPublicIdentity {
+  id: number;
+  request: PublicIdentityRequest;
+}
+
+export type PublicIdentityOutcome =
+  | { status: 'saved'; profile: ProfileApiResponse }
+  | { status: 'cancelled' }
+  /** Nothing draws the app's dialog (a test rendering one component). */
+  | { status: 'unavailable' };
+
 export interface FeedbackSnapshot {
   toasts: ToastRecord[];
   confirmation: PendingConfirmation | null;
+  publicIdentity: PendingPublicIdentity | null;
 }
 
 const DEFAULT_TOAST_DURATION_MS = 4000;
-const EMPTY_SNAPSHOT: FeedbackSnapshot = { toasts: [], confirmation: null };
+const EMPTY_SNAPSHOT: FeedbackSnapshot = { toasts: [], confirmation: null, publicIdentity: null };
 
 type Listener = () => void;
 
@@ -53,6 +76,7 @@ let nextId = 1;
 let snapshot: FeedbackSnapshot = EMPTY_SNAPSHOT;
 const listeners = new Set<Listener>();
 const confirmationResolvers = new Map<number, (confirmed: boolean) => void>();
+const publicIdentityResolvers = new Map<number, (outcome: PublicIdentityOutcome) => void>();
 
 /** How a toast went: closed by the viewer, out of time, or taken down unread by the code that showed it. */
 export type ToastDismissal = 'closed' | 'expired' | 'interrupted';
@@ -211,10 +235,47 @@ export function resolveConfirmation(id: number, confirmed: boolean) {
   resolver(confirmed);
 }
 
-/** Test helper: drop every toast and cancel any open confirmation. */
+/**
+ * Ask for the name and handle a public post shows, and save them to the
+ * profile (`PublicIdentityDialog`, drawn by `FeedbackViewport`). Resolves
+ * once they are saved or the question is put away; with no viewport mounted
+ * it answers `unavailable` at once, and the caller says what it would have
+ * said without asking. A second question while one is open cancels the first.
+ */
+export function requestPublicIdentity(request: PublicIdentityRequest): Promise<PublicIdentityOutcome> {
+  if (listeners.size === 0) {
+    return Promise.resolve({ status: 'unavailable' });
+  }
+  if (snapshot.publicIdentity) {
+    resolvePublicIdentity(snapshot.publicIdentity.id, { status: 'cancelled' });
+  }
+
+  const id = nextId++;
+  return new Promise<PublicIdentityOutcome>((resolve) => {
+    publicIdentityResolvers.set(id, resolve);
+    commit({ ...snapshot, publicIdentity: { id, request } });
+  });
+}
+
+export function resolvePublicIdentity(id: number, outcome: PublicIdentityOutcome) {
+  const resolver = publicIdentityResolvers.get(id);
+  if (!resolver) {
+    return;
+  }
+  publicIdentityResolvers.delete(id);
+  if (snapshot.publicIdentity?.id === id) {
+    commit({ ...snapshot, publicIdentity: null });
+  }
+  resolver(outcome);
+}
+
+/** Test helper: drop every toast and cancel any open question. */
 export function resetFeedbackState() {
   for (const [id] of confirmationResolvers) {
     resolveConfirmation(id, false);
+  }
+  for (const [id] of publicIdentityResolvers) {
+    resolvePublicIdentity(id, { status: 'cancelled' });
   }
   toastDismissHandlers.clear();
   setToastHost(null);

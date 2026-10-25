@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  isPublicIdentityRefusal,
   PostLifecycleRequestError,
   requestPostArchive,
   requestPostDelete,
@@ -85,6 +86,31 @@ describe('post lifecycle client', () => {
       status: 400,
       code: 'PROFILE_INCOMPLETE',
     });
+  });
+
+  // The refusal for the name and handle carries the field the server named,
+  // which is how an owner surface tells it from every other refusal and asks
+  // for the two fields instead of reporting it.
+  it('keeps the field a refusal names, and tells the one for the name and handle', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({
+      error: 'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+      field: 'profile',
+      actionHref: '/profile',
+      actionLabel: 'Complete profile and return',
+    }, 400));
+
+    const refusal = await requestPostVisibilityChange({
+      post: { id: 'post-2', generationId: null },
+      visibility: 'public',
+      accessToken: 'token',
+      fetchImpl,
+    }).catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({ name: 'PostLifecycleRequestError', status: 400, field: 'profile' });
+    expect(isPublicIdentityRefusal(refusal)).toBe(true);
+    expect(isPublicIdentityRefusal(new PostLifecycleRequestError('Add a title.', { status: 400, field: 'title' }))).toBe(false);
+    expect(isPublicIdentityRefusal(new PostLifecycleRequestError('Failed.', { status: 400 }))).toBe(false);
+    expect(isPublicIdentityRefusal(new Error('profile'))).toBe(false);
   });
 
   it('falls back to a generic message when the error body is not JSON', async () => {

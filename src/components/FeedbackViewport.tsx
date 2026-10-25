@@ -1,6 +1,16 @@
 'use client';
 
-import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
+import {
+  Component,
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 
@@ -11,15 +21,53 @@ import {
   readServerToastHost,
   readToastHost,
   resolveConfirmation,
+  resolvePublicIdentity,
   subscribeToFeedback,
   subscribeToToastHost,
   type PendingConfirmation,
   type ToastRecord,
 } from './feedback-state';
 
+// Asked for only by an owner making a post public before their profile can
+// publish, so it is not part of the bundle every page loads with this viewport.
+// React's own lazy, as `next/dynamic` is in the app router: a failed load is
+// thrown to the boundary below, under vitest too, where `next/dynamic` is the
+// pages router's loader and hands the failure to its fallback instead.
+const PublicIdentityDialog = lazy(() => import('./PublicIdentityDialog'));
+
 /**
- * Renders toasts and the confirmation dialog for the whole app. Mounted once
- * in the root layout; everything else talks to it through `feedback-state`.
+ * The question's load can fail: a deploy rotated the chunk names while the tab
+ * was open, or the connection was down as it was asked. React.lazy throws that
+ * to the nearest error boundary, and nothing above this viewport
+ * in the root layout is one, so the whole page would give way to Next's
+ * generic client-exception page, as Alerts' did (`SignedInAlertsBoundary`).
+ * Kept here instead: the question is answered `unavailable`, and its caller
+ * says what it would have said without asking.
+ */
+class PublicIdentityDialogBoundary extends Component<{ id: number; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('Failed to load the name-and-handle question:', error);
+    resolvePublicIdentity(this.props.id, { status: 'unavailable' });
+    // Caught here, it never reaches Next's own reportError, which is what
+    // Sentry hears; hand it on as an uncaught one would be.
+    window.reportError?.(error);
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
+/**
+ * Renders toasts, the confirmation dialog and the name-and-handle question
+ * for the whole app. Mounted once in the root layout; everything else talks to
+ * it through `feedback-state`.
  *
  * Shared by public and authenticated routes, so the layout classes live in
  * globals.css rather than as responsive utilities.
@@ -30,7 +78,7 @@ import {
  * below its header and under its ⋯ menu.
  */
 export default function FeedbackViewport() {
-  const { toasts, confirmation } = useSyncExternalStore(
+  const { toasts, confirmation, publicIdentity } = useSyncExternalStore(
     subscribeToFeedback,
     readFeedbackSnapshot,
     readServerFeedbackSnapshot,
@@ -58,6 +106,16 @@ export default function FeedbackViewport() {
           composer's resource editor) knew nothing of it then, so it can still
           be pressed and focused over that modal. */}
       {confirmation ? createPortal(<ConfirmDialog confirmation={confirmation} />, document.body) : null}
+      {publicIdentity
+        ? createPortal(
+          <PublicIdentityDialogBoundary key={publicIdentity.id} id={publicIdentity.id}>
+            <Suspense fallback={null}>
+              <PublicIdentityDialog pending={publicIdentity} />
+            </Suspense>
+          </PublicIdentityDialogBoundary>,
+          document.body,
+        )
+        : null}
     </>
   );
 }

@@ -23,6 +23,7 @@ import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer } from '@/components/media-zoom';
 import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
 import { OverlayHost } from '@/components/overlay-host';
+import { PublicIdentitySheetHost } from '@/components/public-identity-sheet';
 import { SaverNoticeBar, SaverNoticeSync } from '@/components/saver-notice-bar';
 import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
@@ -249,6 +250,7 @@ function RootLayoutNav() {
                 <OverlayHost>
                 <ActionSheetHost />
                 <DialogHost />
+                <PublicIdentitySheetHost />
                 <SignOutOverlay />
                 <Stack
                 screenOptions={{
