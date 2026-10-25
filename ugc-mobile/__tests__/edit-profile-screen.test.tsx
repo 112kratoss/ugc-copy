@@ -384,6 +384,24 @@ describe('Edit profile: handles', () => {
       vi.useRealTimers();
     }
   });
+
+  it('does not ask about the same handle again when only the name changes', async () => {
+    const tree = await renderScreen(newClient(storedProfile()));
+    vi.useFakeTimers();
+    try {
+      await type(tree, 'Username', 'maya-k');
+      await letTheCheckAnswer();
+      expect(harness.api.validateProfile).toHaveBeenCalledTimes(1);
+
+      await type(tree, 'Display name', 'Maya K');
+      await letTheCheckAnswer();
+
+      expect(harness.api.validateProfile).toHaveBeenCalledTimes(1);
+      expect(input(tree, 'Username').props).toMatchObject({ hint: 'This username is available.', hintTone: 'success' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('Edit profile: picking photos', () => {

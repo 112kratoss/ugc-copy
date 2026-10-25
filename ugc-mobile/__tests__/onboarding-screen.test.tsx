@@ -393,6 +393,23 @@ describe('checking the handle as it is typed', () => {
     act(() => tree.unmount());
   });
 
+  it('does not ask about the same handle again when only the name changes', async () => {
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath-makes');
+    await letTheCheckAnswer();
+    expect(harness.api.validateProfile).toHaveBeenCalledTimes(1);
+
+    const name = tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Display name');
+    await act(async () => { name.props.onChangeText('Sarath K'); });
+    await letTheCheckAnswer();
+
+    expect(harness.api.validateProfile).toHaveBeenCalledTimes(1);
+    expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+
+    act(() => tree.unmount());
+  });
+
   it('says a handle the save found taken until another one is typed', async () => {
     // Free when it was checked, claimed by someone else before the save.
     harness.api.updateProfile.mockReset().mockRejectedValue(taken);

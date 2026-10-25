@@ -259,7 +259,7 @@ function OnboardingFlow() {
   // failed (offline, rate limited) is no verdict, and the save still judges.
   const handleCheck = useHandleAvailability(api, { username, displayName, savedUsername: profile?.username });
   const handleRefusal = readLocalUsernameRejection(username, profile?.username)
-    ?? (handleTakenAtSave !== null && handleTakenAtSave === username ? 'That handle was just claimed. Try another one.' : null)
+    ?? (handleTakenAtSave === username ? 'That handle was just claimed. Try another one.' : null)
     ?? (handleCheck.availability === 'taken' ? handleCheck.message ?? 'This creator name is unavailable.' : null);
   const usernameState = handleRefusal ? 'error' : handleCheck.availability;
   const usernameMessage = handleRefusal ?? (usernameState === 'available' ? 'This creator name is available.' : null);
