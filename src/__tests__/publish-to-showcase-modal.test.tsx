@@ -423,6 +423,25 @@ describe('PublishToShowcaseModal', () => {
       expect(screen.queryByText(/^Suggested/)).toBeNull();
     });
 
+    // A public post saves its title onto the creation, so a suggestion kept
+    // once comes back as the creation's own title.
+    it('swaps an own title that is the prompt’s opening while a recipe is on', () => {
+      render(
+        <PublishToShowcaseModal
+          isOpen
+          onClose={vi.fn()}
+          generationId="gen-1"
+          defaultTitle="Product still lit like a window display"
+          creation={creation}
+          paywallPrefill={prefill}
+        />,
+      );
+      const title = screen.getByRole('textbox', { name: /^title$/i });
+      expect(screen.queryByText(/^Suggested/)).toBeNull();
+      fireEvent.click(screen.getByRole('radio', { name: 'Paid' }));
+      expect(title).toHaveValue('Image recipe');
+    });
+
     // The motion page reads a creation's details after the window can open.
     it('suggests nothing until the creation’s details arrive, then fills the empty title', () => {
       const { rerender } = render(

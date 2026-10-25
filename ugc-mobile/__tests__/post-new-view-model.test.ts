@@ -308,12 +308,17 @@ describe('post new view model', () => {
       const titled = generation({ title: 'Fox study' });
       const own = creationDraft({ title: 'Fox study' });
       expect(followCreationTitleSuggestion(own, withRecipe(own), titled).title).toBe('Fox study');
+      // Unless it is the prompt's opening: a public post saves its title onto the
+      // creation, so a suggestion kept once comes back as the creation's own.
+      const titledFromPrompt = generation({ ...untitled, title: 'Red fox running through fresh snow at dawn' });
+      const kept = creationDraft();
+      expect(followCreationTitleSuggestion(kept, withRecipe(kept), titledFromPrompt).title).toBe('Video recipe');
     });
 
     it('says the title is a suggestion until the creator changes it', () => {
       expect(getCreationTitleSuggestionHint(creationDraft(), untitled)).toBe('Suggested from your prompt. Edit it if you like.');
       expect(getCreationTitleSuggestionHint(withRecipe(creationDraft({ title: 'Video recipe' })), untitled))
-        .toBe('Suggested. Your prompt stays private inside the recipe.');
+        .toBe('Suggested. A recipe keeps your prompt off the post.');
       expect(getCreationTitleSuggestionHint(creationDraft({ title: 'Dawn fox' }), untitled)).toBeNull();
       expect(getCreationTitleSuggestionHint(creationDraft({ title: 'Fox study' }), generation({ title: 'Fox study' }))).toBeNull();
       expect(getCreationTitleSuggestionHint({ ...creationDraft(), mode: 'upload' }, untitled)).toBeNull();

@@ -343,10 +343,10 @@ function findTextInputByAccessibilityLabel(root: renderer.ReactTestInstance, lab
   return input;
 }
 
-async function renderScreen() {
+async function renderScreen(options: { createNodeMock?: (element: React.ReactElement) => unknown } = {}) {
   let tree: renderer.ReactTestRenderer | undefined;
   await renderer.act(async () => {
-    tree = renderer.create(<NewPostScreen />);
+    tree = renderer.create(<NewPostScreen />, options.createNodeMock ? { createNodeMock: options.createNodeMock } : undefined);
     await Promise.resolve();
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1852,13 +1852,14 @@ describe('mobile external post composer', () => {
       expect(update(placeholderProfile)).toEqual(finished);
     });
 
-    it('shows a taken handle on its field and publishes nothing', async () => {
+    it('shows a taken handle on its field, brings it into view and publishes nothing', async () => {
       profileState.profile = placeholderProfile;
       authState.api.updateProfile.mockRejectedValue(new ApiError('That username is already taken.', 409, {
         error: 'That username is already taken.',
         fieldErrors: { username: 'That username is already taken.' },
       }));
-      const tree = await renderScreen();
+      const scrollTo = vi.fn();
+      const tree = await renderScreen({ createNodeMock: (element) => (element.type === 'scrollview' ? { scrollTo } : null) });
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
       renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya K'));
       renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya'));
@@ -1870,6 +1871,8 @@ describe('mobile external post composer', () => {
       expect(text).toContain('Your name and handle were not saved');
       expect(text.filter((line) => line === 'That username is already taken.').length).toBeGreaterThanOrEqual(1);
       expect(mutationState.mutate).not.toHaveBeenCalled();
+      // The banner and the card are at the top of step 2, above a price the creator may have scrolled to.
+      expect(scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: true });
     });
 
     it('asks nothing of a profile that can already publish, or of a private post', async () => {

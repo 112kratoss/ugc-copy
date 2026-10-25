@@ -2470,8 +2470,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         const saved = await claimPublicIdentity(identity, session.access_token);
         if (!saved.ok) {
           setIdentityErrors(saved.errors);
-          stopWithError(saved.message, 'publish');
-          return;
+          // Through the catch, so the attempt is counted as failed, as the
+          // server's own refusal for the profile was.
+          throw new ComposerSubmissionError(saved.message, 'publish');
         }
         setComposerProfile({ username: saved.profile.username, displayName: saved.profile.displayName });
         setProfileRefused(false);

@@ -3496,6 +3496,8 @@ function NewPostComposer() {
         setIdentitySaveErrors(errors);
         setMessage({ tone: 'danger', title: 'Your name and handle were not saved', body: saveMessage });
         setIsSavingIdentity(false);
+        // The banner and the card sit at the top of step 2, as a publish error's banner does.
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
         return;
       }
       // Merged, not replaced: the save's answer has no stats or sales totals,

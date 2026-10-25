@@ -4461,7 +4461,7 @@ describe('NewPostClient', () => {
 
       fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
       expect(titleInput).toHaveValue('Image recipe');
-      expect(screen.getByText('Suggested. Your prompt stays private inside the recipe.')).toBeInTheDocument();
+      expect(screen.getByText('Suggested. A recipe keeps your prompt off the post.')).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
       expect(titleInput).toHaveValue('Product still lit like a window display');
@@ -4723,13 +4723,16 @@ describe('NewPostClient', () => {
       await waitFor(() => expect(screen.queryByRole('textbox', { name: /^display name$/i })).not.toBeInTheDocument());
     });
 
-    it('shows a taken handle on its field and publishes nothing', async () => {
+    it('shows a taken handle on its field, counts the attempt as failed and publishes nothing', async () => {
       loadOwnProfileMock.mockResolvedValue(placeholderProfile);
       claimPublicIdentityMock.mockResolvedValue({
         ok: false,
         errors: { username: 'That username is already taken.' },
         message: 'That username is already taken.',
       });
+      const events: Array<{ eventName: string; parameters: Record<string, unknown> }> = [];
+      const recordEvent = (event: Event) => events.push((event as CustomEvent).detail);
+      window.addEventListener('magicbooklet:product-event', recordEvent);
       render(<NewPostClient />);
       writeTextPost();
 
@@ -4741,6 +4744,10 @@ describe('NewPostClient', () => {
       expect(await screen.findByRole('textbox', { name: /^handle$/i })).toHaveAttribute('aria-invalid', 'true');
       expect(screen.getAllByText('That username is already taken.').length).toBeGreaterThanOrEqual(1);
       expect(postsCalls()).toHaveLength(0);
+      // The server's refusal for the profile used to be counted; the save's refusal is too.
+      expect(events.find((event) => event.eventName === 'post_publish_failed')?.parameters)
+        .toMatchObject({ visibility: 'public', error_section: 'publish' });
+      window.removeEventListener('magicbooklet:product-event', recordEvent);
     });
 
     it('asks nothing of a private post or a profile that can already publish', async () => {
@@ -4756,7 +4763,12 @@ describe('NewPostClient', () => {
 
       loadOwnProfileMock.mockResolvedValue({ ...placeholderProfile, username: 'maya-k', displayName: 'Maya K' });
       render(<NewPostClient />);
+      writeTextPost();
       await waitFor(() => expect(loadOwnProfileMock).toHaveBeenCalledTimes(2));
+      // The read's answer has landed: the page drawn after it shows no fields either.
+      await act(async () => {
+        await loadOwnProfileMock.mock.results[1].value;
+      });
       expect(screen.queryByRole('textbox', { name: /^display name$/i })).not.toBeInTheDocument();
       expect(screen.queryByText('Name and handle')).not.toBeInTheDocument();
     });

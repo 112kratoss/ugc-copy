@@ -91,7 +91,7 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
 
     await page.getByRole('checkbox', { name: /add a reusable recipe/i }).check();
     await expect(title).toHaveValue('Image recipe');
-    await expect(page.getByText('Suggested. Your prompt stays private inside the recipe.')).toBeVisible();
+    await expect(page.getByText('Suggested. A recipe keeps your prompt off the post.')).toBeVisible();
     await title.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath('suggested-title-with-recipe.png') });
     await page.getByRole('checkbox', { name: /add a reusable recipe/i }).uncheck();

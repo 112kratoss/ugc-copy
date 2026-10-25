@@ -367,7 +367,7 @@ export function describeTitleSuggestion(source: CreationTitleSuggestion['source'
   if (source === 'prompt') {
     return 'Suggested from your prompt. Edit it if you like.';
   }
-  return hasRecipe ? 'Suggested. Your prompt stays private inside the recipe.' : 'Suggested. Edit it if you like.';
+  return hasRecipe ? 'Suggested. A recipe keeps your prompt off the post.' : 'Suggested. Edit it if you like.';
 }
 
 const SUGGESTED_HANDLE_PATTERN = /^[a-z0-9-]{3,24}$/;
