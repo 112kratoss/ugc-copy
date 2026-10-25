@@ -9,6 +9,7 @@ const loadHomeFeedMock = vi.fn();
 const loadHomeWorkspaceGenerationsMock = vi.fn();
 const loadHomeWhatsNewModelsMock = vi.fn();
 const feedClientPropsMock = vi.fn();
+const loadHomeShelfMock = vi.fn();
 
 vi.mock('next/headers', () => ({
   headers: async () => new Headers(),
@@ -22,6 +23,10 @@ vi.mock('@/lib/home-dashboard-service', () => ({
   loadHomeFeed: (args: unknown) => loadHomeFeedMock(args),
   loadHomeWorkspaceGenerations: (args: unknown) => loadHomeWorkspaceGenerationsMock(args),
   loadHomeWhatsNewModels: () => loadHomeWhatsNewModelsMock(),
+}));
+
+vi.mock('@/lib/home-shelf-server', () => ({
+  loadHomeShelf: (identity: unknown) => loadHomeShelfMock(identity),
 }));
 
 vi.mock('@/components/AnonymousHome', () => ({
@@ -73,6 +78,22 @@ const EMPTY_FEED = {
   pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 0 },
 };
 
+const SHELF = ['boat', 'serum', 'dance'].map((id) => ({
+  kind: 'creation' as const,
+  id,
+  title: `Creation ${id}`,
+  tool: 'image' as const,
+  posterUrl: `https://cdn.example.test/${id}/poster.webp`,
+  posterThumbhash: null,
+  clipUrl: null,
+  modelName: 'Nano Banana 2',
+  price: { kind: 'credits' as const, credits: 8 },
+  fitsWelcomeCredits: true,
+  badge: null,
+  creator: { username: 'magicbooklet', name: 'Magicbooklet Team', avatar: null },
+  makeHref: `/create-image?remix=generation-${id}&remixPost=${id}`,
+}));
+
 describe('HomeDashboardPage auth branch', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -84,6 +105,8 @@ describe('HomeDashboardPage auth branch', () => {
     loadHomeFeedMock.mockResolvedValue(EMPTY_FEED);
     loadHomeWorkspaceGenerationsMock.mockResolvedValue([]);
     loadHomeWhatsNewModelsMock.mockResolvedValue([]);
+    loadHomeShelfMock.mockReset();
+    loadHomeShelfMock.mockResolvedValue(SHELF);
   });
 
   it('falls back to the signed-out home with recovery when the session is stale', async () => {
@@ -127,35 +150,44 @@ describe('HomeDashboardPage auth branch', () => {
     }));
   });
 
-  it('shows the create rail to signed-in creators too, greeted by name', async () => {
+  it('shows the shelf to signed-in members with their own offers, and never "Free to try"', async () => {
     getServerAuthStateMock.mockResolvedValue({
-      session: { user: { id: 'user-1', email: 'sassy@example.test', user_metadata: { full_name: 'Sassy Manjeri' } } },
+      session: { user: { id: 'user-1', is_anonymous: false } },
       credits: 88,
     });
+    loadHomeShelfMock.mockResolvedValue([
+      SHELF[0],
+      SHELF[1],
+      { kind: 'action', id: 'post' },
+      SHELF[2],
+      { kind: 'action', id: 'invite', inviterPercent: 5, inviteePercent: 5 },
+    ]);
     const { default: HomeDashboardPage } = await import('@/app/home/page');
 
     const html = await renderPageToHtml(
       await HomeDashboardPage({ searchParams: Promise.resolve({}) }),
     );
 
-    // The rail shipped signed-out only at first, so signing in swapped it for
-    // the workspace strip — mobile shows it either way, and so should this.
-    expect(html).toContain('home-slider-track');
-    expect(html).toContain('Ready when you are, Sassy Manjeri');
+    expect(loadHomeShelfMock).toHaveBeenCalledWith({ viewerUserId: 'user-1', isAnonymous: false });
+    expect(html).toContain('home-shelf-track');
+    expect(html).toContain('Share your first post');
+    expect(html).toContain('You get 5% of their top-ups in credits.');
+    // A member already holds the welcome credits the badge promises.
+    expect(html).not.toContain('Free to try');
   });
 
-  it('greets from the email when the account carries no name', async () => {
+  it('asks the shelf about a guest session as a guest', async () => {
     getServerAuthStateMock.mockResolvedValue({
-      session: { user: { id: 'user-1', email: 'sassy@example.test' } },
-      credits: 88,
+      session: { user: { id: 'guest-1', is_anonymous: true } },
+      credits: 0,
     });
     const { default: HomeDashboardPage } = await import('@/app/home/page');
 
-    const html = await renderPageToHtml(
+    await renderPageToHtml(
       await HomeDashboardPage({ searchParams: Promise.resolve({}) }),
     );
 
-    expect(html).toContain('Ready when you are, sassy');
+    expect(loadHomeShelfMock).toHaveBeenCalledWith({ viewerUserId: 'guest-1', isAnonymous: true });
   });
 
   it('maps the chip query onto the feed lane', async () => {

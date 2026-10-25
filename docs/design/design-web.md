@@ -174,7 +174,7 @@ The destinations, in order (`APP_NAV_ITEMS`), are Home, Feed, Create, Studio, Ex
 
 ### Home (`/`)
 
-`HomeExperience` is one layout for both variants: the community feed in the centre and a sticky context rail on the right.
+`HomeExperience` is one layout for both variants: the community feed in the centre and a sticky context rail on the right. The column opens with the "Make this" shelf (`HomeShelf.tsx`, `src/lib/home-shelf.ts`): pinned creations that open their remix, three cards and a sliver of the fourth on a laptop, two on a phone, arrows for a mouse, no timer. The first clip card in view plays a muted preview, one at a time, never under Reduce Motion or Save-Data. A member also gets at most two offers (Post or Earn third, Invite last); the signed-out page offers none and marks what fits the welcome credits "Free to try". The pins live in `src/lib/home-shelf-lineup.ts`; fewer than three qualifying pins renders no shelf.
 - **Signed-out:** `AnonymousHome`, where the rail holds the sign-in card.
 - **Signed-in:** `src/app/home/page.tsx`, served on `/` through the rewrite. The rail carries live workspace context: a greeting and the creator's recent generation.
 

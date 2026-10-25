@@ -1,41 +1,4 @@
-import type { CreatorToolId, OwnerPostListItem } from '@/lib/types';
-import type { ToolAccent } from '@/lib/theme';
-
-export interface HomeToolShortcut {
-  id: CreatorToolId;
-  title: string;
-  body: string;
-  accent: ToolAccent;
-  href: string | null;
-  previewVariant: 'kingdom' | 'city' | 'runner' | null;
-}
-
-export const HOME_TOOL_SHORTCUTS: HomeToolShortcut[] = [
-  {
-    id: 'image',
-    title: 'Image',
-    body: 'Polished stills, hooks, and product frames.',
-    accent: 'image',
-    href: '/create/image',
-    previewVariant: 'kingdom',
-  },
-  {
-    id: 'video',
-    title: 'Video',
-    body: 'Prompt-to-clip scenes for launch content.',
-    accent: 'video',
-    href: '/create/video',
-    previewVariant: 'city',
-  },
-  {
-    id: 'motion',
-    title: 'Motion',
-    body: 'Animate a face, product, or creator visual.',
-    accent: 'motion',
-    href: '/create/motion',
-    previewVariant: 'runner',
-  },
-];
+import type { OwnerPostListItem } from '@/lib/types';
 
 export function formatCompactCount(value: number | null | undefined) {
   const safeValue = Math.max(0, value ?? 0);

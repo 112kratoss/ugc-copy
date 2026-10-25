@@ -42,22 +42,20 @@ describe('feed render cost on iOS', () => {
     expect(disc).toMatch(/backgroundColor: pressed \? theme\.colors\.primaryFillPressed : theme\.colors\.primaryFill/);
   });
 
-  it('leaves the header rail\'s gradients to the render server', () => {
+  it('leaves the shelf\'s caption shade to the render server', () => {
     // expo-linear-gradient paints on the main thread each time its view appears,
-    // and the rail mounts a dozen slides on Home's first render and on every lane
-    // switch: 17–20 ms of painting. React Native's own gradient is a CAGradientLayer.
+    // and the shelf mounts every card on Home's first render: the header rail it
+    // replaced cost 17–20 ms of painting that way. React Native's own gradient
+    // is a CAGradientLayer.
+    const shelf = source('components/home-shelf.tsx');
     const home = source('components/home-dashboard.tsx');
-    expect(home).not.toContain("from 'expo-linear-gradient'");
+    for (const file of [shelf, home]) expect(file).not.toContain("from 'expo-linear-gradient'");
     // Shades over pictures, so the media ground in both schemes.
-    expect(home).toMatch(
-      /function railShade\(bottomAlpha: number\) \{\s*return linearGradient\('to bottom', \[\s*\{ color: hexWithAlpha\(mediaColors\.mediaGround, 0\.04\), at: 0 \},\s*\{ color: hexWithAlpha\(mediaColors\.mediaGround, bottomAlpha\), at: 1 \},\s*\]\);/,
+    expect(shelf).toMatch(
+      /const CAPTION_SHADE: ViewStyle = \{\s*position: 'absolute',\s*inset: 0,\s*experimental_backgroundImage: linearGradient\('to bottom', \[\s*\{ color: hexWithAlpha\(mediaColors\.mediaGround, 0\.04\), at: 0 \},/,
     );
-    expect(home).toContain('experimental_backgroundImage: railShade(0.72)');
-    expect(home).toContain('experimental_backgroundImage: railShade(0.48)');
-    const promo = home.slice(home.indexOf("if (slide.kind === 'promo')"), home.indexOf('const Icon = slide.id'));
-    expect(promo).toContain('<View style={RAIL_PROMO_SCRIM} />');
-    const preview = home.slice(home.indexOf('function ToolPreview'), home.indexOf('function FeedChips'));
-    expect(preview).toContain('<View style={RAIL_PREVIEW_SCRIM} />');
+    const card = shelf.slice(shelf.indexOf('function CreationCard('), shelf.indexOf('function ActionCard('));
+    expect(card).toContain('<View style={CAPTION_SHADE} />');
   });
 
   it('leaves the reel\'s shades to the render server', () => {
@@ -93,15 +91,12 @@ describe('work a scrolling Home feed does not pay for', () => {
     expect(bar).not.toContain('useTabBarAmbientColor()');
   });
 
-  it('asks before each turn of the header rail', () => {
+  it('runs no timer on Home: the shelf moves only when the person moves it', () => {
+    // The rail it replaced turned every 4.6 s, gated on the feed being at rest
+    // and the rail on screen. The shelf holds still, so there is no turn to gate.
     const home = source('components/home-dashboard.tsx');
-    const tick = home.slice(home.indexOf('const timer = setInterval'), home.indexOf('HOME_SLIDE_INTERVAL_MS);'));
-    // The gate comes before any state or scroll the turn would cause.
-    expect(tick.indexOf('if (!mayTurn()) return;')).toBeGreaterThan(-1);
-    expect(tick.indexOf('if (!mayTurn()) return;')).toBeLessThan(tick.indexOf('setPageIndex'));
-    expect(tick.indexOf('if (!mayTurn()) return;')).toBeLessThan(tick.indexOf('scrollToOffset'));
-    expect(home).toContain('mayTurn={mayTurnSlides}');
-    expect(home).toContain('feedMoving: playbackController.isMoving()');
-    expect(home).toContain('onScroll={trackFeedOffset}');
+    const shelf = source('components/home-shelf.tsx');
+    expect(home).not.toContain('HOME_SLIDE_INTERVAL_MS');
+    expect(shelf).not.toContain('setInterval');
   });
 });

@@ -231,6 +231,9 @@ const PUBLIC_ROUTES = [
   // Whether a lane has a post newer than the one a client holds: no identity
   // is read, and every caller gets the same cacheable answer.
   '/api/showcase/feed/newest',
+  // Home's "Make this" shelf. A member's token adds their action cards; a
+  // guest's is answered as a signed-out visitor, with the creations alone.
+  '/api/home/shelf',
   '/api/showcase/posts/[postId]',
   // Which live post an id names (an old link's generation id included), for
   // the app when the read above answers 404. A token only keys the by-id

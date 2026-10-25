@@ -1,18 +1,8 @@
 import { FlashList, type FlashListRef, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
-import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
-import {
-  Crown,
-  ImageIcon,
-  Play,
-  Plus,
-  Rocket,
-  Search,
-  Sparkles,
-  WandSparkles,
-} from 'lucide-react-native';
+import { Crown, Plus, Search } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,6 +14,7 @@ import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagina
 import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo-notice';
 import { GuestMergeBanner } from '@/components/guest-merge-banner';
 import { HomeFeedCardView } from '@/components/home-feed-card';
+import { HomeShelf } from '@/components/home-shelf';
 import { MediaZoomSurface } from '@/components/media-zoom';
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
@@ -42,26 +33,12 @@ import { feedWindowPaginationPosition } from '@/lib/feed-page-window';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import {
   HOME_FEED_CHIPS,
-  HOME_SLIDE_INTERVAL_MS,
-  HOME_SLIDE_RESUME_DELAY_MS,
-  advanceHomeSlide,
   buildHomeFeedCards,
-  buildLoopedHomeSlides,
-  foldHomeSlideOffset,
   getHomeFeedCardOpenTarget,
-  getHomeFeedSlides,
-  getHomeSlideIndexFromOffset,
-  getHomeSlideOffset,
-  getHomeSlidePassWidth,
-  getInitialHomeSlideIndex,
-  pickHomeSlidePreviews,
-  shouldAutoAdvanceHomeSlides,
-  shouldTurnHomeSlides,
   type HomeFeedCard,
   type HomeFeedChipId,
-  type HomeFeedSlide,
-  type HomeLoopedSlide,
 } from '@/lib/home-feed-view-model';
+import { readHomeShelfItems } from '@/lib/home-shelf-view-model';
 import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
 import { useAppForeground } from '@/lib/app-foreground';
@@ -74,7 +51,7 @@ import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { SHOWCASE_DRAW_DISTANCE } from '@/lib/media-performance';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
-import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
+import { MotionView, usePressMotion } from '@/lib/motion';
 import { startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcaseRemixAccess } from '@/lib/showcase-remix-access';
@@ -127,8 +104,7 @@ import { formatCreditBalance } from '@/lib/pricing';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { hexWithAlpha, linearGradient } from '@/lib/eased-fade';
-import { appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
+import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type {
   ShowcaseFeedEventType,
@@ -141,39 +117,7 @@ import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { useActiveGenerationCount } from '@/lib/use-active-generations';
 import { newPostsProbeCategory, newestFeedPostIn, useNewPostsProbe } from '@/lib/use-new-posts-probe';
 
-const TOOL_PREVIEW_IMAGES = {
-  kingdom: require('../assets/images/home-previews/image.jpg'),
-  city: require('../assets/images/home-previews/video.jpg'),
-  runner: require('../assets/images/home-previews/motion.jpg'),
-} as const;
-
 const LOAD_MORE_COOLDOWN_MS = 800;
-const TOP_SLIDE_HEIGHT = 170;
-// The dark washes under the header rail's captions, as React Native's own
-// gradient background. On iOS that is a CAGradientLayer, which the render
-// server draws. expo-linear-gradient painted each one into a bitmap on the main
-// thread whenever its view appeared or resized, and the rail mounts about a
-// dozen slides at once, on Home's first render and on every lane switch (the
-// list is keyed per lane): 17–20 ms of main-thread painting per switch on the
-// iPhone 16e, more than a 60 Hz frame. On Android both draw through a shader,
-// with the same pixels. They shade pictures, so they are the same in both
-// schemes.
-function railShade(bottomAlpha: number) {
-  return linearGradient('to bottom', [
-    { color: hexWithAlpha(mediaColors.mediaGround, 0.04), at: 0 },
-    { color: hexWithAlpha(mediaColors.mediaGround, bottomAlpha), at: 1 },
-  ]);
-}
-const RAIL_PROMO_SCRIM: ViewStyle = {
-  position: 'absolute',
-  inset: 0,
-  experimental_backgroundImage: railShade(0.72),
-};
-const RAIL_PREVIEW_SCRIM: ViewStyle = {
-  position: 'absolute',
-  inset: 0,
-  experimental_backgroundImage: railShade(0.48),
-};
 // Only the cards that can be on screen when a lane first lands rise into
 // place; everything past that mounts plain while scrolling.
 const FEED_REVEAL_COUNT = 6;
@@ -206,12 +150,10 @@ export function HomeDashboard() {
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const pageWidth = Math.min(width, 430);
   const isCompact = pageWidth < 390;
-  const reduceMotion = useReducedMotion();
   const feedRef = useRef<FlashListRef<HomeFeedCard>>(null);
   useScrollToTop(feedRef);
   const horizontalPadding = isCompact ? 15 : 18;
   const contentWidth = pageWidth - horizontalPadding * 2;
-  const slideWidth = Math.round(contentWidth * 0.82);
 
   const [menuVisible, setMenuVisible] = useState(false);
   // The search Explore opens, opened over Home from its top bar.
@@ -236,24 +178,6 @@ export function HomeDashboard() {
   useEffect(() => {
     if (!isFocused || !foreground) playbackController.dispatch({ type: 'stop' });
   }, [foreground, isFocused, playbackController]);
-  // Read by the header rail's timer at each tick, never rendered: where the
-  // rail's bottom edge sits in the header (measured) and how far the feed has
-  // scrolled, so a turn is skipped while the rail is off screen or the feed
-  // moves (shouldTurnHomeSlides) without this screen re-rendering on scroll.
-  const railBottomRef = useRef<number | null>(null);
-  const feedOffsetRef = useRef(0);
-  const reportRailBottom = useCallback((bottom: number) => {
-    railBottomRef.current = bottom;
-  }, []);
-  const trackFeedOffset = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    feedOffsetRef.current = event.nativeEvent.contentOffset.y;
-  }, []);
-  const mayTurnSlides = useCallback(() => shouldTurnHomeSlides({
-    // The header starts below the list's top padding.
-    railBottom: railBottomRef.current === null ? null : topInset + railBottomRef.current,
-    feedOffset: feedOffsetRef.current,
-    feedMoving: playbackController.isMoving(),
-  }), [playbackController, topInset]);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
@@ -492,7 +416,6 @@ export function HomeDashboard() {
   useEffect(() => {
     if (cards.length) feedRef.current?.recomputeViewableItems();
   }, [cards]);
-  const slidePreviews = useMemo(() => pickHomeSlidePreviews(cards), [cards]);
   const hasItems = cards.length > 0;
   const isFirstLoad = feedQuery.isLoading && !hasItems;
   // Reported from the commit that first holds real posts, a frame or so before
@@ -559,11 +482,18 @@ export function HomeDashboard() {
   // The seller total rides on the profile; unknown until the profile has answered.
   const totalSalesUsdCents = profileQuery.data?.sales?.earningsUsdCents ?? null;
 
-  const displayName =
-    profileQuery.data?.displayName?.trim() ||
-    user?.user_metadata?.full_name ||
-    user?.email?.split('@')[0] ||
-    'Creator';
+  // Home's "Make this" shelf. Keyed by identity: a member's answer carries
+  // their own offers, a guest's or a signed-out one the creations alone. The
+  // last answer stays up while a new identity's loads, so a sign-in does not
+  // empty the row; the first load holds the row's place instead.
+  const shelfQuery = useQuery({
+    queryKey: ['home-shelf', identityUserId ?? 'signed-out'],
+    queryFn: () => api.getHomeShelf(),
+    enabled: !isAuthLoading,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: (previous) => previous,
+  });
+  const shelfItems = useMemo(() => readHomeShelfItems(shelfQuery.data), [shelfQuery.data]);
 
   const requestNextPage = () => {
     const now = Date.now();
@@ -615,6 +545,7 @@ export function HomeDashboard() {
   const handleRefresh = () => {
     haptic.light();
     setPullRefreshing(true);
+    void shelfQuery.refetch();
     void refreshFirstPage().finally(() => setPullRefreshing(false));
   };
 
@@ -637,8 +568,6 @@ export function HomeDashboard() {
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     playbackController.dispatch({ type: 'reset' });
-    // The lane remounts the list at its top, and a list at rest sends no scroll.
-    feedOffsetRef.current = 0;
     setActiveChipId(chipId);
   };
 
@@ -1066,7 +995,6 @@ export function HomeDashboard() {
           />
         )}
         showsVerticalScrollIndicator={false}
-        onScroll={trackFeedOffset}
         onScrollBeginDrag={() => playbackController.dispatch({ type: 'dragBegin' })}
         onScrollEndDrag={(event) => playbackController.dispatch({ type: 'dragEnd', velocityY: event.nativeEvent.velocity?.y })}
         onMomentumScrollBegin={() => playbackController.dispatch({ type: 'momentumBegin' })}
@@ -1092,17 +1020,19 @@ export function HomeDashboard() {
               <GuestMergeBanner />
             </View>
 
-            <TopSlider
-              activeGenerationCount={activeGenerationCount}
-              displayName={displayName}
+            {activeGenerationCount > 0 ? (
+              <View style={{ paddingHorizontal: horizontalPadding }}>
+                <ActiveRendersRow count={activeGenerationCount} />
+              </View>
+            ) : null}
+
+            <HomeShelf
+              items={shelfItems}
+              isLoading={shelfQuery.isPending}
+              offerFreeToTry={!user}
               horizontalPadding={horizontalPadding}
-              isFocused={isFocused}
-              mayTurn={mayTurnSlides}
-              onRailBottom={reportRailBottom}
-              reduceMotion={reduceMotion}
-              signedIn={Boolean(user)}
-              slidePreviews={slidePreviews}
-              slideWidth={slideWidth}
+              contentWidth={contentWidth}
+              onMake={(creation) => remixItem(creation.post)}
             />
 
             <View style={{ paddingHorizontal: horizontalPadding }}>
@@ -1344,464 +1274,34 @@ function TopBarControl({
 }
 
 /**
- * Data-driven so promotional slides can join the rotation later without
- * touching the feed itself.
+ * Renders still running, and the way to them. The workspace slide used to
+ * carry this; it has its own row now, drawn only while something runs. It is
+ * labelled with what it shows and its hint says where it goes.
  */
-function TopSlider({
-  activeGenerationCount,
-  displayName,
-  horizontalPadding,
-  isFocused,
-  mayTurn,
-  onRailBottom,
-  reduceMotion,
-  signedIn,
-  slidePreviews,
-  slideWidth,
-}: {
-  activeGenerationCount: number;
-  displayName: string;
-  horizontalPadding: number;
-  isFocused: boolean;
-  /** Asked at each tick of the rotation; a tick it declines turns nothing. */
-  mayTurn: () => boolean;
-  /** The rail's bottom edge, relative to the header it sits in. */
-  onRailBottom: (bottom: number) => void;
-  reduceMotion: boolean;
-  signedIn: boolean;
-  slidePreviews: Partial<Record<ToolAccent, string>>;
-  slideWidth: number;
-}) {
-  const slides = useMemo(() => getHomeFeedSlides(), []);
-  // Matching the gap to the screen gutter is what squares the rail's edges.
-  // With a smaller gap the previous card's right edge lands `gutter - gap`
-  // inside the screen, leaving a sliver of image bleeding off the left that
-  // reads as a clipping bug rather than a peek. Equal values park it exactly on
-  // the edge, so only the next card peeks — on the side you are scrolling to.
-  const gap = horizontalPadding;
-  // Laid out three times, with the carousel parked in the middle pass, so it
-  // can travel off either end into more of the same rail rather than reversing.
-  const loopedSlides = useMemo(() => buildLoopedHomeSlides(slides), [slides]);
-  const initialIndex = getInitialHomeSlideIndex(slides.length);
-  const listRef = useRef<FlashListRef<HomeLoopedSlide>>(null);
-  // The timer's own position. Held in a ref so re-arming it on every tick
-  // would not restart the interval mid-cycle. It starts at 0 — the list's
-  // actual resting place — and only claims the middle pass once the scroll
-  // that gets it there has actually been issued.
-  const slideIndexRef = useRef(0);
-  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const centerFrameRef = useRef<number | null>(null);
-  const [isInteracting, setIsInteracting] = useState(false);
-  // The dots' own copy of the position. The ref above stays the timer's, so
-  // this render never restarts the interval — it is not in that effect's deps.
-  const [pageIndex, setPageIndex] = useState(0);
-
-  const autoAdvance = shouldAutoAdvanceHomeSlides({
-    slideCount: slides.length,
-    isFocused,
-    isInteracting,
-    reduceMotion,
-  });
-
-  useEffect(() => {
-    if (!autoAdvance) return;
-
-    const timer = setInterval(() => {
-      // A turn re-renders this rail and runs an animated scroll. Off screen it
-      // is work no one sees, and under a moving feed it lands in that scroll's
-      // frames, so the tick passes and the rhythm carries on.
-      if (!mayTurn()) return;
-      const nextIndex = advanceHomeSlide(slideIndexRef.current, slides.length);
-      slideIndexRef.current = nextIndex;
-      setPageIndex(nextIndex % slides.length);
-      listRef.current?.scrollToOffset({
-        offset: getHomeSlideOffset(nextIndex, slideWidth, gap),
-        animated: true,
-      });
-    }, HOME_SLIDE_INTERVAL_MS);
-
-    return () => clearInterval(timer);
-  }, [autoAdvance, gap, mayTurn, slideWidth, slides.length]);
-
-  // Pending work must not outlive the slider: the resume would call setState on
-  // an unmounted component after a tab switch, and the centering frame would
-  // scroll a list that is gone.
-  useEffect(() => () => {
-    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
-    if (centerFrameRef.current !== null) cancelAnimationFrame(centerFrameRef.current);
-  }, []);
-
-  /**
-   * Slides the rail to the middle pass as soon as the list has drawn, so a
-   * backward swipe has somewhere to go from the very first card.
-   * `initialScrollIndex` is not used for this: FlashList ignored it here, which
-   * left the ref claiming the middle pass while the list sat at 0 — the next
-   * tick would then have lurched several slides at once. The index is only
-   * updated alongside the scroll that moves it, so if this never runs the
-   * rotation still starts from a truthful 0 and the first settle recenters it.
-   */
-  const centerOnLoad = useCallback(() => {
-    if (initialIndex === 0) return;
-
-    // Deferred a frame: at `onLoad` the rows have drawn but the scroll metrics
-    // have not settled, and a scroll issued synchronously here is dropped.
-    centerFrameRef.current = requestAnimationFrame(() => {
-      listRef.current?.scrollToOffset({
-        offset: getHomeSlideOffset(initialIndex, slideWidth, gap),
-        animated: false,
-      });
-      slideIndexRef.current = initialIndex;
-      setPageIndex(initialIndex % slides.length);
-    });
-  }, [gap, initialIndex, slideWidth, slides.length]);
-
-  const scheduleResume = useCallback(() => {
-    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
-    resumeTimerRef.current = setTimeout(() => setIsInteracting(false), HOME_SLIDE_RESUME_DELAY_MS);
-  }, []);
-
-  const holdRotation = useCallback(() => {
-    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
-    setIsInteracting(true);
-  }, []);
-
-  /**
-   * Runs once the scroll has come to rest — the timer's own scrolls included.
-   * Whatever pass it landed in, the offset is translated back into the middle
-   * pass by whole pass-widths, which maps every visible pixel onto its own
-   * copy. Nothing moves on screen; it just restores the runway needed to keep
-   * going in either direction.
-   */
-  const settleRotation = useCallback((offset: number) => {
-    const passWidth = getHomeSlidePassWidth(slides.length, slideWidth, gap);
-    const foldedOffset = foldHomeSlideOffset(offset, passWidth);
-
-    if (foldedOffset !== offset) {
-      listRef.current?.scrollToOffset({ offset: foldedOffset, animated: false });
-    }
-
-    slideIndexRef.current = getHomeSlideIndexFromOffset(foldedOffset, slideWidth, gap, loopedSlides.length);
-    setPageIndex(slideIndexRef.current % slides.length);
-    scheduleResume();
-  }, [gap, loopedSlides.length, scheduleResume, slideWidth, slides.length]);
-
-  return (
-    <View
-      style={{ gap: 10 }}
-      onLayout={(event) => onRailBottom(event.nativeEvent.layout.y + event.nativeEvent.layout.height)}
-    >
-    <FlashList
-      ref={listRef}
-      data={loopedSlides}
-      horizontal
-      keyboardShouldPersistTaps="handled"
-      keyExtractor={(item) => item.key}
-      // Recentering jumps a full pass, so the list re-renders its window on
-      // arrival. Typing the rows lets it reuse the view it already had for the
-      // same kind of slide instead of rebuilding a different one mid-jump.
-      getItemType={(item) => item.slide.kind}
-      // Keeps a full pass mounted beyond each edge, so the window a recentering
-      // teleport lands on is always already drawn. One slide of headroom is not
-      // enough: the teleport moves a whole pass, and any card it reveals that
-      // was not mounted flashes in a frame late — a visible jerk. The rail is
-      // a dozen lightweight cards, so mounting it all costs nothing.
-      drawDistance={getHomeSlidePassWidth(slides.length, slideWidth, gap)}
-      // The default anchoring re-adjusts the offset when content shifts — on a
-      // deliberate instant teleport that correction fights the jump and tugs
-      // the rail a frame later. The rail's data never changes at runtime, so
-      // anchoring buys nothing here.
-      maintainVisibleContentPosition={{ disabled: true }}
-      onLoad={centerOnLoad}
-      showsHorizontalScrollIndicator={false}
-      snapToInterval={slideWidth + gap}
-      snapToAlignment="start"
-      disableIntervalMomentum
-      decelerationRate="fast"
-      onScrollBeginDrag={holdRotation}
-      // Only momentum end reports a settled offset — `onScrollEndDrag` fires at
-      // finger-lift with the scroll still in flight, so reading the index there
-      // could trigger a visible correction to the wrong slide. It re-arms the
-      // resume timer only, as the safety net for a drag that never coasts.
-      onScrollEndDrag={scheduleResume}
-      onMomentumScrollEnd={(event) => settleRotation(event.nativeEvent.contentOffset.x)}
-      // The rail presents as endless, so its real ends must never be felt: a
-      // hard fling that reaches the layout edge would otherwise stretch
-      // (Android) or rubber-band (iOS) before the fold teleports it home.
-      overScrollMode="never"
-      bounces={false}
-      extraData={slidePreviews}
-      style={{ height: TOP_SLIDE_HEIGHT }}
-      contentContainerStyle={{ paddingHorizontal: horizontalPadding }}
-      renderItem={({ item }) => (
-        <View style={{ marginRight: gap }}>
-          <TopSlide
-            activeGenerationCount={activeGenerationCount}
-            displayName={displayName}
-            previewUrl={item.slide.kind === 'tool' ? slidePreviews[item.slide.accent] ?? null : null}
-            signedIn={signedIn}
-            slide={item.slide}
-            width={slideWidth}
-          />
-        </View>
-      )}
-    />
-    <SlideDots count={slides.length} index={pageIndex} />
-    </View>
-  );
-}
-
-/**
- * How many slides the rail holds, and which one is showing.
- *
- * Scroll views: "consider showing a page control when a scroll view is in
- * page-by-page mode … If you show a page control with a scroll view, don't show
- * the scrolling indicator on the same axis" — the rail's indicator is already
- * off. It earns its place most with Reduce Motion on, where the rotation stops
- * and a sliver of the next card was the only evidence that there was more.
- *
- * Uncoloured on purpose. Page controls: "Avoid coloring indicator images.
- * Custom colors can reduce the contrast that differentiates the current-page
- * indicator" — so the current dot is simply the brightest thing in the row.
- */
-function SlideDots({ count, index }: { count: number; index: number }) {
+function ActiveRendersRow({ count }: { count: number }) {
   const theme = useAppTheme();
-  if (count < 2) return null;
+  const status = `${count} render${count === 1 ? '' : 's'} in progress`;
 
   return (
-    <View
-      accessible
-      accessibilityLabel={`Slide ${Math.min(index + 1, count)} of ${count}`}
-      style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-    >
-      {Array.from({ length: count }, (_, dot) => (
-        <View
-          key={dot}
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: 3,
-            backgroundColor: dot === index % count ? theme.colors.text : theme.colors.borderSubtle,
-          }}
-        />
-      ))}
-    </View>
-  );
-}
-
-function TopSlide({
-  activeGenerationCount,
-  displayName,
-  previewUrl,
-  signedIn,
-  slide,
-  width,
-}: {
-  activeGenerationCount: number;
-  displayName: string;
-  previewUrl: string | null;
-  signedIn: boolean;
-  slide: HomeFeedSlide;
-  width: number;
-}) {
-  const theme = useAppTheme();
-  // Declared before the per-kind branches below: these are hooks, so they have
-  // to run on every render regardless of which slide this is. `usePressMotion`
-  // handles the reduced-motion preference itself, which is why this component
-  // no longer takes a `reduceMotion` prop.
-  const ctaMotion = usePressMotion();
-  const cardMotion = usePressMotion(false, { scale: appTheme.motion.scale.pressedCard });
-  if (slide.kind === 'workspace') {
-    const title = signedIn ? `Ready when you are, ${displayName}` : 'Create something worth sharing';
-    const status = activeGenerationCount > 0
-      ? `${activeGenerationCount} render${activeGenerationCount === 1 ? '' : 's'} in progress`
-      : 'Creator workspace';
-
-    return (
-      <View
-        style={{
-          width,
-          height: TOP_SLIDE_HEIGHT,
-          borderRadius: 20,
-          borderCurve: 'continuous',
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: theme.colors.panelSoft,
-          padding: 14,
-          justifyContent: 'space-between',
-        }}
-      >
-        <View style={{ gap: 6 }}>
-          {/* The count opens the creations list: it used to be a label on a
-              slide that rotated away, with no way to the renders it counted.
-              It is labelled with what it shows, in both states, and the hint
-              says where it goes: Android never clears a label that goes back
-              to undefined, so "Open your creations" outlived the renders. */}
-          <Pressable
-            accessibilityRole={activeGenerationCount > 0 ? 'button' : undefined}
-            accessibilityLabel={status}
-            accessibilityHint={activeGenerationCount > 0 ? 'Opens your creations' : undefined}
-            disabled={activeGenerationCount === 0}
-            onPress={() => router.push({ pathname: '/profile', params: { tab: 'Creations' } } as never)}
-            hitSlop={8}
-            style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}
-          >
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: activeGenerationCount > 0 ? theme.colors.success : theme.colors.primary }} />
-            <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' }}>
-              {status}
-            </Text>
-          </Pressable>
-          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: theme.colors.text, fontSize: 22, lineHeight: 27, fontWeight: '800', letterSpacing: -0.45 }}>
-            {title}
-          </Text>
-        </View>
-
-        {/* The scale lives on a MotionView so it can spring. Inline in the
-            style callback it was an un-animated snap of 1.5%, which the theme
-            itself calls out as below the perception floor — it cost a
-            re-render per press and returned nothing visible. */}
-        <MotionView style={ctaMotion.animatedStyle}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Create new project"
-          accessibilityHint="Opens the creator tools"
-          onPress={() => router.push(slide.href as never)}
-          onPressIn={ctaMotion.onPressIn}
-          onPressOut={ctaMotion.onPressOut}
-          style={({ pressed }) => ({
-            minHeight: 44,
-            borderRadius: 14,
-            backgroundColor: theme.colors.primaryFill,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
-          <WandSparkles size={appTheme.icon.compact} color={theme.colors.onPrimary} />
-          <Text style={{ color: theme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>{slide.ctaLabel}</Text>
-        </Pressable>
-        </MotionView>
-      </View>
-    );
-  }
-
-  if (slide.kind === 'promo') {
-    return (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={slide.title}
-        onPress={() => router.push(slide.href as never)}
-        style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}
-      >
-        <View
-          style={{
-            height: TOP_SLIDE_HEIGHT,
-            borderRadius: 20,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: theme.colors.borderSubtle,
-            backgroundColor: theme.colors.panel,
-            overflow: 'hidden',
-            justifyContent: 'flex-end',
-          }}
-        >
-          {slide.imageUrl ? (
-            <Image source={{ uri: slide.imageUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-          ) : null}
-          <View style={RAIL_PROMO_SCRIM} />
-          <View style={{ padding: 12, gap: 4 }}>
-            <Text numberOfLines={1} style={{ color: mediaColors.onMedia, fontSize: 16, fontWeight: '800' }}>{slide.title}</Text>
-            <Text numberOfLines={2} style={{ color: hexWithAlpha(mediaColors.onMedia, 0.78), fontSize: 12, fontWeight: '600' }}>{slide.body}</Text>
-          </View>
-        </View>
-      </Pressable>
-    );
-  }
-
-  const Icon = slide.id === 'image' ? ImageIcon : slide.id === 'video' ? Play : slide.id === 'motion' ? Rocket : Sparkles;
-
-  return (
-    // `width` sits on the wrapper, not the Pressable. This is a FlashList item
-    // and the carousel scrolls by offsets computed from `slideWidth`, so the
-    // element the list measures has to keep exactly the width it had. The
-    // scale is a transform, which is visual only and never affects that.
-    <MotionView style={[{ width }, cardMotion.animatedStyle]}>
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={slide.title}
-      onPress={() => router.push(slide.href as never)}
-      onPressIn={cardMotion.onPressIn}
-      onPressOut={cardMotion.onPressOut}
+      accessibilityLabel={status}
+      accessibilityHint="Opens your creations"
+      onPress={() => router.push({ pathname: '/profile', params: { tab: 'Creations' } } as never)}
       style={({ pressed }) => ({
+        minHeight: 44,
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View
-        style={{
-          height: TOP_SLIDE_HEIGHT,
-          borderRadius: 20,
-          borderCurve: 'continuous',
-          borderWidth: 1,
-          borderColor: theme.colors.borderSubtle,
-          backgroundColor: theme.colors.panel,
-          justifyContent: 'space-between',
-          overflow: 'hidden',
-        }}
-      >
-        {slide.previewVariant ? (
-          <ToolPreview
-            variant={slide.previewVariant}
-            previewUrl={previewUrl}
-            icon={<Icon size={18} color={mediaColors.onMedia} fill={slide.id === 'video' ? 'transparent' : hexWithAlpha(mediaColors.onMedia, 0.14)} />}
-          />
-        ) : null}
-        <View style={{ gap: 4, flexShrink: 0, paddingHorizontal: 12, paddingBottom: 11, paddingTop: 10 }}>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: theme.colors.text, fontSize: 16, fontWeight: '800' }}>
-            {slide.title}
-          </Text>
-          <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
-            {slide.body}
-          </Text>
-        </View>
-      </View>
+      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.success }} />
+      <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 12, fontWeight: '800', letterSpacing: 0.4 }}>
+        {status}
+      </Text>
     </Pressable>
-    </MotionView>
-  );
-}
-
-function ToolPreview({
-  variant,
-  previewUrl,
-  icon,
-}: {
-  variant: 'kingdom' | 'city' | 'runner';
-  /** The newest community preview for this tool; the bundled still is the fallback. */
-  previewUrl: string | null;
-  icon: ReactNode;
-}) {
-  const theme = useAppTheme();
-  return (
-    // `flexShrink` so the artwork yields height to the caption at large Dynamic
-    // Type sizes. The card height is fixed so every slide in the rail matches,
-    // and without this the caption was the child that lost the space race — its
-    // second line was sliced in half at 1.5x text.
-    <View style={{ height: 82, flexShrink: 1, overflow: 'hidden', backgroundColor: theme.colors.panelSoft }}>
-      <Image source={TOOL_PREVIEW_IMAGES[variant]} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-      {previewUrl ? (
-        <Image
-          source={{ uri: previewUrl }}
-          cachePolicy="memory-disk"
-          contentFit="cover"
-          transition={240}
-          style={{ position: 'absolute', inset: 0 }}
-        />
-      ) : null}
-      <View style={RAIL_PREVIEW_SCRIM} />
-      <View style={{ position: 'absolute', left: 9, top: 9, width: 30, height: 30, borderRadius: 12, backgroundColor: mediaColors.mediaScrim, alignItems: 'center', justifyContent: 'center' }}>
-        {icon}
-      </View>
-    </View>
   );
 }
 

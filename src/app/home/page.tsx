@@ -5,13 +5,15 @@ import AnonymousHome from '@/components/AnonymousHome';
 import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
 import WelcomeCreditsCard from '@/app/home/WelcomeCreditsCard';
 import HomeExperience from '@/components/HomeExperience';
-import HomeSlider from '@/components/HomeSlider';
+import HomeShelf from '@/components/HomeShelf';
 import QuickStartsCard from '@/components/QuickStartsCard';
 import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
 import StaleSessionRecovery from '@/app/home/StaleSessionRecovery';
 import WorkspaceCard from '@/app/home/WorkspaceCard';
 import type { HomeWhatsNewModel, HomeWorkspaceGenerationView } from '@/lib/home-dashboard';
+import type { HomeShelfItem } from '@/lib/home-shelf';
+import { loadHomeShelf } from '@/lib/home-shelf-server';
 import {
   loadHomeFeed,
   loadHomeWhatsNewModels,
@@ -27,23 +29,6 @@ type HomeDashboardPageProps = {
 
 function getFirstValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
-}
-
-/**
- * Mirrors the mobile rail's greeting chain: the profile's display name first
- * (the auth state already reads the profile row for the credit balance), then
- * the sign-in name, then the email's local part.
- */
-function resolveDisplayName(
-  user: { user_metadata?: Record<string, unknown>; email?: string },
-  profileDisplayName: string | null | undefined,
-) {
-  const displayName = profileDisplayName?.trim() ?? '';
-  const fullName = typeof user.user_metadata?.full_name === 'string'
-    ? user.user_metadata.full_name.trim()
-    : '';
-
-  return displayName || fullName || user.email?.split('@')[0] || 'Creator';
 }
 
 function HomeFeedSection({
@@ -92,6 +77,11 @@ function HomeModelsSection({ data }: { data: Promise<HomeWhatsNewModel[]> }) {
   return <WhatsNewModelsCard models={use(data)} />;
 }
 
+function HomeShelfSection({ data }: { data: Promise<HomeShelfItem[]> }) {
+  // A member already holds the welcome credits "Free to try" promises.
+  return <HomeShelf items={use(data)} offerFreeToTry={false} />;
+}
+
 function WorkspaceRailFallback() {
   return (
     <div className="ui-card relative min-h-40 overflow-hidden p-5" aria-label="Loading workspace">
@@ -133,10 +123,18 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
   const feedPromise = loadHomeFeed({ viewerUserId, chip, countryCode });
   const workspacePromise = loadHomeWorkspaceGenerations({ userId: viewerUserId });
   const modelsPromise = loadHomeWhatsNewModels();
+  const shelfPromise = loadHomeShelf({
+    viewerUserId,
+    isAnonymous: auth.session.user.is_anonymous === true,
+  });
 
   return (
     <HomeExperience
-      hero={<HomeSlider displayName={resolveDisplayName(auth.session.user, auth.displayName)} />}
+      hero={(
+        <Suspense fallback={null}>
+          <HomeShelfSection data={shelfPromise} />
+        </Suspense>
+      )}
       inlineStrip={(
         <>
           <WelcomeCreditsCard />

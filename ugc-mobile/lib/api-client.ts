@@ -57,6 +57,7 @@ import type {
   ShowcaseFeedEventRequest,
   ShowcaseFeedEventBatchResponse,
   ShowcaseFeedNewestResponse,
+  HomeShelfResponse,
   ShowcaseFeedEventResponse,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
@@ -1304,6 +1305,9 @@ export function createApiClient({
     // the proxy would check (and refuse) an expired token it was given.
     getShowcaseFeedNewest: (params?: { category?: 'media' | 'text' | 'all' }) =>
       request<ShowcaseFeedNewestResponse>(`/api/showcase/feed/newest${buildQuery(params)}`, {}, { auth: false }),
+    // Home's "Make this" shelf. Sent with the session token: a member's adds
+    // their own offers, and a guest's is answered as a signed-out visitor.
+    getHomeShelf: () => request<HomeShelfResponse>('/api/home/shelf'),
     undoFeedFeedback: (body: UndoFeedFeedbackRequest) =>
       request<UndoFeedFeedbackResponse>('/api/showcase/feed/feedback/undo', {
         method: 'POST',

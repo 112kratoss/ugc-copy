@@ -3,8 +3,6 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getHomeFeedSlides } from '../lib/home-feed-view-model';
-
 /**
  * S4's rules, in the form a suite can hold. Sources: Toolbars, Branding,
  * Page controls, Scroll views, Motion.
@@ -14,6 +12,7 @@ const mobileRoot = path.resolve(__dirname, '..');
 const read = (name: string) => readFileSync(path.join(mobileRoot, name), 'utf8');
 
 const dashboard = read('components/home-dashboard.tsx');
+const shelfSource = read('components/home-shelf.tsx');
 const authScreen = read('app/auth.tsx');
 
 /** Slice one function out of a 1,400-line file rather than matching across it. */
@@ -25,8 +24,8 @@ function declaration(source: string, header: string) {
 }
 
 const topBar = declaration(dashboard, 'function HomeTopBar(');
-const slider = declaration(dashboard, 'function TopSlider(');
-const dots = declaration(dashboard, 'function SlideDots(');
+const shelf = declaration(shelfSource, 'export function HomeShelf(');
+const startBlank = declaration(shelfSource, 'function StartBlankTile(');
 
 describe('the home top bar', () => {
   /**
@@ -54,69 +53,46 @@ describe('the home top bar', () => {
   });
 });
 
-describe('the top carousel says how much of it there is', () => {
+describe('the Make this shelf', () => {
   /**
-   * Scroll views: "Consider showing a page control when a scroll view is in
-   * page-by-page mode … If you show a page control with a scroll view, don't
-   * show the scrolling indicator on the same axis to avoid confusing people
-   * with redundant controls."
+   * Motion: "Make motion optional", and "let people cancel motion". The rail
+   * this replaced turned itself every 4.6 s; the shelf holds still, so nothing
+   * on Home moves unless the person moves it.
    */
-  it('shows a page control under a page-by-page rail', () => {
-    expect(slider).toContain('<SlideDots count={slides.length} index={pageIndex} />');
-    expect(slider).toContain('snapToInterval={slideWidth + gap}');
-  });
-
-  it('keeps the scroll indicator off the same axis', () => {
-    expect(slider).toContain('showsHorizontalScrollIndicator={false}');
-  });
-
-  /** Page controls: "more than about 10 dots are hard to count at a glance." */
-  it('has few enough dots to count at a glance', () => {
-    const slideCount = getHomeFeedSlides().length;
-    expect(slideCount).toBeGreaterThan(1);
-    expect(slideCount).toBeLessThanOrEqual(10);
-  });
-
-  it('draws nothing when there is nothing to page through', () => {
-    expect(dots).toContain('if (count < 2) return null;');
+  it('holds still until the person moves it', () => {
+    expect(shelfSource).not.toContain('setInterval');
+    expect(shelfSource).not.toContain('setTimeout');
   });
 
   /**
-   * Page controls: "Avoid coloring indicator images. Custom colors can reduce
-   * the contrast that differentiates the current-page indicator."
+   * Scroll views: a page control belongs to a scroll view "in page-by-page
+   * mode". The shelf is not: two cards and a sliver of the third are on screen
+   * at once, and the sliver is what says it scrolls. So no dots, and no
+   * indicator either, as App Store shelves do it.
    */
-  it('separates the current dot by contrast, not by hue', () => {
-    expect(dots).toContain('theme.colors.text : theme.colors.borderSubtle');
-    expect(dots).not.toContain('coral');
+  it('peeks the next card instead of drawing a page control', () => {
+    expect(shelf).toContain('snapToInterval={cardWidth + SHELF_GAP}');
+    expect(shelf).toContain('showsHorizontalScrollIndicator={false}');
+    expect(shelfSource).not.toContain('SlideDots');
   });
 
-  it('tells a screen reader where in the set it is', () => {
-    expect(dots).toContain('accessibilityLabel={`Slide ${Math.min(index + 1, count)} of ${count}`}');
+  it('names every card for a screen reader', () => {
+    expect(shelfSource).toContain('accessibilityLabel={homeShelfCreationLabel(creation)}');
+    expect(shelfSource).toContain('accessibilityLabel={`${copy.title}. ${copy.body}`}');
   });
 
-  /**
-   * Three things move the rail — the timer, a settled swipe, and the jump into
-   * the middle pass on load — and the dots have to follow all three or they
-   * lie. The timer's own position stays a ref, so this state never lands in
-   * the interval effect's deps and can never restart it mid-cycle.
-   */
-  it('follows the rail however it moved', () => {
-    expect(slider).toContain('setPageIndex(nextIndex % slides.length)');
-    expect(slider).toContain('setPageIndex(slideIndexRef.current % slides.length)');
-    expect(slider).toContain('setPageIndex(initialIndex % slides.length)');
-    const interval = slider.slice(slider.indexOf('const timer = setInterval'));
-    expect(interval).toContain('}, [autoAdvance, gap, mayTurn, slideWidth, slides.length]);');
+  /** 44pt hit regions: the end tile's rows are drawn shorter and given the rest as slop. */
+  it('keeps the end tile\'s rows at a full hit region', () => {
+    expect(startBlank).toContain('hitSlop={verticalHitSlop(START_BLANK_ROW_HEIGHT)}');
+    expect(startBlank).toContain('minHeight: START_BLANK_ROW_HEIGHT');
   });
 
   /**
-   * Motion: "Make motion optional … avoid using it as the only way to
-   * communicate important information", and "let people cancel motion". The
-   * rotation already stops for Reduce Motion, for a blur, and for a touch —
-   * pinned in `home-feed-view-model.test.ts` — which is exactly when the dots
-   * become the only thing saying there are four slides.
+   * The row's place is held while the first answer loads, so the restored feed
+   * below it does not jump down once the shelf arrives.
    */
-  it('leaves the rotation gated the way it was', () => {
-    expect(slider).toContain('shouldAutoAdvanceHomeSlides({');
-    expect(slider).toContain('reduceMotion,');
+  it('holds its place while it loads, and draws nothing with nothing to show', () => {
+    expect(shelf).toContain('if (!isLoading && items.length === 0) return null;');
+    expect(dashboard).toContain('isLoading={shelfQuery.isPending}');
   });
 });

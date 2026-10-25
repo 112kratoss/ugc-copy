@@ -1099,6 +1099,46 @@ export interface ShowcasePostResponse {
   item: ShowcaseFeedItem;
 }
 
+/** Motion is priced by the length of the clip the viewer brings. */
+export type HomeShelfPrice = { kind: 'credits'; credits: number } | { kind: 'clip-length' };
+
+/**
+ * A creation on Home's "Make this" shelf (`GET /api/home/shelf`, the web's
+ * `src/lib/home-shelf.ts`). `post` is the post itself, as the by-id read
+ * sends it, so the shelf's Make this runs the same remix the feed does.
+ */
+export interface HomeShelfCreation {
+  kind: 'creation';
+  id: string;
+  title: string;
+  tool: 'image' | 'video' | 'motion';
+  posterUrl: string;
+  posterThumbhash: string | null;
+  clipUrl: string | null;
+  modelName: string | null;
+  price: HomeShelfPrice | null;
+  /** The price fits the welcome credits someone without an account is owed. */
+  fitsWelcomeCredits: boolean;
+  badge: 'new-model' | null;
+  creator: { username: string | null; name: string | null; avatar: string | null };
+  /** The web's create page for this remix; the app routes through `post`. */
+  makeHref: string;
+  post: ShowcaseFeedItem;
+}
+
+export type HomeShelfAction =
+  | { kind: 'action'; id: 'post' }
+  | { kind: 'action'; id: 'invite'; inviterPercent: number; inviteePercent: number }
+  | { kind: 'action'; id: 'earn'; creatorSharePercent: number };
+
+export type HomeShelfItem = HomeShelfCreation | HomeShelfAction;
+
+export interface HomeShelfResponse {
+  success: true;
+  schemaVersion: number;
+  items: HomeShelfItem[];
+}
+
 export type PostCommentStatus =
   | 'active'
   | 'removed_by_author'

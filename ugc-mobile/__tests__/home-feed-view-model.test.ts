@@ -10,26 +10,15 @@ vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
 import feedRecipeChipContract from '../../contracts/feed-recipe-chip-v1.json';
 import {
   HOME_FEED_CHIPS,
-  advanceHomeSlide,
   buildHomeFeedCards,
-  buildLoopedHomeSlides,
   canExpandHomeFeedBody,
   estimateWrappedLineCount,
   getHomeFeedCardOpenTarget,
   getHomeFeedMediaHeight,
-  getHomeFeedSlides,
-  getHomeSlideIndexFromOffset,
-  getHomeSlideOffset,
-  getHomeSlidePassWidth,
-  getInitialHomeSlideIndex,
-  foldHomeSlideOffset,
   homeRecipeChip,
-  shouldAutoAdvanceHomeSlides,
-  shouldTurnHomeSlides,
   showcaseToHomeFeedCard,
   type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
-import { HOME_TOOL_SHORTCUTS } from '@/lib/home-view-model';
 import { FREE_RECIPE_LABEL } from '@/lib/pricing';
 import { createShowcaseFeedQueryKey, getShowcaseFeedPageParams } from '@/lib/showcase-feed-query';
 import { applyShowcaseSaveStateToFeedResponse } from '@/lib/showcase-save-cache';
@@ -94,22 +83,6 @@ describe('home feed view model', () => {
     it('gives the unlocks chip the same key the showcase unlocks filter uses', () => {
       expect(createShowcaseFeedQueryKey(chipFilters('unlocks'), 'viewer-1'))
         .toEqual(createShowcaseFeedQueryKey({ sort: 'for-you', unlock: 'with-unlock' }, 'viewer-1'));
-    });
-  });
-
-  describe('top slider', () => {
-    it('leads with the workspace slide then the enabled tool shortcuts', () => {
-      const slides = getHomeFeedSlides();
-
-      expect(slides[0]).toMatchObject({ kind: 'workspace', ctaLabel: 'Create new' });
-      expect(slides.slice(1).map((slide) => slide.id)).toEqual(['image', 'video', 'motion']);
-    });
-
-    it('omits shortcuts that have no destination yet', () => {
-      const [image, ...rest] = HOME_TOOL_SHORTCUTS;
-
-      expect(getHomeFeedSlides([{ ...image, href: null }, ...rest]).map((slide) => slide.id))
-        .toEqual(['workspace', 'video', 'motion']);
     });
   });
 
@@ -423,145 +396,6 @@ describe('home feed view model', () => {
       const card = showcaseToHomeFeedCard(item({ mediaKind: 'video', category: 'video' }));
 
       expect(getHomeFeedMediaHeight(card, 400)).toBe(225);
-    });
-  });
-  describe('slide rotation', () => {
-    const SLIDE_WIDTH = 300;
-    const GAP = 10;
-
-    it('advances one slide at a time', () => {
-      expect(advanceHomeSlide(0, 4)).toBe(1);
-      expect(advanceHomeSlide(2, 4)).toBe(3);
-    });
-
-    it('keeps going forward past the last slide instead of rewinding', () => {
-      // Index 8 is the next pass's copy of the first slide, so the carousel
-      // travels on in the same direction rather than sweeping back.
-      expect(advanceHomeSlide(7, 4)).toBe(8);
-    });
-
-    it('stays put when there is nothing to rotate through', () => {
-      expect(advanceHomeSlide(0, 1)).toBe(0);
-      expect(advanceHomeSlide(0, 0)).toBe(0);
-    });
-
-    it('starts in the middle pass so a backward swipe has somewhere to go', () => {
-      expect(getInitialHomeSlideIndex(4)).toBe(4);
-      expect(getInitialHomeSlideIndex(1)).toBe(0);
-    });
-
-    it('measures the rail period from the snap interval', () => {
-      expect(getHomeSlidePassWidth(4, SLIDE_WIDTH, GAP)).toBe(1240);
-    });
-
-    it('folds a wrapped offset back by exactly one pass', () => {
-      // Forward wrap: settled in pass three, translated into the middle pass.
-      expect(foldHomeSlideOffset(2480, 1240)).toBe(1240);
-      // Backward wrap: settled in pass one after a back-swipe from the first slide.
-      expect(foldHomeSlideOffset(930, 1240)).toBe(2170);
-    });
-
-    it('leaves an offset already inside the middle pass untouched', () => {
-      // No scroll is issued on an unchanged offset, so at-rest settles are free.
-      expect(foldHomeSlideOffset(1240, 1240)).toBe(1240);
-      expect(foldHomeSlideOffset(1550, 1240)).toBe(1550);
-      expect(foldHomeSlideOffset(2479, 1240)).toBe(2479);
-    });
-
-    it('preserves a few pixels of snap error instead of folding it into the jump', () => {
-      // The scroll rested 3px past the snap point; the translation keeps that
-      // remainder so the teleport moves no pixels. Snapping to the canonical
-      // slide offset here is what showed up as a flick.
-      expect(foldHomeSlideOffset(2483, 1240)).toBe(1243);
-      expect(foldHomeSlideOffset(927, 1240)).toBe(2167);
-    });
-
-    it('is a no-op without a real pass width', () => {
-      expect(foldHomeSlideOffset(640, 0)).toBe(640);
-    });
-
-    it('always folds into the middle pass by whole passes', () => {
-      const passWidth = 1240;
-
-      // Whatever the scroll settles on — flung far, overscrolled negative —
-      // the corrected offset sits in the middle pass and differs from the
-      // original by an exact number of passes, so every visible pixel lands
-      // on its own copy.
-      for (let offset = -passWidth; offset < passWidth * 4; offset += 173) {
-        const folded = foldHomeSlideOffset(offset, passWidth);
-
-        expect(folded).toBeGreaterThanOrEqual(passWidth);
-        expect(folded).toBeLessThan(passWidth * 2);
-        expect(Math.abs((folded - offset) % passWidth)).toBe(0);
-      }
-    });
-
-    it('lays the slides out three times with unique keys', () => {
-      const slides = getHomeFeedSlides();
-      const looped = buildLoopedHomeSlides(slides);
-
-      expect(looped).toHaveLength(slides.length * 3);
-      expect(new Set(looped.map((entry) => entry.key)).size).toBe(looped.length);
-      expect(looped[slides.length].slide).toBe(slides[0]);
-      expect(looped[slides.length - 1].slide).toBe(slides[slides.length - 1]);
-    });
-
-    it('leaves a single slide unrepeated', () => {
-      const [only] = getHomeFeedSlides();
-
-      expect(buildLoopedHomeSlides([only])).toHaveLength(1);
-    });
-
-    it('places each slide on the snap interval', () => {
-      expect(getHomeSlideOffset(0, SLIDE_WIDTH, GAP)).toBe(0);
-      expect(getHomeSlideOffset(2, SLIDE_WIDTH, GAP)).toBe(620);
-    });
-
-    it('reads the settled slide back from a scroll offset', () => {
-      expect(getHomeSlideIndexFromOffset(0, SLIDE_WIDTH, GAP, 12)).toBe(0);
-      expect(getHomeSlideIndexFromOffset(620, SLIDE_WIDTH, GAP, 12)).toBe(2);
-      // Snapping settles a few pixels off often enough to round, not floor.
-      expect(getHomeSlideIndexFromOffset(618, SLIDE_WIDTH, GAP, 12)).toBe(2);
-    });
-
-    it('clamps an overscrolled offset to a laid-out position', () => {
-      expect(getHomeSlideIndexFromOffset(-40, SLIDE_WIDTH, GAP, 12)).toBe(0);
-      expect(getHomeSlideIndexFromOffset(9000, SLIDE_WIDTH, GAP, 12)).toBe(11);
-    });
-
-    it('resolves a settle outside the middle pass back to the centre', () => {
-      // The rotation runs off the middle pass and settles on pass three; the
-      // offset is folded home, then the timer's index re-read from it.
-      const folded = foldHomeSlideOffset(getHomeSlideOffset(8, SLIDE_WIDTH, GAP), 1240);
-
-      expect(folded).toBe(getHomeSlideOffset(4, SLIDE_WIDTH, GAP));
-      expect(getHomeSlideIndexFromOffset(folded, SLIDE_WIDTH, GAP, 12)).toBe(4);
-    });
-
-    it('rotates only while focused, untouched, and motion is allowed', () => {
-      const running = { slideCount: 4, isFocused: true, isInteracting: false, reduceMotion: false };
-
-      expect(shouldAutoAdvanceHomeSlides(running)).toBe(true);
-      expect(shouldAutoAdvanceHomeSlides({ ...running, isFocused: false })).toBe(false);
-      expect(shouldAutoAdvanceHomeSlides({ ...running, isInteracting: true })).toBe(false);
-      expect(shouldAutoAdvanceHomeSlides({ ...running, reduceMotion: true })).toBe(false);
-      expect(shouldAutoAdvanceHomeSlides({ ...running, slideCount: 1 })).toBe(false);
-    });
-
-    it('turns the rail only while it is on screen and the feed is at rest', () => {
-      // The rail's bottom edge at 420 pt into the feed's content.
-      const resting = { railBottom: 420, feedOffset: 0, feedMoving: false };
-
-      expect(shouldTurnHomeSlides(resting)).toBe(true);
-      expect(shouldTurnHomeSlides({ ...resting, feedOffset: 419 })).toBe(true);
-      // Scrolled past it: a turn would be work no one sees.
-      expect(shouldTurnHomeSlides({ ...resting, feedOffset: 420 })).toBe(false);
-      expect(shouldTurnHomeSlides({ ...resting, feedOffset: 2400 })).toBe(false);
-      // In view but under a moving feed: the turn would land in its frames.
-      expect(shouldTurnHomeSlides({ ...resting, feedMoving: true })).toBe(false);
-      // Not measured yet, as at launch: the rail is at the top, on screen.
-      expect(shouldTurnHomeSlides({ ...resting, railBottom: null, feedOffset: 2400 })).toBe(true);
-      expect(shouldTurnHomeSlides({ ...resting, railBottom: null, feedMoving: true })).toBe(false);
     });
   });
 });
