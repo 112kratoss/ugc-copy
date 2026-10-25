@@ -187,12 +187,15 @@ function HomeShelfRow({ items, offerFreeToTry }: { items: HomeShelfItem[]; offer
       </div>
 
       <ul ref={trackRef} className="home-shelf-track" onScroll={syncScrollEnds}>
-        {items.map((item) => (
+        {items.map((item, index) => (
           <li key={`${item.kind}-${item.id}`} className="home-shelf-item">
             {item.kind === 'creation' ? (
               <CreationCard
                 creation={item}
                 offerFreeToTry={offerFreeToTry}
+                // The row opens the page, so the posters a laptop shows first
+                // are the page's largest paint: fetched at once, not lazily.
+                eager={index < 3}
                 // Checked here as well as in the observer: a preference that
                 // changes mid-visit stops a clip already chosen.
                 playing={clipsAllowed && playingId === item.id}
@@ -213,10 +216,12 @@ function HomeShelfRow({ items, offerFreeToTry }: { items: HomeShelfItem[]; offer
 function CreationCard({
   creation,
   offerFreeToTry,
+  eager,
   playing,
 }: {
   creation: HomeShelfCreation;
   offerFreeToTry: boolean;
+  eager: boolean;
   playing: boolean;
 }) {
   // Registered with the page's one-clip rule: this clip starting pauses any
@@ -237,16 +242,18 @@ function CreationCard({
         previewSrc={creation.posterUrl}
         alt=""
         sizes="(min-width: 40rem) 210px, 160px"
+        loading={eager ? 'eager' : 'lazy'}
         className="object-cover transition duration-300 group-hover:scale-[1.03]"
       />
       {playing && creation.clipUrl ? (
         // Mounted only while it is the card in view, so the clip is fetched
-        // for the one card someone is looking at and never for the rest.
+        // for the one card someone is looking at and never for the rest. No
+        // `poster`: until its first frame a video is transparent over the
+        // optimized poster below, and a poster would fetch the full-size file.
         <video
           key={creation.clipUrl}
           ref={attachPlayback}
           src={creation.clipUrl}
-          poster={creation.posterUrl}
           autoPlay
           muted
           loop
