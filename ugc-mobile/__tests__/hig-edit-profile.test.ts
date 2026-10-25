@@ -76,11 +76,13 @@ describe('HIG S15 — the profile form validates as you type', () => {
   });
 
   it('asks the server about a username before the images upload, not after', () => {
-    expect(screen).toContain('shouldCheckUsernameAvailability(');
-    expect(screen).toContain('api.validateProfile(');
+    // Through the live check onboarding and the name-and-handle card run too.
+    expect(screen).toContain('useHandleAvailability(api, {');
+    const check = file('lib/use-handle-availability.ts');
+    expect(check).toContain('shouldCheckUsernameAvailability(');
+    expect(check).toContain('api.validateProfile(');
     // Debounced, because the endpoint is rate limited.
-    expect(screen).toContain('USERNAME_CHECK_DELAY_MS');
-    expect(screen).toMatch(/const USERNAME_CHECK_DELAY_MS = \d+/);
+    expect(check).toMatch(/export const HANDLE_CHECK_DELAY_MS = \d+/);
   });
 
   it('spends no round trip on a username that cannot need one', () => {

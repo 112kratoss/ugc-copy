@@ -8,7 +8,7 @@ import {
   type UsernameAvailability,
 } from './edit-profile-form';
 
-/** How long typing has to pause before the handle is checked, as on Edit profile. */
+/** How long typing has to pause before the handle is checked. The endpoint is rate limited. */
 export const HANDLE_CHECK_DELAY_MS = 400;
 
 export interface HandleAvailabilityState {
@@ -18,10 +18,10 @@ export interface HandleAvailabilityState {
 }
 
 /**
- * The live check Edit profile and onboarding run on a handle, for the
- * name-and-handle card: what the server says about the handle typed, asked
- * once typing pauses, so a taken one shows beside the field instead of only
- * after the press. `shouldCheckUsernameAvailability` decides when a round trip
+ * The live check Edit profile, onboarding and the name-and-handle card run on
+ * a handle: what the server says about the handle typed, asked once typing
+ * pauses, so a taken one shows beside the field instead of only after the
+ * press. `shouldCheckUsernameAvailability` decides when a round trip
  * is worth it, and a failed check is no verdict (`readUsernameRejection`): the
  * field goes back to its rule, and the save still judges.
  */
