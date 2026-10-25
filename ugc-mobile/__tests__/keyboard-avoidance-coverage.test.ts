@@ -36,9 +36,16 @@ const screenFiles = sourceRoots.flatMap((root) => sourceFiles(path.join(mobileRo
 const PROVIDED_BY_ANCESTOR = new Set([
   // The shared primitive itself; screens opt in via `<Screen keyboardAware>`.
   'components/ui.tsx',
+  // The post composer's field primitives, shared with the name-and-handle
+  // card: each `<ComposerInput>` is swept where it is drawn.
+  'components/composer-fields.tsx',
+  // The name-and-handle card: swept as a field where it is drawn, on the
+  // composer's step 2 and in the sheet a list opens (`FIELD` names it).
+  'components/public-identity-card.tsx',
 ]);
 
-const FIELD = /(?:^|\.)(?:TextInput|AppTextInput|ProfileTextField|ComposerInput|WorkspaceInput)$/;
+// The text inputs, and a component made of them that more than one surface draws.
+const FIELD = /(?:^|\.)(?:TextInput|AppTextInput|ProfileTextField|ComposerInput|WorkspaceInput|PublicIdentityCard)$/;
 /** Surfaces drawn somewhere else (the overlay host, a Modal's window): an area around one does not reach inside. */
 const ELSEWHERE = new Set(['Overlay', 'Modal']);
 

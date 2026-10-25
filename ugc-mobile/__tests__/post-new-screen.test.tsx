@@ -32,6 +32,8 @@ const authState = vi.hoisted(() => ({
   api: {
     getProfile: vi.fn(),
     updateProfile: vi.fn(),
+    // The name-and-handle card checks the handle as it is typed.
+    validateProfile: vi.fn(async (_body: { username?: string | null; displayName?: string | null }) => ({ ok: true })),
     listGenerations: vi.fn(),
     listSourceTools: vi.fn(),
     getOwnerPost: vi.fn(),
@@ -1873,6 +1875,40 @@ describe('mobile external post composer', () => {
       expect(mutationState.mutate).not.toHaveBeenCalled();
       // The banner and the card are at the top of step 2, above a price the creator may have scrolled to.
       expect(scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: true });
+    });
+
+    // As Edit profile and onboarding check it: a taken handle shows beside the
+    // field while it is typed, not only after Publish.
+    it('checks the handle as it is typed and says when it is taken', async () => {
+      profileState.profile = placeholderProfile;
+      authState.user.user_metadata = { full_name: 'Maya K' };
+      authState.api.validateProfile.mockImplementation(async (body: { username?: string | null }) => {
+        if (body.username === 'maya') {
+          throw new ApiError('That username is already taken.', 409, {
+            error: 'That username is already taken.',
+            fieldErrors: { username: 'That username is already taken.' },
+          });
+        }
+        return { ok: true };
+      });
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      vi.useFakeTimers();
+      try {
+        renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya'));
+        expect(collectText(tree.root)).toContain('Checking availability…');
+        await renderer.act(async () => {
+          vi.advanceTimersByTime(400);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(authState.api.validateProfile).toHaveBeenLastCalledWith({ username: 'maya', displayName: 'Maya K' });
+        expect(collectText(tree.root)).toContain('That username is already taken.');
+        expect(mutationState.mutate).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('asks nothing of a profile that can already publish, or of a private post', async () => {

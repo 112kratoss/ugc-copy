@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { claimPublicIdentity, getInitialPublicIdentity } from '@/lib/public-identity';
+import {
+  checkHandleAvailability,
+  claimPublicIdentity,
+  getInitialPublicIdentity,
+  shouldCheckHandleAvailability,
+} from '@/lib/public-identity';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -90,6 +95,73 @@ describe('saving the name and handle before a public post', () => {
       ok: false,
       errors: { username: 'That username is already taken.' },
       message: 'That username is already taken.',
+    });
+  });
+});
+
+// The handle is checked as it is typed, so a taken one shows beside the field
+// instead of after the press (the app's Edit profile and onboarding do this).
+describe('checking a handle while it is typed', () => {
+  it('asks only once both fields pass the local rules, and never about the account\'s own handle', () => {
+    expect(shouldCheckHandleAvailability({ displayName: 'Maya K', username: 'maya-k' }, 'creator-a1b2c3d4')).toBe(true);
+    expect(shouldCheckHandleAvailability({ displayName: 'Maya K', username: 'maya-k' }, null)).toBe(true);
+    // The server judges the whole submission: a blank name is a refusal about the name.
+    expect(shouldCheckHandleAvailability({ displayName: '  ', username: 'maya-k' }, null)).toBe(false);
+    // Said by the form, with no round trip.
+    expect(shouldCheckHandleAvailability({ displayName: 'Maya K', username: 'ma' }, null)).toBe(false);
+    expect(shouldCheckHandleAvailability({ displayName: 'Maya K', username: 'creator-a1b2c3d4' }, null)).toBe(false);
+    expect(shouldCheckHandleAvailability({ displayName: 'Maya K', username: 'admin' }, null)).toBe(false);
+    // Theirs already: nobody else can take it.
+    expect(shouldCheckHandleAvailability({ displayName: 'Maya K', username: 'maya-k' }, 'maya-k')).toBe(false);
+  });
+
+  describe('the server\'s word', () => {
+    const fetchMock = vi.fn();
+    const draft = { displayName: ' Maya K ', username: 'maya-k' };
+
+    beforeEach(() => {
+      fetchMock.mockReset();
+      vi.stubGlobal('fetch', fetchMock);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('sends the two fields to the profile check with the token', async () => {
+      fetchMock.mockResolvedValueOnce(json({ ok: true }));
+
+      await expect(checkHandleAvailability(draft, 'token')).resolves.toEqual({ state: 'available' });
+      expect(fetchMock).toHaveBeenCalledWith('/api/profile/validate', expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token' },
+        body: JSON.stringify({ username: 'maya-k', displayName: 'Maya K' }),
+      }));
+    });
+
+    it('reports a taken or refused handle in the server\'s words', async () => {
+      fetchMock
+        .mockResolvedValueOnce(json({ error: 'That username is already taken.', fieldErrors: { username: 'That username is already taken.' } }, 409))
+        .mockResolvedValueOnce(json({ error: 'That handle is reserved.', fieldErrors: { username: 'That handle is reserved.' } }, 400))
+        .mockResolvedValueOnce(json({}, 409));
+
+      await expect(checkHandleAvailability(draft, 'token')).resolves.toEqual({ state: 'taken', message: 'That username is already taken.' });
+      await expect(checkHandleAvailability(draft, 'token')).resolves.toEqual({ state: 'taken', message: 'That handle is reserved.' });
+      await expect(checkHandleAvailability(draft, 'token')).resolves.toEqual({ state: 'taken', message: 'That username is already taken.' });
+    });
+
+    // Offline, rate limited or a refusal about the name says nothing about the
+    // handle: the field goes back to its rule, and the save still judges.
+    it('gives no verdict when the answer is not about the handle', async () => {
+      fetchMock
+        .mockResolvedValueOnce(json({ error: 'Please fix the highlighted fields.', fieldErrors: { displayName: 'Add a display name for your public profile.' } }, 400))
+        .mockResolvedValueOnce(json({ error: 'Too many requests', code: 'RATE_LIMITED' }, 429))
+        .mockResolvedValueOnce(json({ error: 'Failed to validate username' }, 500))
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await expect(checkHandleAvailability(draft, 'token')).resolves.toBeNull();
+      }
     });
   });
 });

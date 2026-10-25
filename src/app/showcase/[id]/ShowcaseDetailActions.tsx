@@ -80,6 +80,7 @@ export default function ShowcaseDetailActions({
 
   const postLifecycle = usePostLifecycle({
     accessToken: session?.access_token ?? null,
+    signedInUser: session?.user ?? null,
     onAuthRequired: handleLifecycleAuthRequired,
     onPatch: handleLifecyclePatch,
     onSettled: handleLifecycleSettled,

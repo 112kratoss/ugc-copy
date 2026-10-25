@@ -7,6 +7,8 @@ import {
   type PostLifecycleSubject,
   type PostLifecycleVisibility,
 } from './post-lifecycle-policy';
+import { isPublicIdentityRefusal } from './public-identity';
+import { requestPublicIdentity, type PublicIdentityOutcome } from './public-identity-prompt';
 import type { OwnerPostBundleSummary } from './types';
 
 /**
@@ -182,11 +184,14 @@ export async function changePostVisibility({
   post,
   visibility,
   confirm = confirmPostLifecycleAction,
+  askForPublicIdentity = requestPublicIdentity,
 }: {
   api: Pick<MagicbookletApiClient, 'updatePost'>;
   post: PostLifecyclePost;
   visibility: PostLifecycleVisibility;
   confirm?: Confirm;
+  /** Asks for the name and handle a public post needs, and saves them. */
+  askForPublicIdentity?: () => Promise<PublicIdentityOutcome>;
 }): Promise<PostLifecycleOutcome> {
   if (post.archivedAt || visibility === post.visibility) {
     return 'cancelled';
@@ -194,6 +199,25 @@ export async function changePostVisibility({
   const confirmation = getPostLifecycleConfirmation({ type: 'visibility', next: visibility }, post);
   if (confirmation && !(await confirm(confirmation))) {
     return 'cancelled';
+  }
+  try {
+    await api.updatePost(post.id, { visibility });
+    return 'done';
+  } catch (error) {
+    if (visibility !== 'public' || !isPublicIdentityRefusal(error)) {
+      reportFailure('Could not update visibility', error, 'Please try again.');
+      return 'failed';
+    }
+    // A public post needs a claimed handle and a display name, which the
+    // server checks before anything else. They are asked for here and saved,
+    // and the change goes out once more, where it used to end in this same
+    // dialog with nothing to do about it but leave for Edit profile.
+    const identity = await askForPublicIdentity();
+    if (identity.status === 'cancelled') return 'cancelled';
+    if (identity.status === 'unavailable') {
+      reportFailure('Could not update visibility', error, 'Please try again.');
+      return 'failed';
+    }
   }
   try {
     await api.updatePost(post.id, { visibility });

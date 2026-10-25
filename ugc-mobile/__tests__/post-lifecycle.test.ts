@@ -190,22 +190,126 @@ describe('post lifecycle', () => {
   });
 
   // "Please try again." hid the one thing the user needed: why. The server's
-  // reason (profile incomplete, unsafe text, quality gate) is shown instead.
+  // reason (unsafe text, the quality gate) is shown instead.
   it('reports the server reason when a change is refused', async () => {
     const api = {
       updatePost: vi.fn(async () => {
-        throw new ApiError('Complete your profile before publishing publicly.', 400);
+        throw new ApiError('Add a title before making this post public.', 400, { field: 'title' });
       }),
     };
+    const askForPublicIdentity = vi.fn();
 
     await expect(changePostVisibility({
       api,
       post: { ...publicWithListedRecipe, visibility: 'private', bundle: null },
       visibility: 'public',
+      askForPublicIdentity,
     })).resolves.toBe('failed');
 
-    expect(alertState.alert).toHaveBeenCalledWith('Could not update visibility', 'Complete your profile before publishing publicly.');
+    expect(alertState.alert).toHaveBeenCalledWith('Could not update visibility', 'Add a title before making this post public.');
     expect(describePostLifecycleError(new Error('   '), 'Please try again.')).toBe('Please try again.');
+    // Only the refusal for the name and handle is answered by asking for them.
+    expect(askForPublicIdentity).not.toHaveBeenCalled();
+  });
+
+  // A public post needs a claimed handle and a display name, and the server
+  // checks them before anything else. A creator making a private post public
+  // from a list is asked for both and the change goes out again, where it used
+  // to end in "Could not update visibility" with nothing to do about it.
+  describe('a public change refused for the name and handle', () => {
+    const privatePost: PostLifecyclePost = { ...publicWithListedRecipe, visibility: 'private', bundle: null };
+    const profileRefusal = () => new ApiError(
+      'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+      400,
+      {
+        error: 'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+        field: 'profile',
+        actionHref: '/profile',
+        actionLabel: 'Complete profile and return',
+      },
+    );
+    const savedProfile = { id: 'user-1', username: 'maya-k', displayName: 'Maya K' };
+
+    it('asks for both, and sends the change again once they are saved', async () => {
+      const api = {
+        updatePost: vi.fn()
+          .mockRejectedValueOnce(profileRefusal())
+          .mockResolvedValueOnce({ success: true, postId: 'post-1', visibility: 'public' }),
+      };
+      const askForPublicIdentity = vi.fn(async () => ({ status: 'saved' as const, profile: savedProfile as never }));
+
+      await expect(changePostVisibility({ api, post: privatePost, visibility: 'public', askForPublicIdentity }))
+        .resolves.toBe('done');
+
+      expect(askForPublicIdentity).toHaveBeenCalledTimes(1);
+      expect(api.updatePost).toHaveBeenCalledTimes(2);
+      expect(api.updatePost).toHaveBeenNthCalledWith(2, 'post-1', { visibility: 'public' });
+      expect(alertState.alert).not.toHaveBeenCalled();
+    });
+
+    it('leaves the post as it was, without a word, when the creator cancels', async () => {
+      const api = { updatePost: vi.fn().mockRejectedValueOnce(profileRefusal()) };
+      const askForPublicIdentity = vi.fn(async () => ({ status: 'cancelled' as const }));
+
+      await expect(changePostVisibility({ api, post: privatePost, visibility: 'public', askForPublicIdentity }))
+        .resolves.toBe('cancelled');
+
+      expect(api.updatePost).toHaveBeenCalledTimes(1);
+      expect(alertState.alert).not.toHaveBeenCalled();
+    });
+
+    it('reports the refusal when no sheet can ask', async () => {
+      const api = { updatePost: vi.fn().mockRejectedValueOnce(profileRefusal()) };
+      const askForPublicIdentity = vi.fn(async () => ({ status: 'unavailable' as const }));
+
+      await expect(changePostVisibility({ api, post: privatePost, visibility: 'public', askForPublicIdentity }))
+        .resolves.toBe('failed');
+
+      expect(alertState.alert).toHaveBeenCalledWith(
+        'Could not update visibility',
+        'Complete your profile before publishing publicly: choose a custom handle and add your display name.',
+      );
+    });
+
+    it('asks once: a refusal after the save is reported, not asked again', async () => {
+      const api = {
+        updatePost: vi.fn()
+          .mockRejectedValueOnce(profileRefusal())
+          .mockRejectedValueOnce(new ApiError('Add a title before making this post public.', 400)),
+      };
+      const askForPublicIdentity = vi.fn(async () => ({ status: 'saved' as const, profile: savedProfile as never }));
+
+      await expect(changePostVisibility({ api, post: privatePost, visibility: 'public', askForPublicIdentity }))
+        .resolves.toBe('failed');
+
+      expect(askForPublicIdentity).toHaveBeenCalledTimes(1);
+      expect(alertState.alert).toHaveBeenCalledWith('Could not update visibility', 'Add a title before making this post public.');
+    });
+
+    it('never asks when the post is going private', async () => {
+      const api = { updatePost: vi.fn().mockRejectedValueOnce(profileRefusal()) };
+      const askForPublicIdentity = vi.fn();
+
+      await expect(changePostVisibility({
+        api,
+        post: { ...privatePost, visibility: 'public' },
+        visibility: 'private',
+        askForPublicIdentity,
+      })).resolves.toBe('failed');
+
+      expect(askForPublicIdentity).not.toHaveBeenCalled();
+    });
+
+    it('does not ask a creator whose profile can already publish', async () => {
+      const api = { updatePost: vi.fn(async () => ({ success: true, postId: 'post-1', visibility: 'public' })) };
+      const askForPublicIdentity = vi.fn();
+
+      await expect(changePostVisibility({ api, post: privatePost, visibility: 'public', askForPublicIdentity }))
+        .resolves.toBe('done');
+
+      expect(askForPublicIdentity).not.toHaveBeenCalled();
+      expect(api.updatePost).toHaveBeenCalledTimes(1);
+    });
   });
 
   // Decision 12 (2026-10-17): a post is Public or Private. The server stores a

@@ -4,13 +4,15 @@ import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Pencil, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent, type TextInputProps } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { AppText, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaFileName, getComposerMediaLabel } from '@/components/composer-media-lightbox';
+import { CompactFieldLabel, ComposerFieldShell, ComposerInput, FieldErrorText } from '@/components/composer-fields';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { PublicIdentityCard } from '@/components/public-identity-card';
 import { Overlay } from '@/components/overlay-host';
 import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDrag, useSheetPresentation, type SheetDismissDrag } from '@/components/sheet-chrome';
 import { showConfirmDialog } from '@/lib/dialog';
@@ -20,16 +22,11 @@ import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
 import { adjustProfileStats, invalidateProfileStats, profileQueryKey } from '@/lib/profile-stats';
-import {
-  normalizeUsernameInput,
-  PROFILE_DISPLAY_NAME_MAX_LENGTH,
-  PROFILE_USERNAME_MAX_LENGTH,
-  PROFILE_USERNAME_RULE,
-} from '@/lib/edit-profile-form';
-import { invalidateWelcomeCredits } from '@/lib/use-onboarding-destination';
+import { useClaimPublicIdentity } from '@/lib/use-claim-public-identity';
 import {
   getInitialPublicIdentity,
   isPublicIdentityReady,
+  isPublicIdentityRefusal,
   readPublicIdentitySaveError,
   validatePublicIdentity,
   type PublicIdentityDraft,
@@ -479,109 +476,6 @@ function PostFormatSelector({
           );
         })}
       </View>
-    </View>
-  );
-}
-
-function FieldErrorText({ message }: { message?: string }) {
-  if (!message) return null;
-  return (
-    <AppText accessibilityRole="alert" variant="caption" color="danger">
-      {message}
-    </AppText>
-  );
-}
-
-/**
- * The name and handle a public post shows, asked for on step 2 of a creator who
- * has neither yet. Publishing publicly saves them to the profile first, so the
- * post is never refused for them after the media is up.
- */
-function PublicIdentityCard({
-  value,
-  errors,
-  editable,
-  onChange,
-}: {
-  value: PublicIdentityDraft;
-  errors: PublicIdentityErrors;
-  editable: boolean;
-  onChange: (next: PublicIdentityDraft) => void;
-}) {
-  return (
-    <ComposerFieldShell>
-      <AppText variant="label">Your name and handle</AppText>
-      <AppText variant="bodySm" color="muted">
-        Public posts show both. They are saved to your profile when you publish, and you can change them there later.
-      </AppText>
-      <CompactFieldLabel label="Display name" required valueLength={value.displayName.length} maxLength={PROFILE_DISPLAY_NAME_MAX_LENGTH} />
-      <ComposerInput
-        accessibilityLabel="Display name, required"
-        accessibilityHint="The name shown on your public posts."
-        value={value.displayName}
-        onChangeText={(displayName) => onChange({ ...value, displayName: displayName.slice(0, PROFILE_DISPLAY_NAME_MAX_LENGTH) })}
-        placeholder="Your name"
-        autoComplete="name"
-        editable={editable}
-      />
-      <FieldErrorText message={errors.displayName} />
-      <CompactFieldLabel label="Handle" required />
-      <ComposerInput
-        accessibilityLabel="Handle, required"
-        accessibilityHint={`Your profile link: ${PROFILE_USERNAME_RULE}`}
-        value={value.username}
-        onChangeText={(username) => onChange({ ...value, username: normalizeUsernameInput(username).slice(0, PROFILE_USERNAME_MAX_LENGTH) })}
-        placeholder="your-handle"
-        autoCapitalize="none"
-        autoCorrect={false}
-        editable={editable}
-      />
-      {errors.username
-        ? <FieldErrorText message={errors.username} />
-        : <AppText variant="caption" color="muted">{PROFILE_USERNAME_RULE}</AppText>}
-    </ComposerFieldShell>
-  );
-}
-
-function ComposerFieldShell({ children }: { children: React.ReactNode }) {
-  const theme = useAppTheme();
-  return (
-    <View
-      style={{
-        gap: 8,
-        borderRadius: 18,
-        borderWidth: 1,
-        borderColor: theme.colors.borderSubtle,
-        backgroundColor: theme.colors.surface,
-        padding: 14,
-      }}
-    >
-      {children}
-    </View>
-  );
-}
-
-function CompactFieldLabel({
-  label,
-  required = false,
-  optional = false,
-  valueLength,
-  maxLength,
-}: {
-  label: string;
-  required?: boolean;
-  optional?: boolean;
-  valueLength?: number;
-  maxLength?: number;
-}) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-      <AppText variant="label">{label}</AppText>
-      {required ? <AppText variant="caption" color="primary">Required</AppText> : null}
-      {optional ? <AppText variant="caption" color="faint">Optional</AppText> : null}
-      {typeof valueLength === 'number' && typeof maxLength === 'number' ? (
-        <AppText variant="caption" color="faint" style={{ marginLeft: 'auto' }}>{`${valueLength}/${maxLength}`}</AppText>
-      ) : null}
     </View>
   );
 }
@@ -1965,8 +1859,9 @@ export default function NewPostScreen() {
 
 function NewPostComposer() {
   const theme = useAppTheme();
-  const { user, isLoading: authLoading, api, refreshProfile } = useAuth();
+  const { user, isLoading: authLoading, api } = useAuth();
   const queryClient = useQueryClient();
+  const claimIdentity = useClaimPublicIdentity();
   const navigation = useNavigation();
   const params = useLocalSearchParams<{
     generationId?: string;
@@ -2610,8 +2505,7 @@ function NewPostComposer() {
     onError: (error) => {
       // A public post needs a claimed handle and a display name, and the server
       // says which refusal that is on all three routes.
-      const needsProfile = error instanceof ApiError
-        && (error.details as { field?: unknown } | null | undefined)?.field === 'profile';
+      const needsProfile = isPublicIdentityRefusal(error);
       setMessage({
         tone: 'danger',
         title: isEditMode ? 'Could not save' : 'Could not publish',
@@ -3483,14 +3377,10 @@ function NewPostComposer() {
     setMessage(null);
     if (needsPublicIdentity) {
       setIsSavingIdentity(true);
-      let saved: Awaited<ReturnType<typeof api.updateProfile>>;
       try {
         // Read again first: a profile finished elsewhere since this screen read
         // it keeps its own name and handle, and nothing is saved over them.
-        const current = await api.getProfile().catch(() => null);
-        saved = current && isPublicIdentityReady(current)
-          ? current
-          : await api.updateProfile({ username: identity.username.trim(), displayName: identity.displayName.trim() });
+        await claimIdentity(identity);
       } catch (error) {
         const { errors, message: saveMessage } = readPublicIdentitySaveError(error);
         setIdentitySaveErrors(errors);
@@ -3500,13 +3390,6 @@ function NewPostComposer() {
         scrollRef.current?.scrollTo({ y: 0, animated: true });
         return;
       }
-      // Merged, not replaced: the save's answer has no stats or sales totals,
-      // which the profile header and the seller total read from the same entry.
-      queryClient.setQueryData<typeof saved>(profileQueryKey(user?.id), (cached) => (cached ? { ...cached, ...saved } : saved));
-      // As Edit profile does after the same claim: the welcome card stops
-      // asking for the identity, and the account's own profile is read again.
-      void invalidateWelcomeCredits(queryClient);
-      void refreshProfile();
       setIdentitySaveErrors({});
       setIsSavingIdentity(false);
     }
@@ -3651,6 +3534,7 @@ function NewPostComposer() {
           {needsPublicIdentity ? (
             <PublicIdentityCard
               value={identity}
+              savedUsername={profileQuery.data?.username}
               // Until the creator types, the summary says what is missing, not the fields.
               errors={{ ...(identityEdits ? identityProblems : {}), ...identitySaveErrors }}
               editable={!isSavingIdentity && !publishMutation.isPending}
@@ -4417,57 +4301,6 @@ function MinimalStatusPill({
         {label}
       </AppText>
     </View>
-  );
-}
-
-function ComposerInput({
-  inputRef,
-  value,
-  onChangeText,
-  placeholder,
-  accessibilityLabel,
-  accessibilityHint,
-  multiline,
-  minHeight,
-  editable = true,
-  ...inputProps
-}: {
-  inputRef?: RefObject<TextInput | null>;
-  value: string;
-  onChangeText: (value: string) => void;
-  placeholder: string;
-  multiline?: boolean;
-  minHeight?: number;
-  editable?: boolean;
-} & Omit<TextInputProps, 'ref' | 'value' | 'onChangeText' | 'placeholder' | 'multiline' | 'editable' | 'style'>) {
-  const theme = useAppTheme();
-  return (
-    <TextInput
-      {...inputProps}
-      ref={inputRef}
-      accessibilityLabel={accessibilityLabel ?? placeholder}
-      accessibilityHint={accessibilityHint}
-      value={value}
-      onChangeText={onChangeText}
-      placeholder={placeholder}
-      placeholderTextColor={theme.colors.faint}
-      multiline={multiline}
-      textAlignVertical={multiline ? 'top' : 'center'}
-      editable={editable}
-      style={{
-        minHeight: multiline ? minHeight ?? 112 : appTheme.touch.compact,
-        borderRadius: 14,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: editable ? theme.colors.surfaceInset : theme.colors.surface,
-        color: editable ? theme.colors.text : theme.colors.faint,
-        ...appTheme.type.bodySm,
-        fontWeight: '500',
-        paddingHorizontal: appTheme.spacing.gap,
-        paddingVertical: appTheme.spacing.gap,
-      }}
-    />
   );
 }
 
