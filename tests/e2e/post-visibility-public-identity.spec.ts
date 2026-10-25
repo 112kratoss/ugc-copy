@@ -169,6 +169,32 @@ test.describe('Post Library: making a post public asks for the name and handle i
     expect(events.filter((event) => !event.startsWith('check '))).toEqual(['refused']);
   });
 
+  test('says a missing display name in the danger colour', async ({ page }) => {
+    await answerTheLibrary(page, { profile: PLACEHOLDER_PROFILE });
+    await page.goto('/creations?view=posts');
+    await makePublic(page);
+
+    const dialog = page.getByRole('dialog', { name: 'Add your name and handle' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('textbox', { name: /^display name$/i }).fill('');
+    await dialog.getByRole('button', { name: 'Save and make public' }).click();
+
+    const error = dialog.getByText('Add a display name for your public profile.');
+    await expect(error).toBeVisible();
+    // The colour the line is drawn in against the danger token's, as the page
+    // resolves both: with the caption's faint colour also on it, the
+    // stylesheet's order drew it grey.
+    const colours = await error.evaluate((element) => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--ui-accent-danger)';
+      document.body.append(probe);
+      const danger = getComputedStyle(probe).color;
+      probe.remove();
+      return { danger, drawn: getComputedStyle(element).color };
+    });
+    expect(colours.drawn).toBe(colours.danger);
+  });
+
   test('asks nothing of a profile that can already publish', async ({ page }) => {
     const events = await answerTheLibrary(page, {
       profile: { ...PLACEHOLDER_PROFILE, username: 'maya-k', displayName: 'Maya K' },

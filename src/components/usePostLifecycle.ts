@@ -108,6 +108,15 @@ export function usePostLifecycle({
     pendingRef.current = pending;
   }, [pending]);
 
+  // The page's token as it stands: the name-and-handle question can stay up
+  // while the session refreshes, and what it saves and sends afterwards must
+  // not go out with the click's token, which may have expired by then.
+  const accessTokenRef = useRef(accessToken);
+  useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
+  const readAccessToken = useCallback(() => accessTokenRef.current, []);
+
   const beginAction = useCallback((postId: string, action: PostLifecycleActionType): boolean => {
     if (pendingRef.current[postId]) {
       return false;
@@ -155,13 +164,13 @@ export function usePostLifecycle({
       bundleStatus: post.bundle ? (next === 'public' ? 'published' : 'draft') : null,
     });
 
-    const sendChange = () => requestPostVisibilityChange({ post, visibility: next, accessToken });
+    const sendChange = (token: string) => requestPostVisibilityChange({ post, visibility: next, accessToken: token });
 
     try {
       let result: PostVisibilityChangeResult;
       let savedIdentity = false;
       try {
-        result = await sendChange();
+        result = await sendChange(accessToken);
       } catch (error) {
         // A public post needs a claimed handle and a display name, which the
         // server checks before anything else. They are asked for here and
@@ -171,7 +180,7 @@ export function usePostLifecycle({
         if (next !== 'public' || !isPublicIdentityRefusal(error)) {
           throw error;
         }
-        const identity = await requestPublicIdentity({ accessToken, signedInUser });
+        const identity = await requestPublicIdentity({ getAccessToken: readAccessToken, signedInUser });
         if (identity.status === 'unavailable') {
           throw error;
         }
@@ -181,7 +190,7 @@ export function usePostLifecycle({
         }
         onPublicIdentitySaved?.(identity.profile);
         savedIdentity = true;
-        result = await sendChange();
+        result = await sendChange(accessTokenRef.current ?? accessToken);
       }
       onPatch(post.id, {
         visibility: result.visibility,
@@ -208,7 +217,7 @@ export function usePostLifecycle({
     } finally {
       endAction(post.id);
     }
-  }, [accessToken, beginAction, endAction, onAuthRequired, onPatch, onPublicIdentitySaved, onSettled, signedInUser]);
+  }, [accessToken, beginAction, endAction, onAuthRequired, onPatch, onPublicIdentitySaved, onSettled, readAccessToken, signedInUser]);
 
   const archive = useCallback(async (post: PostLifecycleTarget): Promise<boolean> => {
     if (!accessToken) {

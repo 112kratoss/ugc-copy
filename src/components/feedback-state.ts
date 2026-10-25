@@ -44,8 +44,12 @@ export interface PendingConfirmation {
 
 /** Asking for the name and handle a public post needs, and saving them. */
 export interface PublicIdentityRequest {
-  /** The profile is read and saved with it. */
-  accessToken: string;
+  /**
+   * The token the profile is read and saved with, read as each request goes
+   * out: the session can refresh while the question is up, and the click's
+   * token can expire before the creator answers.
+   */
+  getAccessToken: () => string | null;
   /** Whose sign-in name fills the fields, as it fills the composers'. */
   signedInUser?: SignedInUser;
 }
@@ -76,7 +80,8 @@ let nextId = 1;
 let snapshot: FeedbackSnapshot = EMPTY_SNAPSHOT;
 const listeners = new Set<Listener>();
 const confirmationResolvers = new Map<number, (confirmed: boolean) => void>();
-const publicIdentityResolvers = new Map<number, (outcome: PublicIdentityOutcome) => void>();
+/** Everything waiting on the open name-and-handle question, by its id. */
+const publicIdentityResolvers = new Map<number, Array<(outcome: PublicIdentityOutcome) => void>>();
 
 /** How a toast went: closed by the viewer, out of time, or taken down unread by the code that showed it. */
 export type ToastDismissal = 'closed' | 'expired' | 'interrupted';
@@ -240,33 +245,40 @@ export function resolveConfirmation(id: number, confirmed: boolean) {
  * profile (`PublicIdentityDialog`, drawn by `FeedbackViewport`). Resolves
  * once they are saved or the question is put away; with no viewport mounted
  * it answers `unavailable` at once, and the caller says what it would have
- * said without asking. A second question while one is open cancels the first.
+ * said without asking. A second question while one is open waits for the
+ * same answer: two posts made public together both go out once the name and
+ * handle are saved, rather than the first being put back unanswered.
  */
 export function requestPublicIdentity(request: PublicIdentityRequest): Promise<PublicIdentityOutcome> {
   if (listeners.size === 0) {
     return Promise.resolve({ status: 'unavailable' });
   }
-  if (snapshot.publicIdentity) {
-    resolvePublicIdentity(snapshot.publicIdentity.id, { status: 'cancelled' });
+  const waiting = snapshot.publicIdentity ? publicIdentityResolvers.get(snapshot.publicIdentity.id) : undefined;
+  if (waiting) {
+    return new Promise<PublicIdentityOutcome>((resolve) => {
+      waiting.push(resolve);
+    });
   }
 
   const id = nextId++;
   return new Promise<PublicIdentityOutcome>((resolve) => {
-    publicIdentityResolvers.set(id, resolve);
+    publicIdentityResolvers.set(id, [resolve]);
     commit({ ...snapshot, publicIdentity: { id, request } });
   });
 }
 
 export function resolvePublicIdentity(id: number, outcome: PublicIdentityOutcome) {
-  const resolver = publicIdentityResolvers.get(id);
-  if (!resolver) {
+  const waiting = publicIdentityResolvers.get(id);
+  if (!waiting) {
     return;
   }
   publicIdentityResolvers.delete(id);
   if (snapshot.publicIdentity?.id === id) {
     commit({ ...snapshot, publicIdentity: null });
   }
-  resolver(outcome);
+  for (const resolve of waiting) {
+    resolve(outcome);
+  }
 }
 
 /** Test helper: drop every toast and cancel any open question. */

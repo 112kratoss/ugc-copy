@@ -27,13 +27,24 @@ import {
   type PendingConfirmation,
   type ToastRecord,
 } from './feedback-state';
+import { useModalQuestion } from './useModalQuestion';
 
 // Asked for only by an owner making a post public before their profile can
 // publish, so it is not part of the bundle every page loads with this viewport.
 // React's own lazy, as `next/dynamic` is in the app router: a failed load is
 // thrown to the boundary below, under vitest too, where `next/dynamic` is the
 // pages router's loader and hands the failure to its fallback instead.
-const PublicIdentityDialog = lazy(() => import('./PublicIdentityDialog'));
+function lazyPublicIdentityDialog() {
+  return lazy(() => import('./PublicIdentityDialog'));
+}
+
+// One for every question while it works. A lazy keeps a rejected import and
+// throws it on every render after, which would leave the question unavailable
+// for the rest of the visit after one dropped connection, so the boundary
+// replaces it after a failure and the next question fetches the chunk again.
+// (Not a new lazy per question: tried that way, a second question never drew,
+// suspending again and again on a chunk that was already in.)
+let PublicIdentityDialog = lazyPublicIdentityDialog();
 
 /**
  * The question's load can fail: a deploy rotated the chunk names while the tab
@@ -53,6 +64,8 @@ class PublicIdentityDialogBoundary extends Component<{ id: number; children: Rea
 
   componentDidCatch(error: unknown) {
     console.error('Failed to load the name-and-handle question:', error);
+    // The next question asks for the chunk again.
+    PublicIdentityDialog = lazyPublicIdentityDialog();
     resolvePublicIdentity(this.props.id, { status: 'unavailable' });
     // Caught here, it never reaches Next's own reportError, which is what
     // Sentry hears; hand it on as an uncaught one would be.
@@ -275,80 +288,25 @@ function Toast({ toast }: { toast: ToastRecord }) {
   );
 }
 
-/** The page an address names: a change of hash alone stays on it. */
-function readAddress() {
-  return `${window.location.pathname}${window.location.search}`;
-}
-
 function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) {
   const { id, request } = confirmation;
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const isDanger = request.tone === 'danger';
 
-  useEffect(() => {
-    previouslyFocusedRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    // The safe choice takes focus, so Enter never confirms by accident. Without
-    // scrolling: the phone's sheet starts below the window, and focusing it
-    // there scrolled the backdrop to it, so the sheet jumped into place in one
-    // frame instead of sliding up.
-    const focusFrame = window.requestAnimationFrame(() => cancelRef.current?.focus({ preventScroll: true }));
-    // Where it was asked: a Back that leaves this address has left the page
-    // the question was about (the reel it would unlock, the creator it would
-    // block), and its answer would act for a page that is gone.
-    const askedAt = readAddress();
-
-    // Every key is the question's while it is up: heard first (on the window,
-    // in the capture phase) and kept from everything beneath it, so a modal
-    // under it never takes its Escape for its own or pulls Tab back into
-    // itself.
-    const handleKeyDown = (event: KeyboardEvent) => {
-      event.stopPropagation();
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        resolveConfirmation(id, false);
-        return;
-      }
-      if (event.key !== 'Tab') {
-        return;
-      }
-      // Two focusable controls: keep Tab cycling between them.
-      const first = cancelRef.current;
-      const last = confirmRef.current;
-      if (!first || !last) {
-        return;
-      }
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      } else if (!dialogRef.current?.contains(document.activeElement)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    const handlePopState = () => {
-      if (readAddress() !== askedAt) {
-        resolveConfirmation(id, false);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown, true);
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      window.removeEventListener('keydown', handleKeyDown, true);
-      window.removeEventListener('popstate', handlePopState);
-      previouslyFocusedRef.current?.focus();
-    };
-  }, [id]);
+  useModalQuestion({
+    questionId: id,
+    dialogRef,
+    // The safe choice takes focus, so Enter never confirms by accident.
+    initialFocus: () => cancelRef.current,
+    // Two focusable controls: Tab cycles between them.
+    focusables: () => [cancelRef.current, confirmRef.current].filter((control) => control !== null),
+    // A Back that leaves the page has left what the question was about (the
+    // reel it would unlock, the creator it would block): its answer would act
+    // for a page that is gone.
+    onCancel: () => resolveConfirmation(id, false),
+  });
 
   return (
     <div

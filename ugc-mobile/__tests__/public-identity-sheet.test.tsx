@@ -255,16 +255,56 @@ describe('the sheet a list opens to ask for a name and handle before a post goes
     expect(authState.api.updateProfile).not.toHaveBeenCalled();
   });
 
-  it('is answered "cancelled" by Cancel, and a second question answers the first', async () => {
+  it('is answered "cancelled" by Cancel, for a second question asked while it is up too', async () => {
     const tree = mountHost();
 
     const first = ask();
     const second = ask();
-    await expect(first).resolves.toEqual({ status: 'cancelled' });
+    const settled = vi.fn();
+    void first.then(settled);
+    await act(async () => undefined);
+    expect(settled).not.toHaveBeenCalled();
 
     act(() => button(tree.root, 'Cancel').props.onPress());
+    await expect(first).resolves.toEqual({ status: 'cancelled' });
     await expect(second).resolves.toEqual({ status: 'cancelled' });
     expect(authState.api.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('lets a second question wait on the one that is up, and saves once for both', async () => {
+    const tree = mountHost();
+    const first = ask();
+    const second = ask();
+    await letTheCheckAnswer();
+
+    act(() => field(tree.root, 'Handle, required').props.onChangeText('maya-k'));
+    await act(async () => {
+      button(tree.root, 'Save and make public').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const saved = { status: 'saved', profile: expect.objectContaining({ username: 'maya-k', displayName: 'Maya Kapoor' }) };
+    await expect(first).resolves.toEqual(saved);
+    await expect(second).resolves.toEqual(saved);
+    expect(authState.api.updateProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not ask about the same handle again when only the name changes', async () => {
+    const tree = mountHost();
+    void ask();
+    await letTheCheckAnswer();
+    expect(authState.api.validateProfile).toHaveBeenCalledTimes(1);
+
+    act(() => field(tree.root, 'Display name, required').props.onChangeText('Maya K'));
+    expect(collectText(tree.root)).toContain('That username is already taken.');
+    await letTheCheckAnswer();
+    expect(authState.api.validateProfile).toHaveBeenCalledTimes(1);
+
+    // A new handle is asked about with the name as it stands.
+    act(() => field(tree.root, 'Handle, required').props.onChangeText('maya-k'));
+    await letTheCheckAnswer();
+    expect(authState.api.validateProfile).toHaveBeenLastCalledWith({ username: 'maya-k', displayName: 'Maya K' });
   });
 
   it('answers "unavailable" at once when no sheet is mounted', async () => {

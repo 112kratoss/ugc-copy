@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const clientMocks = vi.hoisted(() => ({
@@ -179,7 +179,8 @@ describe('usePostLifecycle', () => {
         expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ type: 'visibility', visibility: 'public' }));
       });
       // The question fills its fields from the sign-in, as the composers do.
-      expect(feedbackMocks.requestPublicIdentity).toHaveBeenCalledWith({ accessToken: 'token', signedInUser });
+      expect(feedbackMocks.requestPublicIdentity).toHaveBeenCalledWith({ getAccessToken: expect.any(Function), signedInUser });
+      expect(feedbackMocks.requestPublicIdentity.mock.calls[0][0].getAccessToken()).toBe('token');
       expect(onPublicIdentitySaved).toHaveBeenCalledWith(savedProfile);
       expect(clientMocks.requestPostVisibilityChange).toHaveBeenCalledTimes(2);
       // The surface stays public while it asks: it was never put back.
@@ -190,6 +191,35 @@ describe('usePostLifecycle', () => {
       expect(feedbackMocks.pushToast).toHaveBeenCalledWith({ tone: 'success', message: 'Name and handle saved. Post is public.' });
       expect(feedbackMocks.pushToast).toHaveBeenCalledTimes(1);
       expect(screen.getByRole('status')).toHaveTextContent('idle');
+    });
+
+    it('asks and sends the change again with the token the page holds by then', async () => {
+      clientMocks.requestPostVisibilityChange
+        .mockRejectedValueOnce(profileRefusal())
+        .mockResolvedValueOnce(publicResult);
+      let answerQuestion: (outcome: unknown) => void = () => undefined;
+      feedbackMocks.requestPublicIdentity.mockImplementation(() => new Promise((resolve) => {
+        answerQuestion = resolve;
+      }));
+      const { rerender } = render(<Harness post={privatePost} accessToken="token" />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'go public' }));
+      await waitFor(() => {
+        expect(feedbackMocks.requestPublicIdentity).toHaveBeenCalledTimes(1);
+      });
+      // The session refreshes while the question is up.
+      rerender(<Harness post={privatePost} accessToken="refreshed-token" />);
+      expect(feedbackMocks.requestPublicIdentity.mock.calls[0][0].getAccessToken()).toBe('refreshed-token');
+
+      await act(async () => {
+        answerQuestion({ status: 'saved', profile: savedProfile });
+      });
+
+      await waitFor(() => {
+        expect(clientMocks.requestPostVisibilityChange).toHaveBeenCalledTimes(2);
+      });
+      expect(clientMocks.requestPostVisibilityChange.mock.calls[0][0]).toEqual(expect.objectContaining({ accessToken: 'token' }));
+      expect(clientMocks.requestPostVisibilityChange.mock.calls[1][0]).toEqual(expect.objectContaining({ accessToken: 'refreshed-token' }));
     });
 
     it('holds the post as busy while it asks', async () => {

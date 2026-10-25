@@ -98,6 +98,7 @@
 @source "../components/useHandleAvailability.ts";
 @source "../components/useInlineMediaPlayback.ts";
 @source "../components/useMediaLoadingPreferences.ts";
+@source "../components/useModalQuestion.ts";
 @source "../components/useOptimisticPostSave.ts";
 @source "../components/usePostLifecycle.ts";
 @source "../components/useShareAction.ts";

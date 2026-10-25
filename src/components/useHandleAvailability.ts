@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   checkHandleAvailability,
@@ -28,12 +28,18 @@ export function useHandleAvailability(
   draft: PublicIdentityDraft,
   { accessToken, savedUsername }: { accessToken?: string | null; savedUsername?: string | null },
 ): HandleAvailability {
-  const username = draft.username.trim();
-  const displayName = draft.displayName.trim();
   // What is being asked: an answer to an earlier question is not this field's.
+  // The handle alone: once the name passes the form's rules the server's word
+  // on a handle cannot change with it (the same `validateProfileUpdate` judges
+  // both), so editing the name asks nothing again. The request still carries
+  // the name as it stands when it goes out.
   const question = accessToken && shouldCheckHandleAvailability(draft, savedUsername)
-    ? JSON.stringify([username, displayName])
+    ? draft.username.trim()
     : null;
+  const displayNameRef = useRef(draft.displayName.trim());
+  useEffect(() => {
+    displayNameRef.current = draft.displayName.trim();
+  });
   const [answer, setAnswer] = useState<{ question: string; availability: HandleAvailability } | null>(null);
 
   useEffect(() => {
@@ -42,7 +48,8 @@ export function useHandleAvailability(
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      void checkHandleAvailability({ username, displayName }, accessToken, controller.signal).then((verdict) => {
+      const draftNow = { username: question, displayName: displayNameRef.current };
+      void checkHandleAvailability(draftNow, accessToken, controller.signal).then((verdict) => {
         if (!controller.signal.aborted) {
           setAnswer({ question, availability: verdict ?? { state: 'idle' } });
         }
@@ -52,7 +59,7 @@ export function useHandleAvailability(
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [accessToken, displayName, question, username]);
+  }, [accessToken, question]);
 
   if (!question) {
     return { state: 'idle' };

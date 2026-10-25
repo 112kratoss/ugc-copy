@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Keyboard, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,7 +20,6 @@ import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
 import { profileQueryKey } from '@/lib/profile-stats';
 import {
-  claimPublicIdentity,
   getInitialPublicIdentity,
   readPublicIdentitySaveError,
   validatePublicIdentity,
@@ -31,10 +30,11 @@ import { registerPublicIdentityPresenter, type PublicIdentityOutcome } from '@/l
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
+import { useClaimPublicIdentity } from '@/lib/use-claim-public-identity';
 import { useHardwareBack } from '@/lib/use-hardware-back';
-import { invalidateWelcomeCredits } from '@/lib/use-onboarding-destination';
 
-type Question = { id: number; settle: (outcome: PublicIdentityOutcome) => void };
+/** The question on screen, and everything waiting on its answer. */
+type Question = { id: number; settles: Array<(outcome: PublicIdentityOutcome) => void> };
 
 let nextQuestionId = 1;
 
@@ -57,12 +57,18 @@ export function PublicIdentitySheetHost() {
   const openRef = useRef<Question | null>(null);
 
   useEffect(() => registerPublicIdentityPresenter((settle) => {
+    // One question at a time, and one answer for everything waiting on it: a
+    // second refusal while the sheet is up (two posts made public together)
+    // waits for the same answer instead of putting the first post back.
+    const open = openRef.current;
+    if (open) {
+      open.settles.push(settle);
+      return;
+    }
     // An overlay takes no window focus, so the keyboard of the page it opens
     // over would stay up over the sheet: it goes as the sheet is asked for.
     Keyboard.dismiss();
-    // One question at a time: a second one answers the first.
-    openRef.current?.settle({ status: 'cancelled' });
-    const next = { id: nextQuestionId++, settle };
+    const next = { id: nextQuestionId++, settles: [settle] };
     openRef.current = next;
     setQuestion(next);
     setVisible(true);
@@ -73,7 +79,7 @@ export function PublicIdentitySheetHost() {
     if (!open) return;
     openRef.current = null;
     setVisible(false);
-    open.settle(outcome);
+    for (const settle of open.settles) settle(outcome);
   };
 
   if (!question) return null;
@@ -100,8 +106,8 @@ function PublicIdentitySheet({
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
-  const queryClient = useQueryClient();
-  const { api, user, refreshProfile } = useAuth();
+  const { api, user } = useAuth();
+  const claimIdentity = useClaimPublicIdentity();
   const bottomInset = resolvedBottomInset(insets.bottom);
 
   // The composer's own read of the profile, so a profile it has already read
@@ -152,9 +158,10 @@ function PublicIdentitySheet({
       return;
     }
     setIsSaving(true);
-    let saved: Awaited<ReturnType<typeof claimPublicIdentity>>;
+    let saved: Awaited<ReturnType<typeof claimIdentity>>;
     try {
-      saved = await claimPublicIdentity(api, identity);
+      // The composer's claim, with the same cache updates after it.
+      saved = await claimIdentity(identity);
     } catch (error) {
       const { errors, message: saveMessage } = readPublicIdentitySaveError(error);
       setSaveErrors(errors);
@@ -163,12 +170,6 @@ function PublicIdentitySheet({
       setIsSaving(false);
       return;
     }
-    // As the composer does after the same claim: merged, since the save's
-    // answer has no stats or sales totals; the welcome card stops asking for
-    // the identity; and the account's own profile is read again.
-    queryClient.setQueryData<typeof saved>(profileQueryKey(user?.id), (cached) => (cached ? { ...cached, ...saved } : saved));
-    void invalidateWelcomeCredits(queryClient);
-    void refreshProfile();
     setIsSaving(false);
     onAnswer({ status: 'saved', profile: saved });
   };

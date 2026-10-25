@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { MagicbookletApiClient } from './api-client';
 import {
@@ -32,16 +32,23 @@ export function useHandleAvailability(
   const handle = normalizeUsername(username);
   const name = displayName.trim();
   // What is being asked: an answer to an earlier question is not this field's.
+  // The handle alone: the check runs only once the name is there, and the
+  // server's word on a handle does not change with the name, so editing the
+  // name asks nothing again. The request carries the name as it stands then.
   const question = handle && shouldCheckUsernameAvailability({ value: username, displayName, savedUsername })
-    ? `${handle}\n${name}`
+    ? handle
     : null;
+  const nameRef = useRef(name);
+  useEffect(() => {
+    nameRef.current = name;
+  }, [name]);
   const [answer, setAnswer] = useState<(HandleAvailabilityState & { question: string }) | null>(null);
 
   useEffect(() => {
-    if (!question || !handle) return undefined;
+    if (!question) return undefined;
     let current = true;
     const timer = setTimeout(() => {
-      void api.validateProfile({ username: handle, displayName: name })
+      void api.validateProfile({ username: question, displayName: nameRef.current })
         .then(() => {
           if (current) setAnswer({ question, availability: 'available', message: null });
         })
@@ -55,7 +62,7 @@ export function useHandleAvailability(
       current = false;
       clearTimeout(timer);
     };
-  }, [api, handle, name, question]);
+  }, [api, question]);
 
   if (!question) return { availability: 'idle', message: null };
   return answer?.question === question

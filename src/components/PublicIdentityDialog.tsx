@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react';
 
 import PublicIdentityFields from '@/components/PublicIdentityFields';
 import { resolvePublicIdentity, type PendingPublicIdentity } from '@/components/feedback-state';
+import { useModalQuestion } from '@/components/useModalQuestion';
 import {
   claimPublicIdentity,
   getInitialPublicIdentity,
@@ -14,11 +15,6 @@ import {
   type PublicIdentityErrors,
   type PublicIdentityProfile,
 } from '@/lib/public-identity';
-
-/** The page an address names: a change of hash alone stays on it. */
-function readAddress() {
-  return `${window.location.pathname}${window.location.search}`;
-}
 
 const FOCUSABLE = 'input:not([disabled]), button:not([disabled])';
 
@@ -30,7 +26,8 @@ const FOCUSABLE = 'input:not([disabled]), button:not([disabled])';
  * composers' claim, and the post's change goes out again once it has.
  *
  * Drawn by `FeedbackViewport` from the root layout, outside every route's
- * `AuthProvider`, so the request carries the token and the sign-in it needs.
+ * `AuthProvider`, so the request carries the sign-in it needs and a way to
+ * read the page's token as it stands.
  */
 export default function PublicIdentityDialog({ pending }: { pending: PendingPublicIdentity }) {
   const { id, request } = pending;
@@ -45,82 +42,42 @@ export default function PublicIdentityDialog({ pending }: { pending: PendingPubl
   const titleId = `ui-identity-title-${id}`;
   const messageId = `ui-identity-message-${id}`;
 
+  // Until the profile has been read the fields hold the sign-in's suggestion,
+  // which the profile's own name can replace: the handle is checked only once
+  // they have settled, so the server is not asked about a handle about to go.
+  const [profileSettled, setProfileSettled] = useState(false);
+
   useEffect(() => {
     const controller = new AbortController();
-    void loadOwnProfile(request.accessToken, controller.signal).then((loaded) => {
-      if (loaded && !controller.signal.aborted) {
+    void loadOwnProfile(request.getAccessToken(), controller.signal).then((loaded) => {
+      if (controller.signal.aborted) {
+        return;
+      }
+      if (loaded) {
         setProfile(loaded);
       }
+      setProfileSettled(true);
     });
     return () => controller.abort();
-  }, [request.accessToken]);
+  }, [request]);
 
-  const isSavingRef = useRef(isSaving);
-  useEffect(() => {
-    isSavingRef.current = isSaving;
-  }, [isSaving]);
+  // A question put away mid-save would leave the save to land unseen, so
+  // Cancel, the backdrop, Escape and a Back that leaves the page all wait for
+  // it; a save that lands after such a Back still makes the post public.
+  const cancel = () => {
+    if (!isSaving) {
+      resolvePublicIdentity(id, { status: 'cancelled' });
+    }
+  };
 
-  useEffect(() => {
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    // The first field takes the focus, without scrolling: on a phone the sheet
-    // starts below the window, and focusing it there would jump it into place.
-    const focusFrame = window.requestAnimationFrame(() => {
-      dialogRef.current?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true });
-    });
-    const askedAt = readAddress();
-    // A question put away mid-save would leave the save to land unseen.
-    const cancel = () => {
-      if (!isSavingRef.current) {
-        resolvePublicIdentity(id, { status: 'cancelled' });
-      }
-    };
-
-    // As the confirmation does: every key is the question's while it is up, so
-    // a modal under it never takes its Escape or pulls Tab back into itself.
-    // Typing still reaches the fields; their changes arrive as input events.
-    const handleKeyDown = (event: KeyboardEvent) => {
-      event.stopPropagation();
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        cancel();
-        return;
-      }
-      if (event.key !== 'Tab') {
-        return;
-      }
-      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first || !last) {
-        return;
-      }
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      } else if (!dialogRef.current?.contains(document.activeElement)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    // A Back that leaves the page has left the post the question was about.
-    const handlePopState = () => {
-      if (readAddress() !== askedAt) {
-        resolvePublicIdentity(id, { status: 'cancelled' });
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown, true);
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      window.removeEventListener('keydown', handleKeyDown, true);
-      window.removeEventListener('popstate', handlePopState);
-      previouslyFocused?.focus();
-    };
-  }, [id]);
+  useModalQuestion({
+    questionId: id,
+    dialogRef,
+    // The first field.
+    initialFocus: () => dialogRef.current?.querySelector<HTMLInputElement>('input'),
+    focusables: () => Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []),
+    onCancel: cancel,
+  });
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -135,7 +92,7 @@ export default function PublicIdentityDialog({ pending }: { pending: PendingPubl
     }
     setIsSaving(true);
     setMessage(null);
-    const saved = await claimPublicIdentity(identity, request.accessToken);
+    const saved = await claimPublicIdentity(identity, request.getAccessToken());
     if (saved.ok) {
       resolvePublicIdentity(id, { status: 'saved', profile: saved.profile });
       return;
@@ -150,8 +107,8 @@ export default function PublicIdentityDialog({ pending }: { pending: PendingPubl
     <div
       className="ui-confirm-backdrop"
       onClick={(event) => {
-        if (event.target === event.currentTarget && !isSaving) {
-          resolvePublicIdentity(id, { status: 'cancelled' });
+        if (event.target === event.currentTarget) {
+          cancel();
         }
       }}
     >
@@ -177,7 +134,7 @@ export default function PublicIdentityDialog({ pending }: { pending: PendingPubl
             value={identity}
             errors={errors}
             disabled={isSaving}
-            accessToken={request.accessToken}
+            accessToken={profileSettled ? request.getAccessToken() : null}
             savedUsername={profile?.username}
             framed={false}
             onChange={(next) => {
@@ -196,7 +153,7 @@ export default function PublicIdentityDialog({ pending }: { pending: PendingPubl
           <button
             type="button"
             disabled={isSaving}
-            onClick={() => resolvePublicIdentity(id, { status: 'cancelled' })}
+            onClick={cancel}
             className="ui-button ui-button-secondary ui-focus-ring"
           >
             Cancel

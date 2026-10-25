@@ -31,7 +31,7 @@ export function registerPublicIdentityPresenter(next: Presenter) {
 /**
  * Ask for the name and handle, and save them to the profile. Resolves once
  * they are saved or the sheet is put away; a second question while one is up
- * answers the first `cancelled`.
+ * waits for the same answer.
  */
 export function requestPublicIdentity(): Promise<PublicIdentityOutcome> {
   const present = presenter;

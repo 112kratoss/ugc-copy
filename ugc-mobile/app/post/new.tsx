@@ -22,9 +22,8 @@ import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
 import { adjustProfileStats, invalidateProfileStats, profileQueryKey } from '@/lib/profile-stats';
-import { invalidateWelcomeCredits } from '@/lib/use-onboarding-destination';
+import { useClaimPublicIdentity } from '@/lib/use-claim-public-identity';
 import {
-  claimPublicIdentity,
   getInitialPublicIdentity,
   isPublicIdentityReady,
   isPublicIdentityRefusal,
@@ -1860,8 +1859,9 @@ export default function NewPostScreen() {
 
 function NewPostComposer() {
   const theme = useAppTheme();
-  const { user, isLoading: authLoading, api, refreshProfile } = useAuth();
+  const { user, isLoading: authLoading, api } = useAuth();
   const queryClient = useQueryClient();
+  const claimIdentity = useClaimPublicIdentity();
   const navigation = useNavigation();
   const params = useLocalSearchParams<{
     generationId?: string;
@@ -3377,11 +3377,10 @@ function NewPostComposer() {
     setMessage(null);
     if (needsPublicIdentity) {
       setIsSavingIdentity(true);
-      let saved: Awaited<ReturnType<typeof claimPublicIdentity>>;
       try {
         // Read again first: a profile finished elsewhere since this screen read
         // it keeps its own name and handle, and nothing is saved over them.
-        saved = await claimPublicIdentity(api, identity);
+        await claimIdentity(identity);
       } catch (error) {
         const { errors, message: saveMessage } = readPublicIdentitySaveError(error);
         setIdentitySaveErrors(errors);
@@ -3391,13 +3390,6 @@ function NewPostComposer() {
         scrollRef.current?.scrollTo({ y: 0, animated: true });
         return;
       }
-      // Merged, not replaced: the save's answer has no stats or sales totals,
-      // which the profile header and the seller total read from the same entry.
-      queryClient.setQueryData<typeof saved>(profileQueryKey(user?.id), (cached) => (cached ? { ...cached, ...saved } : saved));
-      // As Edit profile does after the same claim: the welcome card stops
-      // asking for the identity, and the account's own profile is read again.
-      void invalidateWelcomeCredits(queryClient);
-      void refreshProfile();
       setIdentitySaveErrors({});
       setIsSavingIdentity(false);
     }

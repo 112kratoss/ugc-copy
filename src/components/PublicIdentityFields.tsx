@@ -61,7 +61,8 @@ export default function PublicIdentityFields({
         ? 'This handle is available.'
         : PUBLIC_HANDLE_RULE);
   // One colour class, never two: `Text` joins without merging, so a second
-  // colour would be settled by the order of the stylesheet, not of the classes.
+  // colour would be settled by the order of the stylesheet, not of the classes
+  // (Tailwind emits the faint colour after the danger one, so the faint won).
   const handleHintTone = handleError
     ? 'text-[var(--ui-accent-danger)]'
     : availability.state === 'available'
@@ -90,9 +91,10 @@ export default function PublicIdentityFields({
           />
         </div>
         {errors.displayName ? (
-          <div id={`${nameId}-error`} className="mt-1.5">
-            <Text variant="caption" className="text-[var(--ui-accent-danger)]">{errors.displayName}</Text>
-          </div>
+          // The caption's size and weight with the danger colour alone, as the handle's line has.
+          <p id={`${nameId}-error`} className="mt-1.5 text-xs font-semibold leading-[17px] text-[var(--ui-accent-danger)]">
+            {errors.displayName}
+          </p>
         ) : null}
       </div>
       <div>
