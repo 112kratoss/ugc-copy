@@ -2,7 +2,8 @@
   "$comment": [
     "The public-post quality rule the server applies before a post goes public (getPublicPostQualityError in src/lib/marketplace-trust.ts).",
     "The app checks the same rule before step 2 says Ready to publish, so it cannot promise a post the server will refuse.",
-    "Each suite holds its own code to these cases: src/__tests__/marketplace-trust.test.ts (server) and ugc-mobile/__tests__/post-new-view-model.test.ts (app).",
+    "Both read the words rule from one shared module, ugc-mobile/lib/post-publish-policy/post-publish-policy.ts, which lists placeholderTokens and fillerTokens in code; each suite holds its side to these cases: src/__tests__/marketplace-trust.test.ts (server) and ugc-mobile/__tests__/post-new-view-model.test.ts (app).",
+    "A title is a placeholder only when every word in it is a placeholder token, a filler token or a number, and at least one is a placeholder token: 'Demo video' is one, 'Product demo' is not. Text with no letters or digits left once links and ASCII punctuation are removed is a placeholder too, and so is keyboard mash ('ababab'); letters of any script count.",
     "A text post (no media) also needs a body of at least minTextLength characters that is not placeholder text. Private posts are not checked."
   ],
   "version": 1,
@@ -21,6 +22,31 @@
     "todo",
     "untitled"
   ],
+  "fillerTokens": [
+    "a",
+    "an",
+    "the",
+    "my",
+    "this",
+    "new",
+    "post",
+    "image",
+    "images",
+    "photo",
+    "photos",
+    "pic",
+    "picture",
+    "video",
+    "videos",
+    "text",
+    "note",
+    "clip",
+    "render",
+    "creation",
+    "title",
+    "file",
+    "upload"
+  ],
   "minTextLength": 18,
   "messages": {
     "placeholder_title": "Replace the placeholder title with something specific to this post.",
@@ -37,7 +63,31 @@
       "title": "Product demo with Kling 3.0",
       "body": "",
       "hasMedia": true,
-      "expected": "placeholder_title"
+      "expected": null
+    },
+    {
+      "title": "Neon demo reel",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
+    },
+    {
+      "title": "Free sample pack",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
+    },
+    {
+      "title": "Example prompts for product shots",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
+    },
+    {
+      "title": "My first test",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
     },
     {
       "title": "Sample",
@@ -52,7 +102,25 @@
       "expected": "placeholder_title"
     },
     {
+      "title": "Demo video",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "test 2",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
       "title": "Untitled",
+      "body": "",
+      "hasMedia": true,
+      "expected": "placeholder_title"
+    },
+    {
+      "title": "Untitled creation",
       "body": "",
       "hasMedia": true,
       "expected": "placeholder_title"
@@ -118,10 +186,16 @@
       "expected": "needs_text"
     },
     {
+      "title": "Prompt teardown",
+      "body": "A quick test of soft window light",
+      "hasMedia": false,
+      "expected": null
+    },
+    {
       "title": "Testing lights",
       "body": "",
       "hasMedia": true,
-      "expected": "placeholder_title"
+      "expected": null
     },
     {
       "title": "Latest drafting tips",
@@ -133,7 +207,19 @@
       "title": "Demo-day reel",
       "body": "",
       "hasMedia": true,
-      "expected": "placeholder_title"
+      "expected": null
+    },
+    {
+      "title": "नमस्ते दुनिया",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
+    },
+    {
+      "title": "东京之夜",
+      "body": "",
+      "hasMedia": true,
+      "expected": null
     },
     {
       "title": "https://example.com",

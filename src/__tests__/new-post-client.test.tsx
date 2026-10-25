@@ -42,6 +42,17 @@ vi.mock('@/lib/temporary-media-upload', () => ({
   uploadMediaToTemporaryStorage: temporaryUploadMock,
 }));
 
+// The composer reads the profile up front to ask for a name and handle before
+// a public post. Unread (null) leaves the decision to the server, as these
+// tests always had it; the identity tests answer it themselves.
+const loadOwnProfileMock = vi.hoisted(() => vi.fn());
+const savePublicIdentityMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/public-identity', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/public-identity')>(),
+  loadOwnProfile: loadOwnProfileMock,
+  savePublicIdentity: savePublicIdentityMock,
+}));
+
 vi.mock('@/lib/signed-url-upload', async () => {
   const { UploadCancelledError } = await import('@/lib/upload-queue');
   return {
@@ -193,6 +204,9 @@ describe('NewPostClient', () => {
     mockPush.mockReset();
     routerMock.replace.mockReset();
     fetchMock.mockReset();
+    loadOwnProfileMock.mockReset();
+    loadOwnProfileMock.mockResolvedValue(null);
+    savePublicIdentityMock.mockReset();
     temporaryUploadMock.mockReset();
     directResourceUploadMock.mockReset();
     directResourceUploadMock.mockResolvedValue({ error: null });
@@ -4434,6 +4448,39 @@ describe('NewPostClient', () => {
       });
     }
 
+    // Most creations have no title, and typing one was the step people
+    // stopped at. The prompt may suggest it only while the post has no recipe.
+    it('starts an untitled creation from a title its prompt suggests, and swaps it while a recipe keeps the prompt private', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({ title: null });
+
+      render(<NewPostClient />);
+      const titleInput = screen.getByRole('textbox', { name: /^title/i });
+      await waitFor(() => expect(titleInput).toHaveValue('Product still lit like a window display'));
+      expect(screen.getByText('Suggested from your prompt. Edit it if you like.')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      expect(titleInput).toHaveValue('Image recipe');
+      expect(screen.getByText('Suggested. Your prompt stays private inside the recipe.')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      expect(titleInput).toHaveValue('Product still lit like a window display');
+    });
+
+    it('keeps a title the creator typed when a recipe is turned on', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({ title: null });
+
+      render(<NewPostClient />);
+      const titleInput = screen.getByRole('textbox', { name: /^title/i });
+      await waitFor(() => expect(titleInput).toHaveValue('Product still lit like a window display'));
+      fireEvent.change(titleInput, { target: { value: 'Window still, morning light' } });
+      expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      expect(titleInput).toHaveValue('Window still, morning light');
+    });
+
     it('adds the exact prompt as a card and sends the saved references with the recipe', async () => {
       searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
       enqueueCreation();
@@ -4541,5 +4588,121 @@ describe('NewPostClient', () => {
 
     expect(await screen.findByText(/paid unlocks start at 10 tokens and go up in 10-token steps/i)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Every new account starts with the placeholder handle and no name, which a
+  // public post is refused for. The composer asks beside the buttons and saves
+  // them first, instead of the server refusing the post once all is uploaded.
+  describe('a name and handle before a public post', () => {
+    const placeholderProfile = {
+      id: 'user-1',
+      username: 'creator-a1b2c3d4',
+      suggestedUsername: 'creator-a1b2c3d4',
+      displayName: null,
+      bio: null,
+      avatarUrl: null,
+      coverUrl: null,
+      websiteUrl: null,
+      twitterHandle: null,
+      instagramHandle: null,
+      tiktokHandle: null,
+      location: null,
+    };
+    const createdPost = {
+      ok: true,
+      json: async () => ({
+        postId: 'post-identity-1',
+        showcasePath: '/showcase/post-identity-1',
+        ownerPath: '/post/post-identity-1/edit',
+        visibility: 'public',
+        resourceBundleStatus: null,
+      }),
+    };
+    const postsCalls = () => fetchMock.mock.calls.filter(([url]) => String(url) === '/api/posts');
+
+    function writeTextPost() {
+      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
+        target: { value: 'A note that stands on its own for the community.' },
+      });
+      fillRequiredTitle();
+    }
+
+    it('asks for them beside the buttons and publishes nothing until they are given', async () => {
+      loadOwnProfileMock.mockResolvedValue(placeholderProfile);
+      render(<NewPostClient />);
+      writeTextPost();
+
+      expect(await screen.findByRole('textbox', { name: /^display name$/i })).toHaveValue('');
+      expect(screen.getByText('Name and handle')).toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      expect(await screen.findByText('Add your name and handle to publish publicly.')).toBeInTheDocument();
+      expect(screen.getByText('Add a display name for your public profile.')).toBeInTheDocument();
+      expect(savePublicIdentityMock).not.toHaveBeenCalled();
+      expect(postsCalls()).toHaveLength(0);
+    });
+
+    it('saves them first, then publishes the post', async () => {
+      loadOwnProfileMock.mockResolvedValue(placeholderProfile);
+      savePublicIdentityMock.mockResolvedValue({
+        ok: true,
+        profile: { ...placeholderProfile, username: 'maya-k', displayName: 'Maya K' },
+      });
+      enqueueResponse(createdPost);
+      render(<NewPostClient />);
+      writeTextPost();
+
+      fireEvent.change(await screen.findByRole('textbox', { name: /^display name$/i }), { target: { value: 'Maya K' } });
+      fireEvent.change(screen.getByRole('textbox', { name: /^handle$/i }), { target: { value: '@Maya-K!' } });
+      expect(screen.getByRole('textbox', { name: /^handle$/i })).toHaveValue('maya-k');
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(postsCalls()).toHaveLength(1));
+      expect(savePublicIdentityMock).toHaveBeenCalledWith({ displayName: 'Maya K', username: 'maya-k' }, 'test-token');
+      const postCallIndex = fetchMock.mock.calls.findIndex(([url]) => String(url) === '/api/posts');
+      expect(savePublicIdentityMock.mock.invocationCallOrder[0])
+        .toBeLessThan(fetchMock.mock.invocationCallOrder[postCallIndex]);
+      // Saved: the fields give way to the post.
+      await waitFor(() => expect(screen.queryByRole('textbox', { name: /^display name$/i })).not.toBeInTheDocument());
+    });
+
+    it('shows a taken handle on its field and publishes nothing', async () => {
+      loadOwnProfileMock.mockResolvedValue(placeholderProfile);
+      savePublicIdentityMock.mockResolvedValue({
+        ok: false,
+        errors: { username: 'That username is already taken.' },
+        message: 'That username is already taken.',
+      });
+      render(<NewPostClient />);
+      writeTextPost();
+
+      fireEvent.change(await screen.findByRole('textbox', { name: /^display name$/i }), { target: { value: 'Maya K' } });
+      fireEvent.change(screen.getByRole('textbox', { name: /^handle$/i }), { target: { value: 'maya' } });
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(savePublicIdentityMock).toHaveBeenCalledTimes(1));
+      expect(await screen.findByRole('textbox', { name: /^handle$/i })).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getAllByText('That username is already taken.').length).toBeGreaterThanOrEqual(1);
+      expect(postsCalls()).toHaveLength(0);
+    });
+
+    it('asks nothing of a private post or a profile that can already publish', async () => {
+      loadOwnProfileMock.mockResolvedValue(placeholderProfile);
+      enqueueResponse(createdPost);
+      const { unmount } = render(<NewPostClient />);
+      writeTextPost();
+      await screen.findByRole('textbox', { name: /^display name$/i });
+      fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+      await waitFor(() => expect(postsCalls()).toHaveLength(1));
+      expect(savePublicIdentityMock).not.toHaveBeenCalled();
+      unmount();
+
+      loadOwnProfileMock.mockResolvedValue({ ...placeholderProfile, username: 'maya-k', displayName: 'Maya K' });
+      render(<NewPostClient />);
+      await waitFor(() => expect(loadOwnProfileMock).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole('textbox', { name: /^display name$/i })).not.toBeInTheDocument();
+      expect(screen.queryByText('Name and handle')).not.toBeInTheDocument();
+    });
   });
 });

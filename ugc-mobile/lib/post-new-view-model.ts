@@ -20,6 +20,11 @@ import type {
   SourceToolOption,
   ShowcaseFeedItem,
 } from '@/lib/types';
+import {
+  describeTitleSuggestion,
+  isPlaceholderText,
+  suggestCreationPostTitle,
+} from '@/lib/post-publish-policy/post-publish-policy';
 
 export type PostComposerMode = 'text' | 'upload' | 'creation';
 export type PostComposerProofMode = 'media' | 'text';
@@ -944,9 +949,10 @@ const PUBLIC_POST_MIN_TEXT_LENGTH = 18;
 /**
  * The server's public-post rule (`getPublicPostQualityError` in the web app's
  * src/lib/marketplace-trust.ts): a public post may not carry a placeholder
- * title, and one without media needs some useful text. Copied because the app
- * cannot import the web's code; contracts/public-post-quality-v1.json holds
- * both to the same answers.
+ * title, and one without media needs some useful text. This wrapper is copied
+ * because the app cannot import the web's code; what counts as placeholder
+ * text is the one shared `isPlaceholderText`, and
+ * contracts/public-post-quality-v1.json holds both to the same answers.
  */
 export function getPublicPostQualityError(input: {
   title?: string | null;
@@ -956,11 +962,11 @@ export function getPublicPostQualityError(input: {
   const title = input.title?.trim() ?? '';
   const body = input.body?.trim() ?? '';
 
-  if (title && isPlaceholderMarketplaceText(title)) {
+  if (title && isPlaceholderText(title)) {
     return PUBLIC_POST_PLACEHOLDER_TITLE_ERROR;
   }
 
-  if (!input.hasMedia && (body.length < PUBLIC_POST_MIN_TEXT_LENGTH || isPlaceholderMarketplaceText(body))) {
+  if (!input.hasMedia && (body.length < PUBLIC_POST_MIN_TEXT_LENGTH || isPlaceholderText(body))) {
     return PUBLIC_POST_NEEDS_TEXT_ERROR;
   }
 
@@ -1653,13 +1659,72 @@ export function getPublishGenerationTitle(item: GenerationListItem) {
 }
 
 /**
- * The title a new post from a creation starts with: the creation's own title,
- * else its template's, else nothing, as the web composer does. Never the
+ * A creation's own title, else its template's, else nothing. Never the raw
  * prompt: a creator selling that prompt published its opening as the post's
- * public title unless they noticed and rewrote it.
+ * public title unless they noticed and rewrote it. The composer's starting
+ * title is `getCreationPostTitleSuggestion`, which falls back to a suggestion.
  */
 export function getPublishGenerationTitlePrefill(item: GenerationListItem) {
   return (item.title || item.template?.templateTitle || '').slice(0, TITLE_MAX_LENGTH);
+}
+
+export type CreationPostTitleSuggestion = {
+  title: string;
+  /** `creation`: the creation's own or template title; else how the suggestion was made. */
+  source: 'creation' | 'prompt' | 'kind';
+};
+
+/**
+ * The title a new post of a creation starts with, as the web composers do:
+ * the creation's own title or its template's, else a suggestion from the
+ * shared policy (the prompt's opening while the post has no recipe, which
+ * keeps the prompt private; else words naming what was made). Most creations
+ * have no title, and typing one was the step people stopped at.
+ */
+export function getCreationPostTitleSuggestion(
+  item: GenerationListItem,
+  accessMode: PostResourceBundleAccessMode = 'none',
+): CreationPostTitleSuggestion {
+  const ownTitle = getPublishGenerationTitlePrefill(item);
+  if (ownTitle.trim()) {
+    return { title: ownTitle, source: 'creation' };
+  }
+  return suggestCreationPostTitle({
+    prompt: item.prompt,
+    model: item.model,
+    category: item.category,
+    hasRecipe: accessMode !== 'none',
+  });
+}
+
+/**
+ * A suggested title follows the recipe. It may come from the prompt only while
+ * the post has no recipe, so a change that turns a recipe on or off swaps a
+ * suggestion nobody has edited for the matching one. A title the creator typed
+ * is never touched.
+ */
+export function followCreationTitleSuggestion(
+  previous: PostComposerDraft,
+  next: PostComposerDraft,
+  generation: GenerationListItem | null | undefined,
+): PostComposerDraft {
+  if (!generation || next.mode !== 'creation' || next.title !== previous.title) return next;
+  const hadRecipe = previous.resource.accessMode !== 'none';
+  const hasRecipe = next.resource.accessMode !== 'none';
+  if (hadRecipe === hasRecipe) return next;
+  if (previous.title !== getCreationPostTitleSuggestion(generation, previous.resource.accessMode).title) return next;
+  return { ...next, title: getCreationPostTitleSuggestion(generation, next.resource.accessMode).title };
+}
+
+/** The line under the title while it is still the composer's suggestion; null once the creator has changed it. */
+export function getCreationTitleSuggestionHint(
+  draft: PostComposerDraft,
+  generation: GenerationListItem | null | undefined,
+): string | null {
+  if (!generation || draft.mode !== 'creation') return null;
+  const suggestion = getCreationPostTitleSuggestion(generation, draft.resource.accessMode);
+  if (suggestion.source === 'creation' || draft.title !== suggestion.title) return null;
+  return describeTitleSuggestion(suggestion.source, draft.resource.accessMode !== 'none');
 }
 
 export function getPublishGenerationMediaKind(item: GenerationListItem): 'image' | 'video' | null {
@@ -1718,37 +1783,9 @@ function trimOrNull(value: string | null | undefined) {
   return trimOrUndefined(value) ?? null;
 }
 
-function isPlaceholderMarketplaceText(value: string): boolean {
-  const comparable = value
-    .trim()
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-  if (!comparable) return true;
-  const placeholderTokens = new Set([
-    'asdf', 'demo', 'draft', 'example', 'foo', 'ipsum', 'lorem',
-    'placeholder', 'sample', 'test', 'testing', 'todo', 'untitled',
-  ]);
-  const tokens = comparable.split(/\s+/).filter(Boolean);
-  if (tokens.some((token) => placeholderTokens.has(token))) return true;
-
-  const compact = comparable.replace(/\s+/g, '');
-  if (compact.length >= 6) {
-    if (new Set(compact).size <= 3) return true;
-    for (let size = 1; size <= 3; size += 1) {
-      const pattern = compact.slice(0, size);
-      if (pattern.repeat(Math.ceil(compact.length / size)).slice(0, compact.length) === compact) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 function hasUsefulBuyerPreview(resource: PostComposerResourceDraft): boolean {
   const preview = resource.summary.trim() || resource.previewText.trim();
-  return preview.length >= 18 && !isPlaceholderMarketplaceText(preview);
+  return preview.length >= 18 && !isPlaceholderText(preview);
 }
 
 function slugifySourceValue(value: string | null | undefined) {

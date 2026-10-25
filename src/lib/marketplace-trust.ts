@@ -12,6 +12,8 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import { getCreatorProfileReadiness } from '@/lib/profile';
+// One rule for the server and both composers (contracts/public-post-quality-v1.json).
+import { isPlaceholderText } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
 const CREATOR_PROFILE_READINESS_ERROR_PREFIX = 'Complete your profile before publishing';
 export const CREATOR_PROFILE_CHECK_ERROR = 'Could not verify your creator profile right now. Try again.';
@@ -221,14 +223,6 @@ function normalizeText(value: string | null | undefined): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function normalizeComparableText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
-
 function firstUsefulText(...values: Array<string | null | undefined>): string {
   for (const value of values) {
     const normalized = normalizeText(value);
@@ -238,50 +232,6 @@ function firstUsefulText(...values: Array<string | null | undefined>): string {
   }
 
   return '';
-}
-
-function isPlaceholderText(value: string): boolean {
-  const comparable = normalizeComparableText(value);
-  if (!comparable) {
-    return true;
-  }
-
-  const placeholderTokens = new Set([
-    'asdf',
-    'demo',
-    'draft',
-    'example',
-    'foo',
-    'ipsum',
-    'lorem',
-    'placeholder',
-    'sample',
-    'test',
-    'testing',
-    'todo',
-    'untitled',
-  ]);
-  const tokens = comparable.split(/\s+/).filter(Boolean);
-  if (tokens.some((token) => placeholderTokens.has(token))) {
-    return true;
-  }
-
-  const compact = comparable.replace(/\s+/g, '');
-  if (compact.length >= 6) {
-    const uniqueChars = new Set(compact).size;
-    if (uniqueChars <= 3) {
-      return true;
-    }
-
-    for (let size = 1; size <= 3; size += 1) {
-      const pattern = compact.slice(0, size);
-      if (pattern.repeat(Math.ceil(compact.length / size)).slice(0, compact.length) === compact) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 function hasCreatorIdentity(seller: MarketplaceQualityInput['seller']): boolean {

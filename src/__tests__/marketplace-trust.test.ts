@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import publicPostQuality from '../../contracts/public-post-quality-v1.json';
+import { PLACEHOLDER_FILLER_WORDS, PLACEHOLDER_WORDS } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 import {
   assessMarketplaceListingQuality,
   formatBundleAccessLabel,
@@ -23,9 +24,20 @@ describe('the public-post quality rule, held to contracts/public-post-quality-v1
     },
   );
 
-  it.each(publicPostQuality.placeholderTokens)('treats "%s" in a title as a placeholder', (token) => {
-    expect(getPublicPostQualityError({ title: `Neon ${token} reel`, hasMedia: true }))
+  it('reads the placeholder and filler words from the shared module the fixture lists', () => {
+    expect([...PLACEHOLDER_WORDS]).toEqual(publicPostQuality.placeholderTokens);
+    expect([...PLACEHOLDER_FILLER_WORDS]).toEqual(publicPostQuality.fillerTokens);
+  });
+
+  it.each(publicPostQuality.placeholderTokens)('treats "%s" alone, or with filler words, as a placeholder title', (token) => {
+    expect(getPublicPostQualityError({ title: token, hasMedia: true }))
       .toBe(publicPostQuality.messages.placeholder_title);
+    expect(getPublicPostQualityError({ title: `My ${token} video 2`, hasMedia: true }))
+      .toBe(publicPostQuality.messages.placeholder_title);
+  });
+
+  it.each(publicPostQuality.placeholderTokens)('takes a real title that uses "%s"', (token) => {
+    expect(getPublicPostQualityError({ title: `Neon ${token} reel`, hasMedia: true })).toBeNull();
   });
 
   it('asks a post without media for at least the fixture\'s minimum of useful text', () => {

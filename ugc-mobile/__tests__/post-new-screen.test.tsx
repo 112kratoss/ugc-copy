@@ -26,9 +26,11 @@ const shareState = vi.hoisted(() => ({
   dismissedAction: 'dismissedAction',
 }));
 const authState = vi.hoisted(() => ({
-  user: { id: 'user-123', email: 'creator@example.com' },
+  user: { id: 'user-123', email: 'creator@example.com', user_metadata: {} as Record<string, unknown> },
   isLoading: false,
   api: {
+    getProfile: vi.fn(),
+    updateProfile: vi.fn(),
     listGenerations: vi.fn(),
     listSourceTools: vi.fn(),
     getOwnerPost: vi.fn(),
@@ -49,6 +51,8 @@ const sourceToolsState = vi.hoisted(() => ({
   }] as SourceToolOption[],
 }));
 const postEditState = vi.hoisted(() => ({ post: null as Record<string, unknown> | null }));
+// The signed-in account's profile as the shared `['profile', id]` query reads it; null is unread.
+const profileState = vi.hoisted(() => ({ profile: null as Record<string, unknown> | null }));
 // The files still on the device, by uri; anything else reads as gone.
 const deviceFileState = vi.hoisted(() => ({ uris: new Set<string>() }));
 // The creation the composer is opened on, when a case needs one other than `generationItem`.
@@ -154,6 +158,9 @@ vi.mock('@tanstack/react-query', () => ({
     }
     if (options.queryKey[0] === 'post-source-tools') {
       return { data: { tools: sourceToolsState.tools }, error: null, isLoading: false, isSuccess: true };
+    }
+    if (options.queryKey[0] === 'profile') {
+      return { data: profileState.profile, error: null, isLoading: false, isSuccess: Boolean(profileState.profile) };
     }
     return { data: null, error: null, isLoading: false, isSuccess: false };
   },
@@ -413,6 +420,9 @@ describe('mobile external post composer', () => {
     routerState.canGoBack.mockReset();
     routerState.canGoBack.mockReturnValue(false);
     generationState.item = null;
+    profileState.profile = null;
+    authState.user.user_metadata = {};
+    authState.api.updateProfile.mockReset();
     authState.api.createPost.mockReset();
     authState.api.updatePost.mockReset();
     authState.api.getOwnerPost.mockReset();
@@ -1456,10 +1466,36 @@ describe('mobile external post composer', () => {
   });
 
   describe('title prefill from a creation', () => {
-    it('starts untitled when the creation has no title, rather than from its prompt', async () => {
+    // Typing a title was the step people stopped at. The prompt may suggest it
+    // only while the post has no recipe: a recipe keeps the prompt private.
+    it('starts from a title suggested by the prompt, says so, and swaps it once a recipe keeps the prompt private', async () => {
       generationState.item = { ...generationItem, title: null };
       const tree = await renderScreen();
-      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('');
+      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Exact glossy product prompt');
+      expect(collectText(tree.root)).toContain('Suggested from your prompt. Edit it if you like.');
+
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
+      let context: { submittedDraft?: PostComposerDraft } | void = undefined;
+      renderer.act(() => {
+        context = mutationState.options?.onMutate?.('public') as typeof context;
+      });
+      expect((context as { submittedDraft?: PostComposerDraft } | undefined)?.submittedDraft?.title).toBe('Image recipe');
+    });
+
+    it('keeps a typed title when a recipe is turned on', async () => {
+      generationState.item = { ...generationItem, title: null };
+      const tree = await renderScreen();
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Glossy hero shot'));
+      expect(collectText(tree.root)).not.toContain('Suggested from your prompt. Edit it if you like.');
+
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
+      let context: { submittedDraft?: PostComposerDraft } | void = undefined;
+      renderer.act(() => {
+        context = mutationState.options?.onMutate?.('public') as typeof context;
+      });
+      expect((context as { submittedDraft?: PostComposerDraft } | undefined)?.submittedDraft?.title).toBe('Glossy hero shot');
     });
 
     it('takes the template title when the creation has none', async () => {
@@ -1715,6 +1751,90 @@ describe('mobile external post composer', () => {
     });
   });
 
+  // A new account has the placeholder handle and no name, which the server
+  // refuses a public post for once the media is up. Step 2 asks for both,
+  // filled in from the sign-in, and Publish public saves them first.
+  describe('a name and handle on step 2 of a public post', () => {
+    const placeholderProfile = { id: 'user-123', username: 'creator-a1b2c3d4', displayName: null };
+    const publishPublic = (tree: renderer.ReactTestRenderer) => findPressableByAccessibilityLabel(tree.root, 'Publish public');
+
+    it('starts from the sign-in, waits for both, then saves them before publishing', async () => {
+      profileState.profile = placeholderProfile;
+      authState.user.user_metadata = { full_name: 'Maya K' };
+      const order: string[] = [];
+      authState.api.updateProfile.mockImplementation(async (body: Record<string, unknown>) => {
+        order.push('profile');
+        return { ...placeholderProfile, ...body };
+      });
+      mutationState.mutate.mockImplementation(() => order.push('publish'));
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(collectText(tree.root)).toContain('Your name and handle');
+      expect(findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.value).toBe('Maya K');
+      expect(findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.value).toBe('maya-k');
+      expect(publishPublic(tree).props.disabled).toBe(false);
+
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText(''));
+      expect(collectText(tree.root)).toContain('Add your name and handle to publish publicly.');
+      expect(collectText(tree.root)).toContain('Add a display name for your public profile.');
+      expect(publishPublic(tree).props.disabled).toBe(true);
+
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya K'));
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('@Maya.K'));
+      expect(findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.value).toBe('mayak');
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+
+      expect(authState.api.updateProfile).toHaveBeenCalledWith({ username: 'mayak', displayName: 'Maya K' });
+      expect(queryClientState.setQueryData).toHaveBeenCalledWith(['profile', 'user-123'], expect.objectContaining({ username: 'mayak' }));
+      expect(mutationState.mutate).toHaveBeenCalledWith('public');
+      expect(order).toEqual(['profile', 'publish']);
+    });
+
+    it('shows a taken handle on its field and publishes nothing', async () => {
+      profileState.profile = placeholderProfile;
+      authState.api.updateProfile.mockRejectedValue(new ApiError('That username is already taken.', 409, {
+        error: 'That username is already taken.',
+        fieldErrors: { username: 'That username is already taken.' },
+      }));
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya K'));
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya'));
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+
+      const text = collectText(tree.root);
+      expect(text).toContain('Your name and handle were not saved');
+      expect(text.filter((line) => line === 'That username is already taken.').length).toBeGreaterThanOrEqual(1);
+      expect(mutationState.mutate).not.toHaveBeenCalled();
+    });
+
+    it('asks nothing of a profile that can already publish, or of a private post', async () => {
+      profileState.profile = { id: 'user-123', username: 'maya-k', displayName: 'Maya K' };
+      let tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      expect(collectText(tree.root)).not.toContain('Your name and handle');
+      tree.unmount();
+
+      profileState.profile = placeholderProfile;
+      tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      expect(collectText(tree.root)).toContain('Your name and handle');
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Visibility: Public').props.onPress());
+      renderer.act(() => findPressableByText(tree.root, 'Private').props.onPress());
+      expect(collectText(tree.root)).not.toContain('Your name and handle');
+      await renderer.act(async () => {
+        findPressableByAccessibilityLabel(tree.root, 'Save private').props.onPress();
+      });
+      expect(authState.api.updateProfile).not.toHaveBeenCalled();
+      expect(mutationState.mutate).toHaveBeenCalledWith('private');
+    });
+  });
+
   // Every public post needs a claimed handle and a display name. The server says
   // so with `field: 'profile'` on all three routes, and the banner had no way on:
   // Close, Save draft, find Edit profile, come back.
@@ -1792,7 +1912,7 @@ describe('mobile external post composer', () => {
       await uploadManualMedia();
       const tree = await renderScreen();
       await choosePreparedMedia(tree);
-      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Product demo with Kling 3.0'));
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Demo video'));
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
 
       let text = collectText(tree.root);

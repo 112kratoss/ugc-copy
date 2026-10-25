@@ -31,6 +31,9 @@ import {
   getPublishGenerationMediaKind,
   postComposerReturnPath,
   getPublishGenerationTitlePrefill,
+  getCreationPostTitleSuggestion,
+  getCreationTitleSuggestionHint,
+  followCreationTitleSuggestion,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
@@ -247,6 +250,66 @@ describe('post new view model', () => {
       mode: 'creation',
       selectedGenerationId: untitled.id,
     }).title).toBeUndefined();
+  });
+
+  // Most creations have no title, and typing one was where people stopped.
+  // The suggestion may use the prompt only while the post has no recipe.
+  describe('the title a post of a creation starts with', () => {
+    const untitled = generation({
+      title: null,
+      model: 'seedance-2',
+      category: 'video',
+      prompt: 'A red fox running through fresh snow at dawn, cinematic, 35mm',
+    });
+    const creationDraft = (overrides: Partial<PostComposerDraft> = {}): PostComposerDraft => ({
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      selectedGenerationId: untitled.id,
+      title: 'Red fox running through fresh snow at dawn',
+      ...overrides,
+    });
+    const withRecipe = (draft: PostComposerDraft): PostComposerDraft => ({
+      ...draft,
+      resource: { ...draft.resource, accessMode: 'paid' },
+    });
+
+    it('is the creation’s own title, else a suggestion from the prompt, else one naming the creation', () => {
+      expect(getCreationPostTitleSuggestion(generation({ title: 'Image result' })))
+        .toEqual({ title: 'Image result', source: 'creation' });
+      expect(getCreationPostTitleSuggestion(untitled))
+        .toEqual({ title: 'Red fox running through fresh snow at dawn', source: 'prompt' });
+      expect(getCreationPostTitleSuggestion(untitled, 'paid')).toEqual({ title: 'Video recipe', source: 'kind' });
+      expect(getCreationPostTitleSuggestion(generation({ title: null, prompt: null, model: 'kling-2.6/motion-control', category: null })))
+        .toEqual({ title: 'Motion transfer', source: 'kind' });
+    });
+
+    it('swaps an untouched suggestion when a recipe is turned on or off, and never a typed title', () => {
+      const suggested = creationDraft();
+      expect(followCreationTitleSuggestion(suggested, withRecipe(suggested), untitled).title).toBe('Video recipe');
+      const recipeSuggested = withRecipe(creationDraft({ title: 'Video recipe' }));
+      expect(followCreationTitleSuggestion(recipeSuggested, { ...recipeSuggested, resource: { ...recipeSuggested.resource, accessMode: 'none' } }, untitled).title)
+        .toBe('Red fox running through fresh snow at dawn');
+
+      const typed = creationDraft({ title: 'Dawn fox' });
+      expect(followCreationTitleSuggestion(typed, withRecipe(typed), untitled).title).toBe('Dawn fox');
+      // Turning the exact-prompt card on also turns a recipe on.
+      const withPromptCard = applyCreationPromptResource(suggested, untitled, true);
+      expect(withPromptCard.resource.accessMode).toBe('free');
+      expect(followCreationTitleSuggestion(suggested, withPromptCard, untitled).title).toBe('Video recipe');
+      // A creation's own title is the creator's, recipe or not.
+      const titled = generation({ title: 'Fox study' });
+      const own = creationDraft({ title: 'Fox study' });
+      expect(followCreationTitleSuggestion(own, withRecipe(own), titled).title).toBe('Fox study');
+    });
+
+    it('says the title is a suggestion until the creator changes it', () => {
+      expect(getCreationTitleSuggestionHint(creationDraft(), untitled)).toBe('Suggested from your prompt. Edit it if you like.');
+      expect(getCreationTitleSuggestionHint(withRecipe(creationDraft({ title: 'Video recipe' })), untitled))
+        .toBe('Suggested. Your prompt stays private inside the recipe.');
+      expect(getCreationTitleSuggestionHint(creationDraft({ title: 'Dawn fox' }), untitled)).toBeNull();
+      expect(getCreationTitleSuggestionHint(creationDraft({ title: 'Fox study' }), generation({ title: 'Fox study' }))).toBeNull();
+      expect(getCreationTitleSuggestionHint({ ...creationDraft(), mode: 'upload' }, untitled)).toBeNull();
+    });
   });
 
   it('validates the ordered text composer fields', () => {
@@ -1758,10 +1821,15 @@ describe('the public-post rule, checked before step 2 says Ready to publish', ()
     }
   });
 
-  it('refuses each placeholder word the server refuses, and takes text from the server’s length', () => {
+  it('refuses a title made only of placeholder words the server refuses, and takes text from the server’s length', () => {
     for (const token of publicPostQuality.placeholderTokens) {
-      expect(getPublicPostQualityError({ title: `Studio ${token} reel`, body: '', hasMedia: true }), token)
+      expect(getPublicPostQualityError({ title: token, body: '', hasMedia: true }), token)
         .toBe(messages.placeholder_title);
+      expect(getPublicPostQualityError({ title: `My ${token} video 2`, body: '', hasMedia: true }), token)
+        .toBe(messages.placeholder_title);
+      // "Product demo" or "Free sample pack" is a real title that uses the word.
+      expect(getPublicPostQualityError({ title: `Studio ${token} reel`, body: '', hasMedia: true }), token)
+        .toBeNull();
     }
     const sentence = 'Lighting breakdown for a product reel';
     expect(getPublicPostQualityError({
@@ -1777,15 +1845,16 @@ describe('the public-post rule, checked before step 2 says Ready to publish', ()
   });
 
   it('keeps a public post the server would refuse from validating', () => {
-    expect(validatePostComposerDraft(mediaPostDraft({ title: 'Product demo with Kling 3.0' })))
+    expect(validatePostComposerDraft(mediaPostDraft({ title: 'Demo video' })))
       .toEqual({ valid: false, message: messages.placeholder_title });
+    expect(validatePostComposerDraft(mediaPostDraft({ title: 'Product demo with Kling 3.0' }))).toEqual({ valid: true });
     expect(validatePostComposerDraft(textPostDraft())).toEqual({ valid: false, message: messages.needs_text });
     expect(validatePostComposerDraft(textPostDraft({ contentText: 'A useful text breakdown' }))).toEqual({ valid: true });
     expect(validatePostComposerDraft(mediaPostDraft())).toEqual({ valid: true });
   });
 
   it('leaves a private post alone', () => {
-    expect(validatePostComposerDraft(mediaPostDraft({ title: 'Product demo with Kling 3.0', visibility: 'private' })))
+    expect(validatePostComposerDraft(mediaPostDraft({ title: 'Demo video', visibility: 'private' })))
       .toEqual({ valid: true });
     expect(validatePostComposerDraft(textPostDraft({ visibility: 'private' }))).toEqual({ valid: true });
   });
@@ -1805,7 +1874,8 @@ describe('the public-post rule, checked before step 2 says Ready to publish', ()
     };
 
     expect(validatePostComposerDraft(textPostDraft({ title: 'Sunset prompt pack', resource: recipe }))).toEqual({ valid: true });
-    expect(validatePostComposerDraft(textPostDraft({ title: 'Sample pack', resource: recipe })))
+    expect(validatePostComposerDraft(textPostDraft({ title: 'Sample pack', resource: recipe }))).toEqual({ valid: true });
+    expect(validatePostComposerDraft(textPostDraft({ title: 'Sample video', resource: recipe })))
       .toEqual({ valid: false, message: messages.placeholder_title });
   });
 });

@@ -19,7 +19,20 @@ import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
-import { adjustProfileStats, invalidateProfileStats } from '@/lib/profile-stats';
+import { adjustProfileStats, invalidateProfileStats, profileQueryKey } from '@/lib/profile-stats';
+import {
+  normalizeUsernameInput,
+  PROFILE_DISPLAY_NAME_MAX_LENGTH,
+  PROFILE_USERNAME_MAX_LENGTH,
+} from '@/lib/edit-profile-form';
+import {
+  getInitialPublicIdentity,
+  isPublicIdentityReady,
+  readPublicIdentitySaveError,
+  validatePublicIdentity,
+  type PublicIdentityDraft,
+  type PublicIdentityErrors,
+} from '@/lib/public-identity';
 import {
   assetDurationSeconds,
   describePostMediaPickRefusals,
@@ -69,7 +82,9 @@ import {
   getExplicitPublishGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationTitle,
-  getPublishGenerationTitlePrefill,
+  getCreationPostTitleSuggestion,
+  getCreationTitleSuggestionHint,
+  followCreationTitleSuggestion,
   BODY_MAX_LENGTH,
   MADE_WITH_LABEL_MAX_LENGTH,
   TITLE_MAX_LENGTH,
@@ -293,6 +308,7 @@ function PostDetailsPage({
   const attribution = primaryAttribution
     ? `${primaryAttribution.toolLabel}${primaryAttribution.modelLabel ? ` · ${primaryAttribution.modelLabel}` : ''}`
     : 'Add tool and model';
+  const titleSuggestionHint = getCreationTitleSuggestionHint(draft, selectedGeneration);
   const titleField = (
     <ComposerFieldShell>
       <CompactFieldLabel label="Title" required valueLength={draft.title.length} maxLength={TITLE_MAX_LENGTH} />
@@ -304,6 +320,7 @@ function PostDetailsPage({
         onChangeText={(title) => onChange({ title: title.slice(0, TITLE_MAX_LENGTH) })}
         placeholder="What is this creation about?"
       />
+      {titleSuggestionHint ? <AppText variant="caption" color="muted">{titleSuggestionHint}</AppText> : null}
       <FieldErrorText message={detailErrors.title} />
     </ComposerFieldShell>
   );
@@ -469,6 +486,57 @@ function FieldErrorText({ message }: { message?: string }) {
     <AppText accessibilityRole="alert" variant="caption" color="danger">
       {message}
     </AppText>
+  );
+}
+
+/**
+ * The name and handle a public post shows, asked for on step 2 of a creator who
+ * has neither yet. Publishing publicly saves them to the profile first, so the
+ * post is never refused for them after the media is up.
+ */
+function PublicIdentityCard({
+  value,
+  errors,
+  editable,
+  onChange,
+}: {
+  value: PublicIdentityDraft;
+  errors: PublicIdentityErrors;
+  editable: boolean;
+  onChange: (next: PublicIdentityDraft) => void;
+}) {
+  return (
+    <ComposerFieldShell>
+      <AppText variant="label">Your name and handle</AppText>
+      <AppText variant="bodySm" color="muted">
+        Public posts show both. They are saved to your profile when you publish, and you can change them there later.
+      </AppText>
+      <CompactFieldLabel label="Display name" required valueLength={value.displayName.length} maxLength={PROFILE_DISPLAY_NAME_MAX_LENGTH} />
+      <ComposerInput
+        accessibilityLabel="Display name, required"
+        accessibilityHint="The name shown on your public posts."
+        value={value.displayName}
+        onChangeText={(displayName) => onChange({ ...value, displayName: displayName.slice(0, PROFILE_DISPLAY_NAME_MAX_LENGTH) })}
+        placeholder="Your name"
+        autoComplete="name"
+        editable={editable}
+      />
+      <FieldErrorText message={errors.displayName} />
+      <CompactFieldLabel label="Handle" required />
+      <ComposerInput
+        accessibilityLabel="Handle, required"
+        accessibilityHint="Your profile link: 3 to 24 lowercase letters, numbers or hyphens."
+        value={value.username}
+        onChangeText={(username) => onChange({ ...value, username: normalizeUsernameInput(username).slice(0, PROFILE_USERNAME_MAX_LENGTH) })}
+        placeholder="your-handle"
+        autoCapitalize="none"
+        autoCorrect={false}
+        editable={editable}
+      />
+      {errors.username
+        ? <FieldErrorText message={errors.username} />
+        : <AppText variant="caption" color="muted">3–24 lowercase letters, numbers or hyphens.</AppText>}
+    </ComposerFieldShell>
   );
 }
 
@@ -1931,6 +1999,28 @@ function NewPostComposer() {
     action?: 'complete-profile';
   } | null>(null);
   const [detailErrors, setDetailErrors] = useState<PostComposerDetailErrors>({});
+  // A public post needs a claimed handle and a display name. Read up front, so
+  // step 2 asks for them and the post saves them first, instead of the server
+  // refusing it once the media is up.
+  const profileQuery = useQuery({
+    queryKey: profileQueryKey(user?.id),
+    enabled: Boolean(user),
+    queryFn: api.getProfile,
+    staleTime: 1000 * 60 * 5,
+  });
+  const [identity, setIdentity] = useState<PublicIdentityDraft>({ displayName: '', username: '' });
+  const [identityEdited, setIdentityEdited] = useState(false);
+  const [identitySaveErrors, setIdentitySaveErrors] = useState<PublicIdentityErrors>({});
+  const [isSavingIdentity, setIsSavingIdentity] = useState(false);
+  const needsPublicIdentity = draft.visibility === 'public'
+    && Boolean(profileQuery.data)
+    && !isPublicIdentityReady(profileQuery.data);
+  const identityProblems = needsPublicIdentity ? validatePublicIdentity(identity, profileQuery.data?.username) : {};
+  // The profile's or the sign-in's values until the creator types.
+  useEffect(() => {
+    if (!needsPublicIdentity || identityEdited) return;
+    setIdentity(getInitialPublicIdentity(profileQuery.data, user));
+  }, [identityEdited, needsPublicIdentity, profileQuery.data, user]);
   const [isPickingMedia, setIsPickingMedia] = useState(false);
   const [isRecoveringDraftMedia, setIsRecoveringDraftMedia] = useState(false);
   const [isPickingResourceFile, setIsPickingResourceFile] = useState(false);
@@ -2065,7 +2155,7 @@ function NewPostComposer() {
             mode: 'creation',
             proofMode: 'media',
             selectedGenerationId: found.id,
-            title: current.title || getPublishGenerationTitlePrefill(found),
+            title: current.title || getCreationPostTitleSuggestion(found, current.resource.accessMode).title,
             contentText: '',
             sourceTool: 'Magicbooklet',
             sourceToolSlug: 'magicbooklet',
@@ -2663,7 +2753,11 @@ function NewPostComposer() {
 
   const updateResource = (patch: Partial<PostComposerDraft['resource']>) => {
     if (hasPaidOrders) return;
-    setDraft((current) => ({ ...current, resource: { ...current.resource, ...patch } }));
+    setDraft((current) => followCreationTitleSuggestion(
+      current,
+      { ...current, resource: { ...current.resource, ...patch } },
+      selectedGeneration,
+    ));
   };
 
   const updateCreationPackage = (patch: Partial<PostComposerDraft['creationPackage']>) => {
@@ -2673,7 +2767,11 @@ function NewPostComposer() {
 
   const togglePromptResource = (enabled: boolean) => {
     if (hasPaidOrders) return;
-    setDraft((current) => applyCreationPromptResource(current, selectedGeneration, enabled));
+    setDraft((current) => followCreationTitleSuggestion(
+      current,
+      applyCreationPromptResource(current, selectedGeneration, enabled),
+      selectedGeneration,
+    ));
   };
 
   const applyUploadedMedia = (uploadedItems: PostComposerMediaItem[]) => {
@@ -3382,11 +3480,31 @@ function NewPostComposer() {
   // drawn: Undo would take the bar away and change nothing.
   const shownUndoEntry = undoEntry && putBackComposerRemoval(draft, undoEntry.removal) !== draft ? undoEntry : null;
 
-  const submitPost = () => {
+  const submitPost = async () => {
     setMessage(null);
+    if (needsPublicIdentity) {
+      setIsSavingIdentity(true);
+      let saved: Awaited<ReturnType<typeof api.updateProfile>>;
+      try {
+        saved = await api.updateProfile({ username: identity.username.trim(), displayName: identity.displayName.trim() });
+      } catch (error) {
+        const { errors, message: saveMessage } = readPublicIdentitySaveError(error);
+        setIdentitySaveErrors(errors);
+        setMessage({ tone: 'danger', title: 'Your name and handle were not saved', body: saveMessage });
+        setIsSavingIdentity(false);
+        return;
+      }
+      queryClient.setQueryData(profileQueryKey(user?.id), saved);
+      setIdentitySaveErrors({});
+      setIsSavingIdentity(false);
+    }
     setPendingPublishVisibility(draft.visibility);
     publishMutation.mutate(draft.visibility);
   };
+  // Step 2 is not ready while a public post still lacks the name and handle.
+  const stepTwoValidation: PostComposerValidationResult = publishValidation.valid && (identityProblems.displayName || identityProblems.username)
+    ? { valid: false, message: 'Add your name and handle to publish publicly.' }
+    : publishValidation;
 
   // Pushed over the composer, which stays as it is: the profile editor goes
   // back to it when it saves or closes, and the draft is kept on the device too.
@@ -3517,6 +3635,20 @@ function NewPostComposer() {
             onRemoveMadeWith={removeMadeWithRow}
           />
         ) : (
+          <>
+          {needsPublicIdentity ? (
+            <PublicIdentityCard
+              value={identity}
+              // A field the creator has not touched shows no error yet; the summary says what is missing.
+              errors={{ ...(identityEdited ? identityProblems : {}), ...identitySaveErrors }}
+              editable={!isSavingIdentity && !publishMutation.isPending}
+              onChange={(next) => {
+                setIdentityEdited(true);
+                setIdentity(next);
+                setIdentitySaveErrors({});
+              }}
+            />
+          ) : null}
           <PostResourcesPage
             draft={draft}
             selectedGeneration={selectedGeneration}
@@ -3524,7 +3656,7 @@ function NewPostComposer() {
             isEditMode={isEditMode}
             resourceEditingLocked={hasPaidOrders}
             packageStatus={packageStatus}
-            publishValidation={publishValidation}
+            publishValidation={stepTwoValidation}
             onResourceChange={updateResource}
             onCreationPackageChange={updateCreationPackage}
             onTogglePromptResource={togglePromptResource}
@@ -3535,6 +3667,7 @@ function NewPostComposer() {
             onRemoveResource={removeResourceCard}
             onEditDetails={() => setComposerStep('details')}
           />
+          </>
         )}
       </ScrollView>
 
@@ -3545,11 +3678,11 @@ function NewPostComposer() {
         bottomInset={bottomInset}
         visibility={draft.visibility}
         isEditMode={isEditMode}
-        loading={publishMutation.isPending}
-        disabled={!canSubmit || isPickingMedia || pendingRetryMedia.length > 0 || (composerStep === 'resources' && !publishValidation.valid)}
+        loading={publishMutation.isPending || isSavingIdentity}
+        disabled={!canSubmit || isSavingIdentity || isPickingMedia || pendingRetryMedia.length > 0 || (composerStep === 'resources' && !stepTwoValidation.valid)}
         onNext={goToResources}
         onVisibility={() => setIsVisibilityOpen(true)}
-        onPublish={submitPost}
+        onPublish={() => void submitPost()}
       />
       </KeyboardAvoidingArea>
 

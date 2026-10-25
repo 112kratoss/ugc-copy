@@ -265,40 +265,141 @@ describe('PublishToShowcaseModal', () => {
     expect(screen.queryByText(/share sheet unavailable/i)).not.toBeInTheDocument();
   });
 
-  it('blocks public publishing with an actionable profile repair link but keeps private save available', async () => {
-    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => new Response(
-      JSON.stringify(String(url) === '/api/profile'
-        ? {
-            id: 'user-1',
-            username: 'creator-a1b2c3d4',
-            suggestedUsername: 'creator-a1b2c3d4',
-            displayName: null,
-            avatarUrl: null,
-          }
-        : { success: true }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    ));
+  // A new account has the placeholder handle and no name, which a public post
+  // is refused for. The window asks for both and saves them as part of the
+  // public post, where it used to send the creator to their profile.
+  describe('a name and handle before a public post', () => {
+    const placeholderProfile = {
+      id: 'user-1',
+      username: 'creator-a1b2c3d4',
+      suggestedUsername: 'creator-a1b2c3d4',
+      displayName: null,
+      avatarUrl: null,
+    };
 
-    render(
-      <PublishToShowcaseModal
-        isOpen
-        onClose={vi.fn()}
-        generationId="gen-1"
-        defaultTitle="Broadcast"
-      />
-    );
+    function answer(handlers: { patchProfile?: () => Response }) {
+      vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url) === '/api/profile' && init?.method === 'PATCH') {
+          return handlers.patchProfile?.() ?? new Response(JSON.stringify({
+            ...placeholderProfile,
+            ...JSON.parse(String(init.body)),
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(
+          JSON.stringify(String(url) === '/api/profile' ? placeholderProfile : { success: true }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      });
+    }
+    const calls = (url: string, method?: string) => vi.mocked(fetch).mock.calls
+      .filter(([called, init]) => String(called) === url && (method ? init?.method === method : true));
 
-    const repairLink = await screen.findByRole('link', { name: /complete profile in a new tab/i });
-    expect(repairLink).toHaveAttribute('href', '/profile?source=quick-publish');
-    expect(repairLink).toHaveAttribute('target', '_blank');
+    it('asks for them and publishes nothing publicly until they are given, while Private post still goes', async () => {
+      answer({});
+      render(<PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="Broadcast" />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/custom handle/i);
-    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/showcase/publish')).toBe(false);
+      expect(await screen.findByRole('textbox', { name: /^display name$/i })).toHaveValue('');
+      expect(screen.queryByRole('link', { name: /complete profile/i })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
 
-    fireEvent.click(screen.getByRole('button', { name: /^private post$/i }));
-    await waitFor(() => {
-      expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/showcase/publish')).toBe(true);
+      expect(await screen.findByRole('alert')).toHaveTextContent('Add your name and handle to publish publicly.');
+      expect(screen.getByText('Add a display name for your public profile.')).toBeInTheDocument();
+      expect(calls('/api/profile', 'PATCH')).toHaveLength(0);
+      expect(calls('/api/showcase/publish')).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole('button', { name: /^private post$/i }));
+      await waitFor(() => expect(calls('/api/showcase/publish')).toHaveLength(1));
+      expect(calls('/api/profile', 'PATCH')).toHaveLength(0);
+    });
+
+    it('saves them, then publishes, in one press', async () => {
+      answer({});
+      render(<PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="Broadcast" />);
+
+      fireEvent.change(await screen.findByRole('textbox', { name: /^display name$/i }), { target: { value: 'Maya K' } });
+      fireEvent.change(screen.getByRole('textbox', { name: /^handle$/i }), { target: { value: '@Maya-K' } });
+      fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+      await waitFor(() => expect(calls('/api/showcase/publish')).toHaveLength(1));
+      const [patch] = calls('/api/profile', 'PATCH');
+      expect(JSON.parse(String(patch[1]?.body))).toEqual({ username: 'maya-k', displayName: 'Maya K' });
+      const order = vi.mocked(fetch).mock.invocationCallOrder;
+      const patchIndex = vi.mocked(fetch).mock.calls.indexOf(patch);
+      const publishIndex = vi.mocked(fetch).mock.calls.findIndex(([url]) => url === '/api/showcase/publish');
+      expect(order[patchIndex]).toBeLessThan(order[publishIndex]);
+      expect(JSON.parse(String(getPublishRequest().body)).visibility).toBe('public');
+    });
+
+    it('shows a taken handle on its field and publishes nothing', async () => {
+      answer({
+        patchProfile: () => new Response(JSON.stringify({
+          error: 'That username is already taken.',
+          fieldErrors: { username: 'That username is already taken.' },
+        }), { status: 409, headers: { 'Content-Type': 'application/json' } }),
+      });
+      render(<PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="Broadcast" />);
+
+      fireEvent.change(await screen.findByRole('textbox', { name: /^display name$/i }), { target: { value: 'Maya K' } });
+      fireEvent.change(screen.getByRole('textbox', { name: /^handle$/i }), { target: { value: 'maya' } });
+      fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^handle$/i })).toHaveAttribute('aria-invalid', 'true'));
+      expect(screen.getAllByText('That username is already taken.').length).toBeGreaterThanOrEqual(1);
+      expect(calls('/api/showcase/publish')).toHaveLength(0);
+      expect(screen.getByRole('button', { name: /^public post$/i })).toBeEnabled();
+    });
+  });
+
+  it('says whom a public post goes out as when the profile is ready', async () => {
+    render(<PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="Broadcast" />);
+    expect(await screen.findByText('Posting as Launch Maker · @launchmaker')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /^display name$/i })).toBeNull();
+  });
+
+  // Most creations have no title; typing one was the step people stopped at.
+  describe('the title of a creation that has none', () => {
+    const creation = {
+      prompt: 'A product still lit like a window display. Soft morning light.',
+      model: 'nano-banana-2',
+      category: 'image',
+    };
+    const prefill = {
+      resourceKinds: ['prompt' as const],
+      promptText: creation.prompt,
+      notesMarkdown: null,
+      allowRemix: false,
+    };
+
+    it('starts from a suggestion cut from the prompt and says so', () => {
+      render(<PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="" creation={creation} />);
+      expect(screen.getByRole('textbox', { name: /^title$/i })).toHaveValue('Product still lit like a window display');
+      expect(screen.getByText('Suggested from your prompt. Edit it if you like.')).toBeInTheDocument();
+    });
+
+    it('swaps an untouched suggestion while a recipe keeps the prompt private, and keeps a typed title', () => {
+      const { unmount } = render(
+        <PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="" creation={creation} paywallPrefill={prefill} />,
+      );
+      const title = screen.getByRole('textbox', { name: /^title$/i });
+      fireEvent.click(screen.getByRole('radio', { name: 'Paid' }));
+      expect(title).toHaveValue('Image recipe');
+      fireEvent.click(screen.getByRole('radio', { name: 'Off' }));
+      expect(title).toHaveValue('Product still lit like a window display');
+      unmount();
+
+      render(
+        <PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="" creation={creation} paywallPrefill={prefill} />,
+      );
+      const typed = screen.getByRole('textbox', { name: /^title$/i });
+      fireEvent.change(typed, { target: { value: 'Window still' } });
+      fireEvent.click(screen.getByRole('radio', { name: 'Paid' }));
+      expect(typed).toHaveValue('Window still');
+    });
+
+    it('keeps the creation’s own title', () => {
+      render(<PublishToShowcaseModal isOpen onClose={vi.fn()} generationId="gen-1" defaultTitle="Broadcast" creation={creation} />);
+      expect(screen.getByRole('textbox', { name: /^title$/i })).toHaveValue('Broadcast');
+      expect(screen.queryByText(/^Suggested/)).toBeNull();
     });
   });
 

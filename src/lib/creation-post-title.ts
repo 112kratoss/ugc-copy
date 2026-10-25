@@ -1,0 +1,94 @@
+import {
+  describeTitleSuggestion,
+  suggestCreationPostTitle,
+  type CreationTitleSuggestion,
+} from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
+import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
+
+/** What a suggested title is made from: fields of a creation as the generations API returns it. */
+export type CreationTitleSource = {
+  prompt?: string | null;
+  model?: string | null;
+  category?: string | null;
+};
+
+export type CreationPostTitleSuggestion = {
+  title: string;
+  /** `creation`: the creation's own title or its template's; else how the suggestion was made. */
+  source: 'creation' | CreationTitleSuggestion['source'];
+};
+
+function readText(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+/** The fields a suggestion needs, from a creation record of `/api/generations`. */
+export function readCreationTitleSource(generation: unknown): CreationTitleSource | null {
+  if (!generation || typeof generation !== 'object') {
+    return null;
+  }
+  const record = generation as Record<string, unknown>;
+  return { prompt: readText(record.prompt), model: readText(record.model), category: readText(record.category) };
+}
+
+/**
+ * The title a post of a creation starts with, as the app composer's
+ * `getCreationPostTitleSuggestion`: the creation's own title or its template's,
+ * else a suggestion from the shared policy (the prompt's opening while the post
+ * has no recipe, which keeps the prompt private; else words naming what was
+ * made). Most creations have no title, and typing one was where people stopped.
+ */
+export function getCreationPostTitleSuggestion(
+  ownTitle: string | null | undefined,
+  source: CreationTitleSource | null | undefined,
+  hasRecipe: boolean,
+): CreationPostTitleSuggestion | null {
+  const own = (ownTitle ?? '').slice(0, TITLE_MAX_LENGTH);
+  if (own.trim()) {
+    return { title: own, source: 'creation' };
+  }
+  if (!source) {
+    return null;
+  }
+  return suggestCreationPostTitle({ ...source, hasRecipe });
+}
+
+/** The line under the title while it is still the composer's suggestion; null once the creator has changed it. */
+export function getCreationTitleSuggestionHint(
+  title: string,
+  suggestion: CreationPostTitleSuggestion | null,
+  hasRecipe: boolean,
+): string | null {
+  if (!suggestion || suggestion.source === 'creation' || title !== suggestion.title) {
+    return null;
+  }
+  return describeTitleSuggestion(suggestion.source, hasRecipe);
+}
+
+/**
+ * The title once a recipe is turned on or off. A suggestion may come from the
+ * prompt only while the post has no recipe, so one nobody has edited becomes
+ * the suggestion for the new state; a typed title, or the creation's own, stays.
+ */
+export function followCreationTitleSuggestion({
+  title,
+  ownTitle,
+  source,
+  hadRecipe,
+  hasRecipe,
+}: {
+  title: string;
+  ownTitle: string | null | undefined;
+  source: CreationTitleSource | null | undefined;
+  hadRecipe: boolean;
+  hasRecipe: boolean;
+}): string {
+  if (hadRecipe === hasRecipe) {
+    return title;
+  }
+  const previous = getCreationPostTitleSuggestion(ownTitle, source, hadRecipe);
+  if (!previous || previous.source === 'creation' || previous.title !== title) {
+    return title;
+  }
+  return getCreationPostTitleSuggestion(ownTitle, source, hasRecipe)?.title ?? title;
+}
