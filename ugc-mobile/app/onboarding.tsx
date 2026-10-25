@@ -18,7 +18,7 @@ import { AtSign, Clapperboard, ImageIcon, Sparkles, WandSparkles } from 'lucide-
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '@/lib/api-client';
-import { buildIdentityClaimBody } from '@/lib/edit-profile-form';
+import { buildIdentityClaimBody, readLocalUsernameRejection } from '@/lib/edit-profile-form';
 import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
@@ -28,6 +28,7 @@ import { appTheme } from '@/lib/theme';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
+import { useHandleAvailability } from '@/lib/use-handle-availability';
 import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -142,8 +143,8 @@ function OnboardingFlow() {
   const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
-  const [usernameState, setUsernameState] = useState<'idle' | 'checking' | 'available' | 'error'>('idle');
-  const [usernameMessage, setUsernameMessage] = useState<string | null>(null);
+  // A handle the save found taken: free when it was checked, claimed since.
+  const [handleTakenAtSave, setHandleTakenAtSave] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [animatedCredits, setAnimatedCredits] = useState(0);
@@ -253,28 +254,15 @@ function OnboardingFlow() {
     void trackOnboardingEvent(api, 'reward_viewed', { goal, step: 'reward' });
   }, [api, goal, stage, welcome]);
 
-  useEffect(() => {
-    if (stage !== 'identity') return;
-    const normalized = username.trim().replace(/^@+/, '').toLowerCase();
-    if (!/^[a-z0-9-]{3,24}$/.test(normalized) || !displayName.trim()) {
-      setUsernameState('idle');
-      setUsernameMessage(null);
-      return;
-    }
-    setUsernameState('checking');
-    const timer = setTimeout(() => {
-      void api.validateProfile({ username: normalized, displayName: displayName.trim() })
-        .then(() => {
-          setUsernameState('available');
-          setUsernameMessage('This creator name is available.');
-        })
-        .catch((error) => {
-          setUsernameState('error');
-          setUsernameMessage(error instanceof Error ? error.message : 'This creator name is unavailable.');
-        });
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [api, displayName, stage, username]);
+  // The check Edit profile runs on the same handle. The placeholder and the
+  // reserved list are answered first, with no round trip (D3); a check that
+  // failed (offline, rate limited) is no verdict, and the save still judges.
+  const handleCheck = useHandleAvailability(api, { username, displayName, savedUsername: profile?.username });
+  const handleRefusal = readLocalUsernameRejection(username, profile?.username)
+    ?? (handleTakenAtSave !== null && handleTakenAtSave === username ? 'That handle was just claimed. Try another one.' : null)
+    ?? (handleCheck.availability === 'taken' ? handleCheck.message ?? 'This creator name is unavailable.' : null);
+  const usernameState = handleRefusal ? 'error' : handleCheck.availability;
+  const usernameMessage = handleRefusal ?? (usernameState === 'available' ? 'This creator name is available.' : null);
 
   const moveToStep = async (nextStep: number) => {
     setStep(nextStep);
@@ -369,8 +357,7 @@ function OnboardingFlow() {
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
-        setUsernameState('error');
-        setUsernameMessage('That handle was just claimed. Try another one.');
+        setHandleTakenAtSave(username);
         void trackOnboardingEvent(api, 'username_conflict', { goal, step: 'identity' });
       }
       setMessage(error instanceof Error ? error.message : 'Could not save your creator name.');

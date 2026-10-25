@@ -35,8 +35,6 @@ import {
   normalizeUsernameInput,
   profilePhotoCropAspect,
   readLocalUsernameRejection,
-  readUsernameRejection,
-  shouldCheckUsernameAvailability,
   usernameHint,
   validateProfileField,
   validateProfileForm,
@@ -51,10 +49,8 @@ import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ProfileResponse } from '@/lib/types';
 import { haptic } from '@/lib/haptics';
+import { useHandleAvailability } from '@/lib/use-handle-availability';
 import { invalidateWelcomeCredits } from '@/lib/use-onboarding-destination';
-
-/** Debounce before the availability round trip. The endpoint is rate limited. */
-const USERNAME_CHECK_DELAY_MS = 400;
 
 /** The web editor's labels (`CreatorProfileCard`), in the order the form reads. */
 const SOCIAL_FIELDS = [
@@ -88,8 +84,6 @@ export function EditProfileScreen() {
   const [message, setMessage] = useState<string | null>(null);
   const [photoAccessDenied, setPhotoAccessDenied] = useState(false);
   const [progressMessage, setProgressMessage] = useState<string | null>(null);
-  const [usernameAvailability, setUsernameAvailability] = useState<UsernameAvailability>('idle');
-  const [usernameMessage, setUsernameMessage] = useState<string | null>(null);
   // Set once the screen is done with the changes, so the unsaved-work guard
   // below lets a successful save — or an accepted discard — navigate away.
   const [isLeaveAllowed, setIsLeaveAllowed] = useState(false);
@@ -143,50 +137,16 @@ export function EditProfileScreen() {
    * the avatar and the cover *before* it PATCHes the profile, so the answer
    * arrived after two uploads had run for nothing.
    */
-  useEffect(() => {
-    // The placeholder and the reserved list are answered here, before any
-    // round trip, in the words the server would use (D3).
-    const localRejection = readLocalUsernameRejection(form.username, profile?.username);
-    if (localRejection) {
-      setUsernameAvailability('taken');
-      setUsernameMessage(localRejection);
-      return;
-    }
-    if (!shouldCheckUsernameAvailability({
-      value: form.username,
-      displayName: form.displayName,
-      savedUsername: profile?.username,
-    })) {
-      setUsernameAvailability('idle');
-      setUsernameMessage(null);
-      return;
-    }
-
-    setUsernameAvailability('checking');
-    const timer = setTimeout(() => {
-      void api.validateProfile({
-        username: normalizeUsername(form.username),
-        displayName: form.displayName.trim(),
-      })
-        .then(() => {
-          setUsernameAvailability('available');
-          setUsernameMessage(null);
-        })
-        .catch((error) => {
-          const rejection = readUsernameRejection(error);
-          if (!rejection) {
-            // Offline, rate limited, or a server fault: no verdict on the name.
-            setUsernameAvailability('idle');
-            setUsernameMessage(null);
-            return;
-          }
-          setUsernameAvailability('taken');
-          setUsernameMessage(rejection);
-        });
-    }, USERNAME_CHECK_DELAY_MS);
-
-    return () => clearTimeout(timer);
-  }, [api, form.displayName, form.username, profile?.username]);
+  // The placeholder and the reserved list are answered here, before any
+  // round trip, in the words the server would use (D3).
+  const localUsernameRejection = readLocalUsernameRejection(form.username, profile?.username);
+  const usernameCheck = useHandleAvailability(api, {
+    username: form.username,
+    displayName: form.displayName,
+    savedUsername: profile?.username,
+  });
+  const usernameAvailability: UsernameAvailability = localUsernameRejection ? 'taken' : usernameCheck.availability;
+  const usernameMessage = localUsernameRejection ?? usernameCheck.message;
 
   const saveMutation = useMutation({
     mutationFn: saveProfile,

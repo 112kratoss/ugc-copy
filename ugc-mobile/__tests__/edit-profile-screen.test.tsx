@@ -101,6 +101,7 @@ vi.mock('@/lib/use-onboarding-destination', () => ({ invalidateWelcomeCredits: v
 
 import { EditProfileScreen } from '../components/edit-profile-screen';
 import { ApiError } from '../lib/api-client';
+import { HANDLE_CHECK_DELAY_MS } from '../lib/use-handle-availability';
 
 const PROFILE_KEY = ['profile', 'user-1'];
 
@@ -159,6 +160,14 @@ function pressable(tree: renderer.ReactTestRenderer, accessibilityLabel: string)
 async function press(tree: renderer.ReactTestRenderer, accessibilityLabel: string) {
   await renderer.act(async () => { pressable(tree, accessibilityLabel).props.onPress(); });
   await flush();
+}
+
+/** Under fake timers: lets the handle check's pause run out and its answer arrive. */
+async function letTheCheckAnswer() {
+  await renderer.act(async () => {
+    vi.advanceTimersByTime(HANDLE_CHECK_DELAY_MS);
+    for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+  });
 }
 
 function images(tree: renderer.ReactTestRenderer) {
@@ -342,6 +351,38 @@ describe('Edit profile: handles', () => {
     expect(input(tree, 'Username').props).toMatchObject({ hint: 'That handle is reserved.', hintTone: 'danger' });
     expect(pressable(tree, 'Save profile').props.disabled).toBe(true);
     expect(harness.api.validateProfile).not.toHaveBeenCalled();
+  });
+
+  it('keeps the answer for the handle in the field when one for an earlier handle comes back last', async () => {
+    // `maya` is taken and slow to answer; `maya-k` is free and answered at once.
+    let refuseMaya!: (error: unknown) => void;
+    harness.api.validateProfile.mockImplementation(({ username }: { username: string }) => (
+      username === 'maya'
+        ? new Promise((_resolve, reject) => { refuseMaya = reject; })
+        : Promise.resolve({ ok: true })
+    ));
+    const tree = await renderScreen(newClient(storedProfile()));
+    vi.useFakeTimers();
+    try {
+      await type(tree, 'Username', 'maya');
+      await letTheCheckAnswer();
+      await type(tree, 'Username', 'maya-k');
+      await letTheCheckAnswer();
+      expect(input(tree, 'Username').props).toMatchObject({ hint: 'This username is available.', hintTone: 'success' });
+
+      await renderer.act(async () => {
+        refuseMaya(new ApiError('That username is already taken.', 409, {
+          error: 'That username is already taken.',
+          fieldErrors: { username: 'That username is already taken.' },
+        }));
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+      });
+
+      expect(input(tree, 'Username').props).toMatchObject({ hint: 'This username is available.', hintTone: 'success' });
+      expect(pressable(tree, 'Save profile').props.disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
