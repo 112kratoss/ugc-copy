@@ -12,6 +12,7 @@ import MediaDetailsPreviewModal, {
 import PostVisibilityMenu from '@/components/PostVisibilityMenu';
 import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/StudioOverflowMenu';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import { readCreationTitleSource } from '@/lib/creation-post-title';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import {
     usePostLifecycle,
@@ -2843,6 +2844,7 @@ export default function CreationsPage() {
                 generationId={publishTarget?.id ?? null}
                 accessToken={session?.access_token ?? null}
                 defaultTitle={publishTarget?.title ?? publishTarget?.template?.templateTitle ?? ''}
+                creation={publishTarget ? readCreationTitleSource(publishTarget) : null}
                 defaultDescription={publishTarget?.description ?? ''}
                 showPaidShortcut={showPaidShortcutInPublishModal}
                 mediaOnly={publishTarget?.origin === 'template'}

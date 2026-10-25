@@ -40,3 +40,10 @@ it('keeps the saver notice policy, which the web imports, in web deployments', (
   // Its own config, extending nothing: see the comment in it.
   expect(readFileSync('ugc-mobile/lib/saver-notice-policy/tsconfig.json', 'utf8')).not.toMatch(/"extends"/);
 });
+
+it('keeps the post publish policy, which the server and the web composers import, in web deployments', () => {
+  const lines = readFileSync('.vercelignore', 'utf8').split('\n');
+  expect(lines.indexOf('!ugc-mobile/lib/post-publish-policy')).toBeGreaterThan(lines.indexOf('ugc-mobile/lib/*'));
+  // Its own config, extending nothing: see the comment in it.
+  expect(readFileSync('ugc-mobile/lib/post-publish-policy/tsconfig.json', 'utf8')).not.toMatch(/"extends"/);
+});

@@ -33,6 +33,7 @@ import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
@@ -194,9 +195,11 @@ const START_UNCONFIRMED_MESSAGE = 'We couldn’t confirm your generation started
 type CreationPublishDetails = {
     title: string;
     paywallPrefill: GenerationPaywallPrefill | null;
+    /** What the modal suggests a title from when the creation has none. */
+    creation: CreationTitleSource | null;
 };
 
-const EMPTY_PUBLISH_DETAILS: CreationPublishDetails = { title: '', paywallPrefill: null };
+const EMPTY_PUBLISH_DETAILS: CreationPublishDetails = { title: '', paywallPrefill: null, creation: null };
 /** How long the publish button waits for the creation's details before opening without them. */
 const PUBLISH_DETAILS_WAIT_MS = 3_000;
 
@@ -306,6 +309,7 @@ async function fetchCreationPublishDetails(generationId: string): Promise<Creati
         paywallPrefill: prefill && typeof prefill === 'object' && Array.isArray((prefill as { resourceKinds?: unknown }).resourceKinds)
             ? prefill as GenerationPaywallPrefill
             : null,
+        creation: readCreationTitleSource(generation),
     };
 }
 
@@ -2536,6 +2540,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 generationId={latestGenerationId}
                 accessToken={session?.access_token ?? null}
                 defaultTitle={publishModalDefaults.title}
+                creation={publishModalDefaults.creation}
                 paywallPrefill={publishModalDefaults.paywallPrefill}
                 shareAfterPublish={latestGenerationId ? {
                     title: shareTitle,

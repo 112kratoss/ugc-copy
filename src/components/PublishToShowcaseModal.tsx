@@ -4,11 +4,26 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, BadgeDollarSign, BookOpen, Check, CircleAlert, Globe, Loader2, LockKeyhole, Share2, UserRound, X } from 'lucide-react';
 
+import { useAuth } from '@/components/AuthProvider';
+import PublicIdentityFields from '@/components/PublicIdentityFields';
 import { sharePublicGeneration } from '@/lib/share-client';
 import type { GenerationShareSourceSurface } from '@/lib/share';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
+import {
+  followCreationTitleSuggestion,
+  getCreationPostTitleSuggestion,
+  getCreationTitleSuggestionHint,
+  type CreationTitleSource,
+} from '@/lib/creation-post-title';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
+import {
+  getInitialPublicIdentity,
+  claimPublicIdentity,
+  validatePublicIdentity,
+  type PublicIdentityDraft,
+  type PublicIdentityErrors,
+} from '@/lib/public-identity';
 import {
   formatUsdCents,
   getPostResourceKindLabel,
@@ -168,6 +183,11 @@ interface PublishToShowcaseModalProps {
   generationId: string | null;
   accessToken?: string | null;
   defaultTitle?: string;
+  /**
+   * The creation's prompt, model and category, from which a title is
+   * suggested when it has none of its own (`defaultTitle`).
+   */
+  creation?: CreationTitleSource | null;
   defaultDescription?: string;
   showPaidShortcut?: boolean;
   mediaOnly?: boolean;
@@ -195,6 +215,7 @@ export default function PublishToShowcaseModal({
   generationId,
   accessToken = null,
   defaultTitle = '',
+  creation = null,
   defaultDescription = '',
   showPaidShortcut = true,
   mediaOnly = false,
@@ -204,6 +225,8 @@ export default function PublishToShowcaseModal({
 }: PublishToShowcaseModalProps) {
   const [isNsfw, setIsNsfw] = useState(false);
   const [publishTitle, setPublishTitle] = useState(() => getDefaultPublishTitle(defaultTitle));
+  // Set once the creator types a title: a suggestion is never put over theirs.
+  const titleTouchedRef = useRef(false);
   const [publishDescription, setPublishDescription] = useState(() =>
     getDefaultPublishDescription(defaultDescription)
   );
@@ -214,18 +237,27 @@ export default function PublishToShowcaseModal({
   const [needsProfileRepair, setNeedsProfileRepair] = useState(false);
   const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
   const [profileLoadState, setProfileLoadState] = useState<ProfileLoadState>('idle');
-  const [profileRefreshRevision, setProfileRefreshRevision] = useState(0);
+  const { user } = useAuth();
+  // The name and handle follow the profile and the sign-in until the creator
+  // types; a later answer never puts the starting values back over theirs.
+  const [identityEdits, setIdentityEdits] = useState<PublicIdentityDraft | null>(null);
+  const [identityErrors, setIdentityErrors] = useState<PublicIdentityErrors>({});
+  const identity = identityEdits ?? getInitialPublicIdentity(profile, user);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   const isPublishingRef = useRef(false);
-  const profileRepairHref = '/profile?source=quick-publish';
   const autoUnlockKinds = getAutoUnlockKinds(paywallPrefill);
   const hasAutoUnlock = showPaidShortcut && Boolean(paywallPrefill) && autoUnlockKinds.length > 0;
   const generationReferenceCount = Math.max(0, Math.round(paywallPrefill?.referenceCount ?? 0));
   const hasGenerationReferences = generationReferenceCount > 0;
   const isPaidRecipe = recipeAccess === 'paid';
+  // A creation's details can arrive after the dialog opened (the motion page
+  // reads them in the background), so the suggestion is derived, not set once.
+  const titleSuggestion = getCreationPostTitleSuggestion(defaultTitle, creation, recipeAccess !== 'none');
+  const suggestedTitle = titleSuggestion && titleSuggestion.source !== 'creation' ? titleSuggestion.title : null;
+  const titleSuggestionHint = getCreationTitleSuggestionHint(publishTitle, titleSuggestion, recipeAccess !== 'none');
   const activeAccessIndex = Math.max(
     0,
     RECIPE_ACCESS_OPTIONS.findIndex((option) => option.value === recipeAccess)
@@ -237,6 +269,9 @@ export default function PublishToShowcaseModal({
   // the public gate (handle + display name). The avatar is only a
   // profile-completeness nudge, never a blocker.
   const isProfileReadyForPublish = profileReadiness.publicPublishReady;
+  // Asked beside the buttons when the profile cannot publish publicly yet, or
+  // when the server said so although the check had failed.
+  const needsPublicIdentity = needsProfileRepair || (profileLoadState === 'ready' && !isProfileReadyForPublish);
   const recipeAccessBadgeLabel = recipeAccess === 'none'
     ? 'No recipe'
     : recipeAccess === 'free'
@@ -258,9 +293,11 @@ export default function PublishToShowcaseModal({
       return;
     }
 
-    // Opening a generation starts a fresh publish draft from its supplied defaults.
+    // Opening a generation starts a fresh publish draft from its supplied
+    // defaults; the suggestion below fills an untitled one.
     setIsNsfw(false);
     setPublishTitle(getDefaultPublishTitle(defaultTitle));
+    titleTouchedRef.current = false;
     setPublishDescription(getDefaultPublishDescription(defaultDescription));
     // A fresh publish starts with no recipe attached; the creator opts in.
     setRecipeAccess('none');
@@ -268,7 +305,19 @@ export default function PublishToShowcaseModal({
     setPublishingVisibility(null);
     setFormError(null);
     setNeedsProfileRepair(false);
+    setIdentityErrors({});
+    setIdentityEdits(null);
   }, [defaultDescription, defaultTitle, generationId, isOpen]);
+
+  // An untitled creation starts from the suggestion once its details are
+  // known. Only an empty, untyped title takes it: arriving late never wipes
+  // anything the creator did, and a recipe switch swaps it in its own handler.
+  useEffect(() => {
+    if (!isOpen || !suggestedTitle || titleTouchedRef.current) {
+      return;
+    }
+    setPublishTitle((current) => (current.trim() ? current : getDefaultPublishTitle(suggestedTitle)));
+  }, [isOpen, suggestedTitle]);
 
   useEffect(() => {
     if (!isOpen || !generationId) {
@@ -309,20 +358,7 @@ export default function PublishToShowcaseModal({
       });
 
     return () => controller.abort();
-  }, [accessToken, generationId, isOpen, profileRefreshRevision]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    const refreshProfileAfterRepair = () => {
-      setProfileRefreshRevision((current) => current + 1);
-    };
-
-    window.addEventListener('focus', refreshProfileAfterRepair);
-    return () => window.removeEventListener('focus', refreshProfileAfterRepair);
-  }, [isOpen]);
+  }, [accessToken, generationId, isOpen]);
 
   useEffect(() => {
     if (!isOpen || !generationId) {
@@ -402,12 +438,14 @@ export default function PublishToShowcaseModal({
       return;
     }
 
-    if (nextVisibility === 'public' && profileLoadState === 'ready' && !isProfileReadyForPublish) {
-      setNeedsProfileRepair(true);
-      setFormError(
-        'Complete your profile before publishing publicly: choose a custom handle and add your display name.'
-      );
-      return;
+    const savesIdentity = nextVisibility === 'public' && needsPublicIdentity;
+    if (savesIdentity) {
+      const localErrors = validatePublicIdentity(identity, profile?.username);
+      if (localErrors.displayName || localErrors.username) {
+        setIdentityErrors(localErrors);
+        setFormError('Add your name and handle to publish publicly.');
+        return;
+      }
     }
 
     let resourceBundle: PostResourceBundleInput | null = mediaOnly ? null : { accessMode: 'none' };
@@ -442,6 +480,19 @@ export default function PublishToShowcaseModal({
 
     setPublishingVisibility(nextVisibility);
     setFormError(null);
+
+    if (savesIdentity) {
+      const saved = await claimPublicIdentity(identity, accessToken);
+      if (!saved.ok) {
+        setIdentityErrors(saved.errors);
+        setFormError(saved.message);
+        setPublishingVisibility(null);
+        return;
+      }
+      setProfile(saved.profile);
+      setIdentityErrors({});
+      setNeedsProfileRepair(false);
+    }
 
     try {
       const requestBody: {
@@ -591,49 +642,58 @@ export default function PublishToShowcaseModal({
               id="publish-title-input"
               type="text"
               value={publishTitle}
-              onChange={(event) => setPublishTitle(event.target.value)}
+              onChange={(event) => {
+                titleTouchedRef.current = true;
+                setPublishTitle(event.target.value);
+              }}
               placeholder="Give your creation a name"
               className="w-full rounded-2xl border border-white/10 bg-black px-4 py-3 text-white transition-colors placeholder:text-zinc-600 focus:border-emerald-400/50 focus:outline-none"
               maxLength={TITLE_MAX_LENGTH}
             />
+            {titleSuggestionHint ? (
+              <p className="mt-2 text-xs leading-5 text-zinc-500">{titleSuggestionHint}</p>
+            ) : null}
           </div>
 
-          <div
-            aria-live="polite"
-            className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${
-              profileLoadState === 'ready' && isProfileReadyForPublish
-                ? 'border-emerald-300/20 bg-emerald-400/8'
-                : 'border-amber-300/20 bg-amber-400/8'
-            }`}
-          >
-            <UserRound className={`mt-0.5 h-4 w-4 shrink-0 ${
-              profileLoadState === 'ready' && isProfileReadyForPublish ? 'text-emerald-300' : 'text-amber-200'
-            }`} />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-white">
-                {profileLoadState === 'loading'
-                  ? 'Checking profile…'
-                  : profileLoadState === 'error'
-                    ? 'Profile check unavailable'
-                    : isProfileReadyForPublish
-                      ? 'Ready for public publishing'
-                      : 'Public profile needs attention'}
-              </p>
-              <p className="mt-1 text-xs leading-5 text-zinc-400">
-                Public posts require a custom handle and display name.
-              </p>
-              {profileLoadState === 'ready' && !isProfileReadyForPublish ? (
-                <Link
-                  href={profileRepairHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="ui-focus-ring mt-2 inline-flex min-h-12 items-center text-sm font-bold text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]"
-                >
-                  Complete profile in a new tab
-                </Link>
-              ) : null}
+          {needsPublicIdentity ? (
+            <PublicIdentityFields
+              idPrefix="publish-identity"
+              value={identity}
+              errors={identityErrors}
+              disabled={isPublishing}
+              onChange={(next) => {
+                setIdentityEdits(next);
+                setIdentityErrors({});
+              }}
+            />
+          ) : (
+            <div
+              aria-live="polite"
+              className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${
+                profileLoadState === 'ready'
+                  ? 'border-emerald-300/20 bg-emerald-400/8'
+                  : 'border-white/10 bg-white/[0.03]'
+              }`}
+            >
+              <UserRound className={`mt-0.5 h-4 w-4 shrink-0 ${
+                profileLoadState === 'ready' ? 'text-emerald-300' : 'text-zinc-400'
+              }`} />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-white">
+                  {profileLoadState === 'loading' || profileLoadState === 'idle'
+                    ? 'Checking profile…'
+                    : profileLoadState === 'error'
+                      ? 'Profile check unavailable'
+                      : 'Ready for public publishing'}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">
+                  {profileLoadState === 'ready' && profile?.username
+                    ? `Posting as ${profile.displayName?.trim() || profile.username} · @${profile.username}`
+                    : 'Public posts show your name and handle.'}
+                </p>
+              </div>
             </div>
-          </div>
+          )}
 
           <div>
             <label htmlFor="publish-caption-input" className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Caption optional</label>
@@ -736,6 +796,14 @@ export default function PublishToShowcaseModal({
                                 value={option.value}
                                 checked={isActive}
                                 onChange={() => {
+                                  // A suggested title nobody edited follows the
+                                  // recipe: a recipe keeps the prompt private.
+                                  setPublishTitle((current) => followCreationTitleSuggestion({
+                                    title: current,
+                                    source: creation,
+                                    hadRecipe: recipeAccess !== 'none',
+                                    hasRecipe: option.value !== 'none',
+                                  }));
                                   setRecipeAccess(option.value);
                                   setFormError(null);
                                 }}
@@ -803,16 +871,6 @@ export default function PublishToShowcaseModal({
                 <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{formError}</span>
               </div>
-              {needsProfileRepair ? (
-                <Link
-                  href={profileRepairHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="ui-focus-ring mt-2 inline-flex min-h-12 items-center font-bold text-white underline decoration-white/40 underline-offset-4"
-                >
-                  Complete profile in a new tab
-                </Link>
-              ) : null}
             </div>
           ) : null}
 
