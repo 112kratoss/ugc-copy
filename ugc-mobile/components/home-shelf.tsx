@@ -5,6 +5,7 @@ import { Pressable, ScrollView, useWindowDimensions, View, type ViewStyle } from
 import { StableMediaImage } from '@/components/media-preview';
 import { SkeletonBone } from '@/components/skeleton';
 import { AppText } from '@/components/ui';
+import { useDisplayFontLoaded } from '@/lib/display-font-ready';
 import { hexWithAlpha, linearGradient } from '@/lib/eased-fade';
 import { verticalHitSlop } from '@/lib/hit-target';
 import {
@@ -91,6 +92,7 @@ export function HomeShelf({
   onMake: (creation: HomeShelfCreation) => void;
 }) {
   const { fontScale } = useWindowDimensions();
+  const displayFontLoaded = useDisplayFontLoaded();
   const card = getHomeShelfCardSize(contentWidth, SHELF_GAP, fontScale, appTheme.typeScale.control);
   const empty = !isLoading && items.length === 0;
 
@@ -106,7 +108,14 @@ export function HomeShelf({
         }}
       >
         <View style={{ flexShrink: 1 }}>
-          <AppText variant="cardTitle" heading numberOfLines={1}>
+          <AppText
+            // Drawn anew once the display face is in: Home draws this title at
+            // launch, before the face has loaded, and rarely draws it again.
+            key={displayFontLoaded ? 'display-face' : 'system-face'}
+            variant="cardTitle"
+            heading
+            numberOfLines={1}
+          >
             {empty ? 'Start creating' : 'Make this'}
           </AppText>
           {activeRenders > 0 ? (

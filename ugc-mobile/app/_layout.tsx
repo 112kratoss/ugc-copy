@@ -59,6 +59,7 @@ import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } fro
 import { hydrateAiDataConsent } from '@/lib/ai-data-consent';
 import { hydrateContentPolicy } from '@/lib/content-policy';
 import { hydrateAppearancePreference, useResolvedColorScheme } from '@/lib/appearance';
+import { markDisplayFontLoaded } from '@/lib/display-font-ready';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { appTheme, mediaColors, themes, type AppTheme } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
@@ -205,6 +206,13 @@ function RootLayoutNav() {
     if ((!fontsLoaded && !fontError) || !appearanceReady) return;
     void SplashScreen.hideAsync().catch(() => undefined);
   }, [appearanceReady, fontError, fontsLoaded]);
+
+  // The screens below render before the faces load. Text drawn by then is in
+  // the system face, and on Android stays so until it is drawn again: what is
+  // on screen from launch keys itself on this (`lib/display-font-ready.ts`).
+  useEffect(() => {
+    if (fontsLoaded) markDisplayFontLoaded();
+  }, [fontsLoaded]);
 
   useEffect(() => {
     const fallback = setTimeout(() => {
