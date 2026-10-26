@@ -4,8 +4,10 @@ import { logBackendError } from '@/lib/backend-logger';
 import type { PostMediaSummary } from '@/lib/post-media';
 import { toUsablePreviewSize, type PreviewSize } from '@/lib/preview-dimensions';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { isTemplateResultGeneration, TEMPLATE_RESULT_MODEL, type TemplateRunLink } from '@/lib/template-result';
 
 export interface GenerationPreviewInfo {
+  /** As anyone may see it: a template result's is `template-workflow`, as Studio shows it. */
   model: string;
   previewUrl: string | null;
   previewWidth: number | null;
@@ -41,7 +43,8 @@ function previewSizeFields(size: PreviewSize | null) {
  * if the caller asked for it", not "signed whenever the generation has one":
  * a new consumer that needs a poster must widen the set, not just read the map.
  * The model is returned for every generation either way; callers read it
- * whether or not a poster is grafted.
+ * whether or not a poster is grafted. A template result's is never its own: its
+ * recipe and model are the template author's (`template-result.ts`).
  */
 export async function loadGenerationPreviewInfoMap(
   adminSupabase: SupabaseClient,
@@ -52,7 +55,7 @@ export async function loadGenerationPreviewInfoMap(
   const uniqueIds = Array.from(new Set(generationIds.filter(Boolean)));
   if (uniqueIds.length === 0) return generationInfoMap;
 
-  type GenerationInfoRow = {
+  type GenerationInfoRow = TemplateRunLink & {
     id: string;
     user_id: string | null;
     model: string;
@@ -63,7 +66,7 @@ export async function loadGenerationPreviewInfoMap(
 
   const modelsWithPreviewResult = await adminSupabase
     .from('generations')
-    .select('id, user_id, model, preview_url, preview_width, preview_height, category')
+    .select('id, user_id, model, preview_url, preview_width, preview_height, category, template_run_id, template_run_step_id')
     .in('id', uniqueIds);
   const models = modelsWithPreviewResult.data as GenerationInfoRow[] | null;
   const modelsError = modelsWithPreviewResult.error;
@@ -87,7 +90,7 @@ export async function loadGenerationPreviewInfoMap(
       ? resolveOwnedStoredMediaUrl(adminSupabase, previewSource, generation.user_id)
       : null)
       .then((previewUrl) => [generation.id, {
-        model: generation.model,
+        model: isTemplateResultGeneration(generation) ? TEMPLATE_RESULT_MODEL : generation.model,
         previewUrl,
         // One rule for a usable size, shared with the backfill that writes
         // the column and the pipeline that measures it.

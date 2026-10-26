@@ -213,6 +213,8 @@ export interface PostRemixResolutionInput {
   /** The post's `creation_mode`: 'motion' for a motion transfer, which is stored as a video. */
   creationMode?: string | null;
   sourceKind: string | null | undefined;
+  /** The post's creation is a template's result (`template-result.ts`), whose recipe is the template's. */
+  templateResult?: boolean;
   resourceBundle?: {
     viewerCanAccess?: boolean | null;
     allowRemix?: boolean | null;
@@ -1623,6 +1625,15 @@ export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
       };
     }
 
+    return {
+      capability: 'none',
+      target: null,
+    };
+  }
+
+  // Its prompt, settings and inputs were never kept and its model is the
+  // template's, so a remix would restore nothing of it: like an upload, no Remix.
+  if (hasGeneration && input.templateResult) {
     return {
       capability: 'none',
       target: null,

@@ -1,4 +1,5 @@
 import type { PublicPostDetail } from '@/lib/public-posts';
+import { TEMPLATE_RESULT_MODEL } from '@/lib/template-result';
 import { GENERIC_SUGGESTED_TITLES } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
 /**
@@ -36,11 +37,12 @@ export function hasMeaningfulTitle(title: string | null | undefined): boolean {
  * Model identifiers arrive as slugs (`kling-v2-master`). Rendering the raw slug
  * in a title looks like a leaked internal, so it is spaced and cased — but not
  * aggressively rewritten, because the slug is what a person searching for that
- * model actually types.
+ * model actually types. A template result names none: its model is the
+ * template's, and `template-workflow` is no model's name.
  */
 function formatModelName(model: string | null | undefined): string | null {
     const raw = model?.trim();
-    if (!raw) return null;
+    if (!raw || raw === TEMPLATE_RESULT_MODEL) return null;
 
     return raw
         .replace(/[-_]+/g, ' ')

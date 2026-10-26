@@ -11,8 +11,11 @@ import {
 } from '../lib/api-client';
 import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
+import { buildHomeFeedCards } from '../lib/home-feed-view-model';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
+import { buildPostDetailsMeta } from '../lib/post-details-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
+import { getShowcaseRemixAccess } from '../lib/showcase-remix-access';
 import type {
   InsufficientCreditsResponse,
   ShowcaseFeedEventRequest,
@@ -143,6 +146,25 @@ it('shows the caption a post read by id carries as its story when it has no body
   expect(withBody.details?.body).toBe('Reusable launch notes.');
   const [withoutBody] = buildImmersiveShowcaseItems('showcase-feed', [{ ...item, body: '' }]);
   expect(withoutBody.details?.body).toBe('A clean launch visual.');
+});
+
+it("names no model and offers no Remix for a template result's post, on its card, in the reel and in its details", async () => {
+  // A template's model is its author's: the server sends Studio's
+  // `template-workflow` in its place and no Remix, which the app reads as no
+  // model's name and nothing to remix.
+  const api = createApiClient({
+    baseUrl: 'https://example.test',
+    getAccessToken: async () => null,
+    fetcher: vi.fn(async () => jsonResponse(mobileApiContract.endpoints.getShowcasePost.responseVariants.templateResult)),
+  });
+  const { item } = await api.getShowcasePost('post-template');
+  expect(item.model).toBe('template-workflow');
+
+  expect(getShowcaseRemixAccess(item)).toBeNull();
+  expect(buildHomeFeedCards([item])[0]).toMatchObject({ modelLabel: null, remixAccess: null });
+  const [reelItem] = buildImmersiveShowcaseItems('showcase-feed', [item]);
+  expect(reelItem.availableActions).not.toContain('recreate');
+  expect(buildPostDetailsMeta(reelItem).metaParts.join(' · ')).not.toMatch(/Made with|template-workflow/i);
 });
 
 it('plays an audio creation from the owner library as sound, never as a picture', async () => {

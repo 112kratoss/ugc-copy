@@ -8,11 +8,13 @@ import { isAudioModel } from '@/lib/models';
 import {
   REMIX_UNLOCK_REQUIRED_CODE,
   REMIX_UNLOCK_REQUIRED_MESSAGE,
+  TEMPLATE_RESULT_REMIX_MESSAGE,
   resolveRemixAccess,
 } from '@/lib/remix-access';
 import { remixCreatePathForCategory } from '@/lib/remix-tools';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
+import type { TemplateRunLink } from '@/lib/template-result';
 
 type PostReference = {
   id: string;
@@ -21,7 +23,7 @@ type PostReference = {
   category?: string | null;
 };
 
-type GenerationRow = {
+type GenerationRow = TemplateRunLink & {
   id?: string | null;
   user_id?: string | null;
   is_public?: boolean | null;
@@ -156,7 +158,7 @@ export async function remixShowcasePostForRoute({
   // remix-enabled recipe on it is unlocked.
   const { data: generation, error: generationError } = await serviceClient
     .from('generations')
-    .select('id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings')
+    .select('id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings, template_run_id, template_run_step_id')
     .eq('id', post.generation_id)
     .maybeSingle();
 
@@ -176,17 +178,22 @@ export async function remixShowcasePostForRoute({
       user_id: generationRow.user_id ?? null,
       is_public: generationRow.is_public ?? null,
       share_input_media_for_remix: generationRow.share_input_media_for_remix ?? null,
+      template_run_id: generationRow.template_run_id ?? null,
+      template_run_step_id: generationRow.template_run_step_id ?? null,
     },
     requestedPostId: post.id,
     dependencies: { isUserRelationshipBlocked: resolvedDependencies.isUserRelationshipBlocked },
   });
   if (!access.allowed) {
-    return access.reason === 'unlock_required'
-      ? {
-          ok: false,
-          status: 403,
-          body: { error: REMIX_UNLOCK_REQUIRED_MESSAGE, code: REMIX_UNLOCK_REQUIRED_CODE },
-        }
+    if (access.reason === 'unlock_required') {
+      return {
+        ok: false,
+        status: 403,
+        body: { error: REMIX_UNLOCK_REQUIRED_MESSAGE, code: REMIX_UNLOCK_REQUIRED_CODE },
+      };
+    }
+    return access.reason === 'template_result'
+      ? { ok: false, status: 400, body: { error: TEMPLATE_RESULT_REMIX_MESSAGE } }
       : linkedGenerationNotFound();
   }
 

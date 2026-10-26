@@ -55,6 +55,7 @@ import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { titleForRecipePost } from '@/lib/creation-post-title';
 import { requestPostEmbedding } from '@/lib/feed-embeddings';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { isTemplateResultGeneration } from '@/lib/template-result';
 import {
   getPublicUgcRecipeTextFields,
   getPublicUgcSafetyViolation,
@@ -506,7 +507,7 @@ export async function publishGenerationToShowcaseForRoute({
   // every other outcome reports plain "not found" rather than disclosing
   // anything about the row (matching the row-level invisibility these
   // generations had under 20260711154500_private_template_generations.sql).
-  const isTemplateLinked = Boolean(generation.template_run_id || generation.template_run_step_id);
+  const isTemplateLinked = isTemplateResultGeneration(generation);
   let isCanonicalTemplateResult = false;
 
   if (isTemplateLinked) {

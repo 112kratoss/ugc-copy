@@ -202,4 +202,60 @@ describe('public post detail read', () => {
       isNsfw: true,
     }));
   });
+
+  /** Answers the post row and its creation; the creator read finds nothing. */
+  function useClientWithCreation(row: Record<string, unknown>, generation: Record<string, unknown>) {
+    const client = {
+      from(table: string) {
+        const query = {
+          select: () => query,
+          eq: () => query,
+          is: () => query,
+          in: () => query,
+          maybeSingle: async () => ({
+            data: table === 'posts' ? row : table === 'generations' ? generation : null,
+            error: null,
+          }),
+        };
+        return query;
+      },
+    };
+    helperMocks.createServiceClient.mockReturnValue(client);
+  }
+
+  // A template's recipe and model are its author's: Studio shows the result's
+  // model as `template-workflow`, and the post page said the real one to anyone.
+  it.each([
+    ['its run', { template_run_id: 'run-1', template_run_step_id: null }],
+    ['its step', { template_run_id: null, template_run_step_id: 'step-1' }],
+  ])("names a template result's model as Studio does when the creation records %s, and offers no Remix", async (_label, link) => {
+    useClientWithCreation(
+      postRow({ generation_id: 'gen-1', category: 'image' }),
+      { model: 'nano-banana-pro', ...link },
+    );
+
+    const detail = await getPublicPostDetail('post-1');
+
+    expect(detail).toMatchObject({
+      model: 'template-workflow',
+      canRemix: false,
+      remixCapability: 'none',
+      remixTarget: null,
+    });
+    expect(JSON.stringify(detail)).not.toContain('nano-banana-pro');
+  });
+
+  it("keeps an ordinary creation's model and Remix", async () => {
+    useClientWithCreation(
+      postRow({ generation_id: 'gen-1', category: 'image' }),
+      { model: 'nano-banana-pro', template_run_id: null, template_run_step_id: null },
+    );
+
+    await expect(getPublicPostDetail('post-1')).resolves.toMatchObject({
+      model: 'nano-banana-pro',
+      canRemix: true,
+      remixCapability: 'public',
+      remixTarget: 'image',
+    });
+  });
 });

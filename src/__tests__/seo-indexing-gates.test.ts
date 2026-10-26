@@ -136,6 +136,15 @@ describe('composeShowcaseTitle', () => {
         expect(composeShowcaseTitle(postDetail({ title: 'untitled', model: '' })))
             .toBe('AI video by @aria');
     });
+
+    // A template result's model is the template's own, so its post reads
+    // `template-workflow`: no model's name, as the post page and the cards say none.
+    it('names no model for a template result', () => {
+        expect(composeShowcaseTitle(postDetail({ model: 'template-workflow' })))
+            .toBe('Sunset skincare hook — AI video');
+        expect(composeShowcaseTitle(postDetail({ title: 'untitled', model: 'template-workflow' })))
+            .toBe('AI video by @aria');
+    });
 });
 
 describe('hasMeaningfulTitle', () => {

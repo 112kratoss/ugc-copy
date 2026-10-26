@@ -45,6 +45,7 @@ vi.mock('@/lib/backend-rate-limit', () => ({
 vi.mock('@/lib/remix-access', () => ({
   REMIX_UNLOCK_REQUIRED_CODE: 'REMIX_UNLOCK_REQUIRED',
   REMIX_UNLOCK_REQUIRED_MESSAGE: 'Unlock this post to remix it.',
+  TEMPLATE_RESULT_REMIX_MESSAGE: 'Template results cannot be remixed. Use the template again to make another.',
   resolveRemixAccess: mocks.resolveRemixAccess,
 }));
 vi.mock('@/lib/generation-input-media', async (importOriginal) => ({
@@ -126,10 +127,41 @@ describe('loadRemixSourceBundle access', () => {
         user_id: 'creator-1',
         is_public: true,
         share_input_media_for_remix: true,
+        template_run_id: null,
+        template_run_step_id: null,
       },
     }));
     expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
     expect(mocks.loadGenerationRecipeRemixInputMediaByPostId).not.toHaveBeenCalled();
+  });
+
+  // A template's recipe and model are its author's (Studio shows the result's
+  // model as `template-workflow`), and this read handed the model to a remix.
+  it("refuses a template result in the gate's words, never with its model, having asked the gate with its run", async () => {
+    mocks.generation = {
+      ...mocks.generation,
+      model: 'nano-banana-pro',
+      prompt: null,
+      workflow_settings: {},
+      template_run_id: 'run-1',
+      template_run_step_id: 'step-1',
+    };
+    mocks.resolveRemixAccess.mockResolvedValue({ allowed: false, reason: 'template_result' });
+
+    const outcome = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' })
+      .then((bundle) => bundle, (error: unknown) => error);
+
+    expect(outcome).toBeInstanceOf(RemixSourceError);
+    expect(outcome).toMatchObject({
+      status: 400,
+      message: 'Template results cannot be remixed. Use the template again to make another.',
+    });
+    expect(JSON.stringify(outcome)).not.toContain('nano-banana-pro');
+    expect(mocks.selectedColumns[0]).toContain('template_run_id, template_run_step_id');
+    expect(mocks.resolveRemixAccess).toHaveBeenCalledWith(expect.objectContaining({
+      generation: expect.objectContaining({ template_run_id: 'run-1', template_run_step_id: 'step-1' }),
+    }));
+    expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
   });
 
   it('answers not found when the gate refuses, before any media is signed', async () => {

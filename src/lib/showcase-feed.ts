@@ -36,6 +36,7 @@ import {
   type GenerationPreviewInfo,
 } from '@/lib/generation-preview-info';
 import { toUsablePreviewSize } from '@/lib/preview-dimensions';
+import { TEMPLATE_RESULT_MODEL } from '@/lib/template-result';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -723,6 +724,7 @@ export async function resolvePostRowsToFeedItems(
         isPaidRecipe: asset?.accessMode === 'paid',
       });
       const body = publicContent.body;
+      // A template result's reads as Studio's `template-workflow` (`loadGenerationPreviewInfoMap`).
       const model = post.generation_id
         ? generationInfo?.model ?? MAGICBOOKLET_SOURCE_KIND
         : post.source_kind === 'manual'
@@ -735,6 +737,7 @@ export async function resolvePostRowsToFeedItems(
         category: post.category,
         creationMode: post.creation_mode,
         sourceKind: normalizeShowcaseSourceKind(post.source_kind),
+        templateResult: model === TEMPLATE_RESULT_MODEL,
         resourceBundle: asset
           ? {
               // Built without a viewer, so nothing is unlocked here; a caller
@@ -1499,6 +1502,8 @@ export async function attachViewerStateToFeed(
         category: item.category,
         creationMode: item.creationMode,
         sourceKind: item.sourceKind,
+        // The item says so by its model alone, as the read without a viewer set it.
+        templateResult: item.model === TEMPLATE_RESULT_MODEL,
         resourceBundle: item.asset
           ? {
               viewerCanAccess: viewerCanAccessBundle,

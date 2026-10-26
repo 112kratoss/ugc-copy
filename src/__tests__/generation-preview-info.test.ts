@@ -87,6 +87,29 @@ describe('loadGenerationPreviewInfoMap', () => {
     });
   });
 
+  // A template's recipe and model are its author's: Studio shows the result's
+  // model as `template-workflow`, and every card read from here said the real one.
+  it("reports a template result's model as Studio does, reading the run it came from", async () => {
+    const { client } = createAdminClient([
+      { ...generationRow('gen-run'), model: 'nano-banana-pro', template_run_id: 'run-1', template_run_step_id: null },
+      { ...generationRow('gen-step'), model: 'nano-banana-pro', template_run_id: null, template_run_step_id: 'step-1' },
+      { ...generationRow('gen-1'), template_run_id: null, template_run_step_id: null },
+    ]);
+    let columns = '';
+    const originalFrom = client.from.bind(client);
+    (client as unknown as { from: (table: string) => unknown }).from = (table: string) => {
+      const query = originalFrom(table) as { select: (selected: string) => unknown };
+      return { select: (selected: string) => { columns = selected; return query.select(selected); } };
+    };
+
+    const map = await loadGenerationPreviewInfoMap(client, ['gen-run', 'gen-step', 'gen-1']);
+
+    expect(columns).toContain('template_run_id, template_run_step_id');
+    expect(map.get('gen-run')?.model).toBe('template-workflow');
+    expect(map.get('gen-step')?.model).toBe('template-workflow');
+    expect(map.get('gen-1')?.model).toBe('nano-banana-2');
+  });
+
   it('does not read the generations table at all for an empty id list', async () => {
     const from = vi.fn();
     const map = await loadGenerationPreviewInfoMap({ from } as unknown as SupabaseClient, []);

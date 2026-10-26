@@ -32,6 +32,7 @@ import {
 import { createServiceClient } from '@/lib/server-helpers';
 import { buildVisualMediaDescriptor } from '@/lib/media-descriptor';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import { isTemplateResultGeneration, TEMPLATE_RESULT_MODEL } from '@/lib/template-result';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -280,6 +281,7 @@ async function loadPublicPostCreator(
   };
 }
 
+/** The creation's model as anyone may see it: a template result's is the template's, never said. */
 async function loadPublicPostGenerationModel(
   adminSupabase: ReturnType<typeof createServiceClient>,
   generationId: string | null,
@@ -288,7 +290,7 @@ async function loadPublicPostGenerationModel(
 
   const { data: generation, error: generationError } = await adminSupabase
     .from('generations')
-    .select('model')
+    .select('model, template_run_id, template_run_step_id')
     .eq('id', generationId)
     .maybeSingle();
 
@@ -296,6 +298,7 @@ async function loadPublicPostGenerationModel(
     logBackendError('failed_to_fetch_post_generation_model', { error: generationError });
     return null;
   }
+  if (isTemplateResultGeneration(generation)) return TEMPLATE_RESULT_MODEL;
   return generation?.model ?? null;
 }
 
@@ -449,6 +452,7 @@ export async function getPublicPostDetail(
     category: row.category,
     creationMode: row.creation_mode,
     sourceKind: normalizeShowcaseSourceKind(row.source_kind),
+    templateResult: generationModel === TEMPLATE_RESULT_MODEL,
     resourceBundle: resourceBundle
       ? {
           viewerCanAccess: resourceBundle.viewerCanAccess,

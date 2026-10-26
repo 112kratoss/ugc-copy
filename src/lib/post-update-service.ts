@@ -61,6 +61,7 @@ import { POST_VIDEO_DURATION_LIMIT_MESSAGE, POST_VIDEO_MAX_DURATION_SECONDS } fr
 import { isCreatorProfileCheckError, isCreatorProfileReadinessError } from '@/lib/marketplace-trust';
 import { titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { isTemplateResultGeneration, type TemplateRunLink } from '@/lib/template-result';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
   getPublicUgcRecipeTextFields,
@@ -522,8 +523,7 @@ async function isTemplateLinkedGeneration(
   if (!data) {
     throw new Error('The post’s creation could not be found.');
   }
-  const row = data as { template_run_id?: string | null; template_run_step_id?: string | null };
-  return Boolean(row.template_run_id || row.template_run_step_id);
+  return isTemplateResultGeneration(data as TemplateRunLink);
 }
 
 async function loadOwnedPost(
