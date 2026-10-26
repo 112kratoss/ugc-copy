@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { InstallOnboardingState } from '../lib/onboarding-state';
 
@@ -155,6 +155,8 @@ vi.mock('@/components/ui', () => ({
 }));
 
 import OnboardingScreen from '../app/onboarding';
+import { ApiError } from '../lib/api-client';
+import { HANDLE_CHECK_DELAY_MS } from '../lib/use-handle-availability';
 import { welcomeCreditsQueryKey } from '../lib/use-onboarding-destination';
 
 function renderScreen(queryClient: QueryClient) {
@@ -307,6 +309,143 @@ async function saveHandle(tree: renderer.ReactTestRenderer) {
     await settle();
   });
 }
+
+describe('checking the handle as it is typed', () => {
+  const taken = new ApiError('That username is already taken.', 409, {
+    error: 'That username is already taken.',
+    fieldErrors: { username: 'That username is already taken.' },
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    harness.api.getProfile.mockReset().mockResolvedValue(profile);
+    harness.api.getWelcomeCredits.mockReset().mockResolvedValue(welcome);
+    harness.api.updateOnboardingState.mockReset().mockResolvedValue(undefined);
+    harness.api.validateProfile.mockReset().mockImplementation(async (body: { username?: string }) => {
+      if (body.username === 'sarath') throw taken;
+      return { ok: true };
+    });
+    harness.localUpdates.length = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function openIdentityStep() {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderScreen(new QueryClient());
+      await settle();
+    });
+    return tree;
+  }
+
+  async function typeHandle(tree: renderer.ReactTestRenderer, value: string) {
+    const handle = tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle');
+    await act(async () => { handle.props.onChangeText(value); });
+  }
+
+  /** Lets the check's pause run out and its answer arrive. */
+  async function letTheCheckAnswer() {
+    await act(async () => {
+      vi.advanceTimersByTime(HANDLE_CHECK_DELAY_MS);
+      await settle();
+    });
+  }
+
+  function handleLine(tree: renderer.ReactTestRenderer) {
+    const line = tree.root.find((node) => String(node.type) === 'app-text' && node.props.accessibilityLiveRegion === 'polite');
+    return { text: line.props.children as string, color: line.props.color as string };
+  }
+
+  it('says an available handle and a taken one in its own words', async () => {
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath-makes');
+    expect(handleLine(tree).text).toBe('Checking availability…');
+    await letTheCheckAnswer();
+    expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+
+    await typeHandle(tree, 'sarath');
+    await letTheCheckAnswer();
+    expect(handleLine(tree)).toEqual({ text: 'That username is already taken.', color: 'danger' });
+    expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(true);
+
+    act(() => tree.unmount());
+  });
+
+  it.each([
+    ['offline', new ApiError('Network request failed. Please check your connection and try again.', 0, { url: 'https://magicbooklet.com/api/profile/validate' })],
+    ['rate limited', new ApiError('Too many requests. Try again shortly.', 429)],
+  ])('says nothing against the handle when the check fails %s', async (_how, failure) => {
+    harness.api.validateProfile.mockRejectedValue(failure);
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath-makes');
+    await letTheCheckAnswer();
+
+    expect(harness.api.validateProfile).toHaveBeenCalledWith({ username: 'sarath-makes', displayName: 'Sarath' });
+    // No verdict on the name: the line goes back to the rule, and the save judges.
+    expect(handleLine(tree)).toEqual({ text: '3–24 lowercase letters, numbers, or hyphens.', color: 'muted' });
+    expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(false);
+
+    act(() => tree.unmount());
+  });
+
+  it('does not ask about the same handle again when only the name changes', async () => {
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath-makes');
+    await letTheCheckAnswer();
+    expect(harness.api.validateProfile).toHaveBeenCalledTimes(1);
+
+    const name = tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Display name');
+    await act(async () => { name.props.onChangeText('Sarath K'); });
+    await letTheCheckAnswer();
+
+    expect(harness.api.validateProfile).toHaveBeenCalledTimes(1);
+    expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+
+    act(() => tree.unmount());
+  });
+
+  it('says a handle the save found taken until another one is typed', async () => {
+    // Free when it was checked, claimed by someone else before the save.
+    harness.api.updateProfile.mockReset().mockRejectedValue(taken);
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath-makes');
+    await letTheCheckAnswer();
+    await act(async () => {
+      findButton(tree, 'primary-button', 'Save creator name').props.onPress();
+      await settle();
+    });
+
+    expect(handleLine(tree)).toEqual({ text: 'That handle was just claimed. Try another one.', color: 'danger' });
+    expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(true);
+
+    await typeHandle(tree, 'sarath-makes-2');
+    await letTheCheckAnswer();
+    expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+    expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(false);
+
+    act(() => tree.unmount());
+  });
+
+  it('refuses a reserved handle as it is typed, with no request', async () => {
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'support');
+    await letTheCheckAnswer();
+
+    expect(handleLine(tree)).toEqual({ text: 'That handle is reserved.', color: 'danger' });
+    expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(true);
+    expect(harness.api.validateProfile).not.toHaveBeenCalled();
+
+    act(() => tree.unmount());
+  });
+});
 
 describe('what the welcome answer after the identity step says (03-6)', () => {
   beforeEach(() => {
