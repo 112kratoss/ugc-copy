@@ -3,13 +3,15 @@
  * the web creators (src/app/create-video, src/app/create-motion) and the app's creator
  * bar (`creatorParameterSummary`, ugc-mobile/lib/creator-parameter-summary.ts) each read
  * their own form or draft into these inputs and take the words from here, so the two
- * chips cannot drift apart. The web bundle compiles this file too: keep it free of
- * React Native, Expo and Node imports.
+ * chips cannot word the same settings differently. The inputs are each side's own: the
+ * web passes '' for a model without resolutions, the app the resolution its draft holds.
+ * The web bundle compiles this file too: keep it free of React Native, Expo and Node
+ * imports.
  */
 
 /**
  * A video's resolution, or the mode that names one ("Pro 1080p"), then its ratio and
- * its length: "720P · 16:9 · 5s". A model with neither drops the first part.
+ * its length: "720P · 16:9 · 5s". With neither, the first part is left out.
  */
 export function videoSettingsSummary({
   modeLabel,

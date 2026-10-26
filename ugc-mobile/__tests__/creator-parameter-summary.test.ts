@@ -41,6 +41,13 @@ describe('the video bar summary', () => {
     expect(creatorParameterSummary(draft, { controls: [] })).toBe('1080P · 16:9 · 5s');
   });
 
+  it('reads the mode\'s own value where the mode control lists no such option, or is no choice', () => {
+    const draft = { ...createDefaultCreationDraft('video'), mode: '1080p' };
+    expect(creatorParameterSummary(draft, { controls: [modeControl] })).toBe('1080P · 9:16 · 5s');
+    const toggle = { key: 'mode', label: 'Mode', type: 'boolean' as const, presentation: 'toggle' as const, defaultValue: true };
+    expect(creatorParameterSummary(draft, { controls: [toggle] })).toBe('1080P · 9:16 · 5s');
+  });
+
   it('gives a multi-shot run\'s length as its shots together, as the request sends them', () => {
     const draft = {
       ...createDefaultCreationDraft('video'),
