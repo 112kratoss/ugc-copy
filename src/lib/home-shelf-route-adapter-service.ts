@@ -103,7 +103,8 @@ async function handleHomeShelfGET(
     };
 
     // A signed-out answer is the same for everyone and caches at the edge; a
-    // member's carries their own offers, so it is never shared.
+    // guest's or a member's leaves out what that viewer took out of the feed
+    // (and a member's carries their own offers), so it is never shared.
     return NextResponse.json(body, {
       headers: createApiResponseHeaders(request, getViewerAwareApiCacheControl(hasAuthorizationHeader), {
         vary: ['Authorization'],

@@ -113,7 +113,7 @@ describe('the Make this shelf', () => {
       'Paper boat on a sunlit pond, Grok Imagine, 15 credits, by @magicbooklet',
       'Serum on a stone pedestal, Nano Banana Pro, 18 credits, by @magicbooklet',
       'Share your first post. Post a creation or a tip to the feed.',
-      'Make anyone dance, Kling 3.0 Motion, Priced by clip length, by @magicbooklet',
+      'Make anyone dance, New model, Kling 3.0 Motion, Priced by clip length, by @magicbooklet',
       'Invite friends, earn credits. You get 5% of their top-ups in credits. They get 5% extra on their first.',
       'New image',
       'New video',
@@ -121,6 +121,18 @@ describe('the Make this shelf', () => {
     ]);
     expect(allText(tree.root)).toContain('Make this');
     expect(tree.root.find((node) => String(node.type) === 'scrollview').props.horizontal).toBe(true);
+  });
+
+  it('reads a card its badge, and tells a guest that Make this signs in first', () => {
+    const member = renderShelf(shelf.responseVariants.member.response.items).tree;
+    expect(byLabel(member, 'Paper boat').props.accessibilityLabel).not.toContain('Free to try');
+    expect(byLabel(member, 'Paper boat').props.accessibilityHint).toBe('Opens the creator with this prompt and settings');
+
+    const guest = renderShelf(shelf.response.items, { offerFreeToTry: true, signsInFirst: true }).tree;
+    expect(byLabel(guest, 'Paper boat').props.accessibilityLabel)
+      .toBe('Paper boat on a sunlit pond, Free to try, Grok Imagine, 15 credits, by @magicbooklet');
+    expect(byLabel(guest, 'Paper boat').props.accessibilityHint)
+      .toBe('Opens sign-in, then the creator with this prompt and settings');
   });
 
   it("hands a creation to the screen to remix, and opens an offer's screen", () => {

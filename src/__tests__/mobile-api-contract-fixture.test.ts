@@ -549,7 +549,8 @@ describe('shared mobile API v1 contract fixture', () => {
 
   // The shelf answers a visitor with no token the creations alone, shared at the
   // edge, and a member their own offers too, never shared. A guest's token is
-  // read for what it is, so the loader can answer it as a signed-out visitor.
+  // read for what it is: the creations alone, as a signed-out visitor gets them,
+  // less what that guest took out of the feed, so its answer is never shared either.
   it('answers the home shelf in the shapes and cache policy the fixture pins', async () => {
     const endpoint = contract.endpoints.getHomeShelf;
     const answer = async (
@@ -597,6 +598,8 @@ describe('shared mobile API v1 contract fixture', () => {
 
     const guest = await answer('Bearer guest-token', endpoint.response.items, { id: 'guest-1', is_anonymous: true });
     expect(guest.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'guest-1', isAnonymous: true });
+    expect(guest.response.headers.get('Cache-Control')).toBe(endpoint.responseVariants.member.cacheControl);
+    await expect(guest.response.json()).resolves.toEqual(endpoint.response);
   });
 
   // The app says the same words from its own copy (ugc-mobile's

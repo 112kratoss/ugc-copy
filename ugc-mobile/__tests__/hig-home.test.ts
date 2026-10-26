@@ -76,8 +76,24 @@ describe('the Make this shelf', () => {
     expect(shelfSource).not.toContain('SlideDots');
   });
 
+  /**
+   * Layout: text is never cut to fit a shape. On a 360dp phone the Invite
+   * terms ran past a fixed-height card and its button was cut off, so a
+   * card's height is a floor and the row takes its tallest card.
+   */
+  it('lets the tallest card set the row instead of cutting its words', () => {
+    expect(shelf).toContain("alignItems: 'stretch'");
+    for (const name of ['function CreationCard(', 'function ActionCard(', 'function ToolCard(', 'function StartBlankTile(']) {
+      const card = declaration(shelfSource, name);
+      expect(card, name).toContain('minHeight: height');
+      // The fixed form this replaced, in the card's own style.
+      expect(card, name).not.toMatch(/^\s*height,\n\s*borderRadius: CARD_RADIUS/m);
+    }
+  });
+
   it('names every card for a screen reader', () => {
-    expect(shelfSource).toContain('accessibilityLabel={homeShelfCreationLabel(creation)}');
+    expect(shelfSource).toContain('accessibilityLabel={homeShelfCreationLabel(creation, badge)}');
+    expect(shelfSource).toContain('accessibilityHint={homeShelfCreationHint(signsInFirst)}');
     expect(shelfSource).toContain('accessibilityLabel={`${copy.title}. ${copy.body}`}');
   });
 

@@ -170,10 +170,12 @@ describe('buildHomeShelfCreations', () => {
       loadGenerations: async () => [generation('boat', {
         workflow_settings: {
           model: 'grok-imagine-video',
-          duration: '6',
-          sound: 'false',
+          duration: 6,
+          sound: false,
           resolution: '480p',
           referenceImageUrls: ['https://cdn.example.test/creator-input.png'],
+          // Some generations keep a copy under `settings`: one that says the same is no conflict.
+          settings: { duration: 6, resolution: '480p' },
         },
       })],
       loadCatalogs: BOTH_CATALOGS,
@@ -215,6 +217,28 @@ describe('buildHomeShelfCreations', () => {
       fitsWelcomeCredits: false,
       makeHref: '/create-motion?remix=gen-dance&remixPost=dance',
     });
+  });
+
+  it.each([
+    ['a number stored as text, which the app opens at the default', { duration: '10' }],
+    ['a boolean stored as text, which the web would send on as text', { sound: 'true' }],
+    ['a copy under settings that says otherwise, which the app reads first', { duration: 6, settings: { duration: 10 } }],
+    ['a value only under settings, which the web never reads', { settings: { duration: 10 } }],
+  ])('shows no price for %s', async (_case, values) => {
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
+    quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 15 });
+
+    const creations = await buildHomeShelfCreations([{ postId: 'boat' }], {
+      getPosts: async () => [post('boat')],
+      loadGenerations: async () => [generation('boat', {
+        workflow_settings: { model: 'grok-imagine-video', ...values },
+      })],
+      loadCatalogs: BOTH_CATALOGS,
+      loadWelcomeCredits: async () => 25,
+    });
+
+    expect(quotePublishedGenerationModelMock).not.toHaveBeenCalled();
+    expect(creations[0]).toMatchObject({ modelName: 'Grok Imagine', price: null, fitsWelcomeCredits: false });
   });
 
   it('shows no price when the creator shared their inputs, which the editor prices', async () => {

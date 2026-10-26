@@ -232,7 +232,8 @@ const PUBLIC_ROUTES = [
   // is read, and every caller gets the same cacheable answer.
   '/api/showcase/feed/newest',
   // Home's "Make this" shelf. A member's token adds their action cards; a
-  // guest's is answered as a signed-out visitor, with the creations alone.
+  // guest gets the creations alone, as a signed-out visitor does, and either
+  // token leaves out what that viewer blocked, hid or reported in the feed.
   '/api/home/shelf',
   '/api/showcase/posts/[postId]',
   // Which live post an id names (an old link's generation id included), for

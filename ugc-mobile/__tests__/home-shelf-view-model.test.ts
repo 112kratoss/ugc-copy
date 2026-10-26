@@ -8,6 +8,7 @@ import {
   getHomeShelfCardSize,
   homeShelfActionCopy,
   homeShelfBadge,
+  homeShelfCreationHint,
   homeShelfCreationLabel,
   homeShelfGuestReturnTo,
   homeShelfPosterCacheKey,
@@ -125,6 +126,18 @@ describe('homeShelfCreationLabel', () => {
   it('reads the card in order for a screen reader', () => {
     expect(homeShelfCreationLabel(creations[0])).toBe('Paper boat on a sunlit pond, Grok Imagine, 15 credits, by @magicbooklet');
     expect(homeShelfCreationLabel(creations[2])).toBe('Make anyone dance, Kling 3.0 Motion, Priced by clip length, by @magicbooklet');
+  });
+
+  it('reads the badge the card shows, as the web card has it in its link text', () => {
+    expect(homeShelfCreationLabel(creations[0], homeShelfBadge(creations[0], true)))
+      .toBe('Paper boat on a sunlit pond, Free to try, Grok Imagine, 15 credits, by @magicbooklet');
+    expect(homeShelfCreationLabel(creations[2], homeShelfBadge(creations[2], true)))
+      .toBe('Make anyone dance, New model, Kling 3.0 Motion, Priced by clip length, by @magicbooklet');
+  });
+
+  it('tells a guest that the card opens sign-in first', () => {
+    expect(homeShelfCreationHint(true)).toBe('Opens sign-in, then the creator with this prompt and settings');
+    expect(homeShelfCreationHint(false)).toBe('Opens the creator with this prompt and settings');
   });
 });
 

@@ -82,15 +82,26 @@ export function homeShelfCreatorLabel(creator: HomeShelfCreation['creator']): st
   return creator.username ? `@${creator.username}` : creator.name;
 }
 
-/** What a screen reader says for a creation card, in reading order. */
-export function homeShelfCreationLabel(creation: HomeShelfCreation): string {
+/**
+ * What a screen reader says for a creation card, in reading order: its badge
+ * (`homeShelfBadge`) too, which the web's card has in its link text.
+ */
+export function homeShelfCreationLabel(creation: HomeShelfCreation, badge: string | null = null): string {
   const handle = homeShelfCreatorLabel(creation.creator);
   return [
     creation.title,
+    badge,
     creation.modelName,
     formatHomeShelfPrice(creation.price),
     handle ? `by ${handle}` : null,
   ].filter(Boolean).join(', ');
+}
+
+/** What a press on a creation card does, for a screen reader: a guest signs in first. */
+export function homeShelfCreationHint(signsInFirst: boolean): string {
+  return signsInFirst
+    ? 'Opens sign-in, then the creator with this prompt and settings'
+    : 'Opens the creator with this prompt and settings';
 }
 
 /**
@@ -167,9 +178,9 @@ export function formatActiveRenders(count: number): string {
 /**
  * A card's size: two cards and a sliver of the third across the content
  * column, so the row says it scrolls without a page control. The height is a
- * little over 4:5 so an offer's terms fit at the default text size, and grows
- * with Dynamic Type up to the tier cap the cards' text follows, so larger text
- * makes taller cards instead of clipped ones.
+ * little over 4:5 and grows with Dynamic Type up to the tier cap the cards'
+ * text follows. It is the row's floor: an offer whose terms need more (on a
+ * 360dp phone the Invite terms did) makes the whole row taller.
  */
 export function getHomeShelfCardSize(contentWidth: number, gap: number, fontScale = 1, maxFontScale = 1.6) {
   const width = Math.round((contentWidth - gap) / 2.3);

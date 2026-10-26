@@ -50,7 +50,7 @@ const HOME_SHELF_REVALIDATE_SECONDS = 300;
  * Part of the build's cache key. The Data Cache outlives a deploy, so bump this
  * whenever what a build holds or which posts it lets in changes.
  */
-const HOME_SHELF_BUILD_VERSION = 'home-shelf-creations-v2';
+const HOME_SHELF_BUILD_VERSION = 'home-shelf-creations-v3';
 
 /** The shelf could not be read, or not filtered for its viewer; the app's route answers an error. */
 export class HomeShelfUnavailableError extends Error {
@@ -142,32 +142,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The settings the remix opens with, in the types the quote expects. The
- * editor restores them from the generation's own copy, where a boolean or a
- * number can be stored as text ("false", "4").
+ * The settings every editor opens the remix with, or null when they would not
+ * open with the same ones. The web's editors restore the generation's top-level
+ * values; the app's reads a value under `settings` first and puts a control's
+ * default in place of a boolean or number stored as text ("false", "4"), which
+ * the web's would send on as text. Either way the card goes without a price
+ * rather than show one an editor would not.
  */
 function remixQuoteSettings(
   descriptor: GenerationModelDescriptor,
   stored: Record<string, unknown>,
-): Record<string, unknown> {
+): Record<string, unknown> | null {
   // Without shared inputs the remix opens without the creator's media.
   const visible = sanitizeWorkflowSettingsForRemix(stored, false);
-  const merged: Record<string, unknown> = {
-    ...(isRecord(visible.settings) ? visible.settings : {}),
-    ...visible,
-  };
+  const nested = isRecord(visible.settings) ? visible.settings : {};
 
   for (const control of descriptor.controls) {
-    const value = merged[control.key];
-    if (typeof value !== 'string') continue;
-    if (control.type === 'boolean' && (value === 'true' || value === 'false')) {
-      merged[control.key] = value === 'true';
-    } else if (control.type === 'integer' && value.trim() !== '' && Number.isFinite(Number(value))) {
-      merged[control.key] = Number(value);
-    }
+    const value = visible[control.key];
+    if (control.key in nested && nested[control.key] !== value) return null;
+    if (typeof value === 'string' && (control.type === 'boolean' || control.type === 'integer')) return null;
   }
 
-  return merged;
+  return visible;
 }
 
 /**
@@ -196,12 +192,14 @@ async function describeShelfPost(
   // prices them; the shelf does not count them, so it shows no price rather
   // than a lower one (and never "Free to try" on it).
   if (generation.share_input_media_for_remix === true) return { modelName: descriptor.displayName, price: null };
+  const settings = remixQuoteSettings(descriptor, stored);
+  if (!settings) return { modelName: descriptor.displayName, price: null };
 
   try {
     const quoted = await quote({
       kind,
       modelId: descriptor.id,
-      settings: remixQuoteSettings(descriptor, stored),
+      settings,
     }, { platform: 'web' });
     return { modelName: descriptor.displayName, price: { kind: 'credits', credits: quoted.costCredits } };
   } catch {

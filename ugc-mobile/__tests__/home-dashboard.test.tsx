@@ -33,6 +33,8 @@ const queryState = vi.hoisted(() => ({
   refetch: vi.fn(() => Promise.resolve()),
   // Every other query's refetch (the profile, the shelf), kept apart from the lane's.
   otherRefetch: vi.fn(() => Promise.resolve()),
+  // The options of every other query the screen made, in render order.
+  queries: [] as Array<{ queryKey: readonly unknown[]; queryFn?: () => unknown }>,
   client: {
     getQueriesData: vi.fn((): Array<[readonly unknown[], unknown]> => []),
     invalidateQueries: vi.fn(() => Promise.resolve()),
@@ -106,7 +108,10 @@ vi.mock('@tanstack/react-query', () => ({
     isSuccess: true,
     refetch: queryState.refetch,
   }),
-  useQuery: () => ({ data: undefined, isPending: false, refetch: queryState.otherRefetch }),
+  useQuery: (options: { queryKey: readonly unknown[]; queryFn?: () => unknown }) => (
+    queryState.queries.push(options),
+    { data: undefined, isPending: false, refetch: queryState.otherRefetch }
+  ),
   useQueryClient: () => queryState.client,
 }));
 
@@ -543,6 +548,7 @@ describe('Home screen', () => {
     authState.identityUserId = 'viewer-1';
     authState.isLoading = false;
     queryState.enabled.length = 0;
+    queryState.queries.length = 0;
     activeGenerationState.count = 0;
     queryState.pages = [];
     queryState.dataUpdatedAt = 1;
@@ -722,6 +728,25 @@ describe('Home screen', () => {
     expect(new Set(vi.mocked(createShowcaseFeedViewerQueryKey).mock.calls.map(([identity]) => identity)))
       .toEqual(new Set(['guest-1']));
     expect(schedulePersistHomeFeed).toHaveBeenCalledWith(queryState.client, 'guest-1');
+
+    renderer.act(() => tree.unmount());
+  });
+
+  // A guest's Not interested and Hide are kept under its uid (D1), and only its
+  // token lets the server leave those creators and posts off the shelf too.
+  it('asks for a guest’s shelf under its identity, with its token', async () => {
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    authState.api.getHomeShelf.mockReset();
+    authState.api.getHomeShelf.mockResolvedValue({ success: true, schemaVersion: 1, items: [] });
+    const { tree } = renderHome();
+
+    const shelf = queryState.queries.findLast((query) => query.queryKey[0] === 'home-shelf');
+    expect(shelf?.queryKey).toEqual(['home-shelf', 'guest-1']);
+    await shelf?.queryFn?.();
+    expect(authState.api.getHomeShelf).toHaveBeenCalledTimes(1);
+    // No `auth: false`: the client sends whatever session token it holds.
+    expect(authState.api.getHomeShelf).toHaveBeenCalledWith();
 
     renderer.act(() => tree.unmount());
   });

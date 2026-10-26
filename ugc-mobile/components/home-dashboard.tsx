@@ -485,12 +485,12 @@ export function HomeDashboard() {
 
   // Home's "Make this" shelf. Keyed by identity: a member's answer carries
   // their own offers, a guest's or a signed-out one the creations alone, and a
-  // guest asks without its token so the edge's shared answer serves it. No
-  // placeholder from another identity: even its creations were filtered by
-  // someone else's blocks. The row keeps its height on bones meanwhile.
+  // guest asks with its token too, so what it took out of the feed stays off
+  // the shelf. No placeholder from another identity: even its creations were
+  // filtered by someone else's choices. The row keeps its height on bones meanwhile.
   const shelfQuery = useQuery({
     queryKey: ['home-shelf', identityUserId ?? 'signed-out'],
-    queryFn: () => api.getHomeShelf({ auth: Boolean(user) }),
+    queryFn: () => api.getHomeShelf(),
     enabled: !isAuthLoading,
     staleTime: 5 * 60 * 1000,
   });
@@ -1028,6 +1028,7 @@ export function HomeDashboard() {
               items={shelfItems}
               isLoading={shelfQuery.isPending}
               offerFreeToTry={!user}
+              signsInFirst={!user}
               horizontalPadding={horizontalPadding}
               contentWidth={contentWidth}
               activeRenders={activeGenerationCount}

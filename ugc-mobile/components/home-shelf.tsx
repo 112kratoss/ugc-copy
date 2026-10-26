@@ -14,6 +14,7 @@ import {
   getHomeShelfCardSize,
   homeShelfActionCopy,
   homeShelfBadge,
+  homeShelfCreationHint,
   homeShelfCreationLabel,
   homeShelfCreatorLabel,
   homeShelfPosterCacheKey,
@@ -71,6 +72,7 @@ export function HomeShelf({
   items,
   isLoading,
   offerFreeToTry,
+  signsInFirst = false,
   horizontalPadding,
   contentWidth,
   activeRenders,
@@ -82,6 +84,8 @@ export function HomeShelf({
   isLoading: boolean;
   /** Signed out or a guest: still owed the welcome credits "Free to try" promises. */
   offerFreeToTry: boolean;
+  /** Signed out or a guest: "Make this" opens sign-in first, and the hint says so. */
+  signsInFirst?: boolean;
   horizontalPadding: number;
   contentWidth: number;
   /** The viewer's renders in flight; the line that opens Creations shows while there are any. */
@@ -152,7 +156,10 @@ export function HomeShelf({
         snapToAlignment="start"
         decelerationRate="fast"
         scrollEnabled={!isLoading}
-        contentContainerStyle={{ paddingHorizontal: horizontalPadding, gap: SHELF_GAP }}
+        // Each card is the shape's height at least, and the row stretches them
+        // all to its tallest: an offer whose terms need more room (a 360dp
+        // phone, larger text) makes the whole row taller instead of being cut.
+        contentContainerStyle={{ paddingHorizontal: horizontalPadding, gap: SHELF_GAP, alignItems: 'stretch' }}
       >
         {isLoading ? (
           <View
@@ -176,6 +183,7 @@ export function HomeShelf({
                 key={`creation-${item.id}`}
                 creation={item}
                 offerFreeToTry={offerFreeToTry}
+                signsInFirst={signsInFirst}
                 width={card.width}
                 height={card.height}
                 pending={pendingId === item.post.id}
@@ -226,6 +234,7 @@ function ActiveRendersLine({ count }: { count: number }) {
 function CreationCard({
   creation,
   offerFreeToTry,
+  signsInFirst,
   width,
   height,
   pending,
@@ -234,6 +243,7 @@ function CreationCard({
 }: {
   creation: HomeShelfCreation;
   offerFreeToTry: boolean;
+  signsInFirst: boolean;
   width: number;
   height: number;
   /** This card's remix is being opened. */
@@ -254,8 +264,8 @@ function CreationCard({
     <MotionView style={[{ width }, motion.animatedStyle]}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={homeShelfCreationLabel(creation)}
-        accessibilityHint="Opens the creator with this prompt and settings"
+        accessibilityLabel={homeShelfCreationLabel(creation, badge)}
+        accessibilityHint={homeShelfCreationHint(signsInFirst)}
         accessibilityState={{ disabled, busy: pending }}
         disabled={disabled}
         onPress={() => onMake(creation)}
@@ -263,7 +273,8 @@ function CreationCard({
         onPressOut={motion.onPressOut}
         style={{
           width,
-          height,
+          minHeight: height,
+          flexGrow: 1,
           borderRadius: CARD_RADIUS,
           borderCurve: 'continuous',
           borderWidth: 1,
@@ -343,7 +354,8 @@ function ActionCard({ action, width, height }: { action: HomeShelfAction; width:
         onPressOut={motion.onPressOut}
         style={{
           width,
-          height,
+          minHeight: height,
+          flexGrow: 1,
           borderRadius: CARD_RADIUS,
           borderCurve: 'continuous',
           borderWidth: 1,
@@ -375,6 +387,8 @@ function ActionCard({ action, width, height }: { action: HomeShelfAction; width:
         <View
           style={{
             alignSelf: 'flex-start',
+            // Room under the terms where they fill the card (a narrow phone).
+            marginTop: appTheme.spacing.compact,
             borderRadius: appTheme.radii.pill,
             borderWidth: 1,
             borderColor: hexWithAlpha(tint, 0.55),
@@ -414,7 +428,8 @@ function ToolCard({
         onPressOut={motion.onPressOut}
         style={{
           width,
-          height,
+          minHeight: height,
+          flexGrow: 1,
           borderRadius: CARD_RADIUS,
           borderCurve: 'continuous',
           borderWidth: 1,
@@ -441,13 +456,14 @@ function StartBlankTile({ width, height }: { width: number; height: number }) {
     <View
       style={{
         width,
-        height,
+        minHeight: height,
         borderRadius: CARD_RADIUS,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderStyle: 'dashed',
         borderColor: theme.colors.border,
         padding: appTheme.spacing.gap,
+        gap: appTheme.spacing.compact,
         justifyContent: 'space-between',
       }}
     >

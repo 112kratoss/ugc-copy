@@ -1305,11 +1305,13 @@ export function createApiClient({
     // the proxy would check (and refuse) an expired token it was given.
     getShowcaseFeedNewest: (params?: { category?: 'media' | 'text' | 'all' }) =>
       request<ShowcaseFeedNewestResponse>(`/api/showcase/feed/newest${buildQuery(params)}`, {}, { auth: false }),
-    // Home's "Make this" shelf. A member sends the session token for their own
-    // offers. A guest is answered as a signed-out visitor anyway, so it sends
-    // none (`auth: false`) and shares the answer the edge caches for everyone.
-    getHomeShelf: (options: { auth?: boolean } = {}) =>
-      request<HomeShelfResponse>('/api/home/shelf', {}, { auth: options.auth ?? true }),
+    // Home's "Make this" shelf, with the session token whenever there is one. A
+    // member's brings their own offers; a guest's, like a member's, leaves out
+    // the creators and posts it blocked, hid or reported in the feed (a guest's
+    // Not interested and Hide are kept under its uid, D1), which the answer the
+    // edge shares between signed-out visitors cannot. Signed out, none is sent.
+    getHomeShelf: () =>
+      request<HomeShelfResponse>('/api/home/shelf'),
     undoFeedFeedback: (body: UndoFeedFeedbackRequest) =>
       request<UndoFeedFeedbackResponse>('/api/showcase/feed/feedback/undo', {
         method: 'POST',
