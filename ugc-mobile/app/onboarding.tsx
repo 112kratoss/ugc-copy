@@ -29,6 +29,7 @@ import {
   PROFILE_USERNAME_MAX_LENGTH,
   PROFILE_USERNAME_PATTERN,
   PROFILE_USERNAME_RULE,
+  readUsernameRejection,
 } from '@/lib/edit-profile-form';
 import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
@@ -147,8 +148,9 @@ function OnboardingFlow() {
   const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
-  // A handle the save found taken: free when it was checked, claimed since.
-  const [handleTakenAtSave, setHandleTakenAtSave] = useState<string | null>(null);
+  // A handle the save refused, and what it said: taken since it was checked,
+  // or refused by a rule the live check did not get to answer.
+  const [handleRefusedAtSave, setHandleRefusedAtSave] = useState<{ handle: string; message: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [animatedCredits, setAnimatedCredits] = useState(0);
@@ -262,7 +264,7 @@ function OnboardingFlow() {
   // and the reserved list with no round trip (D3); a check that failed
   // (offline, rate limited) is no verdict, and the save still judges.
   const handleCheck = useHandleAvailability(api, { username, displayName, savedUsername: profile?.username });
-  const handleRefusal = (handleTakenAtSave === username ? 'That handle was just claimed. Try another one.' : null)
+  const handleRefusal = (handleRefusedAtSave?.handle === username ? handleRefusedAtSave.message : null)
     ?? (handleCheck.availability === 'taken' ? handleCheck.message ?? 'This creator name is unavailable.' : null);
   const usernameState = handleRefusal ? 'error' : handleCheck.availability;
   const usernameMessage = handleRefusal ?? (usernameState === 'available' ? 'This creator name is available.' : null);
@@ -359,12 +361,20 @@ function OnboardingFlow() {
         await startCreating();
       }
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        // Said under the handle alone, where the next handle typed replaces
-        // it. An alert here as well kept saying the handle was taken while the
-        // line called the next one available.
-        setHandleTakenAtSave(username);
-        void trackOnboardingEvent(api, 'username_conflict', { goal, step: 'identity' });
+      const refusal = readUsernameRejection(error);
+      if (refusal) {
+        // A refusal of the handle is said under the handle alone, where the
+        // next handle typed replaces it. An alert here as well kept saying the
+        // handle was taken while the line called the next one available.
+        const conflict = error instanceof ApiError && error.status === 409;
+        setHandleRefusedAtSave({
+          handle: username,
+          // "Just claimed" only for a handle the check had seen free.
+          message: conflict && handleCheck.availability === 'available'
+            ? 'That handle was just claimed. Try another one.'
+            : refusal,
+        });
+        if (conflict) void trackOnboardingEvent(api, 'username_conflict', { goal, step: 'identity' });
       } else {
         setMessage(error instanceof Error ? error.message : 'Could not save your creator name.');
       }
@@ -536,10 +546,13 @@ function OnboardingFlow() {
                 <AppText variant="bodySm" color="muted">This is the name people will see on your posts, profile, and recipes.</AppText>
               </View>
               <Card padding="lg" style={{ gap: 18 }}>
+                {/* Both fields hold still while a save runs: a handle typed
+                    then would leave the save's refusal of the last one unsaid. */}
                 <AppTextInput
                   label="Display name"
                   value={displayName}
                   onChangeText={setDisplayName}
+                  editable={!busy}
                   autoCapitalize="words"
                   autoComplete="name"
                   textContentType="name"
@@ -559,6 +572,7 @@ function OnboardingFlow() {
                       label="Unique handle"
                       value={username}
                       onChangeText={(value) => setUsername(normalizeUsernameInput(value))}
+                      editable={!busy}
                       autoCapitalize="none"
                       autoCorrect={false}
                       spellCheck={false}

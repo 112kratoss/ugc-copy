@@ -450,6 +450,71 @@ describe('checking the handle as it is typed', () => {
     act(() => tree.unmount());
   });
 
+  it('says the server’s words for a handle the save found taken before any check answered', async () => {
+    // Save pressed while the line still read "Checking availability…": the
+    // handle was never seen free, so it was not "just claimed".
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath');
+    await pressSave(tree);
+
+    expect(handleLine(tree)).toEqual({ text: 'That username is already taken.', color: 'danger' });
+    expect(alerts(tree)).toEqual([]);
+
+    act(() => tree.unmount());
+  });
+
+  it('says any refusal of the handle by the save under the handle, not in the alert', async () => {
+    // The live check failed (rate limited), so Save stayed on; the save then
+    // met a server rule this copy of the app does not know.
+    const reserved = new ApiError('That handle is reserved.', 400, {
+      error: 'That handle is reserved.',
+      fieldErrors: { username: 'That handle is reserved.' },
+    });
+    harness.api.validateProfile
+      .mockRejectedValueOnce(new ApiError('Too many requests. Try again shortly.', 429))
+      .mockRejectedValueOnce(reserved);
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath-studio');
+    await letTheCheckAnswer();
+    await pressSave(tree);
+
+    expect(handleLine(tree)).toEqual({ text: 'That handle is reserved.', color: 'danger' });
+    expect(alerts(tree)).toEqual([]);
+
+    await typeHandle(tree, 'sarath-makes');
+    await letTheCheckAnswer();
+    expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+    expect(alerts(tree)).toEqual([]);
+
+    act(() => tree.unmount());
+  });
+
+  it('holds both fields while a save is under way', async () => {
+    // A handle typed during the save would leave its refusal about the
+    // previous one unsaid.
+    let refuse!: (error: unknown) => void;
+    harness.api.updateProfile.mockReset().mockImplementation(() => new Promise((_resolve, reject) => { refuse = reject; }));
+    const tree = await openIdentityStep();
+    const field = (label: string) => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
+
+    await typeHandle(tree, 'sarath-makes');
+    await letTheCheckAnswer();
+    await pressSave(tree);
+    expect(field('Unique handle').props.editable).toBe(false);
+    expect(field('Display name').props.editable).toBe(false);
+
+    await act(async () => {
+      refuse(taken);
+      await settle();
+    });
+    expect(field('Unique handle').props.editable).toBe(true);
+    expect(handleLine(tree)).toEqual({ text: 'That handle was just claimed. Try another one.', color: 'danger' });
+
+    act(() => tree.unmount());
+  });
+
   it('keeps the alert for a save that failed for another reason', async () => {
     const offline = new ApiError('Network request failed. Please check your connection and try again.', 0, {
       url: 'https://magicbooklet.com/api/profile',
