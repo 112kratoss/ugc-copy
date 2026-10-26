@@ -107,8 +107,9 @@ export async function claimPublicIdentity(
  * A 409 that names no field refuses the session, not the fields (a guest
  * session linked to an account, an account being deleted), and is said in the
  * server's words: "check your connection" would send the person to retry what
- * cannot pass. The app's handler for it ends the session meanwhile, and the
- * list's sheet, drawn above the navigator, is still up after that.
+ * cannot pass. The app's handler for it ends the session meanwhile; the list's
+ * sheet then puts itself away, as its account is gone, and the handler's own
+ * notice says why.
  */
 export function readPublicIdentitySaveError(error: unknown): { errors: PublicIdentityErrors; message: string } {
   const username = readUsernameRejection(error);

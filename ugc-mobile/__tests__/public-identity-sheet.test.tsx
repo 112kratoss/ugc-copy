@@ -18,8 +18,14 @@ const placeholderProfile = vi.hoisted(() => ({
 const profileState = vi.hoisted(() => ({ profile: null as Record<string, unknown> | null }));
 const queryClientState = vi.hoisted(() => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }));
 const welcomeCreditsState = vi.hoisted(() => ({ invalidate: vi.fn(async () => undefined) }));
+const MAYA = vi.hoisted(() => ({
+  id: 'user-123',
+  email: 'maya.k@example.com',
+  is_anonymous: false as boolean,
+  user_metadata: { full_name: 'Maya Kapoor' } as Record<string, unknown>,
+}));
 const authState = vi.hoisted(() => ({
-  user: { id: 'user-123', email: 'maya.k@example.com', user_metadata: { full_name: 'Maya Kapoor' } as Record<string, unknown> },
+  user: { ...MAYA } as typeof MAYA | null,
   refreshProfile: vi.fn(async () => undefined),
   api: {
     getProfile: vi.fn(),
@@ -148,7 +154,7 @@ const taken = new ApiError('That username is already taken.', 409, {
 describe('the sheet a list opens to ask for a name and handle before a post goes public', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    authState.user.user_metadata = { full_name: 'Maya Kapoor' };
+    authState.user = { ...MAYA, user_metadata: { full_name: 'Maya Kapoor' } };
     profileState.profile = { ...placeholderProfile };
     authState.api.getProfile.mockReset();
     authState.api.getProfile.mockImplementation(async () => profileState.profile);
@@ -255,8 +261,9 @@ describe('the sheet a list opens to ask for a name and handle before a post goes
   });
 
   // The proxy's two 409s name no field: they refuse the session, whatever the
-  // handle, and the app's handler for each ends it. The sheet is drawn above
-  // the navigator, so it is still up after the handler has moved the app on.
+  // handle, and the app's handler for each ends it. The handler does not run
+  // here, so the sheet stays to show what it said; in the app the session's
+  // end then puts the sheet away (the account tests below).
   it.each([
     ['a guest session linked to an account', new SessionMergedError(
       'This guest session has been linked to an account. Sign in to continue.',
@@ -286,7 +293,7 @@ describe('the sheet a list opens to ask for a name and handle before a post goes
   });
 
   it('says what is missing at the press, and saves nothing', async () => {
-    authState.user.user_metadata = {};
+    authState.user = { ...MAYA, user_metadata: {} };
     const tree = mountHost();
     void ask();
     act(() => field(tree.root, 'Display name, required').props.onChangeText(''));
@@ -313,6 +320,88 @@ describe('the sheet a list opens to ask for a name and handle before a post goes
     await expect(first).resolves.toEqual({ status: 'cancelled' });
     await expect(second).resolves.toEqual({ status: 'cancelled' });
     expect(authState.api.updateProfile).not.toHaveBeenCalled();
+  });
+
+  // A 409 ACCOUNT_DELETING ends the session while the sheet is up (the
+  // account's deletion was asked for on another device), and the device goes
+  // on as a guest, for whom `useAuth` has no user. The answer would be saved
+  // to nobody's profile.
+  it('is answered "cancelled" when the account it asks for is signed out', async () => {
+    const tree = mountHost();
+    const answer = ask();
+
+    authState.user = null;
+    act(() => tree.update(<PublicIdentitySheetHost />));
+
+    await expect(answer).resolves.toEqual({ status: 'cancelled' });
+    expect(authState.api.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('is answered "cancelled" when another account is signed in meanwhile', async () => {
+    const tree = mountHost();
+    const answer = ask();
+
+    authState.user = { ...MAYA, id: 'user-456' };
+    act(() => tree.update(<PublicIdentitySheetHost />));
+
+    await expect(answer).resolves.toEqual({ status: 'cancelled' });
+  });
+
+  it('answers "cancelled" at once when asked after the session has ended', async () => {
+    authState.user = null;
+    const tree = mountHost();
+
+    await expect(ask()).resolves.toEqual({ status: 'cancelled' });
+    expect(collectText(tree.root)).not.toContain('Add your name and handle');
+  });
+
+  // The usual shape of the deletion: the sheet's own save is refused with the
+  // 409, and the teardown ends the session while that save is still out.
+  it('is put away once by a session that ends during its save, and the late refusal changes nothing', async () => {
+    let refuseSave: (error: unknown) => void = () => undefined;
+    authState.api.updateProfile.mockImplementation(() => new Promise((_resolve, reject) => {
+      refuseSave = reject;
+    }));
+    const tree = mountHost();
+    const answer = ask();
+    const settled = vi.fn();
+    void answer.then(settled);
+    act(() => field(tree.root, 'Handle, required').props.onChangeText('maya-k'));
+    await letTheCheckAnswer();
+    await act(async () => {
+      button(tree.root, 'Save and make public').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(authState.api.updateProfile).toHaveBeenCalledTimes(1);
+
+    authState.user = null;
+    act(() => tree.update(<PublicIdentitySheetHost />));
+    await expect(answer).resolves.toEqual({ status: 'cancelled' });
+
+    await act(async () => {
+      refuseSave(new AccountDeletingError(
+        'This account is being permanently deleted.',
+        { error: 'This account is being permanently deleted.', code: 'ACCOUNT_DELETING' },
+      ));
+      await Promise.resolve();
+    });
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(collectText(tree.root)).not.toContain('Add your name and handle');
+  });
+
+  it('stays up when the session is only refreshed for the same account', async () => {
+    const tree = mountHost();
+    const answer = ask();
+    const settled = vi.fn();
+    void answer.then(settled);
+
+    authState.user = { ...MAYA, user_metadata: { full_name: 'Maya Kapoor', refreshed: true } };
+    act(() => tree.update(<PublicIdentitySheetHost />));
+    await act(async () => undefined);
+
+    expect(settled).not.toHaveBeenCalled();
+    expect(button(tree.root, 'Save and make public')).toBeTruthy();
   });
 
   it('lets a second question wait on the one that is up, and saves once for both', async () => {

@@ -33,8 +33,12 @@ import { useAppTheme } from '@/lib/theme-context';
 import { useClaimPublicIdentity } from '@/lib/use-claim-public-identity';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 
-/** The question on screen, and everything waiting on its answer. */
-type Question = { id: number; settles: Array<(outcome: PublicIdentityOutcome) => void> };
+/** The question on screen, everything waiting on its answer, and whose profile it is for. */
+type Question = {
+  id: number;
+  settles: Array<(outcome: PublicIdentityOutcome) => void>;
+  accountId: string | null;
+};
 
 let nextQuestionId = 1;
 
@@ -55,6 +59,14 @@ export function PublicIdentitySheetHost() {
   // The question still waiting for its answer, cleared as it is answered, so a
   // press while the sheet leaves cannot answer it twice.
   const openRef = useRef<Question | null>(null);
+  // The signed-in account the sheet would save to; a guest has no profile to
+  // publish under (`useAuth` gives a guest no user at all).
+  const { user } = useAuth();
+  const accountId = user && !user.is_anonymous ? user.id : null;
+  const accountIdRef = useRef(accountId);
+  useEffect(() => {
+    accountIdRef.current = accountId;
+  }, [accountId]);
 
   useEffect(() => registerPublicIdentityPresenter((settle) => {
     // One question at a time, and one answer for everything waiting on it: a
@@ -65,10 +77,16 @@ export function PublicIdentitySheetHost() {
       open.settles.push(settle);
       return;
     }
+    // Asked once the session has already ended (the refusal came back after
+    // the teardown): nobody is signed in to save a name and handle for.
+    if (!accountIdRef.current) {
+      settle({ status: 'cancelled' });
+      return;
+    }
     // An overlay takes no window focus, so the keyboard of the page it opens
     // over would stay up over the sheet: it goes as the sheet is asked for.
     Keyboard.dismiss();
-    const next = { id: nextQuestionId++, settles: [settle] };
+    const next = { id: nextQuestionId++, settles: [settle], accountId: accountIdRef.current };
     openRef.current = next;
     setQuestion(next);
     setVisible(true);
@@ -81,6 +99,17 @@ export function PublicIdentitySheetHost() {
     setVisible(false);
     for (const settle of open.settles) settle(outcome);
   };
+
+  // The server can end the session while the sheet is up: a 409
+  // ACCOUNT_DELETING (the account's deletion was asked for on another device)
+  // leaves the device a guest on Home. The sheet lives above the navigator, so
+  // nothing else puts it away, and its answer would be saved to nobody's
+  // profile: the question goes, as if cancelled, and the post stays as it was.
+  // A refresh of the same account's session changes nothing here.
+  useEffect(() => {
+    const open = openRef.current;
+    if (open && open.accountId !== accountId) answer({ status: 'cancelled' });
+  }, [accountId]);
 
   if (!question) return null;
   return (
