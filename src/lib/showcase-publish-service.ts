@@ -40,6 +40,7 @@ import {
   type GenerationShowcaseCategory,
 } from '@/lib/generation-post-media';
 import {
+  TEMPLATE_RESULT_RECIPE_ERROR,
   getPostResourceBundleLengthError,
   stripDerivedGenerationReferenceItems,
   validatePostResourceBundleInput,
@@ -540,7 +541,7 @@ export async function publishGenerationToShowcaseForRoute({
     return {
       ok: false,
       status: 400,
-      body: { error: 'Template results can publish media and a caption, but cannot share the private recipe or input files.' },
+      body: { error: TEMPLATE_RESULT_RECIPE_ERROR },
     };
   }
 

@@ -3079,3 +3079,156 @@ describe('a title cut from the prompt of a post with a recipe', () => {
     }));
   });
 });
+
+// A template result shares its media and a caption only. The publish route has
+// always refused a recipe on one; an edit used to save it.
+describe('the post of a template result', () => {
+  const templateResultPost = {
+    id: 'post-1',
+    user_id: 'user-1',
+    generation_id: 'generation-1',
+    visibility: 'private',
+    title: 'Window still',
+    description: null,
+    prompt: null,
+    body: null,
+    category: 'image',
+    post_format: 'media',
+    source_tool: 'magicbooklet',
+    source_tool_slug: 'magicbooklet',
+    source_kind: 'magicbooklet',
+    archived_at: null,
+    showcase_asset_path: null,
+    output_url: 'generated_images/user-1/example.jpg',
+    review_status: 'visible',
+  };
+  // As start_template_generation stores a step's creation: no prompt, no settings.
+  const templateGeneration = {
+    id: 'generation-1',
+    user_id: 'user-1',
+    model: 'nano-banana-2',
+    category: 'image',
+    creation_mode: null,
+    prompt: null,
+    output_url: 'generated_images/user-1/example.jpg',
+    showcase_asset_path: null,
+    template_run_id: 'run-1',
+    template_run_step_id: 'step-1',
+  };
+
+  function createDependencies() {
+    return {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }: { patch: Record<string, unknown> }) => ({
+        postId: 'post-1',
+        visibility: (patch.visibility ?? 'private') as 'public' | 'private',
+        bundleId: 'bundle-1',
+        bundleStatus: 'draft' as const,
+      })),
+      replacePostSourceTools: vi.fn(async () => undefined),
+      replacePostMediaItems: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+      createGenerationShowcaseDerivative: vi.fn(async () => 'showcase/generation-1/example.abc123.jpg'),
+      ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+      removeGenerationShowcaseDerivative: vi.fn(async () => ({ removed: true, removedPaths: [], removedMediaRows: 0, error: null })),
+      ensureDurableGenerationMedia: vi.fn(async () => ({ outputUrl: 'generated_images/user-1/example.jpg', createdLocation: null })),
+    } satisfies PostUpdateDependencies;
+  }
+
+  async function save(body: Record<string, unknown>, generation: Record<string, unknown> | null = templateGeneration) {
+    const mock = createSupabaseMock({ post: templateResultPost, bundle: null, generation });
+    const dependencies = createDependencies();
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: mock.client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body,
+      dependencies,
+    });
+    return { result, dependencies };
+  }
+
+  it('refuses a recipe in the publish route’s words', async () => {
+    const { result, dependencies } = await save({ title: 'Window still', resourceBundle: composerRecipe() });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Template results can publish media and a caption, but cannot share the private recipe or input files.' },
+    });
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('refuses a paid one, and one whose creation names only its run step', async () => {
+    const paid = await save({ resourceBundle: { ...composerRecipe(), accessMode: 'paid', priceUsdCents: 500 } });
+    expect(paid.result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Template results can publish media and a caption, but cannot share the private recipe or input files.' },
+    });
+    expect(paid.dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+
+    const stepOnly = await save(
+      { resourceBundle: composerRecipe() },
+      { ...templateGeneration, template_run_id: null },
+    );
+    expect(stepOnly.result).toMatchObject({ ok: false, status: 400 });
+    expect(stepOnly.dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  // Both composers send `{ accessMode: 'none' }` with every save that has no recipe.
+  it('still saves its title, caption and visibility with no recipe', async () => {
+    const { result, dependencies } = await save({
+      title: 'Window still at dawn',
+      body: 'Made with a template.',
+      visibility: 'private',
+      resourceBundle: { accessMode: 'none' },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ title: 'Window still at dawn', body: 'Made with a template.' }),
+    }));
+  });
+
+  it('takes a recipe on a creation made without a template', async () => {
+    const { result } = await save(
+      { resourceBundle: composerRecipe() },
+      { ...templateGeneration, template_run_id: null, template_run_step_id: null },
+    );
+
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  // The link's foreign key unlinks a post when its creation is deleted, so no
+  // row means a read that went wrong (a narrower filter, a race), not a creation
+  // made without a template.
+  it('refuses the save when the creation’s row is missing', async () => {
+    const { result, dependencies } = await save({ resourceBundle: composerRecipe() }, null);
+
+    expect(result).toEqual({ ok: false, status: 500, body: { error: 'Failed to update post.' } });
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('refuses the save when the creation cannot be read', async () => {
+    const mock = createSupabaseMock({ post: templateResultPost, bundle: null, generation: templateGeneration });
+    const dependencies = {
+      ...createDependencies(),
+      isTemplateLinkedGeneration: vi.fn(async () => {
+        throw new Error('connection reset');
+      }),
+    };
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: mock.client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: { resourceBundle: composerRecipe() },
+      dependencies,
+    });
+
+    expect(result).toEqual({ ok: false, status: 500, body: { error: 'Failed to update post.' } });
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+});

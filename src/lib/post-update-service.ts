@@ -13,6 +13,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import {
+  TEMPLATE_RESULT_RECIPE_ERROR,
   getPostResourceBundleLengthError,
   isPostResourceBundleAccessMode,
   normalizePostResourceAttachments,
@@ -240,6 +241,7 @@ export type PostUpdateDependencies = {
   removeGenerationShowcaseDerivative?: typeof removeGenerationShowcaseDerivative;
   ensureDurableGenerationMedia?: typeof ensureDurableGenerationMedia;
   loadGenerationTitleSource?: typeof loadGenerationTitleSource;
+  isTemplateLinkedGeneration?: typeof isTemplateLinkedGeneration;
 };
 
 type ResolvedPostUpdateDependencies = Required<PostUpdateDependencies>;
@@ -305,6 +307,7 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
       dependencies?.removeGenerationShowcaseDerivative ?? removeGenerationShowcaseDerivative,
     ensureDurableGenerationMedia: dependencies?.ensureDurableGenerationMedia ?? ensureDurableGenerationMedia,
     loadGenerationTitleSource: dependencies?.loadGenerationTitleSource ?? loadGenerationTitleSource,
+    isTemplateLinkedGeneration: dependencies?.isTemplateLinkedGeneration ?? isTemplateLinkedGeneration,
   };
 }
 
@@ -495,6 +498,32 @@ async function loadGenerationTitleSource(
   return row
     ? { prompt: row.prompt ?? null, model: row.model ?? null, category: row.category ?? null, creationMode: row.creation_mode ?? null }
     : null;
+}
+
+/**
+ * Whether a post's creation came out of a template run, as its result or one of
+ * its steps. Read by the post's link, as the title source is.
+ */
+async function isTemplateLinkedGeneration(
+  adminSupabase: SupabaseClient,
+  generationId: string,
+): Promise<boolean> {
+  const { data, error } = await adminSupabase
+    .from('generations')
+    .select('template_run_id, template_run_step_id')
+    .eq('id', generationId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+  // While a post links its creation the row exists (deleting it unlinks the
+  // post), so a missing row refuses the save rather than read as no template.
+  if (!data) {
+    throw new Error('The post’s creation could not be found.');
+  }
+  const row = data as { template_run_id?: string | null; template_run_step_id?: string | null };
+  return Boolean(row.template_run_id || row.template_run_step_id);
 }
 
 async function loadOwnedPost(
@@ -1201,6 +1230,18 @@ export async function updateOwnerPostForRoute({
       ? stripGenerationDerivedFields(requestBody)
       : requestBody;
     const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(body, 'resourceBundle');
+    // A template result shares its media and a caption only. The publish route
+    // refuses a recipe on one, so an edit does too: any access mode but none.
+    // A failed read refuses the save rather than let the recipe through.
+    const requestedAccessMode = (body.resourceBundle as { accessMode?: unknown } | null | undefined)?.accessMode;
+    if (
+      post.generation_id
+      && requestedAccessMode !== undefined
+      && requestedAccessMode !== 'none'
+      && await resolvedDependencies.isTemplateLinkedGeneration(adminSupabase, post.generation_id)
+    ) {
+      return { ok: false, status: 400, body: { error: TEMPLATE_RESULT_RECIPE_ERROR } };
+    }
 
     const {
       items: submittedMediaItems,

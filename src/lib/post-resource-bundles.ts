@@ -762,6 +762,13 @@ export function isDerivedGenerationReferenceResourceItem(
 }
 
 /**
+ * A template result shares its media and a caption only; its recipe and inputs
+ * stay the template's. Publishing and editing refuse a recipe on one in these words.
+ */
+export const TEMPLATE_RESULT_RECIPE_ERROR =
+  'Template results can publish media and a caption, but cannot share the private recipe or input files.';
+
+/**
  * Accepts the raw client payload, so it can run before bundle validation —
  * which is where the derived items would otherwise be rejected.
  */
