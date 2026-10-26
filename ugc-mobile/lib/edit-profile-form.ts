@@ -348,6 +348,73 @@ export function isProfileFieldVerdict(error: unknown): error is ApiError {
   return error instanceof ApiError && (error.status === 400 || error.status === 409);
 }
 
+/** A save the form refused itself, before any request: `validateProfileForm`'s verdicts. */
+export class EditProfileValidationError extends Error {
+  readonly fieldErrors: EditProfileFieldErrors;
+
+  constructor(fieldErrors: EditProfileFieldErrors) {
+    super('Fix the highlighted profile fields.');
+    this.name = 'EditProfileValidationError';
+    this.fieldErrors = fieldErrors;
+  }
+}
+
+/** Edit profile's fields from the top of the form down: the two photos, then the text fields as drawn. */
+const EDIT_PROFILE_FIELDS_DOWN_THE_FORM: readonly (keyof EditProfileFieldErrors)[] = [
+  'coverUrl',
+  'avatarUrl',
+  'displayName',
+  'username',
+  'bio',
+  'websiteUrl',
+  'location',
+  'twitterHandle',
+  'instagramHandle',
+  'tiktokHandle',
+];
+
+export interface EditProfileSaveRefusal {
+  /** The verdicts on fields the form draws, each said under its own field. */
+  fieldErrors: EditProfileFieldErrors;
+  /** The first refused field down the form, to bring into view; null when the refusal names none. */
+  firstField: keyof EditProfileFieldErrors | null;
+  /** For the block above the form: only a refusal that names no field the form draws. */
+  message: string | null;
+}
+
+/**
+ * Where a failed save is said. A verdict on a field goes under that field and
+ * nowhere else: the block above the form used to repeat it and kept saying a
+ * handle was taken after the field had moved on to one the live check called
+ * available. The block keeps what no field can hold, such as a request that
+ * failed offline or an upload that did not finish.
+ */
+export function readProfileSaveRefusal(error: unknown): EditProfileSaveRefusal {
+  let verdicts: Partial<Record<string, unknown>> = {};
+  if (error instanceof EditProfileValidationError) {
+    verdicts = error.fieldErrors;
+  } else if (error instanceof ApiError) {
+    // The field errors alone, not `readUsernameRejection`'s reading of every
+    // 409 as the handle's: both server paths that refuse a handle name it, and
+    // the 409s that do not are about something else (an account being
+    // deleted, a guest session merged), which the block says.
+    const details = error.details as { fieldErrors?: Partial<Record<string, unknown>> } | undefined;
+    verdicts = details?.fieldErrors ?? {};
+  }
+
+  const fieldErrors: EditProfileFieldErrors = {};
+  for (const field of EDIT_PROFILE_FIELDS_DOWN_THE_FORM) {
+    const verdict = verdicts[field];
+    if (typeof verdict === 'string' && verdict) fieldErrors[field] = verdict;
+  }
+  const firstField = EDIT_PROFILE_FIELDS_DOWN_THE_FORM.find((field) => fieldErrors[field]) ?? null;
+  return {
+    fieldErrors,
+    firstField,
+    message: firstField ? null : error instanceof Error ? error.message : 'Profile could not be saved.',
+  };
+}
+
 /**
  * How a profile photo is cropped as it is picked: the system crop's ratio, or
  * null to take the photo whole. The avatar is cropped square everywhere. On

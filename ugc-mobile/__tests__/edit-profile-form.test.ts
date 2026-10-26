@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import reservedHandlesContract from '../../contracts/reserved-handles-v1.json';
 
-import { ApiError } from '../lib/api-client';
+import { AccountDeletingError, ApiError, SessionMergedError } from '../lib/api-client';
 import {
   EMPTY_EDIT_PROFILE_FORM,
+  EditProfileValidationError,
   PROFILE_PLACEHOLDER_USERNAME_ERROR,
   RESERVED_PROFILE_USERNAMES,
   RESERVED_PROFILE_USERNAME_ERROR,
@@ -16,6 +17,7 @@ import {
   isProfileFieldVerdict,
   profilePhotoCropAspect,
   readLocalUsernameRejection,
+  readProfileSaveRefusal,
   shouldCheckUsernameAvailability,
   validateProfileField,
   validateProfileForm,
@@ -260,6 +262,76 @@ describe('links and location', () => {
     expect(isProfileFieldVerdict(new ApiError('That username is already taken.', 409))).toBe(true);
     expect(isProfileFieldVerdict(new ApiError('Too many requests', 429))).toBe(false);
     expect(isProfileFieldVerdict(new Error('Network request failed'))).toBe(false);
+  });
+});
+
+describe('a refused save', () => {
+  it('puts a verdict on a field under that field, with nothing for the block', () => {
+    expect(readProfileSaveRefusal(new ApiError('That username is already taken.', 409, {
+      fieldErrors: { username: 'That username is already taken.' },
+    }))).toEqual({
+      fieldErrors: { username: 'That username is already taken.' },
+      firstField: 'username',
+      message: null,
+    });
+  });
+
+  it('leaves a 409 that names no field to the block', () => {
+    // Both server paths that refuse a handle send `fieldErrors.username`. A 409
+    // without it is about something else, and is not drawn under the handle.
+    expect(readProfileSaveRefusal(new ApiError('Uploads are disabled because this account is being deleted.', 409, {
+      error: 'Uploads are disabled because this account is being deleted.',
+      code: 'ACCOUNT_DELETION_IN_PROGRESS',
+    }))).toEqual({
+      fieldErrors: {},
+      firstField: null,
+      message: 'Uploads are disabled because this account is being deleted.',
+    });
+    expect(readProfileSaveRefusal(new SessionMergedError('This guest session is now part of your account.'))).toMatchObject({
+      fieldErrors: {},
+      firstField: null,
+    });
+    expect(readProfileSaveRefusal(new AccountDeletingError('This account is being deleted.'))).toMatchObject({
+      fieldErrors: {},
+      message: 'This account is being deleted.',
+    });
+  });
+
+  it('names the first refused field down the form, whatever order the server lists them in', () => {
+    const refusal = readProfileSaveRefusal(new ApiError('Please fix the highlighted fields.', 400, {
+      fieldErrors: { tiktokHandle: 'Enter your TikTok username or profile link.', websiteUrl: 'Enter a website.', bio: 'Too long.' },
+    }));
+    expect(refusal.firstField).toBe('bio');
+    expect(Object.keys(refusal.fieldErrors).sort()).toEqual(['bio', 'tiktokHandle', 'websiteUrl']);
+    expect(refusal.message).toBeNull();
+  });
+
+  it('heads the form with the photos', () => {
+    expect(readProfileSaveRefusal(new ApiError('Please fix the highlighted fields.', 400, {
+      fieldErrors: { displayName: 'Add a display name.', avatarUrl: 'Upload the display photo again.' },
+    })).firstField).toBe('avatarUrl');
+  });
+
+  it('keeps the form’s own refusal under its fields', () => {
+    const fieldErrors = validateProfileForm({ username: 'ab', displayName: '', bio: '' });
+    expect(readProfileSaveRefusal(new EditProfileValidationError(fieldErrors))).toEqual({
+      fieldErrors,
+      firstField: 'displayName',
+      message: null,
+    });
+  });
+
+  it('gives the block a refusal that names no field the form draws', () => {
+    expect(readProfileSaveRefusal(new Error('Network request failed'))).toEqual({
+      fieldErrors: {},
+      firstField: null,
+      message: 'Network request failed',
+    });
+    // A verdict on a field the form does not draw would be said nowhere.
+    expect(readProfileSaveRefusal(new ApiError('Please fix the highlighted fields.', 400, {
+      fieldErrors: { email: 'Use another email.' },
+    }))).toMatchObject({ fieldErrors: {}, firstField: null, message: 'Please fix the highlighted fields.' });
+    expect(readProfileSaveRefusal('refused').message).toBe('Profile could not be saved.');
   });
 });
 

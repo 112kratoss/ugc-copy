@@ -918,6 +918,7 @@ export function AppTextInput({
   hint,
   hintTone = 'muted',
   inputRef,
+  containerRef,
   onBlur,
   onClear,
   onFocus,
@@ -948,6 +949,8 @@ export function AppTextInput({
   onClear?: () => void;
   /** Lets a caller move focus to this field, e.g. from the previous field's Return key. */
   inputRef?: React.RefObject<TextInput | null>;
+  /** The whole field, label to message: what a caller measures to bring the field into view. */
+  containerRef?: React.Ref<View>;
 }) {
   const theme = useAppTheme();
   const generatedId = useId();
@@ -959,7 +962,7 @@ export function AppTextInput({
   const messageColor = error ? 'danger' : hintTone;
 
   return (
-    <View style={{ gap: appTheme.spacing.compact }}>
+    <View ref={containerRef} style={{ gap: appTheme.spacing.compact }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.compact }}>
         <AppText
           nativeID={labelId}

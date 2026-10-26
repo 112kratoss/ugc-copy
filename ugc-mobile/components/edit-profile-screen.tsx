@@ -11,7 +11,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { AppText, AppTextInput, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
-import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { showConfirmDialog } from '@/lib/dialog';
 import {
@@ -26,6 +25,7 @@ import {
   type EditProfileField,
   type EditProfileFieldErrors,
   type EditProfileFormValues,
+  EditProfileValidationError,
   buildProfileUpdateBody,
   editProfileFormFromProfile,
   hasEditProfileChanges,
@@ -33,12 +33,14 @@ import {
   normalizeUsername,
   normalizeUsernameInput,
   profilePhotoCropAspect,
+  readProfileSaveRefusal,
   usernameHint,
   validateProfileField,
   validateProfileForm,
 } from '@/lib/edit-profile-form';
 import { getEditProfileScrollPadding } from '@/lib/edit-profile-layout';
 import { uploadProfileImage } from '@/lib/media';
+import { useReducedMotion } from '@/lib/motion';
 import { getProfileHandle, getProfileInitials, getProfileName } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { CloseGlyph } from '@/lib/platform-glyphs';
@@ -56,6 +58,11 @@ const SOCIAL_FIELDS = [
   { field: 'instagramHandle', label: 'Instagram handle' },
   { field: 'tiktokHandle', label: 'TikTok handle' },
 ] as const;
+
+/** The space above the form's first block, and where a refused field is brought to. */
+const FORM_TOP_PADDING = 16;
+
+type FormScrollView = React.ComponentRef<typeof ScrollView>;
 
 export function EditProfileScreen() {
   const theme = useAppTheme();
@@ -94,6 +101,16 @@ export function EditProfileScreen() {
   const instagramRef = useRef<TextInput | null>(null);
   const tiktokRef = useRef<TextInput | null>(null);
   const socialRefs = { twitterHandle: twitterRef, instagramHandle: instagramRef, tiktokHandle: tiktokRef };
+  const scrollRef = useRef<FormScrollView | null>(null);
+  // The scroll view's content, and each text field's outer view in it: the
+  // field is measured against the content to bring it into view.
+  const formContentRef = useRef<View | null>(null);
+  const fieldAnchors = useRef<Partial<Record<keyof EditProfileFieldErrors, View>>>({});
+  // What the last refused save brings into view once it is drawn: its first
+  // field, or the top of the form for the block.
+  const pendingReveal = useRef<keyof EditProfileFieldErrors | 'top' | null>(null);
+  const [refusalCount, setRefusalCount] = useState(0);
+  const reducedMotion = useReducedMotion();
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
@@ -160,13 +177,13 @@ export function EditProfileScreen() {
     },
     onError: async (error) => {
       setProgressMessage(null);
-      if (error instanceof ApiError) {
-        const details = error.details as { fieldErrors?: EditProfileFieldErrors } | undefined;
-        if (details?.fieldErrors) {
-          setFieldErrors((current) => ({ ...current, ...details.fieldErrors }));
-        }
-      }
-      setMessage(error instanceof Error ? error.message : 'Profile could not be saved.');
+      // A verdict on a field is said under that field alone, and the block
+      // only says what no field can hold, so the two never disagree.
+      const refusal = readProfileSaveRefusal(error);
+      setFieldErrors((current) => ({ ...current, ...refusal.fieldErrors }));
+      setMessage(refusal.message);
+      pendingReveal.current = refusal.firstField ?? 'top';
+      setRefusalCount((count) => count + 1);
       haptic.error();
     },
     onSettled: () => {
@@ -204,6 +221,33 @@ export function EditProfileScreen() {
     setFieldErrors({});
     setMessage(null);
   }, [hasProfileChanges, initialForm, isSaving, profile]);
+
+  /**
+   * A refused save, brought into view once it is drawn. Save is in the header
+   * and the form scrolls under it, so the refused field, or the block at the
+   * top, could be anywhere: pressed from the links at the foot of the form, a
+   * refusal of the handle used to change nothing on screen. The field's top
+   * comes to where the form's first block rests, with its verdict under it.
+   */
+  useEffect(() => {
+    const target = pendingReveal.current;
+    const scrollView = scrollRef.current;
+    if (!target || !scrollView) return;
+    pendingReveal.current = null;
+    const animated = !reducedMotion;
+    const anchor = target === 'top' ? undefined : fieldAnchors.current[target];
+    const content = formContentRef.current;
+    // The block and the two photos head the form.
+    if (!anchor || !content) {
+      scrollView.scrollTo({ y: 0, animated });
+      return;
+    }
+    anchor.measureLayout(
+      content,
+      (_x, y) => scrollView.scrollTo({ y: Math.max(0, y - FORM_TOP_PADDING), animated }),
+      () => scrollView.scrollTo({ y: 0, animated }),
+    );
+  }, [reducedMotion, refusalCount]);
 
   /**
    * Modality: "if closing a modal could result in loss of user-generated
@@ -293,7 +337,7 @@ export function EditProfileScreen() {
     const validationErrors = validateProfileForm(form, { savedUsername: profile.username });
     setFieldErrors(validationErrors);
     if (Object.keys(validationErrors).length > 0) {
-      throw new Error('Fix the highlighted profile fields.');
+      throw new EditProfileValidationError(validationErrors);
     }
 
     if (avatarAsset || coverAsset) {
@@ -349,8 +393,19 @@ export function EditProfileScreen() {
   function validateOnBlur(field: EditProfileField) {
     setFieldErrors((current) => ({
       ...current,
-      [field]: validateProfileField(field, form[field], { savedUsername: profile?.username }),
+      // An error already on the field speaks of the value as it stands, since
+      // every edit clears it. So a blur that finds nothing wrong leaves it: a
+      // save's refusal of a handle stays until the handle is changed.
+      [field]: validateProfileField(field, form[field], { savedUsername: profile?.username }) ?? current[field],
     }));
+  }
+
+  /** Keeps a text field's outer view by name, to bring the field into view when a save refuses it. */
+  function anchorField(field: EditProfileField) {
+    return (node: View | null) => {
+      if (node) fieldAnchors.current[field] = node;
+      else delete fieldAnchors.current[field];
+    };
   }
 
   /**
@@ -399,7 +454,13 @@ export function EditProfileScreen() {
   const username = usernameHint({ availability: usernameAvailability, message: usernameMessage });
 
   return (
-    <EditProfileShell header={header} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
+    <EditProfileShell
+      header={header}
+      scrollRef={scrollRef}
+      contentRef={formContentRef}
+      scrollBottomPadding={scrollBottomPadding}
+      horizontalPadding={horizontalPadding}
+    >
       {profileQuery.isLoading ? (
         <View style={{ minHeight: 360, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color={theme.colors.primary} />
@@ -513,6 +574,7 @@ export function EditProfileScreen() {
               onBlur={() => validateOnBlur('displayName')}
               onClear={() => editField('displayName', '')}
               error={fieldErrors.displayName}
+              containerRef={anchorField('displayName')}
               placeholder="LunaDreams"
               maxLength={PROFILE_DISPLAY_NAME_MAX_LENGTH}
               autoCapitalize="words"
@@ -533,6 +595,7 @@ export function EditProfileScreen() {
               error={fieldErrors.username}
               hint={fieldErrors.username ? undefined : username.text}
               hintTone={username.tone}
+              containerRef={anchorField('username')}
               placeholder="lunadreams"
               maxLength={PROFILE_USERNAME_MAX_LENGTH}
               autoCapitalize="none"
@@ -550,6 +613,7 @@ export function EditProfileScreen() {
               onChangeText={(bio) => editField('bio', bio)}
               onBlur={() => validateOnBlur('bio')}
               error={fieldErrors.bio}
+              containerRef={anchorField('bio')}
               placeholder="Fantasy worlds, motion stories, and AI art experiments."
               multiline
               maxLength={PROFILE_BIO_MAX_LENGTH}
@@ -575,6 +639,7 @@ export function EditProfileScreen() {
               onBlur={() => validateOnBlur('websiteUrl')}
               onClear={() => editField('websiteUrl', '')}
               error={fieldErrors.websiteUrl}
+              containerRef={anchorField('websiteUrl')}
               placeholder="https://your-site.com"
               maxLength={PROFILE_WEBSITE_MAX_LENGTH}
               keyboardType="url"
@@ -595,6 +660,7 @@ export function EditProfileScreen() {
               onBlur={() => validateOnBlur('location')}
               onClear={() => editField('location', '')}
               error={fieldErrors.location}
+              containerRef={anchorField('location')}
               placeholder="City, country"
               maxLength={PROFILE_LOCATION_MAX_LENGTH}
               autoCapitalize="words"
@@ -614,6 +680,7 @@ export function EditProfileScreen() {
                   onBlur={() => validateOnBlur(field)}
                   onClear={() => editField(field, '')}
                   error={fieldErrors[field]}
+                  containerRef={anchorField(field)}
                   // A handle or the profile link, as the server takes either (D4).
                   hint="Username or profile link"
                   placeholder="username"
@@ -637,11 +704,15 @@ export function EditProfileScreen() {
 function EditProfileShell({
   children,
   header,
+  scrollRef,
+  contentRef,
   scrollBottomPadding,
   horizontalPadding,
 }: {
   children: React.ReactNode;
   header: React.ReactNode;
+  scrollRef?: React.Ref<FormScrollView>;
+  contentRef?: React.RefObject<View | null>;
   scrollBottomPadding: number;
   horizontalPadding: number;
 }) {
@@ -651,6 +722,9 @@ function EditProfileShell({
       {header}
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
+        ref={scrollRef}
+        // React Native declares this ref without React 19's nullable `current`.
+        innerViewRef={contentRef as React.RefObject<View> | undefined}
         contentInsetAdjustmentBehavior="never"
         automaticallyAdjustKeyboardInsets
         keyboardDismissMode="on-drag"
@@ -658,7 +732,7 @@ function EditProfileShell({
         showsVerticalScrollIndicator={false}
         style={{ flex: 1 }}
         contentContainerStyle={{
-          paddingTop: 16,
+          paddingTop: FORM_TOP_PADDING,
           paddingHorizontal: horizontalPadding,
           paddingBottom: scrollBottomPadding,
           gap: 18,
