@@ -14,7 +14,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(28);
+select plan(30);
 
 -- ─── Surface ─────────────────────────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ insert into public.generations (
    'showcase/e7e00000-0000-4000-8000-000000000008/eight.abc123.mp4');
 
 -- Posts 1-6 and 9 take the edit route; 7 and 8 are creations' posts and take
--- the publish route.
+-- the publish route; 10 is upserted by its id.
 insert into public.posts (id, user_id, visibility, category, source_kind, post_format, title, body)
 values
   ('e7b00000-0000-4000-8000-000000000001'::uuid, 'e7a00000-0000-4000-8000-0000000000a1'::uuid,
@@ -81,7 +81,9 @@ values
   ('e7b00000-0000-4000-8000-000000000006'::uuid, 'e7a00000-0000-4000-8000-0000000000a1'::uuid,
    'private', 'text', 'external', 'text', 'A title to clear', 'A body long enough to read as real public content.'),
   ('e7b00000-0000-4000-8000-000000000009'::uuid, 'e7a00000-0000-4000-8000-0000000000a1'::uuid,
-   'private', 'text', 'external', 'text', 'A post saved with its media', 'A body long enough to read as real public content.');
+   'private', 'text', 'external', 'text', 'A post saved with its media', 'A body long enough to read as real public content.'),
+  ('e7b00000-0000-4000-8000-00000000000a'::uuid, 'e7a00000-0000-4000-8000-0000000000a1'::uuid,
+   'private', 'text', 'external', 'text', 'A post named by its id', 'A body long enough to read as real public content.');
 
 insert into public.posts (
   id, user_id, visibility, category, source_kind, post_format, title, generation_id, showcase_asset_path, output_url
@@ -135,6 +137,10 @@ values
    'A drone shot over a glacier, blue crevasses, low sun, slow forward motion.', 500),
   ('e7c00000-0000-4000-8000-000000000009'::uuid, 'e7b00000-0000-4000-8000-000000000009'::uuid,
    'e7a00000-0000-4000-8000-0000000000a1'::uuid, 'free', 'draft', 'A post saved with its media',
+   'Anyone can take this recipe.', 'A preview long enough to satisfy the marketplace quality gate.',
+   'A free prompt that is long enough to count as a real resource.', 0),
+  ('e7c00000-0000-4000-8000-00000000000a'::uuid, 'e7b00000-0000-4000-8000-00000000000a'::uuid,
+   'e7a00000-0000-4000-8000-0000000000a1'::uuid, 'free', 'draft', 'A post named by its id',
    'Anyone can take this recipe.', 'A preview long enough to satisfy the marketplace quality gate.',
    'A free prompt that is long enough to count as a real resource.', 0);
 
@@ -342,7 +348,8 @@ select is(
 
 -- ─── Publish route: Studio unpublishes a creation's post ─────────────────────
 -- The RPC's arguments as showcase-publish-service.ts builds them for a
--- visibility change: the post as stored, retitled, and no recipe.
+-- visibility change to private: the post retitled, its public copy dropped,
+-- found by its creation, and no recipe.
 
 create function pg_temp.unpublish_retitled(p_generation uuid)
 returns uuid
@@ -352,7 +359,7 @@ as $$
   from public.publish_generation_post_with_resource_bundle(
     p_generation,
     'e7a00000-0000-4000-8000-0000000000a1'::uuid,
-    jsonb_build_object('is_public', false, 'title', 'Video recipe'),
+    jsonb_build_object('is_public', false, 'showcase_asset_path', null, 'title', 'Video recipe'),
     jsonb_build_object(
       'user_id', 'e7a00000-0000-4000-8000-0000000000a1'::uuid,
       'visibility', 'private',
@@ -361,7 +368,7 @@ as $$
       'post_format', 'media',
       'source_kind', 'magicbooklet',
       'generation_id', p_generation,
-      'showcase_asset_path', (select showcase_asset_path from public.posts where generation_id = p_generation),
+      'showcase_asset_path', null,
       'output_url', (select output_url from public.generations where id = p_generation)
     ),
     null,
@@ -386,6 +393,33 @@ select is(
   (select title from public.post_resource_bundles where id = 'e7c00000-0000-4000-8000-000000000008'::uuid),
   'A drone shot over a glacier',
   'the publish route leaves a sold recipe''s title as it was bought'
+);
+
+-- ─── The upsert, with the post named by its id ───────────────────────────────
+-- The publish route names the post by its creation; the upsert also takes an
+-- id, and finds the post the same way for the title it had before the save.
+
+select lives_ok(
+  $$ select * from public.upsert_post_with_resource_bundle(
+       jsonb_build_object(
+         'id', 'e7b00000-0000-4000-8000-00000000000a'::uuid,
+         'user_id', 'e7a00000-0000-4000-8000-0000000000a1'::uuid,
+         'visibility', 'private',
+         'category', 'text',
+         'title', 'A post named by its id, retitled',
+         'body', 'A body long enough to read as real public content.',
+         'post_format', 'text',
+         'source_kind', 'external'
+       ),
+       null,
+       false
+     ) $$,
+  'an upsert that names the post by its id and sends no recipe saves'
+);
+select is(
+  (select title from public.post_resource_bundles where id = 'e7c00000-0000-4000-8000-00000000000a'::uuid),
+  'A post named by its id, retitled',
+  'the upsert takes the recipe''s title along for a post named by its id too'
 );
 
 select finish();
