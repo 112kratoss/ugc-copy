@@ -394,10 +394,12 @@ export function readProfileSaveRefusal(error: unknown): EditProfileSaveRefusal {
   if (error instanceof EditProfileValidationError) {
     verdicts = error.fieldErrors;
   } else if (error instanceof ApiError) {
+    // The field errors alone, not `readUsernameRejection`'s reading of every
+    // 409 as the handle's: both server paths that refuse a handle name it, and
+    // the 409s that do not are about something else (an account being
+    // deleted, a guest session merged), which the block says.
     const details = error.details as { fieldErrors?: Partial<Record<string, unknown>> } | undefined;
-    // A 409 can arrive without field errors; it is still about the handle.
-    const username = readUsernameRejection(error);
-    verdicts = { ...details?.fieldErrors, ...(username ? { username } : {}) };
+    verdicts = details?.fieldErrors ?? {};
   }
 
   const fieldErrors: EditProfileFieldErrors = {};

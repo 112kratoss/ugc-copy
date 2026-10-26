@@ -551,6 +551,41 @@ describe('Edit profile: a refused save', () => {
     expect(harness.scrollView.scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: true });
   });
 
+  it('says an upload refused for another reason in the block, not under the handle', async () => {
+    // A 409 with no field errors: the account is being deleted, not the handle taken.
+    harness.uploadProfileImage.mockRejectedValue(new ApiError('Uploads are disabled because this account is being deleted.', 409, {
+      error: 'Uploads are disabled because this account is being deleted.',
+      code: 'ACCOUNT_DELETION_IN_PROGRESS',
+    }));
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await press(tree, 'Change display photo');
+    await press(tree, 'Save profile');
+
+    expect(input(tree, 'Username').props.error).toBeUndefined();
+    expect(statusBlocks(tree)).toEqual([
+      { title: 'Profile not saved', body: 'Uploads are disabled because this account is being deleted.' },
+    ]);
+    expect(harness.scrollView.scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: true });
+  });
+
+  it('brings a refused photo into view at the top of the form', async () => {
+    harness.api.updateProfile.mockRejectedValue(new ApiError('Please fix the highlighted fields.', 400, {
+      fieldErrors: { avatarUrl: 'Upload the display photo again.' },
+    }));
+    harness.fieldTops = { Username: 412 };
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await press(tree, 'Change display photo');
+    await press(tree, 'Save profile');
+
+    expect(tree.root.findAll((node) => String(node.type) === 'app-text' && node.props.children === 'Upload the display photo again.'))
+      .toHaveLength(1);
+    expect(statusBlocks(tree)).toEqual([]);
+    // The photos head the form, and their verdicts sit under the preview there.
+    expect(harness.scrollView.scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: true });
+  });
+
   it('jumps to the refusal rather than scrolling when motion is reduced', async () => {
     harness.api.updateProfile.mockRejectedValue(takenAtSave());
     harness.fieldTops = { Username: 412 };

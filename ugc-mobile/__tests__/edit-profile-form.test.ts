@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import reservedHandlesContract from '../../contracts/reserved-handles-v1.json';
 
-import { ApiError } from '../lib/api-client';
+import { AccountDeletingError, ApiError, SessionMergedError } from '../lib/api-client';
 import {
   EMPTY_EDIT_PROFILE_FORM,
   EditProfileValidationError,
@@ -276,10 +276,24 @@ describe('a refused save', () => {
     });
   });
 
-  it('reads a 409 without field errors as a verdict on the handle', () => {
-    expect(readProfileSaveRefusal(new ApiError('That username is already taken.', 409))).toMatchObject({
-      fieldErrors: { username: 'That username is already taken.' },
-      message: null,
+  it('leaves a 409 that names no field to the block', () => {
+    // Both server paths that refuse a handle send `fieldErrors.username`. A 409
+    // without it is about something else, and is not drawn under the handle.
+    expect(readProfileSaveRefusal(new ApiError('Uploads are disabled because this account is being deleted.', 409, {
+      error: 'Uploads are disabled because this account is being deleted.',
+      code: 'ACCOUNT_DELETION_IN_PROGRESS',
+    }))).toEqual({
+      fieldErrors: {},
+      firstField: null,
+      message: 'Uploads are disabled because this account is being deleted.',
+    });
+    expect(readProfileSaveRefusal(new SessionMergedError('This guest session is now part of your account.'))).toMatchObject({
+      fieldErrors: {},
+      firstField: null,
+    });
+    expect(readProfileSaveRefusal(new AccountDeletingError('This account is being deleted.'))).toMatchObject({
+      fieldErrors: {},
+      message: 'This account is being deleted.',
     });
   });
 
