@@ -295,6 +295,9 @@ describe('Anonymous home cacheability', () => {
     // Part of the prerender, so the cards are in the first HTML; the signed-out
     // page asks for no viewer, which keeps it shared and cacheable.
     expect(loadHomeShelfMock).toHaveBeenCalledWith(undefined);
+    // One shelf, no placeholder beside it: a fallback on this boundary would be
+    // written into the prerendered HTML next to the resolved shelf.
+    expect(container.querySelectorAll('.home-shelf')).toHaveLength(1);
     const cards = [...container.querySelectorAll('.home-shelf-card[href^="/create-"]')];
     expect(cards.map((card) => card.getAttribute('href'))).toEqual(SHELF.map((item) => (
       item.kind === 'creation' ? item.makeHref : null

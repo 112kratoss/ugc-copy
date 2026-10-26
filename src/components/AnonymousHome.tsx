@@ -4,7 +4,7 @@ import { Suspense, use } from 'react';
 import { Text } from '@/components/DesignSystem';
 import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
 import HomeExperience from '@/components/HomeExperience';
-import HomeShelf, { HomeShelfPlaceholder } from '@/components/HomeShelf';
+import HomeShelf from '@/components/HomeShelf';
 import { JsonLd } from '@/components/JsonLd';
 import QuickStartsCard from '@/components/QuickStartsCard';
 import SignInWorkspaceCard from '@/components/SignInWorkspaceCard';
@@ -12,8 +12,7 @@ import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
 import type { HomeWhatsNewModel } from '@/lib/home-dashboard';
 import { loadHomeFeed, loadHomeWhatsNewModels } from '@/lib/home-dashboard-service';
-import { HOME_SHELF_MIN_CREATIONS, type HomeShelfItem } from '@/lib/home-shelf';
-import { HOME_SHELF_PINS } from '@/lib/home-shelf-lineup';
+import type { HomeShelfItem } from '@/lib/home-shelf';
 import { loadHomeShelf } from '@/lib/home-shelf-server';
 import { getFeedChip } from '@/lib/post-feed-chips';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
@@ -118,7 +117,13 @@ function AnonymousHero({ shelf }: { shelf: Promise<HomeShelfItem[]> }) {
           {siteConfig.tagline}
         </Text>
       </div>
-      <Suspense fallback={HOME_SHELF_PINS.length >= HOME_SHELF_MIN_CREATIONS ? <HomeShelfPlaceholder /> : null}>
+      {/*
+        No fallback here, unlike the signed-in page: this page is prerendered,
+        and React writes a boundary that has a fallback out of line, so the HTML
+        would carry the placeholder and the resolved shelf both and then swap
+        them. Only a stale session on /home renders it on request.
+      */}
+      <Suspense fallback={null}>
         <AnonymousShelfSection data={shelf} />
       </Suspense>
     </div>
