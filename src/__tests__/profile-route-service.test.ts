@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   getProfileForRoute,
   loadOwnerProfileTotals,
@@ -556,6 +557,10 @@ describe('profile route service', () => {
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
+  // The app reads a 409 as the handle's only when it names the field: the
+  // proxy's SESSION_MERGED and ACCOUNT_DELETING 409s name none.
+  const usernameTaken = mobileApiContract.profileUsernameTaken;
+
   it('returns stable username conflict errors from profile upserts', async () => {
     const client = createClient({
       upsertError: { code: '23505', message: 'duplicate key' },
@@ -572,10 +577,34 @@ describe('profile route service', () => {
       invalidateFeedCache,
     })).resolves.toEqual({
       ok: false,
-      status: 409,
-      error: 'That username is already taken.',
-      fieldErrors: { username: 'That username is already taken.' },
+      status: usernameTaken.status,
+      error: usernameTaken.response.error,
+      fieldErrors: usernameTaken.response.fieldErrors,
     });
+    expect(invalidateFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('names the field when another profile already holds the handle', async () => {
+    const client = createClient({
+      profiles: [storedProfile(), { ...emptyProfileRow('22222222-2222-2222-2222-222222222222'), username: 'creator-name' }],
+    });
+    const invalidateFeedCache = vi.fn();
+
+    await expect(updateProfileForRoute({
+      userId: user.id,
+      body: {
+        username: 'creator-name',
+        displayName: 'Creator Name',
+      },
+      client: client.client,
+      invalidateFeedCache,
+    })).resolves.toEqual({
+      ok: false,
+      status: usernameTaken.status,
+      error: usernameTaken.response.error,
+      fieldErrors: usernameTaken.response.fieldErrors,
+    });
+    expect(client.upserts).toEqual([]);
     expect(invalidateFeedCache).not.toHaveBeenCalled();
   });
 
