@@ -432,6 +432,7 @@ describe('checking the handle as it is typed', () => {
   it('says a handle the save found taken under the handle alone, until another one is typed', async () => {
     // Free when it was checked, claimed by someone else before the save.
     harness.api.updateProfile.mockReset().mockRejectedValue(taken);
+    vi.mocked(trackOnboardingEvent).mockClear();
     const tree = await openIdentityStep();
 
     await typeHandle(tree, 'sarath-makes');
@@ -440,6 +441,8 @@ describe('checking the handle as it is typed', () => {
 
     expect(handleLine(tree)).toEqual({ text: 'That handle was just claimed. Try another one.', color: 'danger' });
     expect(alerts(tree)).toEqual([]);
+    // Counted as a conflict, which a refusal of the session is not (below).
+    expect(vi.mocked(trackOnboardingEvent).mock.calls.map(([, event]) => event)).toContain('username_conflict');
     expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(true);
 
     await typeHandle(tree, 'sarath-makes-2');
