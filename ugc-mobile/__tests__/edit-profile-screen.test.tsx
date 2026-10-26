@@ -26,6 +26,11 @@ const harness = vi.hoisted(() => ({
     launchImageLibraryAsync: vi.fn(),
   },
   uploadProfileImage: vi.fn(),
+  scrollView: { scrollTo: vi.fn() },
+  scrollContent: { name: 'scroll content' },
+  /** Where each field sits in the scroll content, by label: what `measureLayout` answers. */
+  fieldTops: {} as Record<string, number>,
+  reducedMotion: false,
 }));
 
 vi.mock('react-native', () => ({
@@ -37,7 +42,11 @@ vi.mock('react-native', () => ({
     { ...props, style: typeof style === 'function' ? (style as (state: { pressed: boolean }) => unknown)({ pressed: false }) : style },
     children,
   ),
-  ScrollView: ({ children, ...props }: MockProps) => React.createElement('scroll-view', props, children),
+  ScrollView: ({ children, ref, innerViewRef, ...props }: MockProps) => {
+    React.useImperativeHandle(ref as React.Ref<unknown>, () => harness.scrollView);
+    React.useImperativeHandle(innerViewRef as React.Ref<unknown>, () => harness.scrollContent);
+    return React.createElement('scroll-view', props, children);
+  },
   TextInput: () => null,
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
   useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
@@ -75,7 +84,15 @@ vi.mock('@/components/keyboard-aware', () => ({
 
 vi.mock('@/components/ui', () => ({
   AppText: ({ children, ...props }: MockProps) => React.createElement('app-text', props, children),
-  AppTextInput: (props: MockProps) => React.createElement('app-text-input', props),
+  AppTextInput: ({ containerRef, ...props }: MockProps) => {
+    // Measured against the scroll content, a field answers where `fieldTops` puts it.
+    React.useImperativeHandle(containerRef as React.Ref<unknown>, () => ({
+      measureLayout: (relativeTo: unknown, onSuccess: (x: number, y: number, width: number, height: number) => void) => {
+        onSuccess(0, relativeTo === harness.scrollContent ? harness.fieldTops[String(props.label)] ?? 0 : Number.NaN, 358, 96);
+      },
+    }));
+    return React.createElement('app-text-input', props);
+  },
   PrimaryButton: (props: MockProps) => React.createElement('primary-button', props),
   SecondaryButton: (props: MockProps) => React.createElement('secondary-button', props),
   StatusBlock: (props: MockProps) => React.createElement('status-block', props),
@@ -90,6 +107,7 @@ vi.mock('@/lib/haptics', () => ({ haptic: { success: vi.fn(), error: vi.fn() } }
 vi.mock('@/lib/media', () => ({
   uploadProfileImage: (...args: unknown[]) => harness.uploadProfileImage(...args),
 }));
+vi.mock('@/lib/motion', () => ({ useReducedMotion: () => harness.reducedMotion }));
 vi.mock('@/lib/platform-glyphs', () => ({
   CloseGlyph: (props: MockProps) => React.createElement('close-glyph', props),
 }));
@@ -176,6 +194,31 @@ function images(tree: renderer.ReactTestRenderer) {
     .map((node) => (node.props.source as { uri: string }).uri);
 }
 
+function statusBlocks(tree: renderer.ReactTestRenderer) {
+  return tree.root
+    .findAll((node) => String(node.type) === 'status-block')
+    .map((node) => ({ title: node.props.title as string, body: node.props.body as string | undefined }));
+}
+
+/** The server's answer to a save whose handle was claimed after the live check called it free. */
+function takenAtSave() {
+  return new ApiError('That username is already taken.', 409, {
+    error: 'That username is already taken.',
+    fieldErrors: { username: 'That username is already taken.' },
+  });
+}
+
+/** Types a handle and lets the live check answer it, with fake timers for the check's pause alone. */
+async function typeHandleAndLetTheCheckAnswer(tree: renderer.ReactTestRenderer, handle: string) {
+  vi.useFakeTimers();
+  try {
+    await type(tree, 'Username', handle);
+    await letTheCheckAnswer();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 beforeEach(() => {
   // The save's own refresh reads the profile again.
   harness.api.getProfile.mockReset().mockImplementation(async () => storedProfile());
@@ -190,6 +233,9 @@ beforeEach(() => {
   harness.router.back.mockClear();
   harness.router.replace.mockClear();
   harness.user = { id: 'user-1', email: 'luna@example.com' };
+  harness.scrollView.scrollTo.mockClear();
+  harness.fieldTops = {};
+  harness.reducedMotion = false;
 });
 
 describe('Edit profile: links and location', () => {
@@ -217,18 +263,21 @@ describe('Edit profile: links and location', () => {
     expect(harness.router.back).toHaveBeenCalledTimes(1);
   });
 
-  it('draws the server’s refusal of a social link under its field', async () => {
+  it('draws the server’s refusal of a social link under its field, and brings the field into view', async () => {
     harness.api.updateProfile.mockRejectedValue(new ApiError('Please fix the highlighted fields.', 400, {
       fieldErrors: { twitterHandle: 'Enter your X username or profile link.' },
     }));
+    harness.fieldTops = { 'X (Twitter) handle': 1012 };
     const tree = await renderScreen(newClient(storedProfile()));
 
     await type(tree, 'X (Twitter) handle', 'https://example.com/luna');
     await press(tree, 'Save profile');
 
     expect(input(tree, 'X (Twitter) handle').props.error).toBe('Enter your X username or profile link.');
-    expect(tree.root.findAll((node) => String(node.type) === 'status-block' && node.props.title === 'Profile not saved'))
-      .toHaveLength(1);
+    // Said under the field alone: the block above the form would say it again,
+    // and go on saying it once the link was fixed.
+    expect(statusBlocks(tree)).toEqual([]);
+    expect(harness.scrollView.scrollTo).toHaveBeenLastCalledWith({ y: 996, animated: true });
   });
 
   it('asks the server about the fields before a photo uploads, and uploads nothing it refuses', async () => {
@@ -401,6 +450,117 @@ describe('Edit profile: handles', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Edit profile: a refused save', () => {
+  it('stops calling a handle taken once another is typed after the save refused it', async () => {
+    harness.api.updateProfile.mockRejectedValue(takenAtSave());
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await typeHandleAndLetTheCheckAnswer(tree, 'maya');
+    await press(tree, 'Save profile');
+    expect(input(tree, 'Username').props.error).toBe('That username is already taken.');
+
+    await typeHandleAndLetTheCheckAnswer(tree, 'maya-k');
+
+    expect(input(tree, 'Username').props).toMatchObject({
+      error: undefined,
+      hint: 'This username is available.',
+      hintTone: 'success',
+    });
+    // The block above the form kept "That username is already taken." until the next save.
+    expect(statusBlocks(tree)).toEqual([]);
+  });
+
+  it('says a refusal of the handle under the handle alone, and brings the field into view', async () => {
+    harness.api.updateProfile.mockRejectedValue(takenAtSave());
+    harness.fieldTops = { Username: 412 };
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await typeHandleAndLetTheCheckAnswer(tree, 'maya');
+    await press(tree, 'Save profile');
+
+    expect(input(tree, 'Username').props.error).toBe('That username is already taken.');
+    expect(statusBlocks(tree)).toEqual([]);
+    // Save is in the header and the field can be anywhere: the field's top
+    // comes to the form's own top padding, its verdict under it.
+    expect(harness.scrollView.scrollTo).toHaveBeenCalledTimes(1);
+    expect(harness.scrollView.scrollTo).toHaveBeenLastCalledWith({ y: 396, animated: true });
+  });
+
+  it('keeps the save’s refusal under the handle when the field is left without an edit', async () => {
+    harness.api.updateProfile.mockRejectedValue(takenAtSave());
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await typeHandleAndLetTheCheckAnswer(tree, 'maya');
+    await press(tree, 'Save profile');
+    // Focus comes back to the field and moves on, as Next from Display name does.
+    await renderer.act(async () => { input(tree, 'Username').props.onBlur(); });
+
+    // The blur's own check finds nothing wrong with `maya` and used to clear the
+    // refusal, which left the live check calling the handle available.
+    expect(input(tree, 'Username').props.error).toBe('That username is already taken.');
+  });
+
+  it('brings the first refused field into view, in the order the form draws them', async () => {
+    harness.api.updateProfile.mockRejectedValue(new ApiError('Please fix the highlighted fields.', 400, {
+      fieldErrors: {
+        tiktokHandle: 'Enter your TikTok username or profile link.',
+        websiteUrl: 'Enter a website people can open.',
+      },
+    }));
+    harness.fieldTops = { Website: 820, 'TikTok handle': 1180 };
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await type(tree, 'TikTok handle', 'x');
+    await press(tree, 'Save profile');
+
+    expect(input(tree, 'Website').props.error).toBe('Enter a website people can open.');
+    expect(input(tree, 'TikTok handle').props.error).toBe('Enter your TikTok username or profile link.');
+    expect(statusBlocks(tree)).toEqual([]);
+    expect(harness.scrollView.scrollTo).toHaveBeenLastCalledWith({ y: 804, animated: true });
+  });
+
+  it('refuses what the form can judge itself under its field, with no block and no request', async () => {
+    harness.fieldTops = { Username: 412 };
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await type(tree, 'Username', 'ab');
+    await press(tree, 'Save profile');
+
+    expect(input(tree, 'Username').props.error).toContain('3–24 lowercase letters');
+    expect(harness.api.updateProfile).not.toHaveBeenCalled();
+    expect(statusBlocks(tree)).toEqual([]);
+    expect(harness.scrollView.scrollTo).toHaveBeenLastCalledWith({ y: 396, animated: true });
+  });
+
+  it('says a refusal that names no field in the block above the form, and brings the block into view', async () => {
+    harness.api.updateProfile.mockRejectedValue(
+      new ApiError('Network request failed. Please check your connection and try again.', 0, { url: 'https://api.example/profile' }),
+    );
+    harness.fieldTops = { Bio: 640 };
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await type(tree, 'Bio', 'New bio');
+    await press(tree, 'Save profile');
+
+    expect(statusBlocks(tree)).toEqual([
+      { title: 'Profile not saved', body: 'Network request failed. Please check your connection and try again.' },
+    ]);
+    expect(harness.scrollView.scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: true });
+  });
+
+  it('jumps to the refusal rather than scrolling when motion is reduced', async () => {
+    harness.api.updateProfile.mockRejectedValue(takenAtSave());
+    harness.fieldTops = { Username: 412 };
+    harness.reducedMotion = true;
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await typeHandleAndLetTheCheckAnswer(tree, 'maya');
+    await press(tree, 'Save profile');
+
+    expect(harness.scrollView.scrollTo).toHaveBeenLastCalledWith({ y: 396, animated: false });
   });
 });
 
