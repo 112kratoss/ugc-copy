@@ -30,7 +30,7 @@ import {
   type GenerationTiming,
 } from '@/lib/generation-timing';
 
-const MEDIA_TOOL_IDS: CreatorToolId[] = ['image', 'video', 'motion'];
+export const MEDIA_TOOL_IDS: CreatorToolId[] = ['image', 'video', 'motion'];
 export type StudioMediaPreviewType = 'image' | 'video';
 
 interface SectionHeadingProps {
@@ -377,6 +377,7 @@ function StudioNoticeCard({
   action,
   onDismiss,
   dismissLabel = 'Dismiss notice',
+  stacked = false,
 }: {
   icon: LucideIcon;
   label: string;
@@ -384,10 +385,15 @@ function StudioNoticeCard({
   action?: ReactNode;
   onDismiss?: () => void;
   dismissLabel?: string;
+  /**
+   * The action under the text at every width. In the image creator's column
+   * (340-440px) a row from 640px left the text about 50px beside the buttons.
+   */
+  stacked?: boolean;
 }) {
   return (
     <StudioPanel className="p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className={clsx('flex flex-col gap-3', !stacked && 'sm:flex-row sm:items-center sm:justify-between')}>
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--ui-primary)]/25 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]">
             <Icon className="h-4 w-4" />
@@ -419,12 +425,14 @@ export function StudioRemixNotice({
   label = 'Remixing Community Creation',
   description,
   action,
+  stacked,
 }: {
   label?: string;
   description: string;
   action?: ReactNode;
+  stacked?: boolean;
 }) {
-  return <StudioNoticeCard icon={Sparkles} label={label} description={description} action={action} />;
+  return <StudioNoticeCard icon={Sparkles} label={label} description={description} action={action} stacked={stacked} />;
 }
 
 /**
@@ -437,9 +445,11 @@ export function StudioRemixNotice({
 export function StudioModelNotice({
   description,
   onDismiss,
+  stacked,
 }: {
   description: string;
   onDismiss?: () => void;
+  stacked?: boolean;
 }) {
   return (
     <StudioNoticeCard
@@ -448,6 +458,7 @@ export function StudioModelNotice({
       description={description}
       onDismiss={onDismiss}
       dismissLabel="Dismiss model notice"
+      stacked={stacked}
     />
   );
 }

@@ -27,15 +27,17 @@ import {
 } from '@/components/CreatorStudio';
 import {
     CREATOR_BAR_PRIMARY_CLASS,
-    CREATOR_TWO_PANE_QUERY,
     CreatorCanvas,
     CreatorCanvasFrame,
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorModelChip,
+    CreatorPhoneBalance,
+    CreatorSettingChoices,
     CreatorTemplatesTile,
     CreatorToolTabs,
 } from '@/components/CreatorColumn';
+import { IconButton } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublicShareButton from '@/components/PublicShareButton';
@@ -385,7 +387,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     const elementRefs = useRef<ImageElementDraft[]>([]);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
-    const canvasRef = useRef<HTMLElement>(null);
+    // Bumped once a run the creator started is under way: the canvas then comes into view.
+    const [canvasRevealKey, setCanvasRevealKey] = useState(0);
+    // The shape and settings of the run in flight, so its frame and caption do not
+    // follow the form while it runs.
+    const [runShape, setRunShape] = useState<{ aspectRatio: string; label: string } | null>(null);
     const [activeMentionQuery, setActiveMentionQuery] = useState<{
         query: string;
         replaceStart: number;
@@ -421,16 +427,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     useEffect(() => () => {
         generationPollAbortControllerRef.current?.abort();
     }, []);
-
-    // With one pane the result is drawn under the column, out of view while the
-    // creator is at Generate: a run that starts brings it up. Beside the column
-    // it is in view already.
-    useEffect(() => {
-        if (!isGenerating || typeof window.matchMedia !== 'function') return;
-        if (window.matchMedia(CREATOR_TWO_PANE_QUERY).matches) return;
-        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        canvasRef.current?.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
-    }, [isGenerating]);
 
 
     useEffect(() => {
@@ -1200,6 +1196,22 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         })
         : [];
 
+    // The run's settings read back as the app's bar reads them: "1K · AUTO · JPG".
+    const outputFormat = additionalSettings.settings.outputFormat;
+    const settingsSummary = [
+        showResolutionControl
+            ? resolution
+            : qualityModes.length > 0
+                // Grok prices an edit apart from its quality modes.
+                ? `${qualityMode}${isGrokImageModel && elements.length > 0 ? ' edit' : ''}`
+                : null,
+        aspectRatio,
+        typeof outputFormat === 'string' ? outputFormat : null,
+    ]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .map((value) => value.toUpperCase())
+        .join(' · ') || 'Settings';
+
     const forgetPendingStart = () => {
         clearPendingWebStart('image');
         setPendingStart(null);
@@ -1245,7 +1257,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (code === 'prompt_blocked' || code === 'INVALID_GENERATION_REQUEST') {
             promptTextareaRef.current?.focus();
         } else if (code === 'cost_changed') {
-            // Priced again at once: the run panel shows what the run costs now, and the
+            // Priced again at once: Generate shows what the run costs now, and the
             // next press sends that price.
             quoteState.costChanged(run);
         }
@@ -1285,7 +1297,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
      * that leaves it open keeps the key, so "Check again" finds the run it started
      * or starts it once; a refusal or a started run settles it.
      */
-    const runStart = async (start: PendingWebStart, timing: { startedAtMs: number; estimatedTotalMs: number | null }) => {
+    const runStart = async (
+        start: PendingWebStart,
+        timing: { startedAtMs: number; estimatedTotalMs: number | null },
+        { reveal }: { reveal: boolean },
+    ) => {
         let started: WebGenerationStartResponse;
         try {
             started = await requestWebGenerationStart(start.body as CatalogGenerationRequestPayload, {
@@ -1312,6 +1328,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setLatestIsPublic(false);
         announceGenerationStarted();
         updateCredits(started.remainingCredits);
+        // Only now, and only for a press: a refusal is said in the bar, which a
+        // scroll to the canvas would take out of view, and a run resumed on load
+        // leaves the page where it opened.
+        if (reveal) setCanvasRevealKey((key) => key + 1);
         await followRun(started.predictionId, {
             ...timing,
             cost: started.cost,
@@ -1319,7 +1339,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         });
     };
 
-    const replayPendingStart = async (start: PendingWebStart) => {
+    const replayPendingStart = async (start: PendingWebStart, { reveal }: { reveal: boolean }) => {
         if (activeGenerationRequestKeyRef.current) return;
         activeGenerationRequestKeyRef.current = start.idempotencyKey;
         const createdAtMs = Date.parse(start.createdAt);
@@ -1335,7 +1355,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             estimatedTotalMs: null,
         }));
         try {
-            await runStart(start, { startedAtMs, estimatedTotalMs: null });
+            await runStart(start, { startedAtMs, estimatedTotalMs: null }, { reveal });
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Something went wrong');
             setGenerationTiming(null);
@@ -1354,7 +1374,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             // again finds the run it started, or starts it once.
             const pendingWebStart = loadPendingWebStart('image', session.user.id);
             if (pendingWebStart) {
-                await replayPendingStart(pendingWebStart);
+                await replayPendingStart(pendingWebStart, { reveal: false });
                 return;
             }
 
@@ -1509,6 +1529,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setLatestIsPublic(false);
         setPublishedMeta(null);
         setSubmittedPrompt(submitted);
+        setRunShape({ aspectRatio, label: `${model.displayName} · ${settingsSummary}` });
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimateGenerationDurationMs({
             kind: 'image',
@@ -1542,7 +1563,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 estimatedTotalMs,
             }));
 
-            // The price on the run panel goes with the run when it is this run's own quote.
+            // The price on Generate goes with the run when it is this run's own quote.
             const body = webCatalogStartRequest({
                 kind: 'image',
                 modelId: selectedModel,
@@ -1563,7 +1584,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             };
             // Kept before it is sent: an answer that never arrives is replayed under this key.
             savePendingWebStart(start);
-            await runStart(start, { startedAtMs, estimatedTotalMs });
+            await runStart(start, { startedAtMs, estimatedTotalMs }, { reveal: true });
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Something went wrong');
             setGenerationTiming(null);
@@ -1643,37 +1664,24 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         ? outputImages
         : (outputImage ? [outputImage] : []);
 
-    // The run's settings read back as the app's bar reads them: "1K · AUTO · JPG".
-    const outputFormat = additionalSettings.settings.outputFormat;
-    const settingsSummary = [
-        showResolutionControl
-            ? resolution
-            : qualityModes.length > 0
-                // Grok prices an edit apart from its quality modes.
-                ? `${qualityMode}${isGrokImageModel && elements.length > 0 ? ' edit' : ''}`
-                : null,
-        aspectRatio,
-        typeof outputFormat === 'string' ? outputFormat : null,
-    ]
-        .filter((value): value is string => typeof value === 'string' && value.length > 0)
-        .map((value) => value.toUpperCase())
-        .join(' · ') || 'Settings';
-
     const canvasTitle = outputImage
         ? displayedOutputImages.length > 1 ? 'Your images' : 'Your image'
         : isGenerating
             ? 'Creating your image'
             : isBackgroundProcessing
-                ? backgroundProcessingCopy.title
+                ? 'Your image'
                 : 'Result';
     const canvasSubtitle = outputImage
         ? displayedOutputImages.length > 1
             ? `${displayedOutputImages.length} options. The first is the one you publish.`
             : submittedPrompt || null
-        : isBackgroundProcessing
-            ? backgroundProcessingCopy.description
-            : `${model.displayName} · ${settingsSummary}`;
+        : isGenerating
+            ? runShape?.label ?? `${model.displayName} · ${settingsSummary}`
+            : isBackgroundProcessing
+                ? null
+                : `${model.displayName} · ${settingsSummary}`;
 
+    const canAddReferences = elements.length < model.maxImages;
     const generateBlocked = !prompt.trim()
         || quotePending
         || staleElementMentions.length > 0
@@ -1681,16 +1689,22 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         || Boolean(promptLimitMessage);
     const isAwaitingStartCheck = Boolean(pendingStart) && !isGenerating;
 
-    // What stops or explains a run, said just above the bar. Progress and a run
-    // that went to the background are drawn on the canvas instead.
-    const runStatus = isGenerating || isBackgroundProcessing ? null : pendingStart ? (
+    // What stops or explains a run, said just above the bar. Progress is drawn on
+    // the canvas; a run in the background is named here too, beside Generate.
+    const runStatus = isGenerating ? null : isBackgroundProcessing ? (
+        <p className="text-[var(--ui-text-secondary)]">
+            {backgroundProcessingCopy.title}: it lands in{' '}
+            <Link href="/creations" className="underline underline-offset-4 hover:text-[var(--ui-text-primary)]">Studio</Link>
+            {' '}when it is done.
+        </p>
+    ) : pendingStart ? (
         <div className="space-y-3">
             <p role="alert" className="text-amber-200">{pendingStartNotice ?? START_UNCONFIRMED_MESSAGE}</p>
             <button
                 type="button"
                 onClick={handleStartNewRun}
                 disabled={generateBlocked}
-                className="ui-focus-ring flex min-h-11 w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-5 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="ui-button ui-button-secondary ui-focus-ring w-full disabled:cursor-not-allowed disabled:opacity-50"
             >
                 {currentCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
             </button>
@@ -1742,7 +1756,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const barAction = isAwaitingStartCheck && pendingStart ? (
         <button
             type="button"
-            onClick={() => void replayPendingStart(pendingStart)}
+            onClick={() => void replayPendingStart(pendingStart, { reveal: true })}
             className={CREATOR_BAR_PRIMARY_CLASS}
         >
             Check again
@@ -1773,79 +1787,42 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         </button>
     );
 
-    const settingChoiceClass = (selected: boolean) => (
-        `ui-focus-ring min-h-10 rounded-xl border px-2 text-xs font-bold transition-colors duration-150 ${selected
-            ? 'border-[rgba(115,191,242,0.5)] bg-[rgba(115,191,242,0.14)] text-[#d6ecfb]'
-            : 'border-white/[0.06] bg-black/30 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200'}`
-    );
     const settingsPanel = (
         <div className="space-y-5">
-            <div role="group" aria-labelledby="create-image-ratio-label">
-                <p id="create-image-ratio-label" className="mb-2 text-xs font-bold text-zinc-400">Aspect ratio</p>
-                <div className="grid grid-cols-5 gap-1.5">
-                    {model.aspectRatios.map((ratio) => (
-                        <button
-                            key={ratio}
-                            type="button"
-                            onClick={() => setAspectRatio(ratio)}
-                            aria-pressed={aspectRatio === ratio}
-                            className={settingChoiceClass(aspectRatio === ratio)}
-                        >
-                            {ratio}
-                        </button>
-                    ))}
-                </div>
-            </div>
+            <CreatorSettingChoices
+                label="Aspect ratio"
+                options={model.aspectRatios}
+                value={aspectRatio}
+                onChange={setAspectRatio}
+                columns={5}
+            />
 
             {showResolutionControl ? (
-                <div role="group" aria-labelledby="create-image-resolution-label">
-                    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                        <p id="create-image-resolution-label" className="text-xs font-bold text-zinc-400">Resolution</p>
-                        <p className="text-[11px] text-zinc-500">Higher detail costs more credits.</p>
-                    </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                        {availableResolutions.map((res) => (
-                            <button
-                                key={res}
-                                type="button"
-                                onClick={() => setResolution(res)}
-                                aria-pressed={resolution === res}
-                                className={settingChoiceClass(resolution === res)}
-                            >
-                                {res}
-                            </button>
-                        ))}
-                    </div>
-                </div>
+                <CreatorSettingChoices
+                    label="Resolution"
+                    hint="Higher detail costs more credits."
+                    options={availableResolutions}
+                    value={resolution}
+                    onChange={setResolution}
+                    columns={3}
+                />
             ) : qualityModes.length > 0 ? (
-                <div role="group" aria-labelledby="create-image-quality-label">
-                    <p id="create-image-quality-label" className="text-xs font-bold text-zinc-400">
-                        {/* The descriptor already labels this control per model ("Speed" for the
-                            Ideogram tiers, "Quality" elsewhere), so a new model with quality modes
-                            no longer lands under a heading naming a different vendor. */}
-                        {imageAffordances?.qualityModeLabel
-                            ? `Generation ${imageAffordances.qualityModeLabel.toLowerCase()}`
-                            : (selectedModel === 'ideogram-v3' ? 'Generation speed' : 'Grok quality')}
-                    </p>
-                    <p className="mb-2 mt-1 text-[11px] text-zinc-500">
-                        {selectedModel === 'grok-imagine-image'
-                            ? 'Quality applies to prompt-only Grok runs; edits use fixed image-to-image pricing.'
-                            : 'Choose faster drafts or spend more credits for final-detail output.'}
-                    </p>
-                    <div className={`grid gap-1.5 ${qualityModes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
-                        {qualityModes.map((mode) => (
-                            <button
-                                key={mode}
-                                type="button"
-                                onClick={() => setQualityMode(mode)}
-                                aria-pressed={qualityMode === mode}
-                                className={`${settingChoiceClass(qualityMode === mode)} capitalize`}
-                            >
-                                {mode}
-                            </button>
-                        ))}
-                    </div>
-                </div>
+                <CreatorSettingChoices
+                    // The descriptor already labels this control per model ("Speed" for the
+                    // Ideogram tiers, "Quality" elsewhere), so a new model with quality modes
+                    // no longer lands under a heading naming a different vendor.
+                    label={imageAffordances?.qualityModeLabel
+                        ? `Generation ${imageAffordances.qualityModeLabel.toLowerCase()}`
+                        : (selectedModel === 'ideogram-v3' ? 'Generation speed' : 'Grok quality')}
+                    hint={selectedModel === 'grok-imagine-image'
+                        ? 'Quality applies to prompt-only Grok runs; edits use fixed image-to-image pricing.'
+                        : 'Choose faster drafts or spend more credits for final-detail output.'}
+                    options={qualityModes}
+                    value={qualityMode}
+                    onChange={setQualityMode}
+                    columns={qualityModes.length === 3 ? 3 : 2}
+                    capitalize
+                />
             ) : null}
 
             {model.supportsGoogleSearch ? (
@@ -1854,13 +1831,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     role="switch"
                     aria-checked={googleSearch}
                     onClick={() => setGoogleSearch(!googleSearch)}
-                    className="ui-focus-ring flex w-full items-center justify-between gap-4 rounded-2xl border border-white/[0.06] bg-black/30 px-4 py-3 text-left transition-colors hover:bg-white/[0.04]"
+                    className="ui-focus-ring flex w-full items-center justify-between gap-4 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-4 py-3 text-left transition-colors hover:bg-[var(--ui-surface-2)]"
                 >
                     <span className="min-w-0">
-                        <span className="block text-sm font-semibold text-white">Google Search grounding</span>
-                        <span className="mt-0.5 block text-xs text-zinc-400">Allow the model to pull in live context when it helps.</span>
+                        <span className="block text-sm font-semibold text-[var(--ui-text-primary)]">Google Search grounding</span>
+                        <span className="mt-0.5 block text-xs text-[var(--ui-text-muted)]">Allow the model to pull in live context when it helps.</span>
                     </span>
-                    <span aria-hidden className={`flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors ${googleSearch ? 'bg-[var(--ui-accent-image)]' : 'bg-zinc-700'}`}>
+                    <span aria-hidden className={`flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors ${googleSearch ? 'bg-brand-blue' : 'bg-zinc-700'}`}>
                         <span className={`h-4 w-4 rounded-full bg-white shadow-md transition-transform ${googleSearch ? 'translate-x-5' : 'translate-x-0'}`} />
                     </span>
                 </button>
@@ -1870,7 +1847,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         </div>
     );
 
-    const resultActionClass = 'ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white';
+    const resultActionClass = 'ui-button ui-button-secondary ui-focus-ring';
     const canvasFooter = outputImage ? (
         <div className="flex flex-wrap items-center gap-2">
             {latestGenerationId ? (
@@ -1896,7 +1873,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         type="button"
                         onClick={() => void handleOpenPublish()}
                         disabled={isPreparingPublish}
-                        className="ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.98] disabled:cursor-wait disabled:opacity-70"
+                        className="ui-button ui-button-primary ui-focus-ring disabled:cursor-wait disabled:opacity-70"
                     >
                         {isPreparingPublish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
                         Publish & share
@@ -1922,7 +1899,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     setLatestIsPublic(false);
                     setPublishedMeta(null);
                 }}
-                className="ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full px-4 text-sm font-semibold text-zinc-400 transition hover:bg-white/[0.05] hover:text-white"
+                className="ui-button ui-button-ghost ui-focus-ring"
             >
                 Start another run
             </button>
@@ -1943,7 +1920,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     <>
                         <CreatorToolTabs currentToolId="image" />
 
-                        <div className="relative" ref={dropdownRef}>
+                        <div className="flex items-start gap-2">
+                        <div className="relative min-w-0 flex-1" ref={dropdownRef}>
                             <CreatorModelChip
                                 name={model.displayName}
                                 badge={model.badge}
@@ -2018,6 +1996,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         })}
                             </StudioModelPicker>
                         </div>
+                        <CreatorPhoneBalance credits={userCredits} />
+                        </div>
 
                         <AnimatePresence>
                             {modelNotice ? (
@@ -2028,6 +2008,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     exit={{ opacity: 0, y: -12 }}
                                 >
                                     <StudioModelNotice
+                                        stacked
                                         description={modelNotice}
                                         onDismiss={catalogProblem ? undefined : () => setCatalogNotice(null)}
                                     />
@@ -2049,6 +2030,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     exit={{ opacity: 0, y: -12 }}
                                 >
                                     <StudioRemixNotice
+                                        stacked
                                         description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         action={
                                             remixImageUrl || canUseOriginalResultAsReference ? (
@@ -2083,11 +2065,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             )}
                         </AnimatePresence>
 
-                        <div className="rounded-[26px] border border-[rgba(115,191,242,0.2)] bg-[var(--ui-surface-1)] transition-[border-color,box-shadow] duration-150 focus-within:border-[rgba(115,191,242,0.5)] focus-within:shadow-[0_0_0_3px_rgba(115,191,242,0.1)]">
-                            <label
-                                htmlFor="create-image-prompt"
-                                className="block px-4 pt-4 text-[11px] font-extrabold uppercase tracking-[0.14em] text-[var(--ui-accent-image)]"
-                            >
+                        <div className="rounded-ui-2xl border border-brand-blue/20 bg-[var(--ui-surface-1)] transition-colors duration-150 focus-within:border-brand-blue/60">
+                            <label htmlFor="create-image-prompt" className="ui-kicker block px-4 pt-4">
                                 Prompt
                             </label>
                             <textarea
@@ -2100,7 +2079,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 placeholder="Describe the image you want to create..."
                                 maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                 aria-invalid={promptMeter.state === 'over' || undefined}
-                                className="block min-h-[176px] w-full resize-y bg-transparent px-4 pb-2 pt-2 text-sm leading-6 text-white outline-none placeholder:text-zinc-600"
+                                className="block min-h-[176px] w-full resize-y bg-transparent px-4 pb-2 pt-2 text-sm leading-6 text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)]"
                             />
                             <div className="flex items-center justify-between gap-3 px-4 pb-3 text-xs">
                                 <PromptLengthCounter meter={promptMeter} suffix=" characters" />
@@ -2114,13 +2093,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         </div>
 
                         {activeMentionQuery ? (
-                            <div className="rounded-[20px] border border-white/8 bg-black/35 p-4">
+                            <div className="rounded-ui-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">
                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                     <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-                                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                        <p className="ui-kicker">
                                             Insert element
                                         </p>
-                                        <p className="mt-1 text-sm text-zinc-400">
+                                        <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
                                             {mentionSuggestions.length > 0
                                                 ? 'Pick an element to insert its @mention.'
                                                 : 'No matching elements yet.'}
@@ -2129,7 +2108,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     {activeMentionQuery.query ? (
                                         <StudioElementHandle
                                             handle={`@${activeMentionQuery.query}`}
-                                            className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
+                                            className="rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-xs font-semibold text-[var(--ui-text-secondary)]"
                                         />
                                     ) : null}
                                 </div>
@@ -2185,29 +2164,37 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         {model.maxImages > 0 || elements.length > 0 ? (
                             <section
                                 aria-labelledby="create-image-references"
-                                onDragOver={handleDragOver}
-                                onDragLeave={handleDragLeave}
-                                onDrop={handleDrop}
-                                className={`rounded-[24px] border p-4 transition-colors duration-150 ${isDragging
-                                    ? 'border-[rgba(115,191,242,0.55)] bg-[rgba(115,191,242,0.06)]'
-                                    : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]'}`}
+                                // A drop is taken only while one more fits: at the cap, or on a
+                                // prompt-only model keeping references, nothing can be added.
+                                onDragOver={canAddReferences ? handleDragOver : undefined}
+                                onDragLeave={canAddReferences ? (event) => {
+                                    // Leaving a row for the section is not leaving the section.
+                                    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                                    handleDragLeave(event);
+                                } : undefined}
+                                onDrop={canAddReferences ? handleDrop : undefined}
+                                className={isDragging
+                                    ? 'rounded-ui-2xl border border-brand-blue/60 bg-brand-blue/5 p-4'
+                                    : 'ui-card p-4'}
                             >
-                                <div className="mb-3 flex items-center justify-between gap-3">
-                                    <h2 id="create-image-references" className="text-xs font-bold text-zinc-400">Reference images</h2>
-                                    <span className="text-xs font-bold tabular-nums text-zinc-500">
+                                <div className="mb-1 flex items-center justify-between gap-3">
+                                    <h2 id="create-image-references" className="text-xs font-bold text-[var(--ui-text-muted)]">Reference images</h2>
+                                    <span className="text-xs font-bold tabular-nums text-[var(--ui-text-faint)]">
                                         {elements.length}/{model.maxImages}
                                     </span>
                                 </div>
-                                {model.maxImages === 0 ? (
-                                    <p className="mb-3 text-sm text-zinc-400">
+                                {model.maxImages > 0 ? (
+                                    <p className="mb-3 text-xs text-[var(--ui-text-faint)]">Type @ in the prompt to use one by its name.</p>
+                                ) : (
+                                    <p className="mb-3 mt-2 text-sm text-[var(--ui-text-muted)]">
                                         {model.displayName} does not take reference images. These are kept for another model; remove them to generate here.
                                     </p>
-                                ) : null}
+                                )}
 
                                 {elements.length > 0 ? (
                                     <ul className="mb-3 space-y-2">
                                         {elements.map((element) => (
-                                            <li key={element.id} className="flex items-start gap-3 rounded-[20px] border border-white/[0.07] bg-black/25 p-2.5">
+                                            <li key={element.id} className="flex items-start gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-2.5">
                                                 <button
                                                     type="button"
                                                     onClick={() => setUploadPreview({
@@ -2217,7 +2204,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                         title: element.displayName,
                                                     })}
                                                     aria-label={`Preview ${element.displayName}`}
-                                                    className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-[14px] border border-white/10 bg-black/40"
+                                                    className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
                                                 >
                                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                                     <img
@@ -2245,25 +2232,23 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                                     event.currentTarget.blur();
                                                                 }
                                                             }}
-                                                            aria-label="Element name"
+                                                            aria-label={`Name of ${element.displayName}`}
                                                             placeholder="Rename element"
-                                                            className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-sm font-semibold text-white outline-none transition-colors hover:border-white/10 focus:border-[rgba(115,191,242,0.45)] focus:bg-black/30"
+                                                            className="min-w-0 flex-1 rounded-ui-sm border border-transparent bg-transparent px-2 py-1.5 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:border-brand-blue/50 focus:bg-[var(--ui-surface-2)]"
                                                         />
-                                                        <button
-                                                            type="button"
+                                                        <IconButton
+                                                            label={`Remove ${element.displayName}`}
+                                                            icon={X}
                                                             onClick={() => void handleRemoveElement(element.id)}
-                                                            aria-label={`Remove ${element.displayName}`}
-                                                            className="ui-focus-ring inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-500 transition-colors hover:bg-rose-500/15 hover:text-rose-200"
-                                                        >
-                                                            <X className="h-4 w-4" />
-                                                        </button>
+                                                            className="shrink-0"
+                                                        />
                                                     </div>
                                                     <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
                                                         <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-sky-300" />
                                                         <button
                                                             type="button"
                                                             onClick={() => handleInsertElementHandle(element.handle)}
-                                                            className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
+                                                            className="ui-focus-ring inline-flex min-h-9 shrink-0 items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-semibold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)]"
                                                         >
                                                             Insert
                                                         </button>
@@ -2274,13 +2259,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     </ul>
                                 ) : null}
 
-                                {elements.length < model.maxImages ? (
+                                {canAddReferences ? (
                                     <label
-                                        className={`flex min-h-14 cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed px-4 text-sm font-semibold transition-colors duration-150 focus-within:shadow-[0_0_0_2px_var(--ui-bg-app),0_0_0_4px_rgba(255,170,148,0.55)] ${isDragging
-                                            ? 'border-[var(--ui-accent-image)] text-[#d6ecfb]'
-                                            : 'border-[rgba(115,191,242,0.35)] bg-[rgba(115,191,242,0.05)] text-zinc-300 hover:border-[rgba(115,191,242,0.6)] hover:text-white'}`}
+                                        // The file field's keyboard focus draws the shared ring on the tile.
+                                        className={`flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-full border border-dashed px-4 text-sm font-semibold transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]/55 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-[var(--ui-bg-app)] ${isDragging
+                                            ? 'border-brand-blue text-[var(--ui-text-primary)]'
+                                            : 'border-brand-blue/35 bg-brand-blue/5 text-[var(--ui-text-secondary)] hover:border-brand-blue/60 hover:text-[var(--ui-text-primary)]'}`}
                                     >
-                                        <Plus className="h-4 w-4 text-[var(--ui-accent-image)]" />
+                                        <Plus className="h-4 w-4 text-brand-blue" />
                                         {isDragging ? 'Drop element images here' : 'Add reference images'}
                                         <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="sr-only" />
                                     </label>
@@ -2290,11 +2276,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 ) : null}
                             </section>
                         ) : (
-                            <div className="flex items-start gap-3 rounded-[24px] border border-blue-400/15 bg-blue-400/[0.06] p-4 text-sm text-blue-100">
-                                <ImageIcon className="mt-0.5 h-4 w-4 shrink-0 text-blue-300" />
+                            <div className="flex items-start gap-3 rounded-ui-2xl border border-brand-blue/15 bg-brand-blue/5 p-4 text-sm text-[var(--ui-text-secondary)]">
+                                <ImageIcon className="mt-0.5 h-4 w-4 shrink-0 text-brand-blue" />
                                 <div>
-                                    <div className="font-semibold">Prompt-only model</div>
-                                    <p className="mt-1 leading-relaxed text-blue-100/70">
+                                    <div className="font-semibold text-[var(--ui-text-primary)]">Prompt-only model</div>
+                                    <p className="mt-1 leading-relaxed text-[var(--ui-text-muted)]">
                                         {model.displayName} does not accept reference images. Switch models whenever you need identity, product, or style anchors.
                                     </p>
                                 </div>
@@ -2311,81 +2297,65 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 }
                 canvas={
                     <CreatorCanvas
-                        ref={canvasRef}
                         title={canvasTitle}
                         subtitle={canvasSubtitle}
+                        revealKey={canvasRevealKey}
+                        tall={Boolean(outputImage)}
                         footer={canvasFooter}
                     >
                         {outputImage ? (
-                            displayedOutputImages.length > 1 ? (
-                                <div className="grid h-full w-full auto-rows-fr grid-cols-2 gap-3">
-                                    {displayedOutputImages.map((imageUrl, index) => (
-                                        <div key={`${imageUrl}-${index}`} className="relative flex min-h-0 items-center justify-center">
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setResultPreviewImage(imageUrl);
-                                                    setIsResultPreviewOpen(true);
-                                                }}
-                                                className="flex h-full w-full items-center justify-center rounded-[18px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/40"
-                                                aria-label={`Preview generated image ${index + 1}`}
-                                            >
-                                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                <img
-                                                    src={imageUrl}
-                                                    alt={`Generated image ${index + 1}`}
-                                                    className="max-h-[70dvh] max-w-full rounded-[18px] object-contain shadow-[0_24px_60px_-28px_rgba(0,0,0,0.9)] min-[1120px]:max-h-full"
-                                                />
-                                            </button>
+                            <div className={displayedOutputImages.length > 1 ? 'grid h-full w-full auto-rows-fr grid-cols-2 gap-3' : 'flex h-full w-full'}>
+                                {displayedOutputImages.map((imageUrl, index) => (
+                                    <div key={`${imageUrl}-${index}`} className="relative flex h-full min-h-0 w-full items-center justify-center">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setResultPreviewImage(imageUrl);
+                                                setIsResultPreviewOpen(true);
+                                            }}
+                                            className="ui-focus-ring flex h-full w-full items-center justify-center rounded-ui-xl"
+                                            aria-label={`Preview generated image ${index + 1}`}
+                                        >
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img
+                                                src={imageUrl}
+                                                alt={`Generated image ${index + 1}`}
+                                                className="max-w-full rounded-ui-xl object-contain"
+                                            />
+                                        </button>
+                                        {displayedOutputImages.length > 1 ? (
                                             <a
                                                 href={getOutputImageDownloadUrl(imageUrl, index) ?? imageUrl}
                                                 download={`generated-image-${index + 1}.${getImageFileExtension(imageUrl)}`}
                                                 aria-label={`Download result ${index + 1}`}
-                                                className="ui-focus-ring absolute bottom-2 right-2 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md transition hover:bg-black/85"
+                                                className="ui-focus-ring absolute bottom-2 right-2 inline-flex h-12 w-12 items-center justify-center rounded-full bg-black/65 text-white transition-colors hover:bg-black/85"
                                             >
                                                 <Download className="h-4 w-4" />
                                             </a>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setResultPreviewImage(outputImage);
-                                        setIsResultPreviewOpen(true);
-                                    }}
-                                    className="flex h-full w-full items-center justify-center rounded-[22px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/40"
-                                    aria-label="Preview generated image 1"
-                                >
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img
-                                        src={outputImage}
-                                        alt="Generated image 1"
-                                        className="max-h-[70dvh] max-w-full rounded-[22px] object-contain shadow-[0_24px_60px_-28px_rgba(0,0,0,0.9)] min-[1120px]:max-h-full"
-                                    />
-                                </button>
-                            )
+                                        ) : null}
+                                    </div>
+                                ))}
+                            </div>
                         ) : isGenerating ? (
-                            <CreatorCanvasFrame aspectRatio={aspectRatio} busy>
-                                <Loader2 className="h-6 w-6 animate-spin text-[var(--ui-accent-image)]" />
-                                <p className="text-sm font-semibold text-white">Building your image</p>
+                            <CreatorCanvasFrame aspectRatio={runShape?.aspectRatio ?? aspectRatio} busy>
+                                <p className="text-sm font-semibold text-[var(--ui-text-primary)]">Building your image</p>
                             </CreatorCanvasFrame>
                         ) : isBackgroundProcessing ? (
-                            <StudioBackgroundProcessingNotice
-                                accent={model.accentColor}
-                                label="image"
-                                variant="workspace"
-                                phaseLabel={backgroundTiming?.phaseLabel ?? null}
-                                timingLabel={backgroundTimingLabel}
-                            />
+                            <div className="w-full max-w-md">
+                                <StudioBackgroundProcessingNotice
+                                    accent={model.accentColor}
+                                    label="image"
+                                    phaseLabel={backgroundTiming?.phaseLabel ?? null}
+                                    timingLabel={backgroundTimingLabel}
+                                />
+                            </div>
                         ) : (
                             <CreatorCanvasFrame aspectRatio={aspectRatio}>
-                                <span className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/[0.04]">
-                                    <ImageIcon className="h-5 w-5 text-zinc-400" />
+                                <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
+                                    <ImageIcon className="h-5 w-5 text-[var(--ui-text-muted)]" />
                                 </span>
-                                <p className="text-sm font-semibold text-zinc-200">Your image will appear here</p>
-                                <p className="text-xs leading-5 text-zinc-500">
+                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">Your image will appear here</p>
+                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
                                     {model.maxImages > 0
                                         ? 'Write a prompt, add reference images if you like, then Generate.'
                                         : 'Write a prompt, then Generate.'}

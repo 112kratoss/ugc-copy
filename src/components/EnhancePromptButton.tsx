@@ -13,6 +13,13 @@ import {
 // The service debits this same constant, so the price on the button is the charge.
 const ENHANCEMENT_PRICE_LABEL = `${PROMPT_ENHANCEMENT_COST_CREDITS} ${PROMPT_ENHANCEMENT_COST_CREDITS === 1 ? 'credit' : 'credits'}`;
 
+// Enhance's faces, shared by both variants so the creators never show two Enhances:
+// ready, and waiting for a prompt; then its price beside the word.
+const ENHANCE_READY_CLASS = 'border border-brand-coral/30 bg-brand-coral/10 text-[#ffb09c] hover:border-brand-coral/50 hover:bg-brand-coral/15 active:scale-[0.97]';
+const ENHANCE_IDLE_CLASS = 'bg-zinc-900/30 text-zinc-600 border border-white/5 cursor-not-allowed';
+const PRICE_READY_CLASS = 'bg-black/25 text-[#ffc1b2]';
+const PRICE_IDLE_CLASS = 'bg-zinc-800 text-zinc-600';
+
 interface EnhancePromptButtonProps {
     prompt: string;
     onEnhanced: (enhancedPrompt: string, result?: PromptEnhancementResult) => void;
@@ -145,9 +152,9 @@ export default function EnhancePromptButton({
                     title={value === 'cinematic'
                         ? 'Full rewrite with model-specific craft'
                         : 'Light touch — keeps your wording, fills only missing essentials'}
-                    className={`rounded-md font-semibold transition-colors ${isToolbar ? 'min-h-8 px-3 text-xs' : 'px-2 py-0.5 text-[10px]'} ${
+                    className={`rounded-md font-semibold transition-colors ${isToolbar ? 'min-h-9 px-3 text-xs' : 'px-2 py-0.5 text-[10px]'} ${
                         level === value
-                            ? 'bg-[#ff7a59]/20 text-[#ffb09c]'
+                            ? 'bg-brand-coral/20 text-[#ffb09c]'
                             : 'text-zinc-500 hover:text-zinc-300'
                     }`}
                 >
@@ -204,10 +211,8 @@ export default function EnhancePromptButton({
                         onClick={handleEnhance}
                         disabled={!canEnhance}
                         aria-label={enhanceLabel}
-                        className={`ui-focus-ring flex min-h-12 flex-wrap items-center justify-center gap-x-2 gap-y-0.5 rounded-2xl border px-3 py-1.5 text-sm font-semibold transition-[background-color,border-color,transform] duration-150 ${
-                            canEnhance
-                                ? 'border-[#ff7a59]/35 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/55 hover:bg-[#ff7a59]/15 active:scale-[0.98]'
-                                : 'cursor-not-allowed border-white/5 bg-zinc-900/40 text-zinc-500'
+                        className={`ui-focus-ring flex min-h-12 flex-wrap items-center justify-center gap-x-2 gap-y-0.5 rounded-full px-3 py-1.5 text-sm font-semibold transition-[background-color,border-color,transform] duration-150 ${
+                            canEnhance ? ENHANCE_READY_CLASS : ENHANCE_IDLE_CLASS
                         }`}
                     >
                         <span className="flex items-center gap-2">
@@ -216,7 +221,7 @@ export default function EnhancePromptButton({
                         </span>
                         {/* The price keeps to one line: where the tile is too narrow for both it takes the next. */}
                         {isEnhancing ? null : (
-                            <span className={`whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] ${canEnhance ? 'bg-black/25 text-[#ffc1b2]' : 'bg-zinc-800 text-zinc-600'}`}>
+                            <span className={`whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] ${canEnhance ? PRICE_READY_CLASS : PRICE_IDLE_CLASS}`}>
                                 {ENHANCEMENT_PRICE_LABEL}
                             </span>
                         )}
@@ -241,9 +246,7 @@ export default function EnhancePromptButton({
                     disabled={!canEnhance}
                     aria-label={enhanceLabel}
                     className={`group flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-300 ${
-                        canEnhance
-                            ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/50 hover:bg-[#ff7a59]/15 active:scale-[0.97]'
-                            : 'bg-zinc-900/30 text-zinc-600 border border-white/5 cursor-not-allowed'
+                        canEnhance ? ENHANCE_READY_CLASS : ENHANCE_IDLE_CLASS
                     }`}
                 >
                     {isEnhancing ? (
@@ -252,11 +255,7 @@ export default function EnhancePromptButton({
                         <Sparkles className={`w-3.5 h-3.5 transition-all ${canEnhance ? 'group-hover:scale-110' : ''}`} />
                     )}
                     <span>{isEnhancing ? loadingLabel : label}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                        canEnhance
-                            ? 'bg-black/25 text-[#ffc1b2]'
-                            : 'bg-zinc-800 text-zinc-600'
-                    }`}>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${canEnhance ? PRICE_READY_CLASS : PRICE_IDLE_CLASS}`}>
                         {ENHANCEMENT_PRICE_LABEL}
                     </span>
                 </button>

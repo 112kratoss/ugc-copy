@@ -88,14 +88,14 @@ export default function CatalogAdditionalControls({
   if (!controls.length) return null;
   const isPanel = appearance === 'panel';
   const fieldClass = isPanel
-    ? 'min-h-10 rounded-xl border border-white/[0.06] bg-black/30 px-3 text-sm font-medium text-white'
+    ? 'min-h-10 rounded-ui-md border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-3 text-sm font-medium text-[var(--ui-text-primary)]'
     : 'min-h-11 rounded-xl border border-white/10 bg-zinc-900 px-3 text-white';
   return (
     <div className={isPanel ? 'space-y-5' : 'space-y-3'} aria-label="Additional model settings">
       {controls.map((control) => (
         <label
           key={control.key}
-          className={isPanel ? 'flex flex-col gap-2 text-xs font-bold text-zinc-400' : 'flex flex-col gap-2 text-sm text-zinc-300'}
+          className={isPanel ? 'flex flex-col gap-2 text-xs font-bold text-[var(--ui-text-muted)]' : 'flex flex-col gap-2 text-sm text-zinc-300'}
         >
           {control.label}
           {control.type === 'choice' ? (

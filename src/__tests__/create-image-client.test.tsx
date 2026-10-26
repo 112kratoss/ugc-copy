@@ -812,7 +812,7 @@ function openSettings() {
 
 function chooseAspectRatio(ratio: string) {
   openSettings();
-  fireEvent.click(screen.getByRole('button', { name: ratio }));
+  fireEvent.click(screen.getByRole('radio', { name: ratio }));
 }
 
 /** The aspect ratio the bar's settings chip reads back ("1K · AUTO · JPG"). */
@@ -1255,21 +1255,18 @@ describe('CreateImageClient generation pipeline', () => {
   });
 
   // Under 1120px the result is drawn under the column, below the bar the creator presses.
+  // The canvas comes into view once a run the creator started is under way, and only then:
+  // a refusal is said in the bar, and a run resumed on load leaves the page at its top.
   describe('the result canvas', () => {
     const originalScrollIntoView = Element.prototype.scrollIntoView;
     let scrollIntoView: ReturnType<typeof vi.fn>;
 
-    function stubPanes(twoPanes: boolean) {
-      vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
-        matches: query === '(min-width: 1120px)' ? twoPanes : false,
-        media: query,
-        onchange: null,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      })));
+    /** Draws the canvas `top` pixels down the window: 1500 under the column, 88 beside it. */
+    function placeCanvas(top: number) {
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const y = this.getAttribute('aria-label') === 'Result' ? top : 0;
+        return { top: y, bottom: y, left: 0, right: 0, width: 0, height: 0, x: 0, y, toJSON: () => ({}) } as DOMRect;
+      });
     }
 
     beforeEach(() => {
@@ -1281,9 +1278,9 @@ describe('CreateImageClient generation pipeline', () => {
       Element.prototype.scrollIntoView = originalScrollIntoView;
     });
 
-    it('is brought into view when a run starts under the column', async () => {
-      stubPanes(false);
-      installFetch({ starts: ['hang'] });
+    it('is brought into view under the column once the run it started is under way', async () => {
+      placeCanvas(1500);
+      installFetch({ starts: [startedReply()] });
       render(<CreateImageClient prefill={{}} />);
       typePrompt('A lighthouse at dawn');
 
@@ -1294,15 +1291,41 @@ describe('CreateImageClient generation pipeline', () => {
       expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
     });
 
-    it('stays put beside the column, where it is in view already', async () => {
-      stubPanes(true);
-      installFetch({ starts: ['hang'] });
+    it('stays put when the start is refused, so the reason in the bar stays in view', async () => {
+      placeCanvas(1500);
+      installFetch({ starts: [{ status: 402, body: { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 8 credits.' } }] });
       render(<CreateImageClient prefill={{}} />);
       typePrompt('A lighthouse at dawn');
 
       pressGenerate();
 
-      expect(await screen.findByText('Creating your image')).toBeInTheDocument();
+      expect(await screen.findByText('Insufficient credits. This action costs 8 credits.')).toBeInTheDocument();
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it('stays put when a run is picked up on load, so the page opens at its top', async () => {
+      placeCanvas(1500);
+      maybeSingleMock.mockResolvedValueOnce({
+        data: { id: 'gen-old', prediction_id: 'pred-old', status: 'processing', created_at: new Date().toISOString(), prompt: 'An earlier run', cost: 8 },
+        error: null,
+      } as never);
+      installFetch();
+      render(<CreateImageClient prefill={{}} />);
+
+      // The earlier run was picked up and followed to its end.
+      await findResult();
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it('stays put beside the column, where it is in view already', async () => {
+      placeCanvas(88);
+      installFetch({ starts: [startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+
+      pressGenerate();
+
+      await findResult();
       expect(scrollIntoView).not.toHaveBeenCalled();
     });
   });

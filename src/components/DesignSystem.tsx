@@ -34,6 +34,10 @@ type AccentClasses = {
   button: string;
   surface: string;
   accentText: string;
+  /** A solid mark in the accent: the underline under a selected tab. */
+  indicator: string;
+  /** A chosen option in a row of choices: border, wash and text. */
+  selected: string;
 };
 
 const ACCENT_ALIASES: Record<UiAccent, NormalizedAccent> = {
@@ -60,6 +64,8 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-sky-500/20 via-sky-400/10 to-transparent',
     accentText: 'text-sky-300',
+    indicator: 'bg-brand-blue',
+    selected: 'border-brand-blue/50 bg-brand-blue/15 text-[var(--ui-text-primary)]',
   },
   video: {
     border: 'hover:border-rose-300/25',
@@ -69,6 +75,8 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-rose-500/18 via-orange-400/[0.07] to-transparent',
     accentText: 'text-rose-300',
+    indicator: 'bg-[var(--ui-accent-video)]',
+    selected: 'border-[var(--ui-accent-video)]/50 bg-[var(--ui-accent-video)]/15 text-[var(--ui-text-primary)]',
   },
   motion: {
     border: 'hover:border-white/18',
@@ -78,6 +86,8 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-white/[0.08] via-white/[0.03] to-transparent',
     accentText: 'text-[var(--ui-accent-motion)]',
+    indicator: 'bg-[var(--ui-accent-motion)]',
+    selected: 'border-[var(--ui-accent-motion)]/50 bg-[var(--ui-accent-motion)]/15 text-[var(--ui-text-primary)]',
   },
   workflow: {
     border: 'hover:border-emerald-300/25',
@@ -87,6 +97,8 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-emerald-500/20 via-teal-400/10 to-transparent',
     accentText: 'text-emerald-300',
+    indicator: 'bg-brand-emerald',
+    selected: 'border-brand-emerald/50 bg-brand-emerald/15 text-[var(--ui-text-primary)]',
   },
   commerce: {
     border: 'hover:border-amber-300/25',
@@ -96,6 +108,8 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-amber-500/20 via-orange-400/10 to-transparent',
     accentText: 'text-amber-300',
+    indicator: 'bg-[var(--ui-accent-commerce)]',
+    selected: 'border-[var(--ui-accent-commerce)]/50 bg-[var(--ui-accent-commerce)]/15 text-[var(--ui-text-primary)]',
   },
   danger: {
     border: 'hover:border-rose-300/25',
@@ -105,6 +119,8 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-rose-500/20 via-red-400/10 to-transparent',
     accentText: 'text-rose-300',
+    indicator: 'bg-brand-red',
+    selected: 'border-brand-red/50 bg-brand-red/15 text-[var(--ui-text-primary)]',
   },
   neutral: {
     border: 'hover:border-white/18',
@@ -114,6 +130,8 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     button: 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]',
     surface: 'from-white/10 via-white/[0.04] to-transparent',
     accentText: 'text-zinc-200',
+    indicator: 'bg-[var(--ui-text-secondary)]',
+    selected: 'border-[var(--ui-border-strong)] bg-[var(--ui-surface-3)] text-[var(--ui-text-primary)]',
   },
 };
 
