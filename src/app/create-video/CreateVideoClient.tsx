@@ -5,16 +5,38 @@ import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Images, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
+import { Sparkles, Loader2, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, Play, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
-    GeneratorPageHeader,
-    MediaStudioShell,
+    CREATOR_REFERENCE_CHIP_CLASS,
+    CreatorAddTile,
+    CreatorBackgroundRunLine,
+    CreatorBarAction,
+    CreatorCanvas,
+    CreatorCanvasFrame,
+    CreatorCanvasMedia,
+    CreatorColumnBar,
+    CreatorColumnLayout,
+    CreatorMentionPanel,
+    CreatorModelChip,
+    CreatorPendingStartNotice,
+    CreatorPhoneBalance,
+    CreatorReferenceRow,
+    CreatorResultActions,
+    CreatorSettingChoices,
+    CreatorSettingSwitch,
+    CreatorTemplatesTile,
+    CreatorToolTabs,
+    CreatorTopUpNotice,
+    CreatorUploadSlot,
+    creatorAddButtonClass,
+} from '@/components/CreatorColumn';
+import { getAccentClasses, IconButton } from '@/components/DesignSystem';
+import { videoSettingsSummary } from '@/lib/creator-settings-summary';
+import {
     StudioBackgroundProcessingNotice,
-    StudioElementChip,
     StudioElementHandle,
     StudioElementHandleList,
     StudioElementHandleText,
@@ -25,13 +47,9 @@ import {
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
-    StudioRunPanel,
-    StudioUploadedMediaPreview,
-    StudioWorkspacePanel,
 } from '@/components/CreatorStudio';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
@@ -233,7 +251,7 @@ function screenPickedFiles(files: File[], kind: StorageMediaKind): { accepted: F
     return { accepted, refusal: refusals.length > 0 ? refusals.join(' ') : null };
 }
 
-/** What the run panel says when picks were left out because the model takes no more. */
+/** What the column's bar says when picks were left out because the model takes no more. */
 function droppedPicksNotice(added: number, picked: number, limit: number, noun: string): string | null {
     if (added >= picked) return null;
     return `Added ${added} of ${picked}: this model takes up to ${limit} ${noun}${limit === 1 ? '' : 's'}.`;
@@ -384,14 +402,43 @@ async function loadCreationPublishDefaults(generationId: string, accessToken: st
     }
 }
 
+/** Single shot or multi-shot, as the app's segmented control offers them. */
+const SHOT_MODES = ['single', 'multi'] as const;
+
+/** The run in flight, as it was started: its frame's shape, its settings' line and its prompt. */
+type VideoRunShape = { aspectRatio: string | null; label: string | null; prompt: string | null };
+
+/** A multi-shot run's prompt as one caption: its shots' prompts in order. */
+function shotsPrompt(shots: ReadonlyArray<{ prompt: string }>) {
+    return shots.map((shot) => shot.prompt.trim()).filter(Boolean).join(' · ') || null;
+}
+
+/** The shape and prompt of a start that was sent, read off its saved body. */
+function runShapeOfStart(body: Record<string, unknown>): VideoRunShape {
+    const settings = body.settings && typeof body.settings === 'object' ? body.settings as Record<string, unknown> : {};
+    const shots = Array.isArray(body.shots)
+        ? body.shots.filter((shot): shot is { prompt: string } => typeof (shot as { prompt?: unknown })?.prompt === 'string')
+        : [];
+    return {
+        aspectRatio: typeof settings.aspectRatio === 'string' ? settings.aspectRatio : null,
+        label: null,
+        prompt: shots.length > 0 ? shotsPrompt(shots) : (typeof body.prompt === 'string' && body.prompt.trim() ? body.prompt.trim() : null),
+    };
+}
+
+/** A settings group's columns: its options on one row where up to five fit. */
+function choiceColumns(count: number): 3 | 4 | 5 {
+    return count <= 3 ? 3 : count === 4 ? 4 : 5;
+}
+
 function PromptQualityWarnings({ warnings }: { warnings: PromptEnhancementWarning[] }) {
     if (warnings.length === 0) {
         return null;
     }
 
     return (
-        <div className="mb-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">Prompt quality</p>
+        <div className="mb-3 rounded-ui-lg border border-amber-500/20 bg-amber-500/10 p-3">
+            <p className="text-xs font-semibold text-amber-200">Prompt quality</p>
             <div className="mt-2 space-y-2">
                 {warnings.slice(0, 4).map((warning) => (
                     <div key={warning.code} className="text-sm text-amber-100">
@@ -563,6 +610,7 @@ function KlingSubjectsEditor({
     onChange,
     onRename,
     onRefusedFiles,
+    onInsert,
 }: {
     subjects: KlingSubjectDraft[];
     limits: SubjectLimits;
@@ -570,6 +618,8 @@ function KlingSubjectsEditor({
     onChange: (next: KlingSubjectSeed[]) => void;
     onRename: (subjectId: string, displayName: string) => void;
     onRefusedFiles: (message: string | null) => void;
+    /** Puts a subject's @handle where the creator is writing, as a reference row's Insert does. */
+    onInsert: (handle: string) => void;
 }) {
     const KLING_SUBJECT_LIMIT = limits.maxNamed;
     const KLING_SUBJECT_MIN_IMAGES = limits.imagesPerSubject.min;
@@ -738,9 +788,20 @@ function KlingSubjectsEditor({
                                         </label>
                                     )}
                                 </div>
-                                <p className={`mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] ${imageCountOk ? 'text-zinc-500' : 'text-amber-300'}`}>
-                                    {subject.images.length}/{KLING_SUBJECT_MAX_IMAGES} images{imageCountOk ? '' : ` — add at least ${KLING_SUBJECT_MIN_IMAGES}`}
-                                </p>
+                                <div className="mt-2 flex items-center justify-between gap-2">
+                                    <p className={`text-xs font-semibold ${imageCountOk ? 'text-[var(--ui-text-faint)]' : 'text-amber-300'}`}>
+                                        {subject.images.length}/{KLING_SUBJECT_MAX_IMAGES} images{imageCountOk ? '' : ` — add at least ${KLING_SUBJECT_MIN_IMAGES}`}
+                                    </p>
+                                    <button
+                                        type="button"
+                                        disabled={disabled}
+                                        onClick={() => onInsert(subject.handle)}
+                                        aria-label={`Insert ${subject.handle}`}
+                                        className={CREATOR_REFERENCE_CHIP_CLASS}
+                                    >
+                                        Insert
+                                    </button>
+                                </div>
                             </div>
                         );
                     })}
@@ -992,7 +1053,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // run's error or its background state.
     const [pickNotice, setPickNotice] = useState<string | null>(null);
     // A start sent without an answer that says whether it started. Until one comes, the
-    // run panel offers to check again under the same key instead of starting another.
+    // bar offers to check again under the same key instead of starting another.
     const [unconfirmedStart, setUnconfirmedStart] = useState<PendingWebStart | null>(null);
     // The server's "not enough credits", for the balance and price it was given at. A
     // fresh balance or another price is a new question, so it applies only while both hold.
@@ -1015,8 +1076,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const hasResolvedInitialCatalogModel = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
-    const startImageInputRef = useRef<HTMLInputElement>(null);
-    const endImageInputRef = useRef<HTMLInputElement>(null);
     const elementInputRef = useRef<HTMLInputElement>(null);
     const referenceVideoInputRef = useRef<HTMLInputElement>(null);
     const referenceAudioInputRef = useRef<HTMLInputElement>(null);
@@ -1049,6 +1108,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
+    // Bumped once a start the creator pressed is confirmed: the result canvas comes into view.
+    const [canvasRevealKey, setCanvasRevealKey] = useState(0);
+    // The run in flight's shape, settings and prompt, which its frame and caption keep while
+    // the form changes for the next run.
+    const [runShape, setRunShape] = useState<VideoRunShape | null>(null);
     const nowMs = useTicker(isGenerating) ?? undefined;
 
     useEffect(() => () => {
@@ -1364,6 +1428,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const canAddShot = (multiShotMaxShots === null || multiPrompts.length < multiShotMaxShots)
         && (multiShotMaxTotalSeconds === null || totalDuration < multiShotMaxTotalSeconds);
     const multiShotOverLength = multiShotMaxTotalSeconds !== null && totalDuration > multiShotMaxTotalSeconds;
+    const videoAccent = getAccentClasses('video');
+    // The mode control's own name from the model's descriptor ("Grok mode"), as the app shows it.
+    const modeControlLabel = catalogDescriptor?.controls.find((control) => control.key === 'mode')?.label
+        ?? (selectedModel === 'veo-3.1' ? 'Model variant' : 'Quality mode');
+    // Hailuo 2.3 animates a start image and has no run without one (handleGenerate says so).
+    const startFrameRequired = selectedModel === 'hailuo-2.3';
+    // The settings chip, read as the app's ("720P · 16:9 · 5s").
+    const settingsSummary = videoSettingsSummary({
+        modeLabel: videoModel.modeOptions.find((option) => option.value === currentMode)?.label ?? currentMode,
+        resolution: currentResolution,
+        aspectRatio: currentAspectRatio,
+        durationSeconds: totalDuration,
+    });
     const hasReferenceVideoForRun = (activeReferenceMode === 'elements' && runReferenceVideos.length > 0) || (isKlingVideoModel && klingVideoElements.length > 0);
     const frameReferenceCount = Number(Boolean(startImageUrl || startImageFile)) + (activeSupportsEndFrame ? Number(Boolean(endImageUrl || endImageFile)) : 0);
     const estimatedReferenceCount =
@@ -3280,7 +3357,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     /**
      * A start that did not answer with a run. An answer that may still mean it started
-     * keeps the attempt, and the run panel offers to check again under its key. A
+     * keeps the attempt, and the column's bar offers to check again under its key. A
      * refusal clears it, and says what the creator can do about it.
      */
     const handleStartFailure = async (startError: unknown, attempt: PendingWebStart) => {
@@ -3296,7 +3373,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const message = startError instanceof Error && startError.message ? startError.message : 'Could not start generation.';
         const code = startError instanceof WebCatalogRequestError ? startError.code : undefined;
         if (code === 'insufficient_credits') {
-            // The balance on screen was out of date. It is read again, and the run panel
+            // The balance on screen was out of date. It is read again, and the column's bar
             // offers a top-up instead of a Generate the server would refuse once more.
             window.dispatchEvent(new Event('credits_updated'));
             setCreditRefusal({ message, ...creditContextRef.current });
@@ -3318,8 +3395,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
     };
 
-    /** Sends a saved start under its own key, and follows the run it answers with. */
-    const sendStartAndFollow = async (attempt: PendingWebStart, startedAtMs: number, estimatedTotalMs: number | null) => {
+    /**
+     * Sends a saved start under its own key, and follows the run it answers with. With
+     * `reveal`, the result canvas comes into view once the start is confirmed: a refusal is
+     * said in the column's bar and must stay in view, and a run picked up on load leaves the
+     * page where it is.
+     */
+    const sendStartAndFollow = async (
+        attempt: PendingWebStart,
+        startedAtMs: number,
+        estimatedTotalMs: number | null,
+        { reveal = false }: { reveal?: boolean } = {},
+    ) => {
         let started: WebGenerationStartResponse;
         try {
             const { data: { session: activeSession } } = await supabase.auth.getSession();
@@ -3341,6 +3428,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setLatestIsPublic(false);
             announceGenerationStarted();
             updateCredits(started.remainingCredits);
+            if (reveal) setCanvasRevealKey((key) => key + 1);
 
             const result = await pollPrediction(started.predictionId, startedAtMs, estimatedTotalMs);
             setOutputVideo(result.output);
@@ -3353,9 +3441,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
 
     /** "Check again": the unanswered start, replayed with the exact body under the same key. */
-    const replayPendingStart = async (attempt: PendingWebStart) => {
+    const replayPendingStart = async (attempt: PendingWebStart, { reveal = false }: { reveal?: boolean } = {}) => {
         if (activeGenerationRequestKeyRef.current) return;
         activeGenerationRequestKeyRef.current = attempt.idempotencyKey;
+        setRunShape((current) => current ?? runShapeOfStart(attempt.body));
         const startedAtMs = getCurrentTimestampMs();
         setIsGenerating(true);
         setError(null);
@@ -3367,7 +3456,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             estimatedTotalMs: null,
         }));
         try {
-            await sendStartAndFollow(attempt, startedAtMs, null);
+            await sendStartAndFollow(attempt, startedAtMs, null, { reveal });
         } finally {
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
@@ -3416,7 +3505,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
             const { data, error: pendingError } = await supabase
                 .from('generations')
-                .select('id, prediction_id, status, created_at, cost')
+                .select('id, prediction_id, status, created_at, cost, prompt')
                 .eq('user_id', session.user.id)
                 .eq('category', 'video')
                 .is('creation_mode', null)
@@ -3435,6 +3524,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setError(null);
             setLatestGenerationId(data.id ?? null);
             setLatestIsPublic(false);
+            setRunShape({ aspectRatio: null, label: null, prompt: typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null });
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'video',
                 phaseLabel: 'Resuming active run',
@@ -3469,7 +3559,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         if (activeGenerationRequestKeyRef.current) return;
         // An unanswered start is checked again under its own key before anything new is sent.
         if (unconfirmedStart && !replacingUnconfirmed) {
-            await replayPendingStart(unconfirmedStart);
+            await replayPendingStart(unconfirmedStart, { reveal: true });
             return;
         }
         setPickNotice(null);
@@ -3642,6 +3732,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setLatestGenerationId(null);
         setLatestIsPublic(false);
         setPublishedMeta(null);
+        setRunShape({
+            aspectRatio: currentAspectRatio,
+            label: `${videoModel.displayName} · ${settingsSummary}`,
+            prompt: currentIsMultiShot ? shotsPrompt(multiPrompts) : prompt.trim() || null,
+        });
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimatedGenerationTotalMs;
         setGenerationTiming(createLocalGenerationTiming({
@@ -3902,7 +3997,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }
             }
 
-            // The price on the run panel goes with the run when it is this run's own quote.
+            // The price on Generate goes with the run when it is this run's own quote.
             const payload = webCatalogStartRequest({
                 kind: 'video',
                 modelId: selectedModel,
@@ -3952,7 +4047,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 startedAtMs,
                 estimatedTotalMs,
             }));
-            await sendStartAndFollow(attempt, startedAtMs, estimatedTotalMs);
+            await sendStartAndFollow(attempt, startedAtMs, estimatedTotalMs, { reveal: true });
         } finally {
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
@@ -4004,50 +4099,338 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
 
-    const workspaceTitle = outputVideo
-        ? 'Latest video result'
-        : isGenerating
-            ? 'Creating your video'
-            : isBackgroundProcessing
-                ? backgroundProcessingCopy.title
-            : 'Ready to build a scene';
-
-    const workspaceDescription = outputVideo
-        ? 'Your newest video stays here until you start another run.'
-        : isGenerating
-            ? 'Track the active run here while the model handles timing, frames, and render.'
-            : isBackgroundProcessing
-                ? backgroundProcessingCopy.description
-            : activeReferenceMode === 'elements'
-                ? isSeedance2Family
-                    ? 'The workspace will show the current run and latest result once your Seedance references are ready to render.'
-                    : 'The workspace will show the current run and latest result once your reusable-reference scene starts rendering.'
-                : 'The workspace will show the current run and latest result once you generate.';
+    // The run's own prompt, not the form's: the form may hold the next run's by now.
+    const runPrompt = runShape?.prompt ?? null;
     const primarySharePrompt = publishedMeta?.description
+        || runPrompt
         || prompt.trim()
         || multiPrompts.map((shot) => shot.prompt.trim()).find(Boolean)
         || null;
     const shareTitle = publishedMeta?.title
+        || runPrompt
         || prompt.trim()
         || multiPrompts.map((shot) => shot.prompt.trim()).find(Boolean)
         || `${videoModel.displayName} video`;
     const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
 
-    return (
-        <div className="ui-page ui-page-ambient min-h-screen py-6 text-[var(--ui-text-primary)] sm:py-8 font-[family-name:var(--font-geist-sans)]">
-            <MediaStudioShell
-                currentToolId="video"
-                header={
-                    <GeneratorPageHeader
-                        currentToolId="video"
-                        title="Create video"
-                        eyebrow={`Creator studio / ${videoModel.displayName}`}
-                        description="Start with video when the idea needs movement, presence, or a clearer story in the very first output."
-                        credits={userCredits}
+    const canvasTitle = outputVideo
+        ? 'Your video'
+        : isGenerating
+            ? 'Creating your video'
+            : isBackgroundProcessing
+                ? 'Your video'
+                : 'Result';
+    const canvasSubtitle = outputVideo
+        ? runPrompt
+        : isGenerating
+            ? runShape?.label ?? `${videoModel.displayName} · ${settingsSummary}`
+            : isBackgroundProcessing
+                ? null
+                : `${videoModel.displayName} · ${settingsSummary}`;
+    // What the run needs, as the column's cards ask for it.
+    const emptyCanvasHint = currentIsMultiShot
+        ? 'Write each shot, then Generate.'
+        : klingSubjectsActive
+            ? 'Write a prompt that names your subjects, then Generate.'
+            : activeReferenceMode === 'elements'
+                ? 'Write a prompt, add references if you like, then Generate.'
+                : startFrameRequired
+                    ? startImageUrl || startImageFile
+                        ? 'Write a prompt, then Generate.'
+                        : 'Add a start frame and write a prompt, then Generate.'
+                    : 'Write a prompt, add frames if you like, then Generate.';
+
+    const isAwaitingStartCheck = Boolean(unconfirmedStart) && !isGenerating;
+    // What stops or explains a run, said just above the bar. Progress is drawn on the
+    // canvas; a run in the background is named here too, beside Generate.
+    const runStatus = isGenerating ? null : isBackgroundProcessing ? (
+        <CreatorBackgroundRunLine title={backgroundProcessingCopy.title} />
+    ) : unconfirmedStart ? (
+        <CreatorPendingStartNotice
+            message={START_UNCONFIRMED_MESSAGE}
+            costLabel={quoteUi.costLabel}
+            hasPrice={estimatedCost !== null}
+            disabled={quotePending || Boolean(promptLimitMessage)}
+            onStartNew={startNewRunInstead}
+        />
+    ) : pickNotice ? (
+        <p className="text-amber-200 [overflow-wrap:anywhere]">{pickNotice}</p>
+    ) : referenceLimitMessage ? (
+        <p className="text-red-400">{referenceLimitMessage}</p>
+    ) : promptLimitMessage ? (
+        <p className="text-red-400">{promptLimitMessage}</p>
+    ) : quoteState.pageOutOfDate ? (
+        // In place of the start's refusal it stands for.
+        <StudioOutOfDatePageNotice
+            isRemix={Boolean(remixId)}
+            reloadDidNotHelp={reloadBroughtBackThisBuild()}
+            onReload={() => void reloadPage()}
+        />
+    ) : error ? (
+        // The error can name a handle, and can print a subject's name or whatever the
+        // server answered. A handle gets its own box; any other word that no line can
+        // hold breaks where the line ends. A price that could not be read since (asked
+        // again after `cost_changed`, say) keeps its Retry under the error: Generate
+        // waits for a price.
+        <div className="space-y-2">
+            <p className="text-red-400 [overflow-wrap:anywhere]">
+                <StudioElementHandleText text={error} />
+            </p>
+            {quoteRetry}
+        </div>
+    ) : quoteState.status === 'error' ? (
+        quoteRetry
+    ) : null;
+    const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating ? (
+        <CreatorTopUpNotice cost={estimatedCost} balance={userCredits} message={creditRefusal?.message ?? null} />
+    ) : null;
+    const barStatus = topUpNotice || runStatus ? (
+        <div className="space-y-3">
+            {topUpNotice}
+            {runStatus}
+        </div>
+    ) : null;
+
+    // Check again goes through Generate's own path, which checks an unanswered start first.
+    const barAction = (
+        <CreatorBarAction
+            awaitingCheck={isAwaitingStartCheck}
+            onCheckAgain={() => void handleGenerate()}
+            showTopUp={showTopUp}
+            isGenerating={isGenerating}
+            disabled={quotePending || Boolean(promptLimitMessage)}
+            costLabel={quoteUi.costLabel}
+            hasPrice={estimatedCost !== null}
+            onGenerate={() => void handleGenerate()}
+        />
+    );
+
+    const settingsPanel = (
+        <div className="space-y-5">
+            {videoModel.modeOptions.length > 0 ? (
+                <CreatorSettingChoices
+                    label={modeControlLabel}
+                    options={videoModel.modeOptions.map((option) => option.value)}
+                    optionLabel={(value) => videoModel.modeOptions.find((option) => option.value === value)?.label ?? value}
+                    value={currentMode}
+                    onChange={setMode}
+                    columns={videoModel.modeOptions.length === 2 ? 2 : 1}
+                    accent="video"
+                />
+            ) : null}
+
+            {currentIsMultiShot ? (
+                <p className="text-xs text-[var(--ui-text-faint)]">Each shot sets its own length: {totalDuration}s in all.</p>
+            ) : singleShotDurationRange ? (
+                <div>
+                    <div className="mb-2 flex items-baseline justify-between gap-3">
+                        <label htmlFor="create-video-duration" className="text-xs font-bold text-[var(--ui-text-muted)]">Duration</label>
+                        <span className="text-xs font-bold tabular-nums text-[var(--ui-text-primary)]">{currentDuration}s</span>
+                    </div>
+                    <input
+                        id="create-video-duration"
+                        type="range"
+                        min={singleShotDurationRange.min}
+                        max={singleShotDurationRange.max}
+                        step="1"
+                        value={currentDuration}
+                        onChange={(event) => setSingleDuration(Number(event.target.value))}
+                        className={`ui-focus-ring w-full ${videoAccent.control}`}
                     />
-                }
-                controls={
+                    <div className="mt-1 flex justify-between text-xs tabular-nums text-[var(--ui-text-faint)]">
+                        <span>{singleShotDurationRange.min}s</span>
+                        <span>{singleShotDurationRange.max}s</span>
+                    </div>
+                </div>
+            ) : videoModel.durations.length > 1 ? (
+                <CreatorSettingChoices
+                    label="Duration"
+                    options={videoModel.durations.map(String)}
+                    optionLabel={(value) => `${value}s`}
+                    value={String(currentDuration)}
+                    onChange={(value) => setSingleDuration(Number(value))}
+                    columns={choiceColumns(videoModel.durations.length)}
+                    accent="video"
+                />
+            ) : (
+                <div className="flex items-baseline justify-between gap-3">
+                    <p className="text-xs font-bold text-[var(--ui-text-muted)]">Duration</p>
+                    <p className="text-sm font-semibold tabular-nums text-[var(--ui-text-primary)]">{videoModel.durations[0]}s, fixed</p>
+                </div>
+            )}
+
+            {videoModel.resolutions.length > 0 ? (
+                <CreatorSettingChoices
+                    label="Resolution"
+                    options={videoModel.resolutions as readonly string[]}
+                    value={currentResolution}
+                    onChange={setResolution}
+                    columns={choiceColumns(videoModel.resolutions.length)}
+                    accent="video"
+                />
+            ) : null}
+
+            <CreatorSettingChoices
+                label="Aspect ratio"
+                options={videoModel.aspectRatios as readonly string[]}
+                value={currentAspectRatio}
+                onChange={setAspectRatio}
+                columns={choiceColumns(videoModel.aspectRatios.length)}
+                accent="video"
+            />
+
+            {videoModel.supportsFixedLens ? (
+                <CreatorSettingSwitch
+                    label="Fixed lens"
+                    description="Keeps the camera still for the whole shot."
+                    checked={currentFixedLens}
+                    onChange={setFixedLens}
+                    accent="video"
+                />
+            ) : null}
+
+            {videoModel.supportsSound ? (
+                <CreatorSettingSwitch
+                    label="AI sound effects"
+                    description="Adds sound made for the scene."
+                    checked={currentSound}
+                    onChange={setSound}
+                    accent="video"
+                />
+            ) : null}
+
+            <CatalogAdditionalControls
+                appearance="panel"
+                descriptor={catalogDescriptor}
+                handledKeys={CATALOG_HANDLED_KEYS}
+                settings={{ mode: currentMode, aspectRatio: currentAspectRatio, sound: currentSound, duration: totalDuration, resolution: currentResolution, fixedLens: currentFixedLens, isMultiShot: currentIsMultiShot, referenceMode: activeReferenceMode, ...additionalSettings.settings }}
+                onChange={additionalSettings.onChange}
+            />
+        </div>
+    );
+
+    const canvasFooter = outputVideo ? (
+        <CreatorResultActions
+            generationId={latestGenerationId}
+            isPublic={latestIsPublic}
+            share={{ title: shareTitle, description: primarySharePrompt, sourceSurface: 'create-video', accessToken: session?.access_token ?? null }}
+            publicPath={publicResultPath}
+            onPublish={() => void openPublishModal()}
+            preparingPublish={isPreparingPublish}
+            download={{
+                href: resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo,
+                fileName: 'generated-video.mp4',
+                label: 'Download video',
+                newTab: true,
+            }}
+            onStartAnother={() => {
+                setOutputVideo(null);
+                setLatestGenerationId(null);
+                setLatestIsPublic(false);
+                setPublishedMeta(null);
+            }}
+        />
+    ) : isGenerating && generationTiming ? (
+        <StudioGenerationStatus
+            accent="rose"
+            timing={generationTiming}
+            nowMs={nowMs}
+        />
+    ) : null;
+
+    const cardHeadingClass = 'text-xs font-bold text-[var(--ui-text-muted)]';
+    const cardCountClass = 'text-xs font-bold tabular-nums text-[var(--ui-text-faint)]';
+    const standbyCardClass = 'rounded-ui-2xl border border-amber-500/20 bg-amber-500/10 p-4';
+    const mentionHandleClass = (candidate: { kind: string }) => (candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300');
+
+    return (
+        <div className="ui-page ui-page-ambient min-h-screen py-4 text-[var(--ui-text-primary)] sm:py-6 font-[family-name:var(--font-geist-sans)]">
+            <CreatorColumnLayout
+                title="Create video"
+                column={
                     <>
+                        <CreatorToolTabs currentToolId="video" />
+
+                        <div className="flex items-start gap-2">
+                            <div className="relative min-w-0 flex-1" ref={modelDropdownRef}>
+                                <CreatorModelChip
+                                    name={videoModel.displayName}
+                                    isOpen={isModelDropdownOpen}
+                                    onToggle={() => {
+                                        if (isModelDropdownOpen) setModelSearchQuery('');
+                                        setIsModelDropdownOpen(!isModelDropdownOpen);
+                                    }}
+                                />
+
+                                <StudioModelPicker
+                                    isOpen={isModelDropdownOpen}
+                                    loading={modelCatalog.isLoadingModels}
+                                    error={modelCatalog.error?.message}
+                                    onRetry={modelCatalog.refetch}
+                                    query={modelSearchQuery}
+                                    onQueryChange={setModelSearchQuery}
+                                    onDismiss={() => {
+                                        setIsModelDropdownOpen(false);
+                                        setModelSearchQuery('');
+                                    }}
+                                    searchLabel="Search video models"
+                                    searchPlaceholder="Search video models..."
+                                    resultListLabel="Video models"
+                                    resultCount={filteredVideoModelOptions.length}
+                                    accent="rose"
+                                >
+                                    {filteredVideoModelOptions.map((modelOption) => {
+                                        const isActive = selectedModel === modelOption.id;
+                                        const modelOptionDurationRange = getVideoDurationRange(modelOption.id as VideoModelId);
+
+                                        return (
+                                            <button
+                                                key={modelOption.id}
+                                                type="button"
+                                                role="option"
+                                                aria-selected={isActive}
+                                                onClick={() => handleSelectModel(modelOption.id as VideoModelId)}
+                                                className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
+                                            >
+                                                <div className="flex-1 min-w-0">
+                                                    <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
+                                                        {modelOption.displayName}
+                                                    </span>
+                                                    <p className="text-xs text-zinc-500 mt-0.5">{modelOption.description}</p>
+                                                    <div className="flex flex-wrap gap-1.5 mt-2">
+                                                        {modelOption.supportsMultiShot && (
+                                                            <span className="rounded-full border border-[#ff7a59]/20 bg-[#ff7a59]/10 px-2 py-0.5 text-[10px] text-[#ffb09c]">
+                                                                Multi-shot
+                                                            </span>
+                                                        )}
+                                                        {modelOption.supportsSound && (
+                                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                                                                Sound
+                                                            </span>
+                                                        )}
+                                                        {modelOption.supportsFixedLens && (
+                                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                                                                Fixed Lens
+                                                            </span>
+                                                        )}
+                                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
+                                                            {modelOptionDurationRange
+                                                                ? `${modelOptionDurationRange.min}-${modelOptionDurationRange.max}s`
+                                                                : (modelOption.durations.length > 1
+                                                                    ? `${modelOption.durations.join('/')}s`
+                                                                    : `${modelOption.durations[0]}s fixed`)}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                {isActive && <Check className="h-4 w-4 shrink-0 text-[#ff9a80]" />}
+                                            </button>
+                                        );
+                                    })}
+                                </StudioModelPicker>
+                            </div>
+                            <CreatorPhoneBalance credits={userCredits} />
+                        </div>
+
                         <AnimatePresence>
                             {remixId && isRemixLoading && (
                                 <motion.div
@@ -4065,6 +4448,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         action={
                                             remixVideoUrl ? (
                                                 <button
+                                                    type="button"
                                                     onClick={() => setIsPreviewModalOpen(true)}
                                                     className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
                                                 >
@@ -4086,180 +4470,27 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             ) : null}
                         </AnimatePresence>
 
-                        <motion.div
-                            initial={{ opacity: 0, y: 16 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="relative"
-                            ref={modelDropdownRef}
-                        >
-                            <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Model</p>
-                            <button
-                                onClick={() => {
-                                    if (isModelDropdownOpen) setModelSearchQuery('');
-                                    setIsModelDropdownOpen(!isModelDropdownOpen);
-                                }}
-                                aria-expanded={isModelDropdownOpen}
-                                aria-haspopup="listbox"
-                                className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-zinc-900/50 border border-white/10 rounded-2xl hover:bg-zinc-900/70 hover:border-white/15 transition-all backdrop-blur-sm"
-                            >
-                                <div className="flex items-center gap-3">
-                                    <Video className="w-4 h-4 text-white" />
-                                    <div className="text-left">
-                                        <div className="text-sm font-bold text-white">{videoModel.displayName}</div>
-                                        <p className="text-xs text-zinc-500 mt-0.5">{videoModel.description}</p>
-                                    </div>
-                                </div>
-                                <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
-                            </button>
+                        {videoModel.supportsMultiShot ? (
+                            <CreatorSettingChoices
+                                label="Shot mode"
+                                labelHidden
+                                options={SHOT_MODES}
+                                optionLabel={(value) => (value === 'multi' ? 'Multi-shot' : 'Single shot')}
+                                value={currentIsMultiShot ? 'multi' : 'single'}
+                                onChange={(value) => setIsMultiShot(value === 'multi')}
+                                columns={2}
+                                accent="video"
+                            />
+                        ) : null}
 
-                            <StudioModelPicker
-                                isOpen={isModelDropdownOpen}
-                                loading={modelCatalog.isLoadingModels}
-                                error={modelCatalog.error?.message}
-                                onRetry={modelCatalog.refetch}
-                                query={modelSearchQuery}
-                                onQueryChange={setModelSearchQuery}
-                                onDismiss={() => {
-                                    setIsModelDropdownOpen(false);
-                                    setModelSearchQuery('');
-                                }}
-                                searchLabel="Search video models"
-                                searchPlaceholder="Search video models..."
-                                resultListLabel="Video models"
-                                resultCount={filteredVideoModelOptions.length}
-                                accent="rose"
-                            >
-                                            {filteredVideoModelOptions.map((modelOption) => {
-                                                const isActive = selectedModel === modelOption.id;
-                                                const modelOptionDurationRange = getVideoDurationRange(modelOption.id as VideoModelId);
-
-                                                return (
-                                                    <button
-                                                        key={modelOption.id}
-                                                        type="button"
-                                                        role="option"
-                                                        aria-selected={isActive}
-                                                        onClick={() => handleSelectModel(modelOption.id as VideoModelId)}
-                                                        className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
-                                                    >
-                                                        <div className="flex-1 min-w-0">
-                                                            <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
-                                                                {modelOption.displayName}
-                                                            </span>
-                                                            <p className="text-xs text-zinc-500 mt-0.5">{modelOption.description}</p>
-                                                            <div className="flex flex-wrap gap-1.5 mt-2">
-                                                                {modelOption.supportsMultiShot && (
-                                                                    <span className="rounded-full border border-[#ff7a59]/20 bg-[#ff7a59]/10 px-2 py-0.5 text-[10px] text-[#ffb09c]">
-                                                                        Multi-shot
-                                                                    </span>
-                                                                )}
-                                                                {modelOption.supportsSound && (
-                                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
-                                                                        Sound
-                                                                    </span>
-                                                                )}
-                                                                {modelOption.supportsFixedLens && (
-                                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
-                                                                        Fixed Lens
-                                                                    </span>
-                                                                )}
-                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
-                                                                    {modelOptionDurationRange
-                                                                        ? `${modelOptionDurationRange.min}-${modelOptionDurationRange.max}s`
-                                                                        : (modelOption.durations.length > 1
-                                                                            ? `${modelOption.durations.join('/')}s`
-                                                                            : `${modelOption.durations[0]}s fixed`)}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                        {isActive && <Check className="h-4 w-4 shrink-0 text-[#ff9a80]" />}
-                                                    </button>
-                                                );
-                                            })}
-                            </StudioModelPicker>
-                            <CatalogAdditionalControls descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ mode: currentMode, aspectRatio: currentAspectRatio, sound: currentSound, duration: totalDuration, resolution: currentResolution, fixedLens: currentFixedLens, isMultiShot: currentIsMultiShot, referenceMode: activeReferenceMode, ...additionalSettings.settings }} onChange={additionalSettings.onChange} />
-                        </motion.div>
-
-                        {videoModel.supportsMultiShot && (
-                            <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-2 flex gap-2 backdrop-blur-sm self-start">
-                                <button
-                                    onClick={() => setIsMultiShot(false)}
-                                    className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${!currentIsMultiShot ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'text-zinc-500 hover:text-white'}`}
-                                >
-                                    Single Shot
-                                </button>
-                                <button
-                                    onClick={() => setIsMultiShot(true)}
-                                    className={`px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${currentIsMultiShot ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'text-zinc-500 hover:text-white'}`}
-                                >
-                                    Multi-Shot
-                                </button>
-                            </div>
-                        )}
-
-                        <AnimatePresence mode="popLayout">
-                            {!currentIsMultiShot ? (
-                                <motion.div
-                                    key="single-shot"
-                                    initial={{ opacity: 0, scale: 0.95 }}
-                                    animate={{ opacity: 1, scale: 1 }}
-                                    exit={{ opacity: 0, scale: 0.95 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm"
-                                >
-                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Prompt</h2>
-                                    <EnhancePromptButton
-                                        prompt={prompt}
-                                        onEnhanced={(text, result) => {
-                                            setPrompt(text);
-                                            setPromptQualityWarnings(result?.warnings ?? []);
-                                            setActiveMentionQuery(null);
-                                            requestAnimationFrame(() => updateMentionState(text));
-                                        }}
-                                        onCreditsUpdate={updateCredits}
-                                        medium="video"
-                                        selectedModel={selectedModel}
-                                        helperText={
-                                            activeReferenceMode === 'elements' && runElements.length > 0
-                                                ? 'Reusable references keep their @handles. This enhances the scene while preserving those identities.'
-                                                : undefined
-                                        }
-                                        context={buildSinglePromptQualityContext()}
-                                        prepareContext={prepareSinglePromptEnhancerContext}
-                                        disabled={isGenerating}
-                                        showWarnings={false}
-                                    />
-                                    <PromptQualityWarnings warnings={promptQualityWarnings} />
-	                                    {(canUseVideoElements || (isKlingVideoModel && promptMentionCandidates.length > 0)) && (
-	                                        <div className="mb-4 mt-4 space-y-3">
-	                                            <div className="flex items-center justify-between gap-3">
-	                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-	                                                    {isKlingVideoModel || isKlingO3Model ? 'Prompt references' : 'Reusable image references'}
-	                                                </p>
-	                                                <span className="text-xs text-zinc-500">
-	                                                    Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
-	                                                </span>
-	                                            </div>
-	                                            {promptMentionCandidates.length > 0 ? (
-	                                                <div className="flex flex-wrap gap-2">
-	                                                    {promptMentionCandidates.map((candidate) => (
-	                                                        <StudioElementChip
-	                                                            key={`${candidate.kind}-${candidate.id}`}
-	                                                            displayName={candidate.displayName}
-	                                                            handle={candidate.handle}
-	                                                            handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
-	                                                            onInsert={() => handleInsertPromptHandle(candidate.handle)}
-	                                                        />
-	                                                    ))}
-	                                                </div>
-                                            ) : (
-                                                <p className="text-sm text-zinc-500">
-                                                    Upload reference images below to anchor characters, products, or scenes directly in the prompt.
-                                                </p>
-                                            )}
-                                        </div>
-                                    )}
+                        {!currentIsMultiShot ? (
+                            <>
+                                <div className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${videoAccent.outline}`}>
+                                    <label htmlFor="create-video-prompt" className="ui-kicker block px-4 pt-4">
+                                        Prompt
+                                    </label>
                                     <textarea
+                                        id="create-video-prompt"
                                         ref={promptTextareaRef}
                                         value={prompt}
                                         onChange={(event) => handlePromptChange(event.target.value, event.target.selectionStart ?? event.target.value.length)}
@@ -4268,9 +4499,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         placeholder={`Describe the ${videoModel.displayName} scene in rich cinematic detail...`}
                                         maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                         aria-invalid={promptMeter.state === 'over' || undefined}
-                                        className="w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 focus:border-[#ff7a59]/50 focus:ring-4 focus:ring-[#ff7a59]/10 outline-none resize-y min-h-[140px] text-sm leading-relaxed"
+                                        className="block min-h-[176px] w-full resize-y bg-transparent px-4 pb-2 pt-2 text-sm leading-6 text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)]"
                                     />
-                                    <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                                    <div className="flex items-center justify-between gap-3 px-4 pb-3 text-xs">
                                         <PromptLengthCounter meter={promptMeter} />
                                         {staleElementMentions.length > 0 ? (
                                             <span className="min-w-0 text-right text-rose-300">
@@ -4285,407 +4516,285 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             </span>
                                         ) : null}
                                     </div>
-                                    {activeMentionQuery ? (
-                                        <div className="mt-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
-                                            <div className="flex flex-wrap items-center justify-between gap-3">
-                                                <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-                                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-	                                                        Insert reference
-	                                                    </p>
-	                                                    <p className="mt-1 text-sm text-zinc-400">
-	                                                        {mentionSuggestions.length > 0
-	                                                            ? 'Pick a reference to insert its @mention.'
-	                                                            : 'No matching references yet.'}
-	                                                    </p>
-                                                </div>
-                                                {activeMentionQuery.query ? (
-                                                    <StudioElementHandle
-                                                        handle={`@${activeMentionQuery.query}`}
-                                                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
-                                                    />
-                                                ) : null}
-                                            </div>
-                                            {mentionSuggestions.length > 0 ? (
-                                                <div className="mt-3 flex flex-wrap gap-2">
-	                                                    {mentionSuggestions.map((candidate) => (
-	                                                        <StudioElementChip
-	                                                            key={`${candidate.kind}-${candidate.id}`}
-	                                                            displayName={candidate.displayName}
-	                                                            handle={candidate.handle}
-	                                                            handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
-	                                                            onInsert={() => handleInsertPromptHandle(candidate.handle)}
-	                                                        />
-	                                                    ))}
-                                                </div>
+                                </div>
+
+                                {activeMentionQuery ? (
+                                    <CreatorMentionPanel
+                                        title="Insert reference"
+                                        hint={mentionSuggestions.length > 0 ? 'Pick a reference to insert its @mention.' : 'No matching references yet.'}
+                                        query={activeMentionQuery.query}
+                                        suggestions={mentionSuggestions}
+                                        handleClassName={mentionHandleClass}
+                                        onInsert={handleInsertPromptHandle}
+                                    />
+                                ) : null}
+
+                                <EnhancePromptButton
+                                    variant="toolbar"
+                                    leading={<CreatorTemplatesTile />}
+                                    prompt={prompt}
+                                    onEnhanced={(text, result) => {
+                                        setPrompt(text);
+                                        setPromptQualityWarnings(result?.warnings ?? []);
+                                        setActiveMentionQuery(null);
+                                        requestAnimationFrame(() => updateMentionState(text));
+                                    }}
+                                    onCreditsUpdate={updateCredits}
+                                    medium="video"
+                                    selectedModel={selectedModel}
+                                    helperText={
+                                        activeReferenceMode === 'elements' && runElements.length > 0
+                                            ? 'Reusable references keep their @handles. This enhances the scene while preserving those identities.'
+                                            : undefined
+                                    }
+                                    context={buildSinglePromptQualityContext()}
+                                    prepareContext={prepareSinglePromptEnhancerContext}
+                                    disabled={isGenerating}
+                                    showWarnings={false}
+                                />
+                                <PromptQualityWarnings warnings={promptQualityWarnings} />
+                            </>
+                        ) : (
+                            <div className="flex flex-col gap-3">
+                                {multiPrompts.map((shot, index) => (
+                                    <div role="group"
+                                        key={shot.id}
+                                        aria-labelledby={`create-video-shot-${shot.id}`}
+                                        className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] p-4 transition-colors duration-150 ${videoAccent.outline}`}
+                                    >
+                                        <div className="mb-2 flex items-center justify-between gap-3">
+                                            <h2 id={`create-video-shot-${shot.id}`} className="ui-kicker">Shot {index + 1}</h2>
+                                            {multiPrompts.length > 1 ? (
+                                                <IconButton label={`Remove shot ${index + 1}`} icon={Trash2} onClick={() => removeShot(shot.id)} className="-my-2 -mr-2" />
                                             ) : null}
                                         </div>
-                                    ) : null}
-                                    <div className="mt-4 flex items-center justify-between gap-4">
-                                        <div className="flex items-center gap-3 flex-wrap">
-                                            <span className="text-xs text-zinc-500 font-medium">Duration:</span>
-                                            {singleShotDurationRange ? (
-                                                <>
-                                                    <input
-                                                        type="range"
-                                                        min={singleShotDurationRange.min}
-                                                        max={singleShotDurationRange.max}
-                                                        step="1"
-                                                        value={currentDuration}
-                                                        onChange={(event) => setSingleDuration(Number(event.target.value))}
-                                                        className="w-36 accent-[#ff7a59]"
-                                                    />
-                                                    <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/10 text-white border border-white/20">
-                                                        {currentDuration} sec
-                                                    </span>
-                                                    <span className="text-xs text-zinc-600">
-                                                        {singleShotDurationRange.min}-{singleShotDurationRange.max}s
-                                                    </span>
-                                                </>
-                                            ) : videoModel.durations.length > 1 ? (
-                                                videoModel.durations.map((durationOption) => (
-                                                    <button
-                                                        key={durationOption}
-                                                        onClick={() => setSingleDuration(durationOption)}
-                                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${currentDuration === durationOption ? 'bg-white/10 text-white border border-white/20' : 'bg-black text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
-                                                    >
-                                                        {durationOption} sec
-                                                    </button>
-                                                ))
-                                            ) : (
-                                                <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/10 text-white border border-white/20">
-                                                    {videoModel.durations[0]} sec fixed
-                                                </span>
-                                            )}
+                                        <EnhancePromptButton
+                                            prompt={shot.prompt}
+                                            onEnhanced={(text, result) => {
+                                                updateShot(shot.id, 'prompt', text);
+                                                setMultiPromptQualityWarnings((current) => ({
+                                                    ...current,
+                                                    [shot.id]: result?.warnings ?? [],
+                                                }));
+                                            }}
+                                            onCreditsUpdate={updateCredits}
+                                            medium="video"
+                                            selectedModel={selectedModel}
+                                            context={buildShotPromptQualityContext(shot, index)}
+                                            disabled={isGenerating}
+                                            showWarnings={false}
+                                        />
+                                        <PromptQualityWarnings warnings={multiPromptQualityWarnings[shot.id] ?? []} />
+                                        <textarea
+                                            ref={(element) => {
+                                                multiShotTextareaRefs.current[shot.id] = element;
+                                            }}
+                                            value={shot.prompt}
+                                            onChange={(event) => handleShotPromptChange(shot.id, event.target.value, event.target.selectionStart ?? event.target.value.length)}
+                                            onFocus={() => {
+                                                setFocusedShotId(shot.id);
+                                                updateShotMentionState(shot.id, shot.prompt);
+                                            }}
+                                            onClick={() => syncShotPromptCaretState(shot)}
+                                            onKeyUp={() => syncShotPromptCaretState(shot)}
+                                            placeholder={`Describe shot ${index + 1}...`}
+                                            maxLength={GENERATION_PROMPT_MAX_LENGTH}
+                                            aria-label={`Shot ${index + 1} prompt`}
+                                            aria-invalid={shotMeter(shot.prompt).state === 'over' || undefined}
+                                            className={`mb-3 block min-h-[100px] w-full resize-y rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3 text-sm leading-6 text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] ${videoAccent.fieldFocus}`}
+                                        />
+                                        {activeShotMentionQuery?.shotId === shot.id && shotPromptsTakeMentions ? (
+                                            <div className="mb-3">
+                                                <CreatorMentionPanel
+                                                    title={shotMentionPanelCopy.title}
+                                                    hint={shotMentionSuggestions.length > 0 ? shotMentionPanelCopy.pick : shotMentionPanelCopy.none}
+                                                    query={activeShotMentionQuery.query}
+                                                    suggestions={shotMentionSuggestions}
+                                                    handleClassName={mentionHandleClass}
+                                                    onInsert={(handle) => handleInsertShotHandle(shot.id, handle)}
+                                                />
+                                            </div>
+                                        ) : null}
+                                        <div className="flex items-center gap-3">
+                                            <label htmlFor={`create-video-shot-duration-${shot.id}`} className="text-xs font-bold text-[var(--ui-text-muted)]">
+                                                Duration
+                                            </label>
+                                            <input
+                                                id={`create-video-shot-duration-${shot.id}`}
+                                                type="range"
+                                                min="1"
+                                                max="12"
+                                                step="1"
+                                                value={shot.duration}
+                                                onChange={(event) => updateShot(shot.id, 'duration', parseInt(event.target.value))}
+                                                className={`ui-focus-ring w-32 ${videoAccent.control}`}
+                                            />
+                                            <span className="text-xs font-bold tabular-nums text-[var(--ui-text-primary)]">{shot.duration}s</span>
+                                            {/* The shot's own limit, which Kling 3.0 and Kling O3 set far below the prompt's. */}
+                                            <PromptLengthCounter meter={shotMeter(shot.prompt)} className="ml-auto text-xs" />
                                         </div>
                                     </div>
-                                </motion.div>
-                            ) : (
-                                <motion.div
-                                    key="multi-shot"
-                                    initial={{ opacity: 0, scale: 0.95 }}
-                                    animate={{ opacity: 1, scale: 1 }}
-                                    exit={{ opacity: 0, scale: 0.95 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="flex flex-col gap-4"
+                                ))}
+
+                                <p className={`px-1 text-xs ${multiShotOverLength ? 'text-rose-300' : 'text-[var(--ui-text-faint)]'}`}>
+                                    {`${multiPrompts.length}${multiShotMaxShots === null ? '' : ` of ${multiShotMaxShots}`} shot${multiPrompts.length === 1 && multiShotMaxShots === null ? '' : 's'} · ${totalDuration}s in total${multiShotMaxTotalSeconds === null ? '' : `, up to ${multiShotMaxTotalSeconds}s`}${multiShotOverLength ? '. Shorten a shot to generate.' : ''}`}
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={addShot}
+                                    disabled={!canAddShot}
+                                    className={creatorAddButtonClass('video')}
                                 >
-                                    <AnimatePresence>
-                                        {multiPrompts.map((shot, index) => (
-                                            <motion.div
-                                                key={shot.id}
-                                                initial={{ opacity: 0, height: 0 }}
-                                                animate={{ opacity: 1, height: 'auto' }}
-                                                exit={{ opacity: 0, height: 0 }}
-                                                className="group relative rounded-3xl border border-[#ff7a59]/20 bg-zinc-900/30 p-6 backdrop-blur-sm"
-                                            >
-                                                <div className="flex justify-between items-center mb-3">
-                                                    <h2 className="text-xs font-bold uppercase tracking-widest text-[#ff9a80]">Shot {index + 1}</h2>
-                                                    {multiPrompts.length > 1 && (
-                                                        <button onClick={() => removeShot(shot.id)} className="text-zinc-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100">
-                                                            <Trash2 className="w-4 h-4" />
-                                                        </button>
-                                                    )}
-                                                </div>
-                                                <EnhancePromptButton
-                                                    prompt={shot.prompt}
-                                                    onEnhanced={(text, result) => {
-                                                        updateShot(shot.id, 'prompt', text);
-                                                        setMultiPromptQualityWarnings((current) => ({
-                                                            ...current,
-                                                            [shot.id]: result?.warnings ?? [],
-                                                        }));
-                                                    }}
-                                                    onCreditsUpdate={updateCredits}
-                                                    medium="video"
-                                                    selectedModel={selectedModel}
-                                                    context={buildShotPromptQualityContext(shot, index)}
-                                                    disabled={isGenerating}
-                                                    showWarnings={false}
-                                                />
-                                                <PromptQualityWarnings warnings={multiPromptQualityWarnings[shot.id] ?? []} />
-	                                                <textarea
-	                                                    ref={(element) => {
-	                                                        multiShotTextareaRefs.current[shot.id] = element;
-	                                                    }}
-	                                                    value={shot.prompt}
-	                                                    onChange={(event) => handleShotPromptChange(shot.id, event.target.value, event.target.selectionStart ?? event.target.value.length)}
-	                                                    onFocus={() => {
-	                                                        setFocusedShotId(shot.id);
-	                                                        updateShotMentionState(shot.id, shot.prompt);
-	                                                    }}
-	                                                    onClick={() => syncShotPromptCaretState(shot)}
-	                                                    onKeyUp={() => syncShotPromptCaretState(shot)}
-	                                                    placeholder={`Describe shot ${index + 1}...`}
-	                                                    maxLength={GENERATION_PROMPT_MAX_LENGTH}
-	                                                    aria-invalid={shotMeter(shot.prompt).state === 'over' || undefined}
-	                                                    className="mb-4 min-h-[100px] w-full resize-none rounded-2xl border border-white/10 bg-black/50 p-4 text-sm text-white outline-none focus:border-[#ff7a59]/50"
-	                                                />
-	                                                {activeShotMentionQuery?.shotId === shot.id && shotPromptsTakeMentions ? (
-	                                                    <div className="mb-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
-	                                                        <div className="flex flex-wrap items-center justify-between gap-3">
-	                                                            <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-	                                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">{shotMentionPanelCopy.title}</p>
-	                                                                <p className="mt-1 text-sm text-zinc-400">
-	                                                                    {shotMentionSuggestions.length > 0 ? shotMentionPanelCopy.pick : shotMentionPanelCopy.none}
-	                                                                </p>
-	                                                            </div>
-	                                                            {activeShotMentionQuery.query ? (
-	                                                                <StudioElementHandle
-	                                                                    handle={`@${activeShotMentionQuery.query}`}
-	                                                                    className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
-	                                                                />
-	                                                            ) : null}
-	                                                        </div>
-	                                                        {shotMentionSuggestions.length > 0 ? (
-	                                                            <div className="mt-3 flex flex-wrap gap-2">
-	                                                                {shotMentionSuggestions.map((candidate) => (
-	                                                                    <StudioElementChip
-	                                                                        key={`${candidate.kind}-${candidate.id}`}
-	                                                                        displayName={candidate.displayName}
-	                                                                        handle={candidate.handle}
-	                                                                        handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
-	                                                                        onInsert={() => handleInsertShotHandle(shot.id, candidate.handle)}
-	                                                                    />
-	                                                                ))}
-	                                                            </div>
-	                                                        ) : null}
-	                                                    </div>
-	                                                ) : null}
-	                                                <div className="flex items-center gap-3">
-                                                    <span className="text-xs text-zinc-500 font-medium">Duration (1-12s):</span>
-                                                    <input
-                                                        type="range"
-                                                        min="1"
-                                                        max="12"
-                                                        step="1"
-                                                        value={shot.duration}
-                                                        onChange={(event) => updateShot(shot.id, 'duration', parseInt(event.target.value))}
-                                                        className="w-32 accent-[#ff7a59]"
-                                                    />
-                                                    <span className="text-xs font-bold text-white">{shot.duration}s</span>
-                                                    {/* The shot's own limit, which Kling 3.0 and Kling O3 set far below the prompt's. */}
-                                                    <PromptLengthCounter meter={shotMeter(shot.prompt)} className="ml-auto text-xs" />
-                                                </div>
-                                            </motion.div>
-                                        ))}
-                                    </AnimatePresence>
-
-                                    <p className={`px-2 text-xs ${multiShotOverLength ? 'text-rose-300' : 'text-zinc-500'}`}>
-                                        {`${multiPrompts.length}${multiShotMaxShots === null ? '' : ` of ${multiShotMaxShots}`} shot${multiPrompts.length === 1 && multiShotMaxShots === null ? '' : 's'} · ${totalDuration}s in total${multiShotMaxTotalSeconds === null ? '' : `, up to ${multiShotMaxTotalSeconds}s`}${multiShotOverLength ? '. Shorten a shot to generate.' : ''}`}
-                                    </p>
-                                    <button
-                                        onClick={addShot}
-                                        disabled={!canAddShot}
-                                        className="flex w-full items-center justify-center gap-2 rounded-3xl border-2 border-dashed border-zinc-800 py-4 font-medium text-zinc-500 transition-all hover:border-[#ff7a59]/50 hover:bg-[#ff7a59]/5 hover:text-[#ff9a80] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-zinc-800 disabled:hover:bg-transparent disabled:hover:text-zinc-500"
-                                    >
-                                        <Plus className="w-5 h-5" /> Add New Shot
-                                    </button>
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
-
-                        {!currentIsMultiShot && canUseVideoElements && affordances.framesExcludeReferences && (
-                            <motion.div
-                                initial={{ opacity: 0, y: 16 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm"
-                            >
-                                <div className="flex items-start justify-between gap-4">
-                                    <div>
-                                        <h2 className="text-sm font-semibold text-white">Frames or references</h2>
-                                        <p className="mt-1 text-sm text-zinc-400">
-                                            {framesAndReferencesConflict
-                                                ? `${videoModel.displayName} cannot combine frames with references, and this draft holds both. Clear one — as it stands the run will use your references and ignore the frames.`
-                                                : framesLockedByReferences
-                                                    ? `${videoModel.displayName} cannot combine frames with references. Clear your references to define a start or end frame instead.`
-                                                    : referencesLockedByFrames
-                                                        ? `${videoModel.displayName} cannot combine references with frames. Clear your frames to use reusable references instead.`
-                                                        : `${videoModel.displayName} takes either frames or references in a single run. Attach one and the other locks until you clear it.`}
-                                        </p>
-                                    </div>
-                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-                                        {videoElementSupport.maxElements} references max
-                                    </span>
-                                </div>
-                            </motion.div>
+                                    <Plus aria-hidden className={`h-4 w-4 ${videoAccent.mark}`} /> Add New Shot
+                                </button>
+                            </div>
                         )}
 
-	                        {supportsNamedSubjects && (
-	                            <motion.div
-	                                initial={{ opacity: 0, y: 16 }}
-	                                animate={{ opacity: 1, y: 0 }}
-	                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(16,22,20,0.96),rgba(7,10,9,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
-	                            >
-	                                <KlingSubjectsEditor
-	                                    subjects={klingSubjects}
-	                                    limits={affordances.subjects}
-	                                    disabled={isGenerating}
-	                                    onChange={commitKlingSubjects}
-	                                    onRename={handleKlingSubjectRename}
-	                                    onRefusedFiles={setPickNotice}
-	                                />
-	                            </motion.div>
-	                        )}
+                        {!videoModel.supportsSound && ALWAYS_ON_AUDIO_VIDEO_MODELS.has(selectedModel) ? (
+                            <p className="flex items-start gap-2 px-1 text-xs leading-5 text-[var(--ui-text-muted)]">
+                                <Volume2 aria-hidden className={`mt-0.5 h-4 w-4 shrink-0 ${videoAccent.mark}`} />
+                                This model always generates audio. Describe the sound you want in the prompt, or say “no music”.
+                            </p>
+                        ) : null}
 
-	                        {showKlingVideoElementEditor && (
-	                            <motion.div
-	                                initial={{ opacity: 0, y: 16 }}
-	                                animate={{ opacity: 1, y: 0 }}
-	                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(16,22,20,0.96),rgba(7,10,9,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
-	                            >
-	                                <div className="mb-4 flex items-start justify-between gap-3">
-	                                    <div>
-	                                        <h2 className="text-sm font-semibold text-white">Kling video elements</h2>
-	                                        <p className="mt-1 text-sm text-zinc-400">
-	                                            Add named clips and mention their @handles in the prompt or shot prompts.
-	                                        </p>
-	                                    </div>
-	                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-	                                        {klingVideoElements.length}/{KLING_VIDEO_ELEMENT_LIMIT}
-	                                    </span>
-	                                </div>
+                        {!currentIsMultiShot && canUseVideoElements && affordances.framesExcludeReferences && (
+                            <div className="rounded-ui-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-4">
+                                <div className="flex items-start justify-between gap-3">
+                                    <h2 className="text-sm font-semibold text-[var(--ui-text-primary)]">Frames or references</h2>
+                                    <span className={cardCountClass}>{videoElementSupport.maxElements} references max</span>
+                                </div>
+                                <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
+                                    {framesAndReferencesConflict
+                                        ? `${videoModel.displayName} cannot combine frames with references, and this draft holds both. Clear one — as it stands the run will use your references and ignore the frames.`
+                                        : framesLockedByReferences
+                                            ? `${videoModel.displayName} cannot combine frames with references. Clear your references to define a start or end frame instead.`
+                                            : referencesLockedByFrames
+                                                ? `${videoModel.displayName} cannot combine references with frames. Clear your frames to use reusable references instead.`
+                                                : `${videoModel.displayName} takes either frames or references in a single run. Attach one and the other locks until you clear it.`}
+                                </p>
+                            </div>
+                        )}
 
-	                                <input
-	                                    ref={klingVideoInputRef}
-	                                    type="file"
-	                                    accept="video/mp4,video/quicktime,.mp4,.mov"
-	                                    multiple
-	                                    onChange={handleKlingVideoElementUpload}
-	                                    className="hidden"
-	                                />
+                        {supportsNamedSubjects && (
+                            <div className="ui-card p-4">
+                                <KlingSubjectsEditor
+                                    subjects={klingSubjects}
+                                    limits={affordances.subjects}
+                                    disabled={isGenerating}
+                                    onChange={commitKlingSubjects}
+                                    onRename={handleKlingSubjectRename}
+                                    onRefusedFiles={setPickNotice}
+                                    // Into the prompt, or in multi-shot the shot being written.
+                                    onInsert={handleInsertKlingVideoHandle}
+                                />
+                            </div>
+                        )}
 
-	                                {klingVideoElements.length > 0 ? (
-	                                    <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-	                                        {klingVideoElements.map((element) => (
-	                                            <div key={element.id} className="overflow-hidden rounded-[24px] border border-zinc-700/40 bg-black/35">
-	                                                <div className="relative aspect-video bg-black">
-	                                                    <InlineMediaVideo
-	                                                        src={element.previewUrl || element.providerUrl || undefined}
-	                                                        className="h-full w-full object-cover"
-	                                                        controls
-	                                                        muted
-	                                                        playsInline
-	                                                    />
-	                                                    <button
-	                                                        type="button"
-	                                                        onClick={() => void handleRemoveKlingVideoElement(element.id)}
-	                                                        className="absolute right-2 top-2 z-10 rounded-full bg-black/60 p-1.5 text-white backdrop-blur-md transition hover:bg-red-500"
-	                                                    >
-	                                                        <X className="h-3 w-3" />
-	                                                    </button>
-	                                                </div>
-	                                                <div className="space-y-3 p-3">
-	                                                    <div>
-	                                                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-	                                                            Element name
-	                                                        </label>
-	                                                        <input
-	                                                            type="text"
-	                                                            value={klingVideoNames.drafts[element.id] ?? element.displayName}
-	                                                            onChange={(event) => handleKlingVideoDraftChange(element.id, event.target.value)}
-	                                                            onBlur={() => void commitKlingVideoDraft(element.id)}
-	                                                            onKeyDown={(event) => {
-	                                                                if (event.key === 'Enter') {
-	                                                                    event.preventDefault();
-	                                                                    void commitKlingVideoDraft(element.id);
-	                                                                    event.currentTarget.blur();
-	                                                                }
+                        {showKlingVideoElementEditor && (
+                            <div role="group" aria-labelledby="create-video-kling-elements" className="ui-card p-4">
+                                <div className="mb-1 flex items-center justify-between gap-3">
+                                    <h2 id="create-video-kling-elements" className={cardHeadingClass}>Kling video elements</h2>
+                                    <span className={cardCountClass}>{klingVideoElements.length}/{KLING_VIDEO_ELEMENT_LIMIT}</span>
+                                </div>
+                                <p className="mb-3 text-xs text-[var(--ui-text-faint)]">
+                                    Named clips. Type @ in the prompt or a shot prompt to use one by its name.
+                                </p>
 
-	                                                                if (event.key === 'Escape') {
-	                                                                    klingVideoNames.dropDraft(element.id);
-	                                                                    event.currentTarget.blur();
-	                                                                }
-	                                                            }}
-	                                                            className="w-full rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 text-sm text-white outline-none transition focus:border-emerald-500/40"
-	                                                            placeholder="Rename video element"
-	                                                        />
-	                                                    </div>
-	                                                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
-	                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-emerald-300" />
-	                                                        <div className="flex flex-wrap items-center gap-1.5">
-	                                                            <button
-	                                                                type="button"
-	                                                                onClick={() => {
-	                                                                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-	                                                                        void navigator.clipboard.writeText(element.handle);
-	                                                                    }
-	                                                                }}
-	                                                                className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
-	                                                            >
-	                                                                Copy
-	                                                            </button>
-	                                                            <button
-	                                                                type="button"
-	                                                                onClick={() => handleInsertKlingVideoHandle(element.handle)}
-	                                                                className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
-	                                                            >
-	                                                                Insert
-	                                                            </button>
-	                                                        </div>
-	                                                    </div>
-	                                                    <div className="text-xs text-zinc-500">
-	                                                        {typeof element.durationSeconds === 'number' ? `${element.durationSeconds.toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
-	                                                    </div>
-	                                                </div>
-	                                            </div>
-	                                        ))}
-	                                    </div>
-	                                ) : null}
+                                {klingVideoElements.length > 0 ? (
+                                    <ul className="mb-3 space-y-2">
+                                        {klingVideoElements.map((element) => (
+                                            <CreatorReferenceRow
+                                                key={element.id}
+                                                accent="video"
+                                                preview={
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const src = element.previewUrl || element.providerUrl;
+                                                            if (src) setUploadPreview({ type: 'video', src, alt: element.displayName, title: element.displayName });
+                                                        }}
+                                                        aria-label={`Preview ${element.displayName}`}
+                                                        className="ui-focus-ring relative h-16 w-24 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black"
+                                                    >
+                                                        <InlineMediaVideo
+                                                            src={element.previewUrl || element.providerUrl || undefined}
+                                                            className="pointer-events-none h-full w-full object-cover"
+                                                            muted
+                                                            playsInline
+                                                            preload="metadata"
+                                                        />
+                                                        <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
+                                                    </button>
+                                                }
+                                                displayName={element.displayName}
+                                                nameDraft={klingVideoNames.drafts[element.id]}
+                                                placeholder="Rename video element"
+                                                onNameChange={(value) => handleKlingVideoDraftChange(element.id, value)}
+                                                onNameCommit={() => void commitKlingVideoDraft(element.id)}
+                                                onNameCancel={() => klingVideoNames.dropDraft(element.id)}
+                                                onRemove={() => void handleRemoveKlingVideoElement(element.id)}
+                                                handle={element.handle}
+                                                handleClassName="text-emerald-300"
+                                                onInsert={() => handleInsertKlingVideoHandle(element.handle)}
+                                                onCopy={() => {
+                                                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                                                        void navigator.clipboard.writeText(element.handle);
+                                                    }
+                                                }}
+                                                note={typeof element.durationSeconds === 'number' ? `${element.durationSeconds.toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
+                                            />
+                                        ))}
+                                    </ul>
+                                ) : null}
 
-	                                {klingVideoElements.length < KLING_VIDEO_ELEMENT_LIMIT ? (
-	                                    <label
-	                                        className={`group flex h-[120px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed bg-black/40 transition-all ${isDraggingKlingVideos
-	                                            ? 'border-emerald-400 bg-emerald-500/10 shadow-[0_0_30px_-5px_rgba(16,185,129,0.3)]'
-	                                            : 'border-zinc-700/50 hover:border-emerald-500/50 hover:bg-emerald-500/5'
-	                                            }`}
-	                                        onClick={() => klingVideoInputRef.current?.click()}
-	                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingKlingVideos(true); }}
-	                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingKlingVideos(false); }}
-	                                        onDrop={handleKlingVideoElementDrop}
-	                                    >
-	                                        <div className="flex flex-col items-center gap-2 text-zinc-500">
-	                                            <Video className={`h-6 w-6 transition-colors ${isDraggingKlingVideos ? 'text-emerald-400' : ''}`} />
-	                                            <span className="text-sm">{isDraggingKlingVideos ? 'Drop Kling video elements here' : 'Drop MP4/MOV clips or click'}</span>
-	                                            <span className="text-xs">1 clip per element, 50MB max</span>
-	                                        </div>
-	                                        <span className="sr-only">Upload Kling video elements</span>
-	                                    </label>
-	                                ) : (
-	                                    <p className="rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-zinc-400">
-	                                        Kling video elements are capped at {KLING_VIDEO_ELEMENT_LIMIT} clips in this version.
-	                                    </p>
-	                                )}
-	                            </motion.div>
-	                        )}
+                                {klingVideoElements.length < KLING_VIDEO_ELEMENT_LIMIT ? (
+                                    <CreatorAddTile
+                                        accent="video"
+                                        icon={Video}
+                                        label={isDraggingKlingVideos ? 'Drop Kling video elements here' : 'Add video elements'}
+                                        input={{
+                                            ref: klingVideoInputRef,
+                                            accept: 'video/mp4,video/quicktime,.mp4,.mov',
+                                            multiple: true,
+                                            onChange: handleKlingVideoElementUpload,
+                                            'aria-describedby': 'create-video-kling-elements-limits',
+                                        }}
+                                        dragging={isDraggingKlingVideos}
+                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingKlingVideos(true); }}
+                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingKlingVideos(false); }}
+                                        onDrop={handleKlingVideoElementDrop}
+                                    />
+                                ) : (
+                                    <p className="text-sm text-[var(--ui-text-muted)]">
+                                        Kling video elements are capped at {KLING_VIDEO_ELEMENT_LIMIT} clips in this version.
+                                    </p>
+                                )}
+                                <p id="create-video-kling-elements-limits" className="sr-only">MP4 or MOV clips, one per element, 50MB max.</p>
+                            </div>
+                        )}
 
-	                        {(showSavedElementNotice || savedClipAndTrackNotice) && (
-                            <div className="rounded-[26px] border border-amber-500/20 bg-amber-500/10 p-5">
-                                <p className="text-sm font-semibold text-white">Saved references are on standby</p>
+                        {(showSavedElementNotice || savedClipAndTrackNotice) && (
+                            <div className={standbyCardClass}>
+                                <p className="text-sm font-semibold text-[var(--ui-text-primary)]">Saved references are on standby</p>
                                 {showSavedElementNotice ? (
-                                    <p className="mt-2 text-sm leading-6 text-zinc-300">
+                                    <p className="mt-2 text-sm leading-6 text-[var(--ui-text-secondary)]">
                                         {`Your ${elements.length} saved image reference${elements.length === 1 ? ' remains' : 's remain'} available. `}
                                         {videoElementSupport.reason || `${videoModel.displayName} cannot use reusable references with the current settings.`}
                                         {' '}Use start / end frames for this run, or choose a supported single-shot mode to use reusable references.
                                     </p>
                                 ) : null}
                                 {savedClipAndTrackNotice ? (
-                                    <p className="mt-2 text-sm leading-6 text-zinc-300">{savedClipAndTrackNotice}</p>
+                                    <p className="mt-2 text-sm leading-6 text-[var(--ui-text-secondary)]">{savedClipAndTrackNotice}</p>
                                 ) : null}
                                 {/* The model has no card for these, so they can be taken off here. */}
-                                <ul aria-label="References on standby" className="mt-3 flex flex-wrap gap-2">
+                                <ul aria-label="References on standby" className="mt-3 space-y-1.5">
                                     {standbyReferences.map((reference) => (
                                         <li
                                             key={`${reference.kind}-${reference.id}`}
-                                            className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-white/10 bg-black/30 py-1 pl-3 pr-1 text-xs text-zinc-200"
+                                            className="flex items-center justify-between gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] py-0.5 pl-3 pr-0.5 text-sm text-[var(--ui-text-secondary)]"
                                         >
                                             <span className="min-w-0 truncate">{reference.displayName}</span>
-                                            <button
-                                                type="button"
-                                                onClick={reference.onRemove}
-                                                aria-label={`Remove ${reference.displayName}`}
-                                                className="shrink-0 rounded-full p-1 text-zinc-400 transition hover:bg-rose-500/20 hover:text-rose-100"
-                                            >
-                                                <X className="h-3 w-3" />
-                                            </button>
+                                            <IconButton label={`Remove ${reference.displayName}`} icon={X} onClick={reference.onRemove} className="shrink-0" />
                                         </li>
                                     ))}
                                 </ul>
@@ -4693,145 +4802,112 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         )}
 
                         {showMultiShotElementNotice && (
-                            <div className="rounded-[26px] border border-amber-500/20 bg-amber-500/10 p-5">
-                                <p className="text-sm font-semibold text-white">Reusable references are paused in multi-shot</p>
-                                <p className="mt-2 text-sm leading-6 text-zinc-300">
+                            <div className={standbyCardClass}>
+                                <p className="text-sm font-semibold text-[var(--ui-text-primary)]">Reusable references are paused in multi-shot</p>
+                                <p className="mt-2 text-sm leading-6 text-[var(--ui-text-secondary)]">
                                     Your saved references stay available, but multi-shot runs use shot prompts only in v1. Switch back to single-shot to reuse them.
                                 </p>
                             </div>
                         )}
 
                         {showFramesEditor && (
-                            <>
+                            <div role="group" aria-labelledby="create-video-frames" className="ui-card p-4">
+                                <h2 id="create-video-frames" className={`mb-3 ${cardHeadingClass}`}>Frames</h2>
+                                {/* Locked while references hold the run: greyed, and its fields take no file
+                                    from the keyboard either. */}
                                 <div
                                     aria-disabled={framesLockedByReferences}
-                                    className={`grid gap-4 ${!currentIsMultiShot && activeSupportsEndFrame ? 'sm:grid-cols-2' : ''} ${framesLockedByReferences ? 'pointer-events-none opacity-40' : ''}`}
+                                    className={`grid gap-3 ${!currentIsMultiShot && activeSupportsEndFrame ? 'grid-cols-2' : ''} ${framesLockedByReferences ? 'pointer-events-none opacity-40' : ''}`}
                                 >
-                                    <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
-                                        <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
-                                            Start Frame <span className="text-[10px] text-zinc-600 normal-case">{selectedModel === 'hailuo-2.3' ? 'required' : 'optional'}</span>
-                                        </h2>
-                                        {startImageUrl ? (
-                                            <div className="h-[140px]">
-                                                <StudioUploadedMediaPreview
-                                                    mediaType="image"
-                                                    src={startImageUrl}
-                                                    alt="Start frame"
-                                                    fit="cover"
-                                                    previewHint="Preview frame"
-                                                    onPreview={() => setUploadPreview({
-                                                        type: 'image',
-                                                        src: startImageUrl,
-                                                        alt: 'Start frame',
-                                                        title: 'Start Frame',
-                                                    })}
-                                                    onReplace={() => startImageInputRef.current?.click()}
-                                                    onRemove={() => void clearImage('start')}
-                                                />
-                                            </div>
-                                        ) : (
-                                            <label
-                                                htmlFor="video-start-frame-input"
-                                                className={`group flex h-[140px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed bg-black/40 transition-all ${isDraggingStart ? 'border-cyan-400 bg-cyan-500/10' : 'border-zinc-700/50 hover:border-cyan-500/50'}`}
-                                                onDragOver={(event) => { event.preventDefault(); setIsDraggingStart(true); }}
-                                                onDragLeave={(event) => { event.preventDefault(); setIsDraggingStart(false); }}
-                                                onDrop={(event) => handleImageDrop(event, 'start')}
-                                            >
-                                                <div className="flex flex-col items-center gap-2 text-zinc-500"><ImageIcon className="w-6 h-6" /><span className="text-xs">Upload Start Frame</span></div>
-                                            </label>
-                                        )}
-                                        <input
-                                            ref={startImageInputRef}
-                                            id="video-start-frame-input"
-                                            type="file"
-                                            accept="image/*"
-                                            onChange={(event) => handleImageUpload(event, 'start')}
-                                            className="hidden"
-                                        />
-                                    </div>
+                                    <CreatorUploadSlot
+                                        accent="video"
+                                        title="Start frame"
+                                        status={startFrameRequired ? 'required' : 'optional'}
+                                        height="frame"
+                                        mediaType="image"
+                                        src={startImageUrl}
+                                        alt="Start frame"
+                                        previewHint="Preview frame"
+                                        icon={ImageIcon}
+                                        emptyLabel="Upload Start Frame"
+                                        input={{
+                                            id: 'video-start-frame-input',
+                                            accept: 'image/*',
+                                            disabled: framesLockedByReferences,
+                                            onChange: (event) => handleImageUpload(event, 'start'),
+                                        }}
+                                        onPreview={() => {
+                                            if (startImageUrl) setUploadPreview({ type: 'image', src: startImageUrl, alt: 'Start frame', title: 'Start Frame' });
+                                        }}
+                                        onRemove={() => void clearImage('start')}
+                                        dragging={isDraggingStart}
+                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingStart(true); }}
+                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingStart(false); }}
+                                        onDrop={(event) => handleImageDrop(event, 'start')}
+                                    />
 
                                     {!currentIsMultiShot && activeSupportsEndFrame && (
-                                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
-                                            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
-                                                End Frame <span className="text-[10px] text-zinc-600 normal-case">optional</span>
-                                            </h2>
-                                            {endImageUrl ? (
-                                                <div className="h-[140px]">
-                                                    <StudioUploadedMediaPreview
-                                                        mediaType="image"
-                                                        src={endImageUrl}
-                                                        alt="End frame"
-                                                        fit="cover"
-                                                        previewHint="Preview frame"
-                                                        onPreview={() => setUploadPreview({
-                                                            type: 'image',
-                                                            src: endImageUrl,
-                                                            alt: 'End frame',
-                                                            title: 'End Frame',
-                                                        })}
-                                                        onReplace={() => endImageInputRef.current?.click()}
-                                                        onRemove={() => void clearImage('end')}
-                                                    />
-                                                </div>
-                                            ) : (
-                                                <label
-                                                    htmlFor="video-end-frame-input"
-                                                    className={`group flex h-[140px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed bg-black/40 transition-all ${isDraggingEnd ? 'border-cyan-400 bg-cyan-500/10' : 'border-zinc-700/50 hover:border-cyan-500/50'}`}
-                                                    onDragOver={(event) => { event.preventDefault(); setIsDraggingEnd(true); }}
-                                                    onDragLeave={(event) => { event.preventDefault(); setIsDraggingEnd(false); }}
-                                                    onDrop={(event) => handleImageDrop(event, 'end')}
-                                                >
-                                                    <div className="flex flex-col items-center gap-2 text-zinc-500"><ImageIcon className="w-6 h-6" /><span className="text-xs">Upload End Frame</span></div>
-                                                </label>
-                                            )}
-                                            <input
-                                                ref={endImageInputRef}
-                                                id="video-end-frame-input"
-                                                type="file"
-                                                accept="image/*"
-                                                onChange={(event) => handleImageUpload(event, 'end')}
-                                                className="hidden"
-                                            />
-                                        </motion.div>
+                                        <CreatorUploadSlot
+                                            accent="video"
+                                            title="End frame"
+                                            status="optional"
+                                            height="frame"
+                                            mediaType="image"
+                                            src={endImageUrl}
+                                            alt="End frame"
+                                            previewHint="Preview frame"
+                                            icon={ImageIcon}
+                                            emptyLabel="Upload End Frame"
+                                            input={{
+                                                id: 'video-end-frame-input',
+                                                accept: 'image/*',
+                                                disabled: framesLockedByReferences,
+                                                onChange: (event) => handleImageUpload(event, 'end'),
+                                            }}
+                                            onPreview={() => {
+                                                if (endImageUrl) setUploadPreview({ type: 'image', src: endImageUrl, alt: 'End frame', title: 'End Frame' });
+                                            }}
+                                            onRemove={() => void clearImage('end')}
+                                            dragging={isDraggingEnd}
+                                            onDragOver={(event) => { event.preventDefault(); setIsDraggingEnd(true); }}
+                                            onDragLeave={(event) => { event.preventDefault(); setIsDraggingEnd(false); }}
+                                            onDrop={(event) => handleImageDrop(event, 'end')}
+                                        />
                                     )}
                                 </div>
                                 {isGrokVideoModel ? (
-                                    <div className="rounded-[22px] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-100">
+                                    <p className="mt-3 rounded-ui-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm leading-6 text-amber-100">
                                         Grok image-to-video accepts one image reference per run.
-                                    </div>
+                                    </p>
                                 ) : null}
                                 {combinesFrameWithReferences ? (
-                                    <div className="rounded-[22px] border border-[#ff7a59]/20 bg-[#ff7a59]/10 px-4 py-3 text-sm leading-6 text-zinc-200">
+                                    <p className="mt-3 text-sm leading-6 text-[var(--ui-text-muted)]">
                                         Wan Reference-to-Video can use this first frame together with your reusable images, clips, and voice reference.
-                                    </div>
+                                    </p>
                                 ) : null}
-                            </>
+                            </div>
                         )}
 
                         {showElementEditor && (
-                            <motion.div
-                                initial={{ opacity: 0, y: 16 }}
-                                animate={{ opacity: 1, y: 0 }}
+                            <div
+                                role="group"
+                                aria-labelledby="create-video-references"
                                 aria-disabled={referencesLockedByFrames}
-                                className={`rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6 ${referencesLockedByFrames ? 'pointer-events-none opacity-40' : ''}`}
+                                className={`ui-card p-4 ${referencesLockedByFrames ? 'pointer-events-none opacity-40' : ''}`}
                             >
-                                <div className="mb-4 flex items-start justify-between gap-3">
-                                    <div>
-                                        <h2 className="text-sm font-semibold text-white">Reusable image references</h2>
-                                        <p className="mt-1 text-sm text-zinc-400">
-                                            Upload images, give each one a clear name, and use its @handle in the prompt to preserve identity.
-                                        </p>
-                                    </div>
-                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-                                        {elements.length}/{videoElementSupport.maxElements}
-                                    </span>
+                                <div className="mb-1 flex items-center justify-between gap-3">
+                                    <h2 id="create-video-references" className={cardHeadingClass}>Reusable image references</h2>
+                                    <span className={cardCountClass}>{elements.length}/{videoElementSupport.maxElements}</span>
                                 </div>
+                                <p className="mb-3 text-xs text-[var(--ui-text-faint)]">Type @ in the prompt to use one by its name.</p>
 
                                 {elements.length > 0 ? (
-                                    <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                    <ul className="mb-3 space-y-2">
                                         {elements.map((element) => (
-                                            <div key={element.id} className="overflow-hidden rounded-[24px] border border-zinc-700/40 bg-black/35">
-                                                <div className="relative aspect-square group">
+                                            <CreatorReferenceRow
+                                                key={element.id}
+                                                accent="video"
+                                                preview={
                                                     <button
                                                         type="button"
                                                         onClick={() => setUploadPreview({
@@ -4840,126 +4916,80 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                             alt: element.displayName,
                                                             title: element.displayName,
                                                         })}
-                                                        className="block h-full w-full"
+                                                        aria-label={`Preview ${element.displayName}`}
+                                                        className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
                                                     >
                                                         {/* eslint-disable-next-line @next/next/no-img-element */}
                                                         <img
                                                             src={element.previewUrl}
                                                             alt={element.displayName}
-                                                            className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                                                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
                                                         />
-                                                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
-                                                        <div className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/60 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/90 backdrop-blur-md">
-                                                            Preview
-                                                        </div>
                                                     </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void handleRemoveElement(element.id)}
-                                                        className="absolute right-2 top-2 z-10 rounded-full bg-black/60 p-1.5 text-white backdrop-blur-md transition hover:bg-red-500"
-                                                    >
-                                                        <X className="h-3 w-3" />
-                                                    </button>
-                                                </div>
-                                                <div className="space-y-3 p-3">
-                                                    <div>
-                                                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                                            Element name
-                                                        </label>
-                                                        <input
-                                                            type="text"
-                                                            value={elementNames.drafts[element.id] ?? element.displayName}
-                                                            onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
-                                                            onBlur={() => void commitElementDraft(element.id)}
-                                                            onKeyDown={(event) => {
-                                                                if (event.key === 'Enter') {
-                                                                    event.preventDefault();
-                                                                    void commitElementDraft(element.id);
-                                                                    event.currentTarget.blur();
-                                                                }
-
-                                                                if (event.key === 'Escape') {
-                                                                    elementNames.dropDraft(element.id);
-                                                                    event.currentTarget.blur();
-                                                                }
-                                                            }}
-                                                            className="w-full rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 text-sm text-white outline-none transition focus:border-[#ff7a59]/40"
-                                                            placeholder="Rename element"
-                                                        />
-                                                    </div>
-                                                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
-                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-sky-300" />
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleInsertElementHandle(element.handle)}
-                                                            className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
-                                                        >
-                                                            Insert
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
+                                                }
+                                                displayName={element.displayName}
+                                                nameDraft={elementNames.drafts[element.id]}
+                                                placeholder="Rename element"
+                                                onNameChange={(value) => handleElementDraftChange(element.id, value)}
+                                                onNameCommit={() => void commitElementDraft(element.id)}
+                                                onNameCancel={() => elementNames.dropDraft(element.id)}
+                                                onRemove={() => void handleRemoveElement(element.id)}
+                                                handle={element.handle}
+                                                handleClassName="text-sky-300"
+                                                onInsert={() => handleInsertElementHandle(element.handle)}
+                                            />
                                         ))}
-                                    </div>
+                                    </ul>
                                 ) : null}
 
                                 {elements.length < videoElementSupport.maxElements && (
-                                    <label
-                                        className={`group flex flex-col items-center justify-center w-full h-[120px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDraggingElements
-                                            ? 'border-cyan-400 bg-cyan-500/10 shadow-[0_0_30px_-5px_rgba(6,182,212,0.3)]'
-                                            : 'border-zinc-700/50 hover:border-cyan-500/50 hover:bg-cyan-500/5'
-                                            }`}
+                                    <CreatorAddTile
+                                        accent="video"
+                                        icon={Plus}
+                                        label={isDraggingElements ? 'Drop reference images here' : 'Add reference images'}
+                                        input={{
+                                            ref: elementInputRef,
+                                            accept: 'image/*',
+                                            multiple: true,
+                                            // Locked while frames hold the run: no file from the keyboard either.
+                                            disabled: referencesLockedByFrames,
+                                            onChange: handleElementUpload,
+                                        }}
+                                        dragging={isDraggingElements}
                                         onDragOver={(event) => { event.preventDefault(); setIsDraggingElements(true); }}
                                         onDragLeave={(event) => { event.preventDefault(); setIsDraggingElements(false); }}
                                         onDrop={handleElementDrop}
-                                    >
-                                        <div className="flex flex-col items-center gap-2 text-zinc-500">
-                                            <ImageIcon className={`w-6 h-6 transition-colors ${isDraggingElements ? 'text-cyan-400' : ''}`} />
-                                            <span className="text-sm">{isDraggingElements ? 'Drop reference images here' : 'Drop reference images or click'}</span>
-                                        </div>
-                                        <input
-                                            ref={elementInputRef}
-                                            type="file"
-                                            accept="image/*"
-                                            multiple
-                                            onChange={handleElementUpload}
-                                            className="hidden"
-                                        />
-                                    </label>
+                                    />
                                 )}
-
-                            </motion.div>
+                            </div>
                         )}
 
                         {supportsMultimodalReferences && !currentIsMultiShot && (
                             <>
-                                <div
+                                <div role="group"
+                                    aria-labelledby="create-video-clips"
                                     aria-disabled={referencesLockedByFrames}
-                                    className={`rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,17,21,0.98),rgba(8,8,10,0.95))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6 ${referencesLockedByFrames ? 'pointer-events-none opacity-40' : ''}`}
+                                    className={`ui-card p-4 ${referencesLockedByFrames ? 'pointer-events-none opacity-40' : ''}`}
                                 >
-                                    <div className="mb-4 flex items-start justify-between gap-3">
-                                        <div>
-                                            <h2 className="text-sm font-semibold text-white">{supportsReferenceAudio ? 'Video and audio references' : 'Video references'}</h2>
-                                            <p className="mt-1 text-sm text-zinc-400">
-                                                {supportsReferenceAudio
-                                                    ? 'Add motion clips or timing and voice guidance alongside your reusable image references.'
-                                                    : 'Add one motion clip alongside your reusable image references.'}
-                                            </p>
-                                        </div>
-                                        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-                                            {isWanVideoModel ? '5 total references max' : `${referenceVideoLimit} video refs max`}
-                                        </span>
+                                    <div className="mb-1 flex items-start justify-between gap-3">
+                                        <h2 id="create-video-clips" className={cardHeadingClass}>{supportsReferenceAudio ? 'Video and audio references' : 'Video references'}</h2>
+                                        <span className={cardCountClass}>{isWanVideoModel ? '5 total references max' : `${referenceVideoLimit} video refs max`}</span>
                                     </div>
+                                    <p className="mb-3 text-xs text-[var(--ui-text-faint)]">
+                                        {supportsReferenceAudio
+                                            ? 'Add motion clips or timing and voice guidance alongside your reusable image references.'
+                                            : 'Add one motion clip alongside your reusable image references.'}
+                                    </p>
 
-                                    <div className={`grid gap-4 ${supportsReferenceAudio ? 'lg:grid-cols-2' : ''}`}>
-                                        <div className="space-y-3">
+                                    <div className="space-y-4">
+                                        <div className="space-y-2">
                                             <div className="flex items-center justify-between gap-3">
-                                                <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Reference videos</h3>
+                                                <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference videos</h3>
                                                 <button
                                                     type="button"
                                                     onClick={() => referenceVideoInputRef.current?.click()}
-                                                    disabled={referenceVideos.length >= referenceVideoLimit}
-                                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                                                    disabled={referenceVideos.length >= referenceVideoLimit || referencesLockedByFrames}
+                                                    className={CREATOR_REFERENCE_CHIP_CLASS}
                                                 >
                                                     Add video
                                                 </button>
@@ -4973,129 +5003,127 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 className="hidden"
                                             />
                                             {referenceVideos.length > 0 ? (
-                                                <div className="space-y-3">
+                                                <ul className="space-y-2">
                                                     {referenceVideos.map((reference) => (
-                                                        <div key={reference.id} className="rounded-2xl border border-white/8 bg-black/30 p-3">
+                                                        <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
                                                             <div className="flex items-start justify-between gap-3">
-                                                                <div>
-                                                                    <div className="text-sm font-semibold text-white">{reference.displayName}</div>
-                                                                    <div className="mt-1 text-xs text-zinc-500">
+                                                                <div className="min-w-0">
+                                                                    <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
+                                                                    <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
                                                                         {typeof reference.durationSeconds === 'number'
                                                                             ? `${reference.durationSeconds.toFixed(1)}s clip`
                                                                             : 'Duration unavailable'}
                                                                     </div>
                                                                 </div>
-                                                                <button
-                                                                    type="button"
+                                                                <IconButton
+                                                                    label={`Remove ${reference.displayName}`}
+                                                                    icon={X}
                                                                     onClick={() => void handleRemoveReferenceVideo(reference.id)}
-                                                                    className="rounded-full border border-white/10 bg-white/[0.03] p-2 text-zinc-300 transition hover:bg-rose-500/20 hover:text-rose-100"
-                                                                >
-                                                                    <X className="h-3.5 w-3.5" />
-                                                                </button>
+                                                                    className="-my-1 -mr-1 shrink-0"
+                                                                />
                                                             </div>
                                                             {reference.previewUrl || reference.providerUrl ? (
                                                                 <InlineMediaVideo
                                                                     src={reference.previewUrl || reference.providerUrl || undefined}
-                                                                    className="mt-3 h-40 w-full rounded-2xl border border-white/8 object-cover"
+                                                                    className="mt-3 h-40 w-full rounded-ui-md border border-[var(--ui-border-subtle)] bg-black object-cover"
                                                                     controls
                                                                     muted
                                                                     playsInline
                                                                 />
                                                             ) : null}
-                                                        </div>
+                                                        </li>
                                                     ))}
-                                                </div>
+                                                </ul>
                                             ) : (
-                                                <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-6 text-sm text-zinc-500">
+                                                <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
                                                     Add up to {referenceVideoLimit} short clips as motion and framing guidance.
-                                                </div>
+                                                </p>
                                             )}
                                         </div>
 
-                                        {supportsReferenceAudio ? <div className="space-y-3">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Reference audio</h3>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => referenceAudioInputRef.current?.click()}
-                                                    disabled={referenceAudios.length >= referenceAudioLimit}
-                                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
-                                                >
-                                                    Add audio
-                                                </button>
-                                            </div>
-                                            <input
-                                                ref={referenceAudioInputRef}
-                                                type="file"
-                                                accept="audio/*"
-                                                multiple
-                                                onChange={handleReferenceAudioUpload}
-                                                className="hidden"
-                                            />
-                                            {referenceAudios.length > 0 ? (
-                                                <div className="space-y-3">
-                                                    {referenceAudios.map((reference) => (
-                                                        <div key={reference.id} className="rounded-2xl border border-white/8 bg-black/30 p-3">
-                                                            <div className="flex items-start justify-between gap-3">
-                                                                <div>
-                                                                    <div className="text-sm font-semibold text-white">{reference.displayName}</div>
-                                                                    {/* Only the Seedance 2 family prepares assets. On any other model the card says how long the track is. */}
-                                                                    {isSeedance2Family ? (
-                                                                        <div className="mt-1 text-xs text-zinc-500">
-                                                                            {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
-                                                                        </div>
-                                                                    ) : typeof reference.durationSeconds === 'number' ? (
-                                                                        <div className="mt-1 text-xs text-zinc-500">{`${reference.durationSeconds.toFixed(1)}s track`}</div>
-                                                                    ) : null}
+                                        {supportsReferenceAudio ? (
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference audio</h3>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => referenceAudioInputRef.current?.click()}
+                                                        disabled={referenceAudios.length >= referenceAudioLimit || referencesLockedByFrames}
+                                                        className={CREATOR_REFERENCE_CHIP_CLASS}
+                                                    >
+                                                        Add audio
+                                                    </button>
+                                                </div>
+                                                <input
+                                                    ref={referenceAudioInputRef}
+                                                    type="file"
+                                                    accept="audio/*"
+                                                    multiple
+                                                    onChange={handleReferenceAudioUpload}
+                                                    className="hidden"
+                                                />
+                                                {referenceAudios.length > 0 ? (
+                                                    <ul className="space-y-2">
+                                                        {referenceAudios.map((reference) => (
+                                                            <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
+                                                                <div className="flex items-start justify-between gap-3">
+                                                                    <div className="min-w-0">
+                                                                        <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
+                                                                        {/* Only the Seedance 2 family prepares assets. On any other model the row says how long the track is. */}
+                                                                        {isSeedance2Family ? (
+                                                                            <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
+                                                                                {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
+                                                                            </div>
+                                                                        ) : typeof reference.durationSeconds === 'number' ? (
+                                                                            <div className="mt-1 text-xs text-[var(--ui-text-faint)]">{`${reference.durationSeconds.toFixed(1)}s track`}</div>
+                                                                        ) : null}
+                                                                    </div>
+                                                                    <IconButton
+                                                                        label={`Remove ${reference.displayName}`}
+                                                                        icon={X}
+                                                                        onClick={() => void handleRemoveReferenceAudio(reference.id)}
+                                                                        className="-my-1 -mr-1 shrink-0"
+                                                                    />
                                                                 </div>
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => void handleRemoveReferenceAudio(reference.id)}
-                                                                    className="rounded-full border border-white/10 bg-white/[0.03] p-2 text-zinc-300 transition hover:bg-rose-500/20 hover:text-rose-100"
-                                                                >
-                                                                    <X className="h-3.5 w-3.5" />
-                                                                </button>
-                                                            </div>
-                                                            {reference.providerUrl ? (
-                                                                <RecoverableMediaAudio
-                                                                    src={reference.providerUrl}
-                                                                    className="mt-3 w-full"
-                                                                />
-                                                            ) : reference.previewUrl ? (
-                                                                <RecoverableMediaAudio
-                                                                    src={reference.previewUrl}
-                                                                    className="mt-3 w-full"
-                                                                />
-                                                            ) : null}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            ) : (
-                                                <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-6 text-sm text-zinc-500">
-                                                    Add up to {referenceAudioLimit} audio clip{referenceAudioLimit === 1 ? '' : 's'} for beat, voice, or dialogue timing guidance.
-                                                </div>
-                                            )}
-                                        </div> : null}
+                                                                {reference.providerUrl ? (
+                                                                    <RecoverableMediaAudio
+                                                                        src={reference.providerUrl}
+                                                                        className="mt-3 w-full"
+                                                                    />
+                                                                ) : reference.previewUrl ? (
+                                                                    <RecoverableMediaAudio
+                                                                        src={reference.previewUrl}
+                                                                        className="mt-3 w-full"
+                                                                    />
+                                                                ) : null}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
+                                                        Add up to {referenceAudioLimit} audio clip{referenceAudioLimit === 1 ? '' : 's'} for beat, voice, or dialogue timing guidance.
+                                                    </p>
+                                                )}
+                                            </div>
+                                        ) : null}
                                     </div>
                                 </div>
 
                                 {isGeminiOmniVideoModel ? (
-                                    <div className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,17,21,0.98),rgba(8,8,10,0.95))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6">
-                                        <div className="mb-4">
-                                            <h2 className="text-sm font-semibold text-white">Prepared Omni references</h2>
-                                            <p className="mt-1 text-sm text-zinc-400">
-                                                Add reusable voice and character IDs created with Gemini Omni. Characters count toward the seven-slot media limit; voices do not.
-                                            </p>
-                                        </div>
-                                        <div className="grid gap-5 lg:grid-cols-2">
+                                    <div role="group" aria-labelledby="create-video-omni" className="ui-card p-4">
+                                        <h2 id="create-video-omni" className={cardHeadingClass}>Prepared Omni references</h2>
+                                        <p className="mb-3 mt-1 text-xs text-[var(--ui-text-faint)]">
+                                            Add reusable voice and character IDs created with Gemini Omni. Characters count toward the seven-slot media limit; voices do not.
+                                        </p>
+                                        <div className="space-y-4">
                                             {([
                                                 { kind: 'audio' as const, label: 'Voice IDs', value: preparedAudioIdDraft, setValue: setPreparedAudioIdDraft, items: preparedAudioIds },
                                                 { kind: 'character' as const, label: 'Character IDs', value: characterIdDraft, setValue: setCharacterIdDraft, items: characterIds },
                                             ]).map((group) => (
-                                                <div key={group.kind} className="space-y-3">
+                                                <div key={group.kind} className="space-y-2">
                                                     <div className="flex items-center justify-between gap-3">
-                                                        <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">{group.label}</h3>
-                                                        <span className="text-xs text-zinc-500">{group.items.length}/3</span>
+                                                        <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">{group.label}</h3>
+                                                        <span className={cardCountClass}>{group.items.length}/3</span>
                                                     </div>
                                                     <div className="flex gap-2">
                                                         <input
@@ -5109,30 +5137,28 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                 }
                                                             }}
                                                             placeholder={group.kind === 'audio' ? 'Paste prepared voice ID' : 'Paste prepared character ID'}
-                                                            className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff7a59]/50"
+                                                            className={`min-h-10 min-w-0 flex-1 rounded-ui-md border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-3 text-sm text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] ${videoAccent.fieldFocus}`}
                                                         />
                                                         <button
                                                             type="button"
                                                             onClick={() => addPreparedReferenceId(group.kind)}
                                                             disabled={group.items.length >= 3}
-                                                            className="rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-white transition hover:bg-white/[0.1] disabled:opacity-40"
+                                                            className="ui-button ui-button-secondary ui-focus-ring disabled:opacity-40"
                                                         >
                                                             Add
                                                         </button>
                                                     </div>
                                                     {group.items.map((id) => (
-                                                        <div key={id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-black/30 px-3 py-2.5">
-                                                            <code className="truncate text-xs text-zinc-300">{id}</code>
-                                                            <button
-                                                                type="button"
-                                                                aria-label={`Remove ${group.kind} ID ${id}`}
+                                                        <div key={id} className="flex items-center justify-between gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] py-1 pl-3 pr-1">
+                                                            <code className="truncate text-xs text-[var(--ui-text-secondary)]">{id}</code>
+                                                            <IconButton
+                                                                label={`Remove ${group.kind} ID ${id}`}
+                                                                icon={X}
                                                                 onClick={() => group.kind === 'audio'
                                                                     ? setPreparedAudioIds((current) => current.filter((item) => item !== id))
                                                                     : setCharacterIds((current) => current.filter((item) => item !== id))}
-                                                                className="rounded-full p-2 text-zinc-400 transition hover:bg-rose-500/15 hover:text-rose-200"
-                                                            >
-                                                                <X className="h-3.5 w-3.5" />
-                                                            </button>
+                                                                className="shrink-0"
+                                                            />
                                                         </div>
                                                     ))}
                                                 </div>
@@ -5141,479 +5167,153 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </div>
                                 ) : null}
 
-                                {isSeedance2Family ? <div className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,17,21,0.98),rgba(8,8,10,0.95))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6">
-                                    <div className="mb-4 flex items-start justify-between gap-3">
-                                        <div>
-                                            <h2 className="text-sm font-semibold text-white">Seedance Assets</h2>
-                                            <p className="mt-1 text-sm text-zinc-400">
-                                                Prepare uploaded references into Seedance asset IDs so the next run can prefer the optimized asset instead of the raw URL.
-                                            </p>
+                                {isSeedance2Family ? (
+                                    <div role="group" aria-labelledby="create-video-seedance" className="ui-card p-4">
+                                        <div className="mb-1 flex items-start justify-between gap-3">
+                                            <h2 id="create-video-seedance" className={cardHeadingClass}>Seedance Assets</h2>
+                                            <span className={cardCountClass}>
+                                                {[
+                                                    ...elements.map((element) => element.seedanceAsset),
+                                                    ...referenceVideos.map((reference) => reference.seedanceAsset),
+                                                    ...referenceAudios.map((reference) => reference.seedanceAsset),
+                                                ].filter((asset) => asset.status === 'active' && asset.assetId).length}/{elements.length + referenceVideos.length + referenceAudios.length} ready
+                                            </span>
                                         </div>
-                                        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-                                            {[
-                                                ...elements.map((element) => element.seedanceAsset),
-                                                ...referenceVideos.map((reference) => reference.seedanceAsset),
-                                                ...referenceAudios.map((reference) => reference.seedanceAsset),
-                                            ].filter((asset) => asset.status === 'active' && asset.assetId).length}/{elements.length + referenceVideos.length + referenceAudios.length} ready
-                                        </span>
-                                    </div>
+                                        <p className="mb-3 text-xs text-[var(--ui-text-faint)]">
+                                            Prepare uploaded references into Seedance asset IDs so the next run can prefer the optimized asset instead of the raw URL.
+                                        </p>
 
-                                    <div className="space-y-3">
-                                        {[...elements.map((element) => ({
-                                            id: element.id,
-                                            kind: 'image' as const,
-                                            title: element.displayName,
-                                            assetType: 'Image' as const,
-                                            asset: element.seedanceAsset,
-                                            onPrepare: () => prepareElementSeedanceAsset(element.id),
-                                            onRefresh: () => element.seedanceAsset.assetId ? refreshElementSeedanceAsset(element.id, element.seedanceAsset.assetId) : Promise.resolve(),
-                                        })), ...referenceVideos.map((reference) => ({
-                                            id: reference.id,
-                                            kind: 'video' as const,
-                                            title: reference.displayName,
-                                            assetType: 'Video' as const,
-                                            asset: reference.seedanceAsset,
-                                            onPrepare: () => prepareReferenceSeedanceAsset('video', reference.id),
-                                            onRefresh: () => reference.seedanceAsset.assetId ? refreshReferenceSeedanceAsset('video', reference.id, reference.seedanceAsset.assetId) : Promise.resolve(),
-                                        })), ...referenceAudios.map((reference) => ({
-                                            id: reference.id,
-                                            kind: 'audio' as const,
-                                            title: reference.displayName,
-                                            assetType: 'Audio' as const,
-                                            asset: reference.seedanceAsset,
-                                            onPrepare: () => prepareReferenceSeedanceAsset('audio', reference.id),
-                                            onRefresh: () => reference.seedanceAsset.assetId ? refreshReferenceSeedanceAsset('audio', reference.id, reference.seedanceAsset.assetId) : Promise.resolve(),
-                                        }))].map((item) => {
-                                            const activeKey = createSeedanceAssetKey(item.kind, item.id);
-                                            const isBusy = activeSeedanceAssetKey === activeKey;
-                                            // A reference name, an asset ID or a provider error can be one
-                                            // unbreakable run, so the card's text may break anywhere
-                                            // instead of widening the page.
-                                            return (
-                                                <div key={activeKey} className="rounded-2xl border border-white/8 bg-black/30 p-4 [overflow-wrap:anywhere]">
-                                                    <div className="flex flex-wrap items-start justify-between gap-3">
-                                                        <div>
-                                                            <div className="text-sm font-semibold text-white">{item.title}</div>
-                                                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-                                                                <span>{item.assetType}</span>
-                                                                <span>Status: {getSeedanceAssetStatusLabel(item.asset.status)}</span>
-                                                                <span>Asset ID: {item.asset.assetId || 'none'}</span>
+                                        <div className="space-y-2">
+                                            {[...elements.map((element) => ({
+                                                id: element.id,
+                                                kind: 'image' as const,
+                                                title: element.displayName,
+                                                assetType: 'Image' as const,
+                                                asset: element.seedanceAsset,
+                                                onPrepare: () => prepareElementSeedanceAsset(element.id),
+                                                onRefresh: () => element.seedanceAsset.assetId ? refreshElementSeedanceAsset(element.id, element.seedanceAsset.assetId) : Promise.resolve(),
+                                            })), ...referenceVideos.map((reference) => ({
+                                                id: reference.id,
+                                                kind: 'video' as const,
+                                                title: reference.displayName,
+                                                assetType: 'Video' as const,
+                                                asset: reference.seedanceAsset,
+                                                onPrepare: () => prepareReferenceSeedanceAsset('video', reference.id),
+                                                onRefresh: () => reference.seedanceAsset.assetId ? refreshReferenceSeedanceAsset('video', reference.id, reference.seedanceAsset.assetId) : Promise.resolve(),
+                                            })), ...referenceAudios.map((reference) => ({
+                                                id: reference.id,
+                                                kind: 'audio' as const,
+                                                title: reference.displayName,
+                                                assetType: 'Audio' as const,
+                                                asset: reference.seedanceAsset,
+                                                onPrepare: () => prepareReferenceSeedanceAsset('audio', reference.id),
+                                                onRefresh: () => reference.seedanceAsset.assetId ? refreshReferenceSeedanceAsset('audio', reference.id, reference.seedanceAsset.assetId) : Promise.resolve(),
+                                            }))].map((item) => {
+                                                const activeKey = createSeedanceAssetKey(item.kind, item.id);
+                                                const isBusy = activeSeedanceAssetKey === activeKey;
+                                                // A reference name, an asset ID or a provider error can be one
+                                                // unbreakable run, so the row's text may break anywhere
+                                                // instead of widening the page.
+                                                return (
+                                                    <div key={activeKey} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3 [overflow-wrap:anywhere]">
+                                                        <div className="flex flex-wrap items-start justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <div className="text-sm font-semibold text-[var(--ui-text-primary)]">{item.title}</div>
+                                                                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--ui-text-muted)]">
+                                                                    <span>{item.assetType}</span>
+                                                                    <span>Status: {getSeedanceAssetStatusLabel(item.asset.status)}</span>
+                                                                    <span>Asset ID: {item.asset.assetId || 'none'}</span>
+                                                                </div>
                                                             </div>
-                                                        </div>
-                                                        <div className="flex flex-wrap gap-2">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => void item.onPrepare().catch((prepareError) => setError(prepareError instanceof Error ? prepareError.message : 'Failed to prepare Seedance asset'))}
-                                                                disabled={isBusy}
-                                                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
-                                                            >
-                                                                {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                                                                {item.asset.assetId ? 'Retry prep' : 'Prepare asset'}
-                                                            </button>
-                                                            {item.asset.assetId ? (
+                                                            <div className="flex flex-wrap gap-2">
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => void item.onRefresh().catch((refreshError) => setError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh Seedance asset'))}
+                                                                    onClick={() => void item.onPrepare().catch((prepareError) => setError(prepareError instanceof Error ? prepareError.message : 'Failed to prepare Seedance asset'))}
                                                                     disabled={isBusy}
-                                                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+                                                                    className={`${CREATOR_REFERENCE_CHIP_CLASS} gap-1.5`}
                                                                 >
-                                                                    Refresh
+                                                                    {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                                                    {item.asset.assetId ? 'Retry prep' : 'Prepare asset'}
                                                                 </button>
-                                                            ) : null}
+                                                                {item.asset.assetId ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => void item.onRefresh().catch((refreshError) => setError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh Seedance asset'))}
+                                                                        disabled={isBusy}
+                                                                        className={CREATOR_REFERENCE_CHIP_CLASS}
+                                                                    >
+                                                                        Refresh
+                                                                    </button>
+                                                                ) : null}
+                                                            </div>
                                                         </div>
+                                                        <div className="mt-3 grid gap-2 text-xs text-[var(--ui-text-faint)]">
+                                                            <div className="rounded-ui-md border border-[var(--ui-border-subtle)] px-3 py-2">
+                                                                Source: {getSeedanceAssetSourceName(item.asset.sourceUrl) || 'Upload or prepare to capture a source URL'}
+                                                            </div>
+                                                            <div className="rounded-ui-md border border-[var(--ui-border-subtle)] px-3 py-2">
+                                                                Last checked: {item.asset.lastCheckedAt || 'Never'}
+                                                            </div>
+                                                        </div>
+                                                        {item.asset.error ? (
+                                                            <div className="mt-3 rounded-ui-md border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+                                                                {item.asset.error}
+                                                            </div>
+                                                        ) : null}
                                                     </div>
-                                                    <div className="mt-3 grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
-                                                        <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2">
-                                                            Source: {getSeedanceAssetSourceName(item.asset.sourceUrl) || 'Upload or prepare to capture a source URL'}
-                                                        </div>
-                                                        <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-2">
-                                                            Last checked: {item.asset.lastCheckedAt || 'Never'}
-                                                        </div>
-                                                    </div>
-                                                    {item.asset.error ? (
-                                                        <div className="mt-3 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
-                                                            {item.asset.error}
-                                                        </div>
-                                                    ) : null}
-                                                </div>
-                                            );
-                                        })}
+                                                );
+                                            })}
+                                        </div>
                                     </div>
-                                </div> : null}
+                                ) : null}
                             </>
                         )}
 
-                        <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-6 backdrop-blur-sm space-y-6">
-                            {videoModel.modeOptions.length > 0 && (
-                                <div>
-                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">{selectedModel === 'veo-3.1' ? 'Model Variant' : 'Quality Mode'}</h2>
-                                    <div className="flex flex-col gap-2">
-                                        {videoModel.modeOptions.map((option) => (
-                                            <button
-                                                key={option.value}
-                                                onClick={() => setMode(option.value)}
-                                                className={`p-3 rounded-xl text-sm font-medium transition-all text-left ${currentMode === option.value ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
-                                            >
-                                                {option.label}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {videoModel.resolutions.length > 0 && (
-                                <div>
-                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Resolution</h2>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {videoModel.resolutions.map((resolutionOption) => (
-                                            <button
-                                                key={resolutionOption}
-                                                onClick={() => setResolution(resolutionOption)}
-                                                className={`py-2 rounded-xl text-xs font-bold transition-all ${currentResolution === resolutionOption ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
-                                            >
-                                                {resolutionOption}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            <div>
-                                <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Aspect Ratio</h2>
-                                <div className="grid grid-cols-3 gap-2">
-                                    {videoModel.aspectRatios.map((ratio) => (
-                                        <button
-                                            key={ratio}
-                                            onClick={() => setAspectRatio(ratio)}
-                                            className={`py-2 rounded-xl text-xs font-bold transition-all ${currentAspectRatio === ratio ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800'}`}
-                                        >
-                                            {ratio}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {videoModel.supportsFixedLens && (
-                                <div>
-                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Camera</h2>
-                                    <button
-                                        onClick={() => setFixedLens(!fixedLens)}
-                                        className={`w-full p-3 rounded-xl flex items-center justify-between text-sm font-medium transition-all ${currentFixedLens ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]' : 'bg-black/50 text-zinc-500 border border-white/5'}`}
-                                    >
-                                        <span className="flex items-center gap-2">
-                                            <Camera className="w-4 h-4" />
-                                            Fixed Lens
-                                        </span>
-                                        <span>{currentFixedLens ? 'ON' : 'OFF'}</span>
-                                    </button>
-                                </div>
-                            )}
-
-                            {videoModel.supportsSound && (
-                                <div>
-                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Audio</h2>
-                                    <button
-                                        onClick={() => setSound(!sound)}
-                                        className={`w-full p-3 rounded-xl flex items-center justify-between text-sm font-medium transition-all ${currentSound ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-black/50 text-zinc-500 border border-white/5'}`}
-                                    >
-                                        <span className="flex items-center gap-2">
-                                            {currentSound ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-                                            AI Sound Effects
-                                        </span>
-                                        <span>{currentSound ? 'ON' : 'OFF'}</span>
-                                    </button>
-                                </div>
-                            )}
-
-                            {!videoModel.supportsSound && ALWAYS_ON_AUDIO_VIDEO_MODELS.has(selectedModel) && (
-                                <div>
-                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Audio</h2>
-                                    <div className="w-full p-3 rounded-xl flex items-center gap-2 text-sm font-medium bg-black/50 text-zinc-400 border border-white/5">
-                                        <Volume2 className="w-4 h-4 shrink-0 text-green-400/70" />
-                                        <span>This model always generates audio. Describe the sound you want in the prompt, or say “no music”.</span>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
+                        <CreatorColumnBar
+                            settingsSummary={settingsSummary}
+                            settings={settingsPanel}
+                            status={barStatus}
+                            action={barAction}
+                        />
                     </>
                 }
-                workspace={
-                    <>
-                        <StudioRunPanel
-                            title={isGenerating ? 'Video run in progress' : 'Ready to generate'}
-                            summary={
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Model</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{videoModel.displayName}</div>
-                                    </div>
-                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{quoteUi.costLabel}</div>
-                                    </div>
-                                </div>
-                            }
-                            details={
-                                <div className="grid grid-cols-2 gap-3 text-sm">
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Duration</div>
-                                        <div className="mt-1 text-zinc-200">{totalDuration}s</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Aspect ratio</div>
-                                        <div className="mt-1 text-zinc-200">{currentAspectRatio}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Shot mode</div>
-                                        <div className="mt-1 text-zinc-200">{currentIsMultiShot ? 'Multi-shot' : 'Single shot'}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Reference</div>
-	                                        <div className="mt-1 text-zinc-200">
-	                                            {currentIsMultiShot
-	                                                ? (isKlingVideoModel && klingVideoElements.length > 0 ? 'Shot prompts + Kling refs' : 'Shot prompts')
-	                                                : isKlingVideoModel && klingVideoElements.length > 0
-	                                                        ? 'Frames + Kling refs'
-	                                                    : activeReferenceMode === 'elements'
-	                                                        ? 'Reusable references'
-	                                                        : 'Start / end frames'}
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Inputs</div>
-	                                        <div className="mt-1 text-zinc-200">
-	                                            {currentIsMultiShot
-	                                                ? `${multiPrompts.length} shot${multiPrompts.length === 1 ? '' : 's'}${isKlingVideoModel && klingVideoElements.length > 0 ? ` + ${klingVideoElements.length} video ref${klingVideoElements.length === 1 ? '' : 's'}` : ''}`
-	                                                : isKlingVideoModel
-	                                                    ? `${frameReferenceCount} frame${frameReferenceCount === 1 ? '' : 's'} + ${klingVideoElements.length} video ref${klingVideoElements.length === 1 ? '' : 's'}`
-	                                                : activeReferenceMode === 'elements'
-	                                                    ? `${runElements.length + runReferenceVideos.length + runReferenceAudios.length} reference${runElements.length + runReferenceVideos.length + runReferenceAudios.length === 1 ? '' : 's'}`
-                                                    : `${frameReferenceCount} frame${frameReferenceCount === 1 ? '' : 's'}`}
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Credits left</div>
-                                        <div className="mt-1 text-zinc-200">{userCredits ?? '...'}</div>
-                                    </div>
-                                </div>
-                            }
-                            action={
-                                unconfirmedStart ? (
-                                    <div className="space-y-3">
-                                        <button
-                                            type="button"
-                                            onClick={() => void replayPendingStart(unconfirmedStart)}
-                                            disabled={isGenerating}
-                                            className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
-                                        >
-                                            {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin" /> Checking...</> : 'Check again'}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={startNewRunInstead}
-                                            disabled={isGenerating || quotePending || Boolean(promptLimitMessage)}
-                                            className="ui-focus-ring flex min-h-12 w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-6 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                                        >
-                                            {estimatedCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
-                                        </button>
-                                    </div>
-                                ) : showTopUp ? (
-                                    <div className="space-y-4">
-                                        <div className="rounded-[22px] border border-rose-500/20 bg-rose-500/10 p-4">
-                                            <p className="text-sm font-semibold text-white">Not enough credits</p>
-                                            <p className="mt-2 text-sm text-zinc-400">
-                                                {insufficientCredits ? (
-                                                    <>This run costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.</>
-                                                ) : creditRefusal?.message}
-                                            </p>
-                                        </div>
-                                        <Link href="/pricing" className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]">
-                                            <Sparkles className="h-4 w-4" />
-                                            Top Up Credits
-                                        </Link>
-                                    </div>
-                                ) : (
-                                    <button
-                                        onClick={() => void handleGenerate()}
-                                        disabled={isGenerating || quotePending || Boolean(promptLimitMessage)}
-                                        className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</> : <><Video className="w-5 h-5" /> Generate Video</>}
-                                    </button>
-                                )
-                            }
-                            status={
-                                <>
-                                    {isGenerating && generationTiming ? (
-                                        <StudioGenerationStatus
-                                            accent="rose"
-                                            timing={generationTiming}
-                                            nowMs={nowMs}
-                                        />
-                                    ) : isBackgroundProcessing ? (
-                                        <StudioBackgroundProcessingNotice
-                                            accent="rose"
-                                            label="video"
-                                            phaseLabel={backgroundTiming?.phaseLabel ?? null}
-                                            timingLabel={backgroundTimingLabel}
-                                        />
-                                    ) : unconfirmedStart ? (
-                                        <p className="text-sm text-amber-300">{START_UNCONFIRMED_MESSAGE}</p>
-                                    ) : pickNotice ? (
-                                        <p className="text-sm text-amber-300 [overflow-wrap:anywhere]">{pickNotice}</p>
-                                    ) : referenceLimitMessage ? (
-                                        <p className="text-sm text-red-400">{referenceLimitMessage}</p>
-                                    ) : promptLimitMessage ? (
-                                        <p className="text-sm text-red-400">{promptLimitMessage}</p>
-                                    ) : quoteState.pageOutOfDate ? (
-                                        // In place of the start's refusal it stands for.
-                                        <StudioOutOfDatePageNotice
-                                            isRemix={Boolean(remixId)}
-                                            reloadDidNotHelp={reloadBroughtBackThisBuild()}
-                                            onReload={() => void reloadPage()}
-                                        />
-                                    ) : error ? (
-                                        // The error can name a handle, and can print a subject's name or
-                                        // whatever the server answered. A handle gets its own box; any other
-                                        // word that no line can hold breaks where the line ends. A price that
-                                        // could not be read since (asked again after `cost_changed`, say)
-                                        // keeps its Retry under the error: Generate waits for a price.
-                                        <div className="space-y-2">
-                                            <p className="text-sm text-red-400 [overflow-wrap:anywhere]">
-                                                <StudioElementHandleText text={error} />
-                                            </p>
-                                            {quoteRetry}
-                                        </div>
-                                    ) : quoteState.status === 'error' ? (
-                                        quoteRetry
-                                    ) : (
-                                        <p className="text-sm text-zinc-500">The current run will replace this workspace as soon as generation starts.</p>
-                                    )}
-                                </>
-                            }
-                            footer={
-                                <Link
-                                    href="/creations"
-                                    className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
-                                >
-                                    View Studio
-                                    <Images className="h-4 w-4" aria-hidden="true" />
-                                </Link>
-                            }
-                        />
-
-                        <StudioWorkspacePanel
-                            title={workspaceTitle}
-                            description={workspaceDescription}
-                            action={
-                                <Link
-                                    href="/creations"
-                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
-                                >
-                                    Studio
-                                    <Images className="h-4 w-4" aria-hidden="true" />
-                                </Link>
-                            }
-                        >
-                            {outputVideo ? (
-                                <div className="space-y-5">
-                                    <div className="overflow-hidden rounded-[26px] border border-white/8 bg-black/60 aspect-video">
-                                        <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} />
-                                    </div>
-                                    <div className="flex flex-wrap gap-3">
-                                        <a href={resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo} download="generated_video.mp4" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500">
-                                            <Download className="h-4 w-4" />
-                                            Download video
-                                        </a>
-                                        {latestGenerationId ? (
-                                            latestIsPublic ? (
-                                                <>
-                                                    <PublicShareButton
-                                                        generationId={latestGenerationId}
-                                                        viewerIsOwner
-                                                        title={shareTitle}
-                                                        description={primarySharePrompt}
-                                                        sourceSurface="create-video"
-                                                        accessToken={session?.access_token ?? null}
-                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                                    />
-                                                    {publicResultPath ? (
-                                                        <Link
-                                                            href={publicResultPath}
-                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                                        >
-                                                            Open public page
-                                                        </Link>
-                                                    ) : null}
-                                                </>
-                                            ) : (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void openPublishModal()}
-                                                    disabled={isPreparingPublish}
-                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:opacity-60"
-                                                >
-                                                    {isPreparingPublish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
-                                                    Publish & share
-                                                </button>
-                                            )
-                                        ) : null}
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setOutputVideo(null);
-                                                setLatestGenerationId(null);
-                                                setLatestIsPublic(false);
-                                                setPublishedMeta(null);
-                                            }}
-                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                        >
-                                            Start another run
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : isGenerating ? (
-                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#ff7a59]/25 bg-[#ff7a59]/10">
-                                        <Loader2 className="h-7 w-7 animate-spin text-[#ff9a80]" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-xl font-semibold text-white">Rendering the current scene</h3>
-                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            This workspace will switch from progress to preview as soon as the model finishes the latest run.
-                                        </p>
-                                    </div>
-                                </div>
-                            ) : isBackgroundProcessing ? (
+                canvas={
+                    <CreatorCanvas
+                        title={canvasTitle}
+                        subtitle={canvasSubtitle}
+                        revealKey={canvasRevealKey}
+                        tall={Boolean(outputVideo)}
+                        footer={canvasFooter}
+                    >
+                        {outputVideo ? (
+                            <CreatorCanvasMedia key={outputVideo} aspectRatio={runShape?.aspectRatio ?? currentAspectRatio}>
+                                <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
+                            </CreatorCanvasMedia>
+                        ) : isGenerating ? (
+                            <CreatorCanvasFrame aspectRatio={runShape?.aspectRatio ?? currentAspectRatio} accent="video" busy>
+                                <p className="text-sm font-semibold text-[var(--ui-text-primary)]">Rendering your video</p>
+                            </CreatorCanvasFrame>
+                        ) : isBackgroundProcessing ? (
+                            <div className="w-full max-w-md">
                                 <StudioBackgroundProcessingNotice
                                     accent="rose"
                                     label="video"
-                                    variant="workspace"
                                     phaseLabel={backgroundTiming?.phaseLabel ?? null}
                                     timingLabel={backgroundTimingLabel}
                                 />
-                            ) : (
-                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#ff7a59]/25 bg-[#ff7a59]/10">
-                                        <Video className="h-7 w-7 text-[#ff9a80]" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-xl font-semibold text-white">No video yet</h3>
-                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            {activeReferenceMode === 'elements'
-                                                ? isSeedance2Family
-                                                    ? 'Upload image, video, or audio references, prepare assets when needed, and the latest Seedance render will take over this workspace.'
-                                                    : 'Add reusable references, describe how they behave, and the latest render will take over this workspace.'
-                                                : 'Choose the shot structure, write the prompt, and set your frames. The latest render will take over this workspace.'}
-                                        </p>
-                                    </div>
-                                </div>
-                            )}
-                        </StudioWorkspacePanel>
-                    </>
+                            </div>
+                        ) : (
+                            <CreatorCanvasFrame aspectRatio={currentAspectRatio} accent="video">
+                                <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
+                                    <Video className="h-5 w-5 text-[var(--ui-text-muted)]" />
+                                </span>
+                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">Your video will appear here</p>
+                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">{emptyCanvasHint}</p>
+                            </CreatorCanvasFrame>
+                        )}
+                    </CreatorCanvas>
                 }
-            >
-            </MediaStudioShell>
+            />
 
             <StudioMediaPreviewModal
                 isOpen={Boolean(uploadPreview)}

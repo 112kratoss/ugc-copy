@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
@@ -19,6 +19,7 @@ import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 // What the server quotes when it starts a run: for "the price of the run the page sends".
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
+import { chooseSetting as chooseAspectRatio, costShown, generateButton, queryGenerateButton } from './fixtures/creator-column-bar';
 
 // One router for every render: a new object per render restarts effects that read it.
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
@@ -62,7 +63,11 @@ const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
   error: null as Error | null,
   summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
+  // Catalog entries a test adds to the hook's five, as the server publishes them.
+  extraModels: [] as Array<Record<string, unknown>>,
 }));
+// What the result's player was last given; it still plays as it does on the page.
+const resultVideoPropsMock = vi.hoisted(() => vi.fn());
 const temporaryUploadMock = vi.hoisted(() => vi.fn());
 // What each Enhance button on the page was last given: its prompt, and what the enhancer is told about the run.
 const enhanceButtonPropsMock = vi.hoisted(() => vi.fn((_props: { prompt: string; context?: EnhancerContext }) => {
@@ -164,6 +169,17 @@ vi.mock('@/components/EnhancePromptButton', () => ({
     return null;
   },
 }));
+
+vi.mock('@/components/GenerationResultVideo', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/GenerationResultVideo')>();
+  const { createElement } = await import('react');
+  return {
+    default: (props: Parameters<typeof actual.default>[0]) => {
+      resultVideoPropsMock(props);
+      return createElement(actual.default, props);
+    },
+  };
+});
 
 vi.mock('@/components/PublicShareButton', () => ({
   default: () => null,
@@ -298,6 +314,7 @@ vi.mock('@/lib/generation-model-client', async () => {
             capabilities: {},
             inputs: {},
           },
+          ...modelCatalogState.extraModels,
         ],
       },
       error: modelCatalogState.error,
@@ -390,6 +407,13 @@ async function defaultResponse(input: RequestInfo | URL, init?: RequestInit): Pr
   } as Response;
 }
 
+
+/** Generate, found by the price its name keeps while its face says why it waits (the column's bar). */
+/** The shot mode is a radio group, as the app's segmented control is. */
+function chooseMultiShot() {
+  fireEvent.click(screen.getByRole('radio', { name: 'Multi-shot' }));
+}
+
 describe('CreateVideoClient Kling video elements', () => {
   const originalCreateObjectURL = URL.createObjectURL;
   const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -419,6 +443,8 @@ describe('CreateVideoClient Kling video elements', () => {
     modelCatalogState.missingIds = [];
     modelCatalogState.error = null;
     modelCatalogState.summaries = [];
+    modelCatalogState.extraModels = [];
+    resultVideoPropsMock.mockClear();
     temporaryUploadMock.mockReset();
     temporaryUploadMock.mockImplementation(async (file: File) => ({
       signedUrl: `https://signed.example.com/uploads/user-1/${file.name}`,
@@ -615,11 +641,8 @@ describe('CreateVideoClient Kling video elements', () => {
     });
     expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(1);
 
-    const uploadedImage = await screen.findByAltText('Element 1');
-    const uploadedMedia = uploadedImage.closest('div.relative');
-    const removeButton = uploadedMedia?.querySelectorAll('button')[1];
-    expect(removeButton).toBeDefined();
-    fireEvent.click(removeButton!);
+    await screen.findByAltText('Element 1');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Element 1' }));
 
     await waitFor(() => {
       expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(2);
@@ -655,10 +678,8 @@ describe('CreateVideoClient Kling video elements', () => {
     render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
     expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
 
-    const extraImage = screen.getByAltText('Saved element 3');
-    const removeButton = extraImage.closest('div.relative')?.querySelectorAll('button')[1];
-    expect(removeButton).toBeDefined();
-    fireEvent.click(removeButton!);
+    expect(screen.getByAltText('Saved element 3')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Saved element 3' }));
 
     await waitFor(() => {
       expect(screen.queryByAltText('Saved element 3')).not.toBeInTheDocument();
@@ -733,7 +754,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     expect(await screen.findByText('Kling video elements')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Multi-Shot'));
+    chooseMultiShot();
 
     expect(screen.getByText('Kling video elements')).toBeInTheDocument();
   });
@@ -881,7 +902,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(screen.getByPlaceholderText(`Describe the ${modelName} scene in rich cinematic detail...`), {
         target: { value: runPrompt },
       });
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
       await waitFor(() => expect(postedRun()).toBeDefined());
     }
 
@@ -1043,7 +1064,7 @@ describe('CreateVideoClient Kling video elements', () => {
         value: 'A dancer follows @video_element_1 with the same timing in a bright studio, cinematic smooth camera movement.',
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+    fireEvent.click(generateButton());
 
     // The session is read before anything is uploaded, so a lapsed one uploads nothing.
     await waitFor(() => expect(temporaryUploadMock).toHaveBeenCalledWith(file));
@@ -1154,7 +1175,7 @@ describe('CreateVideoClient Kling video elements', () => {
       addKlingClip(view.container, 'clip.mp4');
       await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
 
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       fireEvent.change(await screen.findByPlaceholderText('Describe shot 1...'), {
         target: { value: 'Open on @video_element_1 in the rain' },
       });
@@ -1173,7 +1194,7 @@ describe('CreateVideoClient Kling video elements', () => {
       addKlingClip(view.container, 'clip.mp4');
       await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
 
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       const shot = await screen.findByPlaceholderText('Describe shot 1...');
       expect(shotMentionPanelState()).toBeNull();
 
@@ -1196,9 +1217,9 @@ describe('CreateVideoClient Kling video elements', () => {
       const view = render(<CreateVideoClient prefill={{}} />);
       addKlingClip(view.container, 'clip.mp4');
       await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       const shot = await screen.findByPlaceholderText('Describe shot 1...');
-      const generate = () => screen.getByRole('button', { name: /generate video/i });
+      const generate = () => generateButton();
 
       // 479 characters as typed; 500 as Kie counts the 16-character handle's one mention.
       const atLimit = `${'a'.repeat(500 - 37 - 1)} @video_element_1`;
@@ -1217,12 +1238,12 @@ describe('CreateVideoClient Kling video elements', () => {
       addKlingClip(view.container, 'clip.mp4');
       await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
 
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       // One letter short.
       fireEvent.change(await screen.findByPlaceholderText('Describe shot 1...'), {
         target: { value: 'Open on @video_elemnt_1 in the rain, slow push in.' },
       });
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
 
       expect(await unknownMentionLine()).toBe('Unknown element mention: @video_elemnt_1');
       expect(temporaryUploadMock).not.toHaveBeenCalled();
@@ -1234,11 +1255,11 @@ describe('CreateVideoClient Kling video elements', () => {
       addKlingClip(view.container, 'clip.mp4');
       await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
 
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       fireEvent.change(await screen.findByPlaceholderText('Describe shot 1...'), {
         target: { value: 'Open on @video_element_1 in the rain, slow push in.' },
       });
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
 
       await waitFor(() => expect(postedRun()).toBeDefined());
       const run = postedRun();
@@ -1257,7 +1278,7 @@ describe('CreateVideoClient Kling video elements', () => {
       addKlingClip(view.container, 'clip.mp4');
       await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
 
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       await screen.findByPlaceholderText('Describe shot 1...');
 
       expect(shotEnhanceButton(0)?.context?.elementReferences).toEqual([
@@ -1594,7 +1615,7 @@ describe('CreateVideoClient Kling video elements', () => {
         const view = renderRemix(referenceRun('seedance-1.5-pro'));
         await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
 
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
 
         await waitFor(() => expect(postedRun()).toBeDefined());
         const run = postedRun();
@@ -1625,7 +1646,7 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(screen.getByText(/can use this first frame together with your reusable images/)).toBeInTheDocument();
         expect(screen.queryByText(/cannot combine/)).not.toBeInTheDocument();
 
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
 
         await waitFor(() => expect(postedRun()).toBeDefined());
         expect(postedInputs()).toEqual([
@@ -1653,7 +1674,7 @@ describe('CreateVideoClient Kling video elements', () => {
           expect(quotedRun()?.inputMetadata?.slots?.audioReferences).toEqual({ count: 1, durationsSeconds: [6] });
         });
 
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
 
         await waitFor(() => expect(postedRun()).toBeDefined());
         expect(postedInputs()).toEqual([
@@ -1679,7 +1700,7 @@ describe('CreateVideoClient Kling video elements', () => {
           expect(quotedRun()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.5] });
         });
 
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
 
         await waitFor(() => expect(postedRun()).toBeDefined());
         expect(postedInputs()).toEqual([['videoReferences', CLIP.url, 'Camera move']]);
@@ -1747,7 +1768,7 @@ describe('CreateVideoClient Kling video elements', () => {
         }));
 
         await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
 
         await waitFor(() => expect(postedRun()).toBeDefined());
         expect((postedRun().inputs as Array<{ slot: string; url: string; assetId?: string | null }>)
@@ -1882,6 +1903,15 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     });
 
+    it('puts a subject\'s handle in the prompt from the Insert beside it', async () => {
+      await renderWithSubjects('Hero creator');
+      fireEvent.change(promptBox(), { target: { value: 'A scene with' } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Insert @hero_creator' }));
+
+      expect((promptBox() as HTMLTextAreaElement).value).toContain('@hero_creator');
+    });
+
     it('keeps the "@" panel open at a capital letter, and inserts the handle from it', async () => {
       await renderWithSubjects('Hero creator');
 
@@ -1929,7 +1959,7 @@ describe('CreateVideoClient Kling video elements', () => {
       const view = await renderWithSubjects('Hero');
       await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@hero']));
 
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       fireEvent.change(await screen.findByPlaceholderText('Describe shot 1...'), {
         target: { value: 'Open on @hero in the rain' },
       });
@@ -1977,7 +2007,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.click(screen.getAllByRole('button', { name: 'Remove Hero' })[0]);
       await waitFor(() => expect(subjectFields(view.container)).toHaveLength(1));
 
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
 
       await waitFor(() => {
         expect(fetchMock).toHaveBeenCalledWith(
@@ -2118,7 +2148,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       const prompt = '@hero_creator lifts the serum and smiles at the camera in a bright studio, slow push in.';
       fireEvent.change(promptBox(), { target: { value: prompt } });
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
 
       await waitFor(() => {
         expect(fetchMock).toHaveBeenCalledWith(
@@ -2154,7 +2184,7 @@ describe('CreateVideoClient Kling video elements', () => {
     describe('in a shot prompt', () => {
       async function renderShotsWithSubjects(...names: string[]) {
         const view = await renderWithSubjects(...names);
-        fireEvent.click(screen.getByText('Multi-Shot'));
+        chooseMultiShot();
         await screen.findByPlaceholderText('Describe shot 1...');
         return view;
       }
@@ -2230,7 +2260,7 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.change(await screen.findByPlaceholderText('Describe shot 2...'), {
           target: { value: 'Cut closer while @hero_creatr turns to the camera.' },
         });
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
 
         // The words the server refuses the run with, said before anything is sent.
         expect(await unknownMentionLine()).toBe('Unknown element mention: @hero_creatr');
@@ -2243,7 +2273,7 @@ describe('CreateVideoClient Kling video elements', () => {
         await attachSubjectImages(view.container);
 
         fireEvent.change(shotBox(), { target: { value: 'Open on @hero_creator in the rain, slow push in.' } });
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
 
         await waitFor(() => expect(postedRun()).toBeDefined());
         const run = postedRun();
@@ -2361,7 +2391,7 @@ describe('CreateVideoClient Kling video elements', () => {
         const view = renderRemix(subjectRun());
         await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@lead', '@bottle']));
 
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
 
         await waitFor(() => expect(postedRun()).toBeDefined());
         const run = postedRun();
@@ -2417,7 +2447,7 @@ describe('CreateVideoClient Kling video elements', () => {
         await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@lead', '@bottle']));
         expect(screen.getByPlaceholderText('Describe shot 2...')).toHaveValue(shots[1].prompt);
 
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
 
         await waitFor(() => expect(postedRun()).toBeDefined());
         const run = postedRun();
@@ -2537,7 +2567,7 @@ describe('CreateVideoClient Kling video elements', () => {
     it('refuses the run and names the mention', async () => {
       const view = await renderWithSavedReferenceMentioned();
 
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
 
       expect(view.container.querySelector('p.text-red-400')?.textContent)
         .toBe('Kling 3.0 Cinematic cannot use @hero. Remove it from the prompt, or pick a model that takes reusable references.');
@@ -2654,10 +2684,15 @@ describe('CreateVideoClient Kling video elements', () => {
       }
     }
 
-    /** One line of the run summary, by its label. */
-    function runSummary(label: 'Reference' | 'Inputs') {
-      return screen.getByText(label, { selector: 'div' }).nextElementSibling?.textContent?.replace(/\s+/g, ' ').trim();
+    /** What the empty canvas asks for: frames or references, as the run will use them. */
+    function canvasAsksFor() {
+      return screen.getByText(/^(Write (a prompt|each shot)|Add a start frame)/).textContent;
     }
+    const ASKS_FOR_FRAMES = 'Write a prompt, add frames if you like, then Generate.';
+    const ASKS_FOR_REFERENCES = 'Write a prompt, add references if you like, then Generate.';
+    // Hailuo 2.3 has no run without its start frame.
+    const ASKS_FOR_START_FRAME = 'Add a start frame and write a prompt, then Generate.';
+    const ASKS_FOR_PROMPT = 'Write a prompt, then Generate.';
 
     /** The group that holds the start frame, and whether the page has greyed it out. */
     function frameGroupLocked(container: HTMLElement) {
@@ -2744,11 +2779,9 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(slotCount(request, 'startFrame')).toBe(1);
       expect(refusedByTheServer(request)).toBeNull();
 
-      // The page says the same of the run as its standby card does.
-      expect(runSummary('Reference')).toBe('Start / end frames');
-      expect(runSummary('Inputs')).toBe('1 frame + 0 video refs');
-      expect(screen.getByText(/The latest render will take over this workspace\./).textContent)
-        .toBe('Choose the shot structure, write the prompt, and set your frames. The latest render will take over this workspace.');
+      // The canvas asks for what the standby card says the run takes: frames, not references.
+      expect(canvasAsksFor()).toBe(ASKS_FOR_FRAMES);
+      expect(slotCount(request, 'videoElements')).toBe(0);
       // Nothing by the prompt speaks of references the run does not use.
       expect(screen.queryByText(/Upload reference images below/)).toBeNull();
       const enhance = enhanceButtonPropsMock.mock.calls.at(-1)?.[0] as { helperText?: string; context?: EnhancerContext } | undefined;
@@ -2760,7 +2793,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(screen.getByPlaceholderText(/^Describe the Kling 3\.0 Cinematic scene/), {
         target: { value: 'A harbour at dusk, a slow push in over the water as the lamps come on along the quay.' },
       });
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
       await waitFor(() => expect(postedRun()).toBeDefined());
 
       expect(postedRun().settings.referenceMode).toBe('frames');
@@ -2768,6 +2801,18 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(runInputs('imageReferences')).toHaveLength(0);
       expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
       expect(temporaryUploadMock.mock.calls[0][0]).toMatchObject({ name: 'start.png' });
+    });
+
+    it('asks for the start frame Hailuo 2.3 cannot run without, until one is added', async () => {
+      saveInTheBrowser({});
+      const view = render(<CreateVideoClient prefill={{ model: 'hailuo-2.3' }} />);
+      await restored();
+
+      expect(canvasAsksFor()).toBe(ASKS_FOR_START_FRAME);
+      fireEvent.change(view.container.querySelector<HTMLInputElement>('#video-start-frame-input')!, {
+        target: { files: [picture('start')] },
+      });
+      await waitFor(() => expect(canvasAsksFor()).toBe(ASKS_FOR_PROMPT));
     });
 
     it.each(['kling-3.0-turbo', 'hailuo-2.3'] as const)('makes a frames run on %s while two saved images are on standby', async (modelId) => {
@@ -2780,8 +2825,9 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(request.settings.referenceMode).toBe('frames');
       expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
       expect(refusedByTheServer(request)).toBeNull();
-      expect(runSummary('Reference')).toBe('Start / end frames');
-      expect(runSummary('Inputs')).toBe('1 frame');
+      // Hailuo's start frame is already there, so the canvas asks only for the prompt.
+      expect(canvasAsksFor()).toBe(modelId === 'hailuo-2.3' ? ASKS_FOR_PROMPT : ASKS_FOR_FRAMES);
+      expect(slotCount(request, 'startFrame')).toBe(1);
     });
 
     it('leaves the frames of Seedance 1.5 Pro free while a saved clip and track are on standby', async () => {
@@ -2794,8 +2840,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
       expect(frameGroupLocked(view.container)).toBe(false);
       expect(screen.getByText(/takes either frames or references in a single run/)).toBeInTheDocument();
-      expect(runSummary('Reference')).toBe('Start / end frames');
-      expect(runSummary('Inputs')).toBe('0 frames');
+      expect(canvasAsksFor()).toBe(ASKS_FOR_FRAMES);
+      expect(slotCount(lastQuoteRequest(), 'startFrame')).toBe(0);
       expect(lastQuoteRequest().settings.referenceMode).toBe('frames');
 
       // A frame attached now locks the references, as on a draft that holds no clip.
@@ -2803,18 +2849,23 @@ describe('CreateVideoClient Kling video elements', () => {
         target: { files: [picture('start')] },
       });
       expect(await screen.findByText(/cannot combine references with frames\. Clear your frames/)).toBeInTheDocument();
-      expect(runSummary('Inputs')).toBe('1 frame');
+      await waitFor(() => expect(slotCount(lastQuoteRequest(), 'startFrame')).toBe(1));
+      // Locked for the keyboard too: the add tile's file field is off, not just greyed.
+      expect(screen.getByText('Add reference images').closest('label')?.querySelector('input[type="file"]')).toBeDisabled();
     });
 
     it('counts the image and not the clip in a references run on Seedance 1.5 Pro', async () => {
       saveInTheBrowser({ images: 1, clip: true, track: true });
-      render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
       await screen.findByPlaceholderText('Rename element');
       await restored();
 
-      expect(runSummary('Reference')).toBe('Reusable references');
-      expect(runSummary('Inputs')).toBe('1 reference');
+      expect(canvasAsksFor()).toBe(ASKS_FOR_REFERENCES);
+      // The reference holds the run, so the frames are locked, for the keyboard too.
+      expect(frameGroupLocked(view.container)).toBe(true);
+      expect(view.container.querySelector('#video-start-frame-input')).toBeDisabled();
       const request = lastQuoteRequest();
+      expect(slotCount(request, 'imageReferences')).toBe(1);
       expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
       expect(refusedByTheServer(request)).toBeNull();
     });
@@ -2831,13 +2882,13 @@ describe('CreateVideoClient Kling video elements', () => {
       // The track is offered only on the standby card, where it can be taken off.
       expect(standbyChips()).toEqual(['Saved track']);
       expect(screen.queryByRole('heading', { name: 'Video and audio references' })).toBeNull();
-      expect(runSummary('Inputs')).toBe('2 references');
+      expect(slotCount(lastQuoteRequest(), 'imageReferences') + slotCount(lastQuoteRequest(), 'videoReferences')).toBe(2);
       expect(refusedByTheServer(lastQuoteRequest())).toBeNull();
 
       fireEvent.change(screen.getByPlaceholderText(/^Describe the Gemini Omni Video scene/), {
         target: { value: 'A dancer crosses a bright studio in the rhythm of the reference clip, slow push in, soft daylight.' },
       });
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
       await waitFor(() => expect(postedRun()).toBeDefined());
 
       expect(runInputs('imageReferences')).toHaveLength(1);
@@ -2853,7 +2904,7 @@ describe('CreateVideoClient Kling video elements', () => {
       // Single-shot first: the image is in the run, and the saved frame is the odd one out.
       expect(lastQuoteRequest().settings.referenceMode).toBe('elements');
 
-      fireEvent.click(screen.getByRole('button', { name: 'Multi-Shot' }));
+      chooseMultiShot();
       await screen.findByText('Reusable references are paused in multi-shot');
 
       const request = lastQuoteRequest();
@@ -2866,7 +2917,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(screen.getByPlaceholderText('Describe shot 1...'), {
         target: { value: 'A lighthouse keeper climbs the stairs with a lamp, the camera rising with him, warm light on stone.' },
       });
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
       await waitFor(() => expect(postedRun()).toBeDefined());
 
       expect(postedRun().settings.referenceMode).toBe('frames');
@@ -2898,7 +2949,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(screen.getByPlaceholderText(/^Describe the Kling O3 scene/), {
         target: { value: '@hero_creator lifts the serum and smiles at the camera in a bright studio, slow push in.' },
       });
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
       await waitFor(() => expect(postedRun()).toBeDefined());
 
       expect(postedRun().settings.referenceMode).toBe('subjects');
@@ -2924,7 +2975,7 @@ describe('CreateVideoClient Kling video elements', () => {
         'On standby here: @saved_image_1, @saved_image_2',
       ]);
 
-      fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+      fireEvent.click(generateButton());
 
       expect(view.container.querySelector('p.text-red-400')?.textContent)
         .toBe('Kling 3.0 Cinematic cannot use @saved_image_1, @saved_image_2. Remove them from the prompt, or pick a model that takes reusable references.');
@@ -3021,7 +3072,7 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.change(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/), {
           target: { value: runPrompt },
         });
-        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        fireEvent.click(generateButton());
         await waitFor(() => expect(postedRun()).toBeDefined());
       }
 
@@ -3120,15 +3171,7 @@ describe('CreateVideoClient Kling video elements', () => {
       return screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
     }
 
-    function generateButton() {
-      return screen.getByRole('button', { name: /generate video/i });
-    }
-
-    /** The price on the run panel. */
-    function costShown() {
-      return screen.getByText('Cost', { selector: 'div' }).nextElementSibling?.textContent;
-    }
-
+    /** The price Generate names, or why it waits ("Calculating...", "Unavailable"). */
     /** Every start the page sent, as its key and its body. */
     function postedStarts(): Array<{ key: string | null; body: { inputs: Array<Record<string, unknown>>; settings: Record<string, unknown>; shots: unknown[]; expectedCostCredits?: unknown } }> {
       return fetchMock.mock.calls
@@ -3185,7 +3228,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(first.body.expectedCostCredits).toBe(12);
       expect(catalogClient.loadPendingWebStart('video', 'user-1')).toMatchObject({ idempotencyKey: first.key, body: { prompt: PROMPT, expectedCostCredits: 12 } });
       // Nothing on the page can start a second run while this one is unanswered.
-      expect(screen.queryByRole('button', { name: /generate video/i })).toBeNull();
+      expect(queryGenerateButton()).toBeNull();
 
       // The price moves meanwhile. Checking again is the same attempt, so it goes with the
       // price it was sent with: another body under the same key is refused as a reused key.
@@ -3194,7 +3237,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.getByRole('button', { name: 'Start a new run · 15 credits' })).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
 
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
       const starts = postedStarts();
       expect(starts).toHaveLength(2);
       expect(starts[1].key).toBe(first.key);
@@ -3217,7 +3260,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(deployState.enabled.at(-1)).toBe(false));
 
       answer({ ok: true, status: 200, json: async () => startedRunBody() } as Response);
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
       await waitFor(() => expect(deployState.enabled.at(-1)).toBe(true));
     });
 
@@ -3234,7 +3277,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(postedStarts()).toHaveLength(2));
       expect(postedStarts()[1].key).not.toBe(postedStarts()[0].key);
       expect(postedStarts()[1].body.expectedCostCredits).toBe(12);
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
       expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
     });
 
@@ -3292,7 +3335,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       render(<CreateVideoClient prefill={{}} />);
 
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
       expect(postedStarts()).toEqual([{ key: 'video:kept-key', body: { schemaVersion: 3, ...body } }]);
       expect(maybeSingleMock).not.toHaveBeenCalled();
       expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
@@ -3367,7 +3410,7 @@ describe('CreateVideoClient Kling video elements', () => {
           await vi.advanceTimersByTimeAsync(2_500);
         });
         expect(checks).toBe(2);
-        expect(screen.getByText('Latest video result')).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Download video' })).toBeInTheDocument();
       } finally {
         vi.useRealTimers();
       }
@@ -3402,7 +3445,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(await screen.findByText('Insufficient credits. This action costs 12 credits.')).toBeInTheDocument();
         expect(screen.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing');
-        expect(screen.queryByRole('button', { name: /generate video/i })).toBeNull();
+        expect(queryGenerateButton()).toBeNull();
         expect(balance.rereads.length).toBeGreaterThan(0);
         expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
       } finally {
@@ -3467,7 +3510,7 @@ describe('CreateVideoClient Kling video elements', () => {
     it('saves the prompt and settings for the account, and brings them back before the catalog picks a model', async () => {
       const first = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
-      fireEvent.click(screen.getByRole('button', { name: '9:16' }));
+      chooseAspectRatio('9:16');
       await waitFor(() => expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1', expect.objectContaining({
         prompt: PROMPT,
         modelId: 'seedance-1.5-pro',
@@ -3543,7 +3586,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
       fireEvent.click(generateButton());
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
       fireEvent.click(generateButton());
       await waitFor(() => expect(postedStarts()).toHaveLength(2));
 
@@ -3563,7 +3606,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
       fireEvent.click(generateButton());
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
       fireEvent.click(generateButton());
       await waitFor(() => expect(postedStarts()).toHaveLength(2));
 
@@ -3607,7 +3650,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
       fireEvent.click(generateButton());
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
       fireEvent.click(generateButton());
       await waitFor(() => expect(postedStarts()).toHaveLength(2));
 
@@ -3772,7 +3815,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       await waitFor(() => expect(postedStarts()).toHaveLength(1));
       expect(postedStarts()[0].body.expectedCostCredits).toBe(12);
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
     });
 
     it.each([
@@ -3836,7 +3879,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(refused.body.expectedCostCredits).toBe(12);
       expect(next.body.expectedCostCredits).toBe(15);
       expect(next.key).not.toBe(refused.key);
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
     });
 
     it('keeps Retry quote in reach when the price cannot be read again after it changed', async () => {
@@ -3881,7 +3924,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(costShown()).toBe('15 credits');
       expect(screen.queryByText(/This page is out of date/)).toBeNull();
       fireEvent.click(generateButton());
-      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
       expect(postedStarts().map((start) => start.body.expectedCostCredits)).toEqual([12, 15]);
 
       // The old price back (a rollback): the run went, so the page holds nothing.
@@ -4008,7 +4051,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(postedStarts()).toHaveLength(0);
 
       // A multi-shot Kling 3.0 run sends its shots and no prompt of its own: the shots are held.
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       const shot = await screen.findByPlaceholderText('Describe shot 1...');
       expect(shot).toHaveAttribute('maxlength', '10000');
       expect(screen.queryByText(/prompts support up to/)).not.toBeInTheDocument();
@@ -4056,7 +4099,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('prices a multi-shot run by its shots, and stops adding shots at the model’s length and shot limits', async () => {
       render(<CreateVideoClient prefill={{}} />);
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       const addShot = await screen.findByRole('button', { name: /Add New Shot/ });
       const setShotLength = (shot: number, seconds: number) => fireEvent.change(screen.getAllByRole('slider')[shot], { target: { value: String(seconds) } });
 
@@ -4094,7 +4137,7 @@ describe('CreateVideoClient Kling video elements', () => {
       ['Kling O3', 'kling-o3'],
     ] as const)('lets %s add as many shots as the prompt check accepts, and no more', async (_name, modelId) => {
       render(<CreateVideoClient prefill={{ model: modelId }} />);
-      fireEvent.click(screen.getByText('Multi-Shot'));
+      chooseMultiShot();
       const addShot = await screen.findByRole('button', { name: /Add New Shot/ });
       // One-second shots, so the length cap is never what stops the next one.
       let shots = 1;
@@ -4180,10 +4223,153 @@ describe('CreateVideoClient Kling video elements', () => {
       }));
     });
 
-    it('marks the Studio links with a gallery icon, not a download one', async () => {
+    // The video creator on the app's column (2026-10-26): the run's settings fold into
+    // one chip on the bar, read back as the app reads them.
+    it('reads the run\'s settings back on the bar\'s chip, and follows a change made in them', async () => {
+      render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      const chip = await screen.findByRole('button', { name: /^Generation settings: / });
+      expect(chip).toHaveAccessibleName(/^Generation settings: (\d{3,4}P · )?\d+:\d+ · \d+s$/);
+
+      chooseAspectRatio('9:16');
+
+      expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName(/ · 9:16 · \d+s$/);
+    });
+
+    it('keeps the prompt the run was sent with under its clip while the next one is written', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+      await screen.findByRole('link', { name: 'Download video' });
+
+      fireEvent.change(promptBox(), { target: { value: 'A forest at dawn, mist between the trees, a slow crane up.' } });
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(within(canvas).getByText(PROMPT)).toBeInTheDocument();
+      expect(within(canvas).queryByText(/A forest at dawn/)).toBeNull();
+    });
+
+    it('plays the finished clip once: beside the column it never leaves the window to be paused', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+      await screen.findByRole('link', { name: 'Download video' });
+
+      expect(resultVideoPropsMock.mock.calls.at(-1)?.[0]).toMatchObject({ loop: false });
+    });
+
+    it('draws a model the catalog has listed but not described yet, which has no ratio', async () => {
+      // Until its details load, a model is drawn from its summary, with no ratios to offer.
+      const registry = VIDEO_MODELS as unknown as Record<string, Record<string, unknown>>;
+      const described = registry['kling-3.0-video'];
+      registry['kling-3.0-video'] = { ...described, aspectRatios: [] };
+      try {
+        render(<CreateVideoClient prefill={{}} />);
+        const chip = await screen.findByRole('button', { name: /^Generation settings: / });
+        expect(chip.getAttribute('aria-label')).not.toContain('undefined');
+        expect(Number(screen.getByTestId('creator-canvas-frame').style.getPropertyValue('--creator-frame-ratio'))).toBe(1);
+      } finally {
+        registry['kling-3.0-video'] = described;
+      }
+    });
+
+    it('names the mode control as the model\'s catalog entry does', async () => {
+      const published = serverCatalog.buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+      modelCatalogState.extraModels = published.models
+        .filter((model) => model.id === 'grok-imagine-video') as unknown as Array<Record<string, unknown>>;
+      render(<CreateVideoClient prefill={{ model: 'grok-imagine-video' }} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /^Generation settings/ }));
+
+      expect(screen.getByRole('radiogroup', { name: 'Grok mode' })).toBeInTheDocument();
+    });
+
+    it('says in the column, not only in the settings, that a model always makes sound', async () => {
+      render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+
+      expect(await screen.findByText(/This model always generates audio/)).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Generation settings' })).toBeNull();
+    });
+
+    it('offers single shot and multi-shot as a radio group, as the app\'s segmented control', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      const single = await screen.findByRole('radio', { name: 'Single shot' });
+      expect(single).toHaveAttribute('aria-checked', 'true');
+      expect(promptBox()).toBeInTheDocument();
+
+      chooseMultiShot();
+
+      expect(screen.getByRole('radio', { name: 'Multi-shot' })).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getByPlaceholderText('Describe shot 1...')).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/)).toBeNull();
+    });
+
+    describe('the result canvas', () => {
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      let scrollIntoView: ReturnType<typeof vi.fn>;
+      let rects: { mockRestore: () => void } | null = null;
+
+      /** Draws the canvas `top` pixels down the window: 1500 under the column, 88 beside it. */
+      function placeCanvas(top: number) {
+        rects = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+          const y = this.getAttribute('aria-label') === 'Result' ? top : 0;
+          return { top: y, bottom: y, left: 0, right: 0, width: 0, height: 0, x: 0, y, toJSON: () => ({}) } as DOMRect;
+        });
+      }
+
+      beforeEach(() => {
+        scrollIntoView = vi.fn();
+        Element.prototype.scrollIntoView = scrollIntoView as unknown as Element['scrollIntoView'];
+      });
+
+      afterEach(() => {
+        Element.prototype.scrollIntoView = originalScrollIntoView;
+        rects?.mockRestore();
+        rects = null;
+      });
+
+      it('is brought into view under the column once the run it started is under way', async () => {
+        placeCanvas(1500);
+        render(<CreateVideoClient prefill={{}} />);
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+
+        await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+        expect(scrollIntoView.mock.contexts[0]).toHaveAttribute('aria-label', 'Result');
+      });
+
+      it('stays put when the start is refused, so the reason in the bar stays in view', async () => {
+        placeCanvas(1500);
+        answerStarts(refusal(422, { code: 'INVALID_GENERATION_REQUEST', error: 'Shot 1 is too long.' }));
+        render(<CreateVideoClient prefill={{}} />);
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+
+        expect(await screen.findByText('Shot 1 is too long.')).toBeInTheDocument();
+        expect(scrollIntoView).not.toHaveBeenCalled();
+      });
+
+      it('stays put when an unanswered start is checked again on load, so the page opens at its top', async () => {
+        placeCanvas(1500);
+        catalogClient.savePendingWebStart({
+          version: 1,
+          tool: 'video',
+          idempotencyKey: 'video:kept-key',
+          body: { kind: 'video', modelId: 'kling-3.0-video', catalogRevision: 'test-catalog-rev', prompt: PROMPT, shots: [], settings: { duration: 5 }, inputs: [] },
+          catalogRevision: 'test-catalog-rev',
+          createdAt: new Date().toISOString(),
+          userId: 'user-1',
+        });
+        render(<CreateVideoClient prefill={{}} />);
+
+        expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
+        expect(scrollIntoView).not.toHaveBeenCalled();
+      });
+    });
+
+    it('marks the Studio link with a gallery icon, not a download one', async () => {
       render(<CreateVideoClient prefill={{}} />);
 
-      for (const link of [screen.getByRole('link', { name: /View Studio/ }), screen.getByRole('link', { name: /^Studio/ })]) {
+      for (const link of [screen.getByRole('link', { name: /^Studio/ })]) {
         const icon = link.querySelector('svg')?.getAttribute('class') ?? '';
         expect(icon).toContain('lucide-images');
         expect(icon).not.toContain('lucide-download');

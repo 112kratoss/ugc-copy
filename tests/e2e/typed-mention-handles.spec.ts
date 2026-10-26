@@ -209,14 +209,14 @@ async function readMentionLines(page: Page, title: string): Promise<MentionLines
 
 /**
  * Switches to shot prompts. A dev server reload puts the page back on its single
- * prompt. On a page that has only just loaded, the button is drawn before it
+ * prompt. On a page that has only just loaded, the shot mode is drawn before it
  * answers, and a click that comes too early does nothing: the short wait ends
  * the attempt there, so the next one can click again.
  */
 async function showShotPrompts(page: Page) {
   const shot = page.getByPlaceholder('Describe shot 1...');
   if (await shot.count() === 0) {
-    await page.getByRole('button', { name: 'Multi-Shot', exact: true }).click({ timeout: 5_000 });
+    await page.getByRole('radio', { name: 'Multi-shot', exact: true }).click({ timeout: 5_000 });
     await expect(shot).toBeVisible({ timeout: 1_000 });
   }
 }

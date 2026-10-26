@@ -3,30 +3,42 @@
 import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
-import { Upload, Sparkles, Loader2, Download, Zap, ChevronDown, Check, Play, Share2, Images } from 'lucide-react';
+import { Loader2, Check, Play, Image as ImageIcon, Video } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
     StudioBackgroundProcessingNotice,
     StudioGenerationStatus,
-    GeneratorPageHeader,
-    MediaStudioShell,
-    StudioControlCard,
     StudioMediaPreviewModal,
     StudioModelNotice,
     StudioOutOfDatePageNotice,
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
-    StudioRunPanel,
-    StudioUploadedMediaPreview,
-    StudioWorkspacePanel,
 } from '@/components/CreatorStudio';
+import {
+    CreatorBackgroundRunLine,
+    CreatorBarAction,
+    CreatorCanvas,
+    CreatorCanvasFrame,
+    CreatorCanvasMedia,
+    CreatorColumnBar,
+    CreatorColumnLayout,
+    CreatorModelChip,
+    CreatorPendingStartNotice,
+    CreatorPhoneBalance,
+    CreatorResultActions,
+    CreatorSettingChoices,
+    CreatorTemplatesTile,
+    CreatorToolTabs,
+    CreatorTopUpNotice,
+    CreatorUploadSlot,
+} from '@/components/CreatorColumn';
+import { getAccentClasses } from '@/components/DesignSystem';
+import { motionSettingsSummary } from '@/lib/creator-settings-summary';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
@@ -231,8 +243,6 @@ export default function CreateMotionClient({
     const hasResolvedInitialCatalogModel = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
-    const characterImageInputRef = useRef<HTMLInputElement>(null);
-    const referenceVideoInputRef = useRef<HTMLInputElement>(null);
 
     const [characterImage, setCharacterImage] = useState<string | null>(null);
     const [characterImageFile, setCharacterImageFile] = useState<File | null>(null);
@@ -254,6 +264,18 @@ export default function CreateMotionClient({
     const [duration, setDuration] = useState<number>(0);
     const [characterOrientation, setCharacterOrientation] = useState<'video' | 'image'>('video');
     const [mode, setMode] = useState<'720p' | '1080p'>('720p');
+    // Bumped once a start the creator pressed is confirmed: the result canvas comes into view.
+    const [canvasRevealKey, setCanvasRevealKey] = useState(0);
+    // The run in flight's model and settings, which the canvas names while the form changes.
+    const [runLabel, setRunLabel] = useState<string | null>(null);
+    // The prompt the run was sent with: the caption under its clip, whatever the form holds by then.
+    const [runPrompt, setRunPrompt] = useState<string | null>(null);
+    // The settings chip, read as the app's ("720P · 8s", or "Add motion" until a clip is attached:
+    // a run picked up on load gives a length with no clip in the form).
+    const settingsSummary = motionSettingsSummary({
+        quality: mode,
+        referenceSeconds: referenceVideo || referenceVideoFile ? duration : null,
+    });
     const [prompt, setPrompt] = useState<string>("No distortion, the character's movements are consistent with the video.");
     const [imagePickError, setImagePickError] = useState<string | null>(null);
     const [videoPickError, setVideoPickError] = useState<string | null>(null);
@@ -881,14 +903,24 @@ export default function CreateMotionClient({
         ) {
             promptInputRef.current?.focus();
         } else if (code === 'cost_changed') {
-            // Priced again at once: the run panel shows what the run costs now, and the
+            // Priced again at once: Generate shows what the run costs now, and the
             // next press sends that price.
             quoteState.costChanged(run);
         }
     };
 
-    /** Sends a start, new or unanswered, under its key and follows the run it answers with. */
-    const sendStart = async (start: PendingWebStart, startedAtMs: number, estimatedTotalMs: number | null) => {
+    /**
+     * Sends a start, new or unanswered, under its key and follows the run it answers with.
+     * With `reveal`, the result canvas comes into view once the start is confirmed: a
+     * refusal is said in the column's bar and must stay in view, and a run picked up on
+     * load leaves the page where it is.
+     */
+    const sendStart = async (
+        start: PendingWebStart,
+        startedAtMs: number,
+        estimatedTotalMs: number | null,
+        { reveal = false }: { reveal?: boolean } = {},
+    ) => {
         const accessToken = await readAccessToken();
         if (!accessToken) {
             setGenerationTiming(null);
@@ -920,6 +952,7 @@ export default function CreateMotionClient({
         setLatestIsPublic(false);
         announceGenerationStarted();
         updateCredits(started.remainingCredits);
+        if (reveal) setCanvasRevealKey((key) => key + 1);
 
         const result = await pollPrediction(started.predictionId, startedAtMs, estimatedTotalMs);
         setOutputVideo(result.output);
@@ -929,9 +962,10 @@ export default function CreateMotionClient({
     };
 
     /** Check again: the unanswered start, sent exactly as it was. */
-    const replayPendingStart = async (start: PendingWebStart) => {
+    const replayPendingStart = async (start: PendingWebStart, { reveal = false }: { reveal?: boolean } = {}) => {
         if (activeGenerationRequestKeyRef.current) return;
         activeGenerationRequestKeyRef.current = start.idempotencyKey;
+        setRunPrompt(typeof start.body.prompt === 'string' && start.body.prompt.trim() ? start.body.prompt.trim() : null);
         const createdAtMs = Date.parse(start.createdAt);
         const startedAtMs = Number.isFinite(createdAtMs) ? createdAtMs : getCurrentTimestampMs();
         const sentSettings = isRecord(start.body.settings) ? start.body.settings : {};
@@ -943,7 +977,7 @@ export default function CreateMotionClient({
         beginRunView(startedAtMs, estimatedTotalMs, 'Checking your last motion run');
         setUnconfirmedStart(false);
         try {
-            await sendStart(start, startedAtMs, estimatedTotalMs);
+            await sendStart(start, startedAtMs, estimatedTotalMs, { reveal });
         } catch (runError) {
             settleRunError(runError, startedAtMs);
         } finally {
@@ -980,6 +1014,8 @@ export default function CreateMotionClient({
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = getMotionGenerationEstimate(runSettings.duration);
         beginRunView(startedAtMs, estimatedTotalMs, 'Preparing inputs');
+        setRunLabel(`${model.displayName} · ${settingsSummary}`);
+        setRunPrompt(prompt.trim() || null);
 
         try {
             // Before any upload: a lapsed session goes to sign-in with this page's params.
@@ -1076,7 +1112,7 @@ export default function CreateMotionClient({
             // again under this key, on this page or after a reload.
             pendingStartRef.current = start;
             savePendingWebStart(start);
-            await sendStart(start, startedAtMs, estimatedTotalMs);
+            await sendStart(start, startedAtMs, estimatedTotalMs, { reveal: true });
         } catch (runError) {
             settleRunError(runError, startedAtMs);
         } finally {
@@ -1091,7 +1127,7 @@ export default function CreateMotionClient({
         const pending = pendingStartRef.current ?? (userId ? loadPendingWebStart('motion', userId) : null);
         if (pending) {
             pendingStartRef.current = pending;
-            await replayPendingStart(pending);
+            await replayPendingStart(pending, { reveal: true });
             return;
         }
         // The button is disabled until both inputs and a duration exist.
@@ -1119,7 +1155,7 @@ export default function CreateMotionClient({
         if (!currentSession) return;
         const { data } = await supabase
             .from('generations')
-            .select('id, prediction_id, status, created_at, duration')
+            .select('id, prediction_id, status, created_at, duration, prompt')
             .eq('user_id', currentSession.user.id)
             .eq('category', 'video')
             .eq('creation_mode', 'motion')
@@ -1135,6 +1171,7 @@ export default function CreateMotionClient({
         setError(null);
         setLatestGenerationId(data.id ?? null);
         setLatestIsPublic(false);
+        setRunPrompt(typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null);
         latestRunCostRef.current = null;
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'motion',
@@ -1255,7 +1292,7 @@ export default function CreateMotionClient({
     const creditRefusalMessage = creditRefusal && creditRefusal.balance === userCredits && creditRefusal.cost === estimatedCost
         ? creditRefusal.message
         : null;
-    const showTopUp = (insufficientCredits || Boolean(creditRefusalMessage)) && !unconfirmedStart;
+    const showTopUp = insufficientCredits || Boolean(creditRefusalMessage);
     const canGenerate = motionInputsReady && !videoError;
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('motion');
@@ -1280,40 +1317,232 @@ export default function CreateMotionClient({
         referenceVideoDescriptor?.sourceGenerationId === remixSourceBundle.generation.id
     );
 
-    const workspaceTitle = outputVideo
-        ? 'Latest motion result'
+    // The run's own prompt first: the form may hold the next run's by now.
+    const shareTitle = publishedMeta?.title || runPrompt || prompt.trim() || `${model.displayName} motion clip`;
+    const shareDescription = publishedMeta?.description || runPrompt || prompt.trim() || null;
+    const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
+
+    const canvasTitle = outputVideo
+        ? 'Your motion clip'
         : isGenerating
             ? 'Animating your character'
             : isBackgroundProcessing
-                ? backgroundProcessingCopy.title
-            : 'Ready to transfer motion';
-
-    const workspaceDescription = outputVideo
-        ? 'Your newest motion render stays here until you start another run.'
+                ? 'Your motion clip'
+                : 'Result';
+    const canvasSubtitle = outputVideo
+        ? runPrompt
         : isGenerating
-            ? 'Track the active generation here while the model maps movement and finishes the clip.'
+            ? runLabel ?? `${model.displayName} · ${settingsSummary}`
             : isBackgroundProcessing
-                ? backgroundProcessingCopy.description
-            : 'Upload a character still and a motion reference. The active run and latest result will take over this workspace.';
-    const shareTitle = publishedMeta?.title || prompt.trim() || `${model.displayName} motion clip`;
-    const shareDescription = publishedMeta?.description || prompt.trim() || null;
-    const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
+                ? null
+                : `${model.displayName} · ${settingsSummary}`;
+
+    const isAwaitingStartCheck = unconfirmedStart && !isGenerating;
+    // What stops or explains a run, said just above the bar. Progress is drawn on the
+    // canvas; a run in the background is named here too, beside Generate.
+    const runStatus = isGenerating ? null : isBackgroundProcessing ? (
+        <CreatorBackgroundRunLine title={backgroundProcessingCopy.title} />
+    ) : unconfirmedStart ? (
+        <CreatorPendingStartNotice
+            message={UNCONFIRMED_START_MESSAGE}
+            costLabel={quoteUi.costLabel}
+            hasPrice={estimatedCost !== null}
+            disabled={!canGenerate || quotePending}
+            onStartNew={() => void startNewRunInstead()}
+        />
+    ) : videoError ? (
+        <p className="text-rose-300">{videoError}</p>
+    ) : quoteState.pageOutOfDate ? (
+        <StudioOutOfDatePageNotice
+            isRemix={Boolean(remixId)}
+            reloadDidNotHelp={reloadBroughtBackThisBuild()}
+            onReload={() => void reloadPage()}
+        />
+    ) : error ? (
+        // A price that could not be read since (asked again after `cost_changed`,
+        // say) keeps its Retry under the error: Generate waits for a price.
+        <div className="space-y-2">
+            <p className="text-rose-300">{error}</p>
+            {quoteRetry}
+        </div>
+    ) : quoteState.status === 'error' ? (
+        quoteRetry
+    ) : hasCatalogSettings && !motionInputsReady ? (
+        // Why Generate waits: the price is asked for once both inputs are in.
+        <p className="text-[var(--ui-text-muted)]">{quoteUi.message}</p>
+    ) : null;
+    const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating ? (
+        <CreatorTopUpNotice cost={estimatedCost} balance={userCredits} message={creditRefusalMessage} />
+    ) : null;
+    const barStatus = topUpNotice || runStatus ? (
+        <div className="space-y-3">
+            {topUpNotice}
+            {runStatus}
+        </div>
+    ) : null;
+
+    // Generate checks an unanswered start first, so Check again is the same press.
+    const barAction = (
+        <CreatorBarAction
+            awaitingCheck={isAwaitingStartCheck}
+            onCheckAgain={() => void handleGenerate()}
+            showTopUp={showTopUp}
+            isGenerating={isGenerating}
+            disabled={!canGenerate || quotePending}
+            costLabel={quoteUi.costLabel}
+            hasPrice={estimatedCost !== null}
+            onGenerate={() => void handleGenerate()}
+        />
+    );
+
+    const settingsPanel = (
+        <div className="space-y-5">
+            <CreatorSettingChoices
+                label="Character orientation"
+                hint="Which one the clip keeps to."
+                options={model.characterOrientations}
+                optionLabel={(option) => (option === 'video' ? 'Follow video' : 'Favor image')}
+                value={characterOrientation}
+                onChange={setCharacterOrientation}
+                columns={2}
+                accent="motion"
+            />
+            <CreatorSettingChoices
+                label="Quality mode"
+                options={model.resolutions}
+                optionLabel={(quality) => (quality === '720p' ? 'Standard 720p' : quality === '1080p' ? 'Pro 1080p' : quality)}
+                value={mode}
+                onChange={setMode}
+                columns={2}
+                accent="motion"
+            />
+            <CatalogAdditionalControls
+                appearance="panel"
+                descriptor={catalogDescriptor}
+                handledKeys={CATALOG_HANDLED_KEYS}
+                settings={{ resolution: mode, characterOrientation, duration, ...additionalSettings.settings }}
+                inputCounts={{ images: characterImage ? 1 : 0, videos: referenceVideo ? 1 : 0, audios: 0 }}
+                onChange={additionalSettings.onChange}
+            />
+        </div>
+    );
+
+    const canvasFooter = outputVideo ? (
+        <CreatorResultActions
+            generationId={latestGenerationId}
+            isPublic={latestIsPublic}
+            share={{ title: shareTitle, description: shareDescription, sourceSurface: 'create-motion', accessToken: session?.access_token ?? null }}
+            publicPath={publicResultPath}
+            onPublish={() => setIsPublishModalOpen(true)}
+            download={{
+                href: resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo,
+                fileName: 'generated-video.mp4',
+                label: 'Download video',
+                newTab: true,
+            }}
+            onStartAnother={() => {
+                setOutputVideo(null);
+                setLatestGenerationId(null);
+                setLatestIsPublic(false);
+                setPublishedMeta(null);
+                setError(null);
+                setGenerationTiming(null);
+            }}
+        />
+    ) : isGenerating && generationTiming ? (
+        <StudioGenerationStatus
+            accent="violet"
+            timing={generationTiming}
+            nowMs={nowMs}
+        />
+    ) : null;
+
+    const motionAccent = getAccentClasses('motion');
 
     return (
-        <div className="ui-page ui-page-ambient min-h-screen py-6 text-[var(--ui-text-primary)] sm:py-8 font-[family-name:var(--font-geist-sans)]">
-            <MediaStudioShell
-                currentToolId="motion"
-                header={
-                    <GeneratorPageHeader
-                        currentToolId="motion"
-                        title="Create motion"
-                        eyebrow={`Creator studio / ${model.displayName}`}
-                        description="Upload the character, match it to reference movement, and let the workspace track the active motion render from setup to final clip."
-                        credits={userCredits}
-                    />
-                }
-                controls={
+        <div className="ui-page ui-page-ambient min-h-screen py-4 text-[var(--ui-text-primary)] sm:py-6 font-[family-name:var(--font-geist-sans)]">
+            <CreatorColumnLayout
+                title="Create motion"
+                column={
                     <>
+                        <CreatorToolTabs currentToolId="motion" />
+
+                        <div className="flex items-start gap-2">
+                            <div className="relative min-w-0 flex-1" ref={dropdownRef}>
+                                <CreatorModelChip
+                                    name={model.displayName}
+                                    badge={model.badge}
+                                    badgeClassName={model.badgeColor}
+                                    isOpen={isModelDropdownOpen}
+                                    onToggle={() => {
+                                        if (isModelDropdownOpen) setModelSearchQuery('');
+                                        setIsModelDropdownOpen(!isModelDropdownOpen);
+                                    }}
+                                />
+
+                                <StudioModelPicker
+                                    isOpen={isModelDropdownOpen}
+                                    loading={modelCatalog.isLoadingModels}
+                                    error={modelCatalog.error?.message}
+                                    onRetry={modelCatalog.refetch}
+                                    query={modelSearchQuery}
+                                    onQueryChange={setModelSearchQuery}
+                                    onDismiss={() => {
+                                        setIsModelDropdownOpen(false);
+                                        setModelSearchQuery('');
+                                    }}
+                                    searchLabel="Search motion models"
+                                    searchPlaceholder="Search motion models..."
+                                    resultListLabel="Motion models"
+                                    resultCount={filteredMotionModelOptions.length}
+                                    accent="violet"
+                                >
+                                    {filteredMotionModelOptions.map((motionModel) => {
+                                        const isActive = selectedModel === motionModel.id;
+
+                                        return (
+                                            <button
+                                                key={motionModel.id}
+                                                type="button"
+                                                role="option"
+                                                aria-selected={isActive}
+                                                onClick={() => {
+                                                    // A notice about the previous model no longer applies.
+                                                    if (motionModel.id !== selectedModel) setCatalogNotice(null);
+                                                    setSelectedModel(motionModel.id as ModelId);
+                                                    setIsModelDropdownOpen(false);
+                                                    setModelSearchQuery('');
+                                                }}
+                                                className={`flex w-full items-center gap-3 px-5 py-4 text-left transition ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
+                                            >
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`text-sm font-semibold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
+                                                            {motionModel.displayName}
+                                                        </span>
+                                                        <span className={`rounded-full bg-gradient-to-r px-2 py-0.5 text-[10px] font-bold text-white ${motionModel.badgeColor}`}>
+                                                            {motionModel.badge}
+                                                        </span>
+                                                    </div>
+                                                    <p className="mt-1 text-sm text-zinc-400">{motionModel.description}</p>
+                                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                                        <span className="rounded-full border border-white/5 bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-500">
+                                                            Max {Number((motionModel as unknown as { maxVideoDuration?: number; maxDuration?: number }).maxVideoDuration ?? (motionModel as unknown as { maxDuration?: number }).maxDuration ?? 30)}s
+                                                        </span>
+                                                        <span className="rounded-full border border-white/5 bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-500">
+                                                            {(motionModel.resolutions as readonly string[]).join(' / ')}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                {isActive ? <Check className={`h-4 w-4 shrink-0 ${motionAccent.mark}`} /> : null}
+                                            </button>
+                                        );
+                                    })}
+                                </StudioModelPicker>
+                            </div>
+                            <CreatorPhoneBalance credits={userCredits} />
+                        </div>
+
                         <AnimatePresence>
                             {modelNotice ? (
                                 <motion.div key="model-notice" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
@@ -1371,255 +1600,83 @@ export default function CreateMotionClient({
                             )}
                         </AnimatePresence>
 
-                        <motion.div
-                            initial={{ opacity: 0, y: 16 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="relative"
-                            ref={dropdownRef}
-                        >
-                            <StudioControlCard title="Motion model" description="Choose the engine and quality ceiling for this run.">
-                                <button
-                                    onClick={() => {
-                                        if (isModelDropdownOpen) setModelSearchQuery('');
-                                        setIsModelDropdownOpen(!isModelDropdownOpen);
+                        <div role="group" aria-labelledby="create-motion-inputs" className="ui-card p-4">
+                            <h2 id="create-motion-inputs" className="text-xs font-bold text-[var(--ui-text-muted)]">Required inputs</h2>
+                            <p className="mb-3 mt-1 text-xs text-[var(--ui-text-faint)]">Choose the character to keep and the movement to transfer.</p>
+                            <div className="grid grid-cols-2 gap-3">
+                                <CreatorUploadSlot
+                                    accent="motion"
+                                    title="Character image"
+                                    hint="Who should move?"
+                                    height="tall"
+                                    mediaType="image"
+                                    src={characterImage}
+                                    alt="Character image"
+                                    previewHint="Preview image"
+                                    fit="contain"
+                                    icon={ImageIcon}
+                                    emptyLabel={isDraggingImage ? 'Drop image here' : 'Add the character image'}
+                                    emptyHint="A clean, full-body still works best."
+                                    input={{ id: 'motion-character-image-input', accept: 'image/*', onChange: handleImageUpload }}
+                                    onPreview={() => {
+                                        if (characterImage) setUploadPreview({ type: 'image', src: characterImage, alt: 'Character image', title: 'Character Image' });
                                     }}
-                                    aria-expanded={isModelDropdownOpen}
-                                    aria-haspopup="listbox"
-                                    className="w-full flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-left transition hover:border-white/15 hover:bg-black/55"
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-400/10 text-sky-200">
-                                            <Zap className="h-4 w-4" />
-                                        </div>
-                                        <div>
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-sm font-semibold text-white">{model.displayName}</span>
-                                                <span className={`rounded-full bg-gradient-to-r px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white ${model.badgeColor}`}>
-                                                    {model.badge}
-                                                </span>
-                                            </div>
-                                            <p className="mt-1 text-sm text-zinc-400">{model.description}</p>
-                                        </div>
-                                    </div>
-                                    <ChevronDown className={`h-4 w-4 text-zinc-400 transition-transform ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
-                                </button>
-
-                                <StudioModelPicker
-                                    isOpen={isModelDropdownOpen}
-                                loading={modelCatalog.isLoadingModels}
-                                error={modelCatalog.error?.message}
-                                onRetry={modelCatalog.refetch}
-                                    query={modelSearchQuery}
-                                    onQueryChange={setModelSearchQuery}
-                                    onDismiss={() => {
-                                        setIsModelDropdownOpen(false);
-                                        setModelSearchQuery('');
-                                    }}
-                                    searchLabel="Search motion models"
-                                    searchPlaceholder="Search motion models..."
-                                    resultListLabel="Motion models"
-                                    resultCount={filteredMotionModelOptions.length}
-                                    accent="violet"
-                                    desktopInset="card"
-                                >
-                                            {filteredMotionModelOptions.map((motionModel) => {
-                                                const isActive = selectedModel === motionModel.id;
-
-                                                return (
-                                                    <button
-                                                        key={motionModel.id}
-                                                        type="button"
-                                                        role="option"
-                                                        aria-selected={isActive}
-                                                        onClick={() => {
-                                                            // A notice about the previous model no longer applies.
-                                                            if (motionModel.id !== selectedModel) setCatalogNotice(null);
-                                                            setSelectedModel(motionModel.id as ModelId);
-                                                            setIsModelDropdownOpen(false);
-                                                            setModelSearchQuery('');
-                                                        }}
-                                                        className={`flex w-full items-center gap-3 px-5 py-4 text-left transition ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
-                                                    >
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="flex items-center gap-2">
-                                                                <span className={`text-sm font-semibold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
-                                                                    {motionModel.displayName}
-                                                                </span>
-                                                                <span className={`rounded-full bg-gradient-to-r px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white ${motionModel.badgeColor}`}>
-                                                                    {motionModel.badge}
-                                                                </span>
-                                                            </div>
-                                                            <p className="mt-1 text-sm text-zinc-400">{motionModel.description}</p>
-                                                            <div className="mt-2 flex flex-wrap gap-1.5">
-                                                                <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                                                                    Max {Number((motionModel as unknown as { maxVideoDuration?: number; maxDuration?: number }).maxVideoDuration ?? (motionModel as unknown as { maxDuration?: number }).maxDuration ?? 30)}s
-                                                                </span>
-                                                                <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                                                                    {(motionModel.resolutions as readonly string[]).join(' / ')}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                        {isActive ? <Check className="h-4 w-4 shrink-0 text-[#ff9a80]" /> : null}
-                                                    </button>
-                                                );
-                                            })}
-                                </StudioModelPicker>
-                            <CatalogAdditionalControls descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ resolution: mode, characterOrientation, duration, ...additionalSettings.settings }} inputCounts={{ images: characterImage ? 1 : 0, videos: referenceVideo ? 1 : 0, audios: 0 }} onChange={additionalSettings.onChange} />
-                            </StudioControlCard>
-                        </motion.div>
-
-                        <StudioControlCard
-                            title="Character image"
-                            description="A clear still works best. The model uses this as the identity anchor."
-                            meta={<span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Step 1</span>}
-                        >
-                            {characterImage ? (
-                                <div className="h-[280px]">
-                                    <StudioUploadedMediaPreview
-                                        mediaType="image"
-                                        src={characterImage}
-                                        alt="Character image"
-                                        fit="contain"
-                                        previewHint="Preview image"
-                                        onPreview={() => setUploadPreview({
-                                            type: 'image',
-                                            src: characterImage,
-                                            alt: 'Character image',
-                                            title: 'Character Image',
-                                        })}
-                                        onReplace={() => characterImageInputRef.current?.click()}
-                                        onRemove={() => void handleClearImage()}
-                                    />
-                                </div>
-                            ) : (
-                                <label
-                                    htmlFor="motion-character-image-input"
-                                    className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingImage
-                                        ? 'border-sky-400 bg-sky-500/10 shadow-[0_0_30px_-5px_rgba(56,189,248,0.24)]'
-                                        : 'border-zinc-700/50 hover:border-sky-500/50 hover:bg-sky-500/5'
-                                        }`}
+                                    onRemove={() => void handleClearImage()}
+                                    dragging={isDraggingImage}
                                     onDragOver={(event) => handleDragOver(event, setIsDraggingImage)}
                                     onDragLeave={(event) => handleDragLeave(event, setIsDraggingImage)}
                                     onDrop={handleImageDrop}
-                                >
-                                    <div className="flex flex-col items-center gap-3 text-center text-zinc-500">
-                                        <Upload className={`h-8 w-8 transition-colors ${isDraggingImage ? 'text-sky-300' : ''}`} />
-                                        <div>
-                                            <p className="text-sm font-medium text-zinc-300">
-                                                {isDraggingImage ? 'Drop image here' : 'Click or drag in the character image'}
-                                            </p>
-                                            <p className="mt-1 text-xs text-zinc-500">JPG, PNG, WEBP. Use a clean full-body frame when possible.</p>
-                                        </div>
-                                    </div>
-                                </label>
-                            )}
-                            <input
-                                ref={characterImageInputRef}
-                                id="motion-character-image-input"
-                                type="file"
-                                accept="image/*"
-                                onChange={handleImageUpload}
-                                className="hidden"
-                            />
-                            {imagePickError ? (
-                                <div className="mt-4 rounded-[20px] border border-rose-500/20 bg-rose-500/10 px-4 py-3">
-                                    <p className="text-sm text-rose-300">{imagePickError}</p>
-                                </div>
-                            ) : null}
-                        </StudioControlCard>
-
-                        <StudioControlCard
-                            title="Reference video"
-                            description="This clip drives the movement timing and overall energy."
-                            meta={<span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Step 2</span>}
-                        >
-                            <div className="space-y-4">
-                                {referenceVideo ? (
-                                    <div className="h-[280px]">
-                                        <StudioUploadedMediaPreview
-                                            mediaType="video"
-                                            src={referenceVideo}
-                                            alt="Reference video"
-                                            fit="contain"
-                                            previewHint="Preview video"
-                                            onPreview={() => setUploadPreview({
-                                                type: 'video',
-                                                src: referenceVideo,
-                                                alt: 'Reference video',
-                                                title: 'Reference Video',
-                                            })}
-                                            onReplace={() => referenceVideoInputRef.current?.click()}
-                                            onRemove={() => void handleClearVideo()}
-                                        />
-                                    </div>
-                                ) : (
-                                    <label
-                                        htmlFor="motion-reference-video-input"
-                                        className={`group flex h-[280px] w-full cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[24px] border-2 border-dashed bg-black/40 transition ${isDraggingVideo
-                                            ? 'border-[#ff7a59] bg-[#ff7a59]/10 shadow-[0_0_30px_-5px_rgba(255,122,89,0.24)]'
-                                            : 'border-zinc-700/50 hover:border-[#ff7a59]/50 hover:bg-[#ff7a59]/5'
-                                            }`}
-                                        onDragOver={(event) => handleDragOver(event, setIsDraggingVideo)}
-                                        onDragLeave={(event) => handleDragLeave(event, setIsDraggingVideo)}
-                                        onDrop={handleVideoDrop}
-                                    >
-                                        <div className="flex flex-col items-center gap-3 text-center text-zinc-500">
-                                            <Upload className={`h-8 w-8 transition-colors ${isDraggingVideo ? 'text-[#ff9a80]' : ''}`} />
-                                            <div>
-                                                <p className="text-sm font-medium text-zinc-300">
-                                                    {isDraggingVideo ? 'Drop video here' : 'Click or drag in the motion reference'}
-                                                </p>
-                                                <p className="mt-1 text-xs text-zinc-500">MP4 or MOV, up to 100MB and {maxVideoDuration}s.</p>
-                                            </div>
-                                        </div>
-                                    </label>
-                                )}
-                                <input
-                                    ref={referenceVideoInputRef}
-                                    id="motion-reference-video-input"
-                                    type="file"
-                                    accept="video/*"
-                                    onChange={handleVideoUpload}
-                                    className="hidden"
                                 />
-
-                                <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-white/8 bg-black/30 px-4 py-3 text-sm text-zinc-400">
-                                    <span>{duration > 0 ? `Reference length: ${duration.toFixed(1)}s` : 'Reference length will appear after upload.'}</span>
-                                    <span>Limit: {maxVideoDuration}s</span>
-                                </div>
-
-                                {videoPickError ? (
-                                    <div className="rounded-[20px] border border-rose-500/20 bg-rose-500/10 px-4 py-3">
-                                        <p className="text-sm text-rose-300">{videoPickError}</p>
-                                    </div>
-                                ) : null}
-                                {videoError ? (
-                                    <div className="rounded-[20px] border border-rose-500/20 bg-rose-500/10 px-4 py-3">
-                                        <p className="text-sm text-rose-300">{videoError}</p>
-                                    </div>
-                                ) : null}
+                                <CreatorUploadSlot
+                                    accent="motion"
+                                    title="Reference video"
+                                    hint="How should they move?"
+                                    height="tall"
+                                    mediaType="video"
+                                    src={referenceVideo}
+                                    alt="Reference video"
+                                    previewHint="Preview video"
+                                    fit="contain"
+                                    icon={Video}
+                                    emptyLabel={isDraggingVideo ? 'Drop video here' : 'Add the motion clip'}
+                                    emptyHint={`MP4 or MOV, up to 100MB and ${maxVideoDuration}s.`}
+                                    input={{ id: 'motion-reference-video-input', accept: 'video/*', onChange: handleVideoUpload }}
+                                    onPreview={() => {
+                                        if (referenceVideo) setUploadPreview({ type: 'video', src: referenceVideo, alt: 'Reference video', title: 'Reference Video' });
+                                    }}
+                                    onRemove={() => void handleClearVideo()}
+                                    dragging={isDraggingVideo}
+                                    onDragOver={(event) => handleDragOver(event, setIsDraggingVideo)}
+                                    onDragLeave={(event) => handleDragLeave(event, setIsDraggingVideo)}
+                                    onDrop={handleVideoDrop}
+                                />
                             </div>
-                        </StudioControlCard>
 
-                        <StudioControlCard title="Prompt" description="Guide the performance, energy, and cleanup details for the transfer.">
-                            <EnhancePromptButton
-                                prompt={prompt}
-                                onEnhanced={(text) => {
-                                    promptEditedRef.current = true;
-                                    setPrompt(text);
-                                }}
-                                onCreditsUpdate={updateCredits}
-                                medium="motion"
-                                selectedModel={selectedModel}
-                                context={{
-                                    modelId: selectedModel,
-                                    characterOrientation,
-                                    mode,
-                                    hasReferenceVideo: Boolean(referenceVideoFile || referenceVideo),
-                                }}
-                                disabled={isGenerating}
-                            />
+                            <p className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-[var(--ui-text-muted)]">
+                                <span>{duration > 0 ? `Reference length: ${duration.toFixed(1)}s` : 'Reference length will appear after upload.'}</span>
+                                <span className="tabular-nums">Limit: {maxVideoDuration}s</span>
+                            </p>
+
+                            {imagePickError ? (
+                                <p role="alert" className="mt-3 text-sm text-rose-300">{imagePickError}</p>
+                            ) : null}
+                            {videoPickError ? (
+                                <p role="alert" className="mt-3 text-sm text-rose-300">{videoPickError}</p>
+                            ) : null}
+                            {videoError ? (
+                                <p className="mt-3 text-sm text-rose-300">{videoError}</p>
+                            ) : null}
+                        </div>
+
+                        <div className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${motionAccent.outline}`}>
+                            <div className="flex items-baseline justify-between gap-3 px-4 pt-4">
+                                <label htmlFor="create-motion-prompt" className="ui-kicker">
+                                    Prompt
+                                </label>
+                                <span className="text-xs text-[var(--ui-text-faint)]">Optional</span>
+                            </div>
                             <textarea
+                                id="create-motion-prompt"
                                 ref={promptInputRef}
                                 value={prompt}
                                 onChange={(event) => {
@@ -1628,305 +1685,74 @@ export default function CreateMotionClient({
                                 }}
                                 placeholder="Describe the kind of movement, pacing, and constraints you want to preserve."
                                 maxLength={MOTION_PROMPT_MAX_LENGTH}
-                                className="mt-3 min-h-[140px] w-full resize-y rounded-2xl border border-white/10 bg-black/50 p-5 text-sm leading-relaxed text-white outline-none transition focus:border-[#ff7a59]/50 focus:ring-4 focus:ring-[#ff7a59]/10"
+                                className="block min-h-[120px] w-full resize-y bg-transparent px-4 pb-2 pt-2 text-sm leading-6 text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)]"
                             />
-                            <div className="mt-3 flex justify-end text-xs text-zinc-500">{prompt.length}/{MOTION_PROMPT_MAX_LENGTH}</div>
-                        </StudioControlCard>
+                            <div className="px-4 pb-3 text-xs tabular-nums text-[var(--ui-text-faint)]">{prompt.length}/{MOTION_PROMPT_MAX_LENGTH}</div>
+                        </div>
 
-                        <StudioControlCard title="Output settings" description="Set how closely the result follows the reference and the fidelity you want.">
-                            <div className="grid gap-5 sm:grid-cols-2">
-                                <div>
-                                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Character orientation</div>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        {model.characterOrientations.map((option) => (
-                                            <button
-                                                key={option}
-                                                onClick={() => setCharacterOrientation(option)}
-                                                className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${characterOrientation === option
-                                                    ? 'border border-sky-500/30 bg-sky-500/15 text-sky-100'
-                                                    : 'border border-white/8 bg-black/40 text-zinc-400 hover:bg-white/[0.05] hover:text-white'
-                                                    }`}
-                                            >
-                                                {option === 'video' ? 'Follow video' : 'Favor image'}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Quality mode</div>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        {model.resolutions.map((quality) => (
-                                            <button
-                                                key={quality}
-                                                onClick={() => setMode(quality)}
-                                                className={`rounded-2xl px-4 py-3 text-sm font-semibold transition ${mode === quality
-                                                    ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/15 text-[#ffc1b2]'
-                                                    : 'border border-white/8 bg-black/40 text-zinc-400 hover:bg-white/[0.05] hover:text-white'
-                                                    }`}
-                                            >
-                                                {quality === '720p' ? 'Standard 720p' : quality === '1080p' ? 'Pro 1080p' : quality}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                        </StudioControlCard>
-                    </>
-                }
-                workspace={
-                    <>
-                        <StudioRunPanel
-                            title={isGenerating ? 'Motion run in progress' : 'Ready to animate'}
-                            summary={
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Model</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{model.displayName}</div>
-                                    </div>
-                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{quoteUi.costLabel}</div>
-                                    </div>
-                                </div>
-                            }
-                            details={
-                                <div className="grid grid-cols-2 gap-3 text-sm">
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Reference</div>
-                                        <div className="mt-1 text-zinc-200">{duration > 0 ? `${duration.toFixed(1)}s` : 'Not loaded'}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Quality</div>
-                                        <div className="mt-1 text-zinc-200">{mode}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Orientation</div>
-                                        <div className="mt-1 text-zinc-200">{characterOrientation === 'video' ? 'Follow video' : 'Favor image'}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Credits left</div>
-                                        <div className="mt-1 text-zinc-200">{userCredits ?? '...'}</div>
-                                    </div>
-                                </div>
-                            }
-                            action={
-                                showTopUp ? (
-                                    <div className="space-y-4">
-                                        <div className="rounded-[22px] border border-rose-500/20 bg-rose-500/10 p-4">
-                                            <p className="text-sm font-semibold text-white">Not enough credits</p>
-                                            {insufficientCredits ? (
-                                                <p className="mt-2 text-sm text-zinc-400">
-                                                    This run costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
-                                                </p>
-                                            ) : (
-                                                <p className="mt-2 text-sm text-zinc-400">{creditRefusalMessage}</p>
-                                            )}
-                                        </div>
-                                        <Link href="/pricing" className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]">
-                                            <Sparkles className="h-4 w-4" />
-                                            Top Up Credits
-                                        </Link>
-                                    </div>
-                                ) : (
-                                    <button
-                                        onClick={() => void handleGenerate()}
-                                        disabled={isGenerating || (!unconfirmedStart && (!canGenerate || quotePending))}
-                                        className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        {isGenerating ? (
-                                            <>
-                                                <Loader2 className="h-5 w-5 animate-spin" />
-                                                Generating...
-                                            </>
-                                        ) : unconfirmedStart ? (
-                                            <>
-                                                <Sparkles className="h-5 w-5" />
-                                                Check again
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Sparkles className="h-5 w-5" />
-                                                Generate motion
-                                            </>
-                                        )}
-                                    </button>
-                                )
-                            }
-                            status={
-                                <>
-                                    {isGenerating && generationTiming ? (
-                                        <StudioGenerationStatus
-                                            accent="violet"
-                                            timing={generationTiming}
-                                            nowMs={nowMs}
-                                        />
-                                    ) : isBackgroundProcessing ? (
-                                        <StudioBackgroundProcessingNotice
-                                            accent="violet"
-                                            label="motion render"
-                                            phaseLabel={backgroundTiming?.phaseLabel ?? null}
-                                            timingLabel={backgroundTimingLabel}
-                                        />
-                                    ) : unconfirmedStart ? (
-                                        <div className="space-y-2">
-                                            <p className="text-sm text-amber-300">{UNCONFIRMED_START_MESSAGE}</p>
-                                            <button
-                                                type="button"
-                                                onClick={() => void startNewRunInstead()}
-                                                disabled={!canGenerate || quotePending}
-                                                className="text-sm text-zinc-300 underline underline-offset-2 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                                            >
-                                                {estimatedCost !== null ? `Start a new run · ${estimatedCost} ${estimatedCost === 1 ? 'credit' : 'credits'}` : 'Start a new run'}
-                                            </button>
-                                        </div>
-                                    ) : videoError ? (
-                                        <p className="text-sm text-rose-300">{videoError}</p>
-                                    ) : quoteState.pageOutOfDate ? (
-                                        <StudioOutOfDatePageNotice
-                                            isRemix={Boolean(remixId)}
-                                            reloadDidNotHelp={reloadBroughtBackThisBuild()}
-                                            onReload={() => void reloadPage()}
-                                        />
-                                    ) : error ? (
-                                        // A price that could not be read since (asked again after
-                                        // `cost_changed`, say) keeps its Retry under the error:
-                                        // Generate waits for a price.
-                                        <div className="space-y-2">
-                                            <p className="text-sm text-rose-300">{error}</p>
-                                            {quoteRetry}
-                                        </div>
-                                    ) : quoteState.status === 'error' ? (
-                                        quoteRetry
-                                    ) : hasCatalogSettings && !motionInputsReady ? (
-                                        <p className="text-sm text-zinc-400">{quoteUi.message}</p>
-                                    ) : (
-                                        <p className="text-sm text-zinc-500">Upload both inputs, confirm the orientation, and the latest motion render will replace this workspace.</p>
-                                    )}
-                                </>
-                            }
-                            footer={
-                                <Link
-                                    href="/creations"
-                                    className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
-                                >
-                                    View Studio
-                                    <Images className="h-4 w-4" />
-                                </Link>
-                            }
+                        <EnhancePromptButton
+                            variant="toolbar"
+                            leading={<CreatorTemplatesTile />}
+                            prompt={prompt}
+                            onEnhanced={(text) => {
+                                promptEditedRef.current = true;
+                                setPrompt(text);
+                            }}
+                            onCreditsUpdate={updateCredits}
+                            medium="motion"
+                            selectedModel={selectedModel}
+                            context={{
+                                modelId: selectedModel,
+                                characterOrientation,
+                                mode,
+                                hasReferenceVideo: Boolean(referenceVideoFile || referenceVideo),
+                            }}
+                            disabled={isGenerating}
                         />
 
-                        <StudioWorkspacePanel
-                            title={workspaceTitle}
-                            description={workspaceDescription}
-                            action={
-                                <Link
-                                    href="/creations"
-                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
-                                >
-                                    Studio
-                                    <Images className="h-4 w-4" />
-                                </Link>
-                            }
-                        >
-                            {outputVideo ? (
-                                <div className="space-y-5">
-                                    <div className="aspect-video overflow-hidden rounded-[26px] border border-white/8 bg-black/60">
-                                        <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} />
-                                    </div>
-                                    <div className="flex flex-wrap gap-3">
-                                        <a
-                                            href={resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo}
-                                            download="generated-video.mp4"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
-                                        >
-                                            <Download className="h-4 w-4" />
-                                            Download video
-                                        </a>
-                                        {latestGenerationId ? (
-                                            latestIsPublic ? (
-                                                <>
-                                                    <PublicShareButton
-                                                        generationId={latestGenerationId}
-                                                        viewerIsOwner
-                                                        title={shareTitle}
-                                                        description={shareDescription}
-                                                        sourceSurface="create-motion"
-                                                        accessToken={session?.access_token ?? null}
-                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                                    />
-                                                    {publicResultPath ? (
-                                                        <Link
-                                                            href={publicResultPath}
-                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                                        >
-                                                            Open public page
-                                                        </Link>
-                                                    ) : null}
-                                                </>
-                                            ) : (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setIsPublishModalOpen(true)}
-                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
-                                                >
-                                                    <Share2 className="h-4 w-4" />
-                                                    Publish & share
-                                                </button>
-                                            )
-                                        ) : null}
-                                        <button
-                                            onClick={() => {
-                                                setOutputVideo(null);
-                                                setLatestGenerationId(null);
-                                                setLatestIsPublic(false);
-                                                setPublishedMeta(null);
-                                                setError(null);
-                                                setGenerationTiming(null);
-                                            }}
-                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                        >
-                                            Start another run
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : isGenerating ? (
-                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#ff7a59]/25 bg-[#ff7a59]/10">
-                                        <Loader2 className="h-7 w-7 animate-spin text-[#ff9a80]" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-xl font-semibold text-white">Transferring the motion</h3>
-                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            The workspace will switch from progress to preview as soon as the current render finishes.
-                                        </p>
-                                    </div>
-                                </div>
-                            ) : isBackgroundProcessing ? (
+                        <CreatorColumnBar
+                            settingsSummary={settingsSummary}
+                            settings={settingsPanel}
+                            status={barStatus}
+                            action={barAction}
+                        />
+                    </>
+                }
+                canvas={
+                    <CreatorCanvas
+                        title={canvasTitle}
+                        subtitle={canvasSubtitle}
+                        revealKey={canvasRevealKey}
+                        tall={Boolean(outputVideo)}
+                        footer={canvasFooter}
+                    >
+                        {outputVideo ? (
+                            <CreatorCanvasMedia key={outputVideo} aspectRatio="auto">
+                                <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
+                            </CreatorCanvasMedia>
+                        ) : isGenerating ? (
+                            <CreatorCanvasFrame aspectRatio="auto" accent="motion" busy>
+                                <p className="text-sm font-semibold text-[var(--ui-text-primary)]">Transferring the motion</p>
+                            </CreatorCanvasFrame>
+                        ) : isBackgroundProcessing ? (
+                            <div className="w-full max-w-md">
                                 <StudioBackgroundProcessingNotice
                                     accent="violet"
                                     label="motion render"
-                                    variant="workspace"
                                     phaseLabel={backgroundTiming?.phaseLabel ?? null}
                                     timingLabel={backgroundTimingLabel}
                                 />
-                            ) : (
-                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#ff7a59]/25 bg-[#ff7a59]/10">
-                                        <Play className="h-7 w-7 text-[#ff9a80]" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-xl font-semibold text-white">No motion run yet</h3>
-                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            Add the character image, the motion reference, and the prompt. The latest rendered clip will take over this workspace.
-                                        </p>
-                                    </div>
-                                </div>
-                            )}
-                        </StudioWorkspacePanel>
-                    </>
+                            </div>
+                        ) : (
+                            <CreatorCanvasFrame aspectRatio="auto" accent="motion">
+                                <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
+                                    <Play className="h-5 w-5 text-[var(--ui-text-muted)]" />
+                                </span>
+                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">Your motion clip will appear here</p>
+                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">Add a character image and a reference video, then Generate.</p>
+                            </CreatorCanvasFrame>
+                        )}
+                    </CreatorCanvas>
                 }
             />
 

@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Check, Share2, Plus } from 'lucide-react';
+import { Sparkles, Loader2, Download, Image as ImageIcon, Check, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
@@ -14,8 +13,6 @@ import {
 } from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
 import {
     StudioBackgroundProcessingNotice,
-    StudioElementChip,
-    StudioElementHandle,
     StudioElementHandleList,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
@@ -26,21 +23,28 @@ import {
     StudioRemixNotice,
 } from '@/components/CreatorStudio';
 import {
-    CREATOR_BAR_PRIMARY_CLASS,
+    CreatorAddTile,
+    CreatorBackgroundRunLine,
+    CreatorBarAction,
     CreatorCanvas,
     CreatorCanvasFrame,
     CreatorColumnBar,
     CreatorColumnLayout,
+    CreatorMentionPanel,
     CreatorModelChip,
+    CreatorPendingStartNotice,
     CreatorPhoneBalance,
+    CreatorReferenceRow,
+    CreatorResultActions,
     CreatorSettingChoices,
+    CreatorSettingSwitch,
     CreatorTemplatesTile,
     CreatorToolTabs,
+    CreatorTopUpNotice,
 } from '@/components/CreatorColumn';
-import { IconButton } from '@/components/DesignSystem';
+import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
@@ -1682,6 +1686,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 : `${model.displayName} · ${settingsSummary}`;
 
     const canAddReferences = elements.length < model.maxImages;
+    const imageAccent = getAccentClasses('image');
     const generateBlocked = !prompt.trim()
         || quotePending
         || staleElementMentions.length > 0
@@ -1692,23 +1697,15 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     // What stops or explains a run, said just above the bar. Progress is drawn on
     // the canvas; a run in the background is named here too, beside Generate.
     const runStatus = isGenerating ? null : isBackgroundProcessing ? (
-        <p className="text-[var(--ui-text-secondary)]">
-            {backgroundProcessingCopy.title}: it lands in{' '}
-            <Link href="/creations" className="underline underline-offset-4 hover:text-[var(--ui-text-primary)]">Studio</Link>
-            {' '}when it is done.
-        </p>
+        <CreatorBackgroundRunLine title={backgroundProcessingCopy.title} />
     ) : pendingStart ? (
-        <div className="space-y-3">
-            <p role="alert" className="text-amber-200">{pendingStartNotice ?? START_UNCONFIRMED_MESSAGE}</p>
-            <button
-                type="button"
-                onClick={handleStartNewRun}
-                disabled={generateBlocked}
-                className="ui-button ui-button-secondary ui-focus-ring w-full disabled:cursor-not-allowed disabled:opacity-50"
-            >
-                {currentCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
-            </button>
-        </div>
+        <CreatorPendingStartNotice
+            message={pendingStartNotice ?? START_UNCONFIRMED_MESSAGE}
+            costLabel={quoteUi.costLabel}
+            hasPrice={currentCost !== null}
+            disabled={generateBlocked}
+            onStartNew={handleStartNewRun}
+        />
     ) : referenceLimitMessage ? (
         <p className="text-red-400">{referenceLimitMessage}</p>
     ) : promptLimitMessage ? (
@@ -1736,15 +1733,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     ) : quoteState.status === 'error' ? (
         quoteRetry
     ) : null;
-    const topUpNotice = showTopUp && !isAwaitingStartCheck ? (
-        <div>
-            <p className="font-semibold text-white">Not enough credits</p>
-            <p className="mt-1 text-zinc-400">
-                {insufficientCredits ? (
-                    <>Image generation costs <strong className="text-white">{currentCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.</>
-                ) : creditRefusalMessage}
-            </p>
-        </div>
+    const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating ? (
+        <CreatorTopUpNotice cost={currentCost} balance={userCredits} message={creditRefusalMessage} />
     ) : null;
     const barStatus = topUpNotice || runStatus ? (
         <div className="space-y-3">
@@ -1753,38 +1743,19 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         </div>
     ) : null;
 
-    const barAction = isAwaitingStartCheck && pendingStart ? (
-        <button
-            type="button"
-            onClick={() => void replayPendingStart(pendingStart, { reveal: true })}
-            className={CREATOR_BAR_PRIMARY_CLASS}
-        >
-            Check again
-        </button>
-    ) : showTopUp ? (
-        <Link href="/pricing" className={CREATOR_BAR_PRIMARY_CLASS}>
-            <Sparkles className="h-4 w-4" />
-            Top Up Credits
-        </Link>
-    ) : (
-        <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={generateBlocked || isGenerating}
-            // The price stays in its name while the face says why it waits.
-            aria-label={isGenerating ? undefined : `Generate · ${quoteUi.costLabel}`}
-            className={CREATOR_BAR_PRIMARY_CLASS}
-        >
-            {isGenerating ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Generating...</>
-            ) : currentCost !== null ? (
-                `Generate · ${quoteUi.costLabel}`
-            ) : (
-                // As the app's bar: until there is a price the button says why it waits
-                // ("Calculating...", "Unavailable"), and the line above offers a retry.
-                <span className="truncate">{quoteUi.costLabel}</span>
-            )}
-        </button>
+    const barAction = (
+        <CreatorBarAction
+            awaitingCheck={isAwaitingStartCheck}
+            onCheckAgain={() => {
+                if (pendingStart) void replayPendingStart(pendingStart, { reveal: true });
+            }}
+            showTopUp={showTopUp}
+            isGenerating={isGenerating}
+            disabled={generateBlocked}
+            costLabel={quoteUi.costLabel}
+            hasPrice={currentCost !== null}
+            onGenerate={handleGenerate}
+        />
     );
 
     const settingsPanel = (
@@ -1826,84 +1797,41 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             ) : null}
 
             {model.supportsGoogleSearch ? (
-                <button
-                    type="button"
-                    role="switch"
-                    aria-checked={googleSearch}
-                    onClick={() => setGoogleSearch(!googleSearch)}
-                    className="ui-focus-ring flex w-full items-center justify-between gap-4 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-4 py-3 text-left transition-colors hover:bg-[var(--ui-surface-2)]"
-                >
-                    <span className="min-w-0">
-                        <span className="block text-sm font-semibold text-[var(--ui-text-primary)]">Google Search grounding</span>
-                        <span className="mt-0.5 block text-xs text-[var(--ui-text-muted)]">Allow the model to pull in live context when it helps.</span>
-                    </span>
-                    <span aria-hidden className={`flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors ${googleSearch ? 'bg-brand-blue' : 'bg-zinc-700'}`}>
-                        <span className={`h-4 w-4 rounded-full bg-white shadow-md transition-transform ${googleSearch ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </span>
-                </button>
+                <CreatorSettingSwitch
+                    label="Google Search grounding"
+                    description="Allow the model to pull in live context when it helps."
+                    checked={googleSearch}
+                    onChange={setGoogleSearch}
+                />
             ) : null}
 
             <CatalogAdditionalControls appearance="panel" descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ aspectRatio, resolution, qualityMode, googleSearch, ...additionalSettings.settings }} inputCounts={{ images: elements.length, videos: 0, audios: 0 }} onChange={additionalSettings.onChange} />
         </div>
     );
 
-    const resultActionClass = 'ui-button ui-button-secondary ui-focus-ring';
     const canvasFooter = outputImage ? (
-        <div className="flex flex-wrap items-center gap-2">
-            {latestGenerationId ? (
-                latestIsPublic ? (
-                    <>
-                        <PublicShareButton
-                            generationId={latestGenerationId}
-                            viewerIsOwner
-                            title={shareTitle}
-                            description={shareDescription}
-                            sourceSurface="create-image"
-                            accessToken={session?.access_token ?? null}
-                            className={resultActionClass}
-                        />
-                        {publicResultPath ? (
-                            <Link href={publicResultPath} className={resultActionClass}>
-                                Open public page
-                            </Link>
-                        ) : null}
-                    </>
-                ) : (
-                    <button
-                        type="button"
-                        onClick={() => void handleOpenPublish()}
-                        disabled={isPreparingPublish}
-                        className="ui-button ui-button-primary ui-focus-ring disabled:cursor-wait disabled:opacity-70"
-                    >
-                        {isPreparingPublish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
-                        Publish & share
-                    </button>
-                )
-            ) : null}
-            <a
-                href={outputImageDownloadUrl ?? outputImage}
-                download={`generated-image.${getImageFileExtension(outputImage)}`}
-                className={resultActionClass}
-            >
-                <Download className="h-4 w-4" />
-                Download image
-            </a>
-            <button
-                type="button"
-                onClick={() => {
-                    setOutputImage(null);
-                    setOutputImages([]);
-                    setResultPreviewImage(null);
-                    setIsResultPreviewOpen(false);
-                    setLatestGenerationId(null);
-                    setLatestIsPublic(false);
-                    setPublishedMeta(null);
-                }}
-                className="ui-button ui-button-ghost ui-focus-ring"
-            >
-                Start another run
-            </button>
-        </div>
+        <CreatorResultActions
+            generationId={latestGenerationId}
+            isPublic={latestIsPublic}
+            share={{ title: shareTitle, description: shareDescription, sourceSurface: 'create-image', accessToken: session?.access_token ?? null }}
+            publicPath={publicResultPath}
+            onPublish={() => void handleOpenPublish()}
+            preparingPublish={isPreparingPublish}
+            download={{
+                href: outputImageDownloadUrl ?? outputImage,
+                fileName: `generated-image.${getImageFileExtension(outputImage)}`,
+                label: 'Download image',
+            }}
+            onStartAnother={() => {
+                setOutputImage(null);
+                setOutputImages([]);
+                setResultPreviewImage(null);
+                setIsResultPreviewOpen(false);
+                setLatestGenerationId(null);
+                setLatestIsPublic(false);
+                setPublishedMeta(null);
+            }}
+        />
     ) : isGenerating && generationTiming ? (
         <StudioGenerationStatus
             accent={model.accentColor}
@@ -2008,7 +1936,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     exit={{ opacity: 0, y: -12 }}
                                 >
                                     <StudioModelNotice
-                                        stacked
                                         description={modelNotice}
                                         onDismiss={catalogProblem ? undefined : () => setCatalogNotice(null)}
                                     />
@@ -2030,7 +1957,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     exit={{ opacity: 0, y: -12 }}
                                 >
                                     <StudioRemixNotice
-                                        stacked
                                         description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         action={
                                             remixImageUrl || canUseOriginalResultAsReference ? (
@@ -2065,7 +1991,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             )}
                         </AnimatePresence>
 
-                        <div className="rounded-ui-2xl border border-brand-blue/20 bg-[var(--ui-surface-1)] transition-colors duration-150 focus-within:border-brand-blue/60">
+                        <div className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${imageAccent.outline}`}>
                             <label htmlFor="create-image-prompt" className="ui-kicker block px-4 pt-4">
                                 Prompt
                             </label>
@@ -2093,39 +2019,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         </div>
 
                         {activeMentionQuery ? (
-                            <div className="rounded-ui-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">
-                                <div className="flex flex-wrap items-center justify-between gap-3">
-                                    <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-                                        <p className="ui-kicker">
-                                            Insert element
-                                        </p>
-                                        <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
-                                            {mentionSuggestions.length > 0
-                                                ? 'Pick an element to insert its @mention.'
-                                                : 'No matching elements yet.'}
-                                        </p>
-                                    </div>
-                                    {activeMentionQuery.query ? (
-                                        <StudioElementHandle
-                                            handle={`@${activeMentionQuery.query}`}
-                                            className="rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-xs font-semibold text-[var(--ui-text-secondary)]"
-                                        />
-                                    ) : null}
-                                </div>
-                                {mentionSuggestions.length > 0 ? (
-                                    <div className="mt-3 flex flex-wrap gap-2">
-                                        {mentionSuggestions.map((element) => (
-                                            <StudioElementChip
-                                                key={element.id}
-                                                displayName={element.displayName}
-                                                handle={element.handle}
-                                                handleClassName="text-sky-300"
-                                                onInsert={() => handleInsertElementHandle(element.handle)}
-                                            />
-                                        ))}
-                                    </div>
-                                ) : null}
-                            </div>
+                            <CreatorMentionPanel
+                                title="Insert element"
+                                hint={mentionSuggestions.length > 0 ? 'Pick an element to insert its @mention.' : 'No matching elements yet.'}
+                                query={activeMentionQuery.query}
+                                suggestions={mentionSuggestions}
+                                handleClassName={() => 'text-sky-300'}
+                                onInsert={handleInsertElementHandle}
+                            />
                         ) : null}
 
                         <EnhancePromptButton
@@ -2173,9 +2074,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     handleDragLeave(event);
                                 } : undefined}
                                 onDrop={canAddReferences ? handleDrop : undefined}
-                                className={isDragging
-                                    ? 'rounded-ui-2xl border border-brand-blue/60 bg-brand-blue/5 p-4'
-                                    : 'ui-card p-4'}
+                                className={isDragging ? `rounded-ui-2xl border p-4 ${imageAccent.tileActive}` : 'ui-card p-4'}
                             >
                                 <div className="mb-1 flex items-center justify-between gap-3">
                                     <h2 id="create-image-references" className="text-xs font-bold text-[var(--ui-text-muted)]">Reference images</h2>
@@ -2194,90 +2093,60 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 {elements.length > 0 ? (
                                     <ul className="mb-3 space-y-2">
                                         {elements.map((element) => (
-                                            <li key={element.id} className="flex items-start gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-2.5">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setUploadPreview({
-                                                        type: 'image',
-                                                        src: element.previewUrl,
-                                                        alt: element.displayName,
-                                                        title: element.displayName,
-                                                    })}
-                                                    aria-label={`Preview ${element.displayName}`}
-                                                    className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
-                                                >
-                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                    <img
-                                                        src={element.previewUrl}
-                                                        alt={element.displayName}
-                                                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
-                                                    />
-                                                </button>
-                                                <div className="min-w-0 flex-1 space-y-1">
-                                                    <div className="flex items-center gap-1">
-                                                        <input
-                                                            type="text"
-                                                            value={elementNames.drafts[element.id] ?? element.displayName}
-                                                            onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
-                                                            onBlur={() => void commitElementDraft(element.id)}
-                                                            onKeyDown={(event) => {
-                                                                if (event.key === 'Enter') {
-                                                                    event.preventDefault();
-                                                                    void commitElementDraft(element.id);
-                                                                    event.currentTarget.blur();
-                                                                }
-
-                                                                if (event.key === 'Escape') {
-                                                                    elementNames.dropDraft(element.id);
-                                                                    event.currentTarget.blur();
-                                                                }
-                                                            }}
-                                                            aria-label={`Name of ${element.displayName}`}
-                                                            placeholder="Rename element"
-                                                            className="min-w-0 flex-1 rounded-ui-sm border border-transparent bg-transparent px-2 py-1.5 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:border-brand-blue/50 focus:bg-[var(--ui-surface-2)]"
+                                            <CreatorReferenceRow
+                                                key={element.id}
+                                                accent="image"
+                                                preview={
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setUploadPreview({
+                                                            type: 'image',
+                                                            src: element.previewUrl,
+                                                            alt: element.displayName,
+                                                            title: element.displayName,
+                                                        })}
+                                                        aria-label={`Preview ${element.displayName}`}
+                                                        className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
+                                                    >
+                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                        <img
+                                                            src={element.previewUrl}
+                                                            alt={element.displayName}
+                                                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
                                                         />
-                                                        <IconButton
-                                                            label={`Remove ${element.displayName}`}
-                                                            icon={X}
-                                                            onClick={() => void handleRemoveElement(element.id)}
-                                                            className="shrink-0"
-                                                        />
-                                                    </div>
-                                                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
-                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-sky-300" />
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleInsertElementHandle(element.handle)}
-                                                            className="ui-focus-ring inline-flex min-h-9 shrink-0 items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-semibold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)]"
-                                                        >
-                                                            Insert
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </li>
+                                                    </button>
+                                                }
+                                                displayName={element.displayName}
+                                                nameDraft={elementNames.drafts[element.id]}
+                                                placeholder="Rename element"
+                                                onNameChange={(value) => handleElementDraftChange(element.id, value)}
+                                                onNameCommit={() => void commitElementDraft(element.id)}
+                                                onNameCancel={() => elementNames.dropDraft(element.id)}
+                                                onRemove={() => void handleRemoveElement(element.id)}
+                                                handle={element.handle}
+                                                handleClassName="text-sky-300"
+                                                onInsert={() => handleInsertElementHandle(element.handle)}
+                                            />
                                         ))}
                                     </ul>
                                 ) : null}
 
                                 {canAddReferences ? (
-                                    <label
-                                        // The file field's keyboard focus draws the shared ring on the tile.
-                                        className={`flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-full border border-dashed px-4 text-sm font-semibold transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]/55 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-[var(--ui-bg-app)] ${isDragging
-                                            ? 'border-brand-blue text-[var(--ui-text-primary)]'
-                                            : 'border-brand-blue/35 bg-brand-blue/5 text-[var(--ui-text-secondary)] hover:border-brand-blue/60 hover:text-[var(--ui-text-primary)]'}`}
-                                    >
-                                        <Plus className="h-4 w-4 text-brand-blue" />
-                                        {isDragging ? 'Drop element images here' : 'Add reference images'}
-                                        <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="sr-only" />
-                                    </label>
+                                    <CreatorAddTile
+                                        accent="image"
+                                        icon={Plus}
+                                        label={isDragging ? 'Drop element images here' : 'Add reference images'}
+                                        input={{ accept: 'image/*', multiple: true, onChange: handleImageUpload }}
+                                        dragging={isDragging}
+                                    />
                                 ) : null}
                                 {elementPickNotice ? (
                                     <p role="status" className="mt-3 text-sm text-amber-200">{elementPickNotice}</p>
                                 ) : null}
                             </section>
                         ) : (
-                            <div className="flex items-start gap-3 rounded-ui-2xl border border-brand-blue/15 bg-brand-blue/5 p-4 text-sm text-[var(--ui-text-secondary)]">
-                                <ImageIcon className="mt-0.5 h-4 w-4 shrink-0 text-brand-blue" />
+                            <div className="ui-card flex items-start gap-3 p-4 text-sm text-[var(--ui-text-secondary)]">
+                                <ImageIcon aria-hidden className={`mt-0.5 h-4 w-4 shrink-0 ${imageAccent.mark}`} />
                                 <div>
                                     <div className="font-semibold text-[var(--ui-text-primary)]">Prompt-only model</div>
                                     <p className="mt-1 leading-relaxed text-[var(--ui-text-muted)]">

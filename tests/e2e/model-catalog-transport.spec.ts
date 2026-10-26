@@ -250,6 +250,8 @@ for (const kind of ['video', 'motion'] as const) {
           .getByRole('button', { name: new RegExp(model.displayName) })
           .first(),
       ).toBeVisible();
+      // The descriptor's controls are in the settings the chip on the column's bar opens.
+      await page.getByRole('button', { name: /^Generation settings/ }).click();
       const control = page.getByRole('checkbox', {
         name: 'New catalog option',
       });

@@ -693,7 +693,7 @@ export type WebGenerationStartResponse = {
 };
 
 /**
- * The run as a web creator sends it to start: with the price on its run panel
+ * The run as a web creator sends it to start: with the price on its Generate button
  * (`expectedCostCredits`) when that price is a ready quote of this very run, read off the
  * page's quote state. The rule both creators share is `catalogRunWithShownCost`.
  */

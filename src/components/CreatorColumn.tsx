@@ -1,14 +1,22 @@
 'use client';
 
 import Link from 'next/link';
-import type { CSSProperties, FocusEvent, KeyboardEvent, ReactNode } from 'react';
+import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode } from 'react';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronDown, Images, LayoutTemplate, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { ChevronDown, Download, Images, LayoutTemplate, Loader2, Share2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import clsx from 'clsx';
 
-import { MEDIA_TOOL_IDS } from '@/components/CreatorStudio';
+import {
+  MEDIA_TOOL_IDS,
+  StudioElementChip,
+  StudioElementHandle,
+  StudioUploadedMediaPreview,
+  type StudioMediaPreviewType,
+} from '@/components/CreatorStudio';
 import { getAccentClasses, IconButton, Text, type UiAccent } from '@/components/DesignSystem';
+import PublicShareButton from '@/components/PublicShareButton';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
 
 /**
@@ -17,8 +25,8 @@ import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
  * and Generate), and beside it the result. The column scrolls with the page and
  * its bar stays at the foot of the window; the result stays in view beside it.
  *
- * Built for the image creator first (2026-10-26); video and motion still use
- * `MediaStudioShell` in CreatorStudio.tsx until they move over.
+ * Built for the image creator (2026-10-26), then carried to video and motion:
+ * the three creators share it.
  *
  * The two panes need 1120px of window: the app's sidebar takes 216px of it,
  * which leaves the page about 860px. Below that the result follows the column,
@@ -35,8 +43,8 @@ export function CreatorColumnLayout({
   canvas: ReactNode;
 }) {
   return (
-    // Its own stacking context, as MediaStudioShell's was: the model picker's
-    // layer 50 stays under the shell's top bar (also 50) when the page scrolls.
+    // Its own stacking context: the model picker's layer 50 stays under the
+    // shell's top bar (also 50) when the page scrolls.
     <div className="relative z-10 mx-auto grid w-full max-w-[680px] grid-cols-1 gap-4 px-[clamp(1rem,1.9vw,2.25rem)] min-[1120px]:max-w-[1860px] min-[1120px]:grid-cols-[minmax(340px,400px)_minmax(0,1fr)] min-[1120px]:items-start min-[1120px]:gap-5 min-[1440px]:grid-cols-[minmax(380px,440px)_minmax(0,1fr)]">
       <h1 className="sr-only">{title}</h1>
       <div className="flex min-w-0 flex-col gap-3" onFocus={keepFocusClearOfBar}>{column}</div>
@@ -49,16 +57,29 @@ export function CreatorColumnLayout({
  * A control focused under the column's sticky bar is in the window by the
  * browser's measure, so nothing scrolls it out from under the bar: a keyboard
  * walk through the reference rows went on behind it. This scrolls the page by
- * what the bar covers.
+ * what the bar covers, for the keyboard's focus only: a press focuses its
+ * control on the way down, and the scroll moved it from under the pointer before
+ * the press ended, so a suggestion pressed just above the bar never got its
+ * click (2026-10-26). A text field shows its focus either way, and is still
+ * scrolled clear to be typed in.
  */
 function keepFocusClearOfBar(event: FocusEvent<HTMLDivElement>) {
   const target = event.target;
   const bar = event.currentTarget.querySelector('[data-creator-bar]');
-  if (!(target instanceof HTMLElement) || !bar || bar.contains(target)) return;
+  if (!(target instanceof HTMLElement) || !bar || bar.contains(target) || !showsFocus(target)) return;
   const barBox = bar.getBoundingClientRect();
   if (barBox.height === 0) return;
   const { bottom } = target.getBoundingClientRect();
   if (bottom > barBox.top - 8) window.scrollBy({ top: bottom - barBox.top + 16 });
+}
+
+/** Whether the browser draws this focus (the keyboard's, or a text field's); a browser without `:focus-visible` says yes. */
+function showsFocus(element: HTMLElement) {
+  try {
+    return element.matches(':focus-visible');
+  } catch {
+    return true;
+  }
 }
 
 /** Image, Video and Motion, as the app's tabs: the creator open is underlined in its tool's accent. */
@@ -163,7 +184,7 @@ export function CreatorTemplatesTile() {
   );
 }
 
-const CHOICE_COLUMNS = { 2: 'grid-cols-2', 3: 'grid-cols-3', 5: 'grid-cols-5' } as const;
+const CHOICE_COLUMNS = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5' } as const;
 
 /**
  * The bar and its settings float over the column, so their fill is opaque:
@@ -180,8 +201,10 @@ const FLOATING_SURFACE_CLASS =
  */
 export function CreatorSettingChoices<T extends string>({
   label,
+  labelHidden = false,
   hint,
   options,
+  optionLabel,
   value,
   onChange,
   columns,
@@ -189,8 +212,12 @@ export function CreatorSettingChoices<T extends string>({
   capitalize = false,
 }: {
   label: string;
+  /** For a group whose options say what it is, as the shot mode's do. */
+  labelHidden?: boolean;
   hint?: string;
   options: readonly T[];
+  /** What an option says, where its value is not words ("std" → "Standard 720p"). */
+  optionLabel?: (option: T) => string;
   value: T;
   onChange: (value: T) => void;
   columns: keyof typeof CHOICE_COLUMNS;
@@ -223,10 +250,14 @@ export function CreatorSettingChoices<T extends string>({
 
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
-        {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
-      </div>
+      {labelHidden ? (
+        <p id={labelId} className="sr-only">{label}</p>
+      ) : (
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
+          {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
+        </div>
+      )}
       <div role="radiogroup" aria-labelledby={labelId} className={clsx('grid gap-1.5', CHOICE_COLUMNS[columns])}>
         {options.map((option, index) => {
           const checked = index === selectedIndex;
@@ -251,12 +282,54 @@ export function CreatorSettingChoices<T extends string>({
                   : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
-              {option}
+              {optionLabel ? optionLabel(option) : option}
             </button>
           );
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * One setting that is on or off (Google Search grounding, a fixed lens, AI sound): a
+ * switch that says what it does under its name.
+ */
+export function CreatorSettingSwitch({
+  label,
+  description,
+  checked,
+  onChange,
+  accent = 'image',
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  accent?: UiAccent;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="ui-focus-ring flex w-full items-center justify-between gap-4 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-4 py-3 text-left transition-colors hover:bg-[var(--ui-surface-2)]"
+    >
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-[var(--ui-text-primary)]">{label}</span>
+        {description ? <span className="mt-0.5 block text-xs text-[var(--ui-text-muted)]">{description}</span> : null}
+      </span>
+      <span
+        aria-hidden
+        className={clsx(
+          'flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors',
+          checked ? getAccentClasses(accent).indicator : 'bg-[var(--ui-border-strong)]'
+        )}
+      >
+        <span className={clsx('h-4 w-4 rounded-full bg-white shadow-md transition-transform', checked ? 'translate-x-5' : 'translate-x-0')} />
+      </span>
+    </button>
   );
 }
 
@@ -422,6 +495,495 @@ export const CREATOR_BAR_PRIMARY_CLASS =
   'ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 whitespace-nowrap rounded-full bg-[var(--ui-primary)] px-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition-[background-color,transform] duration-150 hover:bg-[var(--ui-primary-strong)] active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-[var(--ui-surface-3)] disabled:text-[var(--ui-text-faint)] disabled:active:scale-100';
 
 /**
+ * The bar's primary action. An unanswered start is checked again before
+ * anything new is sent; a short balance offers a top-up; otherwise Generate,
+ * named with its price while its face says why it waits ("Calculating...").
+ * A run under way keeps Generate's place, spinning: the balance it left can be
+ * short of the next run's price, and a top-up in its place read as if the run
+ * had been refused.
+ */
+export function CreatorBarAction({
+  awaitingCheck,
+  onCheckAgain,
+  showTopUp,
+  isGenerating,
+  disabled,
+  costLabel,
+  hasPrice,
+  onGenerate,
+}: {
+  awaitingCheck: boolean;
+  onCheckAgain: () => void;
+  showTopUp: boolean;
+  isGenerating: boolean;
+  disabled: boolean;
+  costLabel: string;
+  hasPrice: boolean;
+  onGenerate: () => void;
+}) {
+  if (awaitingCheck) {
+    return (
+      <button type="button" onClick={onCheckAgain} className={CREATOR_BAR_PRIMARY_CLASS}>
+        Check again
+      </button>
+    );
+  }
+  if (showTopUp && !isGenerating) {
+    return (
+      <Link href="/pricing" className={CREATOR_BAR_PRIMARY_CLASS}>
+        <Sparkles aria-hidden className="h-4 w-4" />
+        Top Up Credits
+      </Link>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onGenerate}
+      disabled={disabled || isGenerating}
+      // The price stays in its name while the face says why it waits.
+      aria-label={isGenerating ? undefined : `Generate · ${costLabel}`}
+      className={CREATOR_BAR_PRIMARY_CLASS}
+    >
+      {isGenerating ? (
+        <><Loader2 aria-hidden className="h-4 w-4 animate-spin" /> Generating...</>
+      ) : hasPrice ? (
+        `Generate · ${costLabel}`
+      ) : (
+        // As the app's bar: until there is a price the button says why it waits,
+        // and the line above says more.
+        <span className="truncate">{costLabel}</span>
+      )}
+    </button>
+  );
+}
+
+/** Over the bar while the balance is short of the run's price, or the server said so. */
+export function CreatorTopUpNotice({ cost, balance, message }: {
+  cost: number | null;
+  balance: number | null;
+  /** The server's refusal, where it refused a start the balance on screen allowed. */
+  message: string | null;
+}) {
+  return (
+    <div>
+      <p className="font-semibold text-[var(--ui-text-primary)]">Not enough credits</p>
+      <p className="mt-1 text-[var(--ui-text-muted)]">
+        {cost !== null && balance !== null && balance < cost ? (
+          <>This run costs <strong className="text-[var(--ui-text-primary)]">{cost} credits</strong> but you only have <strong className="text-[var(--ui-text-primary)]">{balance}</strong>.</>
+        ) : message}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * A start that got no answer: it may have started. Check again (the bar's
+ * action) asks under the same key; this offers a new run instead, priced, since
+ * it can be a second one.
+ */
+export function CreatorPendingStartNotice({ message, costLabel, hasPrice, disabled, onStartNew }: {
+  message: string;
+  costLabel: string;
+  hasPrice: boolean;
+  disabled: boolean;
+  onStartNew: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <p role="alert" className="text-amber-200">{message}</p>
+      <button
+        type="button"
+        onClick={onStartNew}
+        disabled={disabled}
+        className="ui-button ui-button-secondary ui-focus-ring w-full disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {hasPrice ? `Start a new run · ${costLabel}` : 'Start a new run'}
+      </button>
+    </div>
+  );
+}
+
+/** A run the page stopped following, named beside Generate: it still finishes. */
+export function CreatorBackgroundRunLine({ title }: { title: string }) {
+  return (
+    <p className="text-[var(--ui-text-secondary)]">
+      {title}: it lands in{' '}
+      <Link href="/creations" className="underline underline-offset-4 hover:text-[var(--ui-text-primary)]">Studio</Link>
+      {' '}when it is done.
+    </p>
+  );
+}
+
+const RESULT_ACTION_CLASS = 'ui-button ui-button-secondary ui-focus-ring';
+
+/**
+ * Under a finished result: publish it (or share it once it is public), download
+ * it, or put it away for another run.
+ */
+export function CreatorResultActions({
+  generationId,
+  isPublic,
+  share,
+  publicPath,
+  onPublish,
+  preparingPublish = false,
+  download,
+  onStartAnother,
+}: {
+  generationId: string | null;
+  isPublic: boolean;
+  share: {
+    title: string;
+    description: string | null;
+    sourceSurface: 'create-image' | 'create-video' | 'create-motion';
+    accessToken: string | null;
+  };
+  publicPath: string | null;
+  onPublish: () => void;
+  /** The publish form's title and recipe are being read: the button waits. */
+  preparingPublish?: boolean;
+  download: { href: string; fileName: string; label: string; newTab?: boolean };
+  onStartAnother: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {generationId ? (
+        isPublic ? (
+          <>
+            <PublicShareButton
+              generationId={generationId}
+              viewerIsOwner
+              title={share.title}
+              description={share.description}
+              sourceSurface={share.sourceSurface}
+              accessToken={share.accessToken}
+              className={RESULT_ACTION_CLASS}
+            />
+            {publicPath ? (
+              <Link href={publicPath} className={RESULT_ACTION_CLASS}>
+                Open public page
+              </Link>
+            ) : null}
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={onPublish}
+            disabled={preparingPublish}
+            className="ui-button ui-button-primary ui-focus-ring disabled:cursor-wait disabled:opacity-70"
+          >
+            {preparingPublish ? <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> : <Share2 aria-hidden className="h-4 w-4" />}
+            Publish & share
+          </button>
+        )
+      ) : null}
+      <a
+        href={download.href}
+        download={download.fileName}
+        {...(download.newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+        className={RESULT_ACTION_CLASS}
+      >
+        <Download aria-hidden className="h-4 w-4" />
+        {download.label}
+      </a>
+      <button type="button" onClick={onStartAnother} className="ui-button ui-button-ghost ui-focus-ring">
+        Start another run
+      </button>
+    </div>
+  );
+}
+
+export type CreatorMentionSuggestion = { id: string; displayName: string; handle: string };
+
+/**
+ * The panel that typing "@" in a prompt opens: what was typed, and the
+ * references whose handle it can become. A group named by its title.
+ */
+export function CreatorMentionPanel<T extends CreatorMentionSuggestion>({
+  title,
+  hint,
+  query,
+  suggestions,
+  handleClassName,
+  onInsert,
+}: {
+  title: string;
+  hint: string;
+  query: string;
+  suggestions: readonly T[];
+  /** A suggestion's handle colour: on the video creator a clip's differs from a picture's. */
+  handleClassName: (suggestion: T) => string;
+  onInsert: (handle: string) => void;
+}) {
+  return (
+    <div role="group" aria-label={title} className="rounded-ui-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
+          <p className="ui-kicker">{title}</p>
+          <p className="mt-1 text-sm text-[var(--ui-text-muted)]">{hint}</p>
+        </div>
+        {query ? (
+          <StudioElementHandle
+            handle={`@${query}`}
+            className="rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-xs font-semibold text-[var(--ui-text-secondary)]"
+          />
+        ) : null}
+      </div>
+      {suggestions.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {suggestions.map((suggestion) => (
+            <StudioElementChip
+              key={suggestion.id}
+              displayName={suggestion.displayName}
+              handle={suggestion.handle}
+              handleClassName={handleClassName(suggestion)}
+              onInsert={() => onInsert(suggestion.handle)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A small pill action on a reference: Insert, Copy, Add video. */
+export const CREATOR_REFERENCE_CHIP_CLASS =
+  'ui-focus-ring inline-flex min-h-9 shrink-0 items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-semibold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)] disabled:cursor-not-allowed disabled:opacity-50';
+
+/**
+ * A reference in a creator's column, as a row: its picture or clip (which
+ * opens a preview), its name to rename it by, Remove, and its @handle with
+ * Insert (and Copy for a Kling clip), each named for the handle it acts on.
+ */
+export function CreatorReferenceRow({
+  accent,
+  preview,
+  displayName,
+  nameDraft,
+  placeholder,
+  onNameChange,
+  onNameCommit,
+  onNameCancel,
+  onRemove,
+  handle,
+  handleClassName,
+  onInsert,
+  onCopy,
+  note,
+}: {
+  accent: UiAccent;
+  /** The picture or clip at the row's start. */
+  preview: ReactNode;
+  displayName: string;
+  /** The name as it is being typed, if it is. */
+  nameDraft: string | undefined;
+  placeholder: string;
+  onNameChange: (value: string) => void;
+  /** The typed name becomes the reference's, and the handle and the prompt follow it. */
+  onNameCommit: () => void;
+  onNameCancel: () => void;
+  onRemove: () => void;
+  handle: string;
+  handleClassName: string;
+  onInsert: () => void;
+  onCopy?: () => void;
+  note?: ReactNode;
+}) {
+  return (
+    <li className="flex items-start gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-2.5">
+      {preview}
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex items-center gap-1">
+          <input
+            type="text"
+            value={nameDraft ?? displayName}
+            onChange={(event) => onNameChange(event.target.value)}
+            onBlur={onNameCommit}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                onNameCommit();
+                event.currentTarget.blur();
+              }
+              if (event.key === 'Escape') {
+                onNameCancel();
+                event.currentTarget.blur();
+              }
+            }}
+            aria-label={`Name of ${displayName}`}
+            placeholder={placeholder}
+            className={clsx(
+              'min-w-0 flex-1 rounded-ui-sm border border-transparent bg-transparent px-2 py-1.5 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:bg-[var(--ui-surface-2)]',
+              getAccentClasses(accent).fieldFocus
+            )}
+          />
+          <IconButton label={`Remove ${displayName}`} icon={X} onClick={onRemove} className="shrink-0" />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
+          <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
+          <div className="flex flex-wrap items-center gap-1.5">
+            {onCopy ? (
+              <button type="button" onClick={onCopy} aria-label={`Copy ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
+                Copy
+              </button>
+            ) : null}
+            <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
+              Insert
+            </button>
+          </div>
+        </div>
+        {note ? <p className="px-2 text-xs text-[var(--ui-text-faint)]">{note}</p> : null}
+      </div>
+    </li>
+  );
+}
+
+/** A round, dashed control in the column that adds files in the tool's accent. */
+function addTileClass(accent: UiAccent, dragging: boolean) {
+  const classes = getAccentClasses(accent);
+  return clsx(
+    'flex min-h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-full border border-dashed px-4 text-sm font-semibold transition-colors duration-150',
+    // The file field's keyboard focus draws the shared ring on the tile.
+    'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]/55 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-[var(--ui-bg-app)]',
+    dragging ? clsx(classes.tileActive, 'text-[var(--ui-text-primary)]') : clsx(classes.tile, 'text-[var(--ui-text-secondary)] hover:text-[var(--ui-text-primary)]')
+  );
+}
+
+type FileInputProps = Omit<ComponentPropsWithRef<'input'>, 'type' | 'className'>;
+type FileDropProps = {
+  dragging: boolean;
+  onDragOver?: (event: DragEvent<HTMLElement>) => void;
+  onDragLeave?: (event: DragEvent<HTMLElement>) => void;
+  onDrop?: (event: DragEvent<HTMLElement>) => void;
+};
+
+/** A tile that adds files: a label around its file field, which a drop on it also takes. */
+export function CreatorAddTile({
+  accent,
+  icon: Icon,
+  label,
+  input,
+  dragging,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+}: {
+  accent: UiAccent;
+  icon: LucideIcon;
+  label: ReactNode;
+  input: FileInputProps;
+} & FileDropProps) {
+  return (
+    <label className={addTileClass(accent, dragging)} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+      <Icon aria-hidden className={clsx('h-4 w-4', getAccentClasses(accent).mark)} />
+      {label}
+      <input type="file" className="sr-only" {...input} />
+    </label>
+  );
+}
+
+/** The same in the shape of a button, for one that adds something other than a file (a shot). */
+export function creatorAddButtonClass(accent: UiAccent) {
+  return clsx('ui-focus-ring disabled:cursor-not-allowed disabled:opacity-50', addTileClass(accent, false));
+}
+
+/**
+ * One input of fixed role (a start frame, the character image, the reference
+ * video): empty, a dashed tile to add it; filled, its preview with Replace and
+ * Remove. One file field serves both: the tile's label is for it, and Replace
+ * clicks it.
+ */
+export function CreatorUploadSlot({
+  accent,
+  title,
+  hint,
+  status,
+  height,
+  mediaType,
+  src,
+  alt,
+  previewHint,
+  fit = 'cover',
+  icon: Icon,
+  emptyLabel,
+  emptyHint,
+  input,
+  onPreview,
+  onRemove,
+  dragging,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+}: {
+  accent: UiAccent;
+  title: string;
+  hint?: string;
+  /** "required" or "optional", beside the title. */
+  status?: string;
+  height: 'frame' | 'tall';
+  mediaType: StudioMediaPreviewType;
+  src: string | null;
+  alt: string;
+  previewHint: string;
+  fit?: 'cover' | 'contain';
+  icon: LucideIcon;
+  emptyLabel: string;
+  emptyHint?: string;
+  /** The file field; give it an `id`, which the tile's label points at. Replace clicks it. */
+  input: Omit<FileInputProps, 'ref'> & { id: string };
+  onPreview: () => void;
+  onRemove: () => void;
+} & FileDropProps) {
+  const classes = getAccentClasses(accent);
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <div>
+      <h3 className="flex items-baseline justify-between gap-2 text-xs font-semibold text-[var(--ui-text-secondary)]">
+        {title}
+        {status ? <span className="font-normal text-[var(--ui-text-faint)]">{status}</span> : null}
+      </h3>
+      {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
+      <div className={clsx('relative mt-2', height === 'tall' ? 'h-[180px]' : 'h-[140px]')}>
+        {/* Before the tile, so the tile can draw the field's keyboard focus (peer). */}
+        <input type="file" {...input} ref={inputRef} className={src ? 'hidden' : 'peer sr-only'} />
+        {src ? (
+          <StudioUploadedMediaPreview
+            mediaType={mediaType}
+            src={src}
+            alt={alt}
+            fit={fit}
+            previewHint={previewHint}
+            onPreview={onPreview}
+            onReplace={() => inputRef.current?.click()}
+            onRemove={onRemove}
+          />
+        ) : (
+          <label
+            htmlFor={input.id}
+            className={clsx(
+              'flex h-full w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-ui-xl border border-dashed px-3 text-center transition-colors duration-150',
+              'peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ui-focus)]/55 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[var(--ui-bg-app)]',
+              'peer-disabled:cursor-not-allowed',
+              dragging
+                ? clsx(classes.tileActive, 'text-[var(--ui-text-primary)]')
+                : 'border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:text-[var(--ui-text-secondary)]'
+            )}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+          >
+            <Icon aria-hidden className={clsx('h-5 w-5', dragging && classes.mark)} />
+            <span className="text-xs font-semibold">{emptyLabel}</span>
+            {emptyHint ? <span className="text-xs text-[var(--ui-text-faint)]">{emptyHint}</span> : null}
+          </label>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * The result pane. On a wide window it stays in view beside the column for the
  * whole page, so a run's progress and its picture land where the creator is
  * already looking. Under the column it is as tall as what it shows, and taller
@@ -486,8 +1048,8 @@ export function CreatorCanvas({
           fits the stage there, and 70% of the window's height under the column. */}
       <div
         className={clsx(
-          'relative flex flex-1 items-center justify-center p-4 sm:p-6 [&_img]:max-h-[70dvh] min-[1120px]:min-h-0 min-[1120px]:[container-type:size] min-[1120px]:[&_img]:max-h-full',
-          tall ? 'min-h-[min(70dvh,40rem)]' : 'min-h-64'
+          'relative flex flex-1 items-center justify-center p-4 sm:p-6 [&_img]:max-h-[70svh] min-[1120px]:min-h-0 min-[1120px]:[container-type:size] min-[1120px]:[&_img]:max-h-full',
+          tall ? 'min-h-[min(70svh,40rem)]' : 'min-h-64'
         )}
       >
         {children}
@@ -497,8 +1059,12 @@ export function CreatorCanvas({
   );
 }
 
-/** "16:9" → 16/9; "auto" and anything unreadable → null. */
-export function parseAspectRatio(aspectRatio: string): number | null {
+/**
+ * "16:9" → 16/9; "auto", anything unreadable and no ratio at all → null. A model
+ * known only from the catalog's summary has no ratios until its details arrive.
+ */
+export function parseAspectRatio(aspectRatio: string | null | undefined): number | null {
+  if (typeof aspectRatio !== 'string') return null;
   const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(aspectRatio.trim());
   if (!match) return null;
   const width = Number(match[1]);
@@ -513,6 +1079,55 @@ export function parseAspectRatio(aspectRatio: string): number | null {
  */
 export const CANVAS_FRAME_RATIO_LIMITS = { min: 0.45, max: 2.4 } as const;
 
+/** The frame's sizing, shared with the result's box so a clip lands where its frame was. */
+const CANVAS_FRAME_SIZE_CLASS =
+  // Under the column the width decides, short of 70% of the window's smallest
+  // height (svh: a phone's toolbar coming and going does not resize it); beside
+  // it, the canvas's shorter side.
+  'aspect-[var(--creator-frame-ratio)] w-[min(100%,calc(70svh*var(--creator-frame-ratio)))] min-[1120px]:w-[min(100cqw,calc(100cqh*var(--creator-frame-ratio)))]';
+
+function clampFrameRatio(ratio: number) {
+  return Math.min(CANVAS_FRAME_RATIO_LIMITS.max, Math.max(CANVAS_FRAME_RATIO_LIMITS.min, ratio));
+}
+
+/**
+ * A finished clip, as large as the canvas allows, on black: in the shape its
+ * frame had (square for "auto", as the frame is) until the clip's own size is
+ * known, then in that. A motion run takes its shape from its reference, which
+ * the page does not measure, and a model can answer "auto" with any shape.
+ * Give it the clip's address as its `key`, so a new clip is measured afresh.
+ */
+export function CreatorCanvasMedia({ aspectRatio, children }: { aspectRatio?: string | null; children: ReactNode }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [clipRatio, setClipRatio] = useState<number | null>(null);
+
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    // `loadedmetadata` does not bubble, so it is heard on the way down instead.
+    const readClip = (event: Event) => {
+      const clip = event.target;
+      if (clip instanceof HTMLVideoElement && clip.videoWidth > 0 && clip.videoHeight > 0) {
+        setClipRatio(clip.videoWidth / clip.videoHeight);
+      }
+    };
+    box.addEventListener('loadedmetadata', readClip, true);
+    return () => box.removeEventListener('loadedmetadata', readClip, true);
+  }, []);
+
+  const ratio = clampFrameRatio(clipRatio ?? parseAspectRatio(aspectRatio) ?? 1);
+  return (
+    <div
+      ref={boxRef}
+      data-testid="creator-canvas-media"
+      style={{ '--creator-frame-ratio': ratio } as CSSProperties}
+      className={clsx('relative overflow-hidden rounded-ui-xl bg-black', CANVAS_FRAME_SIZE_CLASS)}
+    >
+      {children}
+    </div>
+  );
+}
+
 /**
  * A frame in the shape of the run's aspect ratio (square for "auto"), the
  * largest that fits the canvas: where the picture will land. Busy, it glows in
@@ -524,23 +1139,18 @@ export function CreatorCanvasFrame({
   busy = false,
   children,
 }: {
-  aspectRatio: string;
+  aspectRatio?: string | null;
   accent?: UiAccent;
   busy?: boolean;
   children: ReactNode;
 }) {
-  const ratio = Math.min(
-    CANVAS_FRAME_RATIO_LIMITS.max,
-    Math.max(CANVAS_FRAME_RATIO_LIMITS.min, parseAspectRatio(aspectRatio) ?? 1),
-  );
   return (
     <div
       data-testid="creator-canvas-frame"
-      style={{ '--creator-frame-ratio': ratio } as CSSProperties}
+      style={{ '--creator-frame-ratio': clampFrameRatio(parseAspectRatio(aspectRatio) ?? 1) } as CSSProperties}
       className={clsx(
-        // Under the column the width decides, short of 70% of the window's height;
-        // beside it, the canvas's shorter side.
-        'relative flex aspect-[var(--creator-frame-ratio)] w-[min(100%,calc(70dvh*var(--creator-frame-ratio)))] items-center justify-center overflow-hidden rounded-ui-xl border min-[1120px]:w-[min(100cqw,calc(100cqh*var(--creator-frame-ratio)))]',
+        'relative flex items-center justify-center overflow-hidden rounded-ui-xl border',
+        CANVAS_FRAME_SIZE_CLASS,
         busy ? 'border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]' : 'border-dashed border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]'
       )}
     >
