@@ -4,6 +4,7 @@ import {
   followTitleForRecipe,
   GENERIC_SUGGESTED_TITLES,
   isPlaceholderText,
+  isTitleFromPrompt,
   suggestCreationPostTitle,
   suggestProfileHandle,
 } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
@@ -119,6 +120,24 @@ describe('the title once a recipe is turned on or off', () => {
 
   it('turns a kind title into the plain one when a prompt gives no title', () => {
     expect(followTitleForRecipe('Image recipe', { ...creation, prompt: null }, true, false)).toBe('AI image');
+  });
+});
+
+// What the server compares a recipe post's title with: the title a suggestion
+// cuts from the prompt, however its case or spacing was changed on the way.
+describe('whether a title is the opening of a prompt', () => {
+  const prompt = 'A product still lit like a window display, soft morning light, 85mm';
+
+  it('knows the cut title, without its case or its spacing', () => {
+    expect(isTitleFromPrompt('Product still lit like a window display', prompt)).toBe(true);
+    expect(isTitleFromPrompt('  product STILL lit like a  window display ', prompt)).toBe(true);
+  });
+
+  it('knows nothing else as one: another title, an empty one, or a prompt that gives none', () => {
+    expect(isTitleFromPrompt('Window still', prompt)).toBe(false);
+    expect(isTitleFromPrompt('Product still lit like a window', prompt)).toBe(false);
+    expect(isTitleFromPrompt('', prompt)).toBe(false);
+    expect(isTitleFromPrompt('Product still', null)).toBe(false);
   });
 });
 

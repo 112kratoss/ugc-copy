@@ -1,6 +1,7 @@
 import {
   describeTitleSuggestion,
   followTitleForRecipe,
+  isTitleFromPrompt,
   suggestCreationPostTitle,
   type CreationTitleSuggestion,
 } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
@@ -89,4 +90,28 @@ export function followCreationTitleSuggestion({
   hasRecipe: boolean;
 }): string {
   return source ? followTitleForRecipe(title, source, hadRecipe, hasRecipe) : title;
+}
+
+/**
+ * The title a post is stored with, as the server holds the composers' rule. A
+ * recipe keeps the creation's prompt private, so a title cut from that prompt
+ * is stored as the recipe's kind title ("Image recipe"), the swap both
+ * composers make when a recipe goes on. Such a title comes from an older app,
+ * from a composer opened with a recipe already chosen, or from a title an
+ * earlier public save copied onto the creation. Any other title, and every
+ * title of a post with no recipe or no creation, is kept as it is.
+ */
+export function titleForRecipePost({
+  title,
+  hasRecipe,
+  source,
+}: {
+  title: string | null;
+  hasRecipe: boolean;
+  source: CreationTitleSource | null | undefined;
+}): string | null {
+  if (!hasRecipe || !title || !source || !isTitleFromPrompt(title, source.prompt)) {
+    return title;
+  }
+  return suggestCreationPostTitle({ ...source, hasRecipe: true }).title;
 }

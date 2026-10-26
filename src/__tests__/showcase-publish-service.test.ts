@@ -1956,3 +1956,107 @@ describe('publishGenerationToShowcaseForRoute', () => {
   });
 
 });
+
+// A recipe keeps the creation's prompt private. Both composers swap a title cut
+// from the prompt for the kind title when a recipe goes on; the server holds
+// the same rule for what an older app, or a composer opened with a recipe
+// already chosen, still sends.
+describe('a title cut from the prompt of a post with a recipe', () => {
+  const generation = {
+    id: 'gen-title',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'nano-banana-2',
+    category: 'image',
+    creation_mode: null,
+    output_url: 'generated_images/user-1/window-still.jpg',
+    showcase_asset_path: null,
+    title: null,
+    description: null,
+    prompt: 'A product still lit like a window display, soft morning light, 85mm',
+  };
+  const fromPrompt = 'Product still lit like a window display';
+
+  function publishDependencies() {
+    return {
+      ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+        outputUrl: mediaGeneration.outputUrl,
+        createdLocation: null,
+      })),
+      listSourceToolsCatalog: vi.fn(async () => [
+        { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+      ]),
+      validatePostResourceBundleInput: vi.fn(() => null),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+        postId: 'post-title',
+        visibility: 'public' as const,
+        bundleId: 'bundle-title',
+        bundleStatus: 'published' as const,
+      })),
+      ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+      requestPostEmbedding: vi.fn(async () => undefined),
+    } satisfies Partial<ShowcasePublishServiceDependencies>;
+  }
+
+  async function publish(body: Record<string, unknown>, extra: Partial<ShowcasePublishServiceDependencies> = {}) {
+    const dependencies = { ...publishDependencies(), ...extra };
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      body: { generationId: 'gen-title', visibility: 'public', ...body },
+      userId: 'user-1',
+      dependencies,
+    });
+    return { result, published: dependencies.publishGenerationPostWithResourceBundleAtomically };
+  }
+
+  it('stores it as the recipe’s kind title, on the post and on the creation', async () => {
+    const { result, published } = await publish({ title: fromPrompt, resourceBundle: cardRecipe() });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(published).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ title: 'Image recipe' }),
+      generationUpdate: expect.objectContaining({ title: 'Image recipe' }),
+    }));
+  });
+
+  it('knows it without its case or its spacing', async () => {
+    const { published } = await publish({ title: '  product STILL lit like a  window display ', resourceBundle: cardRecipe() });
+
+    expect(published).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ title: 'Image recipe' }),
+    }));
+  });
+
+  it('stores it as the kind title when a visibility change republishes the stored recipe', async () => {
+    const { result, published } = await publish({}, {
+      loadExistingGenerationPostContent: vi.fn(async () => ({
+        title: fromPrompt,
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'image',
+        resourceBundle: cardRecipe(),
+      })),
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(published).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ title: 'Image recipe' }),
+    }));
+  });
+
+  it('keeps a title the creator wrote, and the prompt’s title on a post without a recipe', async () => {
+    const typed = await publish({ title: 'Window still', resourceBundle: cardRecipe() });
+    expect(typed.published).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ title: 'Window still' }),
+      generationUpdate: expect.objectContaining({ title: 'Window still' }),
+    }));
+
+    const noRecipe = await publish({ title: fromPrompt, resourceBundle: { accessMode: 'none' } });
+    expect(noRecipe.published).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ title: fromPrompt }),
+      generationUpdate: expect.objectContaining({ title: fromPrompt }),
+    }));
+  });
+});

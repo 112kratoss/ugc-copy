@@ -2946,3 +2946,109 @@ describe('getCanonicalPostMediaStoragePath', () => {
     }
   });
 });
+
+// A recipe keeps the creation's prompt private. Both composers swap a title cut
+// from the prompt for the kind title when a recipe goes on; an edit holds the
+// same rule for what an older app sends, and for a title stored before a
+// recipe was added.
+describe('a title cut from the prompt of a post with a recipe', () => {
+  const prompt = 'A product still lit like a window display, soft morning light, 85mm';
+  const fromPrompt = 'Product still lit like a window display';
+  const creationPost = (title: string) => ({
+    id: 'post-1',
+    user_id: 'user-1',
+    generation_id: 'generation-1',
+    visibility: 'private',
+    title,
+    description: null,
+    prompt: null,
+    body: null,
+    category: 'image',
+    post_format: 'media',
+    source_tool: 'magicbooklet',
+    source_tool_slug: 'magicbooklet',
+    source_kind: 'magicbooklet',
+    archived_at: null,
+    showcase_asset_path: null,
+    output_url: 'generated_images/user-1/example.jpg',
+    review_status: 'visible',
+  });
+  const generation = {
+    id: 'generation-1',
+    user_id: 'user-1',
+    model: 'nano-banana-2',
+    category: 'image',
+    creation_mode: null,
+    prompt,
+    output_url: 'generated_images/user-1/example.jpg',
+    showcase_asset_path: null,
+  };
+
+  function createDependencies() {
+    return {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }: { patch: Record<string, unknown> }) => ({
+        postId: 'post-1',
+        visibility: (patch.visibility ?? 'private') as 'public' | 'private',
+        bundleId: 'bundle-1',
+        bundleStatus: 'draft' as const,
+      })),
+      replacePostSourceTools: vi.fn(async () => undefined),
+      replacePostMediaItems: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+      createGenerationShowcaseDerivative: vi.fn(async () => 'showcase/generation-1/example.abc123.jpg'),
+      ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+      removeGenerationShowcaseDerivative: vi.fn(async () => ({ removed: true, removedPaths: [], removedMediaRows: 0, error: null })),
+      ensureDurableGenerationMedia: vi.fn(async () => ({ outputUrl: 'generated_images/user-1/example.jpg', createdLocation: null })),
+    } satisfies PostUpdateDependencies;
+  }
+
+  async function save(postTitle: string, bundle: Record<string, unknown> | null, body: Record<string, unknown>) {
+    const mock = createSupabaseMock({ post: creationPost(postTitle), bundle, generation });
+    const dependencies = createDependencies();
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: mock.client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body,
+      dependencies,
+    });
+    return { result, dependencies, generationUpdates: mock.generationUpdates };
+  }
+
+  it('stores it as the kind title when a save sends it with a recipe, on the post and the creation', async () => {
+    const { result, dependencies, generationUpdates } = await save('Window still', null, {
+      title: fromPrompt,
+      visibility: 'private',
+      resourceBundle: composerRecipe(),
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ title: 'Image recipe' }),
+    }));
+    expect(generationUpdates).toContainEqual(expect.objectContaining({ title: 'Image recipe' }));
+  });
+
+  it('stores a stored one as the kind title when the post goes public with its stored recipe', async () => {
+    const { result, dependencies } = await save(fromPrompt, storedRecipeRow(composerRecipe()), { visibility: 'public' });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ title: 'Image recipe' }),
+    }));
+  });
+
+  it('keeps a title the creator wrote, and the prompt’s title once the recipe is off', async () => {
+    const typed = await save('Window still', null, { title: 'Window still', resourceBundle: composerRecipe() });
+    expect(typed.dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ title: 'Window still' }),
+    }));
+
+    const off = await save('Window still', storedRecipeRow(composerRecipe()), { title: fromPrompt, resourceBundle: { accessMode: 'none' } });
+    expect(off.dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ title: fromPrompt }),
+    }));
+  });
+});

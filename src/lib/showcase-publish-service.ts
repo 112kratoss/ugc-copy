@@ -51,6 +51,7 @@ import {
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import { titleForRecipePost } from '@/lib/creation-post-title';
 import { requestPostEmbedding } from '@/lib/feed-embeddings';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import {
@@ -684,12 +685,29 @@ export async function publishGenerationToShowcaseForRoute({
     isPaidRecipe,
     prompt: normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? '',
   });
-  const resolvedTitle =
+  const titleAsGiven =
     normalizeTextValue(title)
     ?? normalizeTextValue(existingPost?.title)
     ?? generation.title?.trim()
     ?? resolvedDependencies.deriveTitleFromBody(sanitizedPublicContent.body || null)
     ?? null;
+  // A recipe keeps the prompt private, so a title cut from it goes out as the
+  // recipe's kind title, the swap both composers make. A visibility change
+  // republishes the stored recipe with the post, so that one counts too.
+  const recipeForTitle = effectiveHasResourceBundlePayload
+    ? effectiveResourceBundle
+    : existingPost?.resourceBundle ?? frozenSoldBundleForRepublish;
+  const resolvedTitle = titleForRecipePost({
+    title: titleAsGiven,
+    hasRecipe: Boolean(recipeForTitle && recipeForTitle.accessMode !== 'none'),
+    source: {
+      prompt: generation.prompt,
+      model: generation.model,
+      category: generation.category,
+      creationMode: generation.creation_mode,
+    },
+  });
+  const titleReplacedForRecipe = resolvedTitle !== titleAsGiven;
 
   if (isComposeSubmission && !resolvedTitle) {
     return { ok: false, status: 400, body: { error: 'Add a title for your post.', field: 'title' } };
@@ -820,7 +838,8 @@ export async function publishGenerationToShowcaseForRoute({
       updatePayload.showcase_asset_path = nextShowcaseAssetPath;
     }
 
-    if (title !== undefined) updatePayload.title = title;
+    // The creation shows the post's title: a replaced one replaces it there too.
+    if (title !== undefined) updatePayload.title = titleReplacedForRecipe ? resolvedTitle : title;
     if (description !== undefined) updatePayload.description = description;
     if (prompt !== undefined) updatePayload.prompt = prompt;
     if (detectedCategory !== undefined) updatePayload.category = detectedCategory;
