@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
@@ -9,6 +9,7 @@ import type { CatalogInputMode } from '@/lib/generation-model-catalog';
 import { MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
+import { chooseSetting, costShown } from './fixtures/creator-column-bar';
 
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
@@ -85,6 +86,8 @@ const statusMocks = vi.hoisted(() => ({
 }));
 const deployState = vi.hoisted(() => ({ newBuildAvailable: false, enabled: [] as boolean[] }));
 const publishModalState = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
+// What the result's player was last given.
+const resultVideoState = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 
 const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
 const queryBuilder = {
@@ -113,7 +116,10 @@ vi.mock('@/components/PublicShareButton', () => ({
 }));
 
 vi.mock('@/components/GenerationResultVideo', () => ({
-  default: () => null,
+  default: (props: Record<string, unknown>) => {
+    resultVideoState.props = props;
+    return null;
+  },
 }));
 
 vi.mock('@/components/PublishToShowcaseModal', () => ({
@@ -245,19 +251,6 @@ function startBodies() {
   return startPosts().map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
 }
 
-/** The price Generate names, or why it waits ("Add both inputs", "Calculating..."). */
-function costShown() {
-  return screen.queryByRole('button', { name: /^Generate · / })?.getAttribute('aria-label')?.replace(/^Generate · /, '');
-}
-
-/** A run setting, chosen in the panel the chip on the column's bar opens. */
-function chooseSetting(name: string) {
-  if (!screen.queryByRole('dialog', { name: 'Generation settings' })) {
-    fireEvent.click(screen.getByRole('button', { name: /^Generation settings/ }));
-  }
-  fireEvent.click(screen.getByRole('radio', { name }));
-}
-
 /** The page's last quote request, as JSON. */
 function shownQuote() {
   return JSON.stringify(quoteStandIn.requests.filter(Boolean).at(-1));
@@ -353,6 +346,7 @@ beforeEach(() => {
   deployState.newBuildAvailable = false;
   deployState.enabled = [];
   publishModalState.props = null;
+  resultVideoState.props = null;
   startAnswers = [];
   generationLookupBody = { generations: [] };
   remixSourceBody = null;
@@ -1248,6 +1242,41 @@ describe('CreateMotionClient on the column', () => {
 
     // 7.3 seconds, counted as the app counts them.
     expect(screen.getByRole('button', { name: 'Generation settings: 720P · 8s' })).toBeInTheDocument();
+  });
+
+  it('reads "Add motion" while the page holds no clip, though a run picked up on load gave a length', async () => {
+    // The newest run, still under way, comes back with its length and without its clip.
+    maybeSingleMock.mockResolvedValueOnce({
+      data: { id: 'gen-motion-1', prediction_id: 'pred-motion-1', status: 'processing', created_at: new Date().toISOString(), duration: 10, prompt: 'Saved prompt' },
+      error: null,
+    } as never);
+    render(<CreateMotionClient prefill={{}} />);
+
+    expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 720P · Add motion');
+  });
+
+  it('keeps the prompt the run was sent with under its clip while the next one is written', async () => {
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'Keep the arms loose and the steps light.' } });
+    await pressGenerate();
+    await screen.findByRole('link', { name: /Download video/ });
+
+    fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'A slow spin on the spot.' } });
+
+    const canvas = screen.getByRole('region', { name: 'Result' });
+    expect(within(canvas).getByText('Keep the arms loose and the steps light.')).toBeInTheDocument();
+    expect(within(canvas).queryByText('A slow spin on the spot.')).toBeNull();
+  });
+
+  it('plays the finished clip once: beside the column it never leaves the window to be paused', async () => {
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await pressGenerate();
+    await screen.findByRole('link', { name: /Download video/ });
+
+    expect(resultVideoState.props).toMatchObject({ loop: false, outputUrl: 'https://cdn.example/motion-result.mp4' });
   });
 
   describe('the result canvas', () => {

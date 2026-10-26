@@ -9,6 +9,7 @@ import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 // What the server quotes when it starts a run: for "the price of the run the page sends".
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
+import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings } from './fixtures/creator-column-bar';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
@@ -794,36 +795,14 @@ function typePrompt(value: string) {
   fireEvent.change(screen.getByPlaceholderText(PROMPT_PLACEHOLDER), { target: { value } });
 }
 
-/** Generate in the column's bar, named with the run's price whatever its face says. */
-function generateButton() {
-  return screen.getByRole('button', { name: /^Generate · / });
-}
-
 function pressGenerate() {
   fireEvent.click(generateButton());
-}
-
-/** Opens the settings the bar's chip folds away, if they are not open already. */
-function openSettings() {
-  if (!screen.queryByRole('dialog', { name: 'Generation settings' })) {
-    fireEvent.click(screen.getByRole('button', { name: /^Generation settings/ }));
-  }
-}
-
-function chooseAspectRatio(ratio: string) {
-  openSettings();
-  fireEvent.click(screen.getByRole('radio', { name: ratio }));
 }
 
 /** The aspect ratio the bar's settings chip reads back ("1K · AUTO · JPG"). */
 function frameShown() {
   const parts = (screen.getByTestId('creator-settings-summary').textContent ?? '').split(' · ');
   return parts.find((part) => /^(?:\d+:\d+|AUTO)$/.test(part))?.toLowerCase();
-}
-
-/** The price Generate carries. */
-function costShown() {
-  return generateButton().getAttribute('aria-label')?.replace(/^Generate · /, '');
 }
 
 async function findResult() {

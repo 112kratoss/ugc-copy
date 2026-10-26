@@ -12,6 +12,9 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * The row wraps now: a handle that does not fit beside the buttons takes a line
  * of its own, and it breaks after an underscore when that line is too short too.
+ * Since 2026-10-26 the creators list their references as rows in the column
+ * (one to a line, the handle on the line under the name, with Insert), so the
+ * cards above are rows there.
  *
  * Vitest cannot reach this. The handle was always in the document, and only the
  * layout hid it.
@@ -125,12 +128,11 @@ const IMAGE_REMIX = {
 };
 
 const VIEWPORTS = [
-  // Three cards to a row, each about 160px wide. No handle fits beside its button.
+  // The column beside the canvas (two panes from 1120px wide).
   { width: 1280, height: 720 },
-  // Two cards to a row. The default handle does not fit beside the button, and
-  // fits on a line of its own.
+  // One pane, 680px at most.
   { width: 768, height: 1024 },
-  // One card to a row. Only the long handle is too wide for the button's line.
+  // A phone, the column the window's width.
   { width: 390, height: 844 },
 ];
 

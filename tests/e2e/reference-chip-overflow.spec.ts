@@ -15,9 +15,10 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * the row by itself wraps.
  *
  * The Kling video element card had a smaller fault of the same kind. From 1280px
- * up its cards are 160px wide, which leaves the Copy and Insert buttons a 108px
- * row for their 127px, so Insert stuck out past the row's border. There they now
- * sit one above the other, and side by side wherever both fit.
+ * up its cards were 160px wide, which left the Copy and Insert buttons a 108px
+ * row for their 127px, so Insert stuck out past the row's border. Since
+ * 2026-10-26 each Kling clip is a row of the column, as every reference is, and
+ * Copy and Insert sit side by side under its name.
  *
  * Vitest cannot reach this. Every name and handle was in the document, and only
  * the layout was wrong.
@@ -136,8 +137,7 @@ const VIEWPORTS = [
   // A phone. Two of the three chips are wider than their row, and this is where
   // the page itself grew wider than its window.
   { width: 390, height: 844 },
-  // The form column at its widest, where only the longest chip reaches the end of
-  // its row. The Kling cards are at their narrowest here: 160px.
+  // The column beside the canvas (two panes from 1120px wide).
   { width: 1280, height: 720 },
 ];
 

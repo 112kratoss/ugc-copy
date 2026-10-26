@@ -104,9 +104,12 @@ async function openModel(page: Page, modelId: string) {
   }).toPass({ timeout: 45_000 });
 }
 
-/** What the empty result canvas asks for: frames or references, as the run will use them. */
+/**
+ * What the empty result canvas asks for: frames or references, as the run will use
+ * them, or the prompt alone once Hailuo 2.3 has the start frame it cannot run without.
+ */
 function canvasAsksFor(page: Page) {
-  return page.getByText(/^Write a prompt, add (frames|references) if you like, then Generate\.$/);
+  return page.getByText(/^Write a prompt, (add (frames|references) if you like, )?then Generate\.$/);
 }
 
 async function attachStartFrame(page: Page) {
@@ -159,8 +162,10 @@ test.describe('references saved on another video model', () => {
       // The quote names the slots the run fills (catalogRunQuoteInput): the start frame alone.
       expect(request.inputMetadata?.slots).toEqual({ startFrame: { count: 1 } });
 
-      // The page says of the run what its standby card says.
-      await expect(canvasAsksFor(page)).toHaveText('Write a prompt, add frames if you like, then Generate.');
+      // The canvas asks for what its standby card says the run takes: frames, not references.
+      await expect(canvasAsksFor(page)).toHaveText(modelId === 'hailuo-2.3'
+        ? 'Write a prompt, then Generate.'
+        : 'Write a prompt, add frames if you like, then Generate.');
       await expect(page.getByText(/Reusable references keep their @handles/)).toHaveCount(0);
     });
   }

@@ -389,26 +389,26 @@ export function StudioBackgroundProcessingNotice({
   const theme = getAccentClasses(accent);
 
   return (
-    <div className="rounded-[24px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">
+    <div className="rounded-ui-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">
       <div className={clsx('inline-flex h-11 w-11 items-center justify-center rounded-full border', theme.iconWrap)}>
         <Clock3 className="h-4 w-4" />
       </div>
       <div className="mt-3">
-        <h3 className="text-sm font-semibold text-white">
+        <h3 className="text-sm font-semibold text-[var(--ui-text-primary)]">
           {label.charAt(0).toUpperCase() + label.slice(1)} still processing
         </h3>
-        <p className="mt-2 text-sm leading-6 text-zinc-400">
+        <p className="mt-2 text-sm leading-6 text-[var(--ui-text-muted)]">
           This run is taking longer than usual, but it is still active in the background. We&apos;ll keep
           tracking it in{' '}
-          <Link href="/creations" className={clsx('underline underline-offset-4 transition hover:text-white', theme.accentText)}>
+          <Link href="/creations" className={clsx('underline underline-offset-4 transition hover:text-[var(--ui-text-primary)]', theme.accentText)}>
             Studio
           </Link>
           .
         </p>
         {phaseLabel || timingLabel ? (
-          <div className="mt-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-4 py-3 text-left">
-            {phaseLabel ? <div className="text-sm font-medium text-zinc-200">{phaseLabel}</div> : null}
-            {timingLabel ? <div className="mt-1 text-xs uppercase tracking-[0.18em] text-zinc-500">{timingLabel}</div> : null}
+          <div className="mt-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-4 py-3 text-left">
+            {phaseLabel ? <div className="text-sm font-medium text-[var(--ui-text-secondary)]">{phaseLabel}</div> : null}
+            {timingLabel ? <div className="mt-1 text-xs text-[var(--ui-text-muted)]">{timingLabel}</div> : null}
           </div>
         ) : null}
       </div>
@@ -517,11 +517,11 @@ export function StudioElementHandleList({ handles }: { handles: string[] }) {
 const HANDLE_WORD = /(?:^|\W)@\w/;
 
 /**
- * A sentence held as one string that may name @handles, such as a run panel's
+ * A sentence held as one string that may name @handles, such as a creator bar's
  * error, which the page or the server may have written.
  *
  * Printed as plain text, a handle in such a sentence could not break. "Unknown
- * element mention: @..." in the video creator's run panel stood 149px past its
+ * element mention: @..." in the video creator's run panel (now its column's bar) stood 149px past its
  * box in a 1280px window for a handle of 68 characters, and 219px on a 390px
  * phone, where the page scrolled 165px sideways. The sentence is split at its
  * spaces here, and a word that holds a handle gets the box
@@ -580,7 +580,7 @@ export function StudioUploadedMediaPreview({
   return (
     <div
       className={clsx(
-        'relative h-full w-full overflow-hidden rounded-[24px] border border-white/10 bg-black/50',
+        'relative h-full w-full overflow-hidden rounded-ui-xl border border-[var(--ui-border-default)] bg-black',
         className
       )}
     >

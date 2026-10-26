@@ -5,30 +5,38 @@ import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, Play, Check, Share2 } from 'lucide-react';
+import { Sparkles, Loader2, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, Play, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
-    CREATOR_BAR_PRIMARY_CLASS,
+    CREATOR_REFERENCE_CHIP_CLASS,
+    CreatorAddTile,
+    CreatorBackgroundRunLine,
+    CreatorBarAction,
     CreatorCanvas,
     CreatorCanvasFrame,
     CreatorCanvasMedia,
     CreatorColumnBar,
     CreatorColumnLayout,
+    CreatorMentionPanel,
     CreatorModelChip,
+    CreatorPendingStartNotice,
     CreatorPhoneBalance,
+    CreatorReferenceRow,
+    CreatorResultActions,
     CreatorSettingChoices,
     CreatorSettingSwitch,
     CreatorTemplatesTile,
     CreatorToolTabs,
+    CreatorTopUpNotice,
+    CreatorUploadSlot,
+    creatorAddButtonClass,
 } from '@/components/CreatorColumn';
-import { IconButton } from '@/components/DesignSystem';
+import { getAccentClasses, IconButton } from '@/components/DesignSystem';
 import { videoSettingsSummary } from '@/lib/creator-settings-summary';
 import {
     StudioBackgroundProcessingNotice,
-    StudioElementChip,
     StudioElementHandle,
     StudioElementHandleList,
     StudioElementHandleText,
@@ -39,11 +47,9 @@ import {
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
-    StudioUploadedMediaPreview,
 } from '@/components/CreatorStudio';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
@@ -245,7 +251,7 @@ function screenPickedFiles(files: File[], kind: StorageMediaKind): { accepted: F
     return { accepted, refusal: refusals.length > 0 ? refusals.join(' ') : null };
 }
 
-/** What the run panel says when picks were left out because the model takes no more. */
+/** What the column's bar says when picks were left out because the model takes no more. */
 function droppedPicksNotice(added: number, picked: number, limit: number, noun: string): string | null {
     if (added >= picked) return null;
     return `Added ${added} of ${picked}: this model takes up to ${limit} ${noun}${limit === 1 ? '' : 's'}.`;
@@ -398,6 +404,27 @@ async function loadCreationPublishDefaults(generationId: string, accessToken: st
 
 /** Single shot or multi-shot, as the app's segmented control offers them. */
 const SHOT_MODES = ['single', 'multi'] as const;
+
+/** The run in flight, as it was started: its frame's shape, its settings' line and its prompt. */
+type VideoRunShape = { aspectRatio: string | null; label: string | null; prompt: string | null };
+
+/** A multi-shot run's prompt as one caption: its shots' prompts in order. */
+function shotsPrompt(shots: ReadonlyArray<{ prompt: string }>) {
+    return shots.map((shot) => shot.prompt.trim()).filter(Boolean).join(' · ') || null;
+}
+
+/** The shape and prompt of a start that was sent, read off its saved body. */
+function runShapeOfStart(body: Record<string, unknown>): VideoRunShape {
+    const settings = body.settings && typeof body.settings === 'object' ? body.settings as Record<string, unknown> : {};
+    const shots = Array.isArray(body.shots)
+        ? body.shots.filter((shot): shot is { prompt: string } => typeof (shot as { prompt?: unknown })?.prompt === 'string')
+        : [];
+    return {
+        aspectRatio: typeof settings.aspectRatio === 'string' ? settings.aspectRatio : null,
+        label: null,
+        prompt: shots.length > 0 ? shotsPrompt(shots) : (typeof body.prompt === 'string' && body.prompt.trim() ? body.prompt.trim() : null),
+    };
+}
 
 /** A settings group's columns: its options on one row where up to five fit. */
 function choiceColumns(count: number): 3 | 4 | 5 {
@@ -583,6 +610,7 @@ function KlingSubjectsEditor({
     onChange,
     onRename,
     onRefusedFiles,
+    onInsert,
 }: {
     subjects: KlingSubjectDraft[];
     limits: SubjectLimits;
@@ -590,6 +618,8 @@ function KlingSubjectsEditor({
     onChange: (next: KlingSubjectSeed[]) => void;
     onRename: (subjectId: string, displayName: string) => void;
     onRefusedFiles: (message: string | null) => void;
+    /** Puts a subject's @handle where the creator is writing, as a reference row's Insert does. */
+    onInsert: (handle: string) => void;
 }) {
     const KLING_SUBJECT_LIMIT = limits.maxNamed;
     const KLING_SUBJECT_MIN_IMAGES = limits.imagesPerSubject.min;
@@ -758,9 +788,20 @@ function KlingSubjectsEditor({
                                         </label>
                                     )}
                                 </div>
-                                <p className={`mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] ${imageCountOk ? 'text-zinc-500' : 'text-amber-300'}`}>
-                                    {subject.images.length}/{KLING_SUBJECT_MAX_IMAGES} images{imageCountOk ? '' : ` — add at least ${KLING_SUBJECT_MIN_IMAGES}`}
-                                </p>
+                                <div className="mt-2 flex items-center justify-between gap-2">
+                                    <p className={`text-xs font-semibold ${imageCountOk ? 'text-[var(--ui-text-faint)]' : 'text-amber-300'}`}>
+                                        {subject.images.length}/{KLING_SUBJECT_MAX_IMAGES} images{imageCountOk ? '' : ` — add at least ${KLING_SUBJECT_MIN_IMAGES}`}
+                                    </p>
+                                    <button
+                                        type="button"
+                                        disabled={disabled}
+                                        onClick={() => onInsert(subject.handle)}
+                                        aria-label={`Insert ${subject.handle}`}
+                                        className={CREATOR_REFERENCE_CHIP_CLASS}
+                                    >
+                                        Insert
+                                    </button>
+                                </div>
                             </div>
                         );
                     })}
@@ -1012,7 +1053,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // run's error or its background state.
     const [pickNotice, setPickNotice] = useState<string | null>(null);
     // A start sent without an answer that says whether it started. Until one comes, the
-    // run panel offers to check again under the same key instead of starting another.
+    // bar offers to check again under the same key instead of starting another.
     const [unconfirmedStart, setUnconfirmedStart] = useState<PendingWebStart | null>(null);
     // The server's "not enough credits", for the balance and price it was given at. A
     // fresh balance or another price is a new question, so it applies only while both hold.
@@ -1035,8 +1076,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const hasResolvedInitialCatalogModel = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
-    const startImageInputRef = useRef<HTMLInputElement>(null);
-    const endImageInputRef = useRef<HTMLInputElement>(null);
     const elementInputRef = useRef<HTMLInputElement>(null);
     const referenceVideoInputRef = useRef<HTMLInputElement>(null);
     const referenceAudioInputRef = useRef<HTMLInputElement>(null);
@@ -1071,8 +1110,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     // Bumped once a start the creator pressed is confirmed: the result canvas comes into view.
     const [canvasRevealKey, setCanvasRevealKey] = useState(0);
-    // The run in flight's shape and settings, which its frame keeps while the form changes.
-    const [runShape, setRunShape] = useState<{ aspectRatio: string; label: string } | null>(null);
+    // The run in flight's shape, settings and prompt, which its frame and caption keep while
+    // the form changes for the next run.
+    const [runShape, setRunShape] = useState<VideoRunShape | null>(null);
     const nowMs = useTicker(isGenerating) ?? undefined;
 
     useEffect(() => () => {
@@ -1388,6 +1428,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const canAddShot = (multiShotMaxShots === null || multiPrompts.length < multiShotMaxShots)
         && (multiShotMaxTotalSeconds === null || totalDuration < multiShotMaxTotalSeconds);
     const multiShotOverLength = multiShotMaxTotalSeconds !== null && totalDuration > multiShotMaxTotalSeconds;
+    const videoAccent = getAccentClasses('video');
+    // The mode control's own name from the model's descriptor ("Grok mode"), as the app shows it.
+    const modeControlLabel = catalogDescriptor?.controls.find((control) => control.key === 'mode')?.label
+        ?? (selectedModel === 'veo-3.1' ? 'Model variant' : 'Quality mode');
+    // Hailuo 2.3 animates a start image and has no run without one (handleGenerate says so).
+    const startFrameRequired = selectedModel === 'hailuo-2.3';
     // The settings chip, read as the app's ("720P · 16:9 · 5s").
     const settingsSummary = videoSettingsSummary({
         modeLabel: videoModel.modeOptions.find((option) => option.value === currentMode)?.label ?? currentMode,
@@ -3311,7 +3357,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     /**
      * A start that did not answer with a run. An answer that may still mean it started
-     * keeps the attempt, and the run panel offers to check again under its key. A
+     * keeps the attempt, and the column's bar offers to check again under its key. A
      * refusal clears it, and says what the creator can do about it.
      */
     const handleStartFailure = async (startError: unknown, attempt: PendingWebStart) => {
@@ -3327,7 +3373,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const message = startError instanceof Error && startError.message ? startError.message : 'Could not start generation.';
         const code = startError instanceof WebCatalogRequestError ? startError.code : undefined;
         if (code === 'insufficient_credits') {
-            // The balance on screen was out of date. It is read again, and the run panel
+            // The balance on screen was out of date. It is read again, and the column's bar
             // offers a top-up instead of a Generate the server would refuse once more.
             window.dispatchEvent(new Event('credits_updated'));
             setCreditRefusal({ message, ...creditContextRef.current });
@@ -3398,6 +3444,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const replayPendingStart = async (attempt: PendingWebStart, { reveal = false }: { reveal?: boolean } = {}) => {
         if (activeGenerationRequestKeyRef.current) return;
         activeGenerationRequestKeyRef.current = attempt.idempotencyKey;
+        setRunShape((current) => current ?? runShapeOfStart(attempt.body));
         const startedAtMs = getCurrentTimestampMs();
         setIsGenerating(true);
         setError(null);
@@ -3458,7 +3505,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
             const { data, error: pendingError } = await supabase
                 .from('generations')
-                .select('id, prediction_id, status, created_at, cost')
+                .select('id, prediction_id, status, created_at, cost, prompt')
                 .eq('user_id', session.user.id)
                 .eq('category', 'video')
                 .is('creation_mode', null)
@@ -3477,6 +3524,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setError(null);
             setLatestGenerationId(data.id ?? null);
             setLatestIsPublic(false);
+            setRunShape({ aspectRatio: null, label: null, prompt: typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null });
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'video',
                 phaseLabel: 'Resuming active run',
@@ -3684,7 +3732,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setLatestGenerationId(null);
         setLatestIsPublic(false);
         setPublishedMeta(null);
-        setRunShape({ aspectRatio: currentAspectRatio, label: `${videoModel.displayName} · ${settingsSummary}` });
+        setRunShape({
+            aspectRatio: currentAspectRatio,
+            label: `${videoModel.displayName} · ${settingsSummary}`,
+            prompt: currentIsMultiShot ? shotsPrompt(multiPrompts) : prompt.trim() || null,
+        });
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimatedGenerationTotalMs;
         setGenerationTiming(createLocalGenerationTiming({
@@ -3945,7 +3997,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }
             }
 
-            // The price on the run panel goes with the run when it is this run's own quote.
+            // The price on Generate goes with the run when it is this run's own quote.
             const payload = webCatalogStartRequest({
                 kind: 'video',
                 modelId: selectedModel,
@@ -4047,11 +4099,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
 
+    // The run's own prompt, not the form's: the form may hold the next run's by now.
+    const runPrompt = runShape?.prompt ?? null;
     const primarySharePrompt = publishedMeta?.description
+        || runPrompt
         || prompt.trim()
         || multiPrompts.map((shot) => shot.prompt.trim()).find(Boolean)
         || null;
     const shareTitle = publishedMeta?.title
+        || runPrompt
         || prompt.trim()
         || multiPrompts.map((shot) => shot.prompt.trim()).find(Boolean)
         || `${videoModel.displayName} video`;
@@ -4065,39 +4121,38 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 ? 'Your video'
                 : 'Result';
     const canvasSubtitle = outputVideo
-        ? primarySharePrompt
+        ? runPrompt
         : isGenerating
             ? runShape?.label ?? `${videoModel.displayName} · ${settingsSummary}`
             : isBackgroundProcessing
                 ? null
                 : `${videoModel.displayName} · ${settingsSummary}`;
+    // What the run needs, as the column's cards ask for it.
     const emptyCanvasHint = currentIsMultiShot
         ? 'Write each shot, then Generate.'
-        : activeReferenceMode === 'elements'
-            ? 'Write a prompt, add references if you like, then Generate.'
-            : 'Write a prompt, add frames if you like, then Generate.';
+        : klingSubjectsActive
+            ? 'Write a prompt that names your subjects, then Generate.'
+            : activeReferenceMode === 'elements'
+                ? 'Write a prompt, add references if you like, then Generate.'
+                : startFrameRequired
+                    ? startImageUrl || startImageFile
+                        ? 'Write a prompt, then Generate.'
+                        : 'Add a start frame and write a prompt, then Generate.'
+                    : 'Write a prompt, add frames if you like, then Generate.';
 
     const isAwaitingStartCheck = Boolean(unconfirmedStart) && !isGenerating;
     // What stops or explains a run, said just above the bar. Progress is drawn on the
     // canvas; a run in the background is named here too, beside Generate.
     const runStatus = isGenerating ? null : isBackgroundProcessing ? (
-        <p className="text-[var(--ui-text-secondary)]">
-            {backgroundProcessingCopy.title}: it lands in{' '}
-            <Link href="/creations" className="underline underline-offset-4 hover:text-[var(--ui-text-primary)]">Studio</Link>
-            {' '}when it is done.
-        </p>
+        <CreatorBackgroundRunLine title={backgroundProcessingCopy.title} />
     ) : unconfirmedStart ? (
-        <div className="space-y-3">
-            <p role="alert" className="text-amber-200">{START_UNCONFIRMED_MESSAGE}</p>
-            <button
-                type="button"
-                onClick={startNewRunInstead}
-                disabled={quotePending || Boolean(promptLimitMessage)}
-                className="ui-button ui-button-secondary ui-focus-ring w-full disabled:cursor-not-allowed disabled:opacity-50"
-            >
-                {estimatedCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
-            </button>
-        </div>
+        <CreatorPendingStartNotice
+            message={START_UNCONFIRMED_MESSAGE}
+            costLabel={quoteUi.costLabel}
+            hasPrice={estimatedCost !== null}
+            disabled={quotePending || Boolean(promptLimitMessage)}
+            onStartNew={startNewRunInstead}
+        />
     ) : pickNotice ? (
         <p className="text-amber-200 [overflow-wrap:anywhere]">{pickNotice}</p>
     ) : referenceLimitMessage ? (
@@ -4126,15 +4181,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     ) : quoteState.status === 'error' ? (
         quoteRetry
     ) : null;
-    const topUpNotice = showTopUp && !isAwaitingStartCheck ? (
-        <div>
-            <p className="font-semibold text-[var(--ui-text-primary)]">Not enough credits</p>
-            <p className="mt-1 text-[var(--ui-text-muted)]">
-                {insufficientCredits ? (
-                    <>This run costs <strong className="text-[var(--ui-text-primary)]">{estimatedCost} credits</strong> but you only have <strong className="text-[var(--ui-text-primary)]">{userCredits}</strong>.</>
-                ) : creditRefusal?.message}
-            </p>
-        </div>
+    const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating ? (
+        <CreatorTopUpNotice cost={estimatedCost} balance={userCredits} message={creditRefusal?.message ?? null} />
     ) : null;
     const barStatus = topUpNotice || runStatus ? (
         <div className="space-y-3">
@@ -4143,45 +4191,25 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         </div>
     ) : null;
 
-    const barAction = isAwaitingStartCheck && unconfirmedStart ? (
-        <button
-            type="button"
-            onClick={() => void replayPendingStart(unconfirmedStart, { reveal: true })}
-            className={CREATOR_BAR_PRIMARY_CLASS}
-        >
-            Check again
-        </button>
-    ) : showTopUp ? (
-        <Link href="/pricing" className={CREATOR_BAR_PRIMARY_CLASS}>
-            <Sparkles className="h-4 w-4" />
-            Top Up Credits
-        </Link>
-    ) : (
-        <button
-            type="button"
-            onClick={() => void handleGenerate()}
-            disabled={isGenerating || quotePending || Boolean(promptLimitMessage)}
-            // The price stays in its name while the face says why it waits.
-            aria-label={isGenerating ? undefined : `Generate · ${quoteUi.costLabel}`}
-            className={CREATOR_BAR_PRIMARY_CLASS}
-        >
-            {isGenerating ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Generating...</>
-            ) : estimatedCost !== null ? (
-                `Generate · ${quoteUi.costLabel}`
-            ) : (
-                // As the app's bar: until there is a price the button says why it waits
-                // ("Calculating...", "Unavailable"), and the line above offers a retry.
-                <span className="truncate">{quoteUi.costLabel}</span>
-            )}
-        </button>
+    // Check again goes through Generate's own path, which checks an unanswered start first.
+    const barAction = (
+        <CreatorBarAction
+            awaitingCheck={isAwaitingStartCheck}
+            onCheckAgain={() => void handleGenerate()}
+            showTopUp={showTopUp}
+            isGenerating={isGenerating}
+            disabled={quotePending || Boolean(promptLimitMessage)}
+            costLabel={quoteUi.costLabel}
+            hasPrice={estimatedCost !== null}
+            onGenerate={() => void handleGenerate()}
+        />
     );
 
     const settingsPanel = (
         <div className="space-y-5">
             {videoModel.modeOptions.length > 0 ? (
                 <CreatorSettingChoices
-                    label={selectedModel === 'veo-3.1' ? 'Model variant' : 'Quality mode'}
+                    label={modeControlLabel}
                     options={videoModel.modeOptions.map((option) => option.value)}
                     optionLabel={(value) => videoModel.modeOptions.find((option) => option.value === value)?.label ?? value}
                     value={currentMode}
@@ -4207,7 +4235,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         step="1"
                         value={currentDuration}
                         onChange={(event) => setSingleDuration(Number(event.target.value))}
-                        className="ui-focus-ring w-full accent-[var(--ui-accent-video)]"
+                        className={`ui-focus-ring w-full ${videoAccent.control}`}
                     />
                     <div className="mt-1 flex justify-between text-xs tabular-nums text-[var(--ui-text-faint)]">
                         <span>{singleShotDurationRange.min}s</span>
@@ -4269,11 +4297,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     onChange={setSound}
                     accent="video"
                 />
-            ) : ALWAYS_ON_AUDIO_VIDEO_MODELS.has(selectedModel) ? (
-                <p className="flex items-start gap-2 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-4 py-3 text-xs leading-5 text-[var(--ui-text-muted)]">
-                    <Volume2 aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ui-accent-video)]" />
-                    This model always generates audio. Describe the sound you want in the prompt, or say “no music”.
-                </p>
             ) : null}
 
             <CatalogAdditionalControls
@@ -4286,62 +4309,27 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         </div>
     );
 
-    const resultActionClass = 'ui-button ui-button-secondary ui-focus-ring';
     const canvasFooter = outputVideo ? (
-        <div className="flex flex-wrap items-center gap-2">
-            {latestGenerationId ? (
-                latestIsPublic ? (
-                    <>
-                        <PublicShareButton
-                            generationId={latestGenerationId}
-                            viewerIsOwner
-                            title={shareTitle}
-                            description={primarySharePrompt}
-                            sourceSurface="create-video"
-                            accessToken={session?.access_token ?? null}
-                            className={resultActionClass}
-                        />
-                        {publicResultPath ? (
-                            <Link href={publicResultPath} className={resultActionClass}>
-                                Open public page
-                            </Link>
-                        ) : null}
-                    </>
-                ) : (
-                    <button
-                        type="button"
-                        onClick={() => void openPublishModal()}
-                        disabled={isPreparingPublish}
-                        className="ui-button ui-button-primary ui-focus-ring disabled:cursor-wait disabled:opacity-70"
-                    >
-                        {isPreparingPublish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
-                        Publish & share
-                    </button>
-                )
-            ) : null}
-            <a
-                href={resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo}
-                download="generated_video.mp4"
-                target="_blank"
-                rel="noopener noreferrer"
-                className={resultActionClass}
-            >
-                <Download className="h-4 w-4" />
-                Download video
-            </a>
-            <button
-                type="button"
-                onClick={() => {
-                    setOutputVideo(null);
-                    setLatestGenerationId(null);
-                    setLatestIsPublic(false);
-                    setPublishedMeta(null);
-                }}
-                className="ui-button ui-button-ghost ui-focus-ring"
-            >
-                Start another run
-            </button>
-        </div>
+        <CreatorResultActions
+            generationId={latestGenerationId}
+            isPublic={latestIsPublic}
+            share={{ title: shareTitle, description: primarySharePrompt, sourceSurface: 'create-video', accessToken: session?.access_token ?? null }}
+            publicPath={publicResultPath}
+            onPublish={() => void openPublishModal()}
+            preparingPublish={isPreparingPublish}
+            download={{
+                href: resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo,
+                fileName: 'generated-video.mp4',
+                label: 'Download video',
+                newTab: true,
+            }}
+            onStartAnother={() => {
+                setOutputVideo(null);
+                setLatestGenerationId(null);
+                setLatestIsPublic(false);
+                setPublishedMeta(null);
+            }}
+        />
     ) : isGenerating && generationTiming ? (
         <StudioGenerationStatus
             accent="rose"
@@ -4350,56 +4338,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         />
     ) : null;
 
-    // The column's cards: the references the run can carry, each a row with its name,
-    // its @handle and Insert, as on the image creator.
     const cardHeadingClass = 'text-xs font-bold text-[var(--ui-text-muted)]';
     const cardCountClass = 'text-xs font-bold tabular-nums text-[var(--ui-text-faint)]';
-    const rowClass = 'flex items-start gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-2.5';
-    const nameFieldClass = 'min-w-0 flex-1 rounded-ui-sm border border-transparent bg-transparent px-2 py-1.5 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:border-[var(--ui-accent-video)]/50 focus:bg-[var(--ui-surface-2)]';
-    const chipButtonClass = 'ui-focus-ring inline-flex min-h-9 shrink-0 items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-semibold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)] disabled:cursor-not-allowed disabled:opacity-50';
-    const addTileClass = (dragging: boolean) => `flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-full border border-dashed px-4 text-sm font-semibold transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]/55 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-[var(--ui-bg-app)] ${dragging
-        ? 'border-[var(--ui-accent-video)] text-[var(--ui-text-primary)]'
-        : 'border-[var(--ui-accent-video)]/35 bg-[var(--ui-accent-video)]/5 text-[var(--ui-text-secondary)] hover:border-[var(--ui-accent-video)]/60 hover:text-[var(--ui-text-primary)]'}`;
-    const frameTileClass = (dragging: boolean) => `flex h-[140px] w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-ui-xl border border-dashed text-xs font-semibold transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]/55 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-[var(--ui-bg-app)] ${dragging
-        ? 'border-[var(--ui-accent-video)] bg-[var(--ui-accent-video)]/10 text-[var(--ui-text-primary)]'
-        : 'border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:border-[var(--ui-accent-video)]/50 hover:text-[var(--ui-text-secondary)]'}`;
     const standbyCardClass = 'rounded-ui-2xl border border-amber-500/20 bg-amber-500/10 p-4';
-
-    const mentionPanel = (
-        title: string,
-        hint: string,
-        query: string,
-        suggestions: typeof mentionSuggestions,
-        onInsert: (handle: string) => void,
-    ) => (
-        <div role="group" aria-label={title} className="rounded-ui-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-                    <p className="ui-kicker">{title}</p>
-                    <p className="mt-1 text-sm text-[var(--ui-text-muted)]">{hint}</p>
-                </div>
-                {query ? (
-                    <StudioElementHandle
-                        handle={`@${query}`}
-                        className="rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-xs font-semibold text-[var(--ui-text-secondary)]"
-                    />
-                ) : null}
-            </div>
-            {suggestions.length > 0 ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                    {suggestions.map((candidate) => (
-                        <StudioElementChip
-                            key={`${candidate.kind}-${candidate.id}`}
-                            displayName={candidate.displayName}
-                            handle={candidate.handle}
-                            handleClassName={candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300'}
-                            onInsert={() => onInsert(candidate.handle)}
-                        />
-                    ))}
-                </div>
-            ) : null}
-        </div>
-    );
+    const mentionHandleClass = (candidate: { kind: string }) => (candidate.kind === 'video' ? 'text-emerald-300' : 'text-sky-300');
 
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-4 text-[var(--ui-text-primary)] sm:py-6 font-[family-name:var(--font-geist-sans)]">
@@ -4543,7 +4485,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
                         {!currentIsMultiShot ? (
                             <>
-                                <div className="rounded-ui-2xl border border-[var(--ui-accent-video)]/20 bg-[var(--ui-surface-1)] transition-colors duration-150 focus-within:border-[var(--ui-accent-video)]/60">
+                                <div className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${videoAccent.outline}`}>
                                     <label htmlFor="create-video-prompt" className="ui-kicker block px-4 pt-4">
                                         Prompt
                                     </label>
@@ -4576,15 +4518,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </div>
                                 </div>
 
-                                {activeMentionQuery
-                                    ? mentionPanel(
-                                        'Insert reference',
-                                        mentionSuggestions.length > 0 ? 'Pick a reference to insert its @mention.' : 'No matching references yet.',
-                                        activeMentionQuery.query,
-                                        mentionSuggestions,
-                                        handleInsertPromptHandle,
-                                    )
-                                    : null}
+                                {activeMentionQuery ? (
+                                    <CreatorMentionPanel
+                                        title="Insert reference"
+                                        hint={mentionSuggestions.length > 0 ? 'Pick a reference to insert its @mention.' : 'No matching references yet.'}
+                                        query={activeMentionQuery.query}
+                                        suggestions={mentionSuggestions}
+                                        handleClassName={mentionHandleClass}
+                                        onInsert={handleInsertPromptHandle}
+                                    />
+                                ) : null}
 
                                 <EnhancePromptButton
                                     variant="toolbar"
@@ -4617,7 +4560,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <div role="group"
                                         key={shot.id}
                                         aria-labelledby={`create-video-shot-${shot.id}`}
-                                        className="rounded-ui-2xl border border-[var(--ui-accent-video)]/20 bg-[var(--ui-surface-1)] p-4 transition-colors duration-150 focus-within:border-[var(--ui-accent-video)]/60"
+                                        className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] p-4 transition-colors duration-150 ${videoAccent.outline}`}
                                     >
                                         <div className="mb-2 flex items-center justify-between gap-3">
                                             <h2 id={`create-video-shot-${shot.id}`} className="ui-kicker">Shot {index + 1}</h2>
@@ -4658,17 +4601,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                             aria-label={`Shot ${index + 1} prompt`}
                                             aria-invalid={shotMeter(shot.prompt).state === 'over' || undefined}
-                                            className="mb-3 block min-h-[100px] w-full resize-y rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3 text-sm leading-6 text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-accent-video)]/50"
+                                            className={`mb-3 block min-h-[100px] w-full resize-y rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3 text-sm leading-6 text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] ${videoAccent.fieldFocus}`}
                                         />
                                         {activeShotMentionQuery?.shotId === shot.id && shotPromptsTakeMentions ? (
                                             <div className="mb-3">
-                                                {mentionPanel(
-                                                    shotMentionPanelCopy.title,
-                                                    shotMentionSuggestions.length > 0 ? shotMentionPanelCopy.pick : shotMentionPanelCopy.none,
-                                                    activeShotMentionQuery.query,
-                                                    shotMentionSuggestions,
-                                                    (handle) => handleInsertShotHandle(shot.id, handle),
-                                                )}
+                                                <CreatorMentionPanel
+                                                    title={shotMentionPanelCopy.title}
+                                                    hint={shotMentionSuggestions.length > 0 ? shotMentionPanelCopy.pick : shotMentionPanelCopy.none}
+                                                    query={activeShotMentionQuery.query}
+                                                    suggestions={shotMentionSuggestions}
+                                                    handleClassName={mentionHandleClass}
+                                                    onInsert={(handle) => handleInsertShotHandle(shot.id, handle)}
+                                                />
                                             </div>
                                         ) : null}
                                         <div className="flex items-center gap-3">
@@ -4683,7 +4627,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 step="1"
                                                 value={shot.duration}
                                                 onChange={(event) => updateShot(shot.id, 'duration', parseInt(event.target.value))}
-                                                className="ui-focus-ring w-32 accent-[var(--ui-accent-video)]"
+                                                className={`ui-focus-ring w-32 ${videoAccent.control}`}
                                             />
                                             <span className="text-xs font-bold tabular-nums text-[var(--ui-text-primary)]">{shot.duration}s</span>
                                             {/* The shot's own limit, which Kling 3.0 and Kling O3 set far below the prompt's. */}
@@ -4699,12 +4643,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     type="button"
                                     onClick={addShot}
                                     disabled={!canAddShot}
-                                    className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-dashed border-[var(--ui-accent-video)]/35 bg-[var(--ui-accent-video)]/5 px-4 text-sm font-semibold text-[var(--ui-text-secondary)] transition-colors hover:border-[var(--ui-accent-video)]/60 hover:text-[var(--ui-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                                    className={creatorAddButtonClass('video')}
                                 >
-                                    <Plus className="h-4 w-4 text-[var(--ui-accent-video)]" /> Add New Shot
+                                    <Plus aria-hidden className={`h-4 w-4 ${videoAccent.mark}`} /> Add New Shot
                                 </button>
                             </div>
                         )}
+
+                        {!videoModel.supportsSound && ALWAYS_ON_AUDIO_VIDEO_MODELS.has(selectedModel) ? (
+                            <p className="flex items-start gap-2 px-1 text-xs leading-5 text-[var(--ui-text-muted)]">
+                                <Volume2 aria-hidden className={`mt-0.5 h-4 w-4 shrink-0 ${videoAccent.mark}`} />
+                                This model always generates audio. Describe the sound you want in the prompt, or say “no music”.
+                            </p>
+                        ) : null}
 
                         {!currentIsMultiShot && canUseVideoElements && affordances.framesExcludeReferences && (
                             <div className="rounded-ui-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-4">
@@ -4733,6 +4684,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     onChange={commitKlingSubjects}
                                     onRename={handleKlingSubjectRename}
                                     onRefusedFiles={setPickNotice}
+                                    // Into the prompt, or in multi-shot the shot being written.
+                                    onInsert={handleInsertKlingVideoHandle}
                                 />
                             </div>
                         )}
@@ -4747,117 +4700,76 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     Named clips. Type @ in the prompt or a shot prompt to use one by its name.
                                 </p>
 
-                                <input
-                                    ref={klingVideoInputRef}
-                                    type="file"
-                                    accept="video/mp4,video/quicktime,.mp4,.mov"
-                                    multiple
-                                    onChange={handleKlingVideoElementUpload}
-                                    className="hidden"
-                                />
-
                                 {klingVideoElements.length > 0 ? (
                                     <ul className="mb-3 space-y-2">
                                         {klingVideoElements.map((element) => (
-                                            <li key={element.id} className={rowClass}>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        const src = element.previewUrl || element.providerUrl;
-                                                        if (src) setUploadPreview({ type: 'video', src, alt: element.displayName, title: element.displayName });
-                                                    }}
-                                                    aria-label={`Preview ${element.displayName}`}
-                                                    className="ui-focus-ring relative h-16 w-24 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black"
-                                                >
-                                                    <InlineMediaVideo
-                                                        src={element.previewUrl || element.providerUrl || undefined}
-                                                        className="pointer-events-none h-full w-full object-cover"
-                                                        muted
-                                                        playsInline
-                                                        preload="metadata"
-                                                    />
-                                                    <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
-                                                </button>
-                                                <div className="min-w-0 flex-1 space-y-1">
-                                                    <div className="flex items-center gap-1">
-                                                        <input
-                                                            type="text"
-                                                            value={klingVideoNames.drafts[element.id] ?? element.displayName}
-                                                            onChange={(event) => handleKlingVideoDraftChange(element.id, event.target.value)}
-                                                            onBlur={() => void commitKlingVideoDraft(element.id)}
-                                                            onKeyDown={(event) => {
-                                                                if (event.key === 'Enter') {
-                                                                    event.preventDefault();
-                                                                    void commitKlingVideoDraft(element.id);
-                                                                    event.currentTarget.blur();
-                                                                }
-
-                                                                if (event.key === 'Escape') {
-                                                                    klingVideoNames.dropDraft(element.id);
-                                                                    event.currentTarget.blur();
-                                                                }
-                                                            }}
-                                                            aria-label={`Name of ${element.displayName}`}
-                                                            placeholder="Rename video element"
-                                                            className={nameFieldClass}
+                                            <CreatorReferenceRow
+                                                key={element.id}
+                                                accent="video"
+                                                preview={
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const src = element.previewUrl || element.providerUrl;
+                                                            if (src) setUploadPreview({ type: 'video', src, alt: element.displayName, title: element.displayName });
+                                                        }}
+                                                        aria-label={`Preview ${element.displayName}`}
+                                                        className="ui-focus-ring relative h-16 w-24 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black"
+                                                    >
+                                                        <InlineMediaVideo
+                                                            src={element.previewUrl || element.providerUrl || undefined}
+                                                            className="pointer-events-none h-full w-full object-cover"
+                                                            muted
+                                                            playsInline
+                                                            preload="metadata"
                                                         />
-                                                        <IconButton
-                                                            label={`Remove ${element.displayName}`}
-                                                            icon={X}
-                                                            onClick={() => void handleRemoveKlingVideoElement(element.id)}
-                                                            className="shrink-0"
-                                                        />
-                                                    </div>
-                                                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
-                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-emerald-300" />
-                                                        <div className="flex flex-wrap items-center gap-1.5">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => {
-                                                                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-                                                                        void navigator.clipboard.writeText(element.handle);
-                                                                    }
-                                                                }}
-                                                                className={chipButtonClass}
-                                                            >
-                                                                Copy
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleInsertKlingVideoHandle(element.handle)}
-                                                                className={chipButtonClass}
-                                                            >
-                                                                Insert
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                    <p className="px-2 text-xs text-[var(--ui-text-faint)]">
-                                                        {typeof element.durationSeconds === 'number' ? `${element.durationSeconds.toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
-                                                    </p>
-                                                </div>
-                                            </li>
+                                                        <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
+                                                    </button>
+                                                }
+                                                displayName={element.displayName}
+                                                nameDraft={klingVideoNames.drafts[element.id]}
+                                                placeholder="Rename video element"
+                                                onNameChange={(value) => handleKlingVideoDraftChange(element.id, value)}
+                                                onNameCommit={() => void commitKlingVideoDraft(element.id)}
+                                                onNameCancel={() => klingVideoNames.dropDraft(element.id)}
+                                                onRemove={() => void handleRemoveKlingVideoElement(element.id)}
+                                                handle={element.handle}
+                                                handleClassName="text-emerald-300"
+                                                onInsert={() => handleInsertKlingVideoHandle(element.handle)}
+                                                onCopy={() => {
+                                                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                                                        void navigator.clipboard.writeText(element.handle);
+                                                    }
+                                                }}
+                                                note={typeof element.durationSeconds === 'number' ? `${element.durationSeconds.toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
+                                            />
                                         ))}
                                     </ul>
                                 ) : null}
 
                                 {klingVideoElements.length < KLING_VIDEO_ELEMENT_LIMIT ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => klingVideoInputRef.current?.click()}
+                                    <CreatorAddTile
+                                        accent="video"
+                                        icon={Video}
+                                        label={isDraggingKlingVideos ? 'Drop Kling video elements here' : 'Add video elements'}
+                                        input={{
+                                            ref: klingVideoInputRef,
+                                            accept: 'video/mp4,video/quicktime,.mp4,.mov',
+                                            multiple: true,
+                                            onChange: handleKlingVideoElementUpload,
+                                            'aria-describedby': 'create-video-kling-elements-limits',
+                                        }}
+                                        dragging={isDraggingKlingVideos}
                                         onDragOver={(event) => { event.preventDefault(); setIsDraggingKlingVideos(true); }}
                                         onDragLeave={(event) => { event.preventDefault(); setIsDraggingKlingVideos(false); }}
                                         onDrop={handleKlingVideoElementDrop}
-                                        className={`ui-focus-ring w-full ${addTileClass(isDraggingKlingVideos)}`}
-                                    >
-                                        <Video className="h-4 w-4 text-[var(--ui-accent-video)]" />
-                                        {isDraggingKlingVideos ? 'Drop Kling video elements here' : 'Add video elements'}
-                                        <span className="sr-only">, MP4 or MOV clips, one per element, 50MB max</span>
-                                    </button>
+                                    />
                                 ) : (
                                     <p className="text-sm text-[var(--ui-text-muted)]">
                                         Kling video elements are capped at {KLING_VIDEO_ELEMENT_LIMIT} clips in this version.
                                     </p>
                                 )}
+                                <p id="create-video-kling-elements-limits" className="sr-only">MP4 or MOV clips, one per element, 50MB max.</p>
                             </div>
                         )}
 
@@ -4875,21 +4787,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <p className="mt-2 text-sm leading-6 text-[var(--ui-text-secondary)]">{savedClipAndTrackNotice}</p>
                                 ) : null}
                                 {/* The model has no card for these, so they can be taken off here. */}
-                                <ul aria-label="References on standby" className="mt-3 flex flex-wrap gap-2">
+                                <ul aria-label="References on standby" className="mt-3 space-y-1.5">
                                     {standbyReferences.map((reference) => (
                                         <li
                                             key={`${reference.kind}-${reference.id}`}
-                                            className="inline-flex min-h-9 min-w-0 max-w-full items-center gap-1 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-0.5 pl-3 pr-0.5 text-xs text-[var(--ui-text-secondary)]"
+                                            className="flex items-center justify-between gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] py-0.5 pl-3 pr-0.5 text-sm text-[var(--ui-text-secondary)]"
                                         >
                                             <span className="min-w-0 truncate">{reference.displayName}</span>
-                                            <button
-                                                type="button"
-                                                onClick={reference.onRemove}
-                                                aria-label={`Remove ${reference.displayName}`}
-                                                className="ui-focus-ring inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--ui-text-muted)] transition-colors hover:bg-rose-500/20 hover:text-rose-100"
-                                            >
-                                                <X className="h-3.5 w-3.5" />
-                                            </button>
+                                            <IconButton label={`Remove ${reference.displayName}`} icon={X} onClick={reference.onRemove} className="shrink-0" />
                                         </li>
                                     ))}
                                 </ul>
@@ -4908,114 +4813,66 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         {showFramesEditor && (
                             <div role="group" aria-labelledby="create-video-frames" className="ui-card p-4">
                                 <h2 id="create-video-frames" className={`mb-3 ${cardHeadingClass}`}>Frames</h2>
+                                {/* Locked while references hold the run: greyed, and its fields take no file
+                                    from the keyboard either. */}
                                 <div
                                     aria-disabled={framesLockedByReferences}
                                     className={`grid gap-3 ${!currentIsMultiShot && activeSupportsEndFrame ? 'grid-cols-2' : ''} ${framesLockedByReferences ? 'pointer-events-none opacity-40' : ''}`}
                                 >
-                                    <div>
-                                        <h3 className="mb-2 flex items-baseline justify-between gap-2 text-xs font-semibold text-[var(--ui-text-secondary)]">
-                                            Start frame
-                                            <span className="text-xs font-normal text-[var(--ui-text-faint)]">{selectedModel === 'hailuo-2.3' ? 'required' : 'optional'}</span>
-                                        </h3>
-                                        {startImageUrl ? (
-                                            <div className="h-[140px]">
-                                                <StudioUploadedMediaPreview
-                                                    mediaType="image"
-                                                    src={startImageUrl}
-                                                    alt="Start frame"
-                                                    fit="cover"
-                                                    previewHint="Preview frame"
-                                                    onPreview={() => setUploadPreview({
-                                                        type: 'image',
-                                                        src: startImageUrl,
-                                                        alt: 'Start frame',
-                                                        title: 'Start Frame',
-                                                    })}
-                                                    onReplace={() => startImageInputRef.current?.click()}
-                                                    onRemove={() => void clearImage('start')}
-                                                />
-                                                <input
-                                                    ref={startImageInputRef}
-                                                    id="video-start-frame-input"
-                                                    type="file"
-                                                    accept="image/*"
-                                                    onChange={(event) => handleImageUpload(event, 'start')}
-                                                    className="hidden"
-                                                />
-                                            </div>
-                                        ) : (
-                                            <label
-                                                className={frameTileClass(isDraggingStart)}
-                                                onDragOver={(event) => { event.preventDefault(); setIsDraggingStart(true); }}
-                                                onDragLeave={(event) => { event.preventDefault(); setIsDraggingStart(false); }}
-                                                onDrop={(event) => handleImageDrop(event, 'start')}
-                                            >
-                                                <ImageIcon className="h-5 w-5" />
-                                                Upload Start Frame
-                                                <input
-                                                    ref={startImageInputRef}
-                                                    id="video-start-frame-input"
-                                                    type="file"
-                                                    accept="image/*"
-                                                    onChange={(event) => handleImageUpload(event, 'start')}
-                                                    className="sr-only"
-                                                />
-                                            </label>
-                                        )}
-                                    </div>
+                                    <CreatorUploadSlot
+                                        accent="video"
+                                        title="Start frame"
+                                        status={startFrameRequired ? 'required' : 'optional'}
+                                        height="frame"
+                                        mediaType="image"
+                                        src={startImageUrl}
+                                        alt="Start frame"
+                                        previewHint="Preview frame"
+                                        icon={ImageIcon}
+                                        emptyLabel="Upload Start Frame"
+                                        input={{
+                                            id: 'video-start-frame-input',
+                                            accept: 'image/*',
+                                            disabled: framesLockedByReferences,
+                                            onChange: (event) => handleImageUpload(event, 'start'),
+                                        }}
+                                        onPreview={() => {
+                                            if (startImageUrl) setUploadPreview({ type: 'image', src: startImageUrl, alt: 'Start frame', title: 'Start Frame' });
+                                        }}
+                                        onRemove={() => void clearImage('start')}
+                                        dragging={isDraggingStart}
+                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingStart(true); }}
+                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingStart(false); }}
+                                        onDrop={(event) => handleImageDrop(event, 'start')}
+                                    />
 
                                     {!currentIsMultiShot && activeSupportsEndFrame && (
-                                        <div>
-                                            <h3 className="mb-2 flex items-baseline justify-between gap-2 text-xs font-semibold text-[var(--ui-text-secondary)]">
-                                                End frame
-                                                <span className="text-xs font-normal text-[var(--ui-text-faint)]">optional</span>
-                                            </h3>
-                                            {endImageUrl ? (
-                                                <div className="h-[140px]">
-                                                    <StudioUploadedMediaPreview
-                                                        mediaType="image"
-                                                        src={endImageUrl}
-                                                        alt="End frame"
-                                                        fit="cover"
-                                                        previewHint="Preview frame"
-                                                        onPreview={() => setUploadPreview({
-                                                            type: 'image',
-                                                            src: endImageUrl,
-                                                            alt: 'End frame',
-                                                            title: 'End Frame',
-                                                        })}
-                                                        onReplace={() => endImageInputRef.current?.click()}
-                                                        onRemove={() => void clearImage('end')}
-                                                    />
-                                                    <input
-                                                        ref={endImageInputRef}
-                                                        id="video-end-frame-input"
-                                                        type="file"
-                                                        accept="image/*"
-                                                        onChange={(event) => handleImageUpload(event, 'end')}
-                                                        className="hidden"
-                                                    />
-                                                </div>
-                                            ) : (
-                                                <label
-                                                    className={frameTileClass(isDraggingEnd)}
-                                                    onDragOver={(event) => { event.preventDefault(); setIsDraggingEnd(true); }}
-                                                    onDragLeave={(event) => { event.preventDefault(); setIsDraggingEnd(false); }}
-                                                    onDrop={(event) => handleImageDrop(event, 'end')}
-                                                >
-                                                    <ImageIcon className="h-5 w-5" />
-                                                    Upload End Frame
-                                                    <input
-                                                        ref={endImageInputRef}
-                                                        id="video-end-frame-input"
-                                                        type="file"
-                                                        accept="image/*"
-                                                        onChange={(event) => handleImageUpload(event, 'end')}
-                                                        className="sr-only"
-                                                    />
-                                                </label>
-                                            )}
-                                        </div>
+                                        <CreatorUploadSlot
+                                            accent="video"
+                                            title="End frame"
+                                            status="optional"
+                                            height="frame"
+                                            mediaType="image"
+                                            src={endImageUrl}
+                                            alt="End frame"
+                                            previewHint="Preview frame"
+                                            icon={ImageIcon}
+                                            emptyLabel="Upload End Frame"
+                                            input={{
+                                                id: 'video-end-frame-input',
+                                                accept: 'image/*',
+                                                disabled: framesLockedByReferences,
+                                                onChange: (event) => handleImageUpload(event, 'end'),
+                                            }}
+                                            onPreview={() => {
+                                                if (endImageUrl) setUploadPreview({ type: 'image', src: endImageUrl, alt: 'End frame', title: 'End Frame' });
+                                            }}
+                                            onRemove={() => void clearImage('end')}
+                                            dragging={isDraggingEnd}
+                                            onDragOver={(event) => { event.preventDefault(); setIsDraggingEnd(true); }}
+                                            onDragLeave={(event) => { event.preventDefault(); setIsDraggingEnd(false); }}
+                                            onDrop={(event) => handleImageDrop(event, 'end')}
+                                        />
                                     )}
                                 </div>
                                 {isGrokVideoModel ? (
@@ -5032,7 +4889,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         )}
 
                         {showElementEditor && (
-                            <div role="group"
+                            <div
+                                role="group"
                                 aria-labelledby="create-video-references"
                                 aria-disabled={referencesLockedByFrames}
                                 className={`ui-card p-4 ${referencesLockedByFrames ? 'pointer-events-none opacity-40' : ''}`}
@@ -5046,89 +4904,62 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 {elements.length > 0 ? (
                                     <ul className="mb-3 space-y-2">
                                         {elements.map((element) => (
-                                            <li key={element.id} className={rowClass}>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setUploadPreview({
-                                                        type: 'image',
-                                                        src: element.previewUrl,
-                                                        alt: element.displayName,
-                                                        title: element.displayName,
-                                                    })}
-                                                    aria-label={`Preview ${element.displayName}`}
-                                                    className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
-                                                >
-                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                    <img
-                                                        src={element.previewUrl}
-                                                        alt={element.displayName}
-                                                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
-                                                    />
-                                                </button>
-                                                <div className="min-w-0 flex-1 space-y-1">
-                                                    <div className="flex items-center gap-1">
-                                                        <input
-                                                            type="text"
-                                                            value={elementNames.drafts[element.id] ?? element.displayName}
-                                                            onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
-                                                            onBlur={() => void commitElementDraft(element.id)}
-                                                            onKeyDown={(event) => {
-                                                                if (event.key === 'Enter') {
-                                                                    event.preventDefault();
-                                                                    void commitElementDraft(element.id);
-                                                                    event.currentTarget.blur();
-                                                                }
-
-                                                                if (event.key === 'Escape') {
-                                                                    elementNames.dropDraft(element.id);
-                                                                    event.currentTarget.blur();
-                                                                }
-                                                            }}
-                                                            aria-label={`Name of ${element.displayName}`}
-                                                            placeholder="Rename element"
-                                                            className={nameFieldClass}
+                                            <CreatorReferenceRow
+                                                key={element.id}
+                                                accent="video"
+                                                preview={
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setUploadPreview({
+                                                            type: 'image',
+                                                            src: element.previewUrl,
+                                                            alt: element.displayName,
+                                                            title: element.displayName,
+                                                        })}
+                                                        aria-label={`Preview ${element.displayName}`}
+                                                        className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
+                                                    >
+                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                        <img
+                                                            src={element.previewUrl}
+                                                            alt={element.displayName}
+                                                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
                                                         />
-                                                        <IconButton
-                                                            label={`Remove ${element.displayName}`}
-                                                            icon={X}
-                                                            onClick={() => void handleRemoveElement(element.id)}
-                                                            className="shrink-0"
-                                                        />
-                                                    </div>
-                                                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
-                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-sky-300" />
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleInsertElementHandle(element.handle)}
-                                                            className={chipButtonClass}
-                                                        >
-                                                            Insert
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </li>
+                                                    </button>
+                                                }
+                                                displayName={element.displayName}
+                                                nameDraft={elementNames.drafts[element.id]}
+                                                placeholder="Rename element"
+                                                onNameChange={(value) => handleElementDraftChange(element.id, value)}
+                                                onNameCommit={() => void commitElementDraft(element.id)}
+                                                onNameCancel={() => elementNames.dropDraft(element.id)}
+                                                onRemove={() => void handleRemoveElement(element.id)}
+                                                handle={element.handle}
+                                                handleClassName="text-sky-300"
+                                                onInsert={() => handleInsertElementHandle(element.handle)}
+                                            />
                                         ))}
                                     </ul>
                                 ) : null}
 
                                 {elements.length < videoElementSupport.maxElements && (
-                                    <label
-                                        className={addTileClass(isDraggingElements)}
+                                    <CreatorAddTile
+                                        accent="video"
+                                        icon={Plus}
+                                        label={isDraggingElements ? 'Drop reference images here' : 'Add reference images'}
+                                        input={{
+                                            ref: elementInputRef,
+                                            accept: 'image/*',
+                                            multiple: true,
+                                            // Locked while frames hold the run: no file from the keyboard either.
+                                            disabled: referencesLockedByFrames,
+                                            onChange: handleElementUpload,
+                                        }}
+                                        dragging={isDraggingElements}
                                         onDragOver={(event) => { event.preventDefault(); setIsDraggingElements(true); }}
                                         onDragLeave={(event) => { event.preventDefault(); setIsDraggingElements(false); }}
                                         onDrop={handleElementDrop}
-                                    >
-                                        <Plus className="h-4 w-4 text-[var(--ui-accent-video)]" />
-                                        {isDraggingElements ? 'Drop reference images here' : 'Add reference images'}
-                                        <input
-                                            ref={elementInputRef}
-                                            type="file"
-                                            accept="image/*"
-                                            multiple
-                                            onChange={handleElementUpload}
-                                            className="sr-only"
-                                        />
-                                    </label>
+                                    />
                                 )}
                             </div>
                         )}
@@ -5157,8 +4988,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 <button
                                                     type="button"
                                                     onClick={() => referenceVideoInputRef.current?.click()}
-                                                    disabled={referenceVideos.length >= referenceVideoLimit}
-                                                    className={chipButtonClass}
+                                                    disabled={referenceVideos.length >= referenceVideoLimit || referencesLockedByFrames}
+                                                    className={CREATOR_REFERENCE_CHIP_CLASS}
                                                 >
                                                     Add video
                                                 </button>
@@ -5217,8 +5048,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                     <button
                                                         type="button"
                                                         onClick={() => referenceAudioInputRef.current?.click()}
-                                                        disabled={referenceAudios.length >= referenceAudioLimit}
-                                                        className={chipButtonClass}
+                                                        disabled={referenceAudios.length >= referenceAudioLimit || referencesLockedByFrames}
+                                                        className={CREATOR_REFERENCE_CHIP_CLASS}
                                                     >
                                                         Add audio
                                                     </button>
@@ -5306,7 +5137,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                 }
                                                             }}
                                                             placeholder={group.kind === 'audio' ? 'Paste prepared voice ID' : 'Paste prepared character ID'}
-                                                            className="min-h-10 min-w-0 flex-1 rounded-ui-md border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-3 text-sm text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-accent-video)]/50"
+                                                            className={`min-h-10 min-w-0 flex-1 rounded-ui-md border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-3 text-sm text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] ${videoAccent.fieldFocus}`}
                                                         />
                                                         <button
                                                             type="button"
@@ -5399,7 +5230,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                     type="button"
                                                                     onClick={() => void item.onPrepare().catch((prepareError) => setError(prepareError instanceof Error ? prepareError.message : 'Failed to prepare Seedance asset'))}
                                                                     disabled={isBusy}
-                                                                    className={`${chipButtonClass} gap-1.5`}
+                                                                    className={`${CREATOR_REFERENCE_CHIP_CLASS} gap-1.5`}
                                                                 >
                                                                     {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                                                                     {item.asset.assetId ? 'Retry prep' : 'Prepare asset'}
@@ -5409,7 +5240,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                                         type="button"
                                                                         onClick={() => void item.onRefresh().catch((refreshError) => setError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh Seedance asset'))}
                                                                         disabled={isBusy}
-                                                                        className={chipButtonClass}
+                                                                        className={CREATOR_REFERENCE_CHIP_CLASS}
                                                                     >
                                                                         Refresh
                                                                     </button>
@@ -5456,7 +5287,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     >
                         {outputVideo ? (
                             <CreatorCanvasMedia key={outputVideo} aspectRatio={runShape?.aspectRatio ?? currentAspectRatio}>
-                                <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} />
+                                <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
                             </CreatorCanvasMedia>
                         ) : isGenerating ? (
                             <CreatorCanvasFrame aspectRatio={runShape?.aspectRatio ?? currentAspectRatio} accent="video" busy>

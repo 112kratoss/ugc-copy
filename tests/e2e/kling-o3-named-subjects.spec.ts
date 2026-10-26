@@ -202,10 +202,9 @@ test.describe('Kling O3 named subjects', () => {
 
     await nameSubject(page, 'Hero creator');
     // The @handle is derived from the display name and is what the prompt mentions.
-    // The handle now shows in two places: the subjects editor's own chip and the
-    // @-mention quick-insert row beside the prompt, which O3 reaches now that its
-    // reference capacity is no longer reported as zero.
+    // It shows on the subject's own line, beside the Insert that puts it in the prompt.
     await expect(page.getByText('@hero_creator', { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Insert @hero_creator' })).toBeVisible();
 
     await attachSubjectImages(page, ['hero-front.png', 'hero-side.png']);
 
@@ -229,9 +228,7 @@ test.describe('Kling O3 named subjects', () => {
 
     // The whole group comes back — name, handle, and both images.
     await expect(page.getByPlaceholder('Subject name')).toHaveValue('Hero creator');
-    // The handle now shows in two places: the subjects editor's own chip and the
-    // @-mention quick-insert row beside the prompt, which O3 reaches now that its
-    // reference capacity is no longer reported as zero.
+    // The handle comes back on the subject's own line, beside its Insert.
     await expect(page.getByText('@hero_creator', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('2/4 images')).toBeVisible();
   });
@@ -335,6 +332,45 @@ test.describe('Kling O3 named subjects', () => {
       await suggestion.click();
       await expect(prompt).toHaveValue('A scene with @hero_creator', { timeout: 5_000 });
       await expect(page.getByText(/^Unknown element mention/)).toHaveCount(0);
+    });
+  });
+
+  // A press focuses its button on the way down. The column scrolled a control
+  // focused just above its sticky bar clear of it, which moved the suggestion out
+  // from under the pointer before the press ended: no click, nothing inserted, and
+  // the test above failed now and then (2026-10-26). Only the keyboard's focus is
+  // scrolled clear now. The pointer is put down with page.mouse, since a locator's
+  // click scrolls first.
+  test('inserts a suggestion pressed just above the bar, where the page does not move', async ({ page }) => {
+    await page.goto('/create-video?model=kling-o3');
+    const prompt = page.getByPlaceholder(/^Describe the .* scene/);
+
+    await withNamedSubject(page, 'Hero creator', async () => {
+      await prompt.fill('A scene with @H');
+      const suggestion = mentionPanel(page).getByRole('button', { name: /@hero_creator/ });
+      await expect(suggestion).toBeVisible({ timeout: 5_000 });
+
+      // The window made as tall as puts the bar's top 2px under the suggestion.
+      const viewport = page.viewportSize()!;
+      const { bottom, barGap } = await suggestion.evaluate((button) => {
+        window.scrollTo(0, 0);
+        const bar = document.querySelector('[data-creator-bar]')!.getBoundingClientRect();
+        return { bottom: button.getBoundingClientRect().bottom, barGap: window.innerHeight - bar.top };
+      });
+      await page.setViewportSize({ width: viewport.width, height: Math.round(bottom + 2 + barGap) });
+      const press = await suggestion.evaluate((button) => {
+        const box = button.getBoundingClientRect();
+        const bar = document.querySelector('[data-creator-bar]')!.getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: box.bottom - 4, barTop: bar.top, bottom: box.bottom, scrollY: window.scrollY };
+      });
+      expect(press.barTop - press.bottom).toBeGreaterThanOrEqual(0);
+      expect(press.barTop - press.bottom).toBeLessThan(8);
+
+      await page.mouse.click(press.x, press.y);
+
+      await expect(prompt).toHaveValue('A scene with @hero_creator', { timeout: 5_000 });
+      expect(await page.evaluate(() => window.scrollY)).toBe(press.scrollY);
+      await page.setViewportSize(viewport);
     });
   });
 

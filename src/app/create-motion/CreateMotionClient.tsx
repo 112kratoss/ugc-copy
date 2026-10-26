@@ -3,9 +3,8 @@
 import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
-import { Sparkles, Loader2, Download, Check, Play, Share2, Image as ImageIcon, Video } from 'lucide-react';
+import { Loader2, Check, Play, Image as ImageIcon, Video } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -17,25 +16,29 @@ import {
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
-    StudioUploadedMediaPreview,
 } from '@/components/CreatorStudio';
 import {
-    CREATOR_BAR_PRIMARY_CLASS,
+    CreatorBackgroundRunLine,
+    CreatorBarAction,
     CreatorCanvas,
     CreatorCanvasFrame,
     CreatorCanvasMedia,
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorModelChip,
+    CreatorPendingStartNotice,
     CreatorPhoneBalance,
+    CreatorResultActions,
     CreatorSettingChoices,
     CreatorTemplatesTile,
     CreatorToolTabs,
+    CreatorTopUpNotice,
+    CreatorUploadSlot,
 } from '@/components/CreatorColumn';
+import { getAccentClasses } from '@/components/DesignSystem';
 import { motionSettingsSummary } from '@/lib/creator-settings-summary';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
@@ -240,8 +243,6 @@ export default function CreateMotionClient({
     const hasResolvedInitialCatalogModel = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
-    const characterImageInputRef = useRef<HTMLInputElement>(null);
-    const referenceVideoInputRef = useRef<HTMLInputElement>(null);
 
     const [characterImage, setCharacterImage] = useState<string | null>(null);
     const [characterImageFile, setCharacterImageFile] = useState<File | null>(null);
@@ -267,8 +268,14 @@ export default function CreateMotionClient({
     const [canvasRevealKey, setCanvasRevealKey] = useState(0);
     // The run in flight's model and settings, which the canvas names while the form changes.
     const [runLabel, setRunLabel] = useState<string | null>(null);
-    // The settings chip, read as the app's ("720P · 8s", or "Add motion" before the clip).
-    const settingsSummary = motionSettingsSummary({ quality: mode, referenceSeconds: duration });
+    // The prompt the run was sent with: the caption under its clip, whatever the form holds by then.
+    const [runPrompt, setRunPrompt] = useState<string | null>(null);
+    // The settings chip, read as the app's ("720P · 8s", or "Add motion" until a clip is attached:
+    // a run picked up on load gives a length with no clip in the form).
+    const settingsSummary = motionSettingsSummary({
+        quality: mode,
+        referenceSeconds: referenceVideo || referenceVideoFile ? duration : null,
+    });
     const [prompt, setPrompt] = useState<string>("No distortion, the character's movements are consistent with the video.");
     const [imagePickError, setImagePickError] = useState<string | null>(null);
     const [videoPickError, setVideoPickError] = useState<string | null>(null);
@@ -896,7 +903,7 @@ export default function CreateMotionClient({
         ) {
             promptInputRef.current?.focus();
         } else if (code === 'cost_changed') {
-            // Priced again at once: the run panel shows what the run costs now, and the
+            // Priced again at once: Generate shows what the run costs now, and the
             // next press sends that price.
             quoteState.costChanged(run);
         }
@@ -958,6 +965,7 @@ export default function CreateMotionClient({
     const replayPendingStart = async (start: PendingWebStart, { reveal = false }: { reveal?: boolean } = {}) => {
         if (activeGenerationRequestKeyRef.current) return;
         activeGenerationRequestKeyRef.current = start.idempotencyKey;
+        setRunPrompt(typeof start.body.prompt === 'string' && start.body.prompt.trim() ? start.body.prompt.trim() : null);
         const createdAtMs = Date.parse(start.createdAt);
         const startedAtMs = Number.isFinite(createdAtMs) ? createdAtMs : getCurrentTimestampMs();
         const sentSettings = isRecord(start.body.settings) ? start.body.settings : {};
@@ -1007,6 +1015,7 @@ export default function CreateMotionClient({
         const estimatedTotalMs = getMotionGenerationEstimate(runSettings.duration);
         beginRunView(startedAtMs, estimatedTotalMs, 'Preparing inputs');
         setRunLabel(`${model.displayName} · ${settingsSummary}`);
+        setRunPrompt(prompt.trim() || null);
 
         try {
             // Before any upload: a lapsed session goes to sign-in with this page's params.
@@ -1146,7 +1155,7 @@ export default function CreateMotionClient({
         if (!currentSession) return;
         const { data } = await supabase
             .from('generations')
-            .select('id, prediction_id, status, created_at, duration')
+            .select('id, prediction_id, status, created_at, duration, prompt')
             .eq('user_id', currentSession.user.id)
             .eq('category', 'video')
             .eq('creation_mode', 'motion')
@@ -1162,6 +1171,7 @@ export default function CreateMotionClient({
         setError(null);
         setLatestGenerationId(data.id ?? null);
         setLatestIsPublic(false);
+        setRunPrompt(typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null);
         latestRunCostRef.current = null;
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'motion',
@@ -1282,7 +1292,7 @@ export default function CreateMotionClient({
     const creditRefusalMessage = creditRefusal && creditRefusal.balance === userCredits && creditRefusal.cost === estimatedCost
         ? creditRefusal.message
         : null;
-    const showTopUp = (insufficientCredits || Boolean(creditRefusalMessage)) && !unconfirmedStart;
+    const showTopUp = insufficientCredits || Boolean(creditRefusalMessage);
     const canGenerate = motionInputsReady && !videoError;
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('motion');
@@ -1307,8 +1317,9 @@ export default function CreateMotionClient({
         referenceVideoDescriptor?.sourceGenerationId === remixSourceBundle.generation.id
     );
 
-    const shareTitle = publishedMeta?.title || prompt.trim() || `${model.displayName} motion clip`;
-    const shareDescription = publishedMeta?.description || prompt.trim() || null;
+    // The run's own prompt first: the form may hold the next run's by now.
+    const shareTitle = publishedMeta?.title || runPrompt || prompt.trim() || `${model.displayName} motion clip`;
+    const shareDescription = publishedMeta?.description || runPrompt || prompt.trim() || null;
     const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
 
     const canvasTitle = outputVideo
@@ -1319,7 +1330,7 @@ export default function CreateMotionClient({
                 ? 'Your motion clip'
                 : 'Result';
     const canvasSubtitle = outputVideo
-        ? shareDescription
+        ? runPrompt
         : isGenerating
             ? runLabel ?? `${model.displayName} · ${settingsSummary}`
             : isBackgroundProcessing
@@ -1330,23 +1341,15 @@ export default function CreateMotionClient({
     // What stops or explains a run, said just above the bar. Progress is drawn on the
     // canvas; a run in the background is named here too, beside Generate.
     const runStatus = isGenerating ? null : isBackgroundProcessing ? (
-        <p className="text-[var(--ui-text-secondary)]">
-            {backgroundProcessingCopy.title}: it lands in{' '}
-            <Link href="/creations" className="underline underline-offset-4 hover:text-[var(--ui-text-primary)]">Studio</Link>
-            {' '}when it is done.
-        </p>
+        <CreatorBackgroundRunLine title={backgroundProcessingCopy.title} />
     ) : unconfirmedStart ? (
-        <div className="space-y-3">
-            <p role="alert" className="text-amber-200">{UNCONFIRMED_START_MESSAGE}</p>
-            <button
-                type="button"
-                onClick={() => void startNewRunInstead()}
-                disabled={!canGenerate || quotePending}
-                className="ui-button ui-button-secondary ui-focus-ring w-full disabled:cursor-not-allowed disabled:opacity-50"
-            >
-                {estimatedCost !== null ? `Start a new run · ${estimatedCost} ${estimatedCost === 1 ? 'credit' : 'credits'}` : 'Start a new run'}
-            </button>
-        </div>
+        <CreatorPendingStartNotice
+            message={UNCONFIRMED_START_MESSAGE}
+            costLabel={quoteUi.costLabel}
+            hasPrice={estimatedCost !== null}
+            disabled={!canGenerate || quotePending}
+            onStartNew={() => void startNewRunInstead()}
+        />
     ) : videoError ? (
         <p className="text-rose-300">{videoError}</p>
     ) : quoteState.pageOutOfDate ? (
@@ -1368,15 +1371,8 @@ export default function CreateMotionClient({
         // Why Generate waits: the price is asked for once both inputs are in.
         <p className="text-[var(--ui-text-muted)]">{quoteUi.message}</p>
     ) : null;
-    const topUpNotice = showTopUp ? (
-        <div>
-            <p className="font-semibold text-[var(--ui-text-primary)]">Not enough credits</p>
-            <p className="mt-1 text-[var(--ui-text-muted)]">
-                {insufficientCredits ? (
-                    <>This run costs <strong className="text-[var(--ui-text-primary)]">{estimatedCost} credits</strong> but you only have <strong className="text-[var(--ui-text-primary)]">{userCredits}</strong>.</>
-                ) : creditRefusalMessage}
-            </p>
-        </div>
+    const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating ? (
+        <CreatorTopUpNotice cost={estimatedCost} balance={userCredits} message={creditRefusalMessage} />
     ) : null;
     const barStatus = topUpNotice || runStatus ? (
         <div className="space-y-3">
@@ -1385,38 +1381,18 @@ export default function CreateMotionClient({
         </div>
     ) : null;
 
-    const barAction = isAwaitingStartCheck ? (
-        <button
-            type="button"
-            onClick={() => void handleGenerate()}
-            className={CREATOR_BAR_PRIMARY_CLASS}
-        >
-            Check again
-        </button>
-    ) : showTopUp ? (
-        <Link href="/pricing" className={CREATOR_BAR_PRIMARY_CLASS}>
-            <Sparkles className="h-4 w-4" />
-            Top Up Credits
-        </Link>
-    ) : (
-        <button
-            type="button"
-            onClick={() => void handleGenerate()}
-            disabled={isGenerating || !canGenerate || quotePending}
-            // The price stays in its name while the face says why it waits.
-            aria-label={isGenerating ? undefined : `Generate · ${quoteUi.costLabel}`}
-            className={CREATOR_BAR_PRIMARY_CLASS}
-        >
-            {isGenerating ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Generating...</>
-            ) : estimatedCost !== null ? (
-                `Generate · ${quoteUi.costLabel}`
-            ) : (
-                // As the app's bar: until there is a price the button says why it waits
-                // ("Add both inputs", "Calculating..."), and the line above says more.
-                <span className="truncate">{quoteUi.costLabel}</span>
-            )}
-        </button>
+    // Generate checks an unanswered start first, so Check again is the same press.
+    const barAction = (
+        <CreatorBarAction
+            awaitingCheck={isAwaitingStartCheck}
+            onCheckAgain={() => void handleGenerate()}
+            showTopUp={showTopUp}
+            isGenerating={isGenerating}
+            disabled={!canGenerate || quotePending}
+            costLabel={quoteUi.costLabel}
+            hasPrice={estimatedCost !== null}
+            onGenerate={() => void handleGenerate()}
+        />
     );
 
     const settingsPanel = (
@@ -1451,63 +1427,28 @@ export default function CreateMotionClient({
         </div>
     );
 
-    const resultActionClass = 'ui-button ui-button-secondary ui-focus-ring';
     const canvasFooter = outputVideo ? (
-        <div className="flex flex-wrap items-center gap-2">
-            {latestGenerationId ? (
-                latestIsPublic ? (
-                    <>
-                        <PublicShareButton
-                            generationId={latestGenerationId}
-                            viewerIsOwner
-                            title={shareTitle}
-                            description={shareDescription}
-                            sourceSurface="create-motion"
-                            accessToken={session?.access_token ?? null}
-                            className={resultActionClass}
-                        />
-                        {publicResultPath ? (
-                            <Link href={publicResultPath} className={resultActionClass}>
-                                Open public page
-                            </Link>
-                        ) : null}
-                    </>
-                ) : (
-                    <button
-                        type="button"
-                        onClick={() => setIsPublishModalOpen(true)}
-                        className="ui-button ui-button-primary ui-focus-ring"
-                    >
-                        <Share2 className="h-4 w-4" />
-                        Publish & share
-                    </button>
-                )
-            ) : null}
-            <a
-                href={resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo}
-                download="generated-video.mp4"
-                target="_blank"
-                rel="noopener noreferrer"
-                className={resultActionClass}
-            >
-                <Download className="h-4 w-4" />
-                Download video
-            </a>
-            <button
-                type="button"
-                onClick={() => {
-                    setOutputVideo(null);
-                    setLatestGenerationId(null);
-                    setLatestIsPublic(false);
-                    setPublishedMeta(null);
-                    setError(null);
-                    setGenerationTiming(null);
-                }}
-                className="ui-button ui-button-ghost ui-focus-ring"
-            >
-                Start another run
-            </button>
-        </div>
+        <CreatorResultActions
+            generationId={latestGenerationId}
+            isPublic={latestIsPublic}
+            share={{ title: shareTitle, description: shareDescription, sourceSurface: 'create-motion', accessToken: session?.access_token ?? null }}
+            publicPath={publicResultPath}
+            onPublish={() => setIsPublishModalOpen(true)}
+            download={{
+                href: resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo,
+                fileName: 'generated-video.mp4',
+                label: 'Download video',
+                newTab: true,
+            }}
+            onStartAnother={() => {
+                setOutputVideo(null);
+                setLatestGenerationId(null);
+                setLatestIsPublic(false);
+                setPublishedMeta(null);
+                setError(null);
+                setGenerationTiming(null);
+            }}
+        />
     ) : isGenerating && generationTiming ? (
         <StudioGenerationStatus
             accent="violet"
@@ -1516,9 +1457,7 @@ export default function CreateMotionClient({
         />
     ) : null;
 
-    const slotTileClass = (dragging: boolean) => `flex h-[180px] w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-ui-xl border border-dashed px-3 text-center transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]/55 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-[var(--ui-bg-app)] ${dragging
-        ? 'border-[var(--ui-accent-motion)] bg-[var(--ui-accent-motion)]/10 text-[var(--ui-text-primary)]'
-        : 'border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:border-[var(--ui-accent-motion)]/50 hover:text-[var(--ui-text-secondary)]'}`;
+    const motionAccent = getAccentClasses('motion');
 
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-4 text-[var(--ui-text-primary)] sm:py-6 font-[family-name:var(--font-geist-sans)]">
@@ -1581,21 +1520,21 @@ export default function CreateMotionClient({
                                                         <span className={`text-sm font-semibold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
                                                             {motionModel.displayName}
                                                         </span>
-                                                        <span className={`rounded-full bg-gradient-to-r px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white ${motionModel.badgeColor}`}>
+                                                        <span className={`rounded-full bg-gradient-to-r px-2 py-0.5 text-[10px] font-bold text-white ${motionModel.badgeColor}`}>
                                                             {motionModel.badge}
                                                         </span>
                                                     </div>
                                                     <p className="mt-1 text-sm text-zinc-400">{motionModel.description}</p>
                                                     <div className="mt-2 flex flex-wrap gap-1.5">
-                                                        <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                                                        <span className="rounded-full border border-white/5 bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-500">
                                                             Max {Number((motionModel as unknown as { maxVideoDuration?: number; maxDuration?: number }).maxVideoDuration ?? (motionModel as unknown as { maxDuration?: number }).maxDuration ?? 30)}s
                                                         </span>
-                                                        <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                                                        <span className="rounded-full border border-white/5 bg-zinc-800 px-2 py-0.5 text-[10px] text-zinc-500">
                                                             {(motionModel.resolutions as readonly string[]).join(' / ')}
                                                         </span>
                                                     </div>
                                                 </div>
-                                                {isActive ? <Check className="h-4 w-4 shrink-0 text-[#ff9a80]" /> : null}
+                                                {isActive ? <Check className={`h-4 w-4 shrink-0 ${motionAccent.mark}`} /> : null}
                                             </button>
                                         );
                                     })}
@@ -1665,107 +1604,52 @@ export default function CreateMotionClient({
                             <h2 id="create-motion-inputs" className="text-xs font-bold text-[var(--ui-text-muted)]">Required inputs</h2>
                             <p className="mb-3 mt-1 text-xs text-[var(--ui-text-faint)]">Choose the character to keep and the movement to transfer.</p>
                             <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Character image</h3>
-                                    <p className="mb-2 text-xs text-[var(--ui-text-faint)]">Who should move?</p>
-                                    {characterImage ? (
-                                        <div className="h-[180px]">
-                                            <StudioUploadedMediaPreview
-                                                mediaType="image"
-                                                src={characterImage}
-                                                alt="Character image"
-                                                fit="contain"
-                                                previewHint="Preview image"
-                                                onPreview={() => setUploadPreview({
-                                                    type: 'image',
-                                                    src: characterImage,
-                                                    alt: 'Character image',
-                                                    title: 'Character Image',
-                                                })}
-                                                onReplace={() => characterImageInputRef.current?.click()}
-                                                onRemove={() => void handleClearImage()}
-                                            />
-                                            <input
-                                                ref={characterImageInputRef}
-                                                id="motion-character-image-input"
-                                                type="file"
-                                                accept="image/*"
-                                                onChange={handleImageUpload}
-                                                className="hidden"
-                                            />
-                                        </div>
-                                    ) : (
-                                        <label
-                                            className={slotTileClass(isDraggingImage)}
-                                            onDragOver={(event) => handleDragOver(event, setIsDraggingImage)}
-                                            onDragLeave={(event) => handleDragLeave(event, setIsDraggingImage)}
-                                            onDrop={handleImageDrop}
-                                        >
-                                            <ImageIcon className={`h-5 w-5 ${isDraggingImage ? 'text-[var(--ui-accent-motion)]' : ''}`} />
-                                            <span className="text-xs font-semibold">{isDraggingImage ? 'Drop image here' : 'Add the character image'}</span>
-                                            <span className="text-xs text-[var(--ui-text-faint)]">A clean, full-body still works best.</span>
-                                            <input
-                                                ref={characterImageInputRef}
-                                                id="motion-character-image-input"
-                                                type="file"
-                                                accept="image/*"
-                                                onChange={handleImageUpload}
-                                                className="sr-only"
-                                            />
-                                        </label>
-                                    )}
-                                </div>
-
-                                <div>
-                                    <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference video</h3>
-                                    <p className="mb-2 text-xs text-[var(--ui-text-faint)]">How should they move?</p>
-                                    {referenceVideo ? (
-                                        <div className="h-[180px]">
-                                            <StudioUploadedMediaPreview
-                                                mediaType="video"
-                                                src={referenceVideo}
-                                                alt="Reference video"
-                                                fit="contain"
-                                                previewHint="Preview video"
-                                                onPreview={() => setUploadPreview({
-                                                    type: 'video',
-                                                    src: referenceVideo,
-                                                    alt: 'Reference video',
-                                                    title: 'Reference Video',
-                                                })}
-                                                onReplace={() => referenceVideoInputRef.current?.click()}
-                                                onRemove={() => void handleClearVideo()}
-                                            />
-                                            <input
-                                                ref={referenceVideoInputRef}
-                                                id="motion-reference-video-input"
-                                                type="file"
-                                                accept="video/*"
-                                                onChange={handleVideoUpload}
-                                                className="hidden"
-                                            />
-                                        </div>
-                                    ) : (
-                                        <label
-                                            className={slotTileClass(isDraggingVideo)}
-                                            onDragOver={(event) => handleDragOver(event, setIsDraggingVideo)}
-                                            onDragLeave={(event) => handleDragLeave(event, setIsDraggingVideo)}
-                                            onDrop={handleVideoDrop}
-                                        >
-                                            <Video className={`h-5 w-5 ${isDraggingVideo ? 'text-[var(--ui-accent-motion)]' : ''}`} />
-                                            <span className="text-xs font-semibold">{isDraggingVideo ? 'Drop video here' : 'Add the motion clip'}</span>
-                                            <span className="text-xs text-[var(--ui-text-faint)]">MP4 or MOV, up to 100MB and {maxVideoDuration}s.</span>
-                                            <input
-                                                ref={referenceVideoInputRef}
-                                                id="motion-reference-video-input"
-                                                type="file"
-                                                accept="video/*"
-                                                onChange={handleVideoUpload}
-                                                className="sr-only"
-                                            />
-                                        </label>
-                                    )}
-                                </div>
+                                <CreatorUploadSlot
+                                    accent="motion"
+                                    title="Character image"
+                                    hint="Who should move?"
+                                    height="tall"
+                                    mediaType="image"
+                                    src={characterImage}
+                                    alt="Character image"
+                                    previewHint="Preview image"
+                                    fit="contain"
+                                    icon={ImageIcon}
+                                    emptyLabel={isDraggingImage ? 'Drop image here' : 'Add the character image'}
+                                    emptyHint="A clean, full-body still works best."
+                                    input={{ id: 'motion-character-image-input', accept: 'image/*', onChange: handleImageUpload }}
+                                    onPreview={() => {
+                                        if (characterImage) setUploadPreview({ type: 'image', src: characterImage, alt: 'Character image', title: 'Character Image' });
+                                    }}
+                                    onRemove={() => void handleClearImage()}
+                                    dragging={isDraggingImage}
+                                    onDragOver={(event) => handleDragOver(event, setIsDraggingImage)}
+                                    onDragLeave={(event) => handleDragLeave(event, setIsDraggingImage)}
+                                    onDrop={handleImageDrop}
+                                />
+                                <CreatorUploadSlot
+                                    accent="motion"
+                                    title="Reference video"
+                                    hint="How should they move?"
+                                    height="tall"
+                                    mediaType="video"
+                                    src={referenceVideo}
+                                    alt="Reference video"
+                                    previewHint="Preview video"
+                                    fit="contain"
+                                    icon={Video}
+                                    emptyLabel={isDraggingVideo ? 'Drop video here' : 'Add the motion clip'}
+                                    emptyHint={`MP4 or MOV, up to 100MB and ${maxVideoDuration}s.`}
+                                    input={{ id: 'motion-reference-video-input', accept: 'video/*', onChange: handleVideoUpload }}
+                                    onPreview={() => {
+                                        if (referenceVideo) setUploadPreview({ type: 'video', src: referenceVideo, alt: 'Reference video', title: 'Reference Video' });
+                                    }}
+                                    onRemove={() => void handleClearVideo()}
+                                    dragging={isDraggingVideo}
+                                    onDragOver={(event) => handleDragOver(event, setIsDraggingVideo)}
+                                    onDragLeave={(event) => handleDragLeave(event, setIsDraggingVideo)}
+                                    onDrop={handleVideoDrop}
+                                />
                             </div>
 
                             <p className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-[var(--ui-text-muted)]">
@@ -1784,7 +1668,7 @@ export default function CreateMotionClient({
                             ) : null}
                         </div>
 
-                        <div className="rounded-ui-2xl border border-[var(--ui-accent-motion)]/20 bg-[var(--ui-surface-1)] transition-colors duration-150 focus-within:border-[var(--ui-accent-motion)]/60">
+                        <div className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${motionAccent.outline}`}>
                             <div className="flex items-baseline justify-between gap-3 px-4 pt-4">
                                 <label htmlFor="create-motion-prompt" className="ui-kicker">
                                     Prompt
@@ -1844,7 +1728,7 @@ export default function CreateMotionClient({
                     >
                         {outputVideo ? (
                             <CreatorCanvasMedia key={outputVideo} aspectRatio="auto">
-                                <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} />
+                                <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
                             </CreatorCanvasMedia>
                         ) : isGenerating ? (
                             <CreatorCanvasFrame aspectRatio="auto" accent="motion" busy>
