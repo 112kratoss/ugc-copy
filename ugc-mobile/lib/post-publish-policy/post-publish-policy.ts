@@ -362,6 +362,31 @@ export function followTitleForRecipe(
   return title === forRecipe.title ? fromPrompt.title : title;
 }
 
+/**
+ * A title as it reads, for comparing two: no case, no extra spaces, and no
+ * quotes or marks at its edges, which a cut never keeps ("…window display."
+ * reads as the cut "…window display").
+ */
+function normalizeTitleForComparison(value: string): string {
+  return trimPhraseEdges(value.replace(/\s+/g, ' ').trim()).toLowerCase();
+}
+
+/**
+ * Whether a title is the opening of a prompt, as a suggestion cuts it
+ * (`titleFromPrompt`), compared without case, extra spaces or the marks at
+ * its edges. A title shorter or longer than the cut does not count, so one
+ * the creator chose stays. A recipe keeps its prompt private, so a post with
+ * one must not carry such a title; the server swaps it for the kind title,
+ * as the composers do when a recipe goes on.
+ */
+export function isTitleFromPrompt(title: string | null | undefined, prompt: string | null | undefined): boolean {
+  const fromPrompt = titleFromPrompt(prompt);
+  if (!fromPrompt || !title?.trim()) {
+    return false;
+  }
+  return normalizeTitleForComparison(title) === normalizeTitleForComparison(fromPrompt);
+}
+
 /** The line under a title that is still the composer's suggestion, in the same words on the web and in the app. */
 export function describeTitleSuggestion(source: CreationTitleSuggestion['source'], hasRecipe: boolean): string {
   if (source === 'prompt') {

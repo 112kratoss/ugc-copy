@@ -58,6 +58,7 @@ import { type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { POST_VIDEO_DURATION_LIMIT_MESSAGE, POST_VIDEO_MAX_DURATION_SECONDS } from '@/lib/post-video-limits';
 import { isCreatorProfileCheckError, isCreatorProfileReadinessError } from '@/lib/marketplace-trust';
+import { titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
@@ -238,6 +239,7 @@ export type PostUpdateDependencies = {
   ensureGenerationPostCoverMedia?: typeof ensureGenerationPostCoverMedia;
   removeGenerationShowcaseDerivative?: typeof removeGenerationShowcaseDerivative;
   ensureDurableGenerationMedia?: typeof ensureDurableGenerationMedia;
+  loadGenerationTitleSource?: typeof loadGenerationTitleSource;
 };
 
 type ResolvedPostUpdateDependencies = Required<PostUpdateDependencies>;
@@ -302,6 +304,7 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
     removeGenerationShowcaseDerivative:
       dependencies?.removeGenerationShowcaseDerivative ?? removeGenerationShowcaseDerivative,
     ensureDurableGenerationMedia: dependencies?.ensureDurableGenerationMedia ?? ensureDurableGenerationMedia,
+    loadGenerationTitleSource: dependencies?.loadGenerationTitleSource ?? loadGenerationTitleSource,
   };
 }
 
@@ -468,6 +471,30 @@ async function loadOwnedGenerationForPost(
   }
 
   return (data as OwnedGenerationExposureRow | null) ?? null;
+}
+
+/**
+ * What a post's creation gives the recipe title rule: its prompt, and what
+ * names its kind. Read by the post's link, as a creation an account's guest
+ * session made is the account's post too.
+ */
+async function loadGenerationTitleSource(
+  adminSupabase: SupabaseClient,
+  generationId: string,
+): Promise<CreationTitleSource | null> {
+  const { data, error } = await adminSupabase
+    .from('generations')
+    .select('prompt, model, category, creation_mode')
+    .eq('id', generationId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+  const row = data as { prompt?: string | null; model?: string | null; category?: string | null; creation_mode?: string | null } | null;
+  return row
+    ? { prompt: row.prompt ?? null, model: row.model ?? null, category: row.category ?? null, creationMode: row.creation_mode ?? null }
+    : null;
 }
 
 async function loadOwnedPost(
@@ -1321,7 +1348,7 @@ export async function updateOwnerPostForRoute({
     // the display fallback round-trips into a stored title — which the
     // marketplace placeholder gate then rejects on every public save. An exact
     // fallback echoed over an empty stored title means "unchanged".
-    const nextTitle = submittedTitle && !normalizeText(post.title) && isOwnerPostTitleFallback(submittedTitle)
+    const titleAsGiven = submittedTitle && !normalizeText(post.title) && isOwnerPostTitleFallback(submittedTitle)
       ? post.title
       : submittedTitle;
     // Grandfathered: the cap applies only when this request actually changes the
@@ -1329,7 +1356,7 @@ export async function updateOwnerPostForRoute({
     // without the equality check a post written before the limit existed would
     // become unsavable — its author could not fix a typo in the description
     // without first rewriting a title that was legal when they wrote it.
-    if (nextTitle && nextTitle !== post.title && nextTitle.length > TITLE_MAX_LENGTH) {
+    if (titleAsGiven && titleAsGiven !== post.title && titleAsGiven.length > TITLE_MAX_LENGTH) {
       return {
         ok: false,
         status: 400,
@@ -1353,6 +1380,35 @@ export async function updateOwnerPostForRoute({
         body: { error: `Descriptions are limited to ${DESCRIPTION_MAX_LENGTH} characters.`, field: 'description' },
       };
     }
+    // A recipe keeps the creation's prompt private, so a title cut from it is
+    // stored as the recipe's kind title, the swap both composers make. The
+    // recipe this save leaves on the post counts: the one it sends, else the
+    // stored one, which a visibility change republishes with the post. A post
+    // with no creation has no prompt of its own to cut a title from.
+    const hasRecipeAfterSave = hasResourceBundlePayload
+      ? Boolean(resourceBundle && resourceBundle.accessMode !== 'none')
+      : Boolean(existingBundle && existingBundle.access_mode !== 'none');
+    let nextTitle = titleAsGiven;
+    if (hasRecipeAfterSave && titleAsGiven && post.generation_id) {
+      let titleSource: CreationTitleSource | null = null;
+      try {
+        titleSource = await resolvedDependencies.loadGenerationTitleSource(adminSupabase, post.generation_id);
+      } catch (error) {
+        // The composers hold the same rule, so a save is not refused for a
+        // read that failed; the title goes as it was given.
+        logBackendWarning('post_update_title_source_unavailable', { postId, error });
+      }
+      nextTitle = titleForRecipePost({
+        title: titleAsGiven,
+        hasRecipe: true,
+        // The kind is named as the post is filed: a creation stored without a
+        // category would otherwise read as an image.
+        source: titleSource
+          ? { ...titleSource, category: typeof nextCategory === 'string' ? nextCategory : titleSource.category }
+          : null,
+      });
+    }
+    const titleReplacedForRecipe = nextTitle !== titleAsGiven;
     const frozenSoldBundleForRepublish = nextVisibility === 'public'
       && !hasResourceBundlePayload
       && existingBundle
@@ -1403,7 +1459,7 @@ export async function updateOwnerPostForRoute({
       category: nextCategory,
     };
 
-    if (Object.prototype.hasOwnProperty.call(body, 'title')) {
+    if (Object.prototype.hasOwnProperty.call(body, 'title') || titleReplacedForRecipe) {
       updatePayload.title = nextTitle;
     }
     if (Object.prototype.hasOwnProperty.call(body, 'description')) {
@@ -1607,7 +1663,7 @@ export async function updateOwnerPostForRoute({
         // they follow the post's whenever the post is edited — private too,
         // or a post retitled while private would show its old name in
         // Creations until the next public save.
-        if (Object.prototype.hasOwnProperty.call(body, 'title')) {
+        if (Object.prototype.hasOwnProperty.call(body, 'title') || titleReplacedForRecipe) {
           generationUpdate.title = nextTitle;
         }
         if (Object.prototype.hasOwnProperty.call(body, 'description')) {
