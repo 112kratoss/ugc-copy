@@ -34,6 +34,7 @@ import {
     CreatorModelChip,
     CreatorPhoneBalance,
     CreatorSettingChoices,
+    CreatorSettingSwitch,
     CreatorTemplatesTile,
     CreatorToolTabs,
 } from '@/components/CreatorColumn';
@@ -1826,21 +1827,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             ) : null}
 
             {model.supportsGoogleSearch ? (
-                <button
-                    type="button"
-                    role="switch"
-                    aria-checked={googleSearch}
-                    onClick={() => setGoogleSearch(!googleSearch)}
-                    className="ui-focus-ring flex w-full items-center justify-between gap-4 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-4 py-3 text-left transition-colors hover:bg-[var(--ui-surface-2)]"
-                >
-                    <span className="min-w-0">
-                        <span className="block text-sm font-semibold text-[var(--ui-text-primary)]">Google Search grounding</span>
-                        <span className="mt-0.5 block text-xs text-[var(--ui-text-muted)]">Allow the model to pull in live context when it helps.</span>
-                    </span>
-                    <span aria-hidden className={`flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors ${googleSearch ? 'bg-brand-blue' : 'bg-zinc-700'}`}>
-                        <span className={`h-4 w-4 rounded-full bg-white shadow-md transition-transform ${googleSearch ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </span>
-                </button>
+                <CreatorSettingSwitch
+                    label="Google Search grounding"
+                    description="Allow the model to pull in live context when it helps."
+                    checked={googleSearch}
+                    onChange={setGoogleSearch}
+                />
             ) : null}
 
             <CatalogAdditionalControls appearance="panel" descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ aspectRatio, resolution, qualityMode, googleSearch, ...additionalSettings.settings }} inputCounts={{ images: elements.length, videos: 0, audios: 0 }} onChange={additionalSettings.onChange} />
@@ -2008,7 +2000,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     exit={{ opacity: 0, y: -12 }}
                                 >
                                     <StudioModelNotice
-                                        stacked
                                         description={modelNotice}
                                         onDismiss={catalogProblem ? undefined : () => setCatalogNotice(null)}
                                     />
@@ -2030,7 +2021,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     exit={{ opacity: 0, y: -12 }}
                                 >
                                     <StudioRemixNotice
-                                        stacked
                                         description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         action={
                                             remixImageUrl || canUseOriginalResultAsReference ? (

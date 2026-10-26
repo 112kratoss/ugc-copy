@@ -164,22 +164,18 @@ async function subjectCardHandles(page: Page): Promise<string[]> {
 
 /** The panel that typing "@" in the prompt opens: its title and the references to insert. */
 function mentionPanel(page: Page) {
-  return page
-    .getByText('Insert reference', { exact: true })
-    .locator('xpath=ancestor::div[contains(@class,"rounded-[20px]")][1]');
+  return page.getByRole('group', { name: 'Insert reference', exact: true });
 }
 
 /** The panel that typing "@" in a shot prompt opens: its title and the subjects to insert. */
 function shotMentionPanel(page: Page) {
-  return page
-    .getByText('Insert subject', { exact: true })
-    .locator('xpath=ancestor::div[contains(@class,"rounded-[20px]")][1]');
+  return page.getByRole('group', { name: 'Insert subject', exact: true });
 }
 
 /** Switches to shot prompts. A dev server reload puts the page back on its single prompt. */
 async function showShotPrompts(page: Page) {
   if (await page.getByPlaceholder('Describe shot 1...').count() === 0) {
-    await page.getByRole('button', { name: 'Multi-Shot', exact: true }).click({ timeout: 5_000 });
+    await page.getByRole('radio', { name: 'Multi-shot', exact: true }).click({ timeout: 5_000 });
   }
 }
 
@@ -387,7 +383,7 @@ test.describe('Kling O3 named subjects', () => {
 
       // One letter short.
       await page.getByPlaceholder('Describe shot 1...').fill('Open on @hero_creatr in the rain', { timeout: 5_000 });
-      await page.getByRole('button', { name: 'Generate Video' }).click({ timeout: 5_000 });
+      await page.getByRole('button', { name: /^Generate · / }).click({ timeout: 5_000 });
 
       // The words the server refuses the run with. Past this check the run starts
       // to upload, and the line under the button would be about that instead.

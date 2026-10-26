@@ -4,7 +4,8 @@ import { expect, test, type Page } from '@playwright/test';
  * A long handle stays inside a sentence that the video creator builds as one string.
  *
  * Pressing Generate with an unknown handle in the prompt puts "Unknown element
- * mention: @..." in the run panel. The sentence was a string, so the handle in
+ * mention: @..." in the run panel (the column bar's status line since the video
+ * creator moved onto the column, 2026-10-26). The sentence was a string, so the handle in
  * it was plain text that could not break. A handle of 68 characters stood
  * 149px past its box there in a 1280px window and 219px on a 390px phone,
  * where the page scrolled 165px sideways, and one of 36 characters stood 41px
@@ -12,7 +13,7 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * It follows the rule of the other sentences now (typed-mention-handles.spec.ts):
  * a handle stays on one line while a line can hold it, and where none can it
- * breaks after an underscore. The run panel's line also prints a subject's
+ * breaks after an underscore. The same line also prints a subject's
  * name, which is free text. A name of 44 characters with no space in it stood
  * 18px past the box at 390px, so a word that no line can hold breaks where its
  * line ends.
@@ -40,14 +41,13 @@ type SentenceReading = {
   faults: string[];
 };
 
-/** Measures the run panel's sentence that starts with `start`, or answers null while the page does not show it. */
+/** Measures the column bar's sentence that starts with `start`, or answers null while the page does not show it. */
 async function readSentence(page: Page, start: string): Promise<SentenceReading | null> {
   try {
     return await page.evaluate((opening) => {
-      // The run panel is the section headed "Run summary".
-      const sentence = Array.from(document.querySelectorAll<HTMLElement>('section p'))
-        .find((candidate) => (candidate.textContent ?? '').trim().startsWith(opening)
-          && (candidate.closest('section')?.textContent ?? '').includes('Run summary'));
+      // What stops a run is said in the column bar's status line, over Generate.
+      const sentence = Array.from(document.querySelectorAll<HTMLElement>('[data-creator-bar-status] p'))
+        .find((candidate) => (candidate.textContent ?? '').trim().startsWith(opening));
       const frame = sentence?.parentElement;
       if (!sentence || !frame) return null;
 
@@ -194,12 +194,12 @@ test.describe('sentences that name a handle', () => {
     ]);
   });
 
-  test('the run panel keeps an unknown handle inside its box when Generate refuses the prompt', async ({ page }) => {
+  test('the column bar keeps an unknown handle inside its box when Generate refuses the prompt', async ({ page }) => {
     await answerQuote(page);
     await page.goto('/create-video?model=seedance-2');
     const prompt = page.getByPlaceholder(/^Describe the .* scene/);
     await expect(prompt).toBeVisible();
-    const generate = page.getByRole('button', { name: 'Generate Video' });
+    const generate = page.getByRole('button', { name: /^Generate · / });
 
     for (const handles of [
       // A handle that fits beside its label. Nothing about this may change.
@@ -219,17 +219,17 @@ test.describe('sentences that name a handle', () => {
     }
   });
 
-  test('the run panel keeps an unknown handle from a Kling shot prompt inside its box', async ({ page }) => {
+  test('the column bar keeps an unknown handle from a Kling shot prompt inside its box', async ({ page }) => {
     await answerQuote(page);
     await page.goto('/create-video?model=kling-3.0-video');
-    const generate = page.getByRole('button', { name: 'Generate Video' });
+    const generate = page.getByRole('button', { name: /^Generate · / });
     await expect(generate).toBeVisible();
     const shots = page.getByPlaceholder(/^Describe shot \d+\.\.\.$/);
     const handles = [LONG_WORDS, VERY_LONG];
 
     await expectSentenceInItsBox(page, unknownMention(handles), async () => {
       if ((await shots.count()) === 0) {
-        await page.getByRole('button', { name: 'Multi-Shot', exact: true }).click();
+        await page.getByRole('radio', { name: 'Multi-shot', exact: true }).click();
       }
       await expect(shots.first()).toBeVisible();
       for (let index = 0; index < (await shots.count()); index += 1) {
@@ -241,12 +241,12 @@ test.describe('sentences that name a handle', () => {
     });
   });
 
-  test('the run panel breaks a subject name that no line can hold', async ({ page }) => {
+  test('the column bar breaks a subject name that no line can hold', async ({ page }) => {
     await answerQuote(page);
     await page.goto('/create-video?model=kling-o3');
     await expect(page.getByRole('heading', { name: 'Named subjects' })).toBeVisible();
     const prompt = page.getByPlaceholder(/^Describe the .* scene/);
-    const generate = page.getByRole('button', { name: 'Generate Video' });
+    const generate = page.getByRole('button', { name: /^Generate · / });
     const names = page.getByPlaceholder('Subject name');
 
     for (const name of [

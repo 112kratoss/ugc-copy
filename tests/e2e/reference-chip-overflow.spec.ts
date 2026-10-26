@@ -339,15 +339,6 @@ async function typeAtEnd(field: Locator, text: string) {
   await field.pressSequentially(text);
 }
 
-async function expectChipsInTheirRow(page: Page, label: string, handles: string[]) {
-  for (const viewport of VIEWPORTS) {
-    await page.setViewportSize(viewport);
-    await expect
-      .poll(() => readChipRow(page, label), { message: `"${label}" at ${viewport.width}px wide` })
-      .toEqual(contained(handles));
-  }
-}
-
 /**
  * The same for a panel that only shows while the prompt ends in "@". A dev server
  * reload takes the "@" away and shuts the panel, so `open` types it again until
@@ -386,7 +377,10 @@ test.describe('reference chips', () => {
     await page.goto(`/create-video?remix=${GENERATION_ID}&remixPost=${POST_ID}`);
     await expect(page.getByRole('heading', { name: 'Reusable image references', exact: true })).toBeVisible();
 
-    await expectChipsInTheirRow(page, 'Reusable image references', handles);
+    // The row of chips over the prompt went with the column layout (2026-10-26), as on the
+    // image creator: each reference's row has its own Insert, so the chips left are the "@"
+    // panel's. Those rows are on the page while it is measured, so a long name in one would
+    // show here as the page's overflow.
     await expectSuggestionsInTheirRow(page, 'Insert reference', handles, () => (
       typeAtEnd(page.getByPlaceholder(/^Describe the .* scene/), ' @')
     ));
@@ -399,7 +393,6 @@ test.describe('reference chips', () => {
     await page.goto(`/create-video?remix=${GENERATION_ID}&remixPost=${POST_ID}`);
     await expect(page.getByRole('heading', { name: 'Kling video elements', exact: true })).toBeVisible();
 
-    await expectChipsInTheirRow(page, 'Prompt references', handles);
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize(viewport);
       await expect
@@ -414,7 +407,7 @@ test.describe('reference chips', () => {
     await expectSuggestionsInTheirRow(page, 'Insert video element', handles, async () => {
       const shot = page.getByPlaceholder('Describe shot 1...');
       if (!(await shot.isVisible())) {
-        await page.getByRole('button', { name: 'Multi-Shot', exact: true }).click();
+        await page.getByRole('radio', { name: 'Multi-shot', exact: true }).click();
       }
       await typeAtEnd(shot, ' @');
     });

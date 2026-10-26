@@ -245,9 +245,17 @@ function startBodies() {
   return startPosts().map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
 }
 
-/** The price on the run panel. */
+/** The price Generate names, or why it waits ("Add both inputs", "Calculating..."). */
 function costShown() {
-  return screen.getByText('Cost').nextElementSibling?.textContent;
+  return screen.queryByRole('button', { name: /^Generate · / })?.getAttribute('aria-label')?.replace(/^Generate · /, '');
+}
+
+/** A run setting, chosen in the panel the chip on the column's bar opens. */
+function chooseSetting(name: string) {
+  if (!screen.queryByRole('dialog', { name: 'Generation settings' })) {
+    fireEvent.click(screen.getByRole('button', { name: /^Generation settings/ }));
+  }
+  fireEvent.click(screen.getByRole('radio', { name }));
 }
 
 /** The page's last quote request, as JSON. */
@@ -286,7 +294,7 @@ async function attachBothInputs(container: HTMLElement) {
 }
 
 function generateButton() {
-  return screen.getByRole('button', { name: /^(Generate motion|Check again|Generating\.\.\.)$/ });
+  return screen.getByRole('button', { name: /^(Generate · .+|Check again|Generating\.\.\.)$/ });
 }
 
 async function pressGenerate() {
@@ -460,7 +468,7 @@ describe('CreateMotionClient quote', () => {
       inputCounts: { images: 1, videos: 1, audios: 0 },
     });
     expect(screen.queryByText('Add a character image and a motion clip to see the cost.')).not.toBeInTheDocument();
-    expect(screen.getByText('20 credits')).toBeInTheDocument();
+    expect(costShown()).toBe('20 credits');
   });
 });
 
@@ -492,8 +500,8 @@ describe('CreateMotionClient price of the run it sends', () => {
     // Chosen once the saved draft is read: before that, the catalog's default takes the page back.
     ['Kling 2.6 at 1080p, favoring the image', async (container: HTMLElement) => {
       chooseModel(container, 'Kling 2.6');
-      fireEvent.click(screen.getByRole('button', { name: 'Pro 1080p' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Favor image' }));
+      chooseSetting('Pro 1080p');
+      chooseSetting('Favor image');
     }, { modelId: 'kling-2.6', settings: { resolution: '1080p', characterOrientation: 'image' } }],
   ])('asks for its price with the start’s own quote of the run it posts: %s', async (_case, setUp, run) => {
     modelCatalogState.summaries = motionModelSummaries;
@@ -695,10 +703,11 @@ describe('CreateMotionClient price of the run it sends', () => {
     await pressGenerate();
     expect(await screen.findByText('We couldn’t confirm your generation started. Check again — that can’t start a second run.')).toBeInTheDocument();
 
-    // The price moves and the prompt is edited: Check again still sends what it sent.
+    // The price moves and the prompt is edited: Check again still sends what it sent,
+    // while a new run is offered at the price now.
     quoteStandIn.answers = [24];
     fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'Spin twice, then bow.' } });
-    expect(costShown()).toBe('24 credits');
+    expect(await screen.findByRole('button', { name: 'Start a new run · 24 credits' })).toBeInTheDocument();
     await pressGenerate();
 
     await waitFor(() => expect(startPosts()).toHaveLength(2));
@@ -846,7 +855,7 @@ describe('CreateMotionClient start', () => {
     expect(await screen.findByText('The prompt is too long.')).toBeInTheDocument();
     expect(loadPendingWebStart('motion', 'user-1')).toBeNull();
     expect(document.activeElement).toBe(screen.getByPlaceholderText(/Describe the kind of movement/));
-    expect(generateButton()).toHaveTextContent('Generate motion');
+    expect(generateButton()).toHaveTextContent(/^Generate · /);
 
     await pressGenerate();
 
@@ -1108,7 +1117,7 @@ describe('CreateMotionClient drafts and media', () => {
     const first = render(<CreateMotionClient prefill={{}} />);
     await waitFor(() => expect(draftMocks.loadCreatorDraft).toHaveBeenCalledWith('motion', 'user-1'));
     fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'Moonwalk to the left' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Pro 1080p' }));
+    chooseSetting('Pro 1080p');
     await waitFor(() => expect(savedDrafts.get('motion:user-1')).toMatchObject({
       prompt: 'Moonwalk to the left',
       mode: '1080p',
@@ -1120,7 +1129,7 @@ describe('CreateMotionClient drafts and media', () => {
 
     expect(await screen.findByDisplayValue('Moonwalk to the left')).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText('Kling 2.6').length).toBeGreaterThan(0));
-    expect(screen.getAllByText('1080p').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /^Generation settings: 1080P · / })).toBeInTheDocument();
   });
 
   it('lets a new prompt link win over a draft saved under another link', async () => {
@@ -1218,11 +1227,85 @@ describe('CreateMotionClient drafts and media', () => {
     expect(generateButton()).toBeEnabled();
   });
 
-  it('marks the Studio links with a gallery icon, not a download', async () => {
+  it('marks the Studio link with a gallery icon, not a download', async () => {
     render(<CreateMotionClient prefill={{}} />);
 
-    const studioLink = await screen.findByRole('link', { name: /View Studio/ });
+    const studioLink = await screen.findByRole('link', { name: /^Studio/ });
     expect(studioLink.querySelector('svg.lucide-images')).not.toBeNull();
     expect(studioLink.querySelector('svg.lucide-download')).toBeNull();
+  });
+});
+
+// The motion creator on the app's column (2026-10-26): the run's settings fold into one chip
+// on the bar, read back as the app reads them, and the result canvas comes into view only once
+// a start the creator pressed is confirmed.
+describe('CreateMotionClient on the column', () => {
+  it('reads the quality back on the bar\'s chip, and the clip\'s length once there is one', async () => {
+    const view = render(<CreateMotionClient prefill={{}} />);
+    expect(await screen.findByRole('button', { name: 'Generation settings: 720P · Add motion' })).toBeInTheDocument();
+
+    await attachBothInputs(view.container);
+
+    // 7.3 seconds, counted as the app counts them.
+    expect(screen.getByRole('button', { name: 'Generation settings: 720P · 8s' })).toBeInTheDocument();
+  });
+
+  describe('the result canvas', () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    let scrollIntoView: ReturnType<typeof vi.fn>;
+    let rects: { mockRestore: () => void } | null = null;
+
+    /** Draws the canvas `top` pixels down the window: 1500 under the column, 88 beside it. */
+    function placeCanvas(top: number) {
+      rects = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const y = this.getAttribute('aria-label') === 'Result' ? top : 0;
+        return { top: y, bottom: y, left: 0, right: 0, width: 0, height: 0, x: 0, y, toJSON: () => ({}) } as DOMRect;
+      });
+    }
+
+    beforeEach(() => {
+      scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView as unknown as Element['scrollIntoView'];
+    });
+
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+      rects?.mockRestore();
+      rects = null;
+    });
+
+    it('is brought into view under the column once the run it started is under way', async () => {
+      placeCanvas(1500);
+      const view = render(<CreateMotionClient prefill={{}} />);
+      await attachBothInputs(view.container);
+
+      await pressGenerate();
+
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+      expect(scrollIntoView.mock.contexts[0]).toHaveAttribute('aria-label', 'Result');
+    });
+
+    it('stays put when the start is refused, so the reason in the bar stays in view', async () => {
+      placeCanvas(1500);
+      startAnswers = [
+        jsonResponse({ code: 'INVALID_GENERATION_REQUEST', error: 'The prompt is too long.', fieldErrors: { prompt: 'The prompt is too long.' } }, 422),
+      ];
+      const view = render(<CreateMotionClient prefill={{}} />);
+      await attachBothInputs(view.container);
+
+      await pressGenerate();
+
+      expect(await screen.findByText('The prompt is too long.')).toBeInTheDocument();
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it('stays put when an unanswered start is checked again on load, so the page opens at its top', async () => {
+      placeCanvas(1500);
+      savePendingWebStart(pendingStart());
+      render(<CreateMotionClient prefill={{}} />);
+
+      expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
   });
 });

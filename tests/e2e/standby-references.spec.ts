@@ -104,9 +104,9 @@ async function openModel(page: Page, modelId: string) {
   }).toPass({ timeout: 45_000 });
 }
 
-/** One line of the run summary, by its label. */
-function runSummary(page: Page, label: 'Reference' | 'Inputs') {
-  return page.getByText(label, { exact: true }).locator('xpath=following-sibling::div[1]');
+/** What the empty result canvas asks for: frames or references, as the run will use them. */
+function canvasAsksFor(page: Page) {
+  return page.getByText(/^Write a prompt, add (frames|references) if you like, then Generate\.$/);
 }
 
 async function attachStartFrame(page: Page) {
@@ -122,10 +122,10 @@ test.describe('references saved on another video model', () => {
   });
 
   // The three models with frame slots and no slot for a reference of any kind.
-  for (const { modelId, name, inputs } of [
-    { modelId: 'kling-3.0-video', name: 'Kling 3.0', inputs: '1 frame + 0 video refs' },
-    { modelId: 'kling-3.0-turbo', name: 'Kling 3.0 Turbo', inputs: '1 frame' },
-    { modelId: 'hailuo-2.3', name: 'Hailuo 2.3', inputs: '1 frame' },
+  for (const { modelId, name } of [
+    { modelId: 'kling-3.0-video', name: 'Kling 3.0' },
+    { modelId: 'kling-3.0-turbo', name: 'Kling 3.0 Turbo' },
+    { modelId: 'hailuo-2.3', name: 'Hailuo 2.3' },
   ]) {
     test(`two saved images leave ${name} a frames run`, async ({ page }) => {
       const newestQuote = await answerQuote(page);
@@ -160,10 +160,8 @@ test.describe('references saved on another video model', () => {
       expect(request.inputMetadata?.slots).toEqual({ startFrame: { count: 1 } });
 
       // The page says of the run what its standby card says.
-      await expect(runSummary(page, 'Reference')).toHaveText('Start / end frames');
-      await expect(runSummary(page, 'Inputs')).toHaveText(inputs);
+      await expect(canvasAsksFor(page)).toHaveText('Write a prompt, add frames if you like, then Generate.');
       await expect(page.getByText(/Reusable references keep their @handles/)).toHaveCount(0);
-      await expect(page.getByText(/Upload reference images below/)).toHaveCount(0);
     });
   }
 
@@ -195,8 +193,7 @@ test.describe('references saved on another video model', () => {
     await expect(page.getByText('Saved references are on standby')).toBeVisible();
     await expect(page.getByText('Your saved clip stays saved. Seedance 1.5 Pro takes no reference clip, so this run does not use it.')).toBeVisible();
 
-    await expect(runSummary(page, 'Reference')).toHaveText('Reusable references');
-    await expect(runSummary(page, 'Inputs')).toHaveText('1 reference');
+    await expect(canvasAsksFor(page)).toHaveText('Write a prompt, add references if you like, then Generate.');
     await expect.poll(() => newestQuote('seedance-1.5-pro', 'imageReferences')).not.toBeNull();
     const request = newestQuote('seedance-1.5-pro', 'imageReferences')!;
     expect(request.settings?.referenceMode).toBe('elements');
@@ -258,7 +255,7 @@ test.describe('references saved on another video model', () => {
     await page.setViewportSize({ width: 1280, height: 720 });
 
     // Generate refuses the prompt before anything is uploaded, and says which word.
-    const generate = page.getByRole('button', { name: 'Generate Video' });
+    const generate = page.getByRole('button', { name: /^Generate · / });
     await expect(generate).toBeEnabled();
     await generate.click();
     await expect(page.getByText(`Kling 3.0 Cinematic cannot use ${HANDLE}. Remove it from the prompt, or pick a model that takes reusable references.`)).toBeVisible();

@@ -993,48 +993,6 @@ button:disabled,
   }
 }
 
-/*
- * Generator pages sit inside the persistent app sidebar, so viewport-based
- * Tailwind breakpoints can otherwise enable the three-column studio before
- * its content area is actually wide enough. These layout classes also avoid
- * display conflicts between the global and route-only Tailwind stylesheets.
- */
-.studio-media-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 1rem;
-}
-
-.studio-media-rail {
-  display: none;
-}
-
-.studio-path-switcher {
-  margin-bottom: 1rem;
-}
-
-@media (min-width: 1200px) {
-  .studio-media-layout {
-    grid-template-columns: minmax(0, 1.12fr) minmax(340px, 0.88fr);
-  }
-}
-
-@media (min-width: 1440px) {
-  .studio-media-layout {
-    grid-template-columns: 108px minmax(0, 560px) minmax(0, 1fr);
-  }
-
-  .studio-media-rail {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .studio-path-switcher {
-    display: none;
-  }
-}
-
 .app-shell-root {
   min-height: 100dvh;
   background:

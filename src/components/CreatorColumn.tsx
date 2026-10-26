@@ -17,8 +17,8 @@ import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
  * and Generate), and beside it the result. The column scrolls with the page and
  * its bar stays at the foot of the window; the result stays in view beside it.
  *
- * Built for the image creator first (2026-10-26); video and motion still use
- * `MediaStudioShell` in CreatorStudio.tsx until they move over.
+ * Built for the image creator (2026-10-26), then carried to video and motion:
+ * the three creators share it.
  *
  * The two panes need 1120px of window: the app's sidebar takes 216px of it,
  * which leaves the page about 860px. Below that the result follows the column,
@@ -35,8 +35,8 @@ export function CreatorColumnLayout({
   canvas: ReactNode;
 }) {
   return (
-    // Its own stacking context, as MediaStudioShell's was: the model picker's
-    // layer 50 stays under the shell's top bar (also 50) when the page scrolls.
+    // Its own stacking context: the model picker's layer 50 stays under the
+    // shell's top bar (also 50) when the page scrolls.
     <div className="relative z-10 mx-auto grid w-full max-w-[680px] grid-cols-1 gap-4 px-[clamp(1rem,1.9vw,2.25rem)] min-[1120px]:max-w-[1860px] min-[1120px]:grid-cols-[minmax(340px,400px)_minmax(0,1fr)] min-[1120px]:items-start min-[1120px]:gap-5 min-[1440px]:grid-cols-[minmax(380px,440px)_minmax(0,1fr)]">
       <h1 className="sr-only">{title}</h1>
       <div className="flex min-w-0 flex-col gap-3" onFocus={keepFocusClearOfBar}>{column}</div>
@@ -163,7 +163,7 @@ export function CreatorTemplatesTile() {
   );
 }
 
-const CHOICE_COLUMNS = { 2: 'grid-cols-2', 3: 'grid-cols-3', 5: 'grid-cols-5' } as const;
+const CHOICE_COLUMNS = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5' } as const;
 
 /**
  * The bar and its settings float over the column, so their fill is opaque:
@@ -180,8 +180,10 @@ const FLOATING_SURFACE_CLASS =
  */
 export function CreatorSettingChoices<T extends string>({
   label,
+  labelHidden = false,
   hint,
   options,
+  optionLabel,
   value,
   onChange,
   columns,
@@ -189,8 +191,12 @@ export function CreatorSettingChoices<T extends string>({
   capitalize = false,
 }: {
   label: string;
+  /** For a group whose options say what it is, as the shot mode's do. */
+  labelHidden?: boolean;
   hint?: string;
   options: readonly T[];
+  /** What an option says, where its value is not words ("std" → "Standard 720p"). */
+  optionLabel?: (option: T) => string;
   value: T;
   onChange: (value: T) => void;
   columns: keyof typeof CHOICE_COLUMNS;
@@ -223,10 +229,14 @@ export function CreatorSettingChoices<T extends string>({
 
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
-        {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
-      </div>
+      {labelHidden ? (
+        <p id={labelId} className="sr-only">{label}</p>
+      ) : (
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
+          {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
+        </div>
+      )}
       <div role="radiogroup" aria-labelledby={labelId} className={clsx('grid gap-1.5', CHOICE_COLUMNS[columns])}>
         {options.map((option, index) => {
           const checked = index === selectedIndex;
@@ -251,12 +261,54 @@ export function CreatorSettingChoices<T extends string>({
                   : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
-              {option}
+              {optionLabel ? optionLabel(option) : option}
             </button>
           );
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * One setting that is on or off (Google Search grounding, a fixed lens, AI sound): a
+ * switch that says what it does under its name.
+ */
+export function CreatorSettingSwitch({
+  label,
+  description,
+  checked,
+  onChange,
+  accent = 'image',
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  accent?: UiAccent;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="ui-focus-ring flex w-full items-center justify-between gap-4 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-4 py-3 text-left transition-colors hover:bg-[var(--ui-surface-2)]"
+    >
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-[var(--ui-text-primary)]">{label}</span>
+        {description ? <span className="mt-0.5 block text-xs text-[var(--ui-text-muted)]">{description}</span> : null}
+      </span>
+      <span
+        aria-hidden
+        className={clsx(
+          'flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors',
+          checked ? getAccentClasses(accent).indicator : 'bg-[var(--ui-border-strong)]'
+        )}
+      >
+        <span className={clsx('h-4 w-4 rounded-full bg-white shadow-md transition-transform', checked ? 'translate-x-5' : 'translate-x-0')} />
+      </span>
+    </button>
   );
 }
 
@@ -513,6 +565,58 @@ export function parseAspectRatio(aspectRatio: string): number | null {
  */
 export const CANVAS_FRAME_RATIO_LIMITS = { min: 0.45, max: 2.4 } as const;
 
+/** The frame's sizing, shared with the result's box so a clip lands where its frame was. */
+const CANVAS_FRAME_SIZE_CLASS =
+  // Under the column the width decides, short of 70% of the window's height;
+  // beside it, the canvas's shorter side.
+  'aspect-[var(--creator-frame-ratio)] w-[min(100%,calc(70dvh*var(--creator-frame-ratio)))] min-[1120px]:w-[min(100cqw,calc(100cqh*var(--creator-frame-ratio)))]';
+
+function clampedFrameRatio(aspectRatio: string, fallback = 1) {
+  return Math.min(
+    CANVAS_FRAME_RATIO_LIMITS.max,
+    Math.max(CANVAS_FRAME_RATIO_LIMITS.min, parseAspectRatio(aspectRatio) ?? fallback),
+  );
+}
+
+/**
+ * A finished clip, as large as the canvas allows, on black: in the shape it was
+ * asked for (16:9 for "auto") until the clip's own size is known, then in that.
+ * A motion run takes its shape from its reference, which the page does not
+ * measure, and a model can answer "auto" with any shape.
+ */
+export function CreatorCanvasMedia({ aspectRatio, children }: { aspectRatio: string; children: ReactNode }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [clipRatio, setClipRatio] = useState<number | null>(null);
+
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    // `loadedmetadata` does not bubble, so it is heard on the way down instead.
+    const readClip = (event: Event) => {
+      const clip = event.target;
+      if (clip instanceof HTMLVideoElement && clip.videoWidth > 0 && clip.videoHeight > 0) {
+        setClipRatio(clip.videoWidth / clip.videoHeight);
+      }
+    };
+    box.addEventListener('loadedmetadata', readClip, true);
+    return () => box.removeEventListener('loadedmetadata', readClip, true);
+  }, []);
+
+  const ratio = clipRatio === null
+    ? clampedFrameRatio(aspectRatio, 16 / 9)
+    : Math.min(CANVAS_FRAME_RATIO_LIMITS.max, Math.max(CANVAS_FRAME_RATIO_LIMITS.min, clipRatio));
+  return (
+    <div
+      ref={boxRef}
+      data-testid="creator-canvas-media"
+      style={{ '--creator-frame-ratio': ratio } as CSSProperties}
+      className={clsx('relative overflow-hidden rounded-ui-xl bg-black', CANVAS_FRAME_SIZE_CLASS)}
+    >
+      {children}
+    </div>
+  );
+}
+
 /**
  * A frame in the shape of the run's aspect ratio (square for "auto"), the
  * largest that fits the canvas: where the picture will land. Busy, it glows in
@@ -529,18 +633,13 @@ export function CreatorCanvasFrame({
   busy?: boolean;
   children: ReactNode;
 }) {
-  const ratio = Math.min(
-    CANVAS_FRAME_RATIO_LIMITS.max,
-    Math.max(CANVAS_FRAME_RATIO_LIMITS.min, parseAspectRatio(aspectRatio) ?? 1),
-  );
   return (
     <div
       data-testid="creator-canvas-frame"
-      style={{ '--creator-frame-ratio': ratio } as CSSProperties}
+      style={{ '--creator-frame-ratio': clampedFrameRatio(aspectRatio) } as CSSProperties}
       className={clsx(
-        // Under the column the width decides, short of 70% of the window's height;
-        // beside it, the canvas's shorter side.
-        'relative flex aspect-[var(--creator-frame-ratio)] w-[min(100%,calc(70dvh*var(--creator-frame-ratio)))] items-center justify-center overflow-hidden rounded-ui-xl border min-[1120px]:w-[min(100cqw,calc(100cqh*var(--creator-frame-ratio)))]',
+        'relative flex items-center justify-center overflow-hidden rounded-ui-xl border',
+        CANVAS_FRAME_SIZE_CLASS,
         busy ? 'border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]' : 'border-dashed border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]'
       )}
     >

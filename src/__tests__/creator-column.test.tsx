@@ -7,10 +7,12 @@ import {
   CANVAS_FRAME_RATIO_LIMITS,
   CreatorCanvas,
   CreatorCanvasFrame,
+  CreatorCanvasMedia,
   CreatorColumnBar,
   CreatorColumnLayout,
   CreatorPhoneBalance,
   CreatorSettingChoices,
+  CreatorSettingSwitch,
   CreatorTemplatesTile,
   CreatorToolTabs,
   parseAspectRatio,
@@ -233,6 +235,77 @@ describe('the setting choices', () => {
     fireEvent.keyDown(screen.getByRole('radio', { name: '16:9' }), { key: 'ArrowRight' });
     expect(onChange).toHaveBeenLastCalledWith('auto');
     expect(screen.getByRole('radio', { name: 'auto' })).toHaveFocus();
+  });
+});
+
+describe('the setting choices, named for their options', () => {
+  it('reads an option by its label, and keeps a group the options name out of sight', () => {
+    const onChange = vi.fn();
+    render(
+      <CreatorSettingChoices
+        label="Shot mode"
+        labelHidden
+        options={['single', 'multi'] as const}
+        optionLabel={(value) => (value === 'multi' ? 'Multi-shot' : 'Single shot')}
+        value="single"
+        onChange={onChange}
+        columns={2}
+        accent="video"
+      />
+    );
+
+    const group = screen.getByRole('radiogroup', { name: 'Shot mode' });
+    expect(screen.getByText('Shot mode')).toHaveClass('sr-only');
+    expect(within(group).getByRole('radio', { name: 'Single shot' })).toHaveAttribute('aria-checked', 'true');
+
+    fireEvent.click(within(group).getByRole('radio', { name: 'Multi-shot' }));
+    expect(onChange).toHaveBeenCalledWith('multi');
+  });
+});
+
+describe('the setting switch', () => {
+  it('is a switch that says whether it is on, and turns it at a press', () => {
+    const onChange = vi.fn();
+    const view = render(
+      <CreatorSettingSwitch label="Fixed lens" description="Keeps the camera still." checked={false} onChange={onChange} accent="video" />
+    );
+    const toggle = screen.getByRole('switch', { name: /^Fixed lens/ });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledWith(true);
+
+    view.rerender(<CreatorSettingSwitch label="Fixed lens" checked onChange={onChange} accent="video" />);
+    expect(screen.getByRole('switch', { name: 'Fixed lens' })).toHaveAttribute('aria-checked', 'true');
+  });
+});
+
+describe('the result clip\'s box', () => {
+  function boxRatio() {
+    return Number(screen.getByTestId('creator-canvas-media').style.getPropertyValue('--creator-frame-ratio'));
+  }
+
+  it('takes the shape asked for, 16:9 for "auto", and the clip\'s own once it is known', () => {
+    const view = render(
+      <CreatorCanvasMedia aspectRatio="9:16">
+        <video data-testid="clip" />
+      </CreatorCanvasMedia>
+    );
+    expect(boxRatio()).toBeCloseTo(9 / 16);
+
+    view.rerender(
+      <CreatorCanvasMedia aspectRatio="auto">
+        <video data-testid="clip" />
+      </CreatorCanvasMedia>
+    );
+    expect(boxRatio()).toBeCloseTo(16 / 9);
+
+    // A portrait motion clip, which the page could not know the shape of before it loaded.
+    const clip = screen.getByTestId('clip');
+    Object.defineProperty(clip, 'videoWidth', { configurable: true, value: 720 });
+    Object.defineProperty(clip, 'videoHeight', { configurable: true, value: 1280 });
+    fireEvent(clip, new Event('loadedmetadata'));
+    expect(boxRatio()).toBeCloseTo(720 / 1280);
   });
 });
 
