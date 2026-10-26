@@ -18,8 +18,14 @@ const placeholderProfile = vi.hoisted(() => ({
 const profileState = vi.hoisted(() => ({ profile: null as Record<string, unknown> | null }));
 const queryClientState = vi.hoisted(() => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }));
 const welcomeCreditsState = vi.hoisted(() => ({ invalidate: vi.fn(async () => undefined) }));
+const MAYA = vi.hoisted(() => ({
+  id: 'user-123',
+  email: 'maya.k@example.com',
+  is_anonymous: false as boolean,
+  user_metadata: { full_name: 'Maya Kapoor' } as Record<string, unknown>,
+}));
 const authState = vi.hoisted(() => ({
-  user: { id: 'user-123', email: 'maya.k@example.com', user_metadata: { full_name: 'Maya Kapoor' } as Record<string, unknown> },
+  user: { ...MAYA } as typeof MAYA | null,
   refreshProfile: vi.fn(async () => undefined),
   api: {
     getProfile: vi.fn(),
@@ -148,7 +154,7 @@ const taken = new ApiError('That username is already taken.', 409, {
 describe('the sheet a list opens to ask for a name and handle before a post goes public', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    authState.user.user_metadata = { full_name: 'Maya Kapoor' };
+    authState.user = { ...MAYA, user_metadata: { full_name: 'Maya Kapoor' } };
     profileState.profile = { ...placeholderProfile };
     authState.api.getProfile.mockReset();
     authState.api.getProfile.mockImplementation(async () => profileState.profile);
@@ -286,7 +292,7 @@ describe('the sheet a list opens to ask for a name and handle before a post goes
   });
 
   it('says what is missing at the press, and saves nothing', async () => {
-    authState.user.user_metadata = {};
+    authState.user = { ...MAYA, user_metadata: {} };
     const tree = mountHost();
     void ask();
     act(() => field(tree.root, 'Display name, required').props.onChangeText(''));
@@ -313,6 +319,42 @@ describe('the sheet a list opens to ask for a name and handle before a post goes
     await expect(first).resolves.toEqual({ status: 'cancelled' });
     await expect(second).resolves.toEqual({ status: 'cancelled' });
     expect(authState.api.updateProfile).not.toHaveBeenCalled();
+  });
+
+  // A 409 ACCOUNT_DELETING ends the session while the sheet is up (the
+  // account's deletion was asked for on another device), and the device goes
+  // on as a guest. The answer would be saved to nobody's profile.
+  it('is answered "cancelled" when the account it asks for is signed out or replaced', async () => {
+    const tree = mountHost();
+    const answer = ask();
+
+    authState.user = { id: 'guest-1', email: '', is_anonymous: true, user_metadata: {} };
+    act(() => tree.update(<PublicIdentitySheetHost />));
+
+    await expect(answer).resolves.toEqual({ status: 'cancelled' });
+    expect(authState.api.updateProfile).not.toHaveBeenCalled();
+
+    // Signed out altogether: the same.
+    authState.user = { ...MAYA };
+    act(() => tree.update(<PublicIdentitySheetHost />));
+    const again = ask();
+    authState.user = null;
+    act(() => tree.update(<PublicIdentitySheetHost />));
+    await expect(again).resolves.toEqual({ status: 'cancelled' });
+  });
+
+  it('stays up when the session is only refreshed for the same account', async () => {
+    const tree = mountHost();
+    const answer = ask();
+    const settled = vi.fn();
+    void answer.then(settled);
+
+    authState.user = { ...MAYA, user_metadata: { full_name: 'Maya Kapoor', refreshed: true } };
+    act(() => tree.update(<PublicIdentitySheetHost />));
+    await act(async () => undefined);
+
+    expect(settled).not.toHaveBeenCalled();
+    expect(button(tree.root, 'Save and make public')).toBeTruthy();
   });
 
   it('lets a second question wait on the one that is up, and saves once for both', async () => {

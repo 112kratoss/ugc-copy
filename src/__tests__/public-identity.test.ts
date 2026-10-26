@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   checkHandleAvailability,
   claimPublicIdentity,
@@ -140,14 +141,14 @@ describe('checking a handle while it is typed', () => {
     });
 
     it('reports a taken or refused handle in the server\'s words', async () => {
+      // The 409 both server paths that refuse a handle send, which names the field.
+      const taken = mobileApiContract.profileUsernameTaken;
       fetchMock
-        .mockResolvedValueOnce(json({ error: 'That username is already taken.', fieldErrors: { username: 'That username is already taken.' } }, 409))
-        .mockResolvedValueOnce(json({ error: 'That handle is reserved.', fieldErrors: { username: 'That handle is reserved.' } }, 400))
-        .mockResolvedValueOnce(json({}, 409));
+        .mockResolvedValueOnce(json(taken.response, taken.status))
+        .mockResolvedValueOnce(json({ error: 'That handle is reserved.', fieldErrors: { username: 'That handle is reserved.' } }, 400));
 
       await expect(checkHandleAvailability(draft, 'token')).resolves.toEqual({ state: 'taken', message: 'That username is already taken.' });
       await expect(checkHandleAvailability(draft, 'token')).resolves.toEqual({ state: 'taken', message: 'That handle is reserved.' });
-      await expect(checkHandleAvailability(draft, 'token')).resolves.toEqual({ state: 'taken', message: 'That username is already taken.' });
     });
 
     // Offline, rate limited or a refusal about the name says nothing about the
@@ -160,6 +161,20 @@ describe('checking a handle while it is typed', () => {
         .mockRejectedValueOnce(new TypeError('Failed to fetch'));
 
       for (let attempt = 0; attempt < 4; attempt += 1) {
+        await expect(checkHandleAvailability(draft, 'token')).resolves.toBeNull();
+      }
+    });
+
+    // As the app reads it (#550): a 409 is the handle's only when it names the
+    // field. The proxy's 409s for a merged guest session or an account being
+    // deleted name none, whatever the handle, and so does an empty answer.
+    it('gives no verdict on a 409 that names no field', async () => {
+      fetchMock
+        .mockResolvedValueOnce(json({ error: 'This guest session was linked to an account. Sign in to continue.', code: 'SESSION_MERGED' }, 409))
+        .mockResolvedValueOnce(json({ error: 'This account is being deleted.', code: 'ACCOUNT_DELETING' }, 409))
+        .mockResolvedValueOnce(json({}, 409));
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         await expect(checkHandleAvailability(draft, 'token')).resolves.toBeNull();
       }
     });
