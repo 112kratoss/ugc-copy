@@ -22,6 +22,7 @@ import {
   type PostLifecyclePost,
 } from '@/lib/post-lifecycle';
 import type { OwnerPostsResponse } from '@/lib/types';
+import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { adjustProfileStats, invalidateProfileStats } from '@/lib/profile-stats';
 import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
 import { getDeleteCreationConfirmation, getViewerSafetyActions, isViewerOwnGeneration } from '@/lib/viewer-actions';
@@ -439,6 +440,7 @@ export function useViewerActionHandlers({
                 });
                 haptic.success();
                 onReported?.(item);
+                takeOffHomeShelf(queryClient, { postId });
                 showMessageDialog({
                   title: 'Report received',
                   message: 'Thank you. Our moderation team will review this content.',
@@ -519,6 +521,8 @@ export function useViewerActionHandlers({
         // reader's Saved list and its count, which leave out a blocked
         // creator's posts.
         onBlocked(creatorId);
+        // Home's shelf lets the creator's cards go too; nothing is read again for it.
+        takeOffHomeShelf(queryClient, { creatorId });
         haptic.success();
         void AccessibilityInfo.announceForAccessibility(`${item.creatorLabel} blocked.`);
         await Promise.all([

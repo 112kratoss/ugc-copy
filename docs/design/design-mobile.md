@@ -171,6 +171,7 @@ Two faces:
 - **Display: Bricolage Grotesque**, loaded from the bundle in the root layout, weights 700 and 800 only.
   - It carries the titles, the numbers and the wordmark (`BrandLockup`).
   - Until it loads, the splash screen stays up, so the first screen never swaps fonts in view.
+  - The screens render under the splash before it loads, and on Android text drawn then keeps the system font until it is drawn again. `AppText` draws its display roles anew once the face is in (`lib/display-font-ready.ts`, marked by the root layout). A raw `Text` that spreads a display role does not: use `AppText` for any title a screen can draw at launch.
 - **Everything else: the system font** (San Francisco, Roboto), so running text, labels and buttons match the OS and scale with it.
 
 Roles (`appTheme.type`):
@@ -434,7 +435,7 @@ These describe the app as of 0.1.6; each screen's `hig-*` test pins the details.
    - The menu button (side menu) sits on the left.
    - The credits pill sits on the right: crown, balance, and `+`. It shows a dash until the balance loads, because a 0 reads as an empty account.
    - The title slot is deliberately empty.
-2. **Header rail.** Swipeable slides: continue in the creator workspace, the Image, Video and Motion tools, and promos. It turns every few seconds, but only while Home is at rest and on screen.
+2. **"Make this" shelf** (`components/home-shelf.tsx`, from `GET /api/home/shelf`). Real creations a viewer can make their own in one tap (the feed's remix), two cards and a sliver of the third, then a "Start from scratch" tile with the three tools. A signed-in member also gets at most two offers the server picks: Post until they have posted, then Earn (switched off until a paid sale and payout have worked), and Invite at the end. It holds still: no timer turns it, and no page control, since it is not page by page. It keeps one height in every state, because the list anchors on the header: bones while the first answer loads, the three tools as cards when there are no creations, and, while renders run, a line that opens Creations in the subtitle's place.
 3. **Lanes:** For You, Notes (posts with writing), Recent, Unlocks. A lane is a new feed, so switching remounts the list at its top.
 4. **The feed.** A FlashList of posts on the page background, separated by hairlines:
    - media cards open the reel;
@@ -600,7 +601,7 @@ What scrolls and swipes has a frame budget, and every rule here came from a meas
 - **No box shadows on scrolled content.** The create disc uses a path shadow over its opaque fill.
 - **Gradients use React Native's own** on anything that mounts while scrolling or swiping: `experimental_backgroundImage` with `linearGradient()` from `lib/eased-fade.ts`, drawn by the render server. expo-linear-gradient paints on the main thread each time its view appears, which cost 16–27 ms per rail switch and per reel open on the iPhone.
 - **Pause what nobody sees.**
-  - The header rail stops turning while the feed moves or is off screen.
+  - Nothing on Home turns by itself: the shelf moves only when the person moves it.
   - The dock subscribes to the sampled colour only where it paints it.
 - **One video plays at a time.**
   - The feed elects one player.

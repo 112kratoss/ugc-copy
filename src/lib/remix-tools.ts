@@ -21,7 +21,16 @@ const CREATE_PATH_BY_TOOL: Record<RemixTool, string> = {
   video: '/create-video',
 };
 
-export function resolveRemixTool(category: string | null | undefined): RemixTool {
+export function resolveRemixTool(
+  category: string | null | undefined,
+  /**
+   * The row's `creation_mode`. Since 2026-06-19 a motion transfer is stored as
+   * a video (category 'video') with creation_mode 'motion', so the category
+   * alone would send it to the video creator.
+   */
+  creationMode?: string | null,
+): RemixTool {
+  if (creationMode === 'motion') return 'motion';
   switch (category) {
     case 'motion':
       return 'motion';
@@ -44,6 +53,9 @@ export function remixToolCreatePath(tool: RemixTool): string {
   return CREATE_PATH_BY_TOOL[tool];
 }
 
-export function remixCreatePathForCategory(category: string | null | undefined): string {
-  return remixToolCreatePath(resolveRemixTool(category));
+export function remixCreatePathForCategory(
+  category: string | null | undefined,
+  creationMode?: string | null,
+): string {
+  return remixToolCreatePath(resolveRemixTool(category, creationMode));
 }

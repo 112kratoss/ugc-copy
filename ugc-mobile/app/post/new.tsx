@@ -4989,6 +4989,9 @@ async function invalidatePostCaches(queryClient: QueryClient, userId: string | u
     invalidateProfileStats(queryClient, userId),
     queryClient.invalidateQueries({ queryKey: ['generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+    // Home's shelf asks a member who has never posted to post; after a first
+    // post it offers the next thing instead.
+    queryClient.invalidateQueries({ queryKey: ['home-shelf'] }),
   ]);
 }
 

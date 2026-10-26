@@ -4,6 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { getAppVersionRouteResponse } from '@/lib/app-version-route-adapter-service';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import { getCreditHistoryRouteResponse } from '@/lib/credit-history-route-adapter-service';
+import type { HomeShelfAction, HomeShelfBadge, HomeShelfCreation, HomeShelfPrice } from '@/lib/home-shelf';
+import { formatHomeShelfPrice, homeShelfActionCopy, homeShelfBadge } from '@/lib/home-shelf-copy';
+import {
+  getHomeShelfRouteResponse,
+  type HomeShelfRouteResponse,
+} from '@/lib/home-shelf-route-adapter-service';
 import {
   CREDIT_HISTORY_DEFAULT_LIMIT,
   CREDIT_HISTORY_KINDS,
@@ -111,6 +117,18 @@ type MobileApiContractFixture = {
       query: { category: string };
       responseVariants: { emptyLane: ShowcaseFeedNewestResponse };
     };
+    getHomeShelf: MobileApiContractEndpoint<HomeShelfRouteResponse> & {
+      responseVariants: Record<'member' | 'memberWhoPosted', {
+        cacheControl: string;
+        response: HomeShelfRouteResponse;
+      }>;
+      copy: {
+        actions: Record<HomeShelfAction['id'], { title: string; body: string; cta: string }>;
+        prices: Array<{ price: HomeShelfPrice; label: string }>;
+        badges: Array<{ badge: HomeShelfBadge | null; fitsWelcomeCredits: boolean; offerFreeToTry: boolean; label: string | null }>;
+        referralPercents: Array<{ inviterPercent: number; inviteePercent: number; body: string }>;
+      };
+    };
     undoFeedFeedback: MobileApiContractEndpoint<ShowcaseFeedFeedbackUndoResponse> & {
       request: Extract<ShowcaseFeedFeedbackUndoTarget, { feedbackType: 'not_interested' }>;
       requestVariants: { hideCreator: Extract<ShowcaseFeedFeedbackUndoTarget, { feedbackType: 'hide_creator' }> };
@@ -198,6 +216,7 @@ const expectedEndpointKeys = [
   'readPostMedia',
   'recordReferralVisit',
   'getCreditHistory',
+  'getHomeShelf',
 ] as const;
 
 describe('shared mobile API v1 contract fixture', () => {
@@ -526,6 +545,85 @@ describe('shared mobile API v1 contract fixture', () => {
     await expect(probe({ id: String(endpoint.response.newestPostId), created_at: '2026-10-14T05:30:00+00:00' }))
       .resolves.toEqual(endpoint.response);
     await expect(probe(null)).resolves.toEqual(endpoint.responseVariants.emptyLane);
+  });
+
+  // The shelf answers a visitor with no token the creations alone, shared at the
+  // edge, and a member their own offers too, never shared. A guest's token is
+  // read for what it is: the creations alone, as a signed-out visitor gets them,
+  // less what that guest took out of the feed, so its answer is never shared either.
+  it('answers the home shelf in the shapes and cache policy the fixture pins', async () => {
+    const endpoint = contract.endpoints.getHomeShelf;
+    const answer = async (
+      authorization: string | null,
+      items: HomeShelfRouteResponse['items'],
+      user: Pick<User, 'id' | 'is_anonymous'> | null,
+    ) => {
+      const loadHomeShelfForApi = vi.fn(async () => items);
+      const response = await getHomeShelfRouteResponse({
+        request: new Request(`http://localhost${endpoint.path}`, {
+          headers: authorization ? { Authorization: authorization } : {},
+        }),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as unknown as SupabaseClient),
+          createUserClient: vi.fn(() => ({
+            auth: { getUser: async () => ({ data: { user }, error: null }) },
+          }) as unknown as SupabaseClient),
+          enforceBackendRateLimit: vi.fn(async () => ({
+            allowed: true,
+            limit: 120,
+            remaining: 119,
+            retryAfterSeconds: 0,
+            resetAt: '2026-10-25T06:10:00.000Z',
+          })),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
+          loadHomeShelfForApi,
+        },
+      });
+      expect(response.status).toBe(200);
+      return { response, loadHomeShelfForApi };
+    };
+
+    const signedOut = await answer(null, endpoint.response.items, null);
+    expect(signedOut.response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    await expect(signedOut.response.json()).resolves.toEqual(endpoint.response);
+    expect(signedOut.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false });
+
+    for (const variant of ['member', 'memberWhoPosted'] as const) {
+      const fixture = endpoint.responseVariants[variant];
+      const member = await answer('Bearer token-1', fixture.response.items, { id: 'user-2', is_anonymous: false });
+      expect(member.response.headers.get('Cache-Control')).toBe(fixture.cacheControl);
+      await expect(member.response.json()).resolves.toEqual(fixture.response);
+      expect(member.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'user-2', isAnonymous: false });
+    }
+
+    const guest = await answer('Bearer guest-token', endpoint.response.items, { id: 'guest-1', is_anonymous: true });
+    expect(guest.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'guest-1', isAnonymous: true });
+    expect(guest.response.headers.get('Cache-Control')).toBe(endpoint.responseVariants.member.cacheControl);
+    await expect(guest.response.json()).resolves.toEqual(endpoint.response);
+  });
+
+  // The app says the same words from its own copy (ugc-mobile's
+  // home-shelf-view-model.test.ts holds it to this fixture too).
+  it('words the shelf as the fixture pins', () => {
+    const { copy, responseVariants } = contract.endpoints.getHomeShelf;
+    const actions = [...responseVariants.member.response.items, ...responseVariants.memberWhoPosted.response.items]
+      .filter((item): item is HomeShelfAction => item.kind === 'action');
+
+    expect(new Set(actions.map((action) => action.id))).toEqual(new Set(['post', 'invite', 'earn']));
+    for (const action of actions) {
+      const { title, body, cta } = homeShelfActionCopy(action);
+      expect({ title, body, cta }).toEqual(copy.actions[action.id]);
+    }
+    for (const { price, label } of copy.prices) {
+      expect(formatHomeShelfPrice(price)).toBe(label);
+    }
+    const creation: HomeShelfCreation = responseVariants.member.response.items.find((item) => item.kind === 'creation') as HomeShelfCreation;
+    for (const { badge, fitsWelcomeCredits, offerFreeToTry, label } of copy.badges) {
+      expect(homeShelfBadge({ ...creation, badge, fitsWelcomeCredits }, offerFreeToTry)).toBe(label);
+    }
+    for (const { inviterPercent, inviteePercent, body } of copy.referralPercents) {
+      expect(homeShelfActionCopy({ kind: 'action', id: 'invite', inviterPercent, inviteePercent }).body).toBe(body);
+    }
   });
 
   // A save names its saver only when the app says it told them first: the field

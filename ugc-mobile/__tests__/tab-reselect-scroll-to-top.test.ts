@@ -29,6 +29,9 @@ describe('bottom-tab reselect scroll-to-top wiring', () => {
     const source = readSource('components/home-dashboard.tsx');
 
     expect(source).toContain('key={`home-feed-${activeChipId}`}');
-    expect(source).toContain('maintainVisibleContentPosition={{ disabled: true }}');
+    // Ranked lanes start at the top; Recent keeps its place as new posts land
+    // (since 2026-09-21). Until the shelf replaced the header rail, the rail's
+    // own list carried the `disabled: true` this line used to look for.
+    expect(source).toContain("maintainVisibleContentPosition={{ disabled: activeChip.filters.sort !== 'recent' }}");
   });
 });

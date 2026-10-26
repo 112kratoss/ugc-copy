@@ -416,6 +416,13 @@ export const SHOWCASE_POST_DETAIL_READ_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// The app reads the shelf once per visit to Home and on a pull to refresh.
+export const HOME_SHELF_READ_RATE_LIMIT = {
+  scope: 'home-shelf:read',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const POST_COMMENTS_READ_RATE_LIMIT = {
   scope: 'post-comments:read',
   limit: 300,

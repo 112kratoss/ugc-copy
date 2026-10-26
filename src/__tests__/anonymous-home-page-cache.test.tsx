@@ -4,7 +4,7 @@ import type { ComponentPropsWithoutRef, ReactElement } from 'react';
 import { renderToPipeableStream } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HOME_SLIDE_LOOP_PASSES, getHomeSlides } from '@/lib/home-slider';
+import type { HomeShelfItem } from '@/lib/home-shelf';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 const getServerAuthStateMock = vi.fn();
@@ -14,6 +14,7 @@ const getShowcaseFeedPageMock = vi.fn();
 const loadPublishedGenerationModelCatalogMock = vi.fn();
 const feedClientPropsMock = vi.fn();
 const getInlineShowcasePriorityPosterMock = vi.fn();
+const loadHomeShelfMock = vi.fn();
 
 vi.mock('@/lib/supabase-server', () => ({
   getServerAuthState: () => getServerAuthStateMock(),
@@ -36,6 +37,11 @@ vi.mock('@/lib/generation-model-catalog-store', () => ({
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({ from: vi.fn() }),
+}));
+
+vi.mock('@/lib/home-shelf-server', () => ({
+  homeShelfHasEnoughPins: () => true,
+  loadHomeShelf: (identity?: unknown) => loadHomeShelfMock(identity),
 }));
 
 vi.mock('@/lib/showcase-priority-poster', () => ({
@@ -95,9 +101,30 @@ function buildFeedItem(id: string): ShowcaseFeedItem {
     mediaItems: [],
     commentCount: 0,
     createdAt: '2026-07-20T10:00:00.000Z',
-    creator: { username: 'batman', name: 'Batman' },
+    creator: { id: 'creator-1', username: 'batman', name: 'Batman' },
   } as unknown as ShowcaseFeedItem;
 }
+
+function shelfCreation(id: string, overrides: Partial<Extract<HomeShelfItem, { kind: 'creation' }>> = {}): HomeShelfItem {
+  return {
+    kind: 'creation',
+    id,
+    title: `Creation ${id}`,
+    tool: 'video',
+    posterUrl: `https://cdn.example.test/${id}/poster.webp`,
+    posterThumbhash: null,
+    clipUrl: null,
+    modelName: 'Grok Imagine',
+    price: { kind: 'credits', credits: 15 },
+    fitsWelcomeCredits: true,
+    badge: null,
+    creator: { id: 'creator-1', username: 'magicbooklet', name: 'Magicbooklet Team' },
+    makeHref: `/create-video?remix=generation-${id}&remixPost=${id}`,
+    ...overrides,
+  };
+}
+
+const SHELF = [shelfCreation('boat'), shelfCreation('serum', { price: { kind: 'credits', credits: 70 }, fitsWelcomeCredits: false }), shelfCreation('dance')];
 
 function mockFeed(items: ShowcaseFeedItem[]) {
   getShowcaseFeedPageMock.mockResolvedValue({
@@ -118,6 +145,8 @@ describe('Anonymous home cacheability', () => {
     feedClientPropsMock.mockReset();
     getInlineShowcasePriorityPosterMock.mockReset();
     getInlineShowcasePriorityPosterMock.mockResolvedValue(null);
+    loadHomeShelfMock.mockReset();
+    loadHomeShelfMock.mockResolvedValue(SHELF);
     getServerAuthStateMock.mockImplementation(() => {
       throw new Error('Anonymous home must not read server auth — / must stay statically prerenderable');
     });
@@ -209,13 +238,12 @@ describe('Anonymous home cacheability', () => {
     }));
   });
 
-  it('keeps the create rail, sign-in rail, quick starts, and legal footer', async () => {
+  it('keeps the shelf, sign-in rail, quick starts, and legal footer', async () => {
     const { default: Home } = await import('@/app/page');
 
     const html = await renderPageToHtml(<Home />);
 
-    expect(html).toContain('Creator workspace');
-    expect(html).toContain('Create new');
+    expect(html).toContain('Make this');
     expect(html).toContain('Sign in');
     expect(html).toContain('Quick starts');
     expect(html).toContain('application/ld+json');
@@ -258,37 +286,39 @@ describe('Anonymous home cacheability', () => {
     expect(postLinkedHeadings).toHaveLength(0);
   });
 
-  it('renders the rail server-side, repeated for the loop', async () => {
+  it('renders the shelf server-side from the identityless lane, offering it free to try', async () => {
     const { default: Home } = await import('@/app/page');
 
     const html = await renderPageToHtml(<Home />);
     const container = document.createElement('div');
     container.innerHTML = html;
 
-    // Three passes is what lets the rail wrap in both directions without a
-    // seam; server-rendering them keeps the rail from popping in on hydration.
-    expect(container.querySelectorAll('.home-slider-slide')).toHaveLength(
-      HOME_SLIDE_LOOP_PASSES * getHomeSlides().length
-    );
+    // Part of the prerender, so the cards are in the first HTML; the signed-out
+    // page asks for no viewer, which keeps it shared and cacheable.
+    expect(loadHomeShelfMock).toHaveBeenCalledWith(undefined);
+    // One shelf, no placeholder beside it: a fallback on this boundary would be
+    // written into the prerendered HTML next to the resolved shelf.
+    expect(container.querySelectorAll('.home-shelf')).toHaveLength(1);
+    const cards = [...container.querySelectorAll('.home-shelf-card[href^="/create-"]')];
+    expect(cards.map((card) => card.getAttribute('href'))).toEqual(SHELF.map((item) => (
+      item.kind === 'creation' ? item.makeHref : null
+    )));
+    // The welcome credits cover two of the three; the third says its price.
+    expect(container.querySelectorAll('.home-shelf-card')[0].textContent).toContain('Free to try');
+    expect(container.querySelectorAll('.home-shelf-card')[1].textContent).not.toContain('Free to try');
+    expect(container.querySelectorAll('.home-shelf-card')[1].textContent).toContain('70 credits');
   });
 
-  it('exposes only one copy of each rail link to assistive tech', async () => {
+  it('renders no shelf when there is nothing to put on it', async () => {
+    loadHomeShelfMock.mockResolvedValue([]);
     const { default: Home } = await import('@/app/page');
 
     const html = await renderPageToHtml(<Home />);
     const container = document.createElement('div');
     container.innerHTML = html;
 
-    // The repeated passes are scenery. Left exposed they would announce every
-    // destination three times and put three tab stops on each.
-    const exposed = [...container.querySelectorAll('.home-slider-slide')]
-      .filter((slide) => slide.getAttribute('aria-hidden') !== 'true');
-
-    expect(exposed).toHaveLength(getHomeSlides().length);
-    expect(
-      [...container.querySelectorAll('.home-slider-slide[aria-hidden="true"] a')]
-        .every((link) => link.getAttribute('tabindex') === '-1')
-    ).toBe(true);
+    expect(container.querySelector('.home-shelf')).toBeNull();
+    expect(html).toContain('feed-client');
   });
 
   it('renders the dynamic models card from the published catalog', async () => {
@@ -307,20 +337,16 @@ describe('Anonymous home cacheability', () => {
     const container = document.createElement('div');
     container.innerHTML = html;
 
-    const createNew = [...container.querySelectorAll('a')]
-      .find((link) => link.textContent?.includes('Create new'));
-    const railTool = container.querySelector('.home-slider-slide a[href="/create-image"]');
+    const shelfLinks = [...container.querySelectorAll('.home-shelf a')];
     const quickStartImage = [...container.querySelectorAll('a')]
       .find((link) => (
-        link.getAttribute('href') === '/create-image' && !link.closest('.home-slider-slide')
+        link.getAttribute('href') === '/create-image' && !link.closest('.home-shelf')
       ));
 
-    // The primary action keeps Next's default prefetch; everything else opts
-    // out so the signed-out landing does not warm routes nobody asked for —
-    // the rail especially, which renders every tool three times over.
-    expect(createNew).toBeDefined();
-    expect(createNew).not.toHaveAttribute('data-prefetch');
-    expect(railTool).toHaveAttribute('data-prefetch', 'false');
+    // The signed-out landing does not warm routes nobody asked for: every
+    // shelf card opens a create page, and the quick starts name the same tools.
+    expect(shelfLinks.length).toBeGreaterThan(SHELF.length);
+    expect(shelfLinks.every((link) => link.getAttribute('data-prefetch') === 'false')).toBe(true);
     expect(quickStartImage).toHaveAttribute('data-prefetch', 'false');
   });
 

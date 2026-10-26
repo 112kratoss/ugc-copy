@@ -186,6 +186,11 @@
       "path": "/api/showcase/feed/newest",
       "auth": "none"
     },
+    "getHomeShelf": {
+      "method": "GET",
+      "path": "/api/home/shelf",
+      "auth": "optional"
+    },
     "undoFeedFeedback": {
       "method": "POST",
       "path": "/api/showcase/feed/feedback/undo",

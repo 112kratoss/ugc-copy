@@ -447,6 +447,7 @@ export async function getPublicPostDetail(
     generationId: row.generation_id,
     postFormat: row.post_format,
     category: row.category,
+    creationMode: row.creation_mode,
     sourceKind: normalizeShowcaseSourceKind(row.source_kind),
     resourceBundle: resourceBundle
       ? {

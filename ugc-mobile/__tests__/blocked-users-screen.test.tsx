@@ -189,6 +189,8 @@ describe('Settings → Blocked users', () => {
     // Home as a new session, while the creator's page and the Saved count stayed
     // wrong (audit 04-7).
     expect(state.invalidateQueries.mock.calls.map(([filter]) => filter)).toEqual([
+      // Home's shelf ranks nothing, so it may read the creator back at once.
+      { queryKey: ['home-shelf'] },
       { queryKey: ['showcase-feed'], refetchType: 'none' },
       { queryKey: ['immersive-preview-source'] },
       { queryKey: ['creator-profile'] },
@@ -328,6 +330,7 @@ describe('Settings → Blocked users', () => {
 
     await settle(() => held.get('creator-1')!.agree());
     expect(state.invalidateQueries.mock.calls.map(([filter]) => filter.queryKey)).toEqual([
+      ['home-shelf'],
       ['showcase-feed'],
       ['immersive-preview-source'],
       ['creator-profile'],

@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Sparkles, X } from 'lucide-react-native';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { useDisplayFontLoaded } from '@/lib/display-font-ready';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { getAvatarInitial } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -176,15 +177,23 @@ export function AppText({
   ...textProps
 }: AppTextProps) {
   const theme = useAppTheme();
+  const displayFontLoaded = useDisplayFontLoaded();
   // Android drops `numberOfLines` truncation when the text is selectable: it
   // lays the full string out and draws the extra lines past the single-line box
   // it measured, so a long title spills over whatever sits beneath it instead
   // of ellipsizing. Truncation is a layout guarantee and selection is a nicety,
   // so capped text stops being selectable unless a caller insists.
   const isSelectable = selectable ?? numberOfLines === undefined;
+  // A role in the display face is drawn anew once the face has loaded: the
+  // screens render before it does, and on Android text drawn before that
+  // keeps the system face until it is drawn again (`lib/display-font-ready.ts`).
+  const faceKey = textRole(variant).fontFamily
+    ? (displayFontLoaded ? 'display-face' : 'system-face')
+    : undefined;
 
   return (
     <Text
+      key={faceKey}
       {...textProps}
       ref={ref}
       accessibilityRole={accessibilityRole ?? (heading || isHeadingVariant(variant) ? 'header' : undefined)}

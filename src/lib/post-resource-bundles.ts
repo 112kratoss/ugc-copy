@@ -210,6 +210,8 @@ export interface PostRemixResolutionInput {
   generationId: string | null | undefined;
   postFormat: string | null | undefined;
   category: string | null | undefined;
+  /** The post's `creation_mode`: 'motion' for a motion transfer, which is stored as a video. */
+  creationMode?: string | null;
   sourceKind: string | null | undefined;
   resourceBundle?: {
     viewerCanAccess?: boolean | null;
@@ -1537,10 +1539,13 @@ export function describePostResourceKinds(kinds: PostResourceKind[]): string {
   return `Unlock the ${labels.join(', ')} and ${lastLabel} attached to this post.`;
 }
 
-function targetForMediaCategory(category: string | null | undefined): Exclude<PostRemixTarget, null> {
+function targetForMediaCategory(
+  category: string | null | undefined,
+  creationMode: string | null | undefined,
+): Exclude<PostRemixTarget, null> {
   // Shared with the redirect the remix endpoint emits, so the tool a post
   // advertises is always the tool the viewer actually lands in.
-  return resolveRemixTool(category);
+  return resolveRemixTool(category, creationMode);
 }
 
 function normalizePostResourceRemixDescriptors(value: unknown): PostResourceRemixDescriptor[] {
@@ -1620,7 +1625,7 @@ export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
   if (hasGeneration) {
     return {
       capability: resourceBundle?.allowRemix && bundleRequiresUnlock ? 'unlock_required' : 'public',
-      target: targetForMediaCategory(input.category),
+      target: targetForMediaCategory(input.category, input.creationMode),
     };
   }
 

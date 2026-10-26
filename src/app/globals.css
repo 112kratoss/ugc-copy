@@ -53,7 +53,7 @@
 @source "../components/GenerationNotifications.tsx";
 @source "../components/HomeExperience.tsx";
 @source "../components/HomeFeedSkeleton.tsx";
-@source "../components/HomeSlider.tsx";
+@source "../components/HomeShelf.tsx";
 @source "../components/HoverVideo.tsx";
 @source "../components/InlineMediaAudio.tsx";
 @source "../components/InlineMediaVideo.tsx";
@@ -759,161 +759,101 @@ button:disabled,
 }
 
 /*
- * The looping create rail at the top of the home column. Laid out here rather
- * than with utilities for the same reason as the grid above: it renders on
- * authenticated routes too, where a utility the second sheet re-emitted once
- * won over anything responsive declared in the component.
+ * The "Make this" shelf at the top of the home column (HomeShelf.tsx). Laid
+ * out here rather than with utilities for the same reason as the grid above:
+ * it renders on authenticated routes too, where a utility the second sheet
+ * re-emitted once won over anything responsive declared in the component.
  *
- * The track is bled to the viewport edges on narrow screens so a card can sit
- * flush against the gutter the way it does on mobile, then pulled back in once
- * the column has its own margins.
+ * On a phone the track bleeds to the screen edges so the first card sits on
+ * the gutter and the last scrolls off the edge; from 40rem the column has its
+ * own margins and the track keeps to them. The widths leave a sliver of the
+ * next card showing, which is what says the row scrolls.
+ *
+ * A scrolling row clips both ways, so the track keeps 0.25rem of room around
+ * its cards for the 4px focus ring (`.ui-focus-ring`) and takes it back with
+ * a negative margin: the cards sit where they would without it.
  */
-.home-slider-track {
+.home-shelf-track {
   display: flex;
+  gap: 0.625rem;
+  margin: -0.25rem -1rem;
+  padding: 0.25rem 1rem;
+  list-style: none;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
-  /* The fold teleports by a whole pass at the scroll's true end; an overscroll
-     bounce there would be felt as the rail hitting a wall it claims not to have. */
+  /* Snapping aligns a card to the scrollport edge, which ignores the padding
+     above; without this a snapped card sits flush against the screen. */
+  scroll-padding-inline: 1rem;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
-  margin-inline: -1rem;
-  padding-inline: 1rem;
-  /* Snapping aligns a slide to the scrollport edge, which ignores the padding
-     above — without this a snapped card sits flush against the screen instead
-     of on the gutter, and its resting offset disagrees with the one the
-     rotation scrolls to. */
-  scroll-padding-inline: 1rem;
 }
 
-/* Touch pans this rail natively; a mouse only does because of the drag handler,
-   so the cursor is what advertises that the rail can be pushed at all. */
-@media (hover: hover) and (pointer: fine) {
-  .home-slider-track {
-    cursor: grab;
-  }
-
-  .home-slider-track:active {
-    cursor: grabbing;
-  }
-}
-
-.home-slider-track::-webkit-scrollbar {
+.home-shelf-track::-webkit-scrollbar {
   display: none;
 }
 
-.home-slider-slide {
+/* Two cards and a sliver at phone width. */
+.home-shelf-item {
   flex: 0 0 auto;
+  width: 10rem;
   scroll-snap-align: start;
-  /* Margin, not `gap`: it makes every slide occupy exactly one interval, so a
-     pass width is a clean multiple and the fold lands pixel-perfect. */
-  margin-right: 0.625rem;
-  width: 17.5rem;
+}
+
+/* A phone card's meta line has room for the price alone. */
+.home-shelf-model {
+  display: none;
 }
 
 /*
- * One ratio at every size, so widening a card takes its height with it and the
- * art keeps its shape. Height is never declared — `aspect-ratio` derives it.
+ * No `display` here: these rules sit outside Tailwind's layers and would beat
+ * any layout utility on the element, so each kind of card names its own.
  */
-.home-slider-card {
-  display: flex;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: 1.25rem;
-  border-width: 1px;
-}
-
-.home-slider-preview {
+/* A media frame at every width: 20px, `--ui-radius-xl`. */
+.home-shelf-card {
   position: relative;
-  display: block;
-  /* Takes whatever height the caption leaves, so a taller card grows its art
-     rather than its empty space. */
-  flex: 1 1 auto;
-  min-height: 0;
   overflow: hidden;
-  background: var(--ui-surface-raised);
+  aspect-ratio: 4 / 5;
+  border-radius: var(--ui-radius-xl);
 }
 
-.home-slider-eyebrow {
-  font-size: 0.6875rem;
-  letter-spacing: 0.08em;
+/* A creation: the poster fills it and the captions sit over the picture. */
+.home-shelf-card--media {
+  display: block;
 }
 
-.home-slider-headline {
-  font-size: 1.375rem;
-  line-height: 1.22;
-}
-
-/* Short card: headline at the top, action at the foot, as on mobile. */
-.home-slider-workspace-body {
-  padding: 0.875rem;
+/* An offer or the tools tile: what it says at the top, its action at the foot. */
+.home-shelf-card--stack {
+  display: flex;
+  flex-direction: column;
   justify-content: space-between;
 }
 
-.home-slider-tool-title {
-  font-size: 1rem;
+/* Touch scrolls the row natively; the arrows are for a mouse. */
+.home-shelf-arrows {
+  display: none;
 }
 
-.home-slider-tool-summary {
-  font-size: 0.75rem;
-  line-height: 1.42;
-}
-
-.home-slider-tool-body {
-  padding: 0.625rem 0.75rem 0.6875rem;
+@media (hover: hover) and (pointer: fine) {
+  .home-shelf-arrows {
+    display: flex;
+  }
 }
 
 @media (min-width: 40rem) {
-  .home-slider-track {
-    margin-inline: 0;
-    padding-inline: 0;
-    scroll-padding-inline: 0;
+  /* The column's own margins hold the row; only the focus ring's room is left. */
+  .home-shelf-track {
+    margin: -0.25rem;
+    padding: 0.25rem;
+    scroll-padding-inline: 0.25rem;
   }
 
-  /*
-   * Sized against the feed card below rather than a fixed width, so the rail
-   * reads as the page's opening block. Short of the full measure on purpose:
-   * the sliver of the next card is what tells you the rail scrolls at all.
-   */
-  .home-slider-slide {
-    width: 88%;
+  /* Three cards and a sliver of the fourth across the column. */
+  .home-shelf-item {
+    width: calc((100% - 1.25rem) / 3.3);
   }
 
-  /* Type does not scale with the box — a 2x card with 2x text would just be
-     the same card. It steps up once, enough to carry the larger surface. */
-  .home-slider-card {
-    border-radius: 1.5rem;
-  }
-
-  .home-slider-eyebrow {
-    font-size: 0.75rem;
-  }
-
-  .home-slider-headline {
-    font-size: 2rem;
-    line-height: 1.16;
-  }
-
-  /*
-   * Once the card is hero-sized, pinning the action to the foot leaves a hollow
-   * middle — there is no supporting copy to fill it. Centring keeps the two
-   * elements as one deliberate block.
-   */
-  .home-slider-workspace-body {
-    padding: 1.5rem 2rem;
-    justify-content: center;
-    gap: 1.5rem;
-  }
-
-  .home-slider-tool-title {
-    font-size: 1.25rem;
-  }
-
-  .home-slider-tool-summary {
-    font-size: 0.875rem;
-  }
-
-  .home-slider-tool-body {
-    padding: 0.875rem 1.25rem 1.125rem;
+  .home-shelf-model {
+    display: inline;
   }
 }
 

@@ -1,21 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  HOME_TOOL_SHORTCUTS,
   formatCompactCount,
   formatRelativeTime,
   formatUsdCents,
 } from '../lib/home-view-model';
 
 describe('home view model', () => {
-  it('describes mobile workspace creator paths with routes', () => {
-    expect(HOME_TOOL_SHORTCUTS.map(({ id, accent, href, previewVariant }) => ({ id, accent, href, previewVariant }))).toEqual([
-      { id: 'image', accent: 'image', href: '/create/image', previewVariant: 'kingdom' },
-      { id: 'video', accent: 'video', href: '/create/video', previewVariant: 'city' },
-      { id: 'motion', accent: 'motion', href: '/create/motion', previewVariant: 'runner' },
-    ]);
-  });
-
   it('formats compact counts and relative times for dashboard cards', () => {
     const now = new Date('2026-05-13T12:00:00.000Z');
 

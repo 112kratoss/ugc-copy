@@ -2346,6 +2346,758 @@
           }
         }
       }
+    },
+    "getHomeShelf": {
+      "method": "GET",
+      "path": "/api/home/shelf",
+      "auth": "optional",
+      "cacheControl": "public, s-maxage=60, stale-while-revalidate=300",
+      "response": {
+        "success": true,
+        "schemaVersion": 1,
+        "items": [
+          {
+            "kind": "creation",
+            "id": "post-1",
+            "title": "Paper boat on a sunlit pond",
+            "tool": "video",
+            "posterUrl": "https://cdn.example.test/post-1/poster.webp",
+            "posterThumbhash": null,
+            "clipUrl": "https://cdn.example.test/post-1/stream.mp4",
+            "modelName": "Grok Imagine",
+            "price": {
+              "kind": "credits",
+              "credits": 15
+            },
+            "fitsWelcomeCredits": true,
+            "badge": null,
+            "creator": {
+              "id": "user-1",
+              "username": "magicbooklet",
+              "name": "Magicbooklet Team"
+            },
+            "makeHref": "/create-video?remix=generation-1&remixPost=post-1",
+            "post": {
+              "id": "post-1",
+              "mediaUrl": "https://cdn.example.test/post-1/source.mp4",
+              "mediaKind": "video",
+              "mediaItems": [
+                {
+                  "id": "post-1-media-1",
+                  "url": "https://cdn.example.test/post-1/source.mp4",
+                  "renditionUrl": null,
+                  "previewUrl": "https://cdn.example.test/post-1/poster.webp",
+                  "previewThumbhash": null,
+                  "feedStreamUrl": "https://cdn.example.test/post-1/stream.mp4",
+                  "mediaKind": "video",
+                  "contentType": "video/mp4",
+                  "originalName": null,
+                  "width": 720,
+                  "height": 900,
+                  "durationSeconds": 6,
+                  "sortOrder": 0
+                }
+              ],
+              "model": "Grok Imagine Video",
+              "title": "Paper boat on a sunlit pond",
+              "prompt": "Paper boat on a sunlit pond, cinematic light.",
+              "body": "",
+              "category": "video",
+              "creationMode": null,
+              "postFormat": "media",
+              "saveCount": 0,
+              "remixCount": 0,
+              "commentCount": 0,
+              "createdAt": "2026-10-25T06:00:00.000Z",
+              "creator": {
+                "id": "user-1",
+                "username": "magicbooklet",
+                "name": "Magicbooklet Team",
+                "avatar": null
+              },
+              "isSaved": false,
+              "sourceKind": "magicbooklet",
+              "sourceTool": null,
+              "generationId": "generation-1",
+              "asset": null,
+              "canRemix": true,
+              "remixCapability": "public",
+              "remixTarget": "video"
+            }
+          },
+          {
+            "kind": "creation",
+            "id": "post-2",
+            "title": "Serum on a stone pedestal",
+            "tool": "image",
+            "posterUrl": "https://cdn.example.test/post-2/poster.webp",
+            "posterThumbhash": null,
+            "clipUrl": null,
+            "modelName": "Nano Banana Pro",
+            "price": {
+              "kind": "credits",
+              "credits": 18
+            },
+            "fitsWelcomeCredits": true,
+            "badge": null,
+            "creator": {
+              "id": "user-1",
+              "username": "magicbooklet",
+              "name": "Magicbooklet Team"
+            },
+            "makeHref": "/create-image?remix=generation-2&remixPost=post-2",
+            "post": {
+              "id": "post-2",
+              "mediaUrl": "https://cdn.example.test/post-2/source.webp",
+              "mediaKind": "image",
+              "mediaItems": [
+                {
+                  "id": "post-2-media-1",
+                  "url": "https://cdn.example.test/post-2/source.webp",
+                  "renditionUrl": null,
+                  "previewUrl": "https://cdn.example.test/post-2/poster.webp",
+                  "previewThumbhash": null,
+                  "feedStreamUrl": null,
+                  "mediaKind": "image",
+                  "contentType": "image/webp",
+                  "originalName": null,
+                  "width": 720,
+                  "height": 900,
+                  "durationSeconds": null,
+                  "sortOrder": 0
+                }
+              ],
+              "model": "Nano Banana Pro",
+              "title": "Serum on a stone pedestal",
+              "prompt": "Serum on a stone pedestal, cinematic light.",
+              "body": "",
+              "category": "image",
+              "creationMode": null,
+              "postFormat": "media",
+              "saveCount": 0,
+              "remixCount": 0,
+              "commentCount": 0,
+              "createdAt": "2026-10-25T06:00:00.000Z",
+              "creator": {
+                "id": "user-1",
+                "username": "magicbooklet",
+                "name": "Magicbooklet Team",
+                "avatar": null
+              },
+              "isSaved": false,
+              "sourceKind": "magicbooklet",
+              "sourceTool": null,
+              "generationId": "generation-2",
+              "asset": null,
+              "canRemix": true,
+              "remixCapability": "public",
+              "remixTarget": "image"
+            }
+          },
+          {
+            "kind": "creation",
+            "id": "post-3",
+            "title": "Make anyone dance",
+            "tool": "motion",
+            "posterUrl": "https://cdn.example.test/post-3/poster.webp",
+            "posterThumbhash": null,
+            "clipUrl": "https://cdn.example.test/post-3/stream.mp4",
+            "modelName": "Kling 3.0 Motion",
+            "price": {
+              "kind": "clip-length"
+            },
+            "fitsWelcomeCredits": false,
+            "badge": "new-model",
+            "creator": {
+              "id": "user-1",
+              "username": "magicbooklet",
+              "name": "Magicbooklet Team"
+            },
+            "makeHref": "/create-motion?remix=generation-3&remixPost=post-3",
+            "post": {
+              "id": "post-3",
+              "mediaUrl": "https://cdn.example.test/post-3/source.mp4",
+              "mediaKind": "video",
+              "mediaItems": [
+                {
+                  "id": "post-3-media-1",
+                  "url": "https://cdn.example.test/post-3/source.mp4",
+                  "renditionUrl": null,
+                  "previewUrl": "https://cdn.example.test/post-3/poster.webp",
+                  "previewThumbhash": null,
+                  "feedStreamUrl": "https://cdn.example.test/post-3/stream.mp4",
+                  "mediaKind": "video",
+                  "contentType": "video/mp4",
+                  "originalName": null,
+                  "width": 720,
+                  "height": 900,
+                  "durationSeconds": 6,
+                  "sortOrder": 0
+                }
+              ],
+              "model": "Kling 3.0 Motion",
+              "title": "Make anyone dance",
+              "prompt": "Make anyone dance, cinematic light.",
+              "body": "",
+              "category": "video",
+              "creationMode": "motion",
+              "postFormat": "media",
+              "saveCount": 0,
+              "remixCount": 0,
+              "commentCount": 0,
+              "createdAt": "2026-10-25T06:00:00.000Z",
+              "creator": {
+                "id": "user-1",
+                "username": "magicbooklet",
+                "name": "Magicbooklet Team",
+                "avatar": null
+              },
+              "isSaved": false,
+              "sourceKind": "magicbooklet",
+              "sourceTool": null,
+              "generationId": "generation-3",
+              "asset": null,
+              "canRemix": true,
+              "remixCapability": "public",
+              "remixTarget": "motion"
+            }
+          }
+        ]
+      },
+      "responseVariants": {
+        "member": {
+          "cacheControl": "private, no-store",
+          "response": {
+            "success": true,
+            "schemaVersion": 1,
+            "items": [
+              {
+                "kind": "creation",
+                "id": "post-1",
+                "title": "Paper boat on a sunlit pond",
+                "tool": "video",
+                "posterUrl": "https://cdn.example.test/post-1/poster.webp",
+                "posterThumbhash": null,
+                "clipUrl": "https://cdn.example.test/post-1/stream.mp4",
+                "modelName": "Grok Imagine",
+                "price": {
+                  "kind": "credits",
+                  "credits": 15
+                },
+                "fitsWelcomeCredits": true,
+                "badge": null,
+                "creator": {
+                  "id": "user-1",
+                  "username": "magicbooklet",
+                  "name": "Magicbooklet Team"
+                },
+                "makeHref": "/create-video?remix=generation-1&remixPost=post-1",
+                "post": {
+                  "id": "post-1",
+                  "mediaUrl": "https://cdn.example.test/post-1/source.mp4",
+                  "mediaKind": "video",
+                  "mediaItems": [
+                    {
+                      "id": "post-1-media-1",
+                      "url": "https://cdn.example.test/post-1/source.mp4",
+                      "renditionUrl": null,
+                      "previewUrl": "https://cdn.example.test/post-1/poster.webp",
+                      "previewThumbhash": null,
+                      "feedStreamUrl": "https://cdn.example.test/post-1/stream.mp4",
+                      "mediaKind": "video",
+                      "contentType": "video/mp4",
+                      "originalName": null,
+                      "width": 720,
+                      "height": 900,
+                      "durationSeconds": 6,
+                      "sortOrder": 0
+                    }
+                  ],
+                  "model": "Grok Imagine Video",
+                  "title": "Paper boat on a sunlit pond",
+                  "prompt": "Paper boat on a sunlit pond, cinematic light.",
+                  "body": "",
+                  "category": "video",
+                  "creationMode": null,
+                  "postFormat": "media",
+                  "saveCount": 0,
+                  "remixCount": 0,
+                  "commentCount": 0,
+                  "createdAt": "2026-10-25T06:00:00.000Z",
+                  "creator": {
+                    "id": "user-1",
+                    "username": "magicbooklet",
+                    "name": "Magicbooklet Team",
+                    "avatar": null
+                  },
+                  "isSaved": false,
+                  "sourceKind": "magicbooklet",
+                  "sourceTool": null,
+                  "generationId": "generation-1",
+                  "asset": null,
+                  "canRemix": true,
+                  "remixCapability": "public",
+                  "remixTarget": "video"
+                }
+              },
+              {
+                "kind": "creation",
+                "id": "post-2",
+                "title": "Serum on a stone pedestal",
+                "tool": "image",
+                "posterUrl": "https://cdn.example.test/post-2/poster.webp",
+                "posterThumbhash": null,
+                "clipUrl": null,
+                "modelName": "Nano Banana Pro",
+                "price": {
+                  "kind": "credits",
+                  "credits": 18
+                },
+                "fitsWelcomeCredits": true,
+                "badge": null,
+                "creator": {
+                  "id": "user-1",
+                  "username": "magicbooklet",
+                  "name": "Magicbooklet Team"
+                },
+                "makeHref": "/create-image?remix=generation-2&remixPost=post-2",
+                "post": {
+                  "id": "post-2",
+                  "mediaUrl": "https://cdn.example.test/post-2/source.webp",
+                  "mediaKind": "image",
+                  "mediaItems": [
+                    {
+                      "id": "post-2-media-1",
+                      "url": "https://cdn.example.test/post-2/source.webp",
+                      "renditionUrl": null,
+                      "previewUrl": "https://cdn.example.test/post-2/poster.webp",
+                      "previewThumbhash": null,
+                      "feedStreamUrl": null,
+                      "mediaKind": "image",
+                      "contentType": "image/webp",
+                      "originalName": null,
+                      "width": 720,
+                      "height": 900,
+                      "durationSeconds": null,
+                      "sortOrder": 0
+                    }
+                  ],
+                  "model": "Nano Banana Pro",
+                  "title": "Serum on a stone pedestal",
+                  "prompt": "Serum on a stone pedestal, cinematic light.",
+                  "body": "",
+                  "category": "image",
+                  "creationMode": null,
+                  "postFormat": "media",
+                  "saveCount": 0,
+                  "remixCount": 0,
+                  "commentCount": 0,
+                  "createdAt": "2026-10-25T06:00:00.000Z",
+                  "creator": {
+                    "id": "user-1",
+                    "username": "magicbooklet",
+                    "name": "Magicbooklet Team",
+                    "avatar": null
+                  },
+                  "isSaved": false,
+                  "sourceKind": "magicbooklet",
+                  "sourceTool": null,
+                  "generationId": "generation-2",
+                  "asset": null,
+                  "canRemix": true,
+                  "remixCapability": "public",
+                  "remixTarget": "image"
+                }
+              },
+              {
+                "kind": "action",
+                "id": "post"
+              },
+              {
+                "kind": "creation",
+                "id": "post-3",
+                "title": "Make anyone dance",
+                "tool": "motion",
+                "posterUrl": "https://cdn.example.test/post-3/poster.webp",
+                "posterThumbhash": null,
+                "clipUrl": "https://cdn.example.test/post-3/stream.mp4",
+                "modelName": "Kling 3.0 Motion",
+                "price": {
+                  "kind": "clip-length"
+                },
+                "fitsWelcomeCredits": false,
+                "badge": "new-model",
+                "creator": {
+                  "id": "user-1",
+                  "username": "magicbooklet",
+                  "name": "Magicbooklet Team"
+                },
+                "makeHref": "/create-motion?remix=generation-3&remixPost=post-3",
+                "post": {
+                  "id": "post-3",
+                  "mediaUrl": "https://cdn.example.test/post-3/source.mp4",
+                  "mediaKind": "video",
+                  "mediaItems": [
+                    {
+                      "id": "post-3-media-1",
+                      "url": "https://cdn.example.test/post-3/source.mp4",
+                      "renditionUrl": null,
+                      "previewUrl": "https://cdn.example.test/post-3/poster.webp",
+                      "previewThumbhash": null,
+                      "feedStreamUrl": "https://cdn.example.test/post-3/stream.mp4",
+                      "mediaKind": "video",
+                      "contentType": "video/mp4",
+                      "originalName": null,
+                      "width": 720,
+                      "height": 900,
+                      "durationSeconds": 6,
+                      "sortOrder": 0
+                    }
+                  ],
+                  "model": "Kling 3.0 Motion",
+                  "title": "Make anyone dance",
+                  "prompt": "Make anyone dance, cinematic light.",
+                  "body": "",
+                  "category": "video",
+                  "creationMode": "motion",
+                  "postFormat": "media",
+                  "saveCount": 0,
+                  "remixCount": 0,
+                  "commentCount": 0,
+                  "createdAt": "2026-10-25T06:00:00.000Z",
+                  "creator": {
+                    "id": "user-1",
+                    "username": "magicbooklet",
+                    "name": "Magicbooklet Team",
+                    "avatar": null
+                  },
+                  "isSaved": false,
+                  "sourceKind": "magicbooklet",
+                  "sourceTool": null,
+                  "generationId": "generation-3",
+                  "asset": null,
+                  "canRemix": true,
+                  "remixCapability": "public",
+                  "remixTarget": "motion"
+                }
+              },
+              {
+                "kind": "action",
+                "id": "invite",
+                "inviterPercent": 5,
+                "inviteePercent": 5
+              }
+            ]
+          }
+        },
+        "memberWhoPosted": {
+          "cacheControl": "private, no-store",
+          "response": {
+            "success": true,
+            "schemaVersion": 1,
+            "items": [
+              {
+                "kind": "creation",
+                "id": "post-1",
+                "title": "Paper boat on a sunlit pond",
+                "tool": "video",
+                "posterUrl": "https://cdn.example.test/post-1/poster.webp",
+                "posterThumbhash": null,
+                "clipUrl": "https://cdn.example.test/post-1/stream.mp4",
+                "modelName": "Grok Imagine",
+                "price": {
+                  "kind": "credits",
+                  "credits": 15
+                },
+                "fitsWelcomeCredits": true,
+                "badge": null,
+                "creator": {
+                  "id": "user-1",
+                  "username": "magicbooklet",
+                  "name": "Magicbooklet Team"
+                },
+                "makeHref": "/create-video?remix=generation-1&remixPost=post-1",
+                "post": {
+                  "id": "post-1",
+                  "mediaUrl": "https://cdn.example.test/post-1/source.mp4",
+                  "mediaKind": "video",
+                  "mediaItems": [
+                    {
+                      "id": "post-1-media-1",
+                      "url": "https://cdn.example.test/post-1/source.mp4",
+                      "renditionUrl": null,
+                      "previewUrl": "https://cdn.example.test/post-1/poster.webp",
+                      "previewThumbhash": null,
+                      "feedStreamUrl": "https://cdn.example.test/post-1/stream.mp4",
+                      "mediaKind": "video",
+                      "contentType": "video/mp4",
+                      "originalName": null,
+                      "width": 720,
+                      "height": 900,
+                      "durationSeconds": 6,
+                      "sortOrder": 0
+                    }
+                  ],
+                  "model": "Grok Imagine Video",
+                  "title": "Paper boat on a sunlit pond",
+                  "prompt": "Paper boat on a sunlit pond, cinematic light.",
+                  "body": "",
+                  "category": "video",
+                  "creationMode": null,
+                  "postFormat": "media",
+                  "saveCount": 0,
+                  "remixCount": 0,
+                  "commentCount": 0,
+                  "createdAt": "2026-10-25T06:00:00.000Z",
+                  "creator": {
+                    "id": "user-1",
+                    "username": "magicbooklet",
+                    "name": "Magicbooklet Team",
+                    "avatar": null
+                  },
+                  "isSaved": false,
+                  "sourceKind": "magicbooklet",
+                  "sourceTool": null,
+                  "generationId": "generation-1",
+                  "asset": null,
+                  "canRemix": true,
+                  "remixCapability": "public",
+                  "remixTarget": "video"
+                }
+              },
+              {
+                "kind": "creation",
+                "id": "post-2",
+                "title": "Serum on a stone pedestal",
+                "tool": "image",
+                "posterUrl": "https://cdn.example.test/post-2/poster.webp",
+                "posterThumbhash": null,
+                "clipUrl": null,
+                "modelName": "Nano Banana Pro",
+                "price": {
+                  "kind": "credits",
+                  "credits": 18
+                },
+                "fitsWelcomeCredits": true,
+                "badge": null,
+                "creator": {
+                  "id": "user-1",
+                  "username": "magicbooklet",
+                  "name": "Magicbooklet Team"
+                },
+                "makeHref": "/create-image?remix=generation-2&remixPost=post-2",
+                "post": {
+                  "id": "post-2",
+                  "mediaUrl": "https://cdn.example.test/post-2/source.webp",
+                  "mediaKind": "image",
+                  "mediaItems": [
+                    {
+                      "id": "post-2-media-1",
+                      "url": "https://cdn.example.test/post-2/source.webp",
+                      "renditionUrl": null,
+                      "previewUrl": "https://cdn.example.test/post-2/poster.webp",
+                      "previewThumbhash": null,
+                      "feedStreamUrl": null,
+                      "mediaKind": "image",
+                      "contentType": "image/webp",
+                      "originalName": null,
+                      "width": 720,
+                      "height": 900,
+                      "durationSeconds": null,
+                      "sortOrder": 0
+                    }
+                  ],
+                  "model": "Nano Banana Pro",
+                  "title": "Serum on a stone pedestal",
+                  "prompt": "Serum on a stone pedestal, cinematic light.",
+                  "body": "",
+                  "category": "image",
+                  "creationMode": null,
+                  "postFormat": "media",
+                  "saveCount": 0,
+                  "remixCount": 0,
+                  "commentCount": 0,
+                  "createdAt": "2026-10-25T06:00:00.000Z",
+                  "creator": {
+                    "id": "user-1",
+                    "username": "magicbooklet",
+                    "name": "Magicbooklet Team",
+                    "avatar": null
+                  },
+                  "isSaved": false,
+                  "sourceKind": "magicbooklet",
+                  "sourceTool": null,
+                  "generationId": "generation-2",
+                  "asset": null,
+                  "canRemix": true,
+                  "remixCapability": "public",
+                  "remixTarget": "image"
+                }
+              },
+              {
+                "kind": "action",
+                "id": "earn",
+                "creatorSharePercent": 85
+              },
+              {
+                "kind": "creation",
+                "id": "post-3",
+                "title": "Make anyone dance",
+                "tool": "motion",
+                "posterUrl": "https://cdn.example.test/post-3/poster.webp",
+                "posterThumbhash": null,
+                "clipUrl": "https://cdn.example.test/post-3/stream.mp4",
+                "modelName": "Kling 3.0 Motion",
+                "price": {
+                  "kind": "clip-length"
+                },
+                "fitsWelcomeCredits": false,
+                "badge": "new-model",
+                "creator": {
+                  "id": "user-1",
+                  "username": "magicbooklet",
+                  "name": "Magicbooklet Team"
+                },
+                "makeHref": "/create-motion?remix=generation-3&remixPost=post-3",
+                "post": {
+                  "id": "post-3",
+                  "mediaUrl": "https://cdn.example.test/post-3/source.mp4",
+                  "mediaKind": "video",
+                  "mediaItems": [
+                    {
+                      "id": "post-3-media-1",
+                      "url": "https://cdn.example.test/post-3/source.mp4",
+                      "renditionUrl": null,
+                      "previewUrl": "https://cdn.example.test/post-3/poster.webp",
+                      "previewThumbhash": null,
+                      "feedStreamUrl": "https://cdn.example.test/post-3/stream.mp4",
+                      "mediaKind": "video",
+                      "contentType": "video/mp4",
+                      "originalName": null,
+                      "width": 720,
+                      "height": 900,
+                      "durationSeconds": 6,
+                      "sortOrder": 0
+                    }
+                  ],
+                  "model": "Kling 3.0 Motion",
+                  "title": "Make anyone dance",
+                  "prompt": "Make anyone dance, cinematic light.",
+                  "body": "",
+                  "category": "video",
+                  "creationMode": "motion",
+                  "postFormat": "media",
+                  "saveCount": 0,
+                  "remixCount": 0,
+                  "commentCount": 0,
+                  "createdAt": "2026-10-25T06:00:00.000Z",
+                  "creator": {
+                    "id": "user-1",
+                    "username": "magicbooklet",
+                    "name": "Magicbooklet Team",
+                    "avatar": null
+                  },
+                  "isSaved": false,
+                  "sourceKind": "magicbooklet",
+                  "sourceTool": null,
+                  "generationId": "generation-3",
+                  "asset": null,
+                  "canRemix": true,
+                  "remixCapability": "public",
+                  "remixTarget": "motion"
+                }
+              },
+              {
+                "kind": "action",
+                "id": "invite",
+                "inviterPercent": 5,
+                "inviteePercent": 5
+              }
+            ]
+          }
+        }
+      },
+      "copy": {
+        "description": "What both clients say on the shelf: the actions in responseVariants, each kind of price, and which badge a card shows. src/lib/home-shelf-copy.ts and ugc-mobile/lib/home-shelf-view-model.ts are each held to it.",
+        "actions": {
+          "post": {
+            "title": "Share your first post",
+            "body": "Post a creation or a tip to the feed.",
+            "cta": "Post now"
+          },
+          "invite": {
+            "title": "Invite friends, earn credits",
+            "body": "You get 5% of their top-ups in credits. They get 5% extra on their first.",
+            "cta": "Invite friends"
+          },
+          "earn": {
+            "title": "Earn from your prompts",
+            "body": "Add a recipe to a post, set a price, and keep 85% of each sale.",
+            "cta": "Start selling"
+          }
+        },
+        "prices": [
+          {
+            "price": {
+              "kind": "credits",
+              "credits": 15
+            },
+            "label": "15 credits"
+          },
+          {
+            "price": {
+              "kind": "credits",
+              "credits": 1
+            },
+            "label": "1 credit"
+          },
+          {
+            "price": {
+              "kind": "clip-length"
+            },
+            "label": "Priced by clip length"
+          }
+        ],
+        "badges": [
+          {
+            "badge": "new-model",
+            "fitsWelcomeCredits": true,
+            "offerFreeToTry": true,
+            "label": "New model"
+          },
+          {
+            "badge": "new-model",
+            "fitsWelcomeCredits": false,
+            "offerFreeToTry": false,
+            "label": "New model"
+          },
+          {
+            "badge": null,
+            "fitsWelcomeCredits": true,
+            "offerFreeToTry": true,
+            "label": "Free to try"
+          },
+          {
+            "badge": null,
+            "fitsWelcomeCredits": true,
+            "offerFreeToTry": false,
+            "label": null
+          },
+          {
+            "badge": null,
+            "fitsWelcomeCredits": false,
+            "offerFreeToTry": true,
+            "label": null
+          }
+        ],
+        "referralPercents": [
+          {
+            "inviterPercent": 7.25,
+            "inviteePercent": 0,
+            "body": "You get 7.25% of their top-ups in credits."
+          }
+        ]
+      }
     }
   },
   "profileInvalidPayload": {

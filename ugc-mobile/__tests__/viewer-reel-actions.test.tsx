@@ -505,7 +505,8 @@ describe('Block user from the reel', () => {
     // No creator's grid is read again: Luna's cached pages say she is blocked
     // instead (audit 02-8), and only the Saved list and its count are read.
     const invalidated = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
-    expect(invalidated).toEqual([['profile-saved-media', 'viewer-1'], ['profile', 'viewer-1']]);
+    // Home's shelf is marked stale (no read); the Saved list and its count are read again.
+    expect(invalidated).toEqual([['home-shelf'], ['profile-saved-media', 'viewer-1'], ['profile', 'viewer-1']]);
     expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
     expect(screenState.zoom.dismiss).not.toHaveBeenCalled();
     expect(routerState.back).not.toHaveBeenCalled();
@@ -1077,7 +1078,7 @@ describe("a reel opened on a creator's page", () => {
     // Her posts leave the lanes too, and nothing is read again but the Saved list and its count.
     expect(laneIds(laneKey)).toEqual(['post-a', 'post-d']);
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey))
-      .toEqual([['profile-saved-media', 'viewer-1'], ['profile', 'viewer-1']]);
+      .toEqual([['home-shelf'], ['profile-saved-media', 'viewer-1'], ['profile', 'viewer-1']]);
     expect(authState.api.getCreatorProfile).not.toHaveBeenCalled();
     expect(haptic.success).toHaveBeenCalledTimes(1);
     expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith('@luna blocked.');

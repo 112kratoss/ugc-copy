@@ -27,6 +27,7 @@ type GenerationRow = {
   is_public?: boolean | null;
   share_input_media_for_remix?: boolean | null;
   category?: string | null;
+  creation_mode?: string | null;
   model?: string | null;
   prompt?: string | null;
   workflow_settings?: unknown;
@@ -155,7 +156,7 @@ export async function remixShowcasePostForRoute({
   // remix-enabled recipe on it is unlocked.
   const { data: generation, error: generationError } = await serviceClient
     .from('generations')
-    .select('id, user_id, is_public, share_input_media_for_remix, category, model, prompt, workflow_settings')
+    .select('id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings')
     .eq('id', post.generation_id)
     .maybeSingle();
 
@@ -205,7 +206,7 @@ export async function remixShowcasePostForRoute({
 
   // Opening an editor is not a completed remix. The generation completion
   // ledger counts successful outputs and settlement sends the notification.
-  const redirectPath = remixCreatePathForCategory(generationRow.category ?? post.category);
+  const redirectPath = remixCreatePathForCategory(generationRow.category ?? post.category, generationRow.creation_mode);
   const rawSettings =
     generationRow.workflow_settings && typeof generationRow.workflow_settings === 'object'
       ? generationRow.workflow_settings as Record<string, unknown>

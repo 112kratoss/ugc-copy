@@ -4,7 +4,7 @@ import { Suspense, use } from 'react';
 import { Text } from '@/components/DesignSystem';
 import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
 import HomeExperience from '@/components/HomeExperience';
-import HomeSlider from '@/components/HomeSlider';
+import HomeShelf from '@/components/HomeShelf';
 import { JsonLd } from '@/components/JsonLd';
 import QuickStartsCard from '@/components/QuickStartsCard';
 import SignInWorkspaceCard from '@/components/SignInWorkspaceCard';
@@ -12,6 +12,8 @@ import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
 import type { HomeWhatsNewModel } from '@/lib/home-dashboard';
 import { loadHomeFeed, loadHomeWhatsNewModels } from '@/lib/home-dashboard-service';
+import type { HomeShelfItem } from '@/lib/home-shelf';
+import { loadHomeShelf } from '@/lib/home-shelf-server';
 import { getFeedChip } from '@/lib/post-feed-chips';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
 import { getInlineShowcasePriorityPoster } from '@/lib/showcase-priority-poster';
@@ -83,7 +85,14 @@ function AnonymousModelsSection({ data }: { data: Promise<HomeWhatsNewModel[]> }
   return <WhatsNewModelsCard models={use(data)} />;
 }
 
-function AnonymousHero() {
+async function AnonymousShelfSection({ data }: { data: Promise<HomeShelfItem[]> }) {
+  // Resolved during this page's prerender, so the cards are in the HTML a
+  // visitor first receives. The boundary around it matters only where this
+  // page renders on request (a stale session on `/home`): there it streams.
+  return <HomeShelf items={await data} offerFreeToTry />;
+}
+
+function AnonymousHero({ shelf }: { shelf: Promise<HomeShelfItem[]> }) {
   // A plain div, not <header>: inside <main> the browser maps <header> to a
   // second `banner` landmark, which competes with the app shell's real one.
   return (
@@ -97,7 +106,7 @@ function AnonymousHero() {
         gave a crawler nothing: the only visible headings on `/` are feed post
         titles, so the highest-authority page in the site was being read as a
         page about whatever someone last published. Visible and compact, above
-        the slider, so it states the category without taking the space the feed
+        the shelf, so it states the category without taking the space the feed
         is meant to occupy.
       */}
       <div className="mb-6 space-y-2">
@@ -108,7 +117,15 @@ function AnonymousHero() {
           {siteConfig.tagline}
         </Text>
       </div>
-      <HomeSlider />
+      {/*
+        No fallback here, unlike the signed-in page: this page is prerendered,
+        and React writes a boundary that has a fallback out of line, so the HTML
+        would carry the placeholder and the resolved shelf both and then swap
+        them. Only a stale session on /home renders it on request.
+      */}
+      <Suspense fallback={null}>
+        <AnonymousShelfSection data={shelf} />
+      </Suspense>
     </div>
   );
 }
@@ -144,6 +161,7 @@ function AnonymousFooter() {
 export default function AnonymousHome() {
   const feedPromise = loadHomeFeed({ viewerUserId: null, chip: getFeedChip(undefined) });
   const modelsPromise = loadHomeWhatsNewModels();
+  const shelfPromise = loadHomeShelf();
 
   return (
     <>
@@ -166,7 +184,7 @@ export default function AnonymousHome() {
       />
 
       <HomeExperience
-        hero={<AnonymousHero />}
+        hero={<AnonymousHero shelf={shelfPromise} />}
         inlineStrip={<SignInWorkspaceCard variant="inline" />}
         feed={(
           <Suspense fallback={<HomeFeedSkeleton />}>

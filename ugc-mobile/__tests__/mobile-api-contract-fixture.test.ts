@@ -218,6 +218,7 @@ const successCases: Array<{
     ),
   },
   { key: 'getShowcaseFeedNewest', call: (api) => api.getShowcaseFeedNewest({ category: 'media' }) },
+  { key: 'getHomeShelf', call: (api) => api.getHomeShelf() },
   {
     key: 'undoFeedFeedback',
     call: (api) => api.undoFeedFeedback(mobileApiContract.endpoints.undoFeedFeedback.request as UndoFeedFeedbackRequest),

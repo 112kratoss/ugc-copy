@@ -109,6 +109,7 @@ import { Reveal } from '@/components/reveal';
 import { SkeletonBone } from '@/components/skeleton';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
+import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { MotionView, useOverlayPresence, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
@@ -697,6 +698,7 @@ export default function ShowcaseScreen() {
       { queryKey: viewerFeedQueryKey },
       (current) => removeShowcaseFeedItemsFromInfiniteData(current, target)
     );
+    takeOffHomeShelf(queryClient, target);
     const runtime = feedEventRuntimeRef.current;
     const request = buildShowcaseFeedEventRequest({
       postId: item.id,
@@ -786,6 +788,7 @@ export default function ShowcaseScreen() {
           { queryKey: viewerFeedQueryKey },
           (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
         );
+        takeOffHomeShelf(queryClient, { postId: item.id });
         void AccessibilityInfo.announceForAccessibility('Content reported and removed from your feed.');
       } catch (error) {
         haptic.error();
@@ -838,6 +841,7 @@ export default function ShowcaseScreen() {
           { queryKey: viewerFeedQueryKey },
           (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
         );
+        takeOffHomeShelf(queryClient, { creatorId });
         // Their cached grid becomes the server's blocked answer, as the creator
         // page's own Block leaves it. Invalidating ['creator-profile'] read
         // every loaded page of every cached grid again.
