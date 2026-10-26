@@ -1,6 +1,7 @@
 import { formatCreditCost } from './generation-action-label';
 import type { ToolAccent } from './theme';
 import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, HomeShelfPrice, HomeShelfResponse } from './types';
+import { getNativeRemixCreateHref } from './viewer-actions';
 
 /**
  * Home's "Make this" shelf, as the app draws it: what the server sent
@@ -18,14 +19,22 @@ const ACTION_IDS: ReadonlySet<string> = new Set<HomeShelfAction['id']>(['post', 
 const CREATION_TOOLS: ReadonlySet<string> = new Set<HomeShelfCreation['tool']>(['image', 'video', 'motion']);
 
 /**
+ * The server's floor (`HOME_SHELF_MIN_CREATIONS`, `src/lib/home-shelf.ts`):
+ * two cards and an offer read as a broken row. The app applies it again once
+ * it has taken cards off itself (`home-shelf-cache.ts`).
+ */
+const HOME_SHELF_MIN_CREATIONS = 3;
+
+/**
  * The items this build knows how to draw, in the server's order. A newer
  * server may add a kind of card; an older app skips it rather than drawing it
- * wrong, and a creation without a post to remix is skipped too.
+ * wrong, and a creation without a post to remix is skipped too. Too few
+ * creations left, and there is no shelf: the row shows the tools instead.
  */
 export function readHomeShelfItems(response: HomeShelfResponse | null | undefined): HomeShelfItem[] {
   if (!response || !Array.isArray(response.items)) return [];
 
-  return response.items.filter((item): item is HomeShelfItem => {
+  const items = response.items.filter((item): item is HomeShelfItem => {
     if (!item || typeof item !== 'object') return false;
     if (item.kind === 'action') return ACTION_IDS.has(item.id);
     if (item.kind === 'creation') {
@@ -33,15 +42,20 @@ export function readHomeShelfItems(response: HomeShelfResponse | null | undefine
     }
     return false;
   });
+  const creations = items.filter((item) => item.kind === 'creation').length;
+  return creations >= HOME_SHELF_MIN_CREATIONS ? items : [];
 }
 
 /**
- * The answer to keep on screen while another identity's loads: the creations,
- * which are the same for everyone, and none of the last person's offers.
+ * Where a guest's "Make this" lands once they have signed in: this remix's
+ * editor (the web's create link, as the app's route, as the web's own card
+ * carries it through sign-in), or the post when the card has no such link.
  */
-export function keepHomeShelfCreations(response: HomeShelfResponse | undefined): HomeShelfResponse | undefined {
-  if (!response) return undefined;
-  return { ...response, items: response.items.filter((item) => item.kind === 'creation') };
+export function homeShelfGuestReturnTo(creation: HomeShelfCreation): string {
+  const href = creation.makeHref
+    ? getNativeRemixCreateHref({ redirectTo: creation.makeHref, recreateTool: creation.tool })
+    : null;
+  return href?.includes('remix=') ? href : `/post/${creation.post.id}`;
 }
 
 /** "15 credits" in the words the Generate button uses, "Priced by clip length", or nothing. */

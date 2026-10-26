@@ -258,9 +258,10 @@ function followedCreatorIds(
  * (`post-report-service.ts`), which keeps hiding the post regardless.
  * A signed-out viewer has none of these to load. Any failed read returns null,
  * which the visibility stage treats as "nothing can be cleared" — the same
- * fail-closed rule as the feedback filter this replaced.
+ * fail-closed rule as the feedback filter this replaced. Home's shelf filters
+ * its shared build through the same read (`home-shelf-server.ts`).
  */
-async function loadViewerRelations({
+export async function loadViewerRelations({
   followingCreatorIds,
   items,
   serviceClient,

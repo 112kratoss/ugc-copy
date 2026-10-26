@@ -151,6 +151,8 @@ export async function refreshViewerMediaCaches(
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
     queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+    // Home's shelf draws posts too, and leaves out what the feed leaves out.
+    queryClient.invalidateQueries({ queryKey: ['home-shelf'] }),
     queryClient.invalidateQueries({ queryKey: ['profile-saved-media', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', userId] }),

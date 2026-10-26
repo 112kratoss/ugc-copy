@@ -850,7 +850,9 @@ describe('Home screen', () => {
     });
 
     expect(sentEvents()).toEqual([{ eventType: 'not_interested', deliveryId: 'delivery-undo-b' }]);
-    expect(queryState.client.setQueriesData).toHaveBeenCalledTimes(1);
+    // The lanes lose the post, and so does Home's shelf.
+    expect(queryState.client.setQueriesData).toHaveBeenCalledTimes(2);
+    expect(queryState.client.setQueriesData.mock.calls[1][0]).toEqual({ queryKey: ['home-shelf'] });
     const { clientEventId } = authState.api.recordShowcaseFeedEvent.mock.calls[0][0];
     const shown = hostProps(tree, 'feed-undo-notice');
     expect(shown.notice).toEqual({ id: clientEventId, message: 'Post hidden', onUndo: expect.any(Function) });

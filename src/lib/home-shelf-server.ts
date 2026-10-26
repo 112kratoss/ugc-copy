@@ -12,8 +12,8 @@ import {
   quotePublishedGenerationModel,
 } from '@/lib/generation-model-catalog-store';
 import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
+import type { FeedViewerRelations } from '@/lib/feed-visibility';
 import {
-  HOME_SHELF_MAX_CREATIONS,
   HOME_SHELF_MIN_CREATIONS,
   arrangeHomeShelf,
   selectHomeShelfActions,
@@ -25,7 +25,6 @@ import {
   type HomeShelfPrice,
 } from '@/lib/home-shelf';
 import { HOME_SHELF_EARN_CARD_ENABLED, HOME_SHELF_PINS } from '@/lib/home-shelf-lineup';
-import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import { WELCOME_CREDIT_PROGRAM_KEY } from '@/lib/onboarding';
 import { POST_RESOURCE_CREATOR_SHARE_PERCENT } from '@/lib/post-resource-commerce';
 import { loadReferralProgramTerms } from '@/lib/referral-route-service';
@@ -33,22 +32,39 @@ import { createServiceClient } from '@/lib/server-helpers';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import { loadViewerRelations } from '@/lib/showcase-feed-personalization';
 
 /**
  * Server side of the "Make this" shelf (`home-shelf.ts`): reads the pinned
  * posts, prices each one the way its creator page will, and works out which
- * action cards a viewer is offered. Every loader degrades to an empty shelf
- * instead of throwing, as the other home loaders do: Home renders without it.
+ * action cards a viewer is offered. The web pages' loader degrades to an empty
+ * shelf instead of throwing, as the other home loaders do: Home renders
+ * without it. The app's loader throws instead, so the route answers an error
+ * that neither the edge nor the app keeps, rather than an empty shelf both do.
  */
 
 /** How long a built shelf is reused between rebuilds. */
 const HOME_SHELF_REVALIDATE_SECONDS = 300;
 
-const HOME_SHELF_CACHE_TAG = 'home-shelf';
+/**
+ * Part of the build's cache key. The Data Cache outlives a deploy, so bump this
+ * whenever what a build holds or which posts it lets in changes.
+ */
+const HOME_SHELF_BUILD_VERSION = 'home-shelf-creations-v2';
+
+/** The shelf could not be read, or not filtered for its viewer; the app's route answers an error. */
+export class HomeShelfUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HomeShelfUnavailableError';
+  }
+}
+
+type FailureMode = 'empty' | 'throw';
 
 /**
- * Who asked. No id is a signed-out visitor; a guest's id is read for blocks
- * but offered what a signed-out visitor is.
+ * Who asked. No id is a signed-out visitor; a guest's id is read for its
+ * blocks and feed choices but offered what a signed-out visitor is.
  */
 export interface HomeShelfIdentity {
   viewerUserId: string | null;
@@ -194,9 +210,10 @@ async function describeShelfPost(
 }
 
 /**
- * The qualifying pins as shelf cards with their posts, in pin order, at most
- * HOME_SHELF_MAX_CREATIONS of them. Uncached: `loadHomeShelfCreations` is the
- * cached entry point.
+ * Every qualifying pin as a shelf card with its post, in pin order. Not capped:
+ * a viewer's own filter runs after this shared build, and `arrangeHomeShelf`
+ * caps what is left, so a pin dropped for one viewer lets the next one in.
+ * Uncached: `loadHomeShelfCreations` is the cached entry point.
  */
 export async function buildHomeShelfCreations(
   pins: readonly HomeShelfPin[],
@@ -208,8 +225,11 @@ export async function buildHomeShelfCreations(
   ));
   if (uniquePins.length === 0) return [];
 
-  // Started with the posts read: neither needs it.
+  // Started with the posts read: neither needs it. The catalogs read is joined
+  // only once the posts are in, so it is given a handler now: a posts read that
+  // fails would otherwise leave its rejection unhandled.
   const catalogsRead = resolved.loadCatalogs();
+  catalogsRead.catch(() => undefined);
   const welcomeRead = resolved.loadWelcomeCredits().catch((error) => {
     logBackendError('home_shelf_welcome_credits_load_failed', { error });
     return null;
@@ -238,32 +258,54 @@ export async function buildHomeShelfCreations(
     return creation ? { ...creation, post } : null;
   }));
 
-  return creations
-    .filter((creation): creation is HomeShelfCreationWithPost => creation !== null)
-    .slice(0, HOME_SHELF_MAX_CREATIONS);
+  return creations.filter((creation): creation is HomeShelfCreationWithPost => creation !== null);
 }
 
 /**
  * Shared by every viewer and both clients: the cards depend only on the pins,
  * so one build serves all of them between rebuilds. The pins are part of the
- * key, so a deploy that changes them never reads an old build. The feed's tag
- * is carried too: a moderation take-down, an archive or a delete invalidates
- * it (`invalidateShowcaseFeedCache`), and drops the post from the shelf at once.
+ * key, so a deploy that changes them never reads an old build, and so is the
+ * build version, for a deploy that changes the rules. It carries the feed's
+ * tag: a moderation take-down, an archive or a delete invalidates it
+ * (`invalidateShowcaseFeedCache`), and drops the post from the shelf at once.
+ * A build that throws is not kept.
  */
 const loadCachedHomeShelfCreations = unstable_cache(
   async (pinsKey: string) => buildHomeShelfCreations(JSON.parse(pinsKey) as HomeShelfPin[]),
-  ['home-shelf-creations'],
-  { revalidate: HOME_SHELF_REVALIDATE_SECONDS, tags: [HOME_SHELF_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG] },
+  [HOME_SHELF_BUILD_VERSION],
+  { revalidate: HOME_SHELF_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
 );
 
-async function loadHomeShelfCreations(): Promise<HomeShelfCreationWithPost[]> {
-  if (HOME_SHELF_PINS.length < HOME_SHELF_MIN_CREATIONS) return [];
+/**
+ * Whether enough posts are pinned for a shelf at all: the one place this is
+ * decided, read by the signed-in page before it holds the row's place.
+ */
+export function homeShelfHasEnoughPins(): boolean {
+  return HOME_SHELF_PINS.length >= HOME_SHELF_MIN_CREATIONS;
+}
+
+async function loadHomeShelfCreations(failure: FailureMode): Promise<HomeShelfCreationWithPost[]> {
+  if (!homeShelfHasEnoughPins()) return [];
   try {
     return await loadCachedHomeShelfCreations(JSON.stringify(HOME_SHELF_PINS));
   } catch (error) {
     logBackendError('home_shelf_creations_load_failed', { error });
+    if (failure === 'throw') throw new HomeShelfUnavailableError('The shelf could not be read.');
     return [];
   }
+}
+
+/**
+ * What the feed leaves out for this viewer leaves the shelf too: creators with
+ * a block either way, creators they hid, posts they marked Not interested, and
+ * posts they reported. Their own posts stay: remaking your own creation is fine.
+ */
+function isExcludedForViewer(post: ShowcaseFeedItem, relations: FeedViewerRelations): boolean {
+  const creatorId = post.creator?.id ?? null;
+  if (creatorId && (relations.blockedCreatorIds.has(creatorId) || relations.hiddenCreatorIds.has(creatorId))) {
+    return true;
+  }
+  return relations.hiddenPostIds.has(post.id) || relations.reportedPostIds.has(post.id);
 }
 
 /** Whether the member has a post on the feed: public, live, not hidden. */
@@ -282,7 +324,7 @@ async function hasPublicPost(viewerUserId: string): Promise<boolean> {
 
 async function loadMemberActions(viewerUserId: string): Promise<HomeShelfAction[]> {
   const [hasPosted, terms] = await Promise.all([hasPublicPost(viewerUserId), loadReferralProgramTerms()]);
-  return selectHomeShelfActions({ kind: 'member', hasPosted }, {
+  return selectHomeShelfActions({ hasPosted }, {
     referral: terms
       ? { inviterPercent: terms.inviterPercent, inviteePercent: terms.inviteeFirstPurchasePercent }
       : null,
@@ -293,25 +335,28 @@ async function loadMemberActions(viewerUserId: string): Promise<HomeShelfAction[
 
 /**
  * The shelf for one viewer, each creation with its post. The shared build is
- * filtered by the viewer's blocks both ways, as the feed is (and, like the
- * feed, a block check that fails shows nothing rather than an unverified
- * creator); a member's offers are read only when there is a shelf to put them in.
+ * filtered through the feed's own read of the viewer's relations
+ * (`loadViewerRelations`), and like the feed, a read that fails shows nothing
+ * rather than an unverified creator. A member's offers are read only when
+ * there is a shelf to put them in.
  */
-async function loadHomeShelfForViewer(identity: HomeShelfIdentity): Promise<Array<HomeShelfCreationWithPost | HomeShelfAction>> {
-  const creations = await loadHomeShelfCreations();
+async function loadHomeShelfForViewer(
+  identity: HomeShelfIdentity,
+  failure: FailureMode,
+): Promise<Array<HomeShelfCreationWithPost | HomeShelfAction>> {
+  const creations = await loadHomeShelfCreations(failure);
   if (creations.length < HOME_SHELF_MIN_CREATIONS || !identity.viewerUserId) {
     return arrangeHomeShelf(creations, []);
   }
 
   const viewerUserId = identity.viewerUserId;
-  const [blocked, actions] = await Promise.all([
-    loadBlockedCreatorIds({
-      adminSupabase: createServiceClient(),
-      creatorIds: creations.flatMap((creation) => (creation.post.creator?.id ? [creation.post.creator.id] : [])),
+  const [relations, actions] = await Promise.all([
+    // Logs and answers null on a failed read.
+    loadViewerRelations({
+      followingCreatorIds: new Set(),
+      items: creations.map((creation) => creation.post),
+      serviceClient: createServiceClient(),
       viewerUserId,
-    }).catch((error) => {
-      logBackendError('home_shelf_block_filter_failed', { error });
-      return null;
     }),
     identity.isAnonymous
       ? Promise.resolve([])
@@ -321,9 +366,12 @@ async function loadHomeShelfForViewer(identity: HomeShelfIdentity): Promise<Arra
           return [] as HomeShelfAction[];
         }),
   ]);
-  if (!blocked) return [];
+  if (!relations) {
+    if (failure === 'throw') throw new HomeShelfUnavailableError('The shelf could not be filtered for its viewer.');
+    return [];
+  }
 
-  const visible = creations.filter((creation) => !creation.post.creator?.id || !blocked.has(creation.post.creator.id));
+  const visible = creations.filter((creation) => !isExcludedForViewer(creation.post, relations));
   return arrangeHomeShelf(visible, actions);
 }
 
@@ -334,11 +382,15 @@ function withoutPost({ post, ...creation }: HomeShelfCreationWithPost): HomeShel
 
 /** The shelf as the web pages render it; no full posts reach the client. The signed-out page passes no viewer. */
 export async function loadHomeShelf(identity: HomeShelfIdentity = SIGNED_OUT): Promise<HomeShelfItem[]> {
-  const items = await loadHomeShelfForViewer(identity);
+  const items = await loadHomeShelfForViewer(identity, 'empty');
   return items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item));
 }
 
-/** The shelf as `/api/home/shelf` sends it to the app: each creation with its post. */
+/**
+ * The shelf as `/api/home/shelf` sends it to the app: each creation with its
+ * post. Throws `HomeShelfUnavailableError` where the web pages' loader would
+ * draw nothing.
+ */
 export async function loadHomeShelfForApi(identity: HomeShelfIdentity): Promise<HomeShelfApiItem[]> {
-  return loadHomeShelfForViewer(identity);
+  return loadHomeShelfForViewer(identity, 'throw');
 }

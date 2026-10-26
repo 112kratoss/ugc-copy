@@ -38,7 +38,8 @@ import {
   type HomeFeedCard,
   type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
-import { keepHomeShelfCreations, readHomeShelfItems } from '@/lib/home-shelf-view-model';
+import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
+import { homeShelfGuestReturnTo, readHomeShelfItems } from '@/lib/home-shelf-view-model';
 import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
 import { useAppForeground } from '@/lib/app-foreground';
@@ -484,15 +485,14 @@ export function HomeDashboard() {
 
   // Home's "Make this" shelf. Keyed by identity: a member's answer carries
   // their own offers, a guest's or a signed-out one the creations alone, and a
-  // guest asks without its token so the edge's shared answer serves it. While a
-  // new identity's answer loads, the last one's creations stay up so the row
-  // keeps its height; its offers, which were someone else's, do not.
+  // guest asks without its token so the edge's shared answer serves it. No
+  // placeholder from another identity: even its creations were filtered by
+  // someone else's blocks. The row keeps its height on bones meanwhile.
   const shelfQuery = useQuery({
     queryKey: ['home-shelf', identityUserId ?? 'signed-out'],
     queryFn: () => api.getHomeShelf({ auth: Boolean(user) }),
     enabled: !isAuthLoading,
     staleTime: 5 * 60 * 1000,
-    placeholderData: keepHomeShelfCreations,
   });
   const shelfItems = useMemo(() => readHomeShelfItems(shelfQuery.data), [shelfQuery.data]);
 
@@ -750,6 +750,7 @@ export function HomeDashboard() {
       { queryKey: viewerFeedQueryKey },
       (current) => removeShowcaseFeedItemsFromInfiniteData(current, target)
     );
+    takeOffHomeShelf(queryClient, target);
 
     const runtime = feedEventRuntimeRef.current;
     const request = buildShowcaseFeedEventRequest(
@@ -844,6 +845,7 @@ export function HomeDashboard() {
           { queryKey: viewerFeedQueryKey },
           (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
         );
+        takeOffHomeShelf(queryClient, { postId: item.id });
         void AccessibilityInfo.announceForAccessibility('Content reported and removed from your feed.');
       } catch (error) {
         haptic.error();
@@ -890,6 +892,7 @@ export function HomeDashboard() {
           { queryKey: viewerFeedQueryKey },
           (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
         );
+        takeOffHomeShelf(queryClient, { creatorId });
         void AccessibilityInfo.announceForAccessibility('Creator blocked.');
       } catch (error) {
         haptic.error();
@@ -1030,9 +1033,15 @@ export function HomeDashboard() {
               activeRenders={activeGenerationCount}
               pendingId={remixingItemId}
               // One remix at a time: a second tap while the first is opening
-              // would stack a second creator over it.
+              // would stack a second creator over it. A guest signs in first
+              // and comes back to this remix's editor, as the web's card does,
+              // rather than to the post.
               onMake={(creation) => {
                 if (remixingItemId) return;
+                if (!user) {
+                  router.push({ pathname: '/auth', params: { returnTo: homeShelfGuestReturnTo(creation) } } as never);
+                  return;
+                }
                 remixItem(creation.post);
               }}
             />

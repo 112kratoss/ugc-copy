@@ -2372,6 +2372,7 @@
             "fitsWelcomeCredits": true,
             "badge": null,
             "creator": {
+              "id": "user-1",
               "username": "magicbooklet",
               "name": "Magicbooklet Team"
             },
@@ -2440,6 +2441,7 @@
             "fitsWelcomeCredits": true,
             "badge": null,
             "creator": {
+              "id": "user-1",
               "username": "magicbooklet",
               "name": "Magicbooklet Team"
             },
@@ -2507,6 +2509,7 @@
             "fitsWelcomeCredits": false,
             "badge": "new-model",
             "creator": {
+              "id": "user-1",
               "username": "magicbooklet",
               "name": "Magicbooklet Team"
             },
@@ -2584,6 +2587,7 @@
                 "fitsWelcomeCredits": true,
                 "badge": null,
                 "creator": {
+                  "id": "user-1",
                   "username": "magicbooklet",
                   "name": "Magicbooklet Team"
                 },
@@ -2652,6 +2656,7 @@
                 "fitsWelcomeCredits": true,
                 "badge": null,
                 "creator": {
+                  "id": "user-1",
                   "username": "magicbooklet",
                   "name": "Magicbooklet Team"
                 },
@@ -2723,6 +2728,7 @@
                 "fitsWelcomeCredits": false,
                 "badge": "new-model",
                 "creator": {
+                  "id": "user-1",
                   "username": "magicbooklet",
                   "name": "Magicbooklet Team"
                 },
@@ -2806,6 +2812,7 @@
                 "fitsWelcomeCredits": true,
                 "badge": null,
                 "creator": {
+                  "id": "user-1",
                   "username": "magicbooklet",
                   "name": "Magicbooklet Team"
                 },
@@ -2874,6 +2881,7 @@
                 "fitsWelcomeCredits": true,
                 "badge": null,
                 "creator": {
+                  "id": "user-1",
                   "username": "magicbooklet",
                   "name": "Magicbooklet Team"
                 },
@@ -2946,6 +2954,7 @@
                 "fitsWelcomeCredits": false,
                 "badge": "new-model",
                 "creator": {
+                  "id": "user-1",
                   "username": "magicbooklet",
                   "name": "Magicbooklet Team"
                 },

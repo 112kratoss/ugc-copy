@@ -38,6 +38,7 @@ import {
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import { feedNewestCategoryFor, newestCreatedAtOf, useNewPostsProbe, type NewPostsProbeLane } from '@/lib/feed-newest-probe';
+import { removeFromHomeShelf } from '@/lib/home-shelf-removals';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { REMIX_UNLOCK_REQUIRED_CODE, requestShowcaseRemix, ShowcaseRemixRequestError } from '@/lib/showcase-remix-client';
 import { useMediaQuery } from '@/lib/use-media-query';
@@ -845,6 +846,8 @@ export default function FeedClient({
         const hidden = removedForViewer;
         if (action === 'hide_creator' && target.creator.id) hidden.creatorIds.add(target.creator.id);
         else hidden.postIds.add(postId);
+        // Home's shelf, drawn above this lane, lets them go as well.
+        removeFromHomeShelf(action === 'hide_creator' ? { creatorId: target.creator.id } : { postId });
         const removedIds = new Set(removed.map(({ item }) => item.id));
         setFeedbackNotice(null);
         setItems((current) => current.filter((item) => !removedIds.has(item.id)));
@@ -1029,6 +1032,7 @@ export default function FeedClient({
         if (outcome.status === 'done') {
             removedForViewer.postIds.add(postId);
             removeFromLane((item) => item.id === postId);
+            removeFromHomeShelf({ postId });
         }
         showOutcome(outcome);
     }, [clearNotice, removeFromLane, removedForViewer, requireAccount, showOutcome]);
@@ -1054,6 +1058,7 @@ export default function FeedClient({
         if (outcome.status === 'done') {
             removedForViewer.creatorIds.add(creatorId);
             removeFromLane((item) => item.creator.id === creatorId);
+            removeFromHomeShelf({ creatorId });
         }
         showOutcome(outcome);
     }, [clearNotice, removeFromLane, removedForViewer, requireAccount, showOutcome, user?.id]);

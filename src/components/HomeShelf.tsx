@@ -2,20 +2,26 @@
 
 import Link from 'next/link';
 import { ChevronLeft, ChevronRight, Coins, Gift, Play, Send, type LucideIcon } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { getAccentClasses, Text, type UiAccent } from '@/components/DesignSystem';
+import { HoverVideo } from '@/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
-import { useInlineMediaPlayback } from '@/components/useInlineMediaPlayback';
 import { useMediaLoadingPreferences } from '@/components/useMediaLoadingPreferences';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
-import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem } from '@/lib/home-shelf';
+import { HOME_SHELF_MIN_CREATIONS, type HomeShelfAction, type HomeShelfCreation, type HomeShelfItem } from '@/lib/home-shelf';
+import {
+  getHomeShelfRemovalsVersion,
+  isRemovedFromHomeShelf,
+  subscribeHomeShelfRemovals,
+} from '@/lib/home-shelf-removals';
 import {
   formatHomeShelfPrice,
   homeShelfActionCopy,
   homeShelfBadge,
   homeShelfCreatorLabel,
 } from '@/lib/home-shelf-copy';
+import { useMediaQuery } from '@/lib/use-media-query';
 
 /**
  * The "Make this" shelf at the top of the home column (`home-shelf.ts` says
@@ -37,20 +43,7 @@ const ACTION_LOOK: Record<HomeShelfAction['id'], { icon: LucideIcon; accent: UiA
 const START_BLANK_TOOLS = CREATOR_TOOLS.filter((tool) => tool.id !== 'workflow');
 
 /** A mouse or trackpad that hovers: where a preview can play without fighting the feed's own. */
-function usePointerCanHover() {
-  const [canHover, setCanHover] = useState(false);
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return;
-    const query = window.matchMedia('(hover: hover) and (pointer: fine)');
-    const sync = () => setCanHover(query.matches);
-    sync();
-    query.addEventListener?.('change', sync);
-    return () => query.removeEventListener?.('change', sync);
-  }, []);
-
-  return canHover;
-}
+const POINTER_CAN_HOVER = '(hover: hover) and (pointer: fine)';
 
 export default function HomeShelf({
   items,
@@ -63,9 +56,21 @@ export default function HomeShelf({
    */
   offerFreeToTry: boolean;
 }) {
-  if (items.length === 0) return null;
+  // What the viewer has since blocked, hid or reported in the feed below
+  // leaves the row too (`home-shelf-removals.ts`); too few left, no row.
+  const removalsVersion = useSyncExternalStore(subscribeHomeShelfRemovals, getHomeShelfRemovalsVersion, () => 0);
+  const visibleItems = useMemo(() => {
+    void removalsVersion;
+    const kept = items.filter((item) => (
+      item.kind !== 'creation' || !isRemovedFromHomeShelf({ postId: item.id, creatorId: item.creator.id })
+    ));
+    const creations = kept.filter((item) => item.kind === 'creation').length;
+    return creations >= HOME_SHELF_MIN_CREATIONS ? kept : [];
+  }, [items, removalsVersion]);
 
-  return <HomeShelfRow items={items} offerFreeToTry={offerFreeToTry} />;
+  if (visibleItems.length === 0) return null;
+
+  return <HomeShelfRow items={visibleItems} offerFreeToTry={offerFreeToTry} />;
 }
 
 /**
@@ -75,8 +80,14 @@ export default function HomeShelf({
 export function HomeShelfPlaceholder() {
   return (
     <div className="home-shelf mb-6" aria-hidden>
-      {/* The header: a 20px title over a 14px line. */}
-      <div className="mb-3 h-13" />
+      {/* The real header's words, unseen, so its height follows the type ramp. */}
+      <div className="invisible mb-3 flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          <Text as="p" variant="cardTitle">Make this</Text>
+          <Text variant="bodySm" className="truncate">Real creations, one tap to make your own</Text>
+        </div>
+        <span className="min-h-12 shrink-0" />
+      </div>
       <div className="home-shelf-track">
         {[0, 1, 2, 3].map((slot) => (
           <div key={slot} className="home-shelf-item">
@@ -91,7 +102,7 @@ export function HomeShelfPlaceholder() {
 function HomeShelfRow({ items, offerFreeToTry }: { items: HomeShelfItem[]; offerFreeToTry: boolean }) {
   const trackRef = useRef<HTMLUListElement | null>(null);
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
-  const canHover = usePointerCanHover();
+  const canHover = useMediaQuery(POINTER_CAN_HOVER);
   const [canScroll, setCanScroll] = useState({ back: false, forward: false });
   const [playingId, setPlayingId] = useState<string | null>(null);
   const clipsAllowed = canHover && !prefersReducedMotion && !saveData;
@@ -224,9 +235,6 @@ function CreationCard({
   eager: boolean;
   playing: boolean;
 }) {
-  // Registered with the page's one-clip rule: this clip starting pauses any
-  // other preview, and the feed's starting pauses this one.
-  const attachPlayback = useInlineMediaPlayback<HTMLVideoElement>();
   const badge = homeShelfBadge(creation, offerFreeToTry);
   const price = formatHomeShelfPrice(creation.price);
   const handle = homeShelfCreatorLabel(creation.creator);
@@ -247,19 +255,14 @@ function CreationCard({
       />
       {playing && creation.clipUrl ? (
         // Mounted only while it is the card in view, so the clip is fetched
-        // for the one card someone is looking at and never for the rest. No
-        // `poster`: until its first frame a video is transparent over the
-        // optimized poster below, and a poster would fetch the full-size file.
-        <video
+        // for the one card someone is looking at and never for the rest.
+        // HoverVideo keeps the page's one-clip rule and starts the clip again
+        // when the tab comes back. No poster: until its first frame a video is
+        // transparent over the optimized poster below.
+        <HoverVideo
           key={creation.clipUrl}
-          ref={attachPlayback}
           src={creation.clipUrl}
           autoPlay
-          muted
-          loop
-          playsInline
-          preload="none"
-          aria-hidden
           className="absolute inset-0 h-full w-full object-cover"
         />
       ) : null}

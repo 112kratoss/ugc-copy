@@ -57,6 +57,7 @@ import { Overlay } from '@/components/overlay-host';
 import { SheetGrabber, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
+import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { CommentReportReason } from '@/lib/api-client';
@@ -550,6 +551,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       for (const queryKey of ALL_POST_COMMENT_QUERY_KEYS) {
         void queryClient.invalidateQueries({ queryKey });
       }
+      takeOffHomeShelf(queryClient, { creatorId: authorId });
       AccessibilityInfo.announceForAccessibility(`${authorLabel} blocked.`);
     });
   }, [api, queryClient, requireSignIn]);

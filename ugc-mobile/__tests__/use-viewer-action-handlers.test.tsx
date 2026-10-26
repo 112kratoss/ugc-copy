@@ -360,13 +360,16 @@ describe('Block user', () => {
     const onSourceRefresh = vi.fn();
     mountHandlers(postItem(), { onBlocked, onSourceRefresh }).handleAction('block-user');
 
-    await vi.waitFor(() => expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledTimes(3));
     expect(mocks.auth.api.blockUser).toHaveBeenCalledWith('creator-1');
     expect(onBlocked.mock.calls).toEqual([['creator-1']]);
     expect(invalidatedKeys()).toEqual([
+      ['home-shelf'],
       ['profile-saved-media', 'viewer-1'],
       ['profile', 'viewer-1'],
     ]);
+    // Home's shelf is only marked stale: its card is taken out, nothing is read for it now.
+    expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['home-shelf'], refetchType: 'none' });
     expect(invalidatedKeys().some((key) => ['showcase-feed', 'immersive-preview-source', 'creator-profile'].includes(key[0] as string))).toBe(false);
     expect(refreshViewerMediaCaches).not.toHaveBeenCalled();
     expect(onSourceRefresh).not.toHaveBeenCalled();

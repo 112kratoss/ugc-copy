@@ -5,7 +5,6 @@ import { Pressable, ScrollView, useWindowDimensions, View, type ViewStyle } from
 import { StableMediaImage } from '@/components/media-preview';
 import { SkeletonBone } from '@/components/skeleton';
 import { AppText } from '@/components/ui';
-import { useDisplayFontLoaded } from '@/lib/display-font-ready';
 import { hexWithAlpha, linearGradient } from '@/lib/eased-fade';
 import { verticalHitSlop } from '@/lib/hit-target';
 import {
@@ -39,7 +38,7 @@ import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem } from '@/lib/ty
  * subtitle's place for the same reason.
  */
 
-const SHELF_GAP = 10;
+const SHELF_GAP = appTheme.spacing.gap;
 const CARD_RADIUS = appTheme.radii.lg;
 const ROW_HEIGHT = 36;
 
@@ -92,30 +91,24 @@ export function HomeShelf({
   onMake: (creation: HomeShelfCreation) => void;
 }) {
   const { fontScale } = useWindowDimensions();
-  const displayFontLoaded = useDisplayFontLoaded();
   const card = getHomeShelfCardSize(contentWidth, SHELF_GAP, fontScale, appTheme.typeScale.control);
   const empty = !isLoading && items.length === 0;
 
   return (
-    <View style={{ gap: 10 }}>
+    <View style={{ gap: appTheme.spacing.compact }}>
       <View
         style={{
           paddingHorizontal: horizontalPadding,
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: 12,
+          gap: appTheme.spacing.gap,
         }}
       >
         <View style={{ flexShrink: 1 }}>
-          <AppText
-            // Drawn anew once the display face is in: Home draws this title at
-            // launch, before the face has loaded, and rarely draws it again.
-            key={displayFontLoaded ? 'display-face' : 'system-face'}
-            variant="cardTitle"
-            heading
-            numberOfLines={1}
-          >
+          {/* Drawn at launch, before the display face loads: AppText draws it
+              again in the face once it is in. */}
+          <AppText variant="cardTitle" heading numberOfLines={1}>
             {empty ? 'Start creating' : 'Make this'}
           </AppText>
           {activeRenders > 0 ? (
@@ -142,7 +135,7 @@ export function HomeShelf({
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <AppText variant="label" color="muted">See all</AppText>
+            <AppText variant="label" color="muted" numberOfLines={1}>See all</AppText>
           </Pressable>
         )}
       </View>
@@ -220,7 +213,7 @@ function ActiveRendersLine({ count }: { count: number }) {
         alignSelf: 'flex-start',
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: appTheme.spacing.compact,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
@@ -293,24 +286,24 @@ function CreationCard({
           <View
             style={{
               position: 'absolute',
-              left: 8,
-              top: 8,
+              left: appTheme.spacing.compact,
+              top: appTheme.spacing.compact,
               borderRadius: appTheme.radii.pill,
-              paddingHorizontal: 8,
-              paddingVertical: 3,
+              paddingHorizontal: appTheme.spacing.compact,
+              paddingVertical: appTheme.spacing.unit,
               backgroundColor: mediaColors.mediaChip,
             }}
           >
-            <AppText variant="caption" color={mediaColors.onMedia}>{badge}</AppText>
+            <AppText variant="caption" color={mediaColors.onMedia} numberOfLines={1}>{badge}</AppText>
           </View>
         ) : null}
         {creation.clipUrl ? (
-          <View style={{ position: 'absolute', right: 9, top: 9 }}>
+          <View style={{ position: 'absolute', right: appTheme.spacing.compact, top: appTheme.spacing.compact }}>
             <Play size={appTheme.icon.sm} color={mediaColors.onMedia} />
           </View>
         ) : null}
 
-        <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: 10, gap: 2 }}>
+        <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: appTheme.spacing.compact, gap: appTheme.spacing.unit }}>
           <AppText variant="label" color={mediaColors.onMedia} numberOfLines={2}>
             {creation.title}
           </AppText>
@@ -319,12 +312,12 @@ function CreationCard({
               {price}
             </AppText>
           ) : null}
-          <View style={{ marginTop: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+          <View style={{ marginTop: appTheme.spacing.unit, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.compact }}>
             <AppText variant="caption" color={mediaColors.onMediaSecondary} numberOfLines={1} style={{ flexShrink: 1 }}>
               {handle}
             </AppText>
-            <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: mediaColors.onMedia, paddingHorizontal: 9, paddingVertical: 4 }}>
-              <AppText variant="caption" color={mediaColors.mediaGround}>{pending ? 'Opening' : 'Make this'}</AppText>
+            <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: mediaColors.onMedia, paddingHorizontal: appTheme.spacing.compact, paddingVertical: appTheme.spacing.unit }}>
+              <AppText variant="caption" color={mediaColors.mediaGround} numberOfLines={1}>{pending ? 'Opening' : 'Make this'}</AppText>
             </View>
           </View>
         </View>
@@ -356,7 +349,7 @@ function ActionCard({ action, width, height }: { action: HomeShelfAction; width:
           borderWidth: 1,
           borderColor: hexWithAlpha(tint, 0.32),
           backgroundColor: theme.colors.panel,
-          padding: 12,
+          padding: appTheme.spacing.gap,
           justifyContent: 'space-between',
           overflow: 'hidden',
         }}
@@ -375,7 +368,7 @@ function ActionCard({ action, width, height }: { action: HomeShelfAction; width:
         >
           <Icon size={appTheme.icon.sm} color={tint} />
         </View>
-        <View style={{ gap: 4 }}>
+        <View style={{ gap: appTheme.spacing.unit }}>
           <AppText variant="label" numberOfLines={2}>{copy.title}</AppText>
           <AppText variant="caption" color="muted" numberOfLines={5}>{copy.body}</AppText>
         </View>
@@ -385,11 +378,11 @@ function ActionCard({ action, width, height }: { action: HomeShelfAction; width:
             borderRadius: appTheme.radii.pill,
             borderWidth: 1,
             borderColor: hexWithAlpha(tint, 0.55),
-            paddingHorizontal: 10,
-            paddingVertical: 4,
+            paddingHorizontal: appTheme.spacing.compact,
+            paddingVertical: appTheme.spacing.unit,
           }}
         >
-          <AppText variant="caption">{copy.cta}</AppText>
+          <AppText variant="caption" numberOfLines={1}>{copy.cta}</AppText>
         </View>
       </Pressable>
     </MotionView>
@@ -427,14 +420,14 @@ function ToolCard({
           borderWidth: 1,
           borderColor: theme.colors.borderSubtle,
           backgroundColor: theme.colors.panel,
-          padding: 12,
+          padding: appTheme.spacing.gap,
           justifyContent: 'space-between',
           overflow: 'hidden',
         }}
       >
         <View style={{ position: 'absolute', inset: 0, backgroundColor: hexWithAlpha(tint, 0.08) }} />
         <Icon size={appTheme.icon.feature} color={tint} />
-        <AppText variant="label">{tool.label}</AppText>
+        <AppText variant="label" numberOfLines={1}>{tool.label}</AppText>
       </Pressable>
     </MotionView>
   );
@@ -454,12 +447,12 @@ function StartBlankTile({ width, height }: { width: number; height: number }) {
         borderWidth: 1,
         borderStyle: 'dashed',
         borderColor: theme.colors.border,
-        padding: 12,
+        padding: appTheme.spacing.gap,
         justifyContent: 'space-between',
       }}
     >
       <AppText variant="label" heading numberOfLines={2}>Start from scratch</AppText>
-      <View style={{ gap: 8 }}>
+      <View style={{ gap: appTheme.spacing.compact }}>
         {HOME_SHELF_START_BLANK_TOOLS.map((tool) => {
           const Icon = TOOL_ICONS[tool.id];
           return (
@@ -476,15 +469,15 @@ function StartBlankTile({ width, height }: { width: number; height: number }) {
                 borderWidth: 1,
                 borderColor: theme.colors.borderSubtle,
                 backgroundColor: theme.colors.panel,
-                paddingHorizontal: 10,
+                paddingHorizontal: appTheme.spacing.compact,
                 flexDirection: 'row',
                 alignItems: 'center',
-                gap: 8,
+                gap: appTheme.spacing.compact,
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               <Icon size={appTheme.icon.sm} color={theme.colors.muted} />
-              <AppText variant="caption">{tool.label}</AppText>
+              <AppText variant="caption" numberOfLines={1}>{tool.label}</AppText>
             </Pressable>
           );
         })}

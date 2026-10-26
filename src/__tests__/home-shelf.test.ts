@@ -91,7 +91,7 @@ describe('toHomeShelfCreation', () => {
       price: { kind: 'credits', credits: 15 },
       fitsWelcomeCredits: true,
       badge: 'new-model',
-      creator: { username: 'magicbooklet', name: 'Magicbooklet Team' },
+      creator: { id: 'user-1', username: 'magicbooklet', name: 'Magicbooklet Team' },
       makeHref: '/create-video?remix=generation-1&remixPost=post-1',
     });
   });
@@ -165,32 +165,28 @@ describe('buildHomeShelfMakeHref', () => {
 });
 
 describe('selectHomeShelfActions', () => {
-  it('offers nothing to a signed-out viewer or a guest', () => {
-    expect(selectHomeShelfActions({ kind: 'signed-out' }, actionFacts)).toEqual([]);
-  });
-
   it('asks a member who has never posted to post, and to invite', () => {
-    expect(selectHomeShelfActions({ kind: 'member', hasPosted: false }, actionFacts).map((action) => action.id))
+    expect(selectHomeShelfActions({ hasPosted: false }, actionFacts).map((action) => action.id))
       .toEqual(['post', 'invite']);
   });
 
   it('asks a member who has posted to sell, and to invite', () => {
-    expect(selectHomeShelfActions({ kind: 'member', hasPosted: true }, actionFacts)).toEqual([
+    expect(selectHomeShelfActions({ hasPosted: true }, actionFacts)).toEqual([
       { kind: 'action', id: 'earn', creatorSharePercent: 85 },
       { kind: 'action', id: 'invite', inviterPercent: 5, inviteePercent: 5 },
     ]);
   });
 
   it('keeps Earn off while its switch is off', () => {
-    expect(selectHomeShelfActions({ kind: 'member', hasPosted: true }, { ...actionFacts, earnEnabled: false })
+    expect(selectHomeShelfActions({ hasPosted: true }, { ...actionFacts, earnEnabled: false })
       .map((action) => action.id)).toEqual(['invite']);
   });
 
   it('leaves Invite out while no referral program is running', () => {
-    expect(selectHomeShelfActions({ kind: 'member', hasPosted: false }, { ...actionFacts, referral: null })
+    expect(selectHomeShelfActions({ hasPosted: false }, { ...actionFacts, referral: null })
       .map((action) => action.id)).toEqual(['post']);
     expect(selectHomeShelfActions(
-      { kind: 'member', hasPosted: false },
+      { hasPosted: false },
       { ...actionFacts, referral: { inviterPercent: 0, inviteePercent: 0 } },
     ).map((action) => action.id)).toEqual(['post']);
   });

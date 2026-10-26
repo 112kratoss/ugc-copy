@@ -26,6 +26,7 @@ vi.mock('@/lib/home-dashboard-service', () => ({
 }));
 
 vi.mock('@/lib/home-shelf-server', () => ({
+  homeShelfHasEnoughPins: () => true,
   loadHomeShelf: (identity: unknown) => loadHomeShelfMock(identity),
 }));
 
@@ -90,7 +91,7 @@ const SHELF = ['boat', 'serum', 'dance'].map((id) => ({
   price: { kind: 'credits' as const, credits: 8 },
   fitsWelcomeCredits: true,
   badge: null,
-  creator: { username: 'magicbooklet', name: 'Magicbooklet Team' },
+  creator: { id: 'creator-1', username: 'magicbooklet', name: 'Magicbooklet Team' },
   makeHref: `/create-image?remix=generation-${id}&remixPost=${id}`,
 }));
 

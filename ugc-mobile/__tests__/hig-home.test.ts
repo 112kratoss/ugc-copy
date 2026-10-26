@@ -98,6 +98,8 @@ describe('the Make this shelf', () => {
     expect(shelf).toContain("<View style={{ minHeight: 44, justifyContent: 'center' }}>");
     expect(declaration(shelfSource, 'function ActiveRendersLine(')).toContain('minHeight: 44,');
     expect(dashboard).toContain('isLoading={shelfQuery.isPending}');
-    expect(dashboard).toContain('placeholderData: keepHomeShelfCreations,');
+    // No placeholder from the last identity: its creations were filtered by
+    // someone else's blocks. Bones hold the height while the new one loads.
+    expect(dashboard).not.toContain('placeholderData');
   });
 });

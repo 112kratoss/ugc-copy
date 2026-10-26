@@ -20,6 +20,7 @@ import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { actionSheetFromMenu, menuAction, type NativeMenuModel } from '@/lib/native-menu';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
+import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { useAuth } from '@/lib/auth';
 import { UNBLOCK_CONFIRM_MESSAGE, blockedUsersQueryKey, withoutBlockedUser } from '@/lib/blocked-users-view-model';
 import {
@@ -286,6 +287,9 @@ export function CreatorProfileScreen({
         return;
       }
       leaveBlockedCreator(creator);
+      // After the page has moved on, as its other caches are: Home's shelf
+      // lets the creator's cards go too.
+      takeOffHomeShelf(queryClient, { creatorId: creator.id });
     });
   };
 

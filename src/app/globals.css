@@ -768,12 +768,16 @@ button:disabled,
  * the gutter and the last scrolls off the edge; from 40rem the column has its
  * own margins and the track keeps to them. The widths leave a sliver of the
  * next card showing, which is what says the row scrolls.
+ *
+ * A scrolling row clips both ways, so the track keeps 0.25rem of room around
+ * its cards for the 4px focus ring (`.ui-focus-ring`) and takes it back with
+ * a negative margin: the cards sit where they would without it.
  */
 .home-shelf-track {
   display: flex;
   gap: 0.625rem;
-  margin: 0 -1rem;
-  padding: 0 1rem;
+  margin: -0.25rem -1rem;
+  padding: 0.25rem 1rem;
   list-style: none;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
@@ -804,11 +808,12 @@ button:disabled,
  * No `display` here: these rules sit outside Tailwind's layers and would beat
  * any layout utility on the element, so each kind of card names its own.
  */
+/* A media frame at every width: 20px, `--ui-radius-xl`. */
 .home-shelf-card {
   position: relative;
   overflow: hidden;
   aspect-ratio: 4 / 5;
-  border-radius: 1rem;
+  border-radius: var(--ui-radius-xl);
 }
 
 /* A creation: the poster fills it and the captions sit over the picture. */
@@ -835,19 +840,16 @@ button:disabled,
 }
 
 @media (min-width: 40rem) {
+  /* The column's own margins hold the row; only the focus ring's room is left. */
   .home-shelf-track {
-    margin: 0;
-    padding: 0;
-    scroll-padding-inline: 0;
+    margin: -0.25rem;
+    padding: 0.25rem;
+    scroll-padding-inline: 0.25rem;
   }
 
   /* Three cards and a sliver of the fourth across the column. */
   .home-shelf-item {
     width: calc((100% - 1.25rem) / 3.3);
-  }
-
-  .home-shelf-card {
-    border-radius: 1.25rem;
   }
 
   .home-shelf-model {

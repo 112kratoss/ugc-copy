@@ -40,6 +40,7 @@ vi.mock('@/lib/server-helpers', () => ({
 }));
 
 vi.mock('@/lib/home-shelf-server', () => ({
+  homeShelfHasEnoughPins: () => true,
   loadHomeShelf: (identity?: unknown) => loadHomeShelfMock(identity),
 }));
 
@@ -100,7 +101,7 @@ function buildFeedItem(id: string): ShowcaseFeedItem {
     mediaItems: [],
     commentCount: 0,
     createdAt: '2026-07-20T10:00:00.000Z',
-    creator: { username: 'batman', name: 'Batman' },
+    creator: { id: 'creator-1', username: 'batman', name: 'Batman' },
   } as unknown as ShowcaseFeedItem;
 }
 
@@ -117,7 +118,7 @@ function shelfCreation(id: string, overrides: Partial<Extract<HomeShelfItem, { k
     price: { kind: 'credits', credits: 15 },
     fitsWelcomeCredits: true,
     badge: null,
-    creator: { username: 'magicbooklet', name: 'Magicbooklet Team' },
+    creator: { id: 'creator-1', username: 'magicbooklet', name: 'Magicbooklet Team' },
     makeHref: `/create-video?remix=generation-${id}&remixPost=${id}`,
     ...overrides,
   };

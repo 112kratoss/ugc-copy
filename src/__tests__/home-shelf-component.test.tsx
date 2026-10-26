@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import HomeShelf, { HomeShelfPlaceholder } from '@/components/HomeShelf';
 import type { HomeShelfCreation, HomeShelfItem } from '@/lib/home-shelf';
 import { formatHomeShelfPrice, homeShelfActionCopy } from '@/lib/home-shelf-copy';
+import { forgetHomeShelfRemovalsForTests, removeFromHomeShelf } from '@/lib/home-shelf-removals';
 
 vi.mock('next/link', () => ({
   default: ({ prefetch, ...props }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean }) => (
@@ -30,7 +31,7 @@ function creation(id: string, overrides: Partial<HomeShelfCreation> = {}): HomeS
     price: { kind: 'credits', credits: 15 },
     fitsWelcomeCredits: true,
     badge: null,
-    creator: { username: 'magicbooklet', name: 'Magicbooklet Team' },
+    creator: { id: 'creator-1', username: 'magicbooklet', name: 'Magicbooklet Team' },
     makeHref: `/create-video?remix=generation-${id}&remixPost=${id}`,
     ...overrides,
   };
@@ -53,6 +54,7 @@ function stubMatchMedia({ reduceMotion = false, hover = true }: { reduceMotion?:
 
 beforeEach(() => {
   observers = [];
+  forgetHomeShelfRemovalsForTests();
   stubMatchMedia();
   vi.stubGlobal('IntersectionObserver', class {
     private readonly record: { callback: ObserverCallback; elements: Element[] };
@@ -81,6 +83,19 @@ function reportVisible(ratios: Record<string, number>) {
       const ratio = ratios[(target as HTMLElement).dataset.clipId ?? ''] ?? 0;
       return { target, intersectionRatio: ratio, isIntersecting: ratio > 0 };
     }));
+  });
+}
+
+/**
+ * Reports to the observers a mounted clip has of its own (HoverVideo's, and the
+ * page's one-clip rule's) that it is on screen: HoverVideo attaches the source only then.
+ */
+function reportClipOnScreen() {
+  const watchers = observers.filter((record) => record.elements.some((element) => element.tagName === 'VIDEO'));
+  act(() => {
+    for (const watcher of watchers) {
+      watcher.callback(watcher.elements.map((target) => ({ target, intersectionRatio: 1, isIntersecting: true })));
+    }
   });
 }
 
@@ -124,15 +139,36 @@ describe('HomeShelf', () => {
   });
 
   it('plays the clip of the first card in view only, and hands it on', () => {
+    // jsdom reads as a hidden tab; the clip plays only on a visible one.
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
     const { container } = render(<HomeShelf items={SHELF} offerFreeToTry={false} />);
     expect(container.querySelectorAll('video')).toHaveLength(0);
 
     reportVisible({ a: 1, b: 1, c: 0.2 });
     expect(container.querySelectorAll('video')).toHaveLength(1);
+    reportClipOnScreen();
     expect(container.querySelector('video')).toHaveAttribute('src', 'https://cdn.example.test/a/stream.mp4');
+    // No poster on the clip: the optimized one under it shows until a frame does.
+    expect(container.querySelector('video')).not.toHaveAttribute('poster');
 
     reportVisible({ a: 0.1, b: 1, c: 1 });
+    reportClipOnScreen();
     expect(container.querySelector('video')).toHaveAttribute('src', 'https://cdn.example.test/b/stream.mp4');
+    hidden.mockRestore();
+  });
+
+  it('lets a card go when the viewer blocks, hides or reports it in the feed, and the row when too few are left', () => {
+    const items = ['a', 'b', 'c', 'd'].map((id) => creation(id, { creator: { id: `creator-${id}`, username: id, name: id } }));
+    render(<HomeShelf items={items} offerFreeToTry={false} />);
+    const cardLinks = () => screen.queryAllByRole('link').filter((link) => link.getAttribute('href')?.includes('remix='));
+    expect(cardLinks()).toHaveLength(4);
+
+    act(() => removeFromHomeShelf({ creatorId: 'creator-b' }));
+    expect(cardLinks().map((link) => link.getAttribute('href'))).not.toContain('/create-video?remix=generation-b&remixPost=b');
+    expect(cardLinks()).toHaveLength(3);
+
+    act(() => removeFromHomeShelf({ postId: 'c' }));
+    expect(screen.queryByRole('region', { name: 'Make this' })).toBeNull();
   });
 
   it('plays nothing under Reduce Motion', () => {

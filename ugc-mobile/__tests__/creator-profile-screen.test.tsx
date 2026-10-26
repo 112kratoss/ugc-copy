@@ -455,7 +455,10 @@ describe('blocking from the page', () => {
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
       ['profile-saved-media', 'viewer-1'],
       ['profile', 'viewer-1'],
+      // Home's shelf is marked stale after the move, its card already gone: no read.
+      ['home-shelf'],
     ]);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['home-shelf'], refetchType: 'none' });
     // The lanes and the reel sources lose the creator's posts without a read.
     const lane = queryClient.getQueryData<InfiniteData<ShowcaseFeedResponse>>(laneKey);
     expect(lane?.pages.flatMap((lanePage) => lanePage.items.map((item) => item.id))).toEqual(['other-1']);

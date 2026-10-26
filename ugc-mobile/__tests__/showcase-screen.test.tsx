@@ -811,8 +811,12 @@ describe('Showcase screen', () => {
       });
       // Another creator's grid keeps its pages, and its age.
       expect(queryClient.getQueriesData({ queryKey: otherGridKey })[0]?.[1]).toBe(otherGrid);
-      // Only the Saved list, which loses their posts, is read again.
-      expect(queryClient.invalidateQueries.mock.calls).toEqual([[{ queryKey: ['profile-saved-media', 'viewer-1'] }]]);
+      // Only the Saved list, which loses their posts, is read again. Home's
+      // shelf loses their cards and is only marked stale.
+      expect(queryClient.invalidateQueries.mock.calls).toEqual([
+        [{ queryKey: ['home-shelf'], refetchType: 'none' }],
+        [{ queryKey: ['profile-saved-media', 'viewer-1'] }],
+      ]);
       expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith('@creator-1 blocked.');
     } finally {
       renderer.act(() => tree!.unmount());

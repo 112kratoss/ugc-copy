@@ -9,8 +9,8 @@ import {
   homeShelfActionCopy,
   homeShelfBadge,
   homeShelfCreationLabel,
+  homeShelfGuestReturnTo,
   homeShelfPosterCacheKey,
-  keepHomeShelfCreations,
   readHomeShelfItems,
 } from '../lib/home-shelf-view-model';
 import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, HomeShelfPrice, HomeShelfResponse } from '../lib/types';
@@ -54,14 +54,28 @@ describe('readHomeShelfItems', () => {
     expect(readHomeShelfItems(undefined)).toEqual([]);
     expect(readHomeShelfItems({ success: true, schemaVersion: 1 } as unknown as HomeShelfResponse)).toEqual([]);
   });
+
+  it("draws no shelf once fewer than three creations are left, as the server's rule says", () => {
+    const member = endpoint.responseVariants.member.response;
+    const withoutOne = { ...member, items: member.items.filter((item) => item.id !== 'post-2') };
+
+    expect(readHomeShelfItems(withoutOne)).toEqual([]);
+  });
 });
 
-describe('keepHomeShelfCreations', () => {
-  it("keeps the shared creations and none of the last person's offers", () => {
-    const kept = keepHomeShelfCreations(endpoint.responseVariants.member.response);
+describe('homeShelfGuestReturnTo', () => {
+  it("brings a guest back to this remix's editor after sign-in, as the web's card does", () => {
+    const [video, , motion] = creations;
 
-    expect(kept?.items.map((item) => item.id)).toEqual(['post-1', 'post-2', 'post-3']);
-    expect(keepHomeShelfCreations(undefined)).toBeUndefined();
+    expect(homeShelfGuestReturnTo(video)).toBe('/create/video?remix=generation-1&remixPost=post-1');
+    expect(homeShelfGuestReturnTo(motion)).toMatch(/^\/create\/motion\?remix=[^&]+&remixPost=post-3$/);
+  });
+
+  it('falls back to the post when the card has no create link it can map', () => {
+    const [video] = creations;
+
+    expect(homeShelfGuestReturnTo({ ...video, makeHref: undefined })).toBe('/post/post-1');
+    expect(homeShelfGuestReturnTo({ ...video, makeHref: '/somewhere-else' })).toBe('/post/post-1');
   });
 });
 

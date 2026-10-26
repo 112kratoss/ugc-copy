@@ -171,6 +171,7 @@ Two faces:
 - **Display: Bricolage Grotesque**, loaded from the bundle in the root layout, weights 700 and 800 only.
   - It carries the titles, the numbers and the wordmark (`BrandLockup`).
   - Until it loads, the splash screen stays up, so the first screen never swaps fonts in view.
+  - The screens render under the splash before it loads, and on Android text drawn then keeps the system font until it is drawn again. `AppText` draws its display roles anew once the face is in (`lib/display-font-ready.ts`, marked by the root layout). A raw `Text` that spreads a display role does not: use `AppText` for any title a screen can draw at launch.
 - **Everything else: the system font** (San Francisco, Roboto), so running text, labels and buttons match the OS and scale with it.
 
 Roles (`appTheme.type`):

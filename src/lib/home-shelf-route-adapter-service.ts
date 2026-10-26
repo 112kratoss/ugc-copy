@@ -15,8 +15,14 @@ import {
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { isGuestUser } from '@/lib/account-identity';
 import { HOME_SHELF_SCHEMA_VERSION } from '@/lib/home-shelf';
-import { loadHomeShelfForApi, type HomeShelfApiItem } from '@/lib/home-shelf-server';
+import {
+  HomeShelfUnavailableError,
+  loadHomeShelfForApi,
+  type HomeShelfApiItem,
+  type HomeShelfIdentity,
+} from '@/lib/home-shelf-server';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
@@ -52,18 +58,21 @@ function resolveDependencies(dependencies: HomeShelfRouteDependencies | undefine
 /**
  * The caller as the shelf sees it. No token is a signed-out visitor; a token
  * the proxy admitted is read here once more for its anonymity, since a guest
- * is offered what a signed-out visitor is.
+ * is offered what a signed-out visitor is. A token whose user cannot be read is
+ * not answered as signed out: that answer skips the viewer's blocks and feed
+ * choices, so the route fails instead.
  */
 async function readViewer(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
-): Promise<{ viewerUserId: string | null; isAnonymous: boolean }> {
+): Promise<HomeShelfIdentity> {
   if (!request.headers.get('Authorization')) return { viewerUserId: null, isAnonymous: false };
 
   const {
     data: { user },
   } = await getVerifiedAuthUserResult(dependencies.createUserClient(request));
-  return { viewerUserId: user?.id ?? null, isAnonymous: user?.is_anonymous === true };
+  if (!user) throw new HomeShelfUnavailableError('The shelf viewer could not be read.');
+  return { viewerUserId: user.id, isAnonymous: isGuestUser(user) };
 }
 
 async function handleHomeShelfGET(
@@ -102,7 +111,15 @@ async function handleHomeShelfGET(
     });
   } catch (error) {
     dependencies.logError('Home shelf error:', error);
-    return NextResponse.json({ error: 'Failed to load the shelf.' }, { status: 500 });
+    // Never kept, at the edge or in the app: an empty shelf answered for a
+    // failed read would be served as the shelf until it expired.
+    return NextResponse.json(
+      { error: 'Failed to load the shelf.' },
+      {
+        status: error instanceof HomeShelfUnavailableError ? 503 : 500,
+        headers: { 'Cache-Control': 'no-store' },
+      },
+    );
   }
 }
 

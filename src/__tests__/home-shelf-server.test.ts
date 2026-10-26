@@ -7,7 +7,7 @@ const getShowcaseFeedItemsByPostIdsMock = vi.fn();
 const loadReferralProgramTermsMock = vi.fn();
 const loadPublishedGenerationModelCatalogMock = vi.fn();
 const quotePublishedGenerationModelMock = vi.fn();
-const loadBlockedCreatorIdsMock = vi.fn();
+const loadViewerRelationsMock = vi.fn();
 const unstableCacheOptions = vi.hoisted(() => [] as Array<{ tags?: string[] }>);
 const tableResults = new Map<string, unknown>();
 const tableReads: string[] = [];
@@ -28,8 +28,8 @@ vi.mock('@/lib/referral-route-service', () => ({
   loadReferralProgramTerms: () => loadReferralProgramTermsMock(),
 }));
 
-vi.mock('@/lib/moderation-service', () => ({
-  loadBlockedCreatorIds: (options: unknown) => loadBlockedCreatorIdsMock(options),
+vi.mock('@/lib/showcase-feed-personalization', () => ({
+  loadViewerRelations: (options: unknown) => loadViewerRelationsMock(options),
 }));
 
 vi.mock('@/lib/generation-model-catalog-store', () => ({
@@ -141,6 +141,18 @@ const MODELS = [
   descriptor('kling-3.0-motion', 'motion', 'Kling 3.0 Motion'),
 ];
 const BOTH_CATALOGS = async () => ({ web: MODELS, mobile: MODELS });
+
+/** The feed's read of a viewer's relations, as `loadViewerRelations` answers it. */
+function relations(overrides: Partial<Record<'blockedCreatorIds' | 'hiddenCreatorIds' | 'hiddenPostIds' | 'reportedPostIds', string[]>> = {}) {
+  return {
+    viewerUserId: 'user-2',
+    followingCreatorIds: new Set<string>(),
+    blockedCreatorIds: new Set(overrides.blockedCreatorIds ?? []),
+    hiddenCreatorIds: new Set(overrides.hiddenCreatorIds ?? []),
+    hiddenPostIds: new Set(overrides.hiddenPostIds ?? []),
+    reportedPostIds: new Set(overrides.reportedPostIds ?? []),
+  };
+}
 
 describe('buildHomeShelfCreations', () => {
   beforeEach(() => {
@@ -321,8 +333,8 @@ describe('loadHomeShelf', () => {
     loadPublishedGenerationModelCatalogMock.mockResolvedValue({ catalog: { models: MODELS } });
     loadReferralProgramTermsMock.mockReset();
     loadReferralProgramTermsMock.mockResolvedValue({ inviterPercent: 5, inviteeFirstPurchasePercent: 5, attributionWindowDays: 30 });
-    loadBlockedCreatorIdsMock.mockReset();
-    loadBlockedCreatorIdsMock.mockResolvedValue(new Set());
+    loadViewerRelationsMock.mockReset();
+    loadViewerRelationsMock.mockResolvedValue(relations());
     tableResults.clear();
     tableReads.length = 0;
     tableResults.set('generations', { data: [generation('a'), generation('b'), generation('c')], error: null });
@@ -340,7 +352,7 @@ describe('loadHomeShelf', () => {
     expect(items.map((item) => item.id)).toEqual(['a', 'b', 'c']);
     expect(items.every((item) => !('post' in item))).toBe(true);
     expect(getShowcaseFeedItemsByPostIdsMock).toHaveBeenCalledWith({ postIds: ['a', 'b', 'c'], viewerUserId: null, countryCode: null });
-    expect(loadBlockedCreatorIdsMock).not.toHaveBeenCalled();
+    expect(loadViewerRelationsMock).not.toHaveBeenCalled();
   });
 
   it("drops a take-down with the feed's own cache tag", async () => {
@@ -349,14 +361,14 @@ describe('loadHomeShelf', () => {
     expect(unstableCacheOptions[0]?.tags).toEqual(expect.arrayContaining(['showcase-feed:v3']));
   });
 
-  it('treats a guest as signed out for offers, but still keeps its blocks', async () => {
+  it('treats a guest as signed out for offers, but still keeps its blocks and feed choices', async () => {
     const { loadHomeShelf } = await import('@/lib/home-shelf-server');
 
     const items = await loadHomeShelf({ viewerUserId: 'guest-1', isAnonymous: true });
 
     expect(items.every((item) => item.kind === 'creation')).toBe(true);
     expect(loadReferralProgramTermsMock).not.toHaveBeenCalled();
-    expect(loadBlockedCreatorIdsMock).toHaveBeenCalledWith(expect.objectContaining({ viewerUserId: 'guest-1' }));
+    expect(loadViewerRelationsMock).toHaveBeenCalledWith(expect.objectContaining({ viewerUserId: 'guest-1' }));
   });
 
   it('asks a member with no public post to post, then to invite', async () => {
@@ -389,19 +401,55 @@ describe('loadHomeShelf', () => {
   it("leaves out a creator the member blocked, and shows no shelf it would leave too short", async () => {
     const { loadHomeShelf } = await import('@/lib/home-shelf-server');
     tableResults.set('posts', { data: [], error: null });
-    loadBlockedCreatorIdsMock.mockResolvedValue(new Set(['creator-b']));
+    loadViewerRelationsMock.mockResolvedValue(relations({ blockedCreatorIds: ['creator-b'] }));
 
     const items = await loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false });
 
     expect(items).toEqual([]);
   });
 
-  it('shows nothing when the block check fails, as the feed does', async () => {
+  it('leaves out what the feed leaves out for the viewer, then fills the row from the pins after the sixth', async () => {
+    const { loadHomeShelf } = await import('@/lib/home-shelf-server');
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+    pinsMock.pins = ids.map((postId) => ({ postId }));
+    getShowcaseFeedItemsByPostIdsMock.mockResolvedValue(ids.map((id) => post(id)));
+    tableResults.set('generations', { data: ids.map((id) => generation(id)), error: null });
+    tableResults.set('posts', { data: [{ id: 'their-post' }], error: null });
+    loadViewerRelationsMock.mockResolvedValue(relations({
+      blockedCreatorIds: ['creator-a'],
+      hiddenCreatorIds: ['creator-b'],
+      hiddenPostIds: ['c'],
+      reportedPostIds: ['d'],
+    }));
+
+    const items = await loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false });
+
+    expect(loadViewerRelationsMock).toHaveBeenCalledWith(expect.objectContaining({
+      viewerUserId: 'user-2',
+      items: expect.arrayContaining([expect.objectContaining({ id: 'g' })]),
+    }));
+    expect(items.map((item) => item.id)).toEqual(['e', 'f', 'g', 'invite']);
+  });
+
+  it('shows nothing when the viewer cannot be checked, as the feed does', async () => {
     const { loadHomeShelf } = await import('@/lib/home-shelf-server');
     tableResults.set('posts', { data: [], error: null });
-    loadBlockedCreatorIdsMock.mockRejectedValue(new Error('user_blocks is unavailable'));
+    loadViewerRelationsMock.mockResolvedValue(null);
 
     await expect(loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false })).resolves.toEqual([]);
+  });
+
+  it("fails the app's read instead of answering an empty shelf the edge and the app would keep", async () => {
+    const { HomeShelfUnavailableError, loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
+    tableResults.set('posts', { data: [], error: null });
+    loadViewerRelationsMock.mockResolvedValue(null);
+
+    await expect(loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false }))
+      .rejects.toBeInstanceOf(HomeShelfUnavailableError);
+
+    getShowcaseFeedItemsByPostIdsMock.mockRejectedValue(new Error('posts is unavailable'));
+    await expect(loadHomeShelfForApi({ viewerUserId: null, isAnonymous: false }))
+      .rejects.toBeInstanceOf(HomeShelfUnavailableError);
   });
 
   it("reads no member's offers when there is no shelf to put them in", async () => {
@@ -413,7 +461,7 @@ describe('loadHomeShelf', () => {
     expect(items).toEqual([]);
     expect(tableReads).not.toContain('posts');
     expect(loadReferralProgramTermsMock).not.toHaveBeenCalled();
-    expect(loadBlockedCreatorIdsMock).not.toHaveBeenCalled();
+    expect(loadViewerRelationsMock).not.toHaveBeenCalled();
   });
 
   it('renders no shelf when the posts cannot be read', async () => {

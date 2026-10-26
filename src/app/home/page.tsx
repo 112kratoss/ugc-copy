@@ -12,9 +12,8 @@ import FeedClient from '@/app/feed/FeedClient';
 import StaleSessionRecovery from '@/app/home/StaleSessionRecovery';
 import WorkspaceCard from '@/app/home/WorkspaceCard';
 import type { HomeWhatsNewModel, HomeWorkspaceGenerationView } from '@/lib/home-dashboard';
-import { HOME_SHELF_MIN_CREATIONS, type HomeShelfItem } from '@/lib/home-shelf';
-import { HOME_SHELF_PINS } from '@/lib/home-shelf-lineup';
-import { loadHomeShelf } from '@/lib/home-shelf-server';
+import type { HomeShelfItem } from '@/lib/home-shelf';
+import { homeShelfHasEnoughPins, loadHomeShelf } from '@/lib/home-shelf-server';
 import {
   loadHomeFeed,
   loadHomeWhatsNewModels,
@@ -134,7 +133,7 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
       hero={(
         // The row's place is held while it streams, so the feed below does not
         // jump when it lands; with too few pins for a shelf there is none to hold.
-        <Suspense fallback={HOME_SHELF_PINS.length >= HOME_SHELF_MIN_CREATIONS ? <HomeShelfPlaceholder /> : null}>
+        <Suspense fallback={homeShelfHasEnoughPins() ? <HomeShelfPlaceholder /> : null}>
           <HomeShelfSection data={shelfPromise} />
         </Suspense>
       )}

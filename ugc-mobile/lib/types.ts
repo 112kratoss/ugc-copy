@@ -1120,7 +1120,12 @@ export interface HomeShelfCreation {
   /** The price fits the welcome credits someone without an account is owed. */
   fitsWelcomeCredits: boolean;
   badge: 'new-model' | null;
-  creator: { username: string | null; name: string | null };
+  creator: { id?: string | null; username: string | null; name: string | null };
+  /**
+   * The web's create page for this remix. The app opens it after a guest signs
+   * in (as its native route), so the guest lands in the editor, not on the post.
+   */
+  makeHref?: string;
   /** The post itself: Make this runs the feed's remix on it. */
   post: ShowcaseFeedItem;
 }

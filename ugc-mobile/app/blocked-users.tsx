@@ -29,6 +29,7 @@ import {
 } from '@/lib/blocked-users-view-model';
 import { showConfirmDialog, showErrorDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
+import { refreshHomeShelf } from '@/lib/home-shelf-cache';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 
 /**
@@ -81,6 +82,8 @@ export default function BlockedUsersScreen() {
       queryKey,
       (current) => withoutBlockedUser(current, blocked.id),
     );
+    // Home's shelf may draw them again; it ranks nothing, so it is read now.
+    refreshHomeShelf(queryClient);
     await Promise.all([
       // Their posts may be drawn again. The feeds are marked stale and read on
       // their next refresh, not now: reading them behind this screen re-ranked

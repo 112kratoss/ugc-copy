@@ -47,6 +47,8 @@ export type HomeShelfPrice =
   | { kind: 'clip-length' };
 
 export interface HomeShelfCreator {
+  /** Lets the web's card leave with the creator's posts when the viewer blocks or hides them. */
+  id: string | null;
   username: string | null;
   name: string | null;
 }
@@ -83,14 +85,6 @@ export type HomeShelfAction =
   | { kind: 'action'; id: 'earn'; creatorSharePercent: number };
 
 export type HomeShelfItem = HomeShelfCreation | HomeShelfAction;
-
-/**
- * Who is looking. A guest counts as signed out: it cannot post publicly,
- * invite anyone or sell, and remixing someone else's post needs an account.
- */
-export type HomeShelfViewer =
-  | { kind: 'signed-out' }
-  | { kind: 'member'; hasPosted: boolean };
 
 export interface HomeShelfCreationFacts {
   modelName: string | null;
@@ -161,6 +155,7 @@ export function toHomeShelfCreation(
       && price.credits <= facts.welcomeCredits,
     badge: pin.badge ?? null,
     creator: {
+      id: item.creator?.id ?? null,
       username: item.creator?.username ?? null,
       name: item.creator?.name ?? null,
     },
@@ -169,19 +164,19 @@ export function toHomeShelfCreation(
 }
 
 /**
- * The action cards one viewer is offered: at most two, and only ones that fit
+ * The action cards a member is offered: at most two, and only ones that fit
  * where they are. Someone who has never posted is asked to post; someone who
  * has is asked to sell, once selling is switched on. Invite goes to every
- * member while a referral program is running.
+ * member while a referral program is running. Signed-out visitors and guests
+ * are offered none, and the server never asks for them (`home-shelf-server.ts`):
+ * a guest cannot post publicly, invite anyone or sell.
  */
 export function selectHomeShelfActions(
-  viewer: HomeShelfViewer,
+  member: { hasPosted: boolean },
   facts: HomeShelfActionFacts,
 ): HomeShelfAction[] {
-  if (viewer.kind !== 'member') return [];
-
   const actions: HomeShelfAction[] = [];
-  if (!viewer.hasPosted) {
+  if (!member.hasPosted) {
     actions.push({ kind: 'action', id: 'post' });
   } else if (facts.earnEnabled) {
     actions.push({ kind: 'action', id: 'earn', creatorSharePercent: facts.creatorSharePercent });

@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 // face until it is drawn again. Home's shelf title is drawn at launch, before
 // `useFonts` has loaded the face, and was not drawn again when the answer had
 // creations: it stayed in the thin system face (Pixel 9a emulator, 2026-10-25).
-// The root layout says when the face is in, and the title redraws itself then.
+// The root layout says when the face is in, and AppText draws its display roles
+// again then, for every title a screen draws at launch.
 
 const mobileRoot = path.resolve(__dirname, '..');
 const source = (file: string) => readFileSync(path.join(mobileRoot, file), 'utf8');
@@ -43,9 +44,12 @@ describe('display font ready', () => {
     expect(source('app/_layout.tsx')).toMatch(/if \(fontsLoaded\) markDisplayFontLoaded\(\);/);
   });
 
-  it("keys the shelf's title on it, so the title is drawn anew in the face", () => {
-    expect(source('components/home-shelf.tsx')).toMatch(
-      /key=\{displayFontLoaded \? 'display-face' : 'system-face'\}\s+variant="cardTitle"/,
-    );
+  it('makes AppText draw its display roles anew in the face, so every launch title gets it', () => {
+    const ui = source('components/ui.tsx');
+    expect(ui).toMatch(/const displayFontLoaded = useDisplayFontLoaded\(\);/);
+    expect(ui).toMatch(/const faceKey = textRole\(variant\)\.fontFamily\s+\? \(displayFontLoaded \? 'display-face' : 'system-face'\)\s+: undefined;/);
+    expect(ui).toMatch(/<Text\s+key=\{faceKey\}/);
+    // The shelf's title is an AppText in a display role, with no key of its own.
+    expect(source('components/home-shelf.tsx')).toMatch(/<AppText variant="cardTitle" heading numberOfLines=\{1\}>/);
   });
 });
