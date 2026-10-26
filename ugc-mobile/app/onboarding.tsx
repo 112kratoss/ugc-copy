@@ -18,7 +18,18 @@ import { AtSign, Clapperboard, ImageIcon, Sparkles, WandSparkles } from 'lucide-
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '@/lib/api-client';
-import { buildIdentityClaimBody, readLocalUsernameRejection } from '@/lib/edit-profile-form';
+import {
+  buildIdentityClaimBody,
+  isClaimedProfileUsername,
+  normalizeUsername,
+  normalizeUsernameInput,
+  PROFILE_DISPLAY_NAME_MAX_LENGTH,
+  PROFILE_PLACEHOLDER_USERNAME_ERROR,
+  PROFILE_PLACEHOLDER_USERNAME_PATTERN,
+  PROFILE_USERNAME_MAX_LENGTH,
+  PROFILE_USERNAME_PATTERN,
+  PROFILE_USERNAME_RULE,
+} from '@/lib/edit-profile-form';
 import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
@@ -73,13 +84,6 @@ const GOALS: BookletGoal[] = [
     icon: WandSparkles,
   },
 ];
-
-function isClaimedIdentity(profile: ProfileResponse | null) {
-  const username = profile?.username?.trim() ?? '';
-  return /^[a-z0-9-]{3,24}$/.test(username)
-    && !/^creator-[a-f0-9]{8}$/.test(username)
-    && Boolean(profile?.displayName?.trim());
-}
 
 /**
  * The answers after the identity step that leave nothing to claim yet still
@@ -185,7 +189,7 @@ function OnboardingFlow() {
       setProfile(nextProfile);
       adoptWelcome(nextWelcome);
       setDisplayName(nextProfile.displayName?.trim() || authDisplayName(user.user_metadata) || user.email?.split('@')[0] || 'Creator');
-      setUsername(/^creator-[a-f0-9]{8}$/.test(nextProfile.username ?? '') ? '' : nextProfile.username ?? '');
+      setUsername(PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(nextProfile.username ?? '') ? '' : nextProfile.username ?? '');
       // Resolved once, on entry. Re-deriving as state changes would eject
       // someone the instant `claimCredits` flips `eligible` to `claimed` —
       // mid-celebration, with the credits counter still animating.
@@ -254,12 +258,11 @@ function OnboardingFlow() {
     void trackOnboardingEvent(api, 'reward_viewed', { goal, step: 'reward' });
   }, [api, goal, stage, welcome]);
 
-  // The check Edit profile runs on the same handle. The placeholder and the
-  // reserved list are answered first, with no round trip (D3); a check that
-  // failed (offline, rate limited) is no verdict, and the save still judges.
+  // The check Edit profile runs on the same handle. It refuses the placeholder
+  // and the reserved list with no round trip (D3); a check that failed
+  // (offline, rate limited) is no verdict, and the save still judges.
   const handleCheck = useHandleAvailability(api, { username, displayName, savedUsername: profile?.username });
-  const handleRefusal = readLocalUsernameRejection(username, profile?.username)
-    ?? (handleTakenAtSave === username ? 'That handle was just claimed. Try another one.' : null)
+  const handleRefusal = (handleTakenAtSave === username ? 'That handle was just claimed. Try another one.' : null)
     ?? (handleCheck.availability === 'taken' ? handleCheck.message ?? 'This creator name is unavailable.' : null);
   const usernameState = handleRefusal ? 'error' : handleCheck.availability;
   const usernameMessage = handleRefusal ?? (usernameState === 'available' ? 'This creator name is available.' : null);
@@ -323,13 +326,13 @@ function OnboardingFlow() {
 
   const saveIdentity = async () => {
     if (!profile || busy) return;
-    const normalizedUsername = username.trim().replace(/^@+/, '').toLowerCase();
+    const normalizedUsername = normalizeUsername(username) ?? '';
     if (!displayName.trim()) {
       setMessage('Add the name you want people to see.');
       return;
     }
-    if (!/^[a-z0-9-]{3,24}$/.test(normalizedUsername) || /^creator-[a-f0-9]{8}$/.test(normalizedUsername)) {
-      setMessage('Use 3–24 lowercase letters, numbers, or hyphens for your handle.');
+    if (!isClaimedProfileUsername(normalizedUsername)) {
+      setMessage(PROFILE_PLACEHOLDER_USERNAME_ERROR);
       return;
     }
     setBusy(true);
@@ -357,10 +360,14 @@ function OnboardingFlow() {
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
+        // Said under the handle alone, where the next handle typed replaces
+        // it. An alert here as well kept saying the handle was taken while the
+        // line called the next one available.
         setHandleTakenAtSave(username);
         void trackOnboardingEvent(api, 'username_conflict', { goal, step: 'identity' });
+      } else {
+        setMessage(error instanceof Error ? error.message : 'Could not save your creator name.');
       }
-      setMessage(error instanceof Error ? error.message : 'Could not save your creator name.');
     } finally {
       setBusy(false);
     }
@@ -539,7 +546,7 @@ function OnboardingFlow() {
                   returnKeyType="next"
                   submitBehavior="submit"
                   onSubmitEditing={() => handleRef.current?.focus()}
-                  maxLength={60}
+                  maxLength={PROFILE_DISPLAY_NAME_MAX_LENGTH}
                   placeholder="Your creator name"
                 />
                 <View style={{ gap: 7 }}>
@@ -551,13 +558,13 @@ function OnboardingFlow() {
                       inputRef={handleRef}
                       label="Unique handle"
                       value={username}
-                      onChangeText={(value) => setUsername(value.toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9-]/g, ''))}
+                      onChangeText={(value) => setUsername(normalizeUsernameInput(value))}
                       autoCapitalize="none"
                       autoCorrect={false}
                       spellCheck={false}
                       textContentType="nickname"
                       returnKeyType="done"
-                      maxLength={24}
+                      maxLength={PROFILE_USERNAME_MAX_LENGTH}
                       placeholder="your-name"
                       style={{ paddingLeft: 38 }}
                     />
@@ -567,14 +574,14 @@ function OnboardingFlow() {
                     variant="caption"
                     color={usernameState === 'error' ? 'danger' : usernameState === 'available' ? 'success' : 'muted'}
                   >
-                    {usernameState === 'checking' ? 'Checking availability…' : usernameMessage ?? '3–24 lowercase letters, numbers, or hyphens.'}
+                    {usernameState === 'checking' ? 'Checking availability…' : usernameMessage ?? PROFILE_USERNAME_RULE}
                   </AppText>
                 </View>
                 {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>{message}</Text> : null}
                 <PrimaryButton
                   label="Save creator name"
                   loading={busy}
-                  disabled={!displayName.trim() || !/^[a-z0-9-]{3,24}$/.test(username) || usernameState === 'error'}
+                  disabled={!displayName.trim() || !PROFILE_USERNAME_PATTERN.test(username) || usernameState === 'error'}
                   onPress={() => void saveIdentity()}
                 />
                 {/* The flow has to stay optional: this stage offered no skip and

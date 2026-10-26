@@ -359,8 +359,24 @@ describe('checking the handle as it is typed', () => {
     return { text: line.props.children as string, color: line.props.color as string };
   }
 
+  /** What the alerts under the fields say. */
+  function alerts(tree: renderer.ReactTestRenderer) {
+    return tree.root
+      .findAll((node) => String(node.type) === 'text' && node.props.accessibilityRole === 'alert')
+      .map((node) => node.props.children as string);
+  }
+
+  async function pressSave(tree: renderer.ReactTestRenderer) {
+    await act(async () => {
+      findButton(tree, 'primary-button', 'Save creator name').props.onPress();
+      await settle();
+    });
+  }
+
   it('says an available handle and a taken one in its own words', async () => {
     const tree = await openIdentityStep();
+    // The signup placeholder (`creator-1234abcd`) is nobody's name: the field opens empty.
+    expect(tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle').props.value).toBe('');
 
     await typeHandle(tree, 'sarath-makes');
     expect(handleLine(tree).text).toBe('Checking availability…');
@@ -410,23 +426,42 @@ describe('checking the handle as it is typed', () => {
     act(() => tree.unmount());
   });
 
-  it('says a handle the save found taken until another one is typed', async () => {
+  // Under the handle alone: the alert under the fields used to say it too, and
+  // kept saying the handle was taken while the line called the next one available.
+  it('says a handle the save found taken under the handle alone, until another one is typed', async () => {
     // Free when it was checked, claimed by someone else before the save.
     harness.api.updateProfile.mockReset().mockRejectedValue(taken);
     const tree = await openIdentityStep();
 
     await typeHandle(tree, 'sarath-makes');
     await letTheCheckAnswer();
-    await act(async () => {
-      findButton(tree, 'primary-button', 'Save creator name').props.onPress();
-      await settle();
-    });
+    await pressSave(tree);
 
     expect(handleLine(tree)).toEqual({ text: 'That handle was just claimed. Try another one.', color: 'danger' });
+    expect(alerts(tree)).toEqual([]);
     expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(true);
 
     await typeHandle(tree, 'sarath-makes-2');
     await letTheCheckAnswer();
+    expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+    expect(alerts(tree)).toEqual([]);
+    expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(false);
+
+    act(() => tree.unmount());
+  });
+
+  it('keeps the alert for a save that failed for another reason', async () => {
+    const offline = new ApiError('Network request failed. Please check your connection and try again.', 0, {
+      url: 'https://magicbooklet.com/api/profile',
+    });
+    harness.api.updateProfile.mockReset().mockRejectedValue(offline);
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath-makes');
+    await letTheCheckAnswer();
+    await pressSave(tree);
+
+    expect(alerts(tree)).toEqual(['Network request failed. Please check your connection and try again.']);
     expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
     expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(false);
 
