@@ -1,6 +1,7 @@
+import type { Ref } from 'react';
 import { View } from 'react-native';
 
-import { CompactFieldLabel, ComposerFieldShell, ComposerInput, FieldErrorText } from '@/components/composer-fields';
+import { CompactFieldLabel, ComposerFieldShell, ComposerInput } from '@/components/composer-fields';
 import { AppText } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
@@ -29,6 +30,7 @@ export function PublicIdentityCard({
   onChange,
   savedUsername,
   framed = true,
+  fieldRefs,
 }: {
   value: PublicIdentityDraft;
   errors: PublicIdentityErrors;
@@ -41,6 +43,8 @@ export function PublicIdentityCard({
    * for. A sheet that says that in its own title draws the two fields alone.
    */
   framed?: boolean;
+  /** Each field, label to message: what the composer measures to bring a refused field into view. */
+  fieldRefs?: Partial<Record<keyof PublicIdentityDraft, Ref<View>>>;
 }) {
   const { api } = useAuth();
   const live = useHandleAvailability(api, { ...value, savedUsername });
@@ -51,38 +55,53 @@ export function PublicIdentityCard({
     message: live.availability === 'available' ? 'This handle is available.' : live.message,
   });
 
+  // Each field in a view of its own, spaced as the panel spaces its rows. A
+  // verdict on a field is said on that field's line alone, in a polite live
+  // region as Edit profile's and onboarding's lines are, so TalkBack reads a
+  // save's refusal from there.
   const fields = (
     <>
-      <CompactFieldLabel label="Display name" required valueLength={value.displayName.length} maxLength={PROFILE_DISPLAY_NAME_MAX_LENGTH} />
-      <ComposerInput
-        accessibilityLabel="Display name, required"
-        accessibilityHint="The name shown on your public posts."
-        value={value.displayName}
-        onChangeText={(displayName) => onChange({ ...value, displayName: displayName.slice(0, PROFILE_DISPLAY_NAME_MAX_LENGTH) })}
-        placeholder="Your name"
-        autoComplete="name"
-        editable={editable}
-      />
-      <FieldErrorText message={errors.displayName} />
-      <CompactFieldLabel label="Handle" required />
-      <ComposerInput
-        accessibilityLabel="Handle, required"
-        accessibilityHint={`Your profile link: ${PROFILE_USERNAME_RULE}`}
-        value={value.username}
-        onChangeText={(username) => onChange({ ...value, username: normalizeUsernameInput(username).slice(0, PROFILE_USERNAME_MAX_LENGTH) })}
-        placeholder="your-handle"
-        autoCapitalize="none"
-        autoCorrect={false}
-        editable={editable}
-      />
-      {errors.username
-        ? <FieldErrorText message={errors.username} />
-        : (
-          // Polite: the check answers a pause in typing, not a press.
-          <AppText accessibilityLiveRegion="polite" variant="caption" color={hint.tone}>
-            {hint.text}
+      <View ref={fieldRefs?.displayName} testID="public-identity-display-name" style={{ gap: 8 }}>
+        <CompactFieldLabel label="Display name" required valueLength={value.displayName.length} maxLength={PROFILE_DISPLAY_NAME_MAX_LENGTH} />
+        <ComposerInput
+          accessibilityLabel="Display name, required"
+          accessibilityHint="The name shown on your public posts."
+          value={value.displayName}
+          onChangeText={(displayName) => onChange({ ...value, displayName: displayName.slice(0, PROFILE_DISPLAY_NAME_MAX_LENGTH) })}
+          placeholder="Your name"
+          autoComplete="name"
+          editable={editable}
+        />
+        {errors.displayName ? (
+          <AppText accessibilityRole="alert" accessibilityLiveRegion="polite" variant="caption" color="danger">
+            {errors.displayName}
           </AppText>
-        )}
+        ) : null}
+      </View>
+      <View ref={fieldRefs?.username} testID="public-identity-username" style={{ gap: 8 }}>
+        <CompactFieldLabel label="Handle" required />
+        <ComposerInput
+          accessibilityLabel="Handle, required"
+          accessibilityHint={`Your profile link: ${PROFILE_USERNAME_RULE}`}
+          value={value.username}
+          onChangeText={(username) => onChange({ ...value, username: normalizeUsernameInput(username).slice(0, PROFILE_USERNAME_MAX_LENGTH) })}
+          placeholder="your-handle"
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={editable}
+        />
+        {/* One line for the hint and the verdict, so a verdict that replaces
+            the hint is a change of the line TalkBack reads. Polite: the check
+            answers a pause in typing, not a press. */}
+        <AppText
+          accessibilityRole={errors.username ? 'alert' : undefined}
+          accessibilityLiveRegion="polite"
+          variant="caption"
+          color={errors.username ? 'danger' : hint.tone}
+        >
+          {errors.username || hint.text}
+        </AppText>
+      </View>
     </>
   );
 
