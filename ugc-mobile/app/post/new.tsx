@@ -156,6 +156,9 @@ import { haptic } from '@/lib/haptics';
 // The dimmed strip kept between the status bar and a resource sheet that the keyboard has shortened.
 const RESOURCE_SHEET_TOP_GAP = 8;
 
+/** The space above the page's first block, and where a refused field is brought to. */
+const COMPOSER_TOP_PADDING = 8;
+
 const COMPOSER_SECTION_STYLE = {
   padding: 14,
   borderRadius: appTheme.radii.lg,
@@ -1910,6 +1913,14 @@ function NewPostComposer() {
   const [identityEdits, setIdentityEdits] = useState<PublicIdentityDraft | null>(null);
   const [identitySaveErrors, setIdentitySaveErrors] = useState<PublicIdentityErrors>({});
   const [isSavingIdentity, setIsSavingIdentity] = useState(false);
+  // The card's two fields and the scroll content they are measured against,
+  // and what the last refused save of them brings into view once it is drawn:
+  // its field, or the top of step 2 for the banner.
+  const displayNameFieldRef = useRef<View>(null);
+  const usernameFieldRef = useRef<View>(null);
+  const scrollContentRef = useRef<View>(null);
+  const pendingIdentityRevealRef = useRef<keyof PublicIdentityDraft | 'top' | null>(null);
+  const [identityRefusalCount, setIdentityRefusalCount] = useState(0);
   const identity = identityEdits ?? getInitialPublicIdentity(profileQuery.data, user);
   const needsPublicIdentity = draft.visibility === 'public'
     && Boolean(profileQuery.data)
@@ -2269,6 +2280,33 @@ function NewPostComposer() {
 
     return () => clearTimeout(timer);
   }, [composerStep, draft, draftStorageId, hasHydratedPersistedDraft]);
+
+  /**
+   * A refused save of the name and handle, brought into view once it is drawn.
+   * Publish is in the footer, so the creator may be at a price far down step 2,
+   * or typing in the card with the keyboard up, where the top of step 2 left
+   * the refused field under the footer. The field's top comes to where the
+   * page's first block rests, its verdict under it; the banner is at the top.
+   */
+  useEffect(() => {
+    const target = pendingIdentityRevealRef.current;
+    const scrollView = scrollRef.current;
+    if (!target || !scrollView) return;
+    pendingIdentityRevealRef.current = null;
+    const field = target === 'displayName'
+      ? displayNameFieldRef.current
+      : target === 'username' ? usernameFieldRef.current : null;
+    const content = scrollContentRef.current;
+    if (!field || !content) {
+      scrollView.scrollTo({ y: 0, animated: true });
+      return;
+    }
+    field.measureLayout(
+      content,
+      (_x, y) => scrollView.scrollTo({ y: Math.max(0, y - COMPOSER_TOP_PADDING), animated: true }),
+      () => scrollView.scrollTo({ y: 0, animated: true }),
+    );
+  }, [identityRefusalCount]);
 
   /**
    * Uploads again, from the device, the new media whose staged uploads a failed
@@ -3384,10 +3422,18 @@ function NewPostComposer() {
       } catch (error) {
         const { errors, message: saveMessage } = readPublicIdentitySaveError(error);
         setIdentitySaveErrors(errors);
-        setMessage({ tone: 'danger', title: 'Your name and handle were not saved', body: saveMessage });
+        // A verdict on a field is said under that field alone, as the list's
+        // sheet, Edit profile and onboarding say it: the banner used to repeat
+        // it and kept saying a handle was taken after the field had moved on
+        // to one the card's live check called available. The banner keeps
+        // what no field can hold, such as a save that failed offline.
+        const refusedField = errors.displayName ? 'displayName' : errors.username ? 'username' : null;
+        if (!refusedField) {
+          setMessage({ tone: 'danger', title: 'Your name and handle were not saved', body: saveMessage });
+        }
         setIsSavingIdentity(false);
-        // The banner and the card sit at the top of step 2, as a publish error's banner does.
-        scrollRef.current?.scrollTo({ y: 0, animated: true });
+        pendingIdentityRevealRef.current = refusedField ?? 'top';
+        setIdentityRefusalCount((count) => count + 1);
         return;
       }
       setIdentitySaveErrors({});
@@ -3438,6 +3484,8 @@ function NewPostComposer() {
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets reservedBottomInset={bottomInset} testID="composer-keyboard-area">
       <ScrollView
         ref={scrollRef}
+        // React Native declares this ref without React 19's nullable `current`.
+        innerViewRef={scrollContentRef as RefObject<View>}
         contentInsetAdjustmentBehavior="never"
         automaticallyAdjustKeyboardInsets
         showsVerticalScrollIndicator={false}
@@ -3448,7 +3496,7 @@ function NewPostComposer() {
         style={{ flex: 1, backgroundColor: theme.colors.background }}
         contentContainerStyle={{
           paddingHorizontal: horizontalPadding,
-          paddingTop: 8,
+          paddingTop: COMPOSER_TOP_PADDING,
           paddingBottom: bottomInset + 112,
           gap: 14,
         }}
@@ -3537,6 +3585,7 @@ function NewPostComposer() {
               savedUsername={profileQuery.data?.username}
               // Until the creator types, the summary says what is missing, not the fields.
               errors={{ ...(identityEdits ? identityProblems : {}), ...identitySaveErrors }}
+              fieldRefs={{ displayName: displayNameFieldRef, username: usernameFieldRef }}
               editable={!isSavingIdentity && !publishMutation.isPending}
               onChange={(next) => {
                 setIdentityEdits(next);

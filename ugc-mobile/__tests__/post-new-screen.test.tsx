@@ -77,6 +77,7 @@ const mutationState = vi.hoisted(() => ({
 const queryClientState = vi.hoisted(() => ({ invalidateQueries: vi.fn(), setQueryData: vi.fn() }));
 const queryOptionsState = vi.hoisted(() => ({ options: [] as Array<{ queryKey: string[]; enabled?: boolean; gcTime?: number }> }));
 const keyboardState = vi.hoisted(() => ({ dismiss: vi.fn() }));
+const scrollContentState = vi.hoisted(() => ({ content: { name: 'scroll content' } }));
 // Android's back key, as the screen's own surfaces claim it.
 const backHandlerState = vi.hoisted(() => ({ listeners: new Set<() => boolean>() }));
 // Timed animations end at once unless a case holds them, to look at a sheet
@@ -222,7 +223,11 @@ vi.mock('react-native', () => ({
     return React.createElement('pressable', { ...props, ref, style: resolvePressableStyle(style) }, children);
   }),
   PanResponder: { create: (handlers: Record<string, unknown>) => ({ panHandlers: handlers }) },
-  ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
+  ScrollView: ({ children, innerViewRef, ...props }: MockProps) => {
+    // The scroll content, which a refused field is measured against.
+    React.useImperativeHandle(innerViewRef as React.Ref<unknown>, () => scrollContentState.content);
+    return React.createElement('scrollview', props, children);
+  },
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: React.forwardRef((props: MockProps, ref) => React.createElement('textinput', { ...props, ref })),
   View: React.forwardRef((_props: MockProps, ref) => {
@@ -1794,6 +1799,23 @@ describe('mobile external post composer', () => {
   describe('a name and handle on step 2 of a public post', () => {
     const placeholderProfile = { id: 'user-123', username: 'creator-a1b2c3d4', displayName: null };
     const publishPublic = (tree: renderer.ReactTestRenderer) => findPressableByAccessibilityLabel(tree.root, 'Publish public');
+    // The server's answer to a handle claimed since it was checked.
+    const takenAtSave = () => new ApiError('That username is already taken.', 409, {
+      error: 'That username is already taken.',
+      fieldErrors: { username: 'That username is already taken.' },
+    });
+    // The scroll view, and where each of the card's fields sits in the scroll
+    // content, by test id: what `measureLayout` answers.
+    const stepTwoNodes = (scrollTo: ReturnType<typeof vi.fn>, fieldTops: Record<string, number> = {}) => (element: React.ReactElement) => {
+      if (element.type === 'scrollview') return { scrollTo };
+      const testID = (element.props as { testID?: unknown }).testID;
+      if (typeof testID !== 'string' || !(testID in fieldTops)) return null;
+      return {
+        measureLayout: (relativeTo: unknown, onSuccess: (x: number, y: number, width: number, height: number) => void) => {
+          onSuccess(0, relativeTo === scrollContentState.content ? fieldTops[testID] : Number.NaN, 354, 96);
+        },
+      };
+    };
 
     it('starts from the sign-in, waits for both, then saves them before publishing', async () => {
       profileState.profile = placeholderProfile;
@@ -1854,27 +1876,115 @@ describe('mobile external post composer', () => {
       expect(update(placeholderProfile)).toEqual(finished);
     });
 
-    it('shows a taken handle on its field, brings it into view and publishes nothing', async () => {
+    it('says a taken handle under the handle alone, brings the field into view and publishes nothing', async () => {
       profileState.profile = placeholderProfile;
-      authState.api.updateProfile.mockRejectedValue(new ApiError('That username is already taken.', 409, {
-        error: 'That username is already taken.',
-        fieldErrors: { username: 'That username is already taken.' },
-      }));
+      authState.api.updateProfile.mockRejectedValue(takenAtSave());
       const scrollTo = vi.fn();
-      const tree = await renderScreen({ createNodeMock: (element) => (element.type === 'scrollview' ? { scrollTo } : null) });
+      const tree = await renderScreen({
+        createNodeMock: stepTwoNodes(scrollTo, { 'public-identity-display-name': 190, 'public-identity-username': 286 }),
+      });
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
       renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya K'));
       renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya'));
+      scrollTo.mockClear();
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+
+      const text = collectText(tree.root);
+      expect(text).not.toContain('Your name and handle were not saved');
+      expect(text.filter((line) => line === 'That username is already taken.')).toHaveLength(1);
+      expect(mutationState.mutate).not.toHaveBeenCalled();
+      // Publish is in the footer and the creator may be at a price far down
+      // step 2, or typing with the keyboard up: the handle's top comes to where
+      // the page's first block rests, its verdict under it.
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTo).toHaveBeenLastCalledWith({ y: 278, animated: true });
+    });
+
+    it('says a refused display name under that field alone, and brings it into view', async () => {
+      profileState.profile = placeholderProfile;
+      authState.api.updateProfile.mockRejectedValue(new ApiError('Please fix the highlighted fields.', 400, {
+        error: 'Please fix the highlighted fields.',
+        fieldErrors: { displayName: 'Display name must be 60 characters or fewer.' },
+      }));
+      const scrollTo = vi.fn();
+      const tree = await renderScreen({
+        createNodeMock: stepTwoNodes(scrollTo, { 'public-identity-display-name': 190, 'public-identity-username': 286 }),
+      });
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya K'));
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya-k'));
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+
+      const text = collectText(tree.root);
+      expect(text).not.toContain('Your name and handle were not saved');
+      expect(text.filter((line) => line === 'Display name must be 60 characters or fewer.')).toHaveLength(1);
+      expect(scrollTo).toHaveBeenLastCalledWith({ y: 182, animated: true });
+
+      // Typing in the field takes the verdict away with it.
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya'));
+      expect(collectText(tree.root)).not.toContain('Display name must be 60 characters or fewer.');
+    });
+
+    // What no field can hold stays in the banner, at the top of step 2.
+    it('says a save that failed offline in the banner and brings the banner into view', async () => {
+      profileState.profile = placeholderProfile;
+      authState.api.updateProfile.mockRejectedValue(
+        new ApiError('Network request failed. Please check your connection and try again.', 0, { url: 'https://api.example/profile' }),
+      );
+      const scrollTo = vi.fn();
+      const tree = await renderScreen({
+        createNodeMock: stepTwoNodes(scrollTo, { 'public-identity-display-name': 190, 'public-identity-username': 286 }),
+      });
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya K'));
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya-k'));
       await renderer.act(async () => {
         publishPublic(tree).props.onPress();
       });
 
       const text = collectText(tree.root);
       expect(text).toContain('Your name and handle were not saved');
-      expect(text.filter((line) => line === 'That username is already taken.').length).toBeGreaterThanOrEqual(1);
+      expect(text).toContain('Your name and handle could not be saved. Check your connection and try again.');
       expect(mutationState.mutate).not.toHaveBeenCalled();
-      // The banner and the card are at the top of step 2, above a price the creator may have scrolled to.
       expect(scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: true });
+    });
+
+    // The banner above the card repeated the save's verdict on the handle and
+    // kept it: once the creator typed another handle, which the card's live
+    // check called available, the banner still said the old one was taken.
+    it('says nothing is taken once the refused handle is changed to one the check calls available', async () => {
+      profileState.profile = placeholderProfile;
+      authState.user.user_metadata = { full_name: 'Maya K' };
+      authState.api.validateProfile.mockImplementation(async () => ({ ok: true }));
+      authState.api.updateProfile.mockRejectedValue(takenAtSave());
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya'));
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+      expect(collectText(tree.root)).toContain('That username is already taken.');
+
+      vi.useFakeTimers();
+      try {
+        renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya-k2'));
+        await renderer.act(async () => {
+          vi.advanceTimersByTime(400);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(authState.api.validateProfile).toHaveBeenLastCalledWith({ username: 'maya-k2', displayName: 'Maya K' });
+        const text = collectText(tree.root);
+        expect(text).toContain('This handle is available.');
+        expect(text).not.toContain('That username is already taken.');
+        expect(text).not.toContain('Your name and handle were not saved');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     // As Edit profile and onboarding check it: a taken handle shows beside the
