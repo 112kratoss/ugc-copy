@@ -3032,11 +3032,38 @@ describe('a title cut from the prompt of a post with a recipe', () => {
   });
 
   it('stores a stored one as the kind title when the post goes public with its stored recipe', async () => {
-    const { result, dependencies } = await save(fromPrompt, storedRecipeRow(composerRecipe()), { visibility: 'public' });
+    const { result, dependencies, generationUpdates } = await save(fromPrompt, storedRecipeRow(composerRecipe()), { visibility: 'public' });
 
     expect(result).toMatchObject({ ok: true });
     expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       patch: expect.objectContaining({ title: 'Image recipe' }),
+    }));
+    // The save sent no title, and the creation still follows the post's.
+    expect(generationUpdates).toContainEqual(expect.objectContaining({ title: 'Image recipe' }));
+  });
+
+  // The composers hold the same rule, so a save is not refused because the
+  // creation's prompt could not be read; the title goes as it was given.
+  it('keeps the title as given, and saves, when the creation cannot be read', async () => {
+    const mock = createSupabaseMock({ post: creationPost('Window still'), bundle: null, generation });
+    const dependencies = {
+      ...createDependencies(),
+      loadGenerationTitleSource: vi.fn(async () => {
+        throw new Error('connection reset');
+      }),
+    };
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: mock.client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: { title: fromPrompt, resourceBundle: composerRecipe() },
+      dependencies,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ title: fromPrompt }),
     }));
   });
 

@@ -693,7 +693,9 @@ export async function publishGenerationToShowcaseForRoute({
     ?? null;
   // A recipe keeps the prompt private, so a title cut from it goes out as the
   // recipe's kind title, the swap both composers make. A visibility change
-  // republishes the stored recipe with the post, so that one counts too.
+  // republishes the stored recipe with the post, so that one counts too. (A
+  // compose request is the whole post and every composer sends its recipe; one
+  // that omits it is not read against the stored post here.)
   const recipeForTitle = effectiveHasResourceBundlePayload
     ? effectiveResourceBundle
     : existingPost?.resourceBundle ?? frozenSoldBundleForRepublish;
@@ -703,7 +705,9 @@ export async function publishGenerationToShowcaseForRoute({
     source: {
       prompt: generation.prompt,
       model: generation.model,
-      category: generation.category,
+      // As the post is filed: a creation stored without a category is read
+      // from its model (`detectCategoryFromModel`), as the composers' is.
+      category: detectedCategory ?? generation.category,
       creationMode: generation.creation_mode,
     },
   });

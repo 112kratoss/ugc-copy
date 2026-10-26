@@ -1398,7 +1398,15 @@ export async function updateOwnerPostForRoute({
         // read that failed; the title goes as it was given.
         logBackendWarning('post_update_title_source_unavailable', { postId, error });
       }
-      nextTitle = titleForRecipePost({ title: titleAsGiven, hasRecipe: true, source: titleSource });
+      nextTitle = titleForRecipePost({
+        title: titleAsGiven,
+        hasRecipe: true,
+        // The kind is named as the post is filed: a creation stored without a
+        // category would otherwise read as an image.
+        source: titleSource
+          ? { ...titleSource, category: typeof nextCategory === 'string' ? nextCategory : titleSource.category }
+          : null,
+      });
     }
     const titleReplacedForRecipe = nextTitle !== titleAsGiven;
     const frozenSoldBundleForRepublish = nextVisibility === 'public'

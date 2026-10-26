@@ -1999,10 +1999,14 @@ describe('a title cut from the prompt of a post with a recipe', () => {
     } satisfies Partial<ShowcasePublishServiceDependencies>;
   }
 
-  async function publish(body: Record<string, unknown>, extra: Partial<ShowcasePublishServiceDependencies> = {}) {
+  async function publish(
+    body: Record<string, unknown>,
+    extra: Partial<ShowcasePublishServiceDependencies> = {},
+    creation: Record<string, unknown> = generation,
+  ) {
     const dependencies = { ...publishDependencies(), ...extra };
     const result = await publishGenerationToShowcaseForRoute({
-      adminSupabase: createAdminClientMock(generation).client,
+      adminSupabase: createAdminClientMock(creation).client,
       body: { generationId: 'gen-title', visibility: 'public', ...body },
       userId: 'user-1',
       dependencies,
@@ -2039,6 +2043,26 @@ describe('a title cut from the prompt of a post with a recipe', () => {
         resourceBundle: cardRecipe(),
       })),
     });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(published).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ title: 'Image recipe' }),
+    }));
+  });
+
+  // An earlier public save copied the post's title onto the creation, and a
+  // post without a stored title of its own starts from it.
+  it('stores the creation’s own copy of such a title as the kind title too', async () => {
+    const { result, published } = await publish({}, {
+      loadExistingGenerationPostContent: vi.fn(async () => ({
+        title: null,
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'image',
+        resourceBundle: cardRecipe(),
+      })),
+    }, { ...generation, title: fromPrompt });
 
     expect(result).toMatchObject({ ok: true });
     expect(published).toHaveBeenCalledWith(expect.objectContaining({

@@ -128,9 +128,10 @@ describe('the title once a recipe is turned on or off', () => {
 describe('whether a title is the opening of a prompt', () => {
   const prompt = 'A product still lit like a window display, soft morning light, 85mm';
 
-  it('knows the cut title, without its case or its spacing', () => {
+  it('knows the cut title, without its case, its spacing or the marks at its edges', () => {
     expect(isTitleFromPrompt('Product still lit like a window display', prompt)).toBe(true);
     expect(isTitleFromPrompt('  product STILL lit like a  window display ', prompt)).toBe(true);
+    expect(isTitleFromPrompt('"Product still lit like a window display."', prompt)).toBe(true);
   });
 
   it('knows nothing else as one: another title, an empty one, or a prompt that gives none', () => {
