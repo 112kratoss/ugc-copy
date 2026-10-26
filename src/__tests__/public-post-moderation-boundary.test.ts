@@ -150,16 +150,31 @@ describe('public post detail read', () => {
     };
   }
 
-  /** Answers the post row; the creator and the generation read find nothing. */
-  function useClientFor(row: Record<string, unknown>) {
+  /**
+   * Answers the post row, and the post's creation when one is given, with only
+   * the columns its read asks for, as PostgREST does. The creator read finds
+   * nothing.
+   */
+  function useClientFor(row: Record<string, unknown>, generation: Record<string, unknown> | null = null) {
     const client = {
       from(table: string) {
+        let columns: string[] = [];
         const query = {
-          select: () => query,
+          select: (selected: string) => {
+            columns = selected.split(',').map((column) => column.trim());
+            return query;
+          },
           eq: () => query,
           is: () => query,
           in: () => query,
-          maybeSingle: async () => ({ data: table === 'posts' ? row : null, error: null }),
+          maybeSingle: async () => ({
+            data: table === 'posts'
+              ? row
+              : table === 'generations' && generation
+                ? Object.fromEntries(columns.map((column) => [column, generation[column] ?? null]))
+                : null,
+            error: null,
+          }),
         };
         return query;
       },
@@ -201,5 +216,41 @@ describe('public post detail read', () => {
     expect(detailMocks.getPostResourceBundleDetailByPostId).toHaveBeenLastCalledWith('post-1', expect.objectContaining({
       isNsfw: true,
     }));
+  });
+
+  // A template's recipe and model are its author's: Studio shows the result's
+  // model as `template-workflow`, and the post page said the real one to anyone.
+  it.each([
+    ['its run', { template_run_id: 'run-1', template_run_step_id: null }],
+    ['its step', { template_run_id: null, template_run_step_id: 'step-1' }],
+  ])("names a template result's model as Studio does when the creation records %s, and offers no Remix", async (_label, link) => {
+    useClientFor(
+      postRow({ generation_id: 'gen-1', category: 'image' }),
+      { model: 'nano-banana-pro', ...link },
+    );
+
+    const detail = await getPublicPostDetail('post-1');
+
+    expect(detail).toMatchObject({
+      model: 'template-workflow',
+      canRemix: false,
+      remixCapability: 'none',
+      remixTarget: null,
+    });
+    expect(JSON.stringify(detail)).not.toContain('nano-banana-pro');
+  });
+
+  it("keeps an ordinary creation's model and Remix", async () => {
+    useClientFor(
+      postRow({ generation_id: 'gen-1', category: 'image' }),
+      { model: 'nano-banana-pro', template_run_id: null, template_run_step_id: null },
+    );
+
+    await expect(getPublicPostDetail('post-1')).resolves.toMatchObject({
+      model: 'nano-banana-pro',
+      canRemix: true,
+      remixCapability: 'public',
+      remixTarget: 'image',
+    });
   });
 });

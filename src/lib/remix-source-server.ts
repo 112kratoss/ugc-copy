@@ -21,6 +21,8 @@ import { isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
 import {
   REMIX_UNLOCK_REQUIRED_CODE,
   REMIX_UNLOCK_REQUIRED_MESSAGE,
+  TEMPLATE_RESULT_REMIX_CODE,
+  TEMPLATE_RESULT_REMIX_MESSAGE,
   resolveRemixAccess,
 } from '@/lib/remix-access';
 import {
@@ -40,8 +42,9 @@ import {
   parseCanonicalStorageObjectPath,
 } from '@/lib/storage-ownership';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
+import type { TemplateRunLink } from '@/lib/template-result';
 
-type RemixSourceGenerationRow = {
+type RemixSourceGenerationRow = TemplateRunLink & {
   id: string;
   user_id: string | null;
   is_public: boolean | null;
@@ -62,7 +65,7 @@ type ResultGenerationRow = Pick<
 >;
 
 const GENERATION_SELECT =
-  'id, user_id, is_public, share_input_media_for_remix, output_url, showcase_asset_path, category, creation_mode, model, prompt, title, workflow_settings';
+  'id, user_id, is_public, share_input_media_for_remix, output_url, showcase_asset_path, category, creation_mode, model, prompt, title, workflow_settings, template_run_id, template_run_step_id';
 
 // The proxy's answer to a guest on a registered-only path, word for word: the
 // app already reads this code as "sign in to do that".
@@ -276,8 +279,9 @@ export async function loadRemixSourceBundle(
   // one hop from being bypassed. Owned means the caller's id or a guest
   // identity since linked to it. Anyone else needs the generation's post to be
   // exposed right now, no block between them, and any remix-enabled recipe on
-  // the post unlocked. Every refusal but the unlock answers 404, so the gate
-  // never confirms that a private source exists.
+  // the post unlocked. A template's result is restored for nobody. Every
+  // refusal but the unlock, and the owner's own template result, answers 404,
+  // so the gate never confirms that someone else's private source exists.
   const access = await resolveRemixAccess({
     adminSupabase,
     viewerUserId: user.id,
@@ -286,12 +290,17 @@ export async function loadRemixSourceBundle(
       user_id: typedGeneration.user_id,
       is_public: typedGeneration.is_public,
       share_input_media_for_remix: typedGeneration.share_input_media_for_remix ?? null,
+      template_run_id: typedGeneration.template_run_id ?? null,
+      template_run_step_id: typedGeneration.template_run_step_id ?? null,
     },
     requestedPostId: options?.postId ?? null,
   });
   if (!access.allowed) {
     if (access.reason === 'unlock_required') {
       throw new RemixSourceError(REMIX_UNLOCK_REQUIRED_MESSAGE, 403, REMIX_UNLOCK_REQUIRED_CODE);
+    }
+    if (access.reason === 'template_result') {
+      throw new RemixSourceError(TEMPLATE_RESULT_REMIX_MESSAGE, 400, TEMPLATE_RESULT_REMIX_CODE);
     }
     throw new RemixSourceError('Remix source not found', 404);
   }

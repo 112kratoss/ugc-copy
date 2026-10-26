@@ -10,6 +10,7 @@ vi.mock('@/lib/mobile-notifications', async (importOriginal) => ({
 beforeEach(() => { vi.mocked(notifyPostSocialActivity).mockClear(); });
 
 import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   remixShowcasePostForRoute,
   type ShowcaseRemixServiceDependencies,
@@ -196,7 +197,7 @@ describe('remixShowcasePostForRoute', () => {
     );
     expect(serviceClient.fromMock).toHaveBeenCalledWith('generations');
     expect(serviceClient.selectMock).toHaveBeenCalledWith(
-      'id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings',
+      'id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings, template_run_id, template_run_step_id',
     );
     expect(serviceClient.eqMock).toHaveBeenCalledWith('id', 'gen-1');
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
@@ -698,5 +699,40 @@ describe('remixShowcasePostForRoute access gate', () => {
     });
 
     expect(result.ok ? result.body.prefill.settings : null).toEqual(settings);
+  });
+
+  // A template's recipe and model are its author's (Studio shows the result's
+  // model as `template-workflow`); its post offers no Remix, and this gate held
+  // the editor open to anyone who asked.
+  it('opens no editor on a template result: its owner is told why, anyone else is answered as for a private source', async () => {
+    const serviceClient = createServiceClientMock({
+      generation: {
+        ...PUBLIC_CREATOR_GENERATION,
+        model: 'nano-banana-pro',
+        prompt: null,
+        workflow_settings: {},
+        template_run_id: 'run-1',
+        template_run_step_id: 'step-1',
+      },
+    });
+
+    const owner = await remixShowcasePostForRoute({
+      actorUserId: 'creator-1',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    });
+    const viewer = await remixShowcasePostForRoute({
+      actorUserId: 'viewer-1',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    });
+
+    const refusal = mobileApiContract.endpoints.remixShowcasePost.errors.templateResult;
+    expect(owner).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+    expect(viewer).toEqual({ ok: false, status: 404, body: { error: 'Linked generation not found' } });
+    expect(serviceClient.selectMock).toHaveBeenCalledWith(expect.stringContaining('template_run_id, template_run_step_id'));
+    expect(serviceClient.fromMock).not.toHaveBeenCalledWith('posts');
   });
 });

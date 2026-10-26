@@ -123,6 +123,11 @@ export interface ShowcaseFeedItem {
     mediaUrl: string | null;
     mediaKind: ShowcaseMediaKind | null;
     mediaItems?: ShowcaseMediaItem[];
+    /**
+     * A creation's catalog model id, or `template-workflow` for a template's
+     * result, whose model is the template's (`template-result.ts`); a post with
+     * no creation says `manual`, the outside tool it names, or `external`.
+     */
     model: string;
     title: string;
     prompt: string;

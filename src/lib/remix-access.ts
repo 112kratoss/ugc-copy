@@ -7,15 +7,24 @@ import { logBackendError } from '@/lib/backend-logger';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import { isMissingPostResourceBundlesSchemaError } from '@/lib/posts-server';
+import { isTemplateResultGeneration } from '@/lib/template-result';
 
 export const REMIX_UNLOCK_REQUIRED_CODE = 'REMIX_UNLOCK_REQUIRED';
 export const REMIX_UNLOCK_REQUIRED_MESSAGE = 'Unlock this post to remix it.';
+export const TEMPLATE_RESULT_REMIX_CODE = 'TEMPLATE_RESULT_NOT_REMIXABLE';
+export const TEMPLATE_RESULT_REMIX_MESSAGE = 'Template results cannot be remixed. Use the template again to make another.';
 
 export type RemixAccessGeneration = {
   id: string;
   user_id: string | null;
   is_public: boolean | null;
   share_input_media_for_remix?: boolean | null;
+  /**
+   * The creation's run links (`template-result.ts`), read with it. Required, so
+   * a caller cannot leave them out and have a template result read as ordinary.
+   */
+  template_run_id: string | null;
+  template_run_step_id: string | null;
 };
 
 export type RemixAccessPost = {
@@ -49,7 +58,8 @@ export type RemixAccessDecision =
     }
   | {
       allowed: false;
-      reason: 'not_found' | 'unlock_required';
+      /** `template_result`: the owner's own template result, which nobody remixes. */
+      reason: 'not_found' | 'unlock_required' | 'template_result';
     };
 
 export type RemixAccessDependencies = {
@@ -61,6 +71,7 @@ const REMIX_POST_SELECT =
   'id, user_id, generation_id, category, post_format, source_kind, visibility, archived_at, review_status';
 
 const NOT_FOUND = { allowed: false, reason: 'not_found' } as const;
+const TEMPLATE_RESULT = { allowed: false, reason: 'template_result' } as const;
 
 type RemixBundleRow = {
   id: string;
@@ -119,7 +130,10 @@ async function hasPurchasedBundle(
  * so a viewer shown "unlock to remix" could read the recipe straight from
  * either endpoint.
  *
- * - The owner, or a guest identity since linked to them, always may.
+ * - Nobody may restore a template result (`template-result.ts`): its recipe
+ *   and model are the template author's. Its owner is told why; anyone else
+ *   gets the answer a private source gets, and its post offers no Remix.
+ * - The owner, or a guest identity since linked to them, may restore anything else.
  * - Anyone else needs the generation to be public and its post to be exposed
  *   right now: public, not archived, visible to moderation, and the creator's
  *   own. The generation flag alone is not trusted, because it is a copy of the
@@ -152,7 +166,12 @@ export async function resolveRemixAccess({
     isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
   };
 
-  if (await resolved.isOwnOrLinkedAccountId(adminSupabase, viewerUserId, generation.user_id)) {
+  const ownsGeneration = await resolved.isOwnOrLinkedAccountId(adminSupabase, viewerUserId, generation.user_id);
+  if (isTemplateResultGeneration(generation)) {
+    return ownsGeneration ? TEMPLATE_RESULT : NOT_FOUND;
+  }
+
+  if (ownsGeneration) {
     return {
       allowed: true,
       basis: 'owner',

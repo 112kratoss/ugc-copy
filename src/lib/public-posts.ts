@@ -32,6 +32,7 @@ import {
 import { createServiceClient } from '@/lib/server-helpers';
 import { buildVisualMediaDescriptor } from '@/lib/media-descriptor';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import { isTemplateResultGeneration, shownGenerationModel } from '@/lib/template-result';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -280,15 +281,19 @@ async function loadPublicPostCreator(
   };
 }
 
-async function loadPublicPostGenerationModel(
+/**
+ * The creation's model as anyone may see it, and whether it is a template's
+ * result, whose model is the template's and whose post offers no Remix.
+ */
+async function loadPublicPostGeneration(
   adminSupabase: ReturnType<typeof createServiceClient>,
   generationId: string | null,
-): Promise<string | null> {
+): Promise<{ model: string; templateResult: boolean } | null> {
   if (!generationId) return null;
 
   const { data: generation, error: generationError } = await adminSupabase
     .from('generations')
-    .select('model')
+    .select('model, template_run_id, template_run_step_id')
     .eq('id', generationId)
     .maybeSingle();
 
@@ -296,7 +301,8 @@ async function loadPublicPostGenerationModel(
     logBackendError('failed_to_fetch_post_generation_model', { error: generationError });
     return null;
   }
-  return generation?.model ?? null;
+  if (!generation) return null;
+  return { model: shownGenerationModel(generation), templateResult: isTemplateResultGeneration(generation) };
 }
 
 export async function getPublicPostDetail(
@@ -404,7 +410,7 @@ export async function getPublicPostDetail(
 
   // The four reads below depend only on the row, so they run together; a
   // post page used to pay for them one after the other.
-  const [mediaItems, creator, resourceBundle, generationModel] = await Promise.all([
+  const [mediaItems, creator, resourceBundle, generation] = await Promise.all([
     loadPublicPostMediaItems(adminSupabase, row),
     loadPublicPostCreator(adminSupabase, row.user_id),
     getPostResourceBundleDetailByPostId(row.id, {
@@ -413,7 +419,7 @@ export async function getPublicPostDetail(
       // The row already says, so the bundle read need not ask posts again.
       ...(row.is_nsfw === undefined ? {} : { isNsfw: row.is_nsfw === true }),
     }),
-    loadPublicPostGenerationModel(adminSupabase, row.generation_id),
+    loadPublicPostGeneration(adminSupabase, row.generation_id),
   ]);
   const coverMedia = mediaItems[0] ?? null;
   const mediaUrl = coverMedia?.url ?? null;
@@ -423,7 +429,7 @@ export async function getPublicPostDetail(
   }
 
   const model =
-    generationModel
+    generation?.model
     ?? (normalizeShowcaseSourceKind(row.source_kind) === 'manual'
       ? 'manual'
       : row.source_tool ?? 'external');
@@ -449,6 +455,7 @@ export async function getPublicPostDetail(
     category: row.category,
     creationMode: row.creation_mode,
     sourceKind: normalizeShowcaseSourceKind(row.source_kind),
+    templateResult: generation?.templateResult === true,
     resourceBundle: resourceBundle
       ? {
           viewerCanAccess: resourceBundle.viewerCanAccess,

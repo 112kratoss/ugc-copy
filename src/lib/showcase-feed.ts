@@ -723,6 +723,7 @@ export async function resolvePostRowsToFeedItems(
         isPaidRecipe: asset?.accessMode === 'paid',
       });
       const body = publicContent.body;
+      // A template result's reads as Studio's `template-workflow` (`loadGenerationPreviewInfoMap`).
       const model = post.generation_id
         ? generationInfo?.model ?? MAGICBOOKLET_SOURCE_KIND
         : post.source_kind === 'manual'
@@ -735,6 +736,7 @@ export async function resolvePostRowsToFeedItems(
         category: post.category,
         creationMode: post.creation_mode,
         sourceKind: normalizeShowcaseSourceKind(post.source_kind),
+        templateResult: generationInfo?.templateResult === true,
         resourceBundle: asset
           ? {
               // Built without a viewer, so nothing is unlocked here; a caller
@@ -1493,20 +1495,31 @@ export async function attachViewerStateToFeed(
           || purchasedBundleIdSet.has(item.asset.id)
         )
       );
-      const remix = resolvePostRemixCapability({
-        generationId: item.generationId,
-        postFormat: item.postFormat,
-        category: item.category,
-        creationMode: item.creationMode,
-        sourceKind: item.sourceKind,
-        resourceBundle: item.asset
-          ? {
-              viewerCanAccess: viewerCanAccessBundle,
-              allowRemix: item.asset.allowRemix,
-              items: item.asset.lockedPreview?.itemPreviews ?? [],
-            }
-          : null,
-      });
+      // The read without a viewer settled every rule but one: a recipe this
+      // viewer may open (their own, or bought) no longer locks Remix. Only an
+      // item read without that answer (a legacy generation row) is worked out
+      // again here, from what the item carries.
+      const remix: ReturnType<typeof resolvePostRemixCapability> = item.remixCapability === undefined
+        ? resolvePostRemixCapability({
+            generationId: item.generationId,
+            postFormat: item.postFormat,
+            category: item.category,
+            creationMode: item.creationMode,
+            sourceKind: item.sourceKind,
+            resourceBundle: item.asset
+              ? {
+                  viewerCanAccess: viewerCanAccessBundle,
+                  allowRemix: item.asset.allowRemix,
+                  items: item.asset.lockedPreview?.itemPreviews ?? [],
+                }
+              : null,
+          })
+        : {
+            capability: item.remixCapability === 'unlock_required' && viewerCanAccessBundle
+              ? 'public'
+              : item.remixCapability,
+            target: item.remixTarget ?? null,
+          };
 
       return {
         ...item,

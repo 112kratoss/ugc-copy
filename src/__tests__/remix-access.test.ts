@@ -11,6 +11,8 @@ const GENERATION: RemixAccessGeneration = {
   user_id: 'creator-1',
   is_public: true,
   share_input_media_for_remix: true,
+  template_run_id: null,
+  template_run_step_id: null,
 };
 
 const EXPOSED_POST = {
@@ -306,6 +308,58 @@ describe('resolveRemixAccess', () => {
     });
 
     expect(decision).toMatchObject({ allowed: true, basis: 'public', recipeEntitled: false });
+  });
+
+  // A template's recipe and model are its author's (Studio shows the result's
+  // model as `template-workflow`), and a remix restored the model to anyone.
+  describe('a template result', () => {
+    it.each([
+      ['its run', { template_run_id: 'run-1', template_run_step_id: null }],
+      ['its step', { template_run_id: null, template_run_step_id: 'step-1' }],
+    ])('is restored for nobody when the creation records %s: its owner is told why, before any read', async (_label, link) => {
+      const { client, from } = createClient();
+
+      const decision = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'creator-1',
+        generation: { ...GENERATION, ...link },
+        dependencies: notBlocked(),
+      });
+
+      expect(decision).toEqual({ allowed: false, reason: 'template_result' });
+      expect(from).not.toHaveBeenCalled();
+    });
+
+    it('answers anyone else as for a private source, though its post is public, without reading the post', async () => {
+      const { client, from } = createClient();
+
+      const decision = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'viewer-1',
+        generation: { ...GENERATION, template_run_id: 'run-1', template_run_step_id: 'step-1' },
+        dependencies: notBlocked(),
+      });
+
+      expect(decision).toEqual({ allowed: false, reason: 'not_found' });
+      expect(from).not.toHaveBeenCalledWith('posts');
+    });
+
+    it('says the same as the post surface, which offers no Remix on its post, recipe or none', () => {
+      const templatePost = {
+        generationId: 'gen-1',
+        postFormat: 'media',
+        category: 'image',
+        sourceKind: 'magicbooklet',
+        templateResult: true,
+      };
+
+      expect(resolvePostRemixCapability({ ...templatePost, resourceBundle: null }))
+        .toEqual({ capability: 'none', target: null });
+      expect(resolvePostRemixCapability({
+        ...templatePost,
+        resourceBundle: { viewerCanAccess: false, allowRemix: true, items: [] },
+      })).toEqual({ capability: 'none', target: null });
+    });
   });
 
   it.each([

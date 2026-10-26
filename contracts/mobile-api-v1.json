@@ -938,6 +938,41 @@
           "asset": null,
           "canRemix": true
         }
+      },
+      "responseVariants": {
+        "templateResult": {
+          "success": true,
+          "item": {
+            "id": "post-template",
+            "mediaUrl": "https://cdn.example.test/post-template.png",
+            "mediaKind": "image",
+            "mediaItems": [],
+            "model": "template-workflow",
+            "title": "Product reveal",
+            "prompt": "",
+            "body": "",
+            "description": "Made with a template.",
+            "category": "image",
+            "creationMode": null,
+            "postFormat": "media",
+            "saveCount": 0,
+            "remixCount": 0,
+            "commentCount": 0,
+            "createdAt": "2026-10-27T06:00:00.000Z",
+            "creator": {
+              "id": "user-1",
+              "username": "creator",
+              "name": "Creator One",
+              "avatar": "https://cdn.example.test/avatar.png"
+            },
+            "isSaved": false,
+            "generationId": "generation-template",
+            "asset": null,
+            "canRemix": false,
+            "remixCapability": "none",
+            "remixTarget": null
+          }
+        }
       }
     },
     "resolveShowcasePost": {
@@ -1104,6 +1139,15 @@
           "prompt": "Create a bright launch visual.",
           "settings": {
             "model": "nano-banana"
+          }
+        }
+      },
+      "errors": {
+        "templateResult": {
+          "status": 400,
+          "response": {
+            "error": "Template results cannot be remixed. Use the template again to make another.",
+            "code": "TEMPLATE_RESULT_NOT_REMIXABLE"
           }
         }
       }

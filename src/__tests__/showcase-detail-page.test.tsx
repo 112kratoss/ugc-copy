@@ -1367,4 +1367,30 @@ describe('Showcase detail page', () => {
       bundle: { accessMode: 'free', status: 'published', salesCount: 1, freeUnlockCount: 5 },
     }));
   });
+
+  // A template's model is its author's: the read sends Studio's
+  // `template-workflow` in its place and no Remix, and the page, its title and
+  // its structured data name no model for it.
+  it("names no model on a template result's post and offers no Remix", async () => {
+    const detail = await getPublicPostDetailMock('post-1');
+    const ordinary = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+    expect(screen.getByText('Made with Nano Banana 2.0')).toBeInTheDocument();
+    expect(JSON.stringify(await generateMetadata({ params: Promise.resolve({ id: 'post-1' }) }))).toMatch(/made with/i);
+    ordinary.unmount();
+
+    getPublicPostDetailMock.mockResolvedValue({
+      ...detail,
+      model: 'template-workflow',
+      canRemix: false,
+      remixCapability: 'none',
+      remixTarget: null,
+    });
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+    expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/made with|template[- ]workflow/i);
+    expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveTextContent('post-1:false');
+    expect(JSON.stringify(await generateMetadata({ params: Promise.resolve({ id: 'post-1' }) })))
+      .not.toMatch(/made with|template[- ]workflow/i);
+  });
 });

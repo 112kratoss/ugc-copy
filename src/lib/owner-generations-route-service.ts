@@ -17,6 +17,7 @@ import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildMediaProxyUrl } from '@/lib/media-urls';
 import { resolveOwnedStoredMediaUrlMap } from '@/lib/owned-media-url-batch';
 import { toUsablePreviewSize } from '@/lib/preview-dimensions';
+import { isTemplateResultGeneration, TEMPLATE_RESULT_MODEL } from '@/lib/template-result';
 
 export type OwnerGenerationsRouteClient = SupabaseClient;
 
@@ -142,7 +143,7 @@ export function projectGenerationForStudio(
   delete projected.playback_rendition_status;
   if (isTemplateResult) {
     delete projected.prompt;
-    projected.model = 'template-workflow';
+    projected.model = TEMPLATE_RESULT_MODEL;
   }
   return projected;
 }
@@ -531,7 +532,7 @@ async function authorizeOwnerStudioProjection({
 
   const admitted: GenerationRow[] = [];
   for (const generation of generations) {
-    if (!generation.template_run_id && !generation.template_run_step_id) {
+    if (!isTemplateResultGeneration(generation)) {
       admitted.push(generation);
       continue;
     }
@@ -633,7 +634,7 @@ export async function listOwnerGenerationsForRoute({
           created_at: generation.created_at,
           completed_at: generation.completed_at ?? null,
           category: generation.category ?? null,
-          model: template ? 'template-workflow' : generation.model,
+          model: template ? TEMPLATE_RESULT_MODEL : generation.model,
           origin: template ? 'template' : 'creation',
           template,
           // A run polled to `failed` can say its credits came back without a second read.

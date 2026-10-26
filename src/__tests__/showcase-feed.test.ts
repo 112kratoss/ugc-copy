@@ -75,6 +75,8 @@ type GenerationModelRow = {
   is_public?: boolean | null;
   status?: string | null;
   workflow_settings?: Record<string, unknown> | null;
+  template_run_id?: string | null;
+  template_run_step_id?: string | null;
 };
 
 type GenerationInputMediaRow = {
@@ -1488,6 +1490,59 @@ describe('showcase feed', () => {
 
     expect(page.items[0].asset).toBeNull();
     expect(lastPurchaseBundleIds ?? []).toEqual([]);
+  });
+
+  // A template's recipe and model are its author's: Studio shows the result's
+  // model as `template-workflow`, and every feed card said the real one.
+  it("names a template result's model as Studio does and offers no Remix, on every read of its post", async () => {
+    resourceBundlesState = [];
+    postsState = [
+      createPostRow({
+        id: 'post-template',
+        created_at: '2026-03-20T10:00:00.000Z',
+        generation_id: 'gen-template',
+        source_kind: 'magicbooklet',
+        source_tool: null,
+        source_tool_slug: null,
+      }),
+      createPostRow({
+        id: 'post-ordinary',
+        created_at: '2026-03-19T10:00:00.000Z',
+        generation_id: 'gen-ordinary',
+        source_kind: 'magicbooklet',
+        source_tool: null,
+        source_tool_slug: null,
+      }),
+    ];
+    generationModelsState = [
+      { id: 'gen-template', model: 'nano-banana-pro', template_run_id: 'run-1', template_run_step_id: 'step-1' },
+      { id: 'gen-ordinary', model: 'nano-banana-2', template_run_id: null, template_run_step_id: null },
+    ];
+    const templateResult = { model: 'template-workflow', canRemix: false, remixCapability: 'none', remixTarget: null };
+    const ordinary = { model: 'nano-banana-2', canRemix: true, remixCapability: 'public', remixTarget: 'image' };
+
+    const { getShowcaseFeedItemById, getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const query = { category: 'all', sort: 'recent', offset: 0, limit: 12 } as const;
+    // Signed out, then signed in, which works Remix out again for the viewer.
+    for (const viewerUserId of [null, 'viewer-1']) {
+      const page = await getShowcaseFeedPage({ ...query, viewerUserId });
+      expect(page.items.map((item) => item.id)).toEqual(['post-template', 'post-ordinary']);
+      expect(page.items[0]).toMatchObject(templateResult);
+      expect(page.items[1]).toMatchObject(ordinary);
+      expect(JSON.stringify(page.items)).not.toContain('nano-banana-pro');
+    }
+
+    // The read the app's post page and reel make, which the shared contract pins.
+    const item = await getShowcaseFeedItemById({ postId: 'post-template', viewerUserId: 'viewer-1' });
+    expect(item).toMatchObject(templateResult);
+    expect(JSON.stringify(item)).not.toContain('nano-banana-pro');
+    const pinned = mobileApiContract.endpoints.getShowcasePost.responseVariants.templateResult.item;
+    expect(templateResult).toEqual({
+      model: pinned.model,
+      canRemix: pinned.canRemix,
+      remixCapability: pinned.remixCapability,
+      remixTarget: pinned.remixTarget,
+    });
   });
 
   it('keeps remix access disabled for unrelated viewers of remix-enabled bundles', async () => {
