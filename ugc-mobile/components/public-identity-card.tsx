@@ -1,7 +1,7 @@
 import type { Ref } from 'react';
 import { View } from 'react-native';
 
-import { CompactFieldLabel, ComposerFieldShell, ComposerInput, FieldErrorText } from '@/components/composer-fields';
+import { CompactFieldLabel, ComposerFieldShell, ComposerInput } from '@/components/composer-fields';
 import { AppText } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
@@ -55,7 +55,10 @@ export function PublicIdentityCard({
     message: live.availability === 'available' ? 'This handle is available.' : live.message,
   });
 
-  // Each field in a view of its own, spaced as the panel spaces its rows.
+  // Each field in a view of its own, spaced as the panel spaces its rows. A
+  // verdict on a field is said on that field's line alone, in a polite live
+  // region as Edit profile's and onboarding's lines are, so TalkBack reads a
+  // save's refusal from there.
   const fields = (
     <>
       <View ref={fieldRefs?.displayName} testID="public-identity-display-name" style={{ gap: 8 }}>
@@ -69,7 +72,11 @@ export function PublicIdentityCard({
           autoComplete="name"
           editable={editable}
         />
-        <FieldErrorText message={errors.displayName} />
+        {errors.displayName ? (
+          <AppText accessibilityRole="alert" accessibilityLiveRegion="polite" variant="caption" color="danger">
+            {errors.displayName}
+          </AppText>
+        ) : null}
       </View>
       <View ref={fieldRefs?.username} testID="public-identity-username" style={{ gap: 8 }}>
         <CompactFieldLabel label="Handle" required />
@@ -83,14 +90,17 @@ export function PublicIdentityCard({
           autoCorrect={false}
           editable={editable}
         />
-        {errors.username
-          ? <FieldErrorText message={errors.username} />
-          : (
-            // Polite: the check answers a pause in typing, not a press.
-            <AppText accessibilityLiveRegion="polite" variant="caption" color={hint.tone}>
-              {hint.text}
-            </AppText>
-          )}
+        {/* One line for the hint and the verdict, so a verdict that replaces
+            the hint is a change of the line TalkBack reads. Polite: the check
+            answers a pause in typing, not a press. */}
+        <AppText
+          accessibilityRole={errors.username ? 'alert' : undefined}
+          accessibilityLiveRegion="polite"
+          variant="caption"
+          color={errors.username ? 'danger' : hint.tone}
+        >
+          {errors.username ?? hint.text}
+        </AppText>
       </View>
     </>
   );

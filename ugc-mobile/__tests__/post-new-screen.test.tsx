@@ -1804,6 +1804,9 @@ describe('mobile external post composer', () => {
       error: 'That username is already taken.',
       fieldErrors: { username: 'That username is already taken.' },
     });
+    // The line drawing a text, with what a screen reader is told about it.
+    const lineSaying = (tree: renderer.ReactTestRenderer, text: string) => tree.root
+      .find((node) => String(node.type) === 'text' && node.props.children === text).props;
     // The scroll view, and where each of the card's fields sits in the scroll
     // content, by test id: what `measureLayout` answers.
     const stepTwoNodes = (scrollTo: ReturnType<typeof vi.fn>, fieldTops: Record<string, number> = {}) => (element: React.ReactElement) => {
@@ -1894,6 +1897,10 @@ describe('mobile external post composer', () => {
       const text = collectText(tree.root);
       expect(text).not.toContain('Your name and handle were not saved');
       expect(text.filter((line) => line === 'That username is already taken.')).toHaveLength(1);
+      // No banner announces it now: the handle's own line does, a polite live
+      // region whose hint the verdict replaces, as Edit profile's line is.
+      expect(lineSaying(tree, 'That username is already taken.'))
+        .toMatchObject({ accessibilityRole: 'alert', accessibilityLiveRegion: 'polite' });
       expect(mutationState.mutate).not.toHaveBeenCalled();
       // Publish is in the footer and the creator may be at a price far down
       // step 2, or typing with the keyboard up: the handle's top comes to where
@@ -1922,6 +1929,8 @@ describe('mobile external post composer', () => {
       const text = collectText(tree.root);
       expect(text).not.toContain('Your name and handle were not saved');
       expect(text.filter((line) => line === 'Display name must be 60 characters or fewer.')).toHaveLength(1);
+      expect(lineSaying(tree, 'Display name must be 60 characters or fewer.'))
+        .toMatchObject({ accessibilityRole: 'alert', accessibilityLiveRegion: 'polite' });
       expect(scrollTo).toHaveBeenLastCalledWith({ y: 182, animated: true });
 
       // Typing in the field takes the verdict away with it.
