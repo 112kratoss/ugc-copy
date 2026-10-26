@@ -101,7 +101,8 @@ test.describe('signed in', () => {
     await page.setViewportSize(PHONE);
     await page.goto('/create-image');
     await hideDevBadge(page);
-    const trigger = page.locator('p', { hasText: /^Model$/ }).locator('xpath=following-sibling::button[1]');
+    // The model chip at the head of the creator's column.
+    const trigger = page.locator('button[aria-haspopup="listbox"]');
     await expect(trigger).toBeVisible(COLD_PAGE);
     await trigger.click();
     const sheet = page.getByTestId('studio-model-picker');
@@ -114,6 +115,65 @@ test.describe('signed in', () => {
       .toBeLessThanOrEqual(await navTop(page));
     await sheet.getByRole('listbox').evaluate((list) => { list.scrollTop = list.scrollHeight; });
     await expectPressable(models.last(), 'the last model', { ratio: 0.95 });
+  });
+
+  // The image creator's column keeps its settings and Generate in a bar at the window's foot
+  // (sticky, layer 30, inside the page's own layer 10), raised by the nav's room as the composer's is.
+  // Its settings open above it, as tall as the window has between the top bar and the bar: a short
+  // phone put a fixed-height panel's first rows under the top bar.
+  test('the image creator\'s bar sits above the bottom navigation, and its settings open between it and the top bar', async ({ page }) => {
+    await page.setViewportSize({ width: PHONE.width, height: 560 });
+    // The price is answered once the settings are open: the line that says it could not be read
+    // arrives over the buttons and makes the bar taller, and the open panel must still fit.
+    const heldQuotes: Array<() => void> = [];
+    await page.route('**/api/generation-models/quote', (route) =>
+      new Promise<void>((answer) => heldQuotes.push(answer)).then(() =>
+        route.fulfill({ status: 401, json: { error: 'Unauthorized' } })));
+    await page.goto('/create-image');
+    await hideDevBadge(page);
+    const bar = page.locator('[data-creator-bar]');
+    const generate = bar.getByRole('button', { name: /^Generate · / });
+    await expect(generate).toBeVisible(COLD_PAGE);
+    const chip = bar.getByRole('button', { name: /^Generation settings/ });
+    await expectPressable(chip, 'the settings chip');
+    await expectPressable(generate, 'Generate');
+    expect(await bar.evaluate((element) => element.getBoundingClientRect().bottom), 'the bar ends above the nav')
+      .toBeLessThanOrEqual(await navTop(page));
+
+    await chip.click();
+    const panel = page.getByRole('dialog', { name: 'Generation settings' });
+    await expect(panel).toBeFocused();
+    await expect.poll(() => panel.evaluate((element) => getComputedStyle(element).opacity)).toBe('1');
+    const headerBottom = await page.locator('.app-shell-header').evaluate((header) => header.getBoundingClientRect().bottom);
+    const expectBetweenTheBars = async (when: string) => {
+      // Polled: the panel fits again a frame after the bar changes height.
+      await expect.poll(() => panel.evaluate((element) => element.getBoundingClientRect().top), {
+        message: `the panel starts below the top bar ${when}`,
+      }).toBeGreaterThanOrEqual(headerBottom);
+      expect(await panel.evaluate((element) => element.getBoundingClientRect().bottom), `the panel ends above the bar ${when}`)
+        .toBeLessThanOrEqual(await bar.evaluate((element) => element.getBoundingClientRect().top));
+      await expectPressable(panel.getByRole('button', { name: 'Close settings' }), `Close settings ${when}`);
+      await expectPressable(panel.getByRole('radio').first(), `the first aspect ratio ${when}`);
+    };
+    await expectBetweenTheBars('as it opens');
+
+    const barHeight = () => bar.evaluate((element) => element.getBoundingClientRect().height);
+    const plainBarHeight = await barHeight();
+    await expect.poll(() => heldQuotes.length, { message: 'the price is being asked for' }).toBeGreaterThan(0);
+    heldQuotes.splice(0).forEach((answer) => answer());
+    await expect(bar.getByRole('button', { name: 'Retry quote' })).toBeVisible();
+    expect(await barHeight(), 'the line made the bar taller').toBeGreaterThan(plainBarHeight);
+    await expect(panel).toBeVisible();
+    await expectBetweenTheBars('once the bar grew under it');
+    // Opaque, as the bar under it is: on a translucent fill the column's words showed through.
+    for (const [surface, name] of [[panel, 'the panel'], [bar.locator(':scope > div').first(), 'the bar']] as const) {
+      expect(await surface.evaluate((element) => getComputedStyle(element).backgroundColor), `${name}'s fill is opaque`)
+        .toMatch(/^rgb\(/);
+    }
+
+    await page.keyboard.press('Escape');
+    await expect(panel).toBeHidden();
+    await expect(chip).toBeFocused();
   });
 });
 
