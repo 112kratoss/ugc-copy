@@ -4,11 +4,13 @@ import { logBackendError } from '@/lib/backend-logger';
 import type { PostMediaSummary } from '@/lib/post-media';
 import { toUsablePreviewSize, type PreviewSize } from '@/lib/preview-dimensions';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
-import { isTemplateResultGeneration, TEMPLATE_RESULT_MODEL, type TemplateRunLink } from '@/lib/template-result';
+import { isTemplateResultGeneration, shownGenerationModel, type TemplateRunLink } from '@/lib/template-result';
 
 export interface GenerationPreviewInfo {
   /** As anyone may see it: a template result's is `template-workflow`, as Studio shows it. */
   model: string;
+  /** A template's result (`template-result.ts`): its post offers no Remix. */
+  templateResult: boolean;
   previewUrl: string | null;
   previewWidth: number | null;
   previewHeight: number | null;
@@ -90,7 +92,8 @@ export async function loadGenerationPreviewInfoMap(
       ? resolveOwnedStoredMediaUrl(adminSupabase, previewSource, generation.user_id)
       : null)
       .then((previewUrl) => [generation.id, {
-        model: isTemplateResultGeneration(generation) ? TEMPLATE_RESULT_MODEL : generation.model,
+        model: shownGenerationModel(generation),
+        templateResult: isTemplateResultGeneration(generation),
         previewUrl,
         // One rule for a usable size, shared with the backfill that writes
         // the column and the pipeline that measures it.

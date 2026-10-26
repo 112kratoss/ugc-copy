@@ -82,11 +82,27 @@ describe('source generation validation', () => {
     )).resolves.toBe(SOURCE_ID);
 
     expect(calls.tables).toEqual(['generations']);
-    expect(calls.selects).toEqual(['id, user_id, is_public']);
+    expect(calls.selects).toEqual(['id, user_id, is_public, template_run_id, template_run_step_id']);
     expect(calls.eqs).toEqual([{ column: 'id', value: SOURCE_ID }]);
     // The visibility rule lives in code, so no caller-influenced value is ever
     // embedded in a PostgREST `.or()` filter expression.
     expect(calls.ors).toEqual([]);
+  });
+
+  // A template's result is remixed by nobody (`remix-access.ts`), and its post
+  // offers no Remix. A create page sends the `remix` id of its own URL with every
+  // start, so a hand-made link credited the post with a remix and told its owner.
+  it.each([
+    ['public, someone else’s', { user_id: 'other-user', is_public: true }],
+    ['the caller’s own', { user_id: 'user-1', is_public: false }],
+  ])('records no remix of a template result (%s), and starts the run as an ordinary one', async (_label, row) => {
+    const { calls, supabase } = createSupabaseMock({
+      data: { id: SOURCE_ID, ...row, template_run_id: 'run-1', template_run_step_id: 'step-1' },
+      error: null,
+    });
+
+    await expect(resolveSourceGenerationId(supabase as never, 'user-1', SOURCE_ID)).resolves.toBeNull();
+    expect(calls.selects).toEqual(['id, user_id, is_public, template_run_id, template_run_step_id']);
   });
 
   it('resolves sources the requesting user owns even when private', async () => {

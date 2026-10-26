@@ -7,17 +7,24 @@ import { logBackendError } from '@/lib/backend-logger';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import { isMissingPostResourceBundlesSchemaError } from '@/lib/posts-server';
-import { isTemplateResultGeneration, type TemplateRunLink } from '@/lib/template-result';
+import { isTemplateResultGeneration } from '@/lib/template-result';
 
 export const REMIX_UNLOCK_REQUIRED_CODE = 'REMIX_UNLOCK_REQUIRED';
 export const REMIX_UNLOCK_REQUIRED_MESSAGE = 'Unlock this post to remix it.';
+export const TEMPLATE_RESULT_REMIX_CODE = 'TEMPLATE_RESULT_NOT_REMIXABLE';
 export const TEMPLATE_RESULT_REMIX_MESSAGE = 'Template results cannot be remixed. Use the template again to make another.';
 
-export type RemixAccessGeneration = TemplateRunLink & {
+export type RemixAccessGeneration = {
   id: string;
   user_id: string | null;
   is_public: boolean | null;
   share_input_media_for_remix?: boolean | null;
+  /**
+   * The creation's run links (`template-result.ts`), read with it. Required, so
+   * a caller cannot leave them out and have a template result read as ordinary.
+   */
+  template_run_id: string | null;
+  template_run_step_id: string | null;
 };
 
 export type RemixAccessPost = {

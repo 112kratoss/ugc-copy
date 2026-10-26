@@ -11,6 +11,8 @@ const GENERATION: RemixAccessGeneration = {
   user_id: 'creator-1',
   is_public: true,
   share_input_media_for_remix: true,
+  template_run_id: null,
+  template_run_step_id: null,
 };
 
 const EXPOSED_POST = {

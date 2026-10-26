@@ -8,6 +8,7 @@ import { isAudioModel } from '@/lib/models';
 import {
   REMIX_UNLOCK_REQUIRED_CODE,
   REMIX_UNLOCK_REQUIRED_MESSAGE,
+  TEMPLATE_RESULT_REMIX_CODE,
   TEMPLATE_RESULT_REMIX_MESSAGE,
   resolveRemixAccess,
 } from '@/lib/remix-access';
@@ -155,7 +156,7 @@ export async function remixShowcasePostForRoute({
   // this read must be service-role. The access decision therefore lives in
   // resolveRemixAccess, not in RLS, and it is the same gate /api/remix-source
   // applies: the owner, or anyone else while the post is exposed and any
-  // remix-enabled recipe on it is unlocked.
+  // remix-enabled recipe on it is unlocked, and nobody for a template's result.
   const { data: generation, error: generationError } = await serviceClient
     .from('generations')
     .select('id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings, template_run_id, template_run_step_id')
@@ -192,9 +193,14 @@ export async function remixShowcasePostForRoute({
         body: { error: REMIX_UNLOCK_REQUIRED_MESSAGE, code: REMIX_UNLOCK_REQUIRED_CODE },
       };
     }
-    return access.reason === 'template_result'
-      ? { ok: false, status: 400, body: { error: TEMPLATE_RESULT_REMIX_MESSAGE } }
-      : linkedGenerationNotFound();
+    if (access.reason === 'template_result') {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: TEMPLATE_RESULT_REMIX_MESSAGE, code: TEMPLATE_RESULT_REMIX_CODE },
+      };
+    }
+    return linkedGenerationNotFound();
   }
 
   // No create tool takes audio, and the prefill endpoint answers 400 for an

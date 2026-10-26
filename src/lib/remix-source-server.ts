@@ -21,6 +21,7 @@ import { isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
 import {
   REMIX_UNLOCK_REQUIRED_CODE,
   REMIX_UNLOCK_REQUIRED_MESSAGE,
+  TEMPLATE_RESULT_REMIX_CODE,
   TEMPLATE_RESULT_REMIX_MESSAGE,
   resolveRemixAccess,
 } from '@/lib/remix-access';
@@ -278,8 +279,9 @@ export async function loadRemixSourceBundle(
   // one hop from being bypassed. Owned means the caller's id or a guest
   // identity since linked to it. Anyone else needs the generation's post to be
   // exposed right now, no block between them, and any remix-enabled recipe on
-  // the post unlocked. Every refusal but the unlock answers 404, so the gate
-  // never confirms that a private source exists.
+  // the post unlocked. A template's result is restored for nobody. Every
+  // refusal but the unlock, and the owner's own template result, answers 404,
+  // so the gate never confirms that someone else's private source exists.
   const access = await resolveRemixAccess({
     adminSupabase,
     viewerUserId: user.id,
@@ -298,7 +300,7 @@ export async function loadRemixSourceBundle(
       throw new RemixSourceError(REMIX_UNLOCK_REQUIRED_MESSAGE, 403, REMIX_UNLOCK_REQUIRED_CODE);
     }
     if (access.reason === 'template_result') {
-      throw new RemixSourceError(TEMPLATE_RESULT_REMIX_MESSAGE, 400);
+      throw new RemixSourceError(TEMPLATE_RESULT_REMIX_MESSAGE, 400, TEMPLATE_RESULT_REMIX_CODE);
     }
     throw new RemixSourceError('Remix source not found', 404);
   }

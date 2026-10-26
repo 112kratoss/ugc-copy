@@ -17,7 +17,7 @@ import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildMediaProxyUrl } from '@/lib/media-urls';
 import { resolveOwnedStoredMediaUrlMap } from '@/lib/owned-media-url-batch';
 import { toUsablePreviewSize } from '@/lib/preview-dimensions';
-import { TEMPLATE_RESULT_MODEL } from '@/lib/template-result';
+import { isTemplateResultGeneration, TEMPLATE_RESULT_MODEL } from '@/lib/template-result';
 
 export type OwnerGenerationsRouteClient = SupabaseClient;
 
@@ -532,7 +532,7 @@ async function authorizeOwnerStudioProjection({
 
   const admitted: GenerationRow[] = [];
   for (const generation of generations) {
-    if (!generation.template_run_id && !generation.template_run_step_id) {
+    if (!isTemplateResultGeneration(generation)) {
       admitted.push(generation);
       continue;
     }

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
+import { isTemplateResultGeneration } from '@/lib/template-result';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -38,7 +39,7 @@ export async function resolveSourceGenerationId(
   // a PostgREST `.or()` expression, which postgrest-js does not escape.
   const { data, error } = await adminSupabase
     .from('generations')
-    .select('id, user_id, is_public')
+    .select('id, user_id, is_public, template_run_id, template_run_step_id')
     .eq('id', sourceGenerationId)
     .maybeSingle();
 
@@ -52,6 +53,11 @@ export async function resolveSourceGenerationId(
   if (!data || (!data.is_public && !(await isOwnOrLinkedAccountId(adminSupabase, userId, data.user_id)))) {
     throw new SourceGenerationValidationError('Source generation not found or inaccessible.');
   }
+
+  // Nobody remixes a template's result (`remix-access.ts`), but a create page
+  // sends the `remix` id of its own URL with every start. The run goes ahead as
+  // an ordinary one, and the result is never credited with a remix.
+  if (isTemplateResultGeneration(data)) return null;
 
   return sourceGenerationId;
 }

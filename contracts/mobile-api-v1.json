@@ -1141,6 +1141,15 @@
             "model": "nano-banana"
           }
         }
+      },
+      "errors": {
+        "templateResult": {
+          "status": 400,
+          "response": {
+            "error": "Template results cannot be remixed. Use the template again to make another.",
+            "code": "TEMPLATE_RESULT_NOT_REMIXABLE"
+          }
+        }
       }
     },
     "shareShowcasePost": {

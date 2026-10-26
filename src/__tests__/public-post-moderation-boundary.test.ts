@@ -150,16 +150,31 @@ describe('public post detail read', () => {
     };
   }
 
-  /** Answers the post row; the creator and the generation read find nothing. */
-  function useClientFor(row: Record<string, unknown>) {
+  /**
+   * Answers the post row, and the post's creation when one is given, with only
+   * the columns its read asks for, as PostgREST does. The creator read finds
+   * nothing.
+   */
+  function useClientFor(row: Record<string, unknown>, generation: Record<string, unknown> | null = null) {
     const client = {
       from(table: string) {
+        let columns: string[] = [];
         const query = {
-          select: () => query,
+          select: (selected: string) => {
+            columns = selected.split(',').map((column) => column.trim());
+            return query;
+          },
           eq: () => query,
           is: () => query,
           in: () => query,
-          maybeSingle: async () => ({ data: table === 'posts' ? row : null, error: null }),
+          maybeSingle: async () => ({
+            data: table === 'posts'
+              ? row
+              : table === 'generations' && generation
+                ? Object.fromEntries(columns.map((column) => [column, generation[column] ?? null]))
+                : null,
+            error: null,
+          }),
         };
         return query;
       },
@@ -203,33 +218,13 @@ describe('public post detail read', () => {
     }));
   });
 
-  /** Answers the post row and its creation; the creator read finds nothing. */
-  function useClientWithCreation(row: Record<string, unknown>, generation: Record<string, unknown>) {
-    const client = {
-      from(table: string) {
-        const query = {
-          select: () => query,
-          eq: () => query,
-          is: () => query,
-          in: () => query,
-          maybeSingle: async () => ({
-            data: table === 'posts' ? row : table === 'generations' ? generation : null,
-            error: null,
-          }),
-        };
-        return query;
-      },
-    };
-    helperMocks.createServiceClient.mockReturnValue(client);
-  }
-
   // A template's recipe and model are its author's: Studio shows the result's
   // model as `template-workflow`, and the post page said the real one to anyone.
   it.each([
     ['its run', { template_run_id: 'run-1', template_run_step_id: null }],
     ['its step', { template_run_id: null, template_run_step_id: 'step-1' }],
   ])("names a template result's model as Studio does when the creation records %s, and offers no Remix", async (_label, link) => {
-    useClientWithCreation(
+    useClientFor(
       postRow({ generation_id: 'gen-1', category: 'image' }),
       { model: 'nano-banana-pro', ...link },
     );
@@ -246,7 +241,7 @@ describe('public post detail read', () => {
   });
 
   it("keeps an ordinary creation's model and Remix", async () => {
-    useClientWithCreation(
+    useClientFor(
       postRow({ generation_id: 'gen-1', category: 'image' }),
       { model: 'nano-banana-pro', template_run_id: null, template_run_step_id: null },
     );

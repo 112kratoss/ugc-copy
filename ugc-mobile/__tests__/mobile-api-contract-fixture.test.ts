@@ -167,6 +167,23 @@ it("names no model and offers no Remix for a template result's post, on its card
   expect(buildPostDetailsMeta(reelItem).metaParts.join(' · ')).not.toMatch(/Made with|template-workflow/i);
 });
 
+it("hands on the server's words when it refuses to remix a template result, from either remix route", async () => {
+  // The owner's own Recreate still reaches these routes; the creator shows the
+  // refusal's message, and the code says it is final.
+  const refusal = mobileApiContract.endpoints.remixShowcasePost.errors.templateResult;
+  const api = createApiClient({
+    baseUrl: 'https://example.test',
+    getAccessToken: async () => 'test-token',
+    fetcher: vi.fn(async () => jsonResponse(refusal.response, refusal.status)),
+  });
+
+  for (const call of [() => api.remixShowcasePost('post-template'), () => api.getRemixSourceBundle('generation-template')]) {
+    const error = await call().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 400, message: refusal.response.error, code: refusal.response.code });
+  }
+});
+
 it('plays an audio creation from the owner library as sound, never as a picture', async () => {
   // The whole path again, contract payload to reel item. The server sends an
   // audio creation with no `media` descriptor, and the app once read that as

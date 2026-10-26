@@ -45,6 +45,7 @@ vi.mock('@/lib/backend-rate-limit', () => ({
 vi.mock('@/lib/remix-access', () => ({
   REMIX_UNLOCK_REQUIRED_CODE: 'REMIX_UNLOCK_REQUIRED',
   REMIX_UNLOCK_REQUIRED_MESSAGE: 'Unlock this post to remix it.',
+  TEMPLATE_RESULT_REMIX_CODE: 'TEMPLATE_RESULT_NOT_REMIXABLE',
   TEMPLATE_RESULT_REMIX_MESSAGE: 'Template results cannot be remixed. Use the template again to make another.',
   resolveRemixAccess: mocks.resolveRemixAccess,
 }));
@@ -61,6 +62,7 @@ import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-cand
 import { collectReferenceMediaCandidates, collectSubjectImageCandidates } from '@/lib/generation-input-media';
 import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-server';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 const LOCKED_PROMPT = 'The prompt a buyer pays for';
 
@@ -151,12 +153,15 @@ describe('loadRemixSourceBundle access', () => {
     const outcome = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' })
       .then((bundle) => bundle, (error: unknown) => error);
 
+    // /api/showcase/remix's refusal, word for word: the gate's one answer.
+    const refusal = mobileApiContract.endpoints.remixShowcasePost.errors.templateResult;
     expect(outcome).toBeInstanceOf(RemixSourceError);
     expect(outcome).toMatchObject({
-      status: 400,
-      message: 'Template results cannot be remixed. Use the template again to make another.',
+      status: refusal.status,
+      message: refusal.response.error,
+      code: refusal.response.code,
     });
-    expect(JSON.stringify(outcome)).not.toContain('nano-banana-pro');
+    expect(`${(outcome as Error).message} ${JSON.stringify(outcome)}`).not.toContain('nano-banana-pro');
     expect(mocks.selectedColumns[0]).toContain('template_run_id, template_run_step_id');
     expect(mocks.resolveRemixAccess).toHaveBeenCalledWith(expect.objectContaining({
       generation: expect.objectContaining({ template_run_id: 'run-1', template_run_step_id: 'step-1' }),

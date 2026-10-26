@@ -10,6 +10,7 @@ vi.mock('@/lib/mobile-notifications', async (importOriginal) => ({
 beforeEach(() => { vi.mocked(notifyPostSocialActivity).mockClear(); });
 
 import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   remixShowcasePostForRoute,
   type ShowcaseRemixServiceDependencies,
@@ -728,11 +729,8 @@ describe('remixShowcasePostForRoute access gate', () => {
       dependencies: createDependencies(),
     });
 
-    expect(owner).toEqual({
-      ok: false,
-      status: 400,
-      body: { error: 'Template results cannot be remixed. Use the template again to make another.' },
-    });
+    const refusal = mobileApiContract.endpoints.remixShowcasePost.errors.templateResult;
+    expect(owner).toEqual({ ok: false, status: refusal.status, body: refusal.response });
     expect(viewer).toEqual({ ok: false, status: 404, body: { error: 'Linked generation not found' } });
     expect(serviceClient.selectMock).toHaveBeenCalledWith(expect.stringContaining('template_run_id, template_run_step_id'));
     expect(serviceClient.fromMock).not.toHaveBeenCalledWith('posts');
