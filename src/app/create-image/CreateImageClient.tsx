@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Images, Zap, ChevronDown, Check, Share2, Expand } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Check, Share2, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
@@ -13,8 +13,6 @@ import {
     promptLimitFor,
 } from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
 import {
-    GeneratorPageHeader,
-    MediaStudioShell,
     StudioBackgroundProcessingNotice,
     StudioElementChip,
     StudioElementHandle,
@@ -26,9 +24,18 @@ import {
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
-    StudioRunPanel,
-    StudioWorkspacePanel,
 } from '@/components/CreatorStudio';
+import {
+    CREATOR_BAR_PRIMARY_CLASS,
+    CREATOR_TWO_PANE_QUERY,
+    CreatorCanvas,
+    CreatorCanvasFrame,
+    CreatorColumnBar,
+    CreatorColumnLayout,
+    CreatorModelChip,
+    CreatorTemplatesTile,
+    CreatorToolTabs,
+} from '@/components/CreatorColumn';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublicShareButton from '@/components/PublicShareButton';
@@ -378,6 +385,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     const elementRefs = useRef<ImageElementDraft[]>([]);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const canvasRef = useRef<HTMLElement>(null);
     const [activeMentionQuery, setActiveMentionQuery] = useState<{
         query: string;
         replaceStart: number;
@@ -413,6 +421,16 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     useEffect(() => () => {
         generationPollAbortControllerRef.current?.abort();
     }, []);
+
+    // With one pane the result is drawn under the column, out of view while the
+    // creator is at Generate: a run that starts brings it up. Beside the column
+    // it is in view already.
+    useEffect(() => {
+        if (!isGenerating || typeof window.matchMedia !== 'function') return;
+        if (window.matchMedia(CREATOR_TWO_PANE_QUERY).matches) return;
+        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        canvasRef.current?.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    }, [isGenerating]);
 
 
     useEffect(() => {
@@ -1575,22 +1593,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setIsPublishModalOpen(true);
     };
 
-    const accentStyles = {
-        blue: {
-            ring: 'focus:border-blue-500/50 focus:ring-blue-500/10',
-            button: 'bg-blue-500/20 text-blue-300 border-blue-500/50 shadow-[0_0_12px_-3px_rgba(59,130,246,0.4)]',
-            toggle: 'bg-blue-500',
-            generate: 'from-blue-600 to-cyan-600 shadow-[0_0_30px_-8px_rgba(59,130,246,0.4)]',
-            progress: 'from-blue-500 to-cyan-500',
-        },
-        amber: {
-            ring: 'focus:border-amber-500/50 focus:ring-amber-500/10',
-            button: 'bg-amber-500/20 text-amber-200 border-amber-500/50 shadow-[0_0_12px_-3px_rgba(245,158,11,0.4)]',
-            toggle: 'bg-amber-500',
-            generate: 'from-amber-500 to-orange-600 shadow-[0_0_30px_-8px_rgba(245,158,11,0.4)]',
-            progress: 'from-amber-500 to-orange-500',
-        },
-    }[model.accentColor];
     const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
@@ -1634,23 +1636,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         );
     }
 
-    const workspaceTitle = outputImage
-        ? outputImages.length > 1 ? 'Latest image results' : 'Latest image result'
-        : isGenerating
-            ? 'Creating your image'
-            : isBackgroundProcessing
-                ? backgroundProcessingCopy.title
-                : 'Ready for your next still';
-
-    const workspaceDescription = outputImage
-        ? outputImages.length > 1
-            ? 'Grok returned multiple options. The first image stays primary for sharing and publishing.'
-            : 'Your newest image stays here until you start another run.'
-        : isGenerating
-            ? 'Watch the current run here while the model handles generation.'
-            : isBackgroundProcessing
-                ? backgroundProcessingCopy.description
-                : 'The workspace stays focused on the active run and latest result once you generate.';
     const shareTitle = publishedMeta?.title || submittedPrompt || `${model.displayName} image`;
     const shareDescription = publishedMeta?.description || submittedPrompt || null;
     const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
@@ -1658,21 +1643,382 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         ? outputImages
         : (outputImage ? [outputImage] : []);
 
-    return (
-        <div className="ui-page ui-page-ambient min-h-screen py-6 text-[var(--ui-text-primary)] sm:py-8 font-[family-name:var(--font-geist-sans)]">
-            <MediaStudioShell
-                currentToolId="image"
-                header={
-                    <GeneratorPageHeader
-                        currentToolId="image"
-                        title="Create image"
-                        eyebrow={`Creator studio / ${model.displayName}`}
-                        description="Start with a still when you need the fastest route to a polished product visual, concept frame, or campaign hook."
-                        credits={userCredits}
-                    />
-                }
-                controls={
+    // The run's settings read back as the app's bar reads them: "1K · AUTO · JPG".
+    const outputFormat = additionalSettings.settings.outputFormat;
+    const settingsSummary = [
+        showResolutionControl
+            ? resolution
+            : qualityModes.length > 0
+                // Grok prices an edit apart from its quality modes.
+                ? `${qualityMode}${isGrokImageModel && elements.length > 0 ? ' edit' : ''}`
+                : null,
+        aspectRatio,
+        typeof outputFormat === 'string' ? outputFormat : null,
+    ]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .map((value) => value.toUpperCase())
+        .join(' · ') || 'Settings';
+
+    const canvasTitle = outputImage
+        ? displayedOutputImages.length > 1 ? 'Your images' : 'Your image'
+        : isGenerating
+            ? 'Creating your image'
+            : isBackgroundProcessing
+                ? backgroundProcessingCopy.title
+                : 'Result';
+    const canvasSubtitle = outputImage
+        ? displayedOutputImages.length > 1
+            ? `${displayedOutputImages.length} options. The first is the one you publish.`
+            : submittedPrompt || null
+        : isBackgroundProcessing
+            ? backgroundProcessingCopy.description
+            : `${model.displayName} · ${settingsSummary}`;
+
+    const generateBlocked = !prompt.trim()
+        || quotePending
+        || staleElementMentions.length > 0
+        || Boolean(referenceLimitMessage)
+        || Boolean(promptLimitMessage);
+    const isAwaitingStartCheck = Boolean(pendingStart) && !isGenerating;
+
+    // What stops or explains a run, said just above the bar. Progress and a run
+    // that went to the background are drawn on the canvas instead.
+    const runStatus = isGenerating || isBackgroundProcessing ? null : pendingStart ? (
+        <div className="space-y-3">
+            <p role="alert" className="text-amber-200">{pendingStartNotice ?? START_UNCONFIRMED_MESSAGE}</p>
+            <button
+                type="button"
+                onClick={handleStartNewRun}
+                disabled={generateBlocked}
+                className="ui-focus-ring flex min-h-11 w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-5 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+                {currentCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
+            </button>
+        </div>
+    ) : referenceLimitMessage ? (
+        <p className="text-red-400">{referenceLimitMessage}</p>
+    ) : promptLimitMessage ? (
+        <p className="text-red-400">{promptLimitMessage}</p>
+    ) : quoteState.pageOutOfDate ? (
+        // In place of the start's refusal it stands for.
+        <StudioOutOfDatePageNotice
+            isRemix={Boolean(remixId)}
+            reloadDidNotHelp={reloadBroughtBackThisBuild()}
+            onReload={() => void reloadPage()}
+        />
+    ) : error ? (
+        // A price that could not be read since (asked again after
+        // `cost_changed`, say) keeps its Retry under the error:
+        // Generate waits for a price.
+        <div className="space-y-2">
+            <p className="text-red-400">{error}</p>
+            {quoteRetry}
+        </div>
+    ) : staleElementMentions.length > 0 ? (
+        <p className="text-rose-300">
+            Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating:{' '}
+            <StudioElementHandleList handles={staleElementMentions} />
+        </p>
+    ) : quoteState.status === 'error' ? (
+        quoteRetry
+    ) : null;
+    const topUpNotice = showTopUp && !isAwaitingStartCheck ? (
+        <div>
+            <p className="font-semibold text-white">Not enough credits</p>
+            <p className="mt-1 text-zinc-400">
+                {insufficientCredits ? (
+                    <>Image generation costs <strong className="text-white">{currentCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.</>
+                ) : creditRefusalMessage}
+            </p>
+        </div>
+    ) : null;
+    const barStatus = topUpNotice || runStatus ? (
+        <div className="space-y-3">
+            {topUpNotice}
+            {runStatus}
+        </div>
+    ) : null;
+
+    const barAction = isAwaitingStartCheck && pendingStart ? (
+        <button
+            type="button"
+            onClick={() => void replayPendingStart(pendingStart)}
+            className={CREATOR_BAR_PRIMARY_CLASS}
+        >
+            Check again
+        </button>
+    ) : showTopUp ? (
+        <Link href="/pricing" className={CREATOR_BAR_PRIMARY_CLASS}>
+            <Sparkles className="h-4 w-4" />
+            Top Up Credits
+        </Link>
+    ) : (
+        <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={generateBlocked || isGenerating}
+            // The price stays in its name while the face says why it waits.
+            aria-label={isGenerating ? undefined : `Generate · ${quoteUi.costLabel}`}
+            className={CREATOR_BAR_PRIMARY_CLASS}
+        >
+            {isGenerating ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> Generating...</>
+            ) : currentCost !== null ? (
+                `Generate · ${quoteUi.costLabel}`
+            ) : (
+                // As the app's bar: until there is a price the button says why it waits
+                // ("Calculating...", "Unavailable"), and the line above offers a retry.
+                <span className="truncate">{quoteUi.costLabel}</span>
+            )}
+        </button>
+    );
+
+    const settingChoiceClass = (selected: boolean) => (
+        `ui-focus-ring min-h-10 rounded-xl border px-2 text-xs font-bold transition-colors duration-150 ${selected
+            ? 'border-[rgba(115,191,242,0.5)] bg-[rgba(115,191,242,0.14)] text-[#d6ecfb]'
+            : 'border-white/[0.06] bg-black/30 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200'}`
+    );
+    const settingsPanel = (
+        <div className="space-y-5">
+            <div role="group" aria-labelledby="create-image-ratio-label">
+                <p id="create-image-ratio-label" className="mb-2 text-xs font-bold text-zinc-400">Aspect ratio</p>
+                <div className="grid grid-cols-5 gap-1.5">
+                    {model.aspectRatios.map((ratio) => (
+                        <button
+                            key={ratio}
+                            type="button"
+                            onClick={() => setAspectRatio(ratio)}
+                            aria-pressed={aspectRatio === ratio}
+                            className={settingChoiceClass(aspectRatio === ratio)}
+                        >
+                            {ratio}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {showResolutionControl ? (
+                <div role="group" aria-labelledby="create-image-resolution-label">
+                    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <p id="create-image-resolution-label" className="text-xs font-bold text-zinc-400">Resolution</p>
+                        <p className="text-[11px] text-zinc-500">Higher detail costs more credits.</p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                        {availableResolutions.map((res) => (
+                            <button
+                                key={res}
+                                type="button"
+                                onClick={() => setResolution(res)}
+                                aria-pressed={resolution === res}
+                                className={settingChoiceClass(resolution === res)}
+                            >
+                                {res}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            ) : qualityModes.length > 0 ? (
+                <div role="group" aria-labelledby="create-image-quality-label">
+                    <p id="create-image-quality-label" className="text-xs font-bold text-zinc-400">
+                        {/* The descriptor already labels this control per model ("Speed" for the
+                            Ideogram tiers, "Quality" elsewhere), so a new model with quality modes
+                            no longer lands under a heading naming a different vendor. */}
+                        {imageAffordances?.qualityModeLabel
+                            ? `Generation ${imageAffordances.qualityModeLabel.toLowerCase()}`
+                            : (selectedModel === 'ideogram-v3' ? 'Generation speed' : 'Grok quality')}
+                    </p>
+                    <p className="mb-2 mt-1 text-[11px] text-zinc-500">
+                        {selectedModel === 'grok-imagine-image'
+                            ? 'Quality applies to prompt-only Grok runs; edits use fixed image-to-image pricing.'
+                            : 'Choose faster drafts or spend more credits for final-detail output.'}
+                    </p>
+                    <div className={`grid gap-1.5 ${qualityModes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                        {qualityModes.map((mode) => (
+                            <button
+                                key={mode}
+                                type="button"
+                                onClick={() => setQualityMode(mode)}
+                                aria-pressed={qualityMode === mode}
+                                className={`${settingChoiceClass(qualityMode === mode)} capitalize`}
+                            >
+                                {mode}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            ) : null}
+
+            {model.supportsGoogleSearch ? (
+                <button
+                    type="button"
+                    role="switch"
+                    aria-checked={googleSearch}
+                    onClick={() => setGoogleSearch(!googleSearch)}
+                    className="ui-focus-ring flex w-full items-center justify-between gap-4 rounded-2xl border border-white/[0.06] bg-black/30 px-4 py-3 text-left transition-colors hover:bg-white/[0.04]"
+                >
+                    <span className="min-w-0">
+                        <span className="block text-sm font-semibold text-white">Google Search grounding</span>
+                        <span className="mt-0.5 block text-xs text-zinc-400">Allow the model to pull in live context when it helps.</span>
+                    </span>
+                    <span aria-hidden className={`flex h-6 w-11 shrink-0 items-center rounded-full p-1 transition-colors ${googleSearch ? 'bg-[var(--ui-accent-image)]' : 'bg-zinc-700'}`}>
+                        <span className={`h-4 w-4 rounded-full bg-white shadow-md transition-transform ${googleSearch ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </span>
+                </button>
+            ) : null}
+
+            <CatalogAdditionalControls appearance="panel" descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ aspectRatio, resolution, qualityMode, googleSearch, ...additionalSettings.settings }} inputCounts={{ images: elements.length, videos: 0, audios: 0 }} onChange={additionalSettings.onChange} />
+        </div>
+    );
+
+    const resultActionClass = 'ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white';
+    const canvasFooter = outputImage ? (
+        <div className="flex flex-wrap items-center gap-2">
+            {latestGenerationId ? (
+                latestIsPublic ? (
                     <>
+                        <PublicShareButton
+                            generationId={latestGenerationId}
+                            viewerIsOwner
+                            title={shareTitle}
+                            description={shareDescription}
+                            sourceSurface="create-image"
+                            accessToken={session?.access_token ?? null}
+                            className={resultActionClass}
+                        />
+                        {publicResultPath ? (
+                            <Link href={publicResultPath} className={resultActionClass}>
+                                Open public page
+                            </Link>
+                        ) : null}
+                    </>
+                ) : (
+                    <button
+                        type="button"
+                        onClick={() => void handleOpenPublish()}
+                        disabled={isPreparingPublish}
+                        className="ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.98] disabled:cursor-wait disabled:opacity-70"
+                    >
+                        {isPreparingPublish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
+                        Publish & share
+                    </button>
+                )
+            ) : null}
+            <a
+                href={outputImageDownloadUrl ?? outputImage}
+                download={`generated-image.${getImageFileExtension(outputImage)}`}
+                className={resultActionClass}
+            >
+                <Download className="h-4 w-4" />
+                Download image
+            </a>
+            <button
+                type="button"
+                onClick={() => {
+                    setOutputImage(null);
+                    setOutputImages([]);
+                    setResultPreviewImage(null);
+                    setIsResultPreviewOpen(false);
+                    setLatestGenerationId(null);
+                    setLatestIsPublic(false);
+                    setPublishedMeta(null);
+                }}
+                className="ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full px-4 text-sm font-semibold text-zinc-400 transition hover:bg-white/[0.05] hover:text-white"
+            >
+                Start another run
+            </button>
+        </div>
+    ) : isGenerating && generationTiming ? (
+        <StudioGenerationStatus
+            accent={model.accentColor}
+            timing={generationTiming}
+            nowMs={nowMs}
+        />
+    ) : null;
+
+    return (
+        <div className="ui-page ui-page-ambient min-h-screen py-4 text-[var(--ui-text-primary)] sm:py-6 font-[family-name:var(--font-geist-sans)]">
+            <CreatorColumnLayout
+                title="Create image"
+                column={
+                    <>
+                        <CreatorToolTabs currentToolId="image" />
+
+                        <div className="relative" ref={dropdownRef}>
+                            <CreatorModelChip
+                                name={model.displayName}
+                                badge={model.badge}
+                                badgeClassName={model.badgeColor}
+                                isOpen={isModelDropdownOpen}
+                                onToggle={() => {
+                                    if (isModelDropdownOpen) setModelSearchQuery('');
+                                    setIsModelDropdownOpen(!isModelDropdownOpen);
+                                }}
+                            />
+
+                            <StudioModelPicker
+                                isOpen={isModelDropdownOpen}
+                                loading={modelCatalog.isLoadingModels}
+                                error={modelCatalog.error?.message}
+                                onRetry={modelCatalog.refetch}
+                                query={modelSearchQuery}
+                                onQueryChange={setModelSearchQuery}
+                                onDismiss={() => {
+                                    setIsModelDropdownOpen(false);
+                                    setModelSearchQuery('');
+                                }}
+                                searchLabel="Search image models"
+                                searchPlaceholder="Search image models..."
+                                resultListLabel="Image models"
+                                resultCount={filteredImageModelOptions.length}
+                                accent="blue"
+                            >
+                                        {filteredImageModelOptions.map((m) => {
+                                            const isActive = selectedModel === m.id;
+                                            return (
+                                                <button
+                                                    key={m.id}
+                                                    type="button"
+                                                    role="option"
+                                                    aria-selected={isActive}
+                                                    onClick={() => {
+                                                        // A notice about the previous model no longer applies.
+                                                        if (m.id !== selectedModel) setCatalogNotice(null);
+                                                        setSelectedModel(m.id as ModelId);
+                                                        setIsModelDropdownOpen(false);
+                                                        setModelSearchQuery('');
+                                                    }}
+                                                    className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${
+                                                        isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'
+                                                    }`}
+                                                >
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
+                                                                {m.displayName}
+                                                            </span>
+                                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${m.badgeColor} text-white`}>
+                                                                {m.badge}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-xs text-zinc-500 mt-0.5">{m.description}</p>
+                                                        <div className="flex flex-wrap gap-1.5 mt-2">
+                                                            {m.supportsGoogleSearch && (
+                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                                                    Google Search
+                                                                </span>
+                                                            )}
+                                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
+                                                                {m.maxImages > 0 ? `Up to ${m.maxImages} ref images` : 'Prompt only'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    {isActive && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                                                </button>
+                                            );
+                                        })}
+                            </StudioModelPicker>
+                        </div>
+
                         <AnimatePresence>
                             {modelNotice ? (
                                 <motion.div
@@ -1737,167 +2083,15 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             )}
                         </AnimatePresence>
 
-                        <motion.div
-                            initial={{ opacity: 0, y: 16 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="relative rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
-                            ref={dropdownRef}
-                        >
-                            <p className="mb-3 text-xs font-bold uppercase tracking-widest text-zinc-500">Model</p>
-                            <button
-                                onClick={() => {
-                                    if (isModelDropdownOpen) setModelSearchQuery('');
-                                    setIsModelDropdownOpen(!isModelDropdownOpen);
-                                }}
-                                aria-expanded={isModelDropdownOpen}
-                                aria-haspopup="listbox"
-                                className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-zinc-900/50 border border-white/10 rounded-2xl hover:bg-zinc-900/70 hover:border-white/15 transition-all backdrop-blur-sm"
+                        <div className="rounded-[26px] border border-[rgba(115,191,242,0.2)] bg-[var(--ui-surface-1)] transition-[border-color,box-shadow] duration-150 focus-within:border-[rgba(115,191,242,0.5)] focus-within:shadow-[0_0_0_3px_rgba(115,191,242,0.1)]">
+                            <label
+                                htmlFor="create-image-prompt"
+                                className="block px-4 pt-4 text-[11px] font-extrabold uppercase tracking-[0.14em] text-[var(--ui-accent-image)]"
                             >
-                                <div className="flex items-center gap-3">
-                                    <Zap className="w-4 h-4 text-white" />
-                                    <div className="text-left">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-sm font-bold text-white">{model.displayName}</span>
-                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${model.badgeColor} text-white`}>
-                                                {model.badge}
-                                            </span>
-                                        </div>
-                                        <p className="text-xs text-zinc-500 mt-0.5">{model.description}</p>
-                                    </div>
-                                </div>
-                                <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
-                            </button>
-
-                            <StudioModelPicker
-                                isOpen={isModelDropdownOpen}
-                                loading={modelCatalog.isLoadingModels}
-                                error={modelCatalog.error?.message}
-                                onRetry={modelCatalog.refetch}
-                                query={modelSearchQuery}
-                                onQueryChange={setModelSearchQuery}
-                                onDismiss={() => {
-                                    setIsModelDropdownOpen(false);
-                                    setModelSearchQuery('');
-                                }}
-                                searchLabel="Search image models"
-                                searchPlaceholder="Search image models..."
-                                resultListLabel="Image models"
-                                resultCount={filteredImageModelOptions.length}
-                                accent="blue"
-                                desktopInset="card"
-                            >
-                                        {filteredImageModelOptions.map((m) => {
-                                            const isActive = selectedModel === m.id;
-                                            return (
-                                                <button
-                                                    key={m.id}
-                                                    type="button"
-                                                    role="option"
-                                                    aria-selected={isActive}
-                                                    onClick={() => {
-                                                        // A notice about the previous model no longer applies.
-                                                        if (m.id !== selectedModel) setCatalogNotice(null);
-                                                        setSelectedModel(m.id as ModelId);
-                                                        setIsModelDropdownOpen(false);
-                                                        setModelSearchQuery('');
-                                                    }}
-                                                    className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${
-                                                        isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'
-                                                    }`}
-                                                >
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="flex items-center gap-2">
-                                                            <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
-                                                                {m.displayName}
-                                                            </span>
-                                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${m.badgeColor} text-white`}>
-                                                                {m.badge}
-                                                            </span>
-                                                        </div>
-                                                        <p className="text-xs text-zinc-500 mt-0.5">{m.description}</p>
-                                                        <div className="flex flex-wrap gap-1.5 mt-2">
-                                                            {m.supportsGoogleSearch && (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                                                    Google Search
-                                                                </span>
-                                                            )}
-                                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
-                                                                {m.maxImages > 0 ? `Up to ${m.maxImages} ref images` : 'Prompt only'}
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                    {isActive && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
-                                                </button>
-                                            );
-                                        })}
-                            </StudioModelPicker>
-                            <CatalogAdditionalControls descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ aspectRatio, resolution, qualityMode, googleSearch, ...additionalSettings.settings }} inputCounts={{ images: elements.length, videos: 0, audios: 0 }} onChange={additionalSettings.onChange} />
-                        </motion.div>
-
-                        <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
-                        >
-                            <h2 className="text-sm font-semibold text-white mb-1">Prompt</h2>
-                            <p className="text-sm text-zinc-400 mb-4">Describe the still you want to produce.</p>
-                            <EnhancePromptButton
-                                prompt={prompt}
-                                onEnhanced={(text) => setPrompt(text)}
-                                onCreditsUpdate={updateCredits}
-                                medium="image"
-                                selectedModel={selectedModel}
-                                label={isElementEnhancementLocked ? 'Polish' : 'Enhance'}
-                                showLevelToggle={!isElementEnhancementLocked}
-                                helperText={
-                                    isElementEnhancementLocked
-                                        ? 'Named elements stay locked. This only adds light visual polish around your original @element sentence.'
-                                        : undefined
-                                }
-                                context={{
-                                    modelId: selectedModel,
-                                    aspectRatio,
-                                    resolution,
-                                    googleSearch,
-                                    referenceImageCount: sentElements.length,
-                                    elementEnhancementMode: isElementEnhancementLocked ? 'append-only' : undefined,
-                                    elementReferences: sentElements.map((element) => ({
-                                        handle: element.handle,
-                                        displayName: element.displayName,
-                                    })),
-                                }}
-                                disabled={isGenerating}
-                            />
-                            {model.maxImages > 0 && (
-                                <div className="mb-4 mt-4 space-y-3">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                            Named elements
-                                        </p>
-                                        <span className="text-xs text-zinc-500">
-                                            Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
-                                        </span>
-                                    </div>
-                                    {sentElements.length > 0 ? (
-                                        <div className="flex flex-wrap gap-2">
-                                            {sentElements.map((element) => (
-                                                <StudioElementChip
-                                                    key={element.id}
-                                                    displayName={element.displayName}
-                                                    handle={element.handle}
-                                                    handleClassName="text-sky-300"
-                                                    onInsert={() => handleInsertElementHandle(element.handle)}
-                                                />
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <p className="text-sm text-zinc-500">
-                                            Upload one or more element images below to mention them by name in the prompt.
-                                        </p>
-                                    )}
-                                </div>
-                            )}
+                                Prompt
+                            </label>
                             <textarea
+                                id="create-image-prompt"
                                 ref={promptTextareaRef}
                                 value={prompt}
                                 onChange={(e) => handlePromptChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
@@ -1906,9 +2100,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 placeholder="Describe the image you want to create..."
                                 maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                 aria-invalid={promptMeter.state === 'over' || undefined}
-                                className={`w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 ${accentStyles.ring} focus:ring-4 outline-none resize-y min-h-[150px] placeholder:text-zinc-600 transition-all text-sm leading-relaxed`}
+                                className="block min-h-[176px] w-full resize-y bg-transparent px-4 pb-2 pt-2 text-sm leading-6 text-white outline-none placeholder:text-zinc-600"
                             />
-                            <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                            <div className="flex items-center justify-between gap-3 px-4 pb-3 text-xs">
                                 <PromptLengthCounter meter={promptMeter} suffix=" characters" />
                                 {staleElementMentions.length > 0 ? (
                                     <p className="min-w-0 text-right text-rose-300">
@@ -1917,72 +2111,103 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     </p>
                                 ) : null}
                             </div>
-                            {activeMentionQuery ? (
-                                <div className="mt-4 rounded-[20px] border border-white/8 bg-black/35 p-4">
-                                    <div className="flex flex-wrap items-center justify-between gap-3">
-                                        <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-                                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                                Insert element
-                                            </p>
-                                            <p className="mt-1 text-sm text-zinc-400">
-                                                {mentionSuggestions.length > 0
-                                                    ? 'Pick an element to insert its @mention.'
-                                                    : 'No matching elements yet.'}
-                                            </p>
-                                        </div>
-                                        {activeMentionQuery.query ? (
-                                            <StudioElementHandle
-                                                handle={`@${activeMentionQuery.query}`}
-                                                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
-                                            />
-                                        ) : null}
+                        </div>
+
+                        {activeMentionQuery ? (
+                            <div className="rounded-[20px] border border-white/8 bg-black/35 p-4">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                            Insert element
+                                        </p>
+                                        <p className="mt-1 text-sm text-zinc-400">
+                                            {mentionSuggestions.length > 0
+                                                ? 'Pick an element to insert its @mention.'
+                                                : 'No matching elements yet.'}
+                                        </p>
                                     </div>
-                                    {mentionSuggestions.length > 0 ? (
-                                        <div className="mt-3 flex flex-wrap gap-2">
-                                            {mentionSuggestions.map((element) => (
-                                                <StudioElementChip
-                                                    key={element.id}
-                                                    displayName={element.displayName}
-                                                    handle={element.handle}
-                                                    handleClassName="text-sky-300"
-                                                    onInsert={() => handleInsertElementHandle(element.handle)}
-                                                />
-                                            ))}
-                                        </div>
+                                    {activeMentionQuery.query ? (
+                                        <StudioElementHandle
+                                            handle={`@${activeMentionQuery.query}`}
+                                            className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-zinc-300"
+                                        />
                                     ) : null}
                                 </div>
-                            ) : null}
-                        </motion.div>
+                                {mentionSuggestions.length > 0 ? (
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                        {mentionSuggestions.map((element) => (
+                                            <StudioElementChip
+                                                key={element.id}
+                                                displayName={element.displayName}
+                                                handle={element.handle}
+                                                handleClassName="text-sky-300"
+                                                onInsert={() => handleInsertElementHandle(element.handle)}
+                                            />
+                                        ))}
+                                    </div>
+                                ) : null}
+                            </div>
+                        ) : null}
+
+                        <EnhancePromptButton
+                            variant="toolbar"
+                            leading={<CreatorTemplatesTile />}
+                            prompt={prompt}
+                            onEnhanced={(text) => setPrompt(text)}
+                            onCreditsUpdate={updateCredits}
+                            medium="image"
+                            selectedModel={selectedModel}
+                            label={isElementEnhancementLocked ? 'Polish' : 'Enhance'}
+                            showLevelToggle={!isElementEnhancementLocked}
+                            helperText={
+                                isElementEnhancementLocked
+                                    ? 'Named elements stay locked. This only adds light visual polish around your original @element sentence.'
+                                    : undefined
+                            }
+                            context={{
+                                modelId: selectedModel,
+                                aspectRatio,
+                                resolution,
+                                googleSearch,
+                                referenceImageCount: sentElements.length,
+                                elementEnhancementMode: isElementEnhancementLocked ? 'append-only' : undefined,
+                                elementReferences: sentElements.map((element) => ({
+                                    handle: element.handle,
+                                    displayName: element.displayName,
+                                })),
+                            }}
+                            disabled={isGenerating}
+                        />
 
                         {/* Elements kept from another model stay here with their remove
                             buttons, even on a prompt-only model: the limit message asks the
                             creator to remove the extras, and this is the only place to do it. */}
                         {model.maxImages > 0 || elements.length > 0 ? (
-                            <motion.div
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ delay: 0.04 }}
-                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+                            <section
+                                aria-labelledby="create-image-references"
+                                onDragOver={handleDragOver}
+                                onDragLeave={handleDragLeave}
+                                onDrop={handleDrop}
+                                className={`rounded-[24px] border p-4 transition-colors duration-150 ${isDragging
+                                    ? 'border-[rgba(115,191,242,0.55)] bg-[rgba(115,191,242,0.06)]'
+                                    : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]'}`}
                             >
-                            <div className="mb-4 flex items-start justify-between gap-3">
-                                <div>
-                                    <h2 className="text-sm font-semibold text-white">Elements</h2>
-                                    <p className="mt-1 text-sm text-zinc-400">
-                                        {model.maxImages > 0
-                                            ? 'Upload visual anchors, rename them, and reference them directly in the prompt.'
-                                            : `${model.displayName} does not take reference images. These are kept for another model; remove them to generate here.`}
-                                    </p>
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                    <h2 id="create-image-references" className="text-xs font-bold text-zinc-400">Reference images</h2>
+                                    <span className="text-xs font-bold tabular-nums text-zinc-500">
+                                        {elements.length}/{model.maxImages}
+                                    </span>
                                 </div>
-                                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-                                    {elements.length}/{model.maxImages}
-                                </span>
-                            </div>
+                                {model.maxImages === 0 ? (
+                                    <p className="mb-3 text-sm text-zinc-400">
+                                        {model.displayName} does not take reference images. These are kept for another model; remove them to generate here.
+                                    </p>
+                                ) : null}
 
-                            {elements.length > 0 ? (
-                                <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                                    {elements.map((element) => (
-                                        <div key={element.id} className="overflow-hidden rounded-[24px] border border-zinc-700/40 bg-black/35">
-                                            <div className="relative aspect-square group">
+                                {elements.length > 0 ? (
+                                    <ul className="mb-3 space-y-2">
+                                        {elements.map((element) => (
+                                            <li key={element.id} className="flex items-start gap-3 rounded-[20px] border border-white/[0.07] bg-black/25 p-2.5">
                                                 <button
                                                     type="button"
                                                     onClick={() => setUploadPreview({
@@ -1991,90 +2216,79 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                         alt: element.displayName,
                                                         title: element.displayName,
                                                     })}
-                                                    className="block h-full w-full"
+                                                    aria-label={`Preview ${element.displayName}`}
+                                                    className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-[14px] border border-white/10 bg-black/40"
                                                 >
                                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                                     <img
                                                         src={element.previewUrl}
                                                         alt={element.displayName}
-                                                        className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                                                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
                                                     />
-                                                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
-                                                    <div className="pointer-events-none absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/60 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/90 backdrop-blur-md">
-                                                        Preview
+                                                </button>
+                                                <div className="min-w-0 flex-1 space-y-1">
+                                                    <div className="flex items-center gap-1">
+                                                        <input
+                                                            type="text"
+                                                            value={elementNames.drafts[element.id] ?? element.displayName}
+                                                            onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
+                                                            onBlur={() => void commitElementDraft(element.id)}
+                                                            onKeyDown={(event) => {
+                                                                if (event.key === 'Enter') {
+                                                                    event.preventDefault();
+                                                                    void commitElementDraft(element.id);
+                                                                    event.currentTarget.blur();
+                                                                }
+
+                                                                if (event.key === 'Escape') {
+                                                                    elementNames.dropDraft(element.id);
+                                                                    event.currentTarget.blur();
+                                                                }
+                                                            }}
+                                                            aria-label="Element name"
+                                                            placeholder="Rename element"
+                                                            className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-sm font-semibold text-white outline-none transition-colors hover:border-white/10 focus:border-[rgba(115,191,242,0.45)] focus:bg-black/30"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handleRemoveElement(element.id)}
+                                                            aria-label={`Remove ${element.displayName}`}
+                                                            className="ui-focus-ring inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-500 transition-colors hover:bg-rose-500/15 hover:text-rose-200"
+                                                        >
+                                                            <X className="h-4 w-4" />
+                                                        </button>
                                                     </div>
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleRemoveElement(element.id)}
-                                                    className="absolute right-2 top-2 z-10 rounded-full bg-black/60 p-1.5 text-white backdrop-blur-md transition hover:bg-red-500"
-                                                >
-                                                    <X className="h-3 w-3" />
-                                                </button>
-                                            </div>
-                                            <div className="space-y-3 p-3">
-                                                <div>
-                                                    <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                                        Element name
-                                                    </label>
-                                                    <input
-                                                        type="text"
-                                                        value={elementNames.drafts[element.id] ?? element.displayName}
-                                                        onChange={(event) => handleElementDraftChange(element.id, event.target.value)}
-                                                        onBlur={() => void commitElementDraft(element.id)}
-                                                        onKeyDown={(event) => {
-                                                            if (event.key === 'Enter') {
-                                                                event.preventDefault();
-                                                                void commitElementDraft(element.id);
-                                                                event.currentTarget.blur();
-                                                            }
-
-                                                            if (event.key === 'Escape') {
-                                                                elementNames.dropDraft(element.id);
-                                                                event.currentTarget.blur();
-                                                            }
-                                                        }}
-                                                        className="w-full rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 text-sm text-white outline-none transition focus:border-blue-500/40"
-                                                        placeholder="Rename element"
-                                                    />
+                                                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
+                                                        <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-sky-300" />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleInsertElementHandle(element.handle)}
+                                                            className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
+                                                        >
+                                                            Insert
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2">
-                                                    <StudioElementHandle handle={element.handle} className="text-xs font-semibold text-sky-300" />
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleInsertElementHandle(element.handle)}
-                                                        className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-100 transition hover:bg-white/[0.08]"
-                                                    >
-                                                        Insert
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : null}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                ) : null}
 
-                            {elements.length < model.maxImages && (
-                                <label
-                                    className={`group flex flex-col items-center justify-center w-full h-[120px] border-2 border-dashed rounded-2xl cursor-pointer transition-all bg-black/40 overflow-hidden relative ${isDragging
-                                        ? 'border-cyan-400 bg-cyan-500/10 shadow-[0_0_30px_-5px_rgba(6,182,212,0.3)]'
-                                        : 'border-zinc-700/50 hover:border-cyan-500/50 hover:bg-cyan-500/5'
-                                        }`}
-                                    onDragOver={handleDragOver}
-                                    onDragLeave={handleDragLeave}
-                                    onDrop={handleDrop}
-                                >
-                                    <div className="flex flex-col items-center gap-2 text-zinc-500">
-                                        <ImageIcon className={`w-6 h-6 transition-colors ${isDragging ? 'text-cyan-400' : ''}`} />
-                                        <span className="text-sm">{isDragging ? 'Drop element images here' : 'Drop element images or click'}</span>
-                                    </div>
-                                    <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
-                                </label>
-                            )}
-                            {elementPickNotice ? (
-                                <p role="status" className="mt-3 text-sm text-amber-200">{elementPickNotice}</p>
-                            ) : null}
-                            </motion.div>
+                                {elements.length < model.maxImages ? (
+                                    <label
+                                        className={`flex min-h-14 cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed px-4 text-sm font-semibold transition-colors duration-150 focus-within:shadow-[0_0_0_2px_var(--ui-bg-app),0_0_0_4px_rgba(255,170,148,0.55)] ${isDragging
+                                            ? 'border-[var(--ui-accent-image)] text-[#d6ecfb]'
+                                            : 'border-[rgba(115,191,242,0.35)] bg-[rgba(115,191,242,0.05)] text-zinc-300 hover:border-[rgba(115,191,242,0.6)] hover:text-white'}`}
+                                    >
+                                        <Plus className="h-4 w-4 text-[var(--ui-accent-image)]" />
+                                        {isDragging ? 'Drop element images here' : 'Add reference images'}
+                                        <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="sr-only" />
+                                    </label>
+                                ) : null}
+                                {elementPickNotice ? (
+                                    <p role="status" className="mt-3 text-sm text-amber-200">{elementPickNotice}</p>
+                                ) : null}
+                            </section>
                         ) : (
                             <div className="flex items-start gap-3 rounded-[24px] border border-blue-400/15 bg-blue-400/[0.06] p-4 text-sm text-blue-100">
                                 <ImageIcon className="mt-0.5 h-4 w-4 shrink-0 text-blue-300" />
@@ -2087,424 +2301,98 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             </div>
                         )}
 
-                        <div className="grid gap-4 sm:grid-cols-2">
-                            <motion.div
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ delay: 0.06 }}
-                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
-                            >
-                                <h2 className="text-sm font-semibold text-white mb-1">Aspect ratio</h2>
-                                <p className="text-sm text-zinc-400 mb-4">Choose the output frame before you run.</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {model.aspectRatios.map(ratio => (
-                                        <button
-                                            key={ratio}
-                                            onClick={() => setAspectRatio(ratio)}
-                                            className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${aspectRatio === ratio
-                                                ? accentStyles.button + ' border'
-                                                : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
-                                                }`}
-                                        >
-                                            {ratio}
-                                        </button>
-                                    ))}
-                                </div>
-                            </motion.div>
-
-                            {showResolutionControl ? (
-                                <motion.div
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{ delay: 0.08 }}
-                                    className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
-                                >
-                                    <h2 className="text-sm font-semibold text-white mb-1">Resolution</h2>
-                                    <p className="text-sm text-zinc-400 mb-4">Higher detail costs more credits.</p>
-                                    <div className="flex gap-3">
-                                        {availableResolutions.map(res => (
-                                            <button
-                                                key={res}
-                                                onClick={() => setResolution(res)}
-                                                className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all duration-200 ${resolution === res
-                                                    ? accentStyles.button + ' border'
-                                                    : 'bg-black/50 text-zinc-500 border border-white/5 hover:bg-zinc-800 hover:text-zinc-300'
-                                                    }`}
-                                            >
-                                                {res}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </motion.div>
-                            ) : qualityModes.length > 0 ? (
-                                <motion.div
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{ delay: 0.08 }}
-                                    className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
-                                >
-                                    <h2 className="text-sm font-semibold text-white mb-1">
-                                        {/* The descriptor already labels this control per model ("Speed" for the
-                                            Ideogram tiers, "Quality" elsewhere), so a new model with quality modes
-                                            no longer lands under a heading naming a different vendor. */}
-                                        {imageAffordances?.qualityModeLabel
-                                            ? `Generation ${imageAffordances.qualityModeLabel.toLowerCase()}`
-                                            : (selectedModel === 'ideogram-v3' ? 'Generation speed' : 'Grok quality')}
-                                    </h2>
-                                    <p className="text-sm text-zinc-400 mb-4">
-                                        {selectedModel === 'grok-imagine-image'
-                                            ? 'Quality applies to prompt-only Grok runs; edits use fixed image-to-image pricing.'
-                                            : 'Choose faster drafts or spend more credits for final-detail output.'}
-                                    </p>
-                                    <div className={`grid gap-3 ${qualityModes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
-                                        {qualityModes.map((mode) => (
-                                            <button
-                                                key={mode}
-                                                onClick={() => setQualityMode(mode)}
-                                                className={`rounded-xl px-4 py-3 text-sm font-semibold capitalize transition-all duration-200 ${qualityMode === mode
-                                                    ? accentStyles.button + ' border'
-                                                    : 'border border-white/5 bg-black/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
-                                                    }`}
-                                            >
-                                                {mode}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </motion.div>
-                            ) : null}
-                        </div>
-
-                        <AnimatePresence>
-                            {model.supportsGoogleSearch && (
-                                <motion.div
-                                    key="google-search"
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    exit={{ opacity: 0, height: 0 }}
-                                    transition={{ duration: 0.25 }}
-                                    className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6 overflow-hidden"
-                                >
-                                    <div className="flex items-center justify-between cursor-pointer" onClick={() => setGoogleSearch(!googleSearch)}>
-                                        <div>
-                                            <h2 className="text-sm font-semibold text-white mb-1">Google Search grounding</h2>
-                                            <p className="text-sm text-zinc-400">Allow the model to pull in live context when it helps.</p>
-                                        </div>
-                                        <div className={`w-12 h-6 rounded-full p-1 transition-all ${googleSearch ? accentStyles.toggle : 'bg-zinc-800'}`}>
-                                            <div className={`bg-white w-4 h-4 rounded-full shadow-md transition-transform ${googleSearch ? 'translate-x-6' : 'translate-x-0'}`} />
-                                        </div>
-                                    </div>
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
+                        <CreatorColumnBar
+                            settingsSummary={settingsSummary}
+                            settings={settingsPanel}
+                            status={barStatus}
+                            action={barAction}
+                        />
                     </>
                 }
-                workspace={
-                    <>
-                        <StudioRunPanel
-                            title={isGenerating ? 'Image run in progress' : 'Ready to generate'}
-                            summary={
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Model</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{model.displayName}</div>
-                                    </div>
-                                    <div className="rounded-[20px] border border-white/8 bg-black/30 p-4">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Cost</div>
-                                        <div className="mt-2 text-sm font-semibold text-white">{quoteUi.costLabel}</div>
-                                    </div>
+                canvas={
+                    <CreatorCanvas
+                        ref={canvasRef}
+                        title={canvasTitle}
+                        subtitle={canvasSubtitle}
+                        footer={canvasFooter}
+                    >
+                        {outputImage ? (
+                            displayedOutputImages.length > 1 ? (
+                                <div className="grid h-full w-full auto-rows-fr grid-cols-2 gap-3">
+                                    {displayedOutputImages.map((imageUrl, index) => (
+                                        <div key={`${imageUrl}-${index}`} className="relative flex min-h-0 items-center justify-center">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setResultPreviewImage(imageUrl);
+                                                    setIsResultPreviewOpen(true);
+                                                }}
+                                                className="flex h-full w-full items-center justify-center rounded-[18px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/40"
+                                                aria-label={`Preview generated image ${index + 1}`}
+                                            >
+                                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                <img
+                                                    src={imageUrl}
+                                                    alt={`Generated image ${index + 1}`}
+                                                    className="max-h-[70dvh] max-w-full rounded-[18px] object-contain shadow-[0_24px_60px_-28px_rgba(0,0,0,0.9)] min-[1120px]:max-h-full"
+                                                />
+                                            </button>
+                                            <a
+                                                href={getOutputImageDownloadUrl(imageUrl, index) ?? imageUrl}
+                                                download={`generated-image-${index + 1}.${getImageFileExtension(imageUrl)}`}
+                                                aria-label={`Download result ${index + 1}`}
+                                                className="ui-focus-ring absolute bottom-2 right-2 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md transition hover:bg-black/85"
+                                            >
+                                                <Download className="h-4 w-4" />
+                                            </a>
+                                        </div>
+                                    ))}
                                 </div>
-                            }
-                            details={
-                                <div className="grid grid-cols-2 gap-3 text-sm">
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Frame</div>
-                                        <div className="mt-1 text-zinc-200">{aspectRatio}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                            {showResolutionControl ? 'Resolution' : 'Quality'}
-                                        </div>
-                                        <div className="mt-1 text-zinc-200">
-                                            {showResolutionControl ? resolution : `${qualityMode}${isGrokImageModel && elements.length > 0 ? ' edit' : ''}`}
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Elements</div>
-                                        <div className="mt-1 text-zinc-200">
-                                            {model.maxImages > 0 ? `${elements.length}/${model.maxImages}` : 'Prompt only'}
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Credits left</div>
-                                        <div className="mt-1 text-zinc-200">{userCredits ?? '...'}</div>
-                                    </div>
-                                </div>
-                            }
-                            action={
-                                pendingStart && !isGenerating ? (
-                                    <div className="space-y-3">
-                                        <button
-                                            type="button"
-                                            onClick={() => void replayPendingStart(pendingStart)}
-                                            className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
-                                        >
-                                            Check again
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={handleStartNewRun}
-                                            disabled={!prompt.trim() || quotePending || staleElementMentions.length > 0 || Boolean(referenceLimitMessage) || Boolean(promptLimitMessage)}
-                                            className="ui-focus-ring flex min-h-12 w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-6 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                                        >
-                                            {currentCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
-                                        </button>
-                                    </div>
-                                ) : showTopUp ? (
-                                    <div className="space-y-4">
-                                        <div className="rounded-[22px] border border-blue-500/20 bg-blue-500/10 p-4">
-                                            <p className="text-sm font-semibold text-white">Not enough credits</p>
-                                            <p className="mt-2 text-sm text-zinc-400">
-                                                {insufficientCredits ? (
-                                                    <>Image generation costs <strong className="text-white">{currentCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.</>
-                                                ) : creditRefusalMessage}
-                                            </p>
-                                        </div>
-                                        <Link href="/pricing" className="ui-focus-ring flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]">
-                                            <Sparkles className="h-4 w-4" />
-                                            Top Up Credits
-                                        </Link>
-                                    </div>
-                                ) : (
-                                    <button
-                                        onClick={handleGenerate}
-                                        disabled={!prompt.trim() || isGenerating || quotePending || staleElementMentions.length > 0 || Boolean(referenceLimitMessage) || Boolean(promptLimitMessage)}
-                                        className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        {isGenerating ? (
-                                            <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</>
-                                        ) : (
-                                            <><Sparkles className="w-5 h-5" /> Generate Image</>
-                                        )}
-                                    </button>
-                                )
-                            }
-                            status={
-                                <>
-                                    {isGenerating && generationTiming ? (
-                                        <StudioGenerationStatus
-                                            accent={model.accentColor}
-                                            timing={generationTiming}
-                                            nowMs={nowMs}
-                                        />
-                                    ) : isBackgroundProcessing ? (
-                                        <StudioBackgroundProcessingNotice
-                                            accent={model.accentColor}
-                                            label="image"
-                                            phaseLabel={backgroundTiming?.phaseLabel ?? null}
-                                            timingLabel={backgroundTimingLabel}
-                                        />
-                                    ) : pendingStart ? (
-                                        <p role="alert" className="text-sm text-amber-200">{pendingStartNotice ?? START_UNCONFIRMED_MESSAGE}</p>
-                                    ) : referenceLimitMessage ? (
-                                        <p className="text-sm text-red-400">{referenceLimitMessage}</p>
-                                    ) : promptLimitMessage ? (
-                                        <p className="text-sm text-red-400">{promptLimitMessage}</p>
-                                    ) : quoteState.pageOutOfDate ? (
-                                        // In place of the start's refusal it stands for.
-                                        <StudioOutOfDatePageNotice
-                                            isRemix={Boolean(remixId)}
-                                            reloadDidNotHelp={reloadBroughtBackThisBuild()}
-                                            onReload={() => void reloadPage()}
-                                        />
-                                    ) : error ? (
-                                        // A price that could not be read since (asked again after
-                                        // `cost_changed`, say) keeps its Retry under the error:
-                                        // Generate waits for a price.
-                                        <div className="space-y-2">
-                                            <p className="text-sm text-red-400">{error}</p>
-                                            {quoteRetry}
-                                        </div>
-                                    ) : staleElementMentions.length > 0 ? (
-                                        <p className="text-sm text-rose-300">
-                                            Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating:{' '}
-                                            <StudioElementHandleList handles={staleElementMentions} />
-                                        </p>
-                                    ) : quoteState.status === 'error' ? (
-                                        quoteRetry
-                                    ) : (
-                                        <p className="text-sm text-zinc-500">Your latest image will appear in the workspace as soon as the run finishes.</p>
-                                    )}
-                                </>
-                            }
-                            footer={
-                                <Link
-                                    href="/creations"
-                                    className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
-                                >
-                                    View Studio
-                                    <Images className="h-4 w-4" />
-                                </Link>
-                            }
-                        />
-
-                        <StudioWorkspacePanel
-                            title={workspaceTitle}
-                            description={workspaceDescription}
-                            action={
-                                <Link
-                                    href="/creations"
-                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
-                                >
-                                    Studio
-                                    <Images className="h-4 w-4" />
-                                </Link>
-                            }
-                        >
-                            {outputImage ? (
-                                <div className="space-y-5">
-                                    <div className={displayedOutputImages.length > 1 ? 'grid gap-3 sm:grid-cols-2' : ''}>
-                                        {displayedOutputImages.map((imageUrl, index) => (
-                                            <div key={`${imageUrl}-${index}`} className="space-y-3">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setResultPreviewImage(imageUrl);
-                                                        setIsResultPreviewOpen(true);
-                                                    }}
-                                                    className="group relative block w-full overflow-hidden rounded-[26px] border border-white/8 bg-black/50 text-left transition hover:border-blue-300/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/35"
-                                                    aria-label={`Preview generated image ${index + 1}`}
-                                                >
-                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                    <img src={imageUrl} alt={`Generated image ${index + 1}`} className="block h-auto w-full object-cover transition duration-300 group-hover:scale-[1.01]" />
-                                                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/65 via-black/5 to-transparent opacity-80 transition group-hover:opacity-100" />
-                                                    <div className="pointer-events-none absolute bottom-4 left-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/65 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white backdrop-blur-md">
-                                                        <Expand className="h-3.5 w-3.5" />
-                                                        {index === 0 ? 'Primary result' : `Result ${index + 1}`}
-                                                    </div>
-                                                </button>
-                                                {displayedOutputImages.length > 1 ? (
-                                                    <a
-                                                        href={getOutputImageDownloadUrl(imageUrl, index) ?? imageUrl}
-                                                        download={`generated-image-${index + 1}.${getImageFileExtension(imageUrl)}`}
-                                                        className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-xs font-semibold text-emerald-100 transition hover:border-emerald-400/40 hover:bg-emerald-500/15"
-                                                    >
-                                                        <Download className="h-3.5 w-3.5" />
-                                                        Download result {index + 1}
-                                                    </a>
-                                                ) : null}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="flex flex-wrap gap-3">
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setResultPreviewImage(outputImage);
-                                                setIsResultPreviewOpen(true);
-                                            }}
-                                            className="inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-500/10 px-5 py-3 text-sm font-semibold text-blue-100 transition hover:border-blue-300/35 hover:bg-blue-500/15"
-                                        >
-                                            <Expand className="h-4 w-4" />
-                                            Preview primary
-                                        </button>
-                                        <a
-                                            href={outputImageDownloadUrl ?? outputImage}
-                                            download={`generated-image.${getImageFileExtension(outputImage)}`}
-                                            className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
-                                        >
-                                            <Download className="h-4 w-4" />
-                                            Download image
-                                        </a>
-                                        {latestGenerationId ? (
-                                            latestIsPublic ? (
-                                                <>
-                                                    <PublicShareButton
-                                                        generationId={latestGenerationId}
-                                                        viewerIsOwner
-                                                        title={shareTitle}
-                                                        description={shareDescription}
-                                                        sourceSurface="create-image"
-                                                        accessToken={session?.access_token ?? null}
-                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                                    />
-                                                    {publicResultPath ? (
-                                                        <Link
-                                                            href={publicResultPath}
-                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                                        >
-                                                            Open public page
-                                                        </Link>
-                                                    ) : null}
-                                                </>
-                                            ) : (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleOpenPublish()}
-                                                    disabled={isPreparingPublish}
-                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-wait disabled:opacity-70"
-                                                >
-                                                    {isPreparingPublish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
-                                                    Publish & share
-                                                </button>
-                                            )
-                                        ) : null}
-                                        <button
-                                            onClick={() => {
-                                                setOutputImage(null);
-                                                setOutputImages([]);
-                                                setResultPreviewImage(null);
-                                                setIsResultPreviewOpen(false);
-                                                setLatestGenerationId(null);
-                                                setLatestIsPublic(false);
-                                                setPublishedMeta(null);
-                                            }}
-                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                                        >
-                                            Start another run
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : isGenerating ? (
-                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className={`flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-r ${accentStyles.progress}`}>
-                                        <Loader2 className="h-7 w-7 animate-spin text-white" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-xl font-semibold text-white">Building your next still</h3>
-                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            The workspace will switch from status to output as soon as the model finishes the current run.
-                                        </p>
-                                    </div>
-                                </div>
-                            ) : isBackgroundProcessing ? (
-                                <StudioBackgroundProcessingNotice
-                                    accent={model.accentColor}
-                                    label="image"
-                                    variant="workspace"
-                                    phaseLabel={backgroundTiming?.phaseLabel ?? null}
-                                    timingLabel={backgroundTimingLabel}
-                                />
                             ) : (
-                                <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-dashed border-white/10 bg-black/40 p-10 text-center">
-                                    <div className={`flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-gradient-to-br ${
-                                        model.accentColor === 'amber'
-                                            ? 'from-amber-500/30 to-orange-500/10'
-                                            : 'from-blue-500/30 to-cyan-500/10'
-                                    }`}>
-                                        <ImageIcon className="h-7 w-7 text-white" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-xl font-semibold text-white">No image yet</h3>
-                                        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            {model.maxImages > 0
-                                                ? 'Write the prompt, optionally add a few named elements, then generate. The latest result will take over this workspace.'
-                                                : 'Write the prompt, then generate. The latest result will take over this workspace.'}
-                                        </p>
-                                    </div>
-                                </div>
-                            )}
-                        </StudioWorkspacePanel>
-                    </>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setResultPreviewImage(outputImage);
+                                        setIsResultPreviewOpen(true);
+                                    }}
+                                    className="flex h-full w-full items-center justify-center rounded-[22px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/40"
+                                    aria-label="Preview generated image 1"
+                                >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                        src={outputImage}
+                                        alt="Generated image 1"
+                                        className="max-h-[70dvh] max-w-full rounded-[22px] object-contain shadow-[0_24px_60px_-28px_rgba(0,0,0,0.9)] min-[1120px]:max-h-full"
+                                    />
+                                </button>
+                            )
+                        ) : isGenerating ? (
+                            <CreatorCanvasFrame aspectRatio={aspectRatio} busy>
+                                <Loader2 className="h-6 w-6 animate-spin text-[var(--ui-accent-image)]" />
+                                <p className="text-sm font-semibold text-white">Building your image</p>
+                            </CreatorCanvasFrame>
+                        ) : isBackgroundProcessing ? (
+                            <StudioBackgroundProcessingNotice
+                                accent={model.accentColor}
+                                label="image"
+                                variant="workspace"
+                                phaseLabel={backgroundTiming?.phaseLabel ?? null}
+                                timingLabel={backgroundTimingLabel}
+                            />
+                        ) : (
+                            <CreatorCanvasFrame aspectRatio={aspectRatio}>
+                                <span className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/[0.04]">
+                                    <ImageIcon className="h-5 w-5 text-zinc-400" />
+                                </span>
+                                <p className="text-sm font-semibold text-zinc-200">Your image will appear here</p>
+                                <p className="text-xs leading-5 text-zinc-500">
+                                    {model.maxImages > 0
+                                        ? 'Write a prompt, add reference images if you like, then Generate.'
+                                        : 'Write a prompt, then Generate.'}
+                                </p>
+                            </CreatorCanvasFrame>
+                        )}
+                    </CreatorCanvas>
                 }
             />
 

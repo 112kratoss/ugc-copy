@@ -30,7 +30,7 @@ Principles, distilled from Pinterest Gestalt, Shopify Polaris, Material 3, Apple
 - **App shell:** `src/components/AppShellClient.tsx`, with its destinations in `src/components/app-shell-nav.ts`.
 - **Toasts and the confirm dialog:** `src/components/FeedbackViewport.tsx`, driven through `feedback-state`.
 - **Home shell:** `src/components/HomeExperience.tsx`.
-- **Creator pages:** `src/components/CreatorStudio.tsx`.
+- **Creator pages:** `src/components/CreatorStudio.tsx`, and for the image creator's column and result canvas `src/components/CreatorColumn.tsx`.
 - **Marketing pages:** `src/components/FeatureLandingPage.tsx`.
 - **Feed:** `src/app/feed/` (`FeedClient`, `WindowedFeedList`, `FeedPostCard`, `FeedMediaLightbox`) and `src/components/PostComments.tsx`.
 
@@ -220,7 +220,12 @@ The two must look and behave like one product. A stale session falls back to the
 ### Create (`/create`, `/create-image`, `/create-video`, `/create-motion`, `/create-workflow`)
 
 - **Launchpad (`/create`):** the page title, a short body and the tool pills, then `CreatorToolCard`s with live previews. A card shows what the tool makes, not just a model name.
-- **Creator pages:** they share the `CreatorStudio` shell:
+- **Image creator (`/create-image`):** the app's composer as a column (`src/components/CreatorColumn.tsx`), with the result beside it:
+  - the column, top to bottom: Image, Video and Motion as tabs; the model chip, which opens the model picker under it; the prompt; Templates and Enhance as two tiles, with Enhance's level under them; the reference images as rows (picture, name, and the whole @handle beside Insert);
+  - at the column's foot a bar that stays in reach while the column scrolls (above the bottom navigation on a phone): a chip that reads the run's settings back ("1K · AUTO · JPG") and opens them in a panel above it, and Generate with its price ("Generate · 8 credits"; until there is a price its face says why it waits). What stops a run (a refusal, a limit, the balance, a start not confirmed) is said in the bar, over its buttons;
+  - the result canvas: beside the column from 1120px, where the sidebar leaves the page about 860px, it stays in view for the whole page; below that it follows the column, and a run that starts brings it into view. Empty, it is a frame in the run's aspect ratio; running, the same frame with the run's progress under it; done, the picture with Publish & share, Download and Start another run under it;
+  - no title card and no run summary: the shell's top bar names the page and holds the balance, so the page's own heading is for screen readers only.
+- **Video and motion creators:** the `CreatorStudio` shell until they move to the column:
   - a header with a quick switch between tools;
   - control cards for the prompt, model and settings, and a run panel with generation status.
 - **Notices:** they occupy one slot: a retired or replaced model, reset settings, a remix being restored. A placeholder holds that slot while a remix loads, so the form never looks finished before it is.

@@ -101,7 +101,8 @@ test.describe('signed in', () => {
     await page.setViewportSize(PHONE);
     await page.goto('/create-image');
     await hideDevBadge(page);
-    const trigger = page.locator('p', { hasText: /^Model$/ }).locator('xpath=following-sibling::button[1]');
+    // The model chip at the head of the creator's column.
+    const trigger = page.locator('button[aria-haspopup="listbox"]');
     await expect(trigger).toBeVisible(COLD_PAGE);
     await trigger.click();
     const sheet = page.getByTestId('studio-model-picker');

@@ -69,12 +69,15 @@ export default function CatalogAdditionalControls({
   settings,
   inputCounts,
   onChange,
+  appearance = 'card',
 }: {
   descriptor?: GenerationModelDescriptor;
   handledKeys: readonly string[];
   settings: Settings;
   inputCounts?: Record<string, number>;
   onChange: (key: string, value: CatalogPrimitive) => void;
+  /** `panel` matches the small labels of the image creator's settings panel. */
+  appearance?: 'card' | 'panel';
 }) {
   const controls =
     descriptor?.controls.filter(
@@ -83,19 +86,23 @@ export default function CatalogAdditionalControls({
         catalogConditionsMatch(control.conditions, settings, inputCounts),
     ) ?? [];
   if (!controls.length) return null;
+  const isPanel = appearance === 'panel';
+  const fieldClass = isPanel
+    ? 'min-h-10 rounded-xl border border-white/[0.06] bg-black/30 px-3 text-sm font-medium text-white'
+    : 'min-h-11 rounded-xl border border-white/10 bg-zinc-900 px-3 text-white';
   return (
-    <div className="space-y-3" aria-label="Additional model settings">
+    <div className={isPanel ? 'space-y-5' : 'space-y-3'} aria-label="Additional model settings">
       {controls.map((control) => (
         <label
           key={control.key}
-          className="flex flex-col gap-2 text-sm text-zinc-300"
+          className={isPanel ? 'flex flex-col gap-2 text-xs font-bold text-zinc-400' : 'flex flex-col gap-2 text-sm text-zinc-300'}
         >
           {control.label}
           {control.type === 'choice' ? (
             <select
               value={String(settings[control.key] ?? control.defaultValue)}
               onChange={(event) => onChange(control.key, event.target.value)}
-              className="min-h-11 rounded-xl border border-white/10 bg-zinc-900 px-3 text-white"
+              className={fieldClass}
             >
               {control.options.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -121,7 +128,7 @@ export default function CatalogAdditionalControls({
                 if (Number.isFinite(event.target.valueAsNumber))
                   onChange(control.key, event.target.valueAsNumber);
               }}
-              className="min-h-11 rounded-xl border border-white/10 bg-zinc-900 px-3 text-white"
+              className={fieldClass}
             />
           )}
         </label>

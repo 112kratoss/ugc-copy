@@ -244,11 +244,13 @@ test.describe('reference card handles', () => {
     await expectWholeHandles(page, 'Kling video elements', CLIPS.map((clip) => clip.handle));
   });
 
+  // Since 2026-10-26 the image creator lists its references as rows in its column
+  // (picture, name, then the handle beside Insert), 340 to 440px wide on a desktop.
   test('the image creator shows each element handle whole', async ({ page }) => {
     await page.route('**/api/remix-source*', (route) => route.fulfill({ json: IMAGE_REMIX }));
 
     await page.goto(`/create-image?remix=${GENERATION_ID}&remixPost=${POST_ID}`);
 
-    await expectWholeHandles(page, 'Elements', REFERENCES.map((reference) => reference.handle));
+    await expectWholeHandles(page, 'Reference images', REFERENCES.map((reference) => reference.handle));
   });
 });

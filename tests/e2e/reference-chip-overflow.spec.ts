@@ -425,9 +425,12 @@ test.describe('reference chips', () => {
     const handles = REFERENCES.map((reference) => reference.handle);
 
     await page.goto(`/create-image?remix=${GENERATION_ID}&remixPost=${POST_ID}`);
-    await expect(page.getByRole('heading', { name: 'Elements', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Reference images', exact: true })).toBeVisible();
 
-    await expectChipsInTheirRow(page, 'Named elements', handles);
+    // The row of chips over the prompt went with the column layout (2026-10-26): each
+    // reference's row has its own Insert (reference-card-handles.spec.ts), so the chips
+    // left are the "@" panel's. Those rows are on the page while it is measured, so a
+    // long name in one would show here as the page's overflow.
     await expectSuggestionsInTheirRow(page, 'Insert element', handles, () => (
       typeAtEnd(page.getByPlaceholder('Describe the image you want to create...'), ' @')
     ));

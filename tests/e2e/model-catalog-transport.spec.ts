@@ -129,6 +129,10 @@ for (const viewport of [
       await expect(
         page.getByRole('button', { name: /Future Image Model/ }).first(),
       ).toBeVisible();
+      // The image creator folds its settings into the bar's chip, as the app does.
+      await page
+        .getByRole('button', { name: /^Generation settings/ })
+        .click({ timeout: 5_000 });
       await expect(
         page.getByRole('combobox', { name: 'Background', exact: true }),
       ).toBeVisible();
@@ -138,6 +142,11 @@ for (const viewport of [
       await expect(
         page.getByRole('combobox', { name: 'Background', exact: true }),
       ).toHaveValue('transparent', { timeout: 5_000 });
+      // Put away, so the panel covers nothing the next step presses.
+      await page.keyboard.press('Escape');
+      await expect(
+        page.getByRole('dialog', { name: 'Generation settings' }),
+      ).toBeHidden({ timeout: 5_000 });
       const before = revisionReads;
       revision = 'updated-catalog';
       await page

@@ -291,11 +291,8 @@ describe('CreateImageClient persisted elements', () => {
     });
     expect(setPersistedImageElementRecordsMock.mock.calls[0]?.[1]).toHaveLength(2);
 
-    const uploadedImage = await screen.findByAltText('Element 2');
-    const uploadedMedia = uploadedImage.closest('div.relative');
-    const removeButton = uploadedMedia?.querySelectorAll('button')[1];
-    expect(removeButton).toBeDefined();
-    fireEvent.click(removeButton!);
+    await screen.findByAltText('Element 2');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Element 2' }));
 
     await waitFor(() => {
       expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(2);
@@ -352,10 +349,8 @@ describe('CreateImageClient persisted elements', () => {
     render(<CreateImageClient prefill={{}} />);
     expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
 
-    const extraImage = await screen.findByAltText('Restored 11');
-    const removeButton = extraImage.closest('div.relative')?.querySelectorAll('button')[1];
-    expect(removeButton).toBeDefined();
-    fireEvent.click(removeButton!);
+    await screen.findByAltText('Restored 11');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Restored 11' }));
 
     await waitFor(() => {
       expect(screen.getAllByText('10/10')).not.toHaveLength(0);
@@ -799,17 +794,36 @@ function typePrompt(value: string) {
   fireEvent.change(screen.getByPlaceholderText(PROMPT_PLACEHOLDER), { target: { value } });
 }
 
+/** Generate in the column's bar, named with the run's price whatever its face says. */
+function generateButton() {
+  return screen.getByRole('button', { name: /^Generate · / });
+}
+
 function pressGenerate() {
-  fireEvent.click(screen.getByRole('button', { name: /Generate Image/ }));
+  fireEvent.click(generateButton());
 }
 
+/** Opens the settings the bar's chip folds away, if they are not open already. */
+function openSettings() {
+  if (!screen.queryByRole('dialog', { name: 'Generation settings' })) {
+    fireEvent.click(screen.getByRole('button', { name: /^Generation settings/ }));
+  }
+}
+
+function chooseAspectRatio(ratio: string) {
+  openSettings();
+  fireEvent.click(screen.getByRole('button', { name: ratio }));
+}
+
+/** The aspect ratio the bar's settings chip reads back ("1K · AUTO · JPG"). */
 function frameShown() {
-  return screen.getByText('Frame').nextElementSibling?.textContent;
+  const parts = (screen.getByTestId('creator-settings-summary').textContent ?? '').split(' · ');
+  return parts.find((part) => /^(?:\d+:\d+|AUTO)$/.test(part))?.toLowerCase();
 }
 
-/** The price on the run panel. */
+/** The price Generate carries. */
 function costShown() {
-  return screen.getByText('Cost').nextElementSibling?.textContent;
+  return generateButton().getAttribute('aria-label')?.replace(/^Generate · /, '');
 }
 
 async function findResult() {
@@ -1029,7 +1043,7 @@ describe('CreateImageClient generation pipeline', () => {
 
       pressGenerate();
       await settleDraftRead();
-      expect(screen.getByRole('button', { name: /Generate Image/ })).toBeDisabled();
+      expect(generateButton()).toBeDisabled();
       expect(startCalls(fetchMock)).toHaveLength(0);
 
       quoteStandIn.answers = [8];
@@ -1083,7 +1097,7 @@ describe('CreateImageClient generation pipeline', () => {
 
       expect(await screen.findByText('The price of this run changed. Check the updated cost and generate again.')).toBeInTheDocument();
       expect(costShown()).toBe('Unavailable');
-      expect(screen.getByRole('button', { name: /Generate Image/ })).toBeDisabled();
+      expect(generateButton()).toBeDisabled();
 
       // Generate waits for a price, and asking again is the only way to one.
       fireEvent.click(screen.getByRole('button', { name: 'Retry quote' }));
@@ -1116,7 +1130,7 @@ describe('CreateImageClient generation pipeline', () => {
         // Asked again once, and the start's refusal stood: the same run at the same price.
         expect(quoteStandIn.lastAttempt()).toBe(1);
         expect(costShown()).toBe('8 credits');
-        expect(screen.getByRole('button', { name: /Generate Image/ })).toBeDisabled();
+        expect(generateButton()).toBeDisabled();
         pressGenerate();
         await settleDraftRead();
         expect(startCalls(fetchMock)).toHaveLength(1);
@@ -1149,7 +1163,7 @@ describe('CreateImageClient generation pipeline', () => {
         expect(notice).toHaveTextContent('This page is out of date, so it cannot show what this run costs, and reloading it brought back the same version. Wait a few minutes, then reload the page.');
         expect(notice).toHaveTextContent('The remix starts again from the original.');
         expect(screen.queryByRole('button', { name: 'Reload page' })).not.toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /Generate Image/ })).toBeDisabled();
+        expect(generateButton()).toBeDisabled();
         expect(startCalls(fetchMock)).toHaveLength(1);
       } finally {
         delete document.documentElement.dataset.buildId;
@@ -1193,7 +1207,7 @@ describe('CreateImageClient generation pipeline', () => {
 
       expect(costShown()).toBe('8 credits');
       expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Generate Image/ })).toBeEnabled();
+      expect(generateButton()).toBeEnabled();
     });
 
     it('forgets a refusal once that run goes, after the page was found out of date and the price then moved', async () => {
@@ -1217,7 +1231,7 @@ describe('CreateImageClient generation pipeline', () => {
       typePrompt('A lighthouse at dawn, in rain');
       expect(costShown()).toBe('8 credits');
       expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Generate Image/ })).toBeEnabled();
+      expect(generateButton()).toBeEnabled();
     });
 
     it('lets the creator go on with another run, which the refusal does not hold', async () => {
@@ -1229,14 +1243,67 @@ describe('CreateImageClient generation pipeline', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent('This page is out of date');
 
       // Another run is priced on its own: nothing has refused it.
-      fireEvent.click(screen.getByRole('button', { name: '1:1' }));
+      chooseAspectRatio('1:1');
       expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Generate Image/ })).toBeEnabled();
+      expect(generateButton()).toBeEnabled();
       pressGenerate();
       await findResult();
       expect(startCalls(fetchMock)).toHaveLength(2);
       expect(startBody(startCalls(fetchMock)[1]).settings).toMatchObject({ aspectRatio: '1:1' });
       view.unmount();
+    });
+  });
+
+  // Under 1120px the result is drawn under the column, below the bar the creator presses.
+  describe('the result canvas', () => {
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    let scrollIntoView: ReturnType<typeof vi.fn>;
+
+    function stubPanes(twoPanes: boolean) {
+      vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+        matches: query === '(min-width: 1120px)' ? twoPanes : false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })));
+    }
+
+    beforeEach(() => {
+      scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView as unknown as Element['scrollIntoView'];
+    });
+
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    it('is brought into view when a run starts under the column', async () => {
+      stubPanes(false);
+      installFetch({ starts: ['hang'] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+
+      pressGenerate();
+
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+      expect(scrollIntoView.mock.contexts[0]).toHaveAttribute('aria-label', 'Result');
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+    });
+
+    it('stays put beside the column, where it is in view already', async () => {
+      stubPanes(true);
+      installFetch({ starts: ['hang'] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+
+      pressGenerate();
+
+      expect(await screen.findByText('Creating your image')).toBeInTheDocument();
+      expect(scrollIntoView).not.toHaveBeenCalled();
     });
   });
 
@@ -1274,7 +1341,7 @@ describe('CreateImageClient generation pipeline', () => {
       installFetch();
       const first = render(<CreateImageClient prefill={{}} />);
       typePrompt('A red bicycle in fog');
-      fireEvent.click(screen.getByRole('button', { name: '1:1' }));
+      chooseAspectRatio('1:1');
 
       await waitFor(() => expect(saveCreatorDraftMock).toHaveBeenLastCalledWith('image', 'user-1', expect.objectContaining({
         prompt: 'A red bicycle in fog',
@@ -1455,12 +1522,11 @@ describe('CreateImageClient generation pipeline', () => {
     expect(await screen.findByText(/does not take reference images\. Your references are preserved/)).toBeInTheDocument();
     expect(screen.getByAltText('Restored product')).toBeInTheDocument();
     expect(screen.queryByText('Prompt-only model')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Generate Image/ })).toBeDisabled();
+    expect(generateButton()).toBeDisabled();
     // Nothing is sent to a prompt-only model, so the server would not know the mention either.
     expect(screen.getByText(/^Unknown element mention/)).toBeInTheDocument();
 
-    const removeButton = screen.getByAltText('Restored product').closest('div.relative')?.querySelectorAll('button')[1];
-    fireEvent.click(removeButton!);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Restored product' }));
 
     await waitFor(() => expect(screen.queryByAltText('Restored product')).not.toBeInTheDocument());
     expect(screen.getByText('Prompt-only model')).toBeInTheDocument();
@@ -1482,6 +1548,7 @@ describe('CreateImageClient generation pipeline', () => {
     const fetchMock = installFetch({ starts: [startedReply()] });
     render(<CreateImageClient prefill={{}} />);
 
+    openSettings();
     fireEvent.change(screen.getByLabelText('Output format'), { target: { value: 'png' } });
     typePrompt('A lighthouse at dawn');
     pressGenerate();
@@ -1510,7 +1577,7 @@ describe('CreateImageClient generation pipeline', () => {
 
       expect(await screen.findByText('Insufficient credits. This action costs 8 credits.')).toBeInTheDocument();
       expect(screen.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing');
-      expect(screen.queryByRole('button', { name: /Generate Image/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Generate · / })).not.toBeInTheDocument();
       expect(creditsUpdated).toHaveBeenCalled();
       window.removeEventListener('credits_updated', creditsUpdated);
     });
@@ -1594,7 +1661,7 @@ describe('CreateImageClient generation pipeline', () => {
     pressGenerate();
     await findResult();
     typePrompt('@lead sleeps under @prop');
-    fireEvent.click(screen.getByRole('button', { name: /Preview primary/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview generated image 1' }));
     const preview = screen.getByRole('heading', { name: 'Generated Image Preview' }).parentElement!;
     expect(preview).toHaveTextContent('@lead runs past @prop at noon');
     expect(preview).not.toHaveTextContent('@lead sleeps under @prop');
@@ -1657,12 +1724,13 @@ describe('CreateImageClient generation pipeline', () => {
     expect((creationRead?.[1] as RequestInit).headers).toEqual({ Authorization: 'Bearer test-token' });
   });
 
-  it('marks the Studio links with a gallery icon rather than a download one', () => {
+  it('marks the Studio link with a gallery icon rather than a download one', () => {
     installFetch();
     render(<CreateImageClient prefill={{}} />);
 
+    // One, at the head of the result canvas.
     const studioLinks = screen.getAllByRole('link', { name: /Studio/ });
-    expect(studioLinks).toHaveLength(2);
+    expect(studioLinks).toHaveLength(1);
     for (const link of studioLinks) {
       expect(link.querySelector('svg.lucide-images')).not.toBeNull();
       expect(link.querySelector('svg.lucide-download')).toBeNull();
@@ -1697,10 +1765,6 @@ describe('CreateImageClient prompt limits', () => {
 
   function counter() {
     return screen.getByTestId('prompt-length');
-  }
-
-  function generateButton() {
-    return screen.getByRole('button', { name: /Generate Image/ });
   }
 
   function promptBox() {
