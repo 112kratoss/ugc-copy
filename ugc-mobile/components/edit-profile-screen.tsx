@@ -26,7 +26,6 @@ import {
   type EditProfileField,
   type EditProfileFieldErrors,
   type EditProfileFormValues,
-  type UsernameAvailability,
   buildProfileUpdateBody,
   editProfileFormFromProfile,
   hasEditProfileChanges,
@@ -34,7 +33,6 @@ import {
   normalizeUsername,
   normalizeUsernameInput,
   profilePhotoCropAspect,
-  readLocalUsernameRejection,
   usernameHint,
   validateProfileField,
   validateProfileForm,
@@ -135,18 +133,14 @@ export function EditProfileScreen() {
    * The availability check onboarding already runs on this same handle. Without
    * it a taken username was only discovered by `saveProfile` — which uploads
    * the avatar and the cover *before* it PATCHes the profile, so the answer
-   * arrived after two uploads had run for nothing.
+   * arrived after two uploads had run for nothing. It answers the placeholder
+   * and the reserved list itself, before any round trip (D3).
    */
-  // The placeholder and the reserved list are answered here, before any
-  // round trip, in the words the server would use (D3).
-  const localUsernameRejection = readLocalUsernameRejection(form.username, profile?.username);
-  const usernameCheck = useHandleAvailability(api, {
+  const { availability: usernameAvailability, message: usernameMessage } = useHandleAvailability(api, {
     username: form.username,
     displayName: form.displayName,
     savedUsername: profile?.username,
   });
-  const usernameAvailability: UsernameAvailability = localUsernameRejection ? 'taken' : usernameCheck.availability;
-  const usernameMessage = localUsernameRejection ?? usernameCheck.message;
 
   const saveMutation = useMutation({
     mutationFn: saveProfile,

@@ -199,6 +199,19 @@ describe('the sheet a list opens to ask for a name and handle before a post goes
     expect(collectText(tree.root)).not.toContain('That username is already taken.');
   });
 
+  it('refuses a reserved handle as it is typed, with no request', async () => {
+    const tree = mountHost();
+    void ask();
+    await letTheCheckAnswer();
+    authState.api.validateProfile.mockClear();
+
+    act(() => field(tree.root, 'Handle, required').props.onChangeText('support'));
+    expect(collectText(tree.root)).toContain('That handle is reserved.');
+    await letTheCheckAnswer();
+    expect(collectText(tree.root)).toContain('That handle is reserved.');
+    expect(authState.api.validateProfile).not.toHaveBeenCalled();
+  });
+
   it('saves both with the composer\'s claim and answers with the saved profile', async () => {
     const tree = mountHost();
     const answer = ask();

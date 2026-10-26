@@ -1911,6 +1911,28 @@ describe('mobile external post composer', () => {
       }
     });
 
+    it('refuses a reserved handle as it is typed, with no request', async () => {
+      profileState.profile = placeholderProfile;
+      authState.user.user_metadata = { full_name: 'Maya K' };
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      vi.useFakeTimers();
+      try {
+        renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('support'));
+        expect(collectText(tree.root)).toContain('That handle is reserved.');
+        await renderer.act(async () => {
+          vi.advanceTimersByTime(400);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(collectText(tree.root)).toContain('That handle is reserved.');
+        expect(authState.api.validateProfile).not.toHaveBeenCalledWith(expect.objectContaining({ username: 'support' }));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('asks nothing of a profile that can already publish, or of a private post', async () => {
       profileState.profile = { id: 'user-123', username: 'maya-k', displayName: 'Maya K' };
       let tree = await renderScreen();
