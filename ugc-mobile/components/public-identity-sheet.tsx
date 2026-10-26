@@ -60,7 +60,7 @@ export function PublicIdentitySheetHost() {
   // press while the sheet leaves cannot answer it twice.
   const openRef = useRef<Question | null>(null);
   // The signed-in account the sheet would save to; a guest has no profile to
-  // publish under.
+  // publish under (`useAuth` gives a guest no user at all).
   const { user } = useAuth();
   const accountId = user && !user.is_anonymous ? user.id : null;
   const accountIdRef = useRef(accountId);
@@ -75,6 +75,12 @@ export function PublicIdentitySheetHost() {
     const open = openRef.current;
     if (open) {
       open.settles.push(settle);
+      return;
+    }
+    // Asked once the session has already ended (the refusal came back after
+    // the teardown): nobody is signed in to save a name and handle for.
+    if (!accountIdRef.current) {
+      settle({ status: 'cancelled' });
       return;
     }
     // An overlay takes no window focus, so the keyboard of the page it opens
