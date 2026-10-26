@@ -1915,11 +1915,11 @@ function NewPostComposer() {
   const [isSavingIdentity, setIsSavingIdentity] = useState(false);
   // The card's two fields and the scroll content they are measured against,
   // and what the last refused save of them brings into view once it is drawn:
-  // its field, or the top of step 2 for the banner.
+  // the refused field, or the top of the page for the banner.
   const displayNameFieldRef = useRef<View>(null);
   const usernameFieldRef = useRef<View>(null);
   const scrollContentRef = useRef<View>(null);
-  const pendingIdentityRevealRef = useRef<keyof PublicIdentityDraft | 'top' | null>(null);
+  const pendingIdentityRevealRef = useRef<View | 'top' | null>(null);
   const [identityRefusalCount, setIdentityRefusalCount] = useState(0);
   const identity = identityEdits ?? getInitialPublicIdentity(profileQuery.data, user);
   const needsPublicIdentity = draft.visibility === 'public'
@@ -2293,15 +2293,12 @@ function NewPostComposer() {
     const scrollView = scrollRef.current;
     if (!target || !scrollView) return;
     pendingIdentityRevealRef.current = null;
-    const field = target === 'displayName'
-      ? displayNameFieldRef.current
-      : target === 'username' ? usernameFieldRef.current : null;
     const content = scrollContentRef.current;
-    if (!field || !content) {
+    if (target === 'top' || !content) {
       scrollView.scrollTo({ y: 0, animated: true });
       return;
     }
-    field.measureLayout(
+    target.measureLayout(
       content,
       (_x, y) => scrollView.scrollTo({ y: Math.max(0, y - COMPOSER_TOP_PADDING), animated: true }),
       () => scrollView.scrollTo({ y: 0, animated: true }),
@@ -3426,13 +3423,16 @@ function NewPostComposer() {
         // sheet, Edit profile and onboarding say it: the banner used to repeat
         // it and kept saying a handle was taken after the field had moved on
         // to one the card's live check called available. The banner keeps
-        // what no field can hold, such as a save that failed offline.
-        const refusedField = errors.displayName ? 'displayName' : errors.username ? 'username' : null;
-        if (!refusedField) {
+        // what no field can hold: a save that failed offline, or a verdict
+        // that lands after the creator went back to step 1, with no card drawn.
+        const refusedFieldView = errors.displayName
+          ? displayNameFieldRef.current
+          : errors.username ? usernameFieldRef.current : null;
+        if (!refusedFieldView) {
           setMessage({ tone: 'danger', title: 'Your name and handle were not saved', body: saveMessage });
         }
         setIsSavingIdentity(false);
-        pendingIdentityRevealRef.current = refusedField ?? 'top';
+        pendingIdentityRevealRef.current = refusedFieldView ?? 'top';
         setIdentityRefusalCount((count) => count + 1);
         return;
       }

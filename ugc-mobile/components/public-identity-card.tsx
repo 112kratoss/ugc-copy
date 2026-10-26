@@ -99,7 +99,7 @@ export function PublicIdentityCard({
           variant="caption"
           color={errors.username ? 'danger' : hint.tone}
         >
-          {errors.username ?? hint.text}
+          {errors.username || hint.text}
         </AppText>
       </View>
     </>

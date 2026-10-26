@@ -1970,16 +1970,20 @@ describe('mobile external post composer', () => {
       authState.user.user_metadata = { full_name: 'Maya K' };
       authState.api.validateProfile.mockImplementation(async () => ({ ok: true }));
       authState.api.updateProfile.mockRejectedValue(takenAtSave());
-      const tree = await renderScreen();
-      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya'));
-      await renderer.act(async () => {
-        publishPublic(tree).props.onPress();
+      const tree = await renderScreen({
+        createNodeMock: stepTwoNodes(vi.fn(), { 'public-identity-display-name': 190, 'public-identity-username': 286 }),
       });
-      expect(collectText(tree.root)).toContain('That username is already taken.');
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
 
+      // From the first keystroke, so no check of a handle typed here outlives the case.
       vi.useFakeTimers();
       try {
+        renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya'));
+        await renderer.act(async () => {
+          publishPublic(tree).props.onPress();
+        });
+        expect(collectText(tree.root)).toContain('That username is already taken.');
+
         renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya-k2'));
         await renderer.act(async () => {
           vi.advanceTimersByTime(400);
@@ -1994,6 +1998,44 @@ describe('mobile external post composer', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // Back to step 1 stays open while the save is out, and step 1 draws no
+    // card: a field's verdict that lands there has only the banner to hold it.
+    it('says a refusal that lands after going back to step 1 in the banner, and on the field once back', async () => {
+      profileState.profile = placeholderProfile;
+      let refuseSave: (error: unknown) => void = () => undefined;
+      authState.api.updateProfile.mockImplementation(() => new Promise((_resolve, reject) => {
+        refuseSave = reject;
+      }));
+      const scrollTo = vi.fn();
+      const tree = await renderScreen({
+        createNodeMock: stepTwoNodes(scrollTo, { 'public-identity-display-name': 190, 'public-identity-username': 286 }),
+      });
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Display name, required').props.onChangeText('Maya K'));
+      renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Handle, required').props.onChangeText('maya'));
+      await renderer.act(async () => {
+        publishPublic(tree).props.onPress();
+      });
+      expect(authState.api.updateProfile).toHaveBeenCalledTimes(1);
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Back to post details').props.onPress());
+      scrollTo.mockClear();
+      await renderer.act(async () => {
+        refuseSave(takenAtSave());
+      });
+
+      let text = collectText(tree.root);
+      expect(text).toContain('Your name and handle were not saved');
+      expect(text).toContain('That username is already taken.');
+      expect(scrollTo).toHaveBeenLastCalledWith({ y: 0, animated: true });
+      expect(mutationState.mutate).not.toHaveBeenCalled();
+
+      // Next clears the banner as it always has; the card says the verdict.
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      text = collectText(tree.root);
+      expect(text).not.toContain('Your name and handle were not saved');
+      expect(text.filter((line) => line === 'That username is already taken.')).toHaveLength(1);
     });
 
     // As Edit profile and onboarding check it: a taken handle shows beside the
