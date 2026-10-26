@@ -3136,7 +3136,7 @@ describe('the post of a template result', () => {
     } satisfies PostUpdateDependencies;
   }
 
-  async function save(body: Record<string, unknown>, generation: Record<string, unknown> = templateGeneration) {
+  async function save(body: Record<string, unknown>, generation: Record<string, unknown> | null = templateGeneration) {
     const mock = createSupabaseMock({ post: templateResultPost, bundle: null, generation });
     const dependencies = createDependencies();
     const result = await updateOwnerPostForRoute({
@@ -3162,7 +3162,12 @@ describe('the post of a template result', () => {
 
   it('refuses a paid one, and one whose creation names only its run step', async () => {
     const paid = await save({ resourceBundle: { ...composerRecipe(), accessMode: 'paid', priceUsdCents: 500 } });
-    expect(paid.result).toMatchObject({ ok: false, status: 400 });
+    expect(paid.result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Template results can publish media and a caption, but cannot share the private recipe or input files.' },
+    });
+    expect(paid.dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
 
     const stepOnly = await save(
       { resourceBundle: composerRecipe() },
@@ -3194,6 +3199,16 @@ describe('the post of a template result', () => {
     );
 
     expect(result).toMatchObject({ ok: true });
+  });
+
+  // The link's foreign key unlinks a post when its creation is deleted, so no
+  // row means a read that went wrong (a narrower filter, a race), not a creation
+  // made without a template.
+  it('refuses the save when the creation’s row is missing', async () => {
+    const { result, dependencies } = await save({ resourceBundle: composerRecipe() }, null);
+
+    expect(result).toEqual({ ok: false, status: 500, body: { error: 'Failed to update post.' } });
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
 
   it('refuses the save when the creation cannot be read', async () => {

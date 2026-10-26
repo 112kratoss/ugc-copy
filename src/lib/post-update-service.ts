@@ -517,8 +517,13 @@ async function isTemplateLinkedGeneration(
   if (error) {
     throw error;
   }
-  const row = data as { template_run_id?: string | null; template_run_step_id?: string | null } | null;
-  return Boolean(row?.template_run_id || row?.template_run_step_id);
+  // While a post links its creation the row exists (deleting it unlinks the
+  // post), so a missing row refuses the save rather than read as no template.
+  if (!data) {
+    throw new Error('The post’s creation could not be found.');
+  }
+  const row = data as { template_run_id?: string | null; template_run_step_id?: string | null };
+  return Boolean(row.template_run_id || row.template_run_step_id);
 }
 
 async function loadOwnedPost(
