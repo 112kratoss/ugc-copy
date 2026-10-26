@@ -40,6 +40,7 @@ import { reportGenerationOutput } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { countDraftMedia, heldDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
+import { creatorParameterSummary } from '@/lib/creator-parameter-summary';
 import { recordCreatorSession } from '@/lib/creator-session-diagnostics';
 import { CREATION_DRAFT_FORMAT, clearPersistedCreationDrafts, loadOrdinaryCreationDrafts, loadPersistedCreationDrafts, ordinaryDraftScope, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
 import {
@@ -674,21 +675,6 @@ function startRefusalActionLabel(code: string | null): string | null {
   if (code === 'cost_changed' || code === 'REFERENCE_DURATION_CHANGED') return 'Check the new price';
   if (code === 'CATALOG_CHANGED' || code === 'MODEL_UNAVAILABLE') return 'Review options';
   return null;
-}
-
-/** The video and motion bars' summary; the image bar builds its own from the image draft's fields. */
-function creatorParameterSummary(draft: VideoCreationDraft | MotionCreationDraft, model: CreatorCatalogModel | null) {
-  if (draft.tool === 'video') {
-    const totalDuration = draft.isMultiShot ? multiShotTotalDuration(draft.multiPrompts) : draft.duration;
-    const modeControl = model?.controls.find((control) => control.key === 'mode' && control.type === 'choice');
-    const modeLabel = modeControl?.type === 'choice'
-      ? modeControl.options.find((option) => option.value === draft.mode)?.label ?? draft.mode
-      : draft.mode;
-    const inferredResolution = modeLabel.match(/(?:\d{3,4}p|4k)/i)?.[0] ?? draft.resolution ?? modeLabel;
-    return [inferredResolution.toUpperCase(), draft.aspectRatio, `${totalDuration}s`].filter(Boolean).join(' · ');
-  }
-  const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
-  return [draft.mode.toUpperCase(), duration ? `${duration}s` : 'Add motion'].join(' · ');
 }
 
 type EnhanceVerb = 'Enhance' | 'Polish';

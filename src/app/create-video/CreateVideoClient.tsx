@@ -34,7 +34,7 @@ import {
     creatorAddButtonClass,
 } from '@/components/CreatorColumn';
 import { getAccentClasses, IconButton } from '@/components/DesignSystem';
-import { videoSettingsSummary } from '@/lib/creator-settings-summary';
+import { videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import {
     StudioBackgroundProcessingNotice,
     StudioElementHandle,

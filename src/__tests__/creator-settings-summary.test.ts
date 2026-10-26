@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { motionSettingsSummary, videoSettingsSummary } from '@/lib/creator-settings-summary';
+import { motionSettingsSummary, videoSettingsSummary } from '../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 
-/** The chip reads as the app's does (creatorParameterSummary in the mobile creation screen). */
+/**
+ * The chip's words, which the web creators and the app's creator bar read from one module
+ * (the app's reading of its draft into them: ugc-mobile/__tests__/creator-parameter-summary.test.ts).
+ */
 describe('the video settings chip', () => {
   it('reads the resolution, the ratio and the length', () => {
     expect(videoSettingsSummary({ modeLabel: '', resolution: '720p', aspectRatio: '16:9', durationSeconds: 5 }))

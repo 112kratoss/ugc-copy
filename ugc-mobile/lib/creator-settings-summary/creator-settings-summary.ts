@@ -1,7 +1,10 @@
 /**
- * What the video and motion creators' settings chip reads, in the app's words
- * (`creatorParameterSummary` in ugc-mobile/components/media-creation-screen.tsx, which
- * this follows rule for rule): the chip is the same control on both.
+ * What the video and motion creators' settings chip reads, on the web and in the app:
+ * the web creators (src/app/create-video, src/app/create-motion) and the app's creator
+ * bar (`creatorParameterSummary`, ugc-mobile/lib/creator-parameter-summary.ts) each read
+ * their own form or draft into these inputs and take the words from here, so the two
+ * chips cannot drift apart. The web bundle compiles this file too: keep it free of
+ * React Native, Expo and Node imports.
  */
 
 /**
@@ -14,9 +17,9 @@ export function videoSettingsSummary({
   aspectRatio,
   durationSeconds,
 }: {
-  /** The chosen mode's label, or its value where it has none; '' for a model without modes. */
+  /** The chosen mode's label, or its value where it has none; only a resolution it names is read. */
   modeLabel: string;
-  /** '' for a model without resolutions. */
+  /** The resolution setting, read where the mode names none; '' leaves it out. */
   resolution: string;
   aspectRatio: string;
   /** The whole run's: a multi-shot run's is its shots' together. */
@@ -28,8 +31,8 @@ export function videoSettingsSummary({
 
 /**
  * A motion run's quality, then the length its reference video gives it, in whole
- * seconds rounded up as the app counts them: "720P · 8s", or "720P · Add motion"
- * until there is a reference video.
+ * seconds rounded up: "720P · 8s", or "720P · Add motion" until there is a reference
+ * video.
  */
 export function motionSettingsSummary({
   quality,
