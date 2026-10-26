@@ -9,6 +9,7 @@ import {
   type MagicbookletApiClient,
   type SaveShowcasePostOptions,
 } from '../lib/api-client';
+import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
@@ -969,6 +970,20 @@ it.each(['updateProfile', 'validateProfile'] as const)('preserves %s invalid-pay
   await expect(api[operation]({ displayName: 'Creator One' })).rejects.toMatchObject({
     status: failure.status, message: failure.response.error, details: failure.response,
   });
+});
+
+// The app reads a 409 as the handle's only when it names the field.
+it.each(['updateProfile', 'validateProfile'] as const)('reads a taken handle from %s on the handle', async (operation) => {
+  const failure = mobileApiContract.profileUsernameTaken;
+  expect(failure.operations).toContain(operation);
+  const api = createApiClient({
+    baseUrl: 'https://magicbooklet.test',
+    getAccessToken: async () => 'token-1',
+    fetcher: vi.fn(async () => jsonResponse(failure.response, failure.status)) as unknown as typeof fetch,
+  });
+  const error = await api[operation]({ username: 'creator', displayName: 'Creator One' }).catch((caught: unknown) => caught);
+  expect(error).toMatchObject({ status: failure.status, message: failure.response.error, details: failure.response });
+  expect(readUsernameRejection(error)).toBe(failure.response.fieldErrors.username);
 });
 
 

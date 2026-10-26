@@ -394,10 +394,10 @@ export function readProfileSaveRefusal(error: unknown): EditProfileSaveRefusal {
   if (error instanceof EditProfileValidationError) {
     verdicts = error.fieldErrors;
   } else if (error instanceof ApiError) {
-    // The field errors alone, not `readUsernameRejection`'s reading of every
-    // 409 as the handle's: both server paths that refuse a handle name it, and
-    // the 409s that do not are about something else (an account being
-    // deleted, a guest session merged), which the block says.
+    // The field errors alone, as `readUsernameRejection` reads the handle's:
+    // both server paths that refuse a handle name it, and the 409s that do not
+    // are about something else (an account being deleted, a guest session
+    // merged), which the block says.
     const details = error.details as { fieldErrors?: Partial<Record<string, unknown>> } | undefined;
     verdicts = details?.fieldErrors ?? {};
   }
@@ -470,17 +470,23 @@ export function shouldCheckUsernameAvailability({
 /**
  * A failed availability check is not the same as a taken username: offline the
  * request fails, and the endpoint is rate limited (429), in neither case having
- * an opinion about the name. Only a verdict from the server — a rejected
- * submission (400) or a duplicate (409) — is reported and blocks the save;
- * anything else leaves the field alone and lets the save path do the reporting.
+ * an opinion about the name. Only a verdict from the server on the handle — a
+ * rejected submission (400) or a duplicate (409) that names the field — is
+ * reported and blocks the save; anything else leaves the field alone and lets
+ * the save path do the reporting.
+ *
+ * That includes a 409 that names no field. The proxy refuses a guest session
+ * linked to an account (`SESSION_MERGED`) and an account being deleted
+ * (`ACCOUNT_DELETING`) with one, whatever the handle, and the app's handlers
+ * for those end the session. Both server paths that refuse a handle name it
+ * (`profileUsernameTaken` in `contracts/mobile-api-v1.json`).
  */
 export function readUsernameRejection(error: unknown): string | null {
   if (!(error instanceof ApiError)) return null;
   if (error.status !== 400 && error.status !== 409) return null;
-  const details = error.details as { fieldErrors?: { username?: string } } | undefined;
+  const details = error.details as { fieldErrors?: { username?: unknown } } | undefined;
   const fieldError = details?.fieldErrors?.username;
-  if (fieldError) return fieldError;
-  return error.status === 409 ? (error.message || 'That username is taken.') : null;
+  return typeof fieldError === 'string' && fieldError ? fieldError : null;
 }
 
 /**

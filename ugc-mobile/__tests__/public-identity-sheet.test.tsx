@@ -90,7 +90,7 @@ vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 vi.mock('@/lib/use-onboarding-destination', () => ({ invalidateWelcomeCredits: welcomeCreditsState.invalidate }));
 
 import { PublicIdentitySheetHost } from '../components/public-identity-sheet';
-import { ApiError } from '../lib/api-client';
+import { AccountDeletingError, ApiError, SessionMergedError } from '../lib/api-client';
 import { requestPublicIdentity, type PublicIdentityOutcome } from '../lib/public-identity-prompt';
 import { HANDLE_CHECK_DELAY_MS } from '../lib/use-handle-availability';
 
@@ -252,6 +252,37 @@ describe('the sheet a list opens to ask for a name and handle before a post goes
     expect(collectText(tree.root)).toContain('Add your name and handle');
     expect(settled).not.toHaveBeenCalled();
     expect(field(tree.root, 'Handle, required').props.editable).toBe(true);
+  });
+
+  // The proxy's two 409s name no field: they refuse the session, whatever the
+  // handle, and the app's handler for each ends it. The sheet is drawn above
+  // the navigator, so it is still up after the handler has moved the app on.
+  it.each([
+    ['a guest session linked to an account', new SessionMergedError(
+      'This guest session has been linked to an account. Sign in to continue.',
+      { error: 'This guest session has been linked to an account. Sign in to continue.', code: 'SESSION_MERGED' },
+    )],
+    ['an account being deleted', new AccountDeletingError(
+      'This account is being permanently deleted.',
+      { error: 'This account is being permanently deleted.', code: 'ACCOUNT_DELETING' },
+    )],
+  ])('says a save refused for %s above the fields, not against the handle', async (_why, refusal) => {
+    authState.api.updateProfile.mockRejectedValue(refusal);
+    const tree = mountHost();
+    void ask();
+    act(() => field(tree.root, 'Handle, required').props.onChangeText('maya-k'));
+    await letTheCheckAnswer();
+
+    await act(async () => {
+      button(tree.root, 'Save and make public').props.onPress();
+    });
+
+    const text = collectText(tree.root);
+    // Above the fields, in the server's words; the handle's line still says
+    // what the check found.
+    expect(text).toContain(refusal.message);
+    expect(text).toContain('This handle is available.');
+    expect(text.indexOf(refusal.message)).toBeLessThan(text.indexOf('This handle is available.'));
   });
 
   it('says what is missing at the press, and saves nothing', async () => {

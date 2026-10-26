@@ -3110,6 +3110,20 @@
       "error": "Invalid profile payload."
     }
   },
+  "profileUsernameTaken": {
+    "operations": [
+      "updateProfile",
+      "validateProfile"
+    ],
+    "fieldNamed": "Both server paths that refuse a handle (the duplicate check, and the save's unique-key race) name the field. The app reads a 409 as the handle's only when it does: the proxy's SESSION_MERGED and ACCOUNT_DELETING 409s name none.",
+    "status": 409,
+    "response": {
+      "error": "That username is already taken.",
+      "fieldErrors": {
+        "username": "That username is already taken."
+      }
+    }
+  },
   "socialInputErrors": [
     {
       "operation": "shareCreatorProfile",

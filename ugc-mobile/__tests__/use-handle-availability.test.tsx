@@ -6,7 +6,7 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ApiError } from '../lib/api-client';
+import { AccountDeletingError, ApiError, SessionMergedError } from '../lib/api-client';
 import { PROFILE_PLACEHOLDER_USERNAME_ERROR, RESERVED_PROFILE_USERNAME_ERROR } from '../lib/edit-profile-form';
 import { HANDLE_CHECK_DELAY_MS, useHandleAvailability, type HandleAvailabilityState } from '../lib/use-handle-availability';
 
@@ -107,5 +107,26 @@ describe('the live handle check', () => {
     await letTheCheckAnswer();
     expect(live.read()).toEqual({ availability: 'available', message: null });
     expect(api.validateProfile).toHaveBeenLastCalledWith({ username: 'maya-k', displayName: 'Maya' });
+  });
+
+  // The proxy's two 409s name no field: they refuse the session, whatever the
+  // handle, and the app's handler for each ends it. Read as the handle's, the
+  // field called a free handle taken in the proxy's words.
+  it.each([
+    ['a guest session linked to an account', new SessionMergedError(
+      'This guest session has been linked to an account. Sign in to continue.',
+      { error: 'This guest session has been linked to an account. Sign in to continue.', code: 'SESSION_MERGED' },
+    )],
+    ['an account being deleted', new AccountDeletingError(
+      'This account is being permanently deleted.',
+      { error: 'This account is being permanently deleted.', code: 'ACCOUNT_DELETING' },
+    )],
+  ])('says nothing against the handle when the check is refused for %s', async (_why, refusal) => {
+    api.validateProfile.mockRejectedValue(refusal);
+    const live = check({ username: 'maya-k', displayName: 'Maya' });
+
+    await letTheCheckAnswer();
+    expect(api.validateProfile).toHaveBeenCalledTimes(1);
+    expect(live.read()).toEqual({ availability: 'idle', message: null });
   });
 });

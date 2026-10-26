@@ -3,7 +3,8 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { ApiError } from '../lib/api-client';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import { AccountDeletingError, ApiError, SessionMergedError } from '../lib/api-client';
 import {
   PROFILE_USERNAME_MAX_LENGTH,
   normalizeUsernameInput,
@@ -102,7 +103,24 @@ describe('HIG S15 — the profile form validates as you type', () => {
     expect(readUsernameRejection(new Error('Network request failed'))).toBeNull();
     expect(readUsernameRejection(new ApiError('Too many requests', 429))).toBeNull();
     expect(readUsernameRejection(new ApiError('Failed to validate username', 500))).toBeNull();
-    expect(readUsernameRejection(new ApiError('That username is already taken.', 409))).toBe('That username is already taken.');
+    // A duplicate is a verdict on the handle when it names the field, as both
+    // server paths that refuse a handle do.
+    const taken = mobileApiContract.profileUsernameTaken;
+    expect(readUsernameRejection(new ApiError(taken.response.error, taken.status, taken.response)))
+      .toBe(taken.response.fieldErrors.username);
+    // A 409 that names no field is not, whatever its words: the proxy refuses a
+    // guest session linked to an account and an account being deleted with
+    // one, and the app's handlers for those end the session. Read as the
+    // handle's, the field called a free handle taken in the proxy's words.
+    expect(readUsernameRejection(new ApiError('That username is already taken.', 409))).toBeNull();
+    expect(readUsernameRejection(new SessionMergedError('This guest session has been linked to an account. Sign in to continue.', {
+      error: 'This guest session has been linked to an account. Sign in to continue.',
+      code: 'SESSION_MERGED',
+    }))).toBeNull();
+    expect(readUsernameRejection(new AccountDeletingError('This account is being permanently deleted.', {
+      error: 'This account is being permanently deleted.',
+      code: 'ACCOUNT_DELETING',
+    }))).toBeNull();
     expect(readUsernameRejection(new ApiError('Please fix the highlighted fields.', 400, {
       fieldErrors: { username: 'Choose a custom handle instead of the reserved creator-xxxxxxxx format.' },
     }))).toContain('reserved creator-xxxxxxxx');

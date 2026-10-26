@@ -175,15 +175,12 @@ describe('profile validate route adapter service', () => {
   });
 
   it('maps validation failures without hiding field errors', async () => {
+    // The app reads a 409 as the handle's only when it names the field.
+    const taken = mobileApiContract.profileUsernameTaken;
     validateProfileSubmission.mockResolvedValueOnce({
       ok: false,
-      status: 409,
-      body: {
-        error: 'That username is already taken.',
-        fieldErrors: {
-          username: 'That username is already taken.',
-        },
-      },
+      status: taken.status,
+      body: taken.response,
     });
 
     const response = await postProfileValidateRouteResponse({
@@ -201,13 +198,8 @@ describe('profile validate route adapter service', () => {
       },
     });
 
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({
-      error: 'That username is already taken.',
-      fieldErrors: {
-        username: 'That username is already taken.',
-      },
-    });
+    expect(response.status).toBe(taken.status);
+    await expect(response.json()).resolves.toEqual(taken.response);
   });
 
   it('refuses a reserved handle the account does not already hold', async () => {

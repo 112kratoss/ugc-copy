@@ -103,6 +103,12 @@ export async function claimPublicIdentity(
 /**
  * What a failed save says, and on which field: a taken or refused handle on
  * the handle, anything else (offline, rate limited) above the fields.
+ *
+ * A 409 that names no field refuses the session, not the fields (a guest
+ * session linked to an account, an account being deleted), and is said in the
+ * server's words: "check your connection" would send the person to retry what
+ * cannot pass. The app's handler for it ends the session meanwhile, and the
+ * list's sheet, drawn above the navigator, is still up after that.
  */
 export function readPublicIdentitySaveError(error: unknown): { errors: PublicIdentityErrors; message: string } {
   const username = readUsernameRejection(error);
@@ -114,6 +120,9 @@ export function readPublicIdentitySaveError(error: unknown): { errors: PublicIde
     : undefined;
   if (details?.fieldErrors?.displayName) {
     return { errors: { displayName: details.fieldErrors.displayName }, message: details.fieldErrors.displayName };
+  }
+  if (error instanceof ApiError && error.status === 409 && error.message) {
+    return { errors: {}, message: error.message };
   }
   return { errors: {}, message: 'Your name and handle could not be saved. Check your connection and try again.' };
 }

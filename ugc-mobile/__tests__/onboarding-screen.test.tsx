@@ -155,7 +155,8 @@ vi.mock('@/components/ui', () => ({
 }));
 
 import OnboardingScreen from '../app/onboarding';
-import { ApiError } from '../lib/api-client';
+import { AccountDeletingError, ApiError, SessionMergedError } from '../lib/api-client';
+import { trackOnboardingEvent } from '../lib/onboarding';
 import { HANDLE_CHECK_DELAY_MS } from '../lib/use-handle-availability';
 import { welcomeCreditsQueryKey } from '../lib/use-onboarding-destination';
 
@@ -431,6 +432,7 @@ describe('checking the handle as it is typed', () => {
   it('says a handle the save found taken under the handle alone, until another one is typed', async () => {
     // Free when it was checked, claimed by someone else before the save.
     harness.api.updateProfile.mockReset().mockRejectedValue(taken);
+    vi.mocked(trackOnboardingEvent).mockClear();
     const tree = await openIdentityStep();
 
     await typeHandle(tree, 'sarath-makes');
@@ -439,6 +441,8 @@ describe('checking the handle as it is typed', () => {
 
     expect(handleLine(tree)).toEqual({ text: 'That handle was just claimed. Try another one.', color: 'danger' });
     expect(alerts(tree)).toEqual([]);
+    // Counted as a conflict, which a refusal of the session is not (below).
+    expect(vi.mocked(trackOnboardingEvent).mock.calls.map(([, event]) => event)).toContain('username_conflict');
     expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(true);
 
     await typeHandle(tree, 'sarath-makes-2');
@@ -529,6 +533,34 @@ describe('checking the handle as it is typed', () => {
     expect(alerts(tree)).toEqual(['Network request failed. Please check your connection and try again.']);
     expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
     expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(false);
+
+    act(() => tree.unmount());
+  });
+
+  // The proxy's two 409s name no field: they refuse the session, whatever the
+  // handle, and the app's handler for each ends it. Read as the handle's, the
+  // line called the handle "just claimed" and the funnel counted a conflict.
+  it.each([
+    ['a guest session linked to an account', new SessionMergedError(
+      'This guest session has been linked to an account. Sign in to continue.',
+      { error: 'This guest session has been linked to an account. Sign in to continue.', code: 'SESSION_MERGED' },
+    )],
+    ['an account being deleted', new AccountDeletingError(
+      'This account is being permanently deleted.',
+      { error: 'This account is being permanently deleted.', code: 'ACCOUNT_DELETING' },
+    )],
+  ])('says a save refused for %s in the alert, not against the handle', async (_why, refusal) => {
+    harness.api.updateProfile.mockReset().mockRejectedValue(refusal);
+    vi.mocked(trackOnboardingEvent).mockClear();
+    const tree = await openIdentityStep();
+
+    await typeHandle(tree, 'sarath-makes');
+    await letTheCheckAnswer();
+    await pressSave(tree);
+
+    expect(alerts(tree)).toEqual([refusal.message]);
+    expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+    expect(vi.mocked(trackOnboardingEvent).mock.calls.map(([, event]) => event)).not.toContain('username_conflict');
 
     act(() => tree.unmount());
   });
