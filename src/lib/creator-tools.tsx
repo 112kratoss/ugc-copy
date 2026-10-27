@@ -33,13 +33,9 @@ export interface CreatorToolDefinition {
 }
 
 export interface CreatorStarterRecipe {
-  id: string;
   toolId: CreatorToolId;
   title: string;
-  description: string;
-  promptPreview: string;
   href: string;
-  ctaLabel: string;
 }
 
 export const CREATOR_TOOLS: CreatorToolDefinition[] = [
@@ -121,62 +117,35 @@ export const CREATOR_TOOLS: CreatorToolDefinition[] = [
   },
 ];
 
+// One ready-made setup per generation tool, offered on its card on /create. The
+// workflow canvas has none: its card already opens an empty canvas.
 export const CREATOR_STARTER_RECIPES: CreatorStarterRecipe[] = [
   {
-    id: 'product-hero',
     toolId: 'image',
     title: 'Launch a premium product visual',
-    description:
-      'Start with a still image when you need a clean ad hook, ecommerce shot, or polished campaign cover.',
-    promptPreview:
-      'Luxury skincare serum on a soft stone pedestal, premium studio lighting, sharp reflections, upscale campaign aesthetic.',
     href: buildImageLaunchUrl(
       'Luxury skincare serum on a soft stone pedestal, premium studio lighting, sharp reflections, upscale campaign aesthetic.',
       'nano-banana-2',
       '4:5'
     ),
-    ctaLabel: 'Try this image setup',
   },
   {
-    id: 'founder-teaser',
     toolId: 'video',
     title: 'Create a founder-style teaser',
-    description:
-      'Start with a short video when you want movement, presence, and a clearer story in the very first asset.',
-    promptPreview:
-      'Confident founder walking through a bright studio, explaining how the product saves time, cinematic commercial energy.',
     href: buildVideoLaunchUrl(
       'Confident founder walking through a bright studio, explaining how the product saves time, cinematic commercial energy.',
       'kling-3.0-video',
       '9:16',
       '5'
     ),
-    ctaLabel: 'Try this video setup',
   },
   {
-    id: 'ugc-motion',
     toolId: 'motion',
     title: 'Animate a UGC-style performance',
-    description:
-      'Start with motion when you already have a face, product persona, or creator visual that needs believable movement.',
-    promptPreview:
-      "No distortion, preserve the subject identity, natural creator-style gestures, clean delivery, ad-ready confidence.",
     href: buildMotionLaunchUrl(
       "No distortion, preserve the subject identity, natural creator-style gestures, clean delivery, ad-ready confidence.",
       'kling-3.0'
     ),
-    ctaLabel: 'Try this motion setup',
-  },
-  {
-    id: 'campaign-system',
-    toolId: 'workflow',
-    title: 'Map a reusable campaign system',
-    description:
-      'Start with workflow when you want to connect ideas, prompts, and deliveries into one repeatable production loop.',
-    promptPreview:
-      'Use the canvas to plan stills, motion clips, video beats, and delivery order for a repeatable ad pipeline.',
-    href: '/create-workflow',
-    ctaLabel: 'Open workflow canvas',
   },
 ];
 

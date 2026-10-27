@@ -1,12 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { AlertCircle, ArrowRight, Image as ImageIcon, Music, Play, Plus, Sparkles } from 'lucide-react';
+import { AlertCircle, ArrowRight, Image as ImageIcon, Music, Play } from 'lucide-react';
 import { useMemo, useSyncExternalStore } from 'react';
 
-import { useAuth } from '@/components/AuthProvider';
 import { StudioGenerationStatus } from '@/components/CreatorStudio';
-import { Button, Kicker, Text } from '@/components/DesignSystem';
+import { Kicker, Text } from '@/components/DesignSystem';
 import type { CreatorToolAccent } from '@/lib/creator-tools';
 import {
   rankHomeWorkspaceGenerations,
@@ -62,7 +61,6 @@ const STATUS_CACHE_STORAGE_KEY = 'magicbooklet:generation-status-cache:v1';
 
 interface WorkspaceCardProps {
   initialGenerations: HomeWorkspaceGenerationView[];
-  initialCredits: number | null;
   variant?: 'rail' | 'inline';
 }
 
@@ -128,20 +126,16 @@ function applyStatusUpdate(
 }
 
 /**
- * The signed-in workspace summary: active runs with live progress, the most
- * recent finished creations, and the credit balance. Purely a consumer of
- * live data — `GenerationNotifications` owns the polling and broadcasts every
- * sync (`subscribeToGenerationStatusSynced`); this card never fetches
+ * The signed-in workspace summary: active runs with live progress and the
+ * most recent finished creations, each opening in Studio. Purely a consumer
+ * of live data — `GenerationNotifications` owns the polling and broadcasts
+ * every sync (`subscribeToGenerationStatusSynced`); this card never fetches
  * `/api/generations` itself.
  */
 export default function WorkspaceCard({
   initialGenerations,
-  initialCredits,
   variant = 'rail',
 }: WorkspaceCardProps) {
-  const { credits: liveCredits } = useAuth();
-  const credits = liveCredits ?? initialCredits;
-
   const statusSnapshot = useSyncExternalStore(
     subscribeToStatusStore,
     readStatusStoreSnapshot,
@@ -160,52 +154,41 @@ export default function WorkspaceCard({
   const isShown = variant === 'rail' ? isRailWidth : !isRailWidth;
   const nowMs = useTicker(active.length > 0 && isShown && variant === 'rail');
 
-  const creditsPill = (
-    <Link
-      href="/pricing"
-      prefetch={false}
-      className="ui-focus-ring inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 text-xs font-bold text-[var(--ui-text-secondary)] transition hover:text-[var(--ui-text-primary)]"
-    >
-      <Sparkles className="h-3.5 w-3.5" aria-hidden />
-      {typeof credits === 'number' ? `${credits} credits` : 'Credits'}
-    </Link>
-  );
-
+  // The strip only has news while something renders: the balance is the top
+  // bar's, and a new creation starts from its Create menu.
   if (variant === 'inline') {
+    if (active.length === 0) return null;
     return (
       <section aria-label="Workspace overview" className="ui-card mb-5 flex flex-wrap items-center gap-3 p-4">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          {active.length > 0 ? (
-            <span className="flex items-center gap-2 text-sm font-bold text-[var(--ui-text-secondary)]">
-              <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-[var(--ui-primary)]" />
-              {active.length === 1 ? '1 render in progress' : `${active.length} renders in progress`}
-            </span>
-          ) : (
-            <span className="truncate text-sm font-bold text-[var(--ui-text-secondary)]">Creator workspace</span>
-          )}
-          {creditsPill}
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/creations"
-            prefetch={false}
-            className="ui-focus-ring inline-flex min-h-9 items-center rounded-full px-3 text-xs font-bold text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
-          >
-            Studio
-          </Link>
-          <Button href="/create" variant="primary" icon={Plus}>
-            New creation
-          </Button>
-        </div>
+        <span className="flex min-w-0 flex-1 items-center gap-2 text-sm font-bold text-[var(--ui-text-secondary)]">
+          <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-[var(--ui-primary)]" />
+          {active.length === 1 ? '1 render in progress' : `${active.length} renders in progress`}
+        </span>
+        <Link
+          href="/creations"
+          prefetch={false}
+          className="ui-focus-ring inline-flex min-h-9 items-center gap-1 rounded-full px-3 text-xs font-bold text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
+        >
+          Open Studio
+          <ArrowRight className="h-3 w-3" aria-hidden />
+        </Link>
       </section>
     );
   }
 
   return (
     <section aria-label="Workspace overview" className="ui-card flex flex-col gap-4 p-5">
+      {/* The one way to Studio from here, whether runs are going, done or none. */}
       <div className="flex items-center justify-between gap-3">
         <Kicker>Workspace</Kicker>
-        {creditsPill}
+        <Link
+          href="/creations"
+          prefetch={false}
+          className="ui-focus-ring inline-flex items-center gap-1 rounded-full text-xs font-bold text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
+        >
+          Open Studio
+          <ArrowRight className="h-3 w-3" aria-hidden />
+        </Link>
       </div>
 
       {active.length > 0 ? (
@@ -239,17 +222,7 @@ export default function WorkspaceCard({
 
       {recent.length > 0 ? (
         <div>
-          <div className="mb-2 flex items-center justify-between">
-            <Text variant="label" className="text-[var(--ui-text-faint)]">Recent</Text>
-            <Link
-              href="/creations"
-              prefetch={false}
-              className="ui-focus-ring inline-flex items-center gap-1 rounded-full text-xs font-bold text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
-            >
-              Open Studio
-              <ArrowRight className="h-3 w-3" aria-hidden />
-            </Link>
-          </div>
+          <Text variant="label" className="mb-2 block text-[var(--ui-text-faint)]">Recent</Text>
           <ul className="grid grid-cols-4 gap-2">
             {recent.map((view) => {
               const kind = toGenerationKind(view);
@@ -257,8 +230,9 @@ export default function WorkspaceCard({
 
               return (
                 <li key={view.id}>
+                  {/* Opens this creation in Studio, as an alert about it does. */}
                   <Link
-                    href="/creations"
+                    href={`/creations?generation=${encodeURIComponent(view.id)}`}
                     prefetch={false}
                     className="ui-focus-ring group relative block aspect-square overflow-hidden rounded-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)]"
                     title={view.isFailed ? `${label} — failed` : label}
@@ -299,19 +273,6 @@ export default function WorkspaceCard({
           Nothing in flight yet — your next creation lands here with live progress.
         </Text>
       ) : null}
-
-      <div className="flex items-center gap-2 border-t border-[var(--ui-border-subtle)] pt-4">
-        <Button href="/create" variant="primary" icon={Plus}>
-          New creation
-        </Button>
-        <Link
-          href="/creations"
-          prefetch={false}
-          className="ui-focus-ring inline-flex min-h-9 items-center rounded-full px-3 text-xs font-bold text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
-        >
-          Studio
-        </Link>
-      </div>
     </section>
   );
 }

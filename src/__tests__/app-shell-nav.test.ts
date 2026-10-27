@@ -17,8 +17,43 @@ describe('app shell navigation', () => {
 
   it('keeps the community feed itself in the Explore section', () => {
     expect(getActiveAppNavItem('/showcase')?.id).toBe('showcase');
-    expect(getAppShellTitle('/showcase')).toBe('Explore');
     expect(getActiveAppNavItem('/creators')?.id).toBe('showcase');
+  });
+
+  it('names no page in the top bar that opens with a heading of its own', () => {
+    // The bar said "Studio" over a page headed "Studio", and so on.
+    for (const pathname of [
+      '/showcase',
+      '/creations',
+      '/create',
+      '/search',
+      '/marketplace',
+      '/marketplace/sell',
+      '/notifications',
+      '/invite',
+      '/credits',
+      '/pricing',
+      '/templates',
+      '/models',
+      '/models/kling-3-0',
+      '/profile',
+      '/profile/edit',
+      '/post/new',
+      '/post/post-1/edit',
+    ]) {
+      expect(getAppShellTitle(pathname), pathname).toBeNull();
+    }
+  });
+
+  it('names the pages that have no heading of their own', () => {
+    expect(getAppShellTitle('/')).toBe('Home');
+    expect(getAppShellTitle('/create-image')).toBe('Create');
+    expect(getAppShellTitle('/create-workflow')).toBe('Workflow Canvas');
+    expect(getAppShellTitle('/templates/ghost-rider')).toBe('Templates');
+  });
+
+  it('no longer has a separate Feed section: /feed sends its visitors Home', () => {
+    expect(getActiveAppNavItem('/feed')).toBeNull();
   });
 
   it('never mistakes a filtered feed for a post', () => {
@@ -41,10 +76,8 @@ describe('app shell navigation', () => {
     expect(getAppShellTitle('/creators/sassy23bh')).toBe('Creator');
   });
 
-  it('gives public search its own Explore entry and title', () => {
+  it('gives public search its own entry', () => {
     expect(getActiveAppNavItem('/search')?.id).toBe('search');
-    expect(getAppShellTitle('/search')).toBe('Search');
-    expect(getAppShellTitle('/credits')).toBe('Credit history');
     // A query string never reaches usePathname, but the bare path must not be
     // claimed by any neighbouring section.
     expect(getActiveAppNavItem('/showcase')?.id).toBe('showcase');
@@ -54,13 +87,8 @@ describe('app shell navigation', () => {
     expect(getActiveAppNavItem('/templates')?.id).toBe('create');
     expect(getActiveAppNavItem('/templates/ghost-rider')?.id).toBe('create');
     expect(getActiveAppNavItem('/template-runs/run-1')?.id).toBe('create');
-    expect(getAppShellTitle('/templates')).toBe('Templates');
     expect(getAppShellTitle('/templates/new')).toBe('Create Template');
     expect(getAppShellTitle('/template-runs/run-1')).toBe('Create From Template');
-  });
-
-  it('uses the composer title for new post routes', () => {
-    expect(getAppShellTitle('/post/new')).toBe('Share Post');
   });
 
   it('keeps authentication and referral landing routes focused outside the workspace shell', () => {

@@ -6,7 +6,6 @@ import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFee
 import HomeExperience from '@/components/HomeExperience';
 import HomeShelf from '@/components/HomeShelf';
 import { JsonLd } from '@/components/JsonLd';
-import QuickStartsCard from '@/components/QuickStartsCard';
 import SignInWorkspaceCard from '@/components/SignInWorkspaceCard';
 import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
@@ -49,7 +48,6 @@ async function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage |
         initialFeed={null}
         initialChipId="for-you"
         laneFromUrl
-        variant="embedded"
         detailContext={HOME_FEED_DETAIL_CONTEXT}
       />
     );
@@ -68,7 +66,6 @@ async function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage |
       initialFeed={feed}
       initialChipId="for-you"
       laneFromUrl
-      variant="embedded"
       detailContext={HOME_FEED_DETAIL_CONTEXT}
       initialPriorityPreview={priorityPost && priorityMedia && inlinePriorityPreview
         ? {
@@ -194,7 +191,6 @@ export default function AnonymousHome() {
         rail={(
           <>
             <SignInWorkspaceCard />
-            <QuickStartsCard />
             <Suspense fallback={null}>
               <AnonymousModelsSection data={modelsPromise} />
             </Suspense>

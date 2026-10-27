@@ -309,3 +309,21 @@ export function resolveCreationWorkspaceCardState(
     },
   };
 }
+
+export type CreationMediaFilter = 'all' | 'images' | 'videos' | 'audio';
+
+/**
+ * Studio's media filters, with their counts. A kind with nothing in it is no
+ * filter ("Audio (0)" could only ever show nothing), except the one chosen:
+ * when its last item goes, it stays, at 0, over its empty state, so the
+ * choice does not vanish from under the reader.
+ */
+export function getCreationMediaFilters(
+  counts: Record<CreationMediaFilter, number>,
+  chosen: CreationMediaFilter,
+): Array<{ key: CreationMediaFilter; label: string }> {
+  const names: Record<CreationMediaFilter, string> = { all: 'All', images: 'Images', videos: 'Videos', audio: 'Audio' };
+  return (Object.keys(names) as CreationMediaFilter[])
+    .filter((key) => key === 'all' || counts[key] > 0 || key === chosen)
+    .map((key) => ({ key, label: `${names[key]} (${counts[key]})` }));
+}

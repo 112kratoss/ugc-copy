@@ -145,7 +145,6 @@ describe('HomeDashboardPage auth branch', () => {
     }));
     expect(loadHomeWorkspaceGenerationsMock).toHaveBeenCalledWith({ userId: 'user-1' });
     expect(feedClientPropsMock).toHaveBeenCalledWith(expect.objectContaining({
-      variant: 'embedded',
       detailContext: { from: 'home', returnTo: '/' },
       initialChipId: 'for-you',
     }));

@@ -99,27 +99,6 @@ vi.mock('@/components/OptimizedPreviewImage', () => ({
   ),
 }));
 
-vi.mock('@/components/MediaDetailsPreviewModal', () => ({
-  default: ({ isOpen, title, prompt, src, inputMedia, additionalMedia, onClose }: {
-    isOpen: boolean;
-    title: string;
-    prompt?: string;
-    src: string | null;
-    inputMedia?: Array<{ label: string }> | null;
-    additionalMedia?: Array<{ src: string }> | null;
-    onClose: () => void;
-  }) => isOpen ? (
-    <div role="dialog" aria-label={`${title} creation preview`}>
-      <span>{title}</span>
-      {prompt ? <span>{prompt}</span> : null}
-      <span data-testid="preview-src">{src}</span>
-      <span data-testid="preview-inputs">{(inputMedia ?? []).map((item) => item.label).join(', ')}</span>
-      <span data-testid="preview-more-outputs">{(additionalMedia ?? []).map((item) => item.src).join(' ')}</span>
-      <button type="button" onClick={onClose}>Close preview</button>
-    </div>
-  ) : null,
-}));
-
 function response(body: unknown, ok = true) {
   return Promise.resolve({ ok, json: async () => body } as Response);
 }
@@ -219,49 +198,6 @@ describe('OwnerProfileMediaHub', () => {
       if (url.startsWith('/api/showcase/saved-media?')) {
         return response({ items: [savedPost], pageInfo: { hasMore: false, nextOffset: null } });
       }
-      if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
-        return response({
-          generations: [{
-            id: 'raw-generation',
-            output_url: 'https://example.com/raw.jpg',
-            preview_url: 'https://example.com/raw-preview.jpg',
-            status: 'completed',
-            created_at: '2026-07-04T00:00:00.000Z',
-            duration: 8,
-            model: 'image-model',
-            category: 'image',
-            title: 'Raw frame',
-            linked_post_id: null,
-          }, {
-            id: 'failed-generation',
-            output_url: null,
-            preview_url: null,
-            status: 'failed',
-            created_at: '2026-07-05T00:00:00.000Z',
-            model: 'video-model',
-            category: 'video',
-            title: 'Failed clip',
-            linked_post_id: null,
-          }],
-          pagination: { hasMore: false, nextCursor: null },
-        });
-      }
-      if (url.includes('/api/generations?includeArchived=false&id=raw-generation')) {
-        return response({
-          generations: [{
-            id: 'raw-generation',
-            output_url: 'https://example.com/raw.jpg',
-            status: 'completed',
-            created_at: '2026-07-04T00:00:00.000Z',
-            duration: 8,
-            model: 'image-model',
-            category: 'image',
-            title: 'Raw frame',
-            prompt: 'Owner-only creation prompt',
-            input_media: [],
-          }],
-        });
-      }
       throw new Error(`Unexpected request: ${url}`);
     }));
   });
@@ -320,7 +256,6 @@ describe('OwnerProfileMediaHub', () => {
       expect(statFor('Saved')).toBe('7');
       expect(screen.getByRole('tab', { name: 'Posts 31' })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: 'Saved 7' })).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: 'Creations 200' })).toBeInTheDocument();
       const wallet = screen.getByRole('link', { name: /wallet/i });
       expect(wallet).toHaveTextContent('$1,234.56');
       expect(wallet).toHaveTextContent('Available to withdraw');
@@ -401,7 +336,7 @@ describe('OwnerProfileMediaHub', () => {
 
   // A refreshed token swaps the session object (about hourly, and on coming
   // back to a long-idle tab). The hub read that as a new account: it blanked
-  // every tab, read page 1 of all three again, dropped the pages loaded with
+  // every tab, read page 1 of both again, dropped the pages loaded with
   // Load more, and closed a reel open on one of them.
   it('keeps the loaded pages and the open reel when the token is refreshed', async () => {
     const secondPagePost = { ...publicPost, id: 'post-page-two', title: 'Second page post' };
@@ -409,7 +344,7 @@ describe('OwnerProfileMediaHub', () => {
     const listRequests: string[] = [];
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (/^\/api\/(posts|showcase\/saved-media|generations)\?/.test(url)) listRequests.push(url);
+      if (/^\/api\/(posts|showcase\/saved-media)\?/.test(url)) listRequests.push(url);
       if (url.startsWith('/api/posts?')) {
         return url.includes('offset=24')
           ? response({ posts: [secondPagePost], pageInfo: { hasMore: false, nextOffset: null } })
@@ -422,7 +357,7 @@ describe('OwnerProfileMediaHub', () => {
     await screen.findByRole('button', { name: /open public post/i });
     fireEvent.click(screen.getByRole('button', { name: 'Load more posts' }));
     fireEvent.click(await screen.findByRole('button', { name: /open second page post/i }));
-    await waitFor(() => expect(listRequests).toHaveLength(4));
+    await waitFor(() => expect(listRequests).toHaveLength(3));
 
     authState.session = { access_token: 'refreshed-token', user: { id: 'owner-1' } };
     authState.user = { id: 'owner-1' };
@@ -431,31 +366,18 @@ describe('OwnerProfileMediaHub', () => {
       await Promise.resolve();
     });
 
-    expect(listRequests).toHaveLength(4);
+    expect(listRequests).toHaveLength(3);
     expect(screen.getByRole('dialog', { name: /second page post showcase reel/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /open public post/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /open second page post/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Posts 2' })).toBeInTheDocument();
   });
 
-  it('keeps raw creations in a focused preview instead of the Showcase reel', async () => {
-    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} stats={TOTALS} />);
-
-    await screen.findByRole('button', { name: /open public post/i });
-    fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /open raw frame/i }));
-
-    expect(screen.getByRole('dialog', { name: /raw frame creation preview/i })).toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: /showcase reel/i })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText('Owner-only creation prompt')).toBeInTheDocument());
-  });
-
-  // The browser's Back or Forward onto an entry the page pushed for a post or a creation:
-  // the entry says so (`reel-history-entry.ts`). Popstate took every entry naming one for a
-  // linked one's, so after Forward the close replaced the page's entry: the profile stood
+  // The browser's Back or Forward onto an entry the page pushed for a post: the entry says
+  // so (`reel-history-entry.ts`). Popstate took every entry naming one for a linked one's, so after Forward the close replaced the page's entry: the profile stood
   // twice in history, and the next Back stayed on it
   // (archive/web-reel-forward-history-2026-10-23).
-  describe("a reel or creation the browser's Back or Forward reaches again", () => {
+  describe("a reel the browser's Back or Forward reaches again", () => {
     const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
 
     it("goes Back from a post's reel that Forward opened again on its own entry", async () => {
@@ -476,32 +398,6 @@ describe('OwnerProfileMediaHub', () => {
       const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
       const replaceState = vi.spyOn(window.history, 'replaceState');
       fireEvent.click(within(reel).getByRole('button', { name: 'Close reel' }));
-      expect(back).toHaveBeenCalledTimes(1);
-      expect(replaceState).not.toHaveBeenCalled();
-    });
-
-    it('goes Back from a creation that Forward opened again on its own entry', async () => {
-      const pushState = vi.spyOn(window.history, 'pushState');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      await screen.findByRole('button', { name: /open public post/i });
-      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
-      // A tab's entry is a plain one.
-      expect(pushState).toHaveBeenLastCalledWith(null, '', '/profile?tab=creations');
-      fireEvent.click(await screen.findByRole('button', { name: /open raw frame/i }));
-      expect(pushState).toHaveBeenLastCalledWith(createReelEntryState('generation'), '', '/profile?tab=creations&generation=raw-generation');
-
-      act(() => {
-        window.history.back();
-      });
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: /raw frame creation preview/i })).not.toBeInTheDocument());
-      act(() => {
-        window.history.forward();
-      });
-      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
-
-      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
-      const replaceState = vi.spyOn(window.history, 'replaceState');
-      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
       expect(back).toHaveBeenCalledTimes(1);
       expect(replaceState).not.toHaveBeenCalled();
     });
@@ -528,8 +424,8 @@ describe('OwnerProfileMediaHub', () => {
       expect(back).toHaveBeenCalledTimes(1);
     });
 
-    // The hub mounts on an entry it pushed: a reload, or a Back from a page the reel or
-    // the creation linked to ("Post details", "Turn into post"), where the page mounts again.
+    // The hub mounts on an entry it pushed: a reload, or a Back from a page the reel linked
+    // to ("Post details"), where the page mounts again.
     it("goes Back from a post's reel whose own entry the hub mounted on", async () => {
       window.history.replaceState(createReelEntryState('post'), '', '/profile?tab=posts&post=post-public');
       render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
@@ -538,18 +434,6 @@ describe('OwnerProfileMediaHub', () => {
       const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
       const replaceState = vi.spyOn(window.history, 'replaceState');
       fireEvent.click(within(reel).getByRole('button', { name: 'Close reel' }));
-      expect(back).toHaveBeenCalledTimes(1);
-      expect(replaceState).not.toHaveBeenCalled();
-    });
-
-    it('goes Back from a creation whose own entry the hub mounted on', async () => {
-      window.history.replaceState(createReelEntryState('generation'), '', '/profile?tab=creations&generation=raw-generation');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
-
-      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
-      const replaceState = vi.spyOn(window.history, 'replaceState');
-      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
       expect(back).toHaveBeenCalledTimes(1);
       expect(replaceState).not.toHaveBeenCalled();
     });
@@ -573,486 +457,25 @@ describe('OwnerProfileMediaHub', () => {
       expect(back).not.toHaveBeenCalled();
       expect(replaceState).toHaveBeenLastCalledWith(null, '', '/profile?tab=posts');
     });
-
-    it('replaces the entry of a creation Back reached on an entry the page did not push', async () => {
-      window.history.replaceState(null, '', '/profile?tab=creations&generation=raw-generation');
-      window.history.pushState(null, '', '/profile?tab=creations');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      await screen.findByRole('button', { name: /open raw frame/i });
-
-      act(() => {
-        window.history.back();
-      });
-      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
-
-      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
-      const replaceState = vi.spyOn(window.history, 'replaceState');
-      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
-      expect(back).not.toHaveBeenCalled();
-      expect(replaceState).toHaveBeenLastCalledWith(null, '', '/profile?tab=creations');
-    });
   });
 
-  it('shows an explicit note for a creation whose only source is gone instead of a broken tile', async () => {
-    const baseFetch = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
-        return Promise.resolve(response({
-          generations: [{
-            id: 'gone-generation',
-            status: 'succeeded',
-            created_at: '2026-03-05T10:00:00.000Z',
-            duration: 5,
-            model: 'kling-2.6/motion-control',
-            category: 'motion',
-            title: 'Expired clip',
-            media: null,
-            preview_url: null,
-            linked_post_id: null,
-            source_unavailable_at: '2026-09-08T06:15:00.000Z',
-          }],
-          pagination: { hasMore: false, nextCursor: null },
-        }));
-      }
-      return baseFetch(input);
-    }));
-
+  // Studio holds the creations library, and the top bar's Create menu starts a
+  // post: the profile drew a third tab of the same creations, and two buttons
+  // more ("New post", "Manage in Studio").
+  it('shows Posts and Saved, and leaves creations to Studio and new posts to the Create menu', async () => {
+    window.history.replaceState(null, '', '/profile?tab=creations');
     render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} stats={TOTALS} />);
 
+    // An old address that named the Creations tab opens Posts.
     await screen.findByRole('button', { name: /open public post/i });
-    fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
-
-    expect(await screen.findByText('Expired clip')).toBeInTheDocument();
-    expect(screen.getByText('This file is no longer available')).toBeInTheDocument();
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Posts2', 'Saved1']);
+    expect(screen.getByRole('tab', { name: 'Posts 2' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('link', { name: /new post/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /manage in studio/i })).not.toBeInTheDocument();
+    // No request for the creations a third tab would have drawn: one would throw.
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url)).some((url) => url.startsWith('/api/generations'))).toBe(false);
   });
 
-  it('keeps failed runs out of the grid but reachable, and never as a dead control', async () => {
-    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} stats={TOTALS} />);
-
-    await screen.findByRole('button', { name: /open public post/i });
-    fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
-
-    expect(await screen.findByRole('button', { name: /open raw frame/i })).toBeInTheDocument();
-    expect(screen.queryByText('Failed clip')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /failed runs/i }));
-
-    expect(screen.getByText('Failed clip')).toBeInTheDocument();
-    expect(screen.queryByText('Raw frame')).not.toBeInTheDocument();
-    // No media to open, so the card is a record rather than a control that
-    // does nothing when pressed.
-    expect(screen.queryByRole('button', { name: /open failed clip/i })).not.toBeInTheDocument();
-  });
-
-  // A close clears the selection a render before the query lets go of the
-  // creation: the router takes the page's own replaceState a microtask later,
-  // and Back's popstate comes after the close. The effect that opens the
-  // creation the address names took that render for a new request, so a
-  // creation opened by address opened again after its Close, with no
-  // `generation` left in the address; and details that came after a close
-  // opened it again too (archive/web-profile-creation-close-2026-10-23).
-  describe('a creation the reader closed', () => {
-    const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
-    const noPreview = () => expect(screen.queryByRole('dialog', { name: /creation preview/i })).not.toBeInTheDocument();
-    // Holds back the details read of a creation until the returned call sends it.
-    const holdDetails = (generationId: string) => {
-      const answer = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
-      let send: () => void = () => {
-        throw new Error(`No details read of ${generationId} was held`);
-      };
-      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
-        String(input).includes(`/api/generations?includeArchived=false&id=${generationId}`)
-          ? new Promise<Response>((resolve) => {
-            send = () => resolve(answer(input));
-          })
-          : answer(input)
-      )));
-      return () => send();
-    };
-    // Lets what was sent (and the router's own update) reach the page.
-    const settle = () => act(async () => {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
-    });
-    const openRawFrameFromItsTile = async () => {
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      await screen.findByRole('button', { name: /open public post/i });
-      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
-      fireEvent.click(await screen.findByRole('button', { name: /open raw frame/i }));
-      return screen.findByRole('dialog', { name: /raw frame creation preview/i });
-    };
-
-    it('stays closed when the address had opened it', async () => {
-      window.history.replaceState(null, '', '/profile?tab=creations&generation=raw-generation');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
-
-      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
-      await settle();
-
-      expect(window.location.search).toBe('?tab=creations');
-      noPreview();
-      // Its tile still opens it.
-      fireEvent.click(screen.getByRole('button', { name: /open raw frame/i }));
-      expect(await screen.findByText('Owner-only creation prompt')).toBeInTheDocument();
-    });
-
-    it('stays closed until the popstate of the Back that closes it, when its details come meanwhile too', async () => {
-      const sendDetails = holdDetails('raw-generation');
-      const preview = await openRawFrameFromItsTile();
-
-      // Until Back's popstate the address still names the creation.
-      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
-      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
-      await settle();
-      expect(back).toHaveBeenCalledTimes(1);
-      expect(window.location.search).toBe('?tab=creations&generation=raw-generation');
-      noPreview();
-
-      // The list takes the details, and the selection stays empty.
-      sendDetails();
-      await settle();
-      noPreview();
-    });
-
-    // Opened by address on the page's own entry (a reload, or Back from a page
-    // it linked to), its Close goes Back too; a page of the list can land first.
-    it('stays closed until the popstate of the Back that closes it, when more creations load meanwhile', async () => {
-      const answerPage = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
-      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
-          const page = await (await answerPage(input)).json();
-          return url.includes('cursor=')
-            ? response({ generations: [{ ...page.generations[0], id: 'older-generation', title: 'Older frame' }], pagination: { hasMore: false, nextCursor: null } })
-            : response({ ...page, pagination: { hasMore: true, nextCursor: 'page-2' } });
-        }
-        return answerPage(input);
-      }));
-      window.history.replaceState(createReelEntryState('generation'), '', '/profile?tab=creations&generation=raw-generation');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      const preview = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
-
-      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
-      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
-      await settle();
-      expect(back).toHaveBeenCalledTimes(1);
-      noPreview();
-
-      fireEvent.click(screen.getByRole('button', { name: 'Load more creations' }));
-      expect(await screen.findByRole('button', { name: /open older frame/i })).toBeInTheDocument();
-      noPreview();
-    });
-
-    it('stays closed when its details come after the Close, and Forward opens it again with them', async () => {
-      const sendDetails = holdDetails('raw-generation');
-      const preview = await openRawFrameFromItsTile();
-      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
-      await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
-      noPreview();
-
-      sendDetails();
-      await settle();
-
-      noPreview();
-      expect(window.location.search).toBe('?tab=creations');
-      window.history.forward();
-      const reopened = await screen.findByRole('dialog', { name: /raw frame creation preview/i });
-      expect(within(reopened).getByText('Owner-only creation prompt')).toBeInTheDocument();
-    });
-
-    it('keeps the creation opened next when the details of the one closed come', async () => {
-      const answerPage = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
-      const secondCreation = {
-        id: 'second-generation',
-        output_url: 'https://example.com/second.jpg',
-        preview_url: null,
-        status: 'completed',
-        created_at: '2026-07-06T00:00:00.000Z',
-        model: 'image-model',
-        category: 'image',
-        title: 'Second frame',
-        linked_post_id: null,
-      };
-      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
-          const page = await (await answerPage(input)).json();
-          return response({ ...page, generations: [...page.generations, secondCreation] });
-        }
-        if (url.includes('/api/generations?includeArchived=false&id=second-generation')) {
-          return response({ generations: [{ ...secondCreation, prompt: 'Second creation prompt', input_media: [] }] });
-        }
-        return answerPage(input);
-      }));
-      const sendFirstDetails = holdDetails('raw-generation');
-      const first = await openRawFrameFromItsTile();
-      fireEvent.click(within(first).getByRole('button', { name: 'Close preview' }));
-      await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
-      fireEvent.click(screen.getByRole('button', { name: /open second frame/i }));
-      const second = await screen.findByRole('dialog', { name: /second frame creation preview/i });
-      await within(second).findByText('Second creation prompt');
-
-      sendFirstDetails();
-      await settle();
-
-      expect(screen.getByRole('dialog', { name: /second frame creation preview/i })).toHaveTextContent('Second creation prompt');
-      expect(screen.queryByRole('dialog', { name: /raw frame creation preview/i })).not.toBeInTheDocument();
-      expect(window.location.search).toBe('?tab=creations&generation=second-generation');
-    });
-
-    // The viewer moves no focus, so Enter on a tile can press it again behind
-    // it. A second entry naming the same creation left its Close going Back
-    // onto the first, which still named it.
-    it('pushes no second entry when the tile of the open creation is pressed again', async () => {
-      const preview = await openRawFrameFromItsTile();
-      await within(preview).findByText('Owner-only creation prompt');
-      const pushState = vi.spyOn(window.history, 'pushState');
-
-      fireEvent.click(screen.getByRole('button', { name: /open raw frame/i }));
-      await settle();
-      expect(pushState).not.toHaveBeenCalled();
-
-      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
-      await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
-      noPreview();
-    });
-  });
-
-  // The list answers each creation's summary (`detail=summary`: no inputs, no further
-  // outputs), and its details come from a read of their own. A creation opened by its address
-  // showed only the summary, one beyond the loaded pages opened nothing until a later Load more
-  // popped it open over the grid, and the details of the one on screen came with its media
-  // signed again, which mounted the viewer again and loaded its media again
-  // (archive/web-history-follow-ups-2026-10-23).
-  describe("a creation's details", () => {
-    const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
-    const noPreview = () => expect(screen.queryByRole('dialog', { name: /creation preview/i })).not.toBeInTheDocument();
-    const settle = () => act(async () => {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
-    });
-    // A private file's address as one read signs it.
-    const signed = (file: string, read: string) => `https://storage.example.com/${file}?token=${read}`;
-    type Row = ReturnType<typeof summaryRow>;
-    const summaryRow = (id: string, title: string, expiresAt: string | null = null) => ({
-      id,
-      output_url: signed(`${id}.jpg`, 'list'),
-      preview_url: signed(`${id}-preview.jpg`, 'list'),
-      media: { renditionUrl: null, expiresAt },
-      status: 'completed',
-      created_at: '2026-07-04T00:00:00.000Z',
-      model: 'image-model',
-      category: 'image',
-      title,
-      linked_post_id: null,
-    });
-    const detailsOf = (row: Row) => ({
-      ...row,
-      output_url: signed(`${row.id}.jpg`, 'details'),
-      preview_url: signed(`${row.id}-preview.jpg`, 'details'),
-      media: { renditionUrl: null, expiresAt: null },
-      output_urls: [signed(`${row.id}.jpg`, 'details'), signed(`${row.id}-2.jpg`, 'details')],
-      prompt: `${row.title} prompt`,
-      input_media: [{
-        id: `${row.id}-input`,
-        generationId: row.id,
-        mediaType: 'image',
-        role: 'reference',
-        label: `${row.title} input`,
-        url: signed(`${row.id}-input.jpg`, 'details'),
-        storagePath: null,
-        sourceGenerationId: null,
-        sortOrder: 0,
-        metadata: {},
-      }],
-    });
-    // Answers the list's first page, the page after it, and each details read (none for an id
-    // `details` leaves out, a refused read for one it marks 'failed'); returns the ids the details
-    // were read for. `listAfter` holds the list's answers until it settles.
-    const answerCreations = (
-      first: Row[],
-      second: Row[] | null,
-      details: Record<string, ReturnType<typeof detailsOf> | 'failed'>,
-      listAfter?: Promise<unknown>,
-    ) => {
-      const answerElse = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
-      const detailsReads: string[] = [];
-      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.includes('/api/generations?includeArchived=false&detail=summary')) {
-          const answer = () => (url.includes('cursor=page-2')
-            ? response({ generations: second ?? [], pagination: { hasMore: false, nextCursor: null } })
-            : response({ generations: first, pagination: { hasMore: Boolean(second), nextCursor: second ? 'page-2' : null } }));
-          return listAfter ? listAfter.then(answer) : answer();
-        }
-        const read = /\/api\/generations\?includeArchived=false&id=([^&]+)&limit=1$/.exec(url);
-        if (read) {
-          detailsReads.push(read[1]);
-          const answer = details[read[1]];
-          if (answer === 'failed') return response({ error: 'Too many requests.' }, false);
-          return response({ generations: answer ? [answer] : [] });
-        }
-        return answerElse(input);
-      }));
-      return detailsReads;
-    };
-    const held = () => {
-      let release!: () => void;
-      const settled = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return { settled, release };
-    };
-
-    it('reads the details of a creation its address opened', async () => {
-      const row = summaryRow('gen-linked', 'Linked frame');
-      const reads = answerCreations([row], null, { 'gen-linked': detailsOf(row) });
-      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-linked');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-
-      const preview = await screen.findByRole('dialog', { name: /linked frame creation preview/i });
-      expect(await within(preview).findByText('Linked frame prompt')).toBeInTheDocument();
-      expect(within(preview).getByTestId('preview-inputs')).toHaveTextContent('Linked frame input');
-      expect(within(preview).getByTestId('preview-more-outputs')).toHaveTextContent(signed('gen-linked-2.jpg', 'details'));
-      expect(reads).toEqual(['gen-linked']);
-    });
-
-    it('opens one beyond the loaded pages from its details, and a later page leaves it closed after its Close', async () => {
-      const first = summaryRow('gen-first', 'First frame');
-      const far = summaryRow('gen-far', 'Far frame');
-      answerCreations([first], [far], { 'gen-far': detailsOf(far) });
-      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-far');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-
-      const preview = await screen.findByRole('dialog', { name: /far frame creation preview/i });
-      expect(await within(preview).findByText('Far frame prompt')).toBeInTheDocument();
-      fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
-      await waitFor(() => expect(window.location.search).toBe('?tab=creations'));
-      noPreview();
-
-      fireEvent.click(screen.getByRole('button', { name: 'Load more creations' }));
-      expect(await screen.findByRole('button', { name: /open far frame/i })).toBeInTheDocument();
-      await settle();
-      noPreview();
-    });
-
-    it('leaves one whose details could not be read closed when a later page brings it', async () => {
-      const first = summaryRow('gen-first', 'First frame');
-      const far = summaryRow('gen-far', 'Far frame');
-      const reads = answerCreations([first], [far], {});
-      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-far');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      expect(await screen.findByRole('button', { name: /open first frame/i })).toBeInTheDocument();
-      await settle();
-      expect(reads).toEqual(['gen-far']);
-      noPreview();
-
-      fireEvent.click(screen.getByRole('button', { name: 'Load more creations' }));
-      expect(await screen.findByRole('button', { name: /open far frame/i })).toBeInTheDocument();
-      await settle();
-      noPreview();
-    });
-
-    // The details opened it before the list came, so the list's row (signed by another read) must
-    // not open it again: the viewer would change its media and load it again.
-    it('leaves the creation its details opened as they opened it when the list brings it', async () => {
-      const row = summaryRow('gen-linked', 'Linked frame');
-      const list = held();
-      answerCreations([row], null, { 'gen-linked': detailsOf(row) }, list.settled);
-      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-linked');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      const preview = await screen.findByRole('dialog', { name: /linked frame creation preview/i });
-      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-linked.jpg', 'details'));
-
-      list.release();
-      expect(await screen.findByRole('button', { name: /open linked frame/i })).toBeInTheDocument();
-      await settle();
-      expect(screen.getByTestId('preview-src')).toHaveTextContent(signed('gen-linked.jpg', 'details'));
-    });
-
-    // A refused read (the per-user limit Studio's polling shares, a server error) says nothing about
-    // the creation, so the list still opens it, as before the details were read at once.
-    it('opens the creation from the list when its details read is refused', async () => {
-      const row = summaryRow('gen-linked', 'Linked frame');
-      const list = held();
-      const reads = answerCreations([row], null, { 'gen-linked': 'failed' }, list.settled);
-      window.history.replaceState(null, '', '/profile?tab=creations&generation=gen-linked');
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      await waitFor(() => expect(reads).toEqual(['gen-linked']));
-      await settle();
-      noPreview();
-
-      list.release();
-      const preview = await screen.findByRole('dialog', { name: /linked frame creation preview/i });
-      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-linked.jpg', 'list'));
-    });
-
-    // The server describes no media for a sound, though its file is signed as a picture's is: with
-    // nothing saying how long the address on screen holds, the details' fresh one is taken.
-    it("takes the details' address for a sound, whose media the list does not describe", async () => {
-      const soundRow = (read: string) => ({
-        ...summaryRow('gen-sound', 'Sound take'),
-        output_url: signed('gen-sound.mp3', read),
-        preview_url: null,
-        media: null,
-        category: 'audio',
-        model: 'audio-model',
-      }) as unknown as Row;
-      const row = soundRow('list');
-      answerCreations([row], null, {
-        'gen-sound': { ...detailsOf(row), ...soundRow('details'), output_urls: [signed('gen-sound.mp3', 'details')] } as unknown as ReturnType<typeof detailsOf>,
-      });
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      await screen.findByRole('button', { name: /open public post/i });
-      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
-      fireEvent.click(await screen.findByRole('button', { name: /open sound take/i }));
-
-      const preview = await screen.findByRole('dialog', { name: /sound take creation preview/i });
-      expect(await within(preview).findByText('Sound take prompt')).toBeInTheDocument();
-      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-sound.mp3', 'details'));
-    });
-
-    it('keeps the media on screen when the details of the open creation come signed again', async () => {
-      const row = summaryRow('gen-tile', 'Tile frame', new Date(Date.now() + 30 * 60_000).toISOString());
-      answerCreations([row], null, { 'gen-tile': detailsOf(row) });
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      await screen.findByRole('button', { name: /open public post/i });
-      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
-      fireEvent.click(await screen.findByRole('button', { name: /open tile frame/i }));
-
-      const preview = await screen.findByRole('dialog', { name: /tile frame creation preview/i });
-      expect(await within(preview).findByText('Tile frame prompt')).toBeInTheDocument();
-      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-tile.jpg', 'list'));
-      expect(within(preview).getByTestId('preview-inputs')).toHaveTextContent('Tile frame input');
-      // The main output is the file on screen, not a further output at the details' address.
-      expect(within(preview).getByTestId('preview-more-outputs').textContent).toBe(signed('gen-tile-2.jpg', 'details'));
-      // The grid's tile keeps its address too.
-      expect(screen.getByRole('img', { name: 'Tile frame' })).toHaveAttribute('src', signed('gen-tile-preview.jpg', 'list'));
-    });
-
-    it("takes the details' addresses once the ones on screen have run out", async () => {
-      const row = summaryRow('gen-old', 'Old frame', new Date(Date.now() - 60_000).toISOString());
-      answerCreations([row], null, { 'gen-old': detailsOf(row) });
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
-      await screen.findByRole('button', { name: /open public post/i });
-      fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
-      fireEvent.click(await screen.findByRole('button', { name: /open old frame/i }));
-
-      const preview = await screen.findByRole('dialog', { name: /old frame creation preview/i });
-      expect(await within(preview).findByText('Old frame prompt')).toBeInTheDocument();
-      expect(within(preview).getByTestId('preview-src')).toHaveTextContent(signed('gen-old.jpg', 'details'));
-    });
-  });
-
-  // The reel opened from your own profile had no ⋯ at all. Saved posts are
-  // other people's, so their reel carries the three safety rows, as the app's
-  // does; the reel over your own posts still has none.
-  // The reel takes comments on public posts only; the owner's unlisted post
-  // reached it as public, with no comment count.
   it("hands the reel the owner's post with its visibility and comment count", async () => {
     const baseFetch = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {

@@ -1187,7 +1187,7 @@ describe('CreationsPage', () => {
     expect(video).toHaveClass('object-contain');
   });
 
-  it('shows filtered empty states and keeps filter chips horizontally scrollable', async () => {
+  it('offers a filter only for a kind it has, and keeps the filter chips horizontally scrollable', async () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -1208,13 +1208,14 @@ describe('CreationsPage', () => {
 
     render(<CreationsPage />);
 
-    const audioFilter = await screen.findByRole('button', { name: /audio \(0\)/i });
-    expect(audioFilter).toHaveClass('shrink-0', 'whitespace-nowrap');
-    expect(audioFilter.parentElement).toHaveClass('overflow-x-auto');
-
-    fireEvent.click(audioFilter);
-
-    expect(await screen.findByText('No audio creations yet')).toBeInTheDocument();
+    const allFilter = await screen.findByRole('button', { name: 'All (1)' });
+    expect(allFilter).toHaveClass('shrink-0', 'whitespace-nowrap');
+    expect(allFilter.parentElement).toHaveClass('overflow-x-auto');
+    // "Audio (0)" and "Videos (0)" were filters that could only ever show nothing.
+    expect(within(allFilter.parentElement!).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'All (1)',
+      'Images (1)',
+    ]);
   });
 
   // A photo is never required to sell. The card said "Your selling identity is

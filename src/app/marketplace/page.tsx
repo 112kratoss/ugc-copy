@@ -1,6 +1,6 @@
 import { headers } from 'next/headers';
 import Link from 'next/link';
-import { ArrowRight, ShoppingBag } from 'lucide-react';
+import { ShoppingBag } from 'lucide-react';
 import { Suspense, use } from 'react';
 
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
@@ -162,14 +162,8 @@ export default function MarketplacePage({ searchParams }: MarketplacePageProps) 
               </p>
             </div>
 
+            {/* A post starts from the top bar's Create menu. */}
             <div className="flex flex-wrap gap-3">
-              <Link
-                href="/post/new?from=marketplace&returnTo=%2Fmarketplace"
-                className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
-              >
-                Share a post
-                <ArrowRight className="h-4 w-4" />
-              </Link>
               <Link
                 href="/marketplace/sell"
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"

@@ -173,7 +173,7 @@ function formatShowcaseDate(value: string): string {
 
 const UNLOCK_FILTERS: Array<{ id: ShowcaseUnlockFilter; label: string }> = [
     { id: 'all', label: 'All' },
-    { id: 'with-unlock', label: 'Unlocks' },
+    { id: 'with-unlock', label: 'Recipes' },
     { id: 'free', label: 'Free' },
     { id: 'paid', label: 'Paid' },
 ];
@@ -2171,14 +2171,8 @@ export default function ShowcaseClient({
                         </p>
                     </div>
 
+                    {/* A post starts from the top bar's Create menu. */}
                     <div className="flex flex-wrap gap-2">
-                        <Link
-                            href="/post/new?from=community&returnTo=%2Fshowcase"
-                            prefetch={false}
-                            className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
-                        >
-                            Share a post
-                        </Link>
                         <Link
                             href="/marketplace"
                             prefetch={false}

@@ -748,8 +748,11 @@ const families = {
     if (!user) return;
     // Drives the React Server Component path that calls getServerAuthState().
     // Bearer-only API traffic cannot measure F8's cookie-session decode, local
-    // JWKS verification, request cache, or profile-credit read.
-    await timedFetch('authenticated-page', new URL(`/feed?cert=${randomUUID()}`, BASE_URL), {
+    // JWKS verification, request cache, or profile-credit read. Signed-in Home:
+    // the proxy rewrites `/` with a session to /home. It was /feed, which now
+    // redirects there (308) and reads no session; Home also draws its shelf,
+    // workspace and models, so a first run here re-baselines the p95.
+    await timedFetch('authenticated-page', new URL(`/?cert=${randomUUID()}`, BASE_URL), {
       headers: { Cookie: user.authCookie },
       redirect: 'manual',
     });

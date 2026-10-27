@@ -89,7 +89,7 @@ describe('FeedClient navigation', () => {
 
         fireEvent.click(screen.getByText('warm:post-1'));
 
-        expect(routerPrefetch).toHaveBeenCalledWith('/showcase/post-1?from=community&returnTo=%2Ffeed');
+        expect(routerPrefetch).toHaveBeenCalledWith('/showcase/post-1?from=home&returnTo=%2F');
     });
 
     it('warms each post only once, however many times it is hovered', () => {
@@ -119,7 +119,7 @@ describe('FeedClient navigation', () => {
         // An imperative push raises no link status of its own; without this the
         // click would go unacknowledged for the length of the round trip.
         expect(publishNavigationStartMock).toHaveBeenCalledTimes(1);
-        expect(routerPush).toHaveBeenCalledWith('/showcase/post-1?from=community&returnTo=%2Ffeed');
+        expect(routerPush).toHaveBeenCalledWith('/showcase/post-1?from=home&returnTo=%2F');
     });
 
     it('does not warm or navigate on plain render', () => {

@@ -30,6 +30,7 @@ interface ModalQuestionOptions {
  * - Tab cycles through its own controls, and Escape puts it away.
  * - A Back that leaves the address it was asked at has left the page the
  *   question was about, and puts it away too; a change of hash does not.
+ * - An open popover goes as it comes up: the top layer would draw one over it.
  * - The focus goes in without scrolling (a phone's sheet starts below the
  *   window, and focusing it there jumped it into place in one frame instead
  *   of sliding up), and back to where it was when the question goes.
@@ -41,6 +42,13 @@ export function useModalQuestion({ questionId, dialogRef, initialFocus, focusabl
   });
 
   useEffect(() => {
+    // An open popover (the shell's Create menu) is drawn in the top layer, over
+    // any question, and a question can come up while one is open: from a Back
+    // on a page with unsaved work, say. The question is what the page is
+    // waiting on, so the popover goes.
+    for (const popover of document.querySelectorAll<HTMLElement>('[popover]')) {
+      if (typeof popover.hidePopover === 'function' && popover.matches(':popover-open')) popover.hidePopover();
+    }
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusFrame = window.requestAnimationFrame(() => {
       latest.current.initialFocus()?.focus({ preventScroll: true });

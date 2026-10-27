@@ -3,7 +3,6 @@ import {
   Gift,
   Home,
   Layers3,
-  MessagesSquare,
   Search,
   Sparkles,
   Store,
@@ -14,7 +13,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 
 export interface AppNavItem {
-  id: 'home' | 'feed' | 'create' | 'studio' | 'showcase' | 'search' | 'marketplace' | 'workflow' | 'profile' | 'alerts' | 'invite';
+  id: 'home' | 'create' | 'studio' | 'showcase' | 'search' | 'marketplace' | 'workflow' | 'profile' | 'alerts' | 'invite';
   label: string;
   shortLabel: string;
   href: string;
@@ -42,7 +41,7 @@ const isDetailChildOf = (pathname: string, href: string) => {
 /**
  * A post and a creator profile are their own surfaces, not sub-pages of the
  * Explore feed they happen to sit under in the path. Either can be reached
- * from Home, `/feed`, Marketplace, Studio, or a shared link, so claiming the
+ * from Home, Marketplace, Studio, a profile, or a shared link, so claiming the
  * Explore nav item would tell the viewer they are somewhere they are not.
  * Both get their own title below instead.
  */
@@ -60,15 +59,6 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     // `/home` is the middleware rewrite target for signed-in `/` — match it
     // too in case a server-rendered pathname leaks through.
     match: (pathname) => pathname === '/' || pathname === '/home',
-  },
-  {
-    id: 'feed',
-    label: 'Feed',
-    shortLabel: 'Feed',
-    href: '/feed',
-    description: 'Community notes, prompts, and creations in one column',
-    icon: MessagesSquare,
-    match: (pathname) => isExactOrChild(pathname, '/feed'),
   },
   {
     id: 'create',
@@ -169,10 +159,33 @@ export function getActiveAppNavItem(pathname: string) {
   return APP_NAV_ITEMS.find((item) => item.match(pathname)) ?? null;
 }
 
-export function getAppShellTitle(pathname: string) {
-  if (pathname.startsWith('/pricing')) return 'Pricing';
-  if (pathname.startsWith('/credits')) return 'Credit history';
-  if (pathname.startsWith('/models')) return 'Models';
+/**
+ * Pages that open with a heading of their own: the top bar names none of
+ * them, where it used to say the page's name and section line just above the
+ * page saying it again ("Studio" over "Studio").
+ */
+const OWN_HEADING_PATHS = new Set([
+  '/showcase',
+  '/creations',
+  '/create',
+  '/search',
+  '/marketplace',
+  '/notifications',
+  '/invite',
+  '/credits',
+  '/pricing',
+  '/templates',
+]);
+const OWN_HEADING_SECTIONS = ['/profile', '/models', '/marketplace/sell', '/post'];
+
+function pageHasOwnHeading(pathname: string) {
+  return OWN_HEADING_PATHS.has(pathname)
+    || OWN_HEADING_SECTIONS.some((section) => isExactOrChild(pathname, section));
+}
+
+/** The top bar's title, or null on a page whose own heading says what it is. */
+export function getAppShellTitle(pathname: string): string | null {
+  if (pageHasOwnHeading(pathname)) return null;
   if (pathname.startsWith('/alternatives')) return 'Compare';
   if (pathname.startsWith('/ai-image-generator')) return 'AI image generator';
   if (pathname.startsWith('/ai-video-generator')) return 'AI video generator';
@@ -181,9 +194,6 @@ export function getAppShellTitle(pathname: string) {
   if (pathname.startsWith('/contact')) return 'Contact';
   if (pathname.startsWith('/login')) return 'Sign in';
   if (pathname.startsWith('/signup')) return 'Sign up';
-  if (pathname.startsWith('/post/new')) return 'Share Post';
-  if (pathname.startsWith('/marketplace/sell')) return 'Seller';
-  if (pathname.startsWith('/notifications')) return 'Alerts';
   if (pathname.startsWith('/templates/new')) return 'Create Template';
   if (pathname.startsWith('/template-runs')) return 'Create From Template';
   if (pathname.startsWith('/templates')) return 'Templates';
@@ -220,4 +230,44 @@ export function isMinimalAppChromePath(pathname: string) {
  */
 export function isNotFoundRouteSegment(segment: string | null) {
   return segment === '/_not-found' || segment === '_not-found';
+}
+
+export interface CreateMenuItem {
+  id: 'create' | 'post';
+  label: string;
+  body: string;
+}
+
+/**
+ * The shell's Create menu, in the app's words: its centre + offers the same two
+ * choices (`ugc-mobile/lib/create-menu-view-model.ts`) under the same heading
+ * (`ugc-mobile/components/magic-create-menu.tsx`). `create-menu-parity.test.ts`
+ * holds the two to one wording.
+ */
+export const CREATE_MENU_TITLE = 'Create or publish';
+export const CREATE_MENU_SUBTITLE = 'Start with AI, or share work you already have.';
+export const CREATE_MENU_ITEMS: readonly CreateMenuItem[] = [
+  { id: 'create', label: 'Create', body: 'Image, Video, and Motion' },
+  { id: 'post', label: 'Post', body: 'Share finished media' },
+];
+
+/**
+ * The page a post was started on, for the composer: its `from` decides where
+ * the composer's Back goes and what it says (`NewPostClient`), so the menu
+ * names the page and no more. A page the composer has no Back for sends none,
+ * and the composer goes back to Explore.
+ */
+const POST_COMPOSER_SOURCES: ReadonlyArray<{ matches: (pathname: string) => boolean; from: string }> = [
+  { matches: (pathname) => pathname === '/' || pathname === '/home', from: 'home' },
+  { matches: (pathname) => pathname === '/showcase', from: 'community' },
+  { matches: (pathname) => isExactOrChild(pathname, '/profile'), from: 'profile' },
+  { matches: (pathname) => isExactOrChild(pathname, '/marketplace/sell'), from: 'seller' },
+  { matches: (pathname) => pathname === '/marketplace', from: 'marketplace' },
+  { matches: (pathname) => pathname === '/creations', from: 'creations' },
+];
+
+export function getCreateMenuHref(id: CreateMenuItem['id'], pathname: string): string {
+  if (id === 'create') return '/create';
+  const source = POST_COMPOSER_SOURCES.find((entry) => entry.matches(pathname));
+  return source ? `/post/new?${new URLSearchParams({ from: source.from })}` : '/post/new';
 }

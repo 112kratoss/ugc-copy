@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveCreationWorkspaceCardState } from '@/lib/creation-workspace';
+import { getCreationMediaFilters, resolveCreationWorkspaceCardState } from '@/lib/creation-workspace';
 
 const baseGeneration = {
   id: 'gen-1',
@@ -216,5 +216,27 @@ describe('resolveCreationWorkspaceCardState', () => {
 
       expect(state.monetizationKind).toBe('free');
     });
+  });
+});
+
+describe('getCreationMediaFilters', () => {
+  const labels = (filters: ReturnType<typeof getCreationMediaFilters>) => filters.map((filter) => filter.label);
+
+  it('offers a filter only for a kind there is something of', () => {
+    // "Audio (0)" and "Videos (0)" could only ever show nothing.
+    expect(labels(getCreationMediaFilters({ all: 3, images: 3, videos: 0, audio: 0 }, 'all'))).toEqual(['All (3)', 'Images (3)']);
+    expect(labels(getCreationMediaFilters({ all: 5, images: 3, videos: 2, audio: 0 }, 'all'))).toEqual(['All (5)', 'Images (3)', 'Videos (2)']);
+  });
+
+  it('keeps the kind chosen when its last item goes, at 0, over its empty state', () => {
+    expect(getCreationMediaFilters({ all: 3, images: 3, videos: 0, audio: 0 }, 'videos')).toEqual([
+      { key: 'all', label: 'All (3)' },
+      { key: 'images', label: 'Images (3)' },
+      { key: 'videos', label: 'Videos (0)' },
+    ]);
+  });
+
+  it('always offers All, with nothing in it too', () => {
+    expect(labels(getCreationMediaFilters({ all: 0, images: 0, videos: 0, audio: 0 }, 'all'))).toEqual(['All (0)']);
   });
 });
