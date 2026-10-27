@@ -299,19 +299,94 @@ jobs:
 
       # The SQL-only job deliberately excludes these API services. This job
       # replays independently and exercises actual Auth, Storage and PostgREST.
-      # Keep generated local keys in private runner files, never log/artifact them.
+      # Keep generated local keys in private runner files, never log/artifact them:
+      # a successful start ends with the key table, so its output goes to a file.
+      # A failed start prints no keys and removes its own containers first, so
+      # that file (the stop step deletes it) is the main record of the cause: a
+      # pull, a port, a health check or a migration. The CLI's one-off init
+      # containers (storage and auth migrations) are removed as they exit and
+      # print only under --debug, which proxies every query, so their logs are
+      # followed from their start. On failure the step prints all of it with
+      # key-shaped values masked, every socket on the stack's ports, and the
+      # containers left; db reset's output goes through the same mask. Every
+      # command that can hang has a time limit, so a hang still ends in output.
       - name: Start isolated Supabase API stack
         run: |
           set -euo pipefail
           umask 077
           fixture_dir="$RUNNER_TEMP/supabase-api"
           status_file="$RUNNER_TEMP/supabase-api-status.json"
-          mkdir -p "$fixture_dir/supabase"
+          start_log="$RUNNER_TEMP/supabase-api-start.log"
+          job_logs="$RUNNER_TEMP/supabase-api-jobs"
+          mkdir -p "$fixture_dir/supabase" "$job_logs"
           cp supabase/config.api-tests.toml "$fixture_dir/supabase/config.toml"
           ln -s "$GITHUB_WORKSPACE/supabase/migrations" "$fixture_dir/supabase/migrations"
-          supabase --workdir "$fixture_dir" start --exclude realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > "$RUNNER_TEMP/supabase-api-start.log" 2>&1
-          supabase --workdir "$fixture_dir" db reset --local --no-seed --yes
-          supabase --workdir "$fixture_dir" status -o json > "$status_file"
+          # Ends in a newline, so the workflow command printed next starts its own line.
+          redact() {
+            sed -E -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/[jwt redacted]/g' \
+              -e 's/sb_(publishable|secret)_[A-Za-z0-9_-]+/sb_\1_[redacted]/g' \
+              -e 's/((SECRET|PASSWORD|KEY|[Ss]ecret|[Pp]assword|[Kk]ey)[A-Za-z0-9_]*"?[=:] *"?)[^]{ ,"[]+/\1[redacted]/g' \
+              -e "s/((PASSWORD|[Pp]assword) ')[^']*/\1[redacted]/g" \
+              -e 's/("(k|d|p|q|dp|dq|qi)":")[^"]*/\1[redacted]/g' | awk 1
+          }
+          show_failure_context() {
+            if [ -n "$(ls -A "$job_logs")" ]; then sleep 1; fi # lets a follower finish writing
+            for log in "$job_logs"/*.log; do
+              [ -e "$log" ] || continue
+              echo "::group::One-off container $(basename "$log" .log): $(head -n 1 "$log")"
+              tail -n +2 "$log" | tail -n 100 | redact
+              echo "::endgroup::"
+            done
+            echo "::group::Sockets on ports 54320-54329, in any state"
+            timeout 30 sudo -n ss -tanp | grep -E ':5432[0-9]([^0-9]|$)'
+            echo "::endgroup::"
+            echo "::group::Containers on the runner"
+            timeout 30 docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+            echo "::endgroup::"
+            timeout 30 docker ps -a --filter label=com.supabase.cli.project --format '{{.Names}} {{.Status}}' |
+              while read -r name status; do
+                case "$status" in
+                  *unhealthy* | *'health: starting'*) ;;
+                  Up*) continue ;;
+                esac
+                echo "::group::Last 50 log lines of $name ($status)"
+                timeout 30 docker logs --tail 50 "$name" 2>&1 | redact
+                echo "::endgroup::"
+              done
+          }
+          # Service containers are named supabase_*; the init jobs get Docker's random names.
+          timeout 10m docker events --filter label=com.supabase.cli.project --filter event=start \
+              --format '{{.ID}} {{.Actor.Attributes.name}} {{.Actor.Attributes.image}}' 2> /dev/null |
+            while read -r id name image; do
+              case "$name" in supabase_*) continue ;; esac
+              { echo "$image"; docker logs -f "$id"; } < /dev/null > "$job_logs/$name.log" 2>&1 &
+            done > /dev/null 2>&1 &
+          start_code=0
+          timeout 8m supabase --workdir "$fixture_dir" start --exclude realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > "$start_log" 2>&1 || start_code=$?
+          if [ "$start_code" != 0 ]; then
+            set +e
+            redact < "$start_log"
+            # The CLI prints its error right after "Stopping containers...", then hints
+            # ("Try ...", "Or configure ..."); with no such line, take the last one.
+            cause="$(tr -d '\r' < "$start_log" | awk '
+              /^Stopping containers\.\.\.$/ { after = 1; first = ""; next }
+              /^Try / || /^[ \t]*$/ { next }
+              { last = $0; if (after && first == "") first = $0 }
+              END { print (first != "" ? first : last) }' | sed 's/%/%25/g' | redact)"
+            title="supabase start exited $start_code"
+            if [ "$start_code" = 124 ]; then title="supabase start timed out after 8 minutes"; fi
+            echo "::error title=$title::${cause:-no output}"
+            show_failure_context
+            exit "$start_code"
+          fi
+          reset_code=0
+          timeout 5m supabase --workdir "$fixture_dir" db reset --local --no-seed --yes 2>&1 | redact || reset_code=$?
+          if [ "$reset_code" != 0 ]; then
+            set +e
+            show_failure_context
+            exit "$reset_code"
+          fi
+          timeout 2m supabase --workdir "$fixture_dir" status -o json > "$status_file"
           printf 'AUDIT_STORAGE_CONFIG=%s\n' "$status_file" >> "$GITHUB_ENV"
 
       # Deletion claims are global. Separate invocations keep fixtures sequential;
@@ -387,7 +462,7 @@ jobs:
         continue-on-error: true
         run: |
           supabase --workdir "$RUNNER_TEMP/supabase-api" stop --no-backup
-          rm -f "$RUNNER_TEMP/supabase-api-status.json" "$RUNNER_TEMP/supabase-api-start.log"
+          rm -rf "$RUNNER_TEMP/supabase-api-status.json" "$RUNNER_TEMP/supabase-api-start.log" "$RUNNER_TEMP/supabase-api-jobs"
 
   supabase-migrations:
     name: Supabase migration replay
