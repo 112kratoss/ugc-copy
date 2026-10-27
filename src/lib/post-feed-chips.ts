@@ -22,7 +22,8 @@ export const FEED_CHIPS: FeedChip[] = [
     { id: 'for-you', label: 'For you', sort: 'for-you', unlock: 'all', category: 'all' },
     { id: 'notes', label: 'Notes', sort: 'for-you', unlock: 'all', category: 'text' },
     { id: 'recent', label: 'Recent', sort: 'recent', unlock: 'all', category: 'all' },
-    { id: 'unlocks', label: 'Unlocks', sort: 'for-you', unlock: 'with-unlock', category: 'all' },
+    // "Recipes", as the app names the lane: Studio's Unlocks tab is what you bought.
+    { id: 'unlocks', label: 'Recipes', sort: 'for-you', unlock: 'with-unlock', category: 'all' },
 ];
 
 export function getFeedChip(id: string | null | undefined): FeedChip {

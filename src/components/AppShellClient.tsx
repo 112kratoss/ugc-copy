@@ -32,14 +32,18 @@ import {
   isNotFoundRouteSegment,
   type AppNavItem,
 } from './app-shell-nav';
+import AppShellCreateMenu, { APP_SHELL_CREATE_MENU_ID, goToCreateWithoutPopovers } from './AppShellCreateMenu';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
 import AlertsBadge from '@/components/AlertsBadge';
 import { holdForLeaveGuard } from '@/lib/use-leave-guard';
 
+// The places to go. Search, Alerts, Create and Invite & Earn are the top bar's
+// (its search field, the bell, the Create menu, the account menu), so the side
+// navigation does not name them a second time.
 const NAV_GROUPS = [
-  { label: 'Create', ids: ['home', 'create', 'studio', 'showcase'] },
-  { label: 'Discover', ids: ['search', 'marketplace', 'workflow'] },
-  { label: 'Account', ids: ['invite', 'alerts', 'profile'] },
+  { label: 'Discover', ids: ['home', 'showcase', 'marketplace'] },
+  { label: 'Create', ids: ['studio', 'workflow'] },
+  { label: 'Account', ids: ['profile'] },
 ] as const;
 
 const subscribeToHydration = () => () => undefined;
@@ -197,13 +201,14 @@ function BottomNavItem({
 }) {
   const Icon = item.icon;
 
+  // The centre + opens the Create menu, as the app's does, rather than going
+  // to /create: a post starts there too.
   if (item.id === 'create') {
     return (
-      <Link
-        href={item.href}
-        prefetch={false}
-        aria-current={active ? 'page' : undefined}
-        onClick={(event) => onNavigate(event, item)}
+      <button
+        type="button"
+        popoverTarget={APP_SHELL_CREATE_MENU_ID}
+        onClick={goToCreateWithoutPopovers}
         aria-label="Create"
         className="ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-end gap-0.5 rounded-2xl pb-1 text-xs font-extrabold text-[var(--ui-primary)]"
       >
@@ -211,7 +216,7 @@ function BottomNavItem({
           <Plus className="h-6 w-6" strokeWidth={2.7} aria-hidden />
         </span>
         <span>Create</span>
-      </Link>
+      </button>
     );
   }
 
@@ -457,14 +462,16 @@ const AppShellFrame = memo(function AppShellFrame({
             >
               <Menu className="h-5 w-5" aria-hidden />
             </button>
-            <div className="min-w-0">
-              <div className="truncate text-[15px] font-extrabold text-[var(--ui-text-primary)]">{title}</div>
-              {activeItem ? (
-                <div className="hidden truncate text-xs text-[var(--ui-text-faint)] lg:block">
-                  {activeItem.description}
-                </div>
-              ) : null}
-            </div>
+            {title !== null ? (
+              <div className="min-w-0">
+                <div className="truncate text-[15px] font-extrabold text-[var(--ui-text-primary)]">{title}</div>
+                {activeItem ? (
+                  <div className="hidden truncate text-xs text-[var(--ui-text-faint)] lg:block">
+                    {activeItem.description}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           {activeItem?.id !== 'search' ? (
@@ -517,15 +524,16 @@ const AppShellFrame = memo(function AppShellFrame({
               <Bell className="h-[18px] w-[18px]" aria-hidden />
               <AlertsBadge className="absolute -right-1 -top-1" />
             </Link>
-            <Link
-              href="/create"
-              prefetch={false}
-              aria-label="New creation"
+            <button
+              type="button"
+              popoverTarget={APP_SHELL_CREATE_MENU_ID}
+              onClick={goToCreateWithoutPopovers}
+              aria-label="Create"
               className="app-shell-create ui-focus-ring min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
             >
               <Plus className="h-4 w-4" aria-hidden />
-              <span className="app-shell-create-label">New creation</span>
-            </Link>
+              <span className="app-shell-create-label">Create</span>
+            </button>
             <DeferredAppShellAccount pathname={pathname} />
           </div>
         </header>
@@ -549,6 +557,8 @@ const AppShellFrame = memo(function AppShellFrame({
           />
         ))}
       </nav>
+
+      <AppShellCreateMenu pathname={pathname} routePathname={routePathname} />
 
       {mobileOpen ? (
         <div

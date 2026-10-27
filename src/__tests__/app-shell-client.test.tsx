@@ -119,6 +119,16 @@ function hydrateShell({
   }
 }
 
+/**
+ * The Create menu: a closed popover, which jsdom draws as display: none, so
+ * its heading names it to no query (in a browser it does once open).
+ */
+function createMenu() {
+  const menu = document.getElementById('app-shell-create-menu');
+  if (!menu) throw new Error('No Create menu in the shell');
+  return menu;
+}
+
 describe('AppShellClient', () => {
   beforeEach(() => {
     mockedPathname = '/';
@@ -248,42 +258,61 @@ describe('AppShellClient', () => {
       expect(within(screen.getByRole('banner')).getByText('Workspace')).toBeInTheDocument();
 
       // A link out of the not-found page swaps the route tree under the shell.
-      mockedSegment = 'pricing';
-      mockedPathname = '/pricing';
+      mockedSegment = 'blog';
+      mockedPathname = '/blog';
       view.rerender(
         <AppShellClient>
-          <div>Pricing content</div>
+          <div>Blog content</div>
         </AppShellClient>
       );
 
-      expect(within(screen.getByRole('banner')).getByText('Pricing')).toBeInTheDocument();
+      expect(within(screen.getByRole('banner')).getByText('Blog')).toBeInTheDocument();
     });
   });
 
   it('server-renders the current route title instead of a stale home title', () => {
-    mockedPathname = '/marketplace';
+    mockedPathname = '/create-workflow';
 
     const html = renderToString(
       <AppShellClient>
-        <div>Marketplace content</div>
+        <div>Canvas content</div>
       </AppShellClient>
     );
 
-    expect(html).toContain('Reusable post recipes and creator assets');
-    expect(html).toContain('Marketplace content');
+    expect(html).toContain('Build reusable prompt and generation systems');
+    expect(html).toContain('Canvas content');
   });
 
   it('shows the mounted pathname title and selected navigation state', () => {
+    mockedPathname = '/create-workflow';
+
+    render(
+      <AppShellClient>
+        <div>Canvas content</div>
+      </AppShellClient>
+    );
+
+    expect(within(screen.getByRole('banner')).getByText('Workflow Canvas')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Workflow Canvas' }).some((link) => link.getAttribute('aria-current') === 'page')).toBe(true);
+  });
+
+  it('leaves the naming to a page with a heading of its own, and still marks its section', () => {
     mockedPathname = '/marketplace';
 
     render(
       <AppShellClient>
-        <div>Marketplace content</div>
+        <h1>Buy the reusable parts behind community posts</h1>
       </AppShellClient>
     );
 
-    expect(within(screen.getByRole('banner')).getByText('Marketplace')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: 'Marketplace' }).some((link) => link.getAttribute('aria-current') === 'page')).toBe(true);
+    // The bar said "Marketplace" and its section line over the page's own heading.
+    const banner = screen.getByRole('banner');
+    expect(within(banner).queryByText('Marketplace')).not.toBeInTheDocument();
+    expect(within(banner).queryByText('Reusable post recipes and creator assets')).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole('complementary', { name: 'Primary navigation' }))
+        .getByRole('link', { name: 'Marketplace' })
+    ).toHaveAttribute('aria-current', 'page');
   });
 
   it('presents a post as its own surface rather than part of Explore', () => {
@@ -305,21 +334,109 @@ describe('AppShellClient', () => {
     ).toBe(false);
   });
 
-  it('exposes Invite & Earn under Account without adding a mobile bottom tab', () => {
-    mockedPathname = '/invite';
-
+  it("lists places in the side navigation, and leaves the top bar's controls to the top bar", () => {
     render(
       <AppShellClient>
-        <div>Invite content</div>
+        <div>Page content</div>
       </AppShellClient>
     );
 
-    expect(within(screen.getByRole('banner')).getByText('Invite & Earn')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: 'Invite & Earn' }).some((link) => link.getAttribute('aria-current') === 'page')).toBe(true);
+    // Search is the bar's field, Alerts its bell, Create its menu, and
+    // Invite & Earn the account menu's: each was named in both before.
+    const sideNavigation = screen.getByRole('complementary', { name: 'Primary navigation' });
+    expect(within(sideNavigation).getAllByRole('link').map((link) => link.textContent)).toEqual([
+      'magicbookletCreator studio',
+      'Home',
+      'Explore',
+      'Marketplace',
+      'Studio',
+      'Workflow Canvas',
+      'Profile',
+      'Help & feedback',
+    ]);
+    expect(within(screen.getByRole('banner')).getByRole('searchbox', { name: 'Search creators, posts, and recipes' })).toBeInTheDocument();
+    expect(within(screen.getByRole('banner')).getByRole('link', { name: 'Open alerts' })).toBeInTheDocument();
     expect(
       within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
         .queryByRole('link', { name: /invite/i })
     ).not.toBeInTheDocument();
+  });
+
+  describe('the Create menu', () => {
+    it("opens from the top bar's Create and the phone layout's +, as the app's centre + does", () => {
+      render(
+        <AppShellClient>
+          <div>Home content</div>
+        </AppShellClient>
+      );
+
+      const menu = createMenu();
+      const topBarCreate = within(screen.getByRole('banner')).getByRole('button', { name: 'Create' });
+      const bottomCreate = within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
+        .getByRole('button', { name: 'Create' });
+
+      expect(menu).toHaveAttribute('role', 'dialog');
+      expect(document.getElementById(menu.getAttribute('aria-labelledby')!)).toHaveTextContent('Create or publish');
+      expect(menu).toHaveAttribute('popover', 'auto');
+      expect(topBarCreate).toHaveAttribute('popovertarget', menu.id);
+      expect(bottomCreate).toHaveAttribute('popovertarget', menu.id);
+      // Create and Post, in that order, the post started with a Back to Home.
+      expect(within(menu).getAllByRole('link', { hidden: true }).map((link) => [
+        link.getAttribute('aria-label'),
+        link.getAttribute('href'),
+      ])).toEqual([
+        ['Create', '/create'],
+        ['Post', '/post/new?from=home&returnTo=%2F'],
+      ]);
+      const post = within(menu).getByRole('link', { name: 'Post', hidden: true });
+      expect(document.getElementById(post.getAttribute('aria-describedby')!)).toHaveTextContent('Share finished media');
+    });
+
+    it('closes when one of its choices is clicked, before the page hears the click', () => {
+      render(
+        <AppShellClient>
+          <div>Home content</div>
+        </AppShellClient>
+      );
+      const menu = createMenu();
+      // jsdom has no popovers: this one stands open.
+      const hidePopover = vi.fn();
+      Object.assign(menu, { hidePopover, matches: (selector: string) => selector === ':popover-open' });
+      const heardOpen: boolean[] = [];
+      const listener = () => heardOpen.push(hidePopover.mock.calls.length === 0);
+      document.addEventListener('click', listener, true);
+
+      try {
+        fireEvent.click(within(menu).getByRole('link', { name: 'Create', hidden: true }));
+      } finally {
+        document.removeEventListener('click', listener, true);
+      }
+
+      expect(hidePopover).toHaveBeenCalledTimes(1);
+      // The document's capture phase, where a page with unsaved work asks, came after the close.
+      expect(heardOpen).toEqual([false]);
+      expect(navigations).toEqual(['/create']);
+    });
+
+    it('closes on the next page', () => {
+      const view = render(
+        <AppShellClient>
+          <div>Home content</div>
+        </AppShellClient>
+      );
+      const menu = createMenu();
+      const hidePopover = vi.fn();
+      Object.assign(menu, { hidePopover, matches: (selector: string) => selector === ':popover-open' });
+
+      mockedPathname = '/showcase';
+      view.rerender(
+        <AppShellClient>
+          <div>Explore content</div>
+        </AppShellClient>
+      );
+
+      expect(hidePopover).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('does not prefetch shell navigation during first paint', () => {
@@ -336,10 +453,12 @@ describe('AppShellClient', () => {
       name: 'Primary mobile navigation',
     });
 
+    const menu = createMenu();
+
     for (const link of [
       ...within(desktopNavigation).getAllByRole('link'),
       ...within(mobileNavigation).getAllByRole('link'),
-      screen.getByRole('link', { name: 'New creation' }),
+      ...within(menu).getAllByRole('link', { hidden: true }),
       screen.getByRole('link', { name: 'Open alerts' }),
     ]) {
       expect(link).toHaveAttribute('data-prefetch', 'false');
@@ -664,7 +783,7 @@ describe('AppShellClient', () => {
       for (const link of [
         within(screen.getByRole('complementary', { name: 'Primary navigation' })).getByRole('link', { name: 'Explore' }),
         within(bottomNavigation()).getByRole('link', { name: 'Home' }),
-        screen.getByRole('link', { name: 'New creation' }),
+        within(createMenu()).getByRole('link', { name: 'Create', hidden: true }),
         screen.getByRole('link', { name: 'Open alerts' }),
       ]) {
         fireEvent.click(link);

@@ -27,7 +27,6 @@ import {
     CreatorColumnLayout,
     CreatorModelChip,
     CreatorPendingStartNotice,
-    CreatorPhoneBalance,
     CreatorResultActions,
     CreatorSettingChoices,
     CreatorTemplatesTile,
@@ -1540,7 +1539,6 @@ export default function CreateMotionClient({
                                     })}
                                 </StudioModelPicker>
                             </div>
-                            <CreatorPhoneBalance credits={userCredits} />
                         </div>
 
                         <AnimatePresence>

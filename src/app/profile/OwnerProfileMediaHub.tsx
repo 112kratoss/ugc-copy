@@ -10,28 +10,20 @@ import {
   Crown,
   ExternalLink,
   FileText,
-  Film,
   Gift,
   Heart,
   ImageIcon,
   Layers3,
   Loader2,
   PencilLine,
-  Plus,
   Store,
-  Sparkles,
   UserRound,
-  Volume2,
   WalletCards,
 } from 'lucide-react';
 import UnavailableMediaNote from '@/components/UnavailableMediaNote';
 
 import { useAuth } from '@/components/AuthProvider';
 import { HoverVideo } from '@/components/HoverVideo';
-import MediaDetailsPreviewModal, {
-  type MediaDetailsAdditionalMediaItem,
-  type MediaDetailsType,
-} from '@/components/MediaDetailsPreviewModal';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import ProfileShareButton from '@/components/ProfileShareButton';
 import TextPostPreviewCard from '@/components/TextPostPreviewCard';
@@ -43,7 +35,6 @@ import {
   reportPostAfterConfirmation,
   toastSafetyOutcome,
 } from '@/lib/feed-safety-actions';
-import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
 import type { OwnerProfileStats } from '@/lib/profile';
@@ -63,16 +54,9 @@ import type {
 } from '@/lib/showcase';
 import MatureContentSetting from './MatureContentSetting';
 
-type ProfileMediaTab = 'posts' | 'saved' | 'creations';
-
-/**
- * A run that failed produced no media, so its card can only ever be a plate
- * with a date on it. Keeping those out of the grid by default -- which is what
- * the mobile app has always done -- leaves the workspace showing work, while
- * the scope keeps the record reachable: a reader who wants to know what became
- * of an attempt should not have to take the grid's silence for an answer.
- */
-type CreationsScope = 'ready' | 'failed';
+// Posts and Saved. The creations library is Studio's (/creations): the
+// profile used to draw it again as a third tab.
+type ProfileMediaTab = 'posts' | 'saved';
 
 interface OwnerPost {
   id: string;
@@ -107,45 +91,9 @@ interface OwnerPost {
   } | null;
 }
 
-interface OwnerGeneration {
-  id: string;
-  /**
-   * `expiresAt`: when the signed addresses of a private output stop holding; null for ones that do not
-   * expire. A sound comes with no media at all, though its file is signed as a picture's is.
-   */
-  media?: { renditionUrl?: string | null; expiresAt?: string | null } | null;
-  output_url: string | null;
-  /** Set when the only source is gone; the API withholds every address. */
-  source_unavailable_at?: string | null;
-  output_urls?: string[] | null;
-  preview_url?: string | null;
-  status: string;
-  created_at: string;
-  completed_at?: string | null;
-  duration: number | null;
-  model: string;
-  category?: string | null;
-  title?: string | null;
-  description?: string | null;
-  prompt?: string | null;
-  input_media?: GenerationInputMediaItem[] | null;
-  linked_post_id?: string | null;
-  linked_post_title?: string | null;
-  linked_post_visibility?: 'public' | 'unlisted' | 'private' | null;
-  origin?: 'creation' | 'template';
-  template?: {
-    templateTitle?: string | null;
-  } | null;
-}
-
 interface OffsetPageInfo {
   hasMore: boolean;
   nextOffset: number | null;
-}
-
-interface GenerationPageInfo {
-  hasMore: boolean;
-  nextCursor: string | null;
 }
 
 /** The payout balance the Wallet card shows: what the seller can withdraw now. */
@@ -194,64 +142,12 @@ const ShowcaseReelViewer = dynamic(
 );
 
 function isProfileMediaTab(value: string | null): value is ProfileMediaTab {
-  return value === 'posts' || value === 'saved' || value === 'creations';
+  return value === 'posts' || value === 'saved';
 }
 
 function appendUnique<T extends { id: string }>(current: T[], incoming: T[]): T[] {
   const seen = new Set(current.map((item) => item.id));
   return [...current, ...incoming.filter((item) => !seen.has(item.id))];
-}
-
-function getGenerationTitle(generation: OwnerGeneration): string {
-  // Fall back to the prompt before giving up on a name. `title` is only
-  // populated once a creation is published, so without this every private
-  // creation in the workspace reads "Untitled creation" even though its prompt
-  // is already in the payload. The mobile studio feed has always done this.
-  return generation.title?.trim()
-    || generation.template?.templateTitle?.trim()
-    || generation.prompt?.trim()
-    || (generation.origin === 'template' ? 'Template result' : 'Untitled creation');
-}
-
-function getGenerationMediaType(generation: OwnerGeneration): MediaDetailsType {
-  if (generation.category === 'audio' || /audio|music|speech/i.test(generation.model)) return 'audio';
-  if (generation.category === 'video' || generation.category === 'motion') return 'video';
-  return 'image';
-}
-
-function getAdditionalGenerationMedia(generation: OwnerGeneration): MediaDetailsAdditionalMediaItem[] {
-  const primaryUrl = generation.output_url;
-  return (generation.output_urls ?? [])
-    .filter((url) => Boolean(url) && url !== primaryUrl)
-    .map((url, index) => ({
-      id: `${generation.id}:output:${index}`,
-      src: url,
-      mediaType: getGenerationMediaType(generation) === 'video' ? 'video' : 'image',
-      title: `${getGenerationTitle(generation)} output ${index + 2}`,
-      alt: `${getGenerationTitle(generation)} output ${index + 2}`,
-    }));
-}
-
-/**
- * A creation's details read over the row already drawn: the details carry
- * what the list's summary leaves out (the inputs, the further outputs), and
- * the row keeps the addresses of the media it shows while they hold. A
- * private output is signed anew on each read, and the viewer, keyed by its
- * media's address, mounted again and loaded it again when the details came.
- */
-function withGenerationDetails(shown: OwnerGeneration, details: OwnerGeneration, now: number): OwnerGeneration {
-  const expiresAt = shown.media?.expiresAt ? Date.parse(shown.media.expiresAt) : null;
-  // With no media (a sound), nothing says how long the addresses on screen hold: the details' are taken.
-  if (!shown.output_url || !shown.media || (expiresAt !== null && !(expiresAt > now))) return { ...shown, ...details };
-  return {
-    ...shown,
-    ...details,
-    output_url: shown.output_url,
-    preview_url: shown.preview_url,
-    media: shown.media,
-    // A run's outputs hold its main output too, at this read's address for it.
-    output_urls: details.output_urls?.map((url) => (url === details.output_url ? shown.output_url! : url)) ?? shown.output_urls,
-  };
 }
 
 function mapOwnerPostToFeedItem(post: OwnerPost, creator: ShowcaseCreator): ShowcaseFeedItem {
@@ -327,7 +223,7 @@ function MediaCard({
   unavailable?: boolean;
   previewUrl?: string | null;
   renditionUrl?: string | null;
-  mediaKind: 'image' | 'video' | 'audio' | null;
+  mediaKind: 'image' | 'video' | null;
   textBody?: string;
   badges?: string[];
   onClick?: () => void;
@@ -355,11 +251,6 @@ function MediaCard({
             sizes="(min-width: 1280px) 22vw, (min-width: 768px) 33vw, 50vw"
             className="object-cover opacity-90 transition duration-300 group-hover:scale-[1.015] group-hover:opacity-100"
           />
-        ) : mediaKind === 'audio' ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_top,rgba(255,122,89,0.16),transparent_58%),#09090b] text-zinc-400">
-            <Volume2 className="h-9 w-9 text-[var(--ui-primary)]" />
-            <span className="text-xs font-semibold uppercase tracking-[0.18em]">Audio creation</span>
-          </div>
         ) : textBody ? (
           <TextPostPreviewCard
             title={title}
@@ -387,8 +278,7 @@ function MediaCard({
           {!isTextCard ? <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-white">{title}</h3> : null}
           <div className={`${isTextCard ? '' : 'mt-1'} flex items-center justify-between gap-3`}>
             <p className="min-w-0 truncate text-xs text-zinc-400">{subtitle}</p>
-            {/* A failed creation has no media to open, so it gets no verb. The
-                card used to print "Preview" over a button wired to nothing. */}
+            {/* A card with nothing to open gets no verb. */}
             {isInteractive ? (
               <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
                 {actionLabel || (href ? 'Edit' : 'View')}
@@ -409,7 +299,7 @@ function MediaCard({
   }
 
   // Not a button: a focusable control that does nothing is worse than plain
-  // content, and a failed creation is a record, not an affordance.
+  // content.
   if (!onClick) {
     return <div className={className}>{content}</div>;
   }
@@ -434,28 +324,23 @@ export default function OwnerProfileMediaHub({
   const initialTab = isProfileMediaTab(searchParams.get('tab')) ? searchParams.get('tab') as ProfileMediaTab : 'posts';
   const [activeTab, setActiveTab] = useState<ProfileMediaTab>(initialTab);
   const [ownerPosts, setOwnerPosts] = useState<OwnerPost[]>([]);
-  const [generations, setGenerations] = useState<OwnerGeneration[]>([]);
   const [selectedPostId, setSelectedPostId] = useState<string | null>(() => searchParams.get('post'));
   const [selectedMediaIndex, setSelectedMediaIndex] = useState(() => {
     const value = Number(searchParams.get('media'));
     return Number.isInteger(value) && value >= 0 ? value : 0;
   });
-  const [selectedGeneration, setSelectedGeneration] = useState<OwnerGeneration | null>(null);
-  const [creationsScope, setCreationsScope] = useState<CreationsScope>('ready');
   const [loadingTabs, setLoadingTabs] = useState<Set<ProfileMediaTab>>(() => new Set([initialTab]));
   const [loadingMoreTab, setLoadingMoreTab] = useState<ProfileMediaTab | null>(null);
   const [postsPageInfo, setPostsPageInfo] = useState<OffsetPageInfo>({ hasMore: false, nextOffset: null });
   const [savedPageInfo, setSavedPageInfo] = useState<OffsetPageInfo>({ hasMore: false, nextOffset: null });
-  const [generationsPageInfo, setGenerationsPageInfo] = useState<GenerationPageInfo>({ hasMore: false, nextCursor: null });
   const [errors, setErrors] = useState<Partial<Record<ProfileMediaTab, string>>>({});
   // The libraries are the account's, not the token's: a refreshed token (about
   // hourly, and on coming back to a long-idle tab) keeps every page loaded and
   // the open reel. The requests read the newest token through `authHeaders`.
   const loadedUserRef = useRef<string | null>(null);
-  // How the reel's close and the creation viewer's leave history: read from the
-  // entry when the hub mounts and on popstate, and set by a tile.
+  // How the reel's close leaves history: read from the entry when the hub
+  // mounts and on popstate, and set by a tile.
   const reelHistoryModeRef = useRef<ReelHistoryMode>(null);
-  const creationHistoryModeRef = useRef<ReelHistoryMode>(null);
   // The server's Saved total moves with what is done here, as the app's header
   // does, until the next server render brings a fresh one. Kept against the
   // totals it applies to, so a fresh set starts again from the server's number.
@@ -539,24 +424,6 @@ export default function OwnerProfileMediaHub({
     });
   }, [authHeaders, setProfileSavedItemIds, setProfileSavedItems]);
 
-  const loadGenerations = useCallback(async (cursor: string | null = null, append = false) => {
-    const params = new URLSearchParams({
-      includeArchived: 'false',
-      detail: 'summary',
-      limit: String(PAGE_SIZE),
-    });
-    if (cursor) params.set('cursor', cursor);
-    const response = await fetch(`/api/generations?${params.toString()}`, { headers: authHeaders });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload?.error || 'Could not load your creations.');
-    const nextGenerations = Array.isArray(payload.generations) ? payload.generations as OwnerGeneration[] : [];
-    setGenerations((current) => append ? appendUnique(current, nextGenerations) : nextGenerations);
-    setGenerationsPageInfo({
-      hasMore: Boolean(payload.pagination?.hasMore),
-      nextCursor: typeof payload.pagination?.nextCursor === 'string' ? payload.pagination.nextCursor : null,
-    });
-  }, [authHeaders]);
-
   const runTabLoad = useCallback(async (tab: ProfileMediaTab) => {
     setLoadingTabs((current) => new Set(current).add(tab));
     setErrors((current) => ({ ...current, [tab]: undefined }));
@@ -564,13 +431,8 @@ export default function OwnerProfileMediaHub({
     try {
       if (tab === 'posts') await loadPosts();
       if (tab === 'saved') await loadSaved();
-      if (tab === 'creations') await loadGenerations();
     } catch (error) {
-      const fallback = tab === 'posts'
-        ? 'Could not load your posts.'
-        : tab === 'saved'
-          ? 'Could not load saved posts.'
-          : 'Could not load your creations.';
+      const fallback = tab === 'posts' ? 'Could not load your posts.' : 'Could not load saved posts.';
       setErrors((current) => ({
         ...current,
         [tab]: error instanceof Error ? error.message : fallback,
@@ -582,7 +444,7 @@ export default function OwnerProfileMediaHub({
         return next;
       });
     }
-  }, [loadGenerations, loadPosts, loadSaved]);
+  }, [loadPosts, loadSaved]);
 
   useEffect(() => {
     if (!userId || !accessToken || loadedUserRef.current === userId) return;
@@ -592,80 +454,14 @@ export default function OwnerProfileMediaHub({
 
     void (async () => {
       await runTabLoad(initialTab);
-      const remainingTabs = (['posts', 'saved', 'creations'] as ProfileMediaTab[])
-        .filter((tab) => tab !== initialTab);
-      await Promise.all(remainingTabs.map((tab) => runTabLoad(tab)));
+      await runTabLoad(initialTab === 'posts' ? 'saved' : 'posts');
     })();
   }, [accessToken, initialTab, runTabLoad, userId]);
-
-  // The creation the address names, once the hub has taken it up: its details
-  // are read at once, and it opens once, from the list or from its details,
-  // whichever comes first (a tile marks the one it opens itself); never again
-  // while the address still names it. A close clears the selection before
-  // this query lets go of the creation (Next hands the page's own replaceState
-  // to its readers a microtask later, and Back's popstate comes after the
-  // close), and the list can change in between. Waiting for the list alone, a
-  // creation opened by its address showed only the list's summary, and one
-  // beyond the loaded pages opened nothing until a later Load more popped it
-  // open over the grid.
-  const addressGenerationRef = useRef<{ id: string; opened: boolean } | null>(null);
-
-  // A creation's details fill in the creation on screen while it is the one
-  // they are for (details that come after a close, or after another creation
-  // opened, leave the viewer as it is), and open the address's creation when
-  // the list has not.
-  const readGenerationDetails = useCallback(async (generationId: string) => {
-    let answered: OwnerGeneration | undefined;
-    let read = false;
-    try {
-      const response = await fetch(`/api/generations?includeArchived=false&id=${encodeURIComponent(generationId)}&limit=1`, { headers: authHeaders });
-      const payload = await response.json();
-      const first = Array.isArray(payload.generations) ? payload.generations[0] as OwnerGeneration | undefined : undefined;
-      read = response.ok;
-      if (response.ok && first?.id === generationId) answered = first;
-    } catch (error) {
-      console.error('Failed to load full creation details:', error);
-    }
-    const request = addressGenerationRef.current;
-    if (!answered) {
-      // Read and not found: nothing to open it with, and a later page of the list does not pop it
-      // open either. A refused or failed read says nothing about it, so the list still may.
-      if (read && request?.id === generationId) request.opened = true;
-      return;
-    }
-    const details = answered;
-    const now = Date.now();
-    if (request?.id === generationId && !request.opened) {
-      request.opened = true;
-      setSelectedGeneration(details);
-    } else {
-      setSelectedGeneration((current) => current?.id === generationId ? withGenerationDetails(current, details, now) : current);
-    }
-    setGenerations((current) => current.map((item) => item.id === generationId ? withGenerationDetails(item, details, now) : item));
-  }, [authHeaders]);
-
-  useEffect(() => {
-    const requestedGenerationId = searchParams.get('generation');
-    if (requestedGenerationId !== (addressGenerationRef.current?.id ?? null)) {
-      addressGenerationRef.current = null;
-      // Taken up once there is a token to read its details with.
-      if (!requestedGenerationId || !accessToken) return;
-      addressGenerationRef.current = { id: requestedGenerationId, opened: false };
-      void readGenerationDetails(requestedGenerationId);
-    }
-    const request = addressGenerationRef.current;
-    if (!request || request.opened) return;
-    const listed = generations.find((generation) => generation.id === request.id);
-    if (!listed) return;
-    request.opened = true;
-    setSelectedGeneration(listed);
-  }, [accessToken, generations, readGenerationDetails, searchParams]);
 
   const updateLocation = useCallback((updates: {
     tab?: ProfileMediaTab;
     postId?: string | null;
     mediaIndex?: number;
-    generationId?: string | null;
   }, mode: 'push' | 'replace') => {
     const params = new URLSearchParams(window.location.search);
     params.set('tab', updates.tab ?? activeTab);
@@ -677,23 +473,20 @@ export default function OwnerProfileMediaHub({
       params.delete('post');
       params.delete('media');
     }
-    if (updates.generationId) params.set('generation', updates.generationId);
-    else if (updates.generationId === null) params.delete('generation');
     const nextUrl = `${pathname}?${params.toString()}${window.location.hash}`;
-    // An entry pushed for a post's reel or a creation says so on its state
+    // An entry pushed for a post's reel says so on its state
     // (`reel-history-entry.ts`), and keeps saying so while the reel moves to
     // another post or slide; a tab's entry is a plain one.
-    if (mode === 'push') pushReelEntry(updates.postId ? 'post' : updates.generationId ? 'generation' : null, nextUrl);
+    if (mode === 'push') pushReelEntry(updates.postId ? 'post' : null, nextUrl);
     else replaceReelEntry(nextUrl);
   }, [activeTab, pathname]);
 
   useEffect(() => {
-    // The entry the hub mounts on says how its reel or creation was opened: one
-    // a tile pushed (a reload, or a Back from a page they linked to, brought the
-    // reader back to it) closes by going Back to the entry under it; one any
-    // other entry names opened by address, and its close replaces the entry.
+    // The entry the hub mounts on says how its reel was opened: one a tile
+    // pushed (a reload, or a Back from a page it linked to, brought the reader
+    // back to it) closes by going Back to the entry under it; one any other
+    // entry names opened by address, and its close replaces the entry.
     reelHistoryModeRef.current = readCurrentReelHistoryMode('post');
-    creationHistoryModeRef.current = readCurrentReelHistoryMode('generation');
     const handlePopState = (event: PopStateEvent) => {
       const params = new URLSearchParams(window.location.search);
       const tab = isProfileMediaTab(params.get('tab')) ? params.get('tab') as ProfileMediaTab : 'posts';
@@ -701,10 +494,8 @@ export default function OwnerProfileMediaHub({
       setActiveTab(tab);
       setSelectedPostId(params.get('post'));
       setSelectedMediaIndex(Number.isInteger(mediaIndex) && mediaIndex >= 0 ? mediaIndex : 0);
-      setSelectedGeneration((current) => current?.id === params.get('generation') ? current : null);
       // The same for the entry Back or Forward reaches.
       reelHistoryModeRef.current = readReelHistoryMode('post', params, event.state);
-      creationHistoryModeRef.current = readReelHistoryMode('generation', params, event.state);
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -713,14 +504,13 @@ export default function OwnerProfileMediaHub({
   const selectTab = (tab: ProfileMediaTab) => {
     setActiveTab(tab);
     setSelectedPostId(null);
-    setSelectedGeneration(null);
-    updateLocation({ tab, postId: null, generationId: null }, 'push');
+    updateLocation({ tab, postId: null }, 'push');
   };
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: ProfileMediaTab) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
-    const tabOrder: ProfileMediaTab[] = ['posts', 'saved', 'creations'];
+    const tabOrder: ProfileMediaTab[] = ['posts', 'saved'];
     const currentIndex = tabOrder.indexOf(tab);
     const nextIndex = event.key === 'Home'
       ? 0
@@ -736,7 +526,7 @@ export default function OwnerProfileMediaHub({
     reelHistoryModeRef.current = 'pushed';
     setSelectedMediaIndex(0);
     setSelectedPostId(item.id);
-    updateLocation({ postId: item.id, mediaIndex: 0, generationId: null }, 'push');
+    updateLocation({ postId: item.id, mediaIndex: 0 }, 'push');
   };
 
   const selectPost = (id: string) => {
@@ -831,29 +621,6 @@ export default function OwnerProfileMediaHub({
     }
   };
 
-  const openGeneration = (generation: OwnerGeneration) => {
-    // Open already: a second press of its tile (one that came before the
-    // viewer took the focus) pushed a second entry for it, and Close then
-    // went Back onto one that still named it.
-    if (selectedGeneration?.id === generation.id) return;
-    creationHistoryModeRef.current = 'pushed';
-    addressGenerationRef.current = { id: generation.id, opened: true };
-    setSelectedGeneration(generation);
-    updateLocation({ generationId: generation.id, postId: null }, 'push');
-    void readGenerationDetails(generation.id);
-  };
-
-  const closeGeneration = () => {
-    setSelectedGeneration(null);
-    if (creationHistoryModeRef.current === 'pushed') {
-      creationHistoryModeRef.current = null;
-      window.history.back();
-    } else {
-      creationHistoryModeRef.current = null;
-      updateLocation({ generationId: null }, 'replace');
-    }
-  };
-
   const publicPostItems = useMemo(
     () => postSaveState.items.filter((item) => ownerPosts.some((post) => post.id === item.id && post.canShare)),
     [ownerPosts, postSaveState.items]
@@ -861,24 +628,9 @@ export default function OwnerProfileMediaHub({
   const viewerItems = activeTab === 'saved' ? savedSaveState.items : publicPostItems;
   const activeSaveState = activeTab === 'saved' ? savedSaveState : postSaveState;
   const activePageInfo = activeTab === 'saved' ? savedPageInfo : postsPageInfo;
-  const failedGenerations = useMemo(
-    () => generations.filter((generation) => generation.status === 'failed'),
-    [generations]
-  );
-  const readyGenerations = useMemo(
-    () => generations.filter((generation) => generation.status !== 'failed'),
-    [generations]
-  );
-  // The scope control only renders while there are failed runs, so the stored
-  // scope has to fall back on its own when the last one goes. Otherwise
-  // archiving the final failed run leaves the grid empty with the control that
-  // would take you back already gone.
-  const creationsScopeInEffect: CreationsScope = failedGenerations.length > 0 ? creationsScope : 'ready';
-  const visibleGenerations = creationsScopeInEffect === 'failed' ? failedGenerations : readyGenerations;
   const tabs = [
     { id: 'posts' as const, label: 'Posts', count: stats?.posts ?? null, icon: Layers3 },
     { id: 'saved' as const, label: 'Saved', count: savedTotal, icon: Heart },
-    { id: 'creations' as const, label: 'Creations', count: stats?.creations ?? null, icon: Sparkles },
   ];
 
   const loadMore = async () => {
@@ -887,7 +639,6 @@ export default function OwnerProfileMediaHub({
     try {
       if (activeTab === 'posts' && postsPageInfo.nextOffset !== null) await loadPosts(postsPageInfo.nextOffset, true);
       if (activeTab === 'saved' && savedPageInfo.nextOffset !== null) await loadSaved(savedPageInfo.nextOffset, true);
-      if (activeTab === 'creations' && generationsPageInfo.nextCursor) await loadGenerations(generationsPageInfo.nextCursor, true);
     } catch (error) {
       setErrors((current) => ({
         ...current,
@@ -903,7 +654,7 @@ export default function OwnerProfileMediaHub({
       title: 'Your published story starts here',
       body: 'Turn a finished creation into a post, add context, then attach an optional recipe.',
       href: '/post/new?from=profile&returnTo=%2Fprofile%3Ftab%3Dposts',
-      cta: 'Create a post',
+      cta: 'Post',
     },
     saved: {
       title: 'Nothing saved yet',
@@ -911,20 +662,10 @@ export default function OwnerProfileMediaHub({
       href: '/showcase',
       cta: 'Go to Explore',
     },
-    creations: {
-      title: 'No raw creations yet',
-      body: 'Generate or upload media first. Creations stay private until you publish a post.',
-      href: '/create',
-      cta: 'Start creating',
-    },
   };
 
-  const activeCount = activeTab === 'posts'
-    ? ownerPosts.length
-    : activeTab === 'saved'
-      ? savedSaveState.items.length
-      : visibleGenerations.length;
-  const hasMore = activeTab === 'creations' ? generationsPageInfo.hasMore : activePageInfo.hasMore;
+  const activeCount = activeTab === 'posts' ? ownerPosts.length : savedSaveState.items.length;
+  const hasMore = activePageInfo.hasMore;
   const isLoading = loadingTabs.has(activeTab);
 
   return (
@@ -1031,27 +772,17 @@ export default function OwnerProfileMediaHub({
 
       <section id="profile-media" className="mb-8 overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(145deg,rgba(24,24,27,0.78),rgba(8,8,10,0.94))] shadow-[0_28px_90px_rgba(0,0,0,0.3)]">
       <div className="border-b border-white/8 px-5 py-6 sm:px-7">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-[0.2em] text-[var(--ui-primary)]">Your media</div>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">From private creation to public post</h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-              Explore viewers see posts in the reel. Your raw creations stay here for preview and editing.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link href="/post/new?from=profile&returnTo=%2Fprofile%3Ftab%3Dposts" className="inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-bold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
-              <Plus className="h-4 w-4" />
-              New post
-            </Link>
-            <Link href="/creations" className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]">
-              <PencilLine className="h-4 w-4" />
-              Manage in Studio
-            </Link>
-          </div>
+        {/* A new post starts from the top bar's Create menu, and creations
+            live in Studio. */}
+        <div>
+          <div className="text-xs font-bold uppercase tracking-[0.2em] text-[var(--ui-primary)]">Your media</div>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Your posts and saves</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+            Explore viewers see your posts in the reel. Your creations stay private in Studio until you post them.
+          </p>
         </div>
 
-        <div className="mt-6 grid grid-cols-3 gap-2 rounded-[22px] border border-white/8 bg-black/25 p-1" role="tablist" aria-label="Profile media">
+        <div className="mt-6 grid grid-cols-2 gap-2 rounded-[22px] border border-white/8 bg-black/25 p-1" role="tablist" aria-label="Profile media">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const selected = activeTab === tab.id;
@@ -1080,28 +811,6 @@ export default function OwnerProfileMediaHub({
         </div>
       </div>
 
-      {activeTab === 'creations' && failedGenerations.length > 0 ? (
-        <div role="group" aria-label="Filter creations" className="flex flex-wrap items-center gap-2 px-4 pt-4 sm:px-6">
-          {([
-            { id: 'ready' as const, label: 'Creations', count: readyGenerations.length },
-            { id: 'failed' as const, label: 'Failed runs', count: failedGenerations.length },
-          ]).map((scope) => (
-            <button
-              key={scope.id}
-              type="button"
-              aria-pressed={creationsScopeInEffect === scope.id}
-              onClick={() => setCreationsScope(scope.id)}
-              className={`ui-focus-ring inline-flex min-h-9 items-center gap-2 rounded-full border px-3.5 text-xs font-semibold transition ${creationsScopeInEffect === scope.id
-                ? 'border-white/20 bg-white/[0.10] text-white'
-                : 'border-white/10 bg-white/[0.02] text-zinc-400 hover:bg-white/[0.06] hover:text-white'}`}
-            >
-              {scope.label}
-              <span className="rounded-full bg-black/30 px-1.5 py-0.5 text-[10px] text-zinc-300">{scope.count}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-
       <div id={`profile-panel-${activeTab}`} role="tabpanel" aria-labelledby={`profile-tab-${activeTab}`} className="p-4 sm:p-6">
         {isLoading ? (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4" aria-label="Loading profile media">
@@ -1121,18 +830,11 @@ export default function OwnerProfileMediaHub({
         ) : activeCount === 0 ? (
           <div className="flex min-h-72 flex-col items-center justify-center px-6 py-12 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-400">
-              {activeTab === 'saved' ? <Heart className="h-6 w-6" /> : activeTab === 'creations' ? <Sparkles className="h-6 w-6" /> : <FileText className="h-6 w-6" />}
+              {activeTab === 'saved' ? <Heart className="h-6 w-6" /> : <FileText className="h-6 w-6" />}
             </div>
-            <h3 className="mt-5 text-xl font-semibold text-white">
-              {activeTab === 'creations' && failedGenerations.length > 0 && creationsScopeInEffect === 'ready'
-                ? 'Nothing finished yet'
-                : emptyCopy[activeTab].title}
-            </h3>
+            <h3 className="mt-5 text-xl font-semibold text-white">{emptyCopy[activeTab].title}</h3>
             <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-              {errors[activeTab]
-                || (activeTab === 'creations' && failedGenerations.length > 0 && creationsScopeInEffect === 'ready'
-                  ? `Every creation loaded so far failed. Switch to Failed runs to see ${failedGenerations.length === 1 ? 'it' : 'them'}.`
-                  : emptyCopy[activeTab].body)}
+              {errors[activeTab] || emptyCopy[activeTab].body}
             </p>
             <Link href={emptyCopy[activeTab].href} className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-4 text-sm font-bold text-black transition hover:bg-zinc-200">
               {emptyCopy[activeTab].cta}
@@ -1166,7 +868,7 @@ export default function OwnerProfileMediaHub({
                     actionLabel={post.canShare ? 'View' : 'Edit'}
                   />
                 );
-              }) : activeTab === 'saved' ? savedSaveState.items.map((item) => {
+              }) : savedSaveState.items.map((item) => {
                 const cover = item.mediaItems?.slice().sort((left, right) => left.sortOrder - right.sortOrder)[0];
                 return (
                   <MediaCard
@@ -1181,27 +883,6 @@ export default function OwnerProfileMediaHub({
                     badges={item.asset ? ['Recipe attached'] : undefined}
                     onClick={() => openPost(item)}
                     actionLabel="View"
-                  />
-                );
-              }) : visibleGenerations.map((generation) => {
-                const mediaType = getGenerationMediaType(generation);
-                const failed = generation.status === 'failed';
-                return (
-                  <MediaCard
-                    key={generation.id}
-                    title={getGenerationTitle(generation)}
-                    subtitle={`${generation.status} · ${formatShortDate(generation.created_at)}`}
-                    mediaUrl={generation.output_url}
-                    unavailable={Boolean(generation.source_unavailable_at)}
-                    renditionUrl={generation.media?.renditionUrl}
-                    previewUrl={generation.preview_url}
-                    mediaKind={mediaType === 'text' ? null : mediaType}
-                    badges={[
-                      failed ? 'Failed run' : generation.linked_post_id ? 'Posted' : 'Private creation',
-                      generation.origin === 'template' ? 'Template' : generation.model,
-                    ]}
-                    onClick={generation.output_url ? () => openGeneration(generation) : undefined}
-                    actionLabel="Preview"
                   />
                 );
               })}
@@ -1257,46 +938,6 @@ export default function OwnerProfileMediaHub({
         />
       ) : null}
 
-      <MediaDetailsPreviewModal
-        isOpen={Boolean(selectedGeneration)}
-        onClose={closeGeneration}
-        mediaType={selectedGeneration ? getGenerationMediaType(selectedGeneration) : 'image'}
-        src={selectedGeneration?.output_url ? resolvePlaybackUrl({
-          url: selectedGeneration.output_url, renditionUrl: selectedGeneration.media?.renditionUrl,
-        }) : null}
-        alt={selectedGeneration ? getGenerationTitle(selectedGeneration) : 'Creation preview'}
-        title={selectedGeneration ? getGenerationTitle(selectedGeneration) : 'Creation preview'}
-        prompt={selectedGeneration?.prompt ?? ''}
-        body={selectedGeneration?.description ?? ''}
-        inputMedia={selectedGeneration?.input_media ?? []}
-        additionalMedia={selectedGeneration ? getAdditionalGenerationMedia(selectedGeneration) : []}
-        metadata={selectedGeneration ? [
-          { label: 'Model', value: selectedGeneration.model },
-          { label: 'Created', value: formatShortDate(selectedGeneration.created_at) },
-          { label: 'Status', value: selectedGeneration.status },
-        ] : []}
-        actions={selectedGeneration ? (
-          <>
-            {/* A creation holds one post: a second "new post" from it overwrote the first. */}
-            {selectedGeneration.linked_post_id ? null : (
-              <Link href={`/post/new?generationId=${encodeURIComponent(selectedGeneration.id)}&from=profile&returnTo=%2Fprofile%3Ftab%3Dposts`} className="inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-bold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
-                <Plus className="h-4 w-4" />
-                Turn into post
-              </Link>
-            )}
-            {selectedGeneration.linked_post_id ? (
-              <Link href={`/post/${selectedGeneration.linked_post_id}/edit`} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]">
-                <PencilLine className="h-4 w-4" />
-                Edit post
-              </Link>
-            ) : null}
-            <Link href={`/creations?generation=${encodeURIComponent(selectedGeneration.id)}`} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]">
-              <Film className="h-4 w-4" />
-              Open in Studio
-            </Link>
-          </>
-        ) : null}
-      />
       </section>
     </>
   );

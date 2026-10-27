@@ -420,14 +420,8 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                             Fresh creator posts with optional recipes. Browse the result, then save it, remix it, or open the reusable process.
                         </p>
                     </div>
+                    {/* As the client draws it (ShowcaseClient): a post starts from the top bar's Create menu. */}
                     <div className="flex flex-wrap gap-2">
-                        <a
-                            href="/post/new?from=community&returnTo=%2Fshowcase"
-                            data-showcase-static-link="true"
-                            className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
-                        >
-                            Share a post
-                        </a>
                         <a
                             href="/marketplace"
                             data-showcase-static-link="true"

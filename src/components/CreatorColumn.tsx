@@ -152,23 +152,6 @@ export function CreatorModelChip({
   );
 }
 
-/**
- * The balance beside the model chip on a phone. The shell's own balance pill is
- * hidden below 640px, and the creators were the page that showed it there.
- */
-export function CreatorPhoneBalance({ credits }: { credits: number | null }) {
-  return (
-    <Link
-      href="/pricing"
-      prefetch={false}
-      className="ui-focus-ring inline-flex min-h-12 shrink-0 items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-400/10 px-3 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15 sm:hidden"
-    >
-      <Sparkles aria-hidden className="h-4 w-4" />
-      {typeof credits === 'number' ? `${credits} credits` : 'Credits'}
-    </Link>
-  );
-}
-
 /** The quiet tile beside Enhance: the templates, as the app's toolbar has them. */
 export function CreatorTemplatesTile() {
   return (

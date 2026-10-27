@@ -22,7 +22,6 @@ import {
     CreatorMentionPanel,
     CreatorModelChip,
     CreatorPendingStartNotice,
-    CreatorPhoneBalance,
     CreatorReferenceRow,
     CreatorResultActions,
     CreatorSettingChoices,
@@ -4428,7 +4427,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     })}
                                 </StudioModelPicker>
                             </div>
-                            <CreatorPhoneBalance credits={userCredits} />
                         </div>
 
                         <AnimatePresence>

@@ -1,11 +1,12 @@
 'use client';
 
-import { Loader2, PenLine } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
+import { HOME_FEED_DETAIL_CONTEXT } from '@/components/HomeFeedSkeleton';
 import NewPostsPill, { newPostsScrollBehavior } from '@/components/NewPostsPill';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import { publishNavigationStart } from '@/components/navigation-progress-state';
@@ -52,7 +53,6 @@ import {
 import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
 import { scheduleIdleDebouncedWork } from '@/lib/schedule-idle-work';
 
-const PAGE_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
 const FEED_SNAPSHOT_QUIET_PERIOD_MS = 1_000;
 const FEED_SNAPSHOT_IDLE_TIMEOUT_MS = 1_000;
 // A lane left and come back to within this long shows what it showed, as the
@@ -210,13 +210,7 @@ interface FeedClientProps {
      * after mount, from its snapshot when there is one.
      */
     laneFromUrl?: boolean;
-    /**
-     * `page` (default) renders the standalone /feed page: own header, page
-     * gutters, Share CTA. `embedded` drops the header and gutters so the feed
-     * can sit inside another page's column (the home dashboard) while keeping
-     * the lane chips and infinite scroll.
-     */
-    variant?: 'page' | 'embedded';
+    /** Where a post opened from the feed leads back to: Home's lane by default. */
     detailContext?: FeedDetailContext;
     /** One bounded server-inlined cover for the anonymous home LCP. */
     initialPriorityPreview?: {
@@ -236,14 +230,12 @@ export default function FeedClient({
     initialFeed,
     initialChipId,
     laneFromUrl = false,
-    variant = 'page',
-    detailContext = PAGE_DETAIL_CONTEXT,
+    detailContext = HOME_FEED_DETAIL_CONTEXT,
     initialPriorityPreview = null,
 }: FeedClientProps) {
     const router = useRouter();
     const { session, user, isLoading: authLoading } = useAuth();
     const accessToken = session?.access_token ?? null;
-    const isEmbedded = variant === 'embedded';
 
     const [chipId, setChipId] = useState<FeedChipId>(initialChipId);
     const viewerId = user?.id ?? null;
@@ -1087,13 +1079,11 @@ export default function FeedClient({
         dismissNewPosts();
         const root = rootRef.current;
         if (root) {
-            const top = isEmbedded
-                ? root.getBoundingClientRect().top + window.scrollY - embeddedFeedTopOffset()
-                : 0;
+            const top = root.getBoundingClientRect().top + window.scrollY - embeddedFeedTopOffset();
             if (window.scrollY > top) window.scrollTo({ top: Math.max(0, top), behavior: newPostsScrollBehavior() });
         }
         selectChip(chipId);
-    }, [chipId, dismissNewPosts, isEmbedded, selectChip]);
+    }, [chipId, dismissNewPosts, selectChip]);
 
     // The "Hidden · Undo" row stands where the card stood: above the card that
     // followed it, or below the last. It shares that card's place in the
@@ -1127,35 +1117,8 @@ export default function FeedClient({
     );
 
     return (
-        <div
-            ref={rootRef}
-            className={isEmbedded
-                ? 'flex w-full flex-col gap-5'
-                : 'mx-auto flex w-full max-w-[680px] flex-col gap-5 px-4 pb-24 pt-6 sm:px-6'}
-        >
-            {isEmbedded ? chipRow : (
-                <header className="flex flex-col gap-4">
-                    <div className="flex flex-wrap items-end justify-between gap-3">
-                        <div>
-                            <h1 className="text-3xl font-extrabold tracking-[-0.03em] text-[var(--ui-text-primary)]">
-                                Feed
-                            </h1>
-                            <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
-                                Notes, prompts, and creations from the community — newest thinking first.
-                            </p>
-                        </div>
-                        <Link
-                            href="/post/new?from=community&returnTo=%2Ffeed"
-                            className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
-                        >
-                            <PenLine className="h-4 w-4" aria-hidden="true" />
-                            Share a post
-                        </Link>
-                    </div>
-
-                    {chipRow}
-                </header>
-            )}
+        <div ref={rootRef} className="flex w-full flex-col gap-5">
+            {chipRow}
 
             {loadError ? (
                 <div

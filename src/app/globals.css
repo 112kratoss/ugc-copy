@@ -43,6 +43,7 @@
 @source "../components/AppShellAccount.tsx";
 @source "../components/AppShellAccountFallback.tsx";
 @source "../components/AppShellClient.tsx";
+@source "../components/AppShellCreateMenu.tsx";
 @source "../components/AuthProvider.tsx";
 @source "../components/CreatorIdentity.tsx";
 @source "../components/DeferredAppShellAccount.tsx";
@@ -69,7 +70,6 @@
 @source "../components/PublicIdentityDialog.tsx";
 @source "../components/PublicIdentityFields.tsx";
 @source "../components/PublicShareButton.tsx";
-@source "../components/QuickStartsCard.tsx";
 @source "../components/RecoverableMediaVideo.tsx";
 @source "../components/ResourceFileLink.tsx";
 @source "../components/ResourceMediaPreview.tsx";
@@ -1233,6 +1233,107 @@ button:disabled,
 @media (min-width: 1280px) {
   .app-shell-root {
     grid-template-columns: 224px minmax(0, 1fr);
+  }
+}
+
+/* The Create menu (AppShellCreateMenu.tsx), a popover in the top layer. On a
+   phone it stands above the bottom navigation's +, over a scrim, as the app's
+   sheet does. From 768px it hangs under the top bar's Create button: held to
+   the button where the browser has anchor positioning, and to the bar's right
+   edge where it does not. */
+.app-shell-create-menu {
+  position: fixed;
+  /* The top layer draws it over everything already; every fixed layer still
+     names one over the bottom navigation (bottom-nav-overlay-layers.test.ts). */
+  z-index: 90;
+  inset: auto;
+  bottom: calc(max(0.65rem, env(safe-area-inset-bottom)) + 68px + 0.75rem);
+  left: 50%;
+  translate: -50% 0;
+  margin: 0;
+  width: min(32rem, calc(100vw - 1.5rem));
+  overflow: visible;
+  border: 1px solid var(--ui-border-default);
+  border-radius: 1.75rem;
+  background: var(--ui-surface-1);
+  padding: 1.25rem;
+  color: var(--ui-text-primary);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  transform-origin: bottom center;
+  transition:
+    opacity 160ms ease-out,
+    transform 160ms ease-out,
+    overlay 160ms ease-out allow-discrete,
+    display 160ms ease-out allow-discrete;
+}
+
+.app-shell-create-menu:not(:popover-open) {
+  opacity: 0;
+  transform: translateY(0.5rem) scale(0.98);
+}
+
+@starting-style {
+  .app-shell-create-menu:popover-open {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
+}
+
+.app-shell-create-menu::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+/* A browser without popovers would draw the menu open on every page; the
+   Create button sends it to /create instead (AppShellCreateMenu.tsx). */
+@supports not selector(:popover-open) {
+  .app-shell-create-menu {
+    display: none;
+  }
+}
+
+@media (min-width: 768px) {
+  .app-shell-create-menu {
+    top: calc(var(--app-shell-topbar-height) + 0.5rem);
+    right: 1.7rem;
+    bottom: auto;
+    left: auto;
+    translate: none;
+    width: 22.5rem;
+    transform-origin: top right;
+  }
+
+  .app-shell-create-menu:not(:popover-open) {
+    transform: translateY(-0.25rem) scale(0.98);
+  }
+
+  @starting-style {
+    .app-shell-create-menu:popover-open {
+      transform: translateY(-0.25rem) scale(0.98);
+    }
+  }
+
+  .app-shell-create-menu::backdrop {
+    background: transparent;
+  }
+
+  @supports (position-area: bottom) {
+    .app-shell-create {
+      anchor-name: --app-shell-create;
+    }
+
+    .app-shell-create-menu {
+      position-anchor: --app-shell-create;
+      position-area: bottom span-left;
+      top: auto;
+      right: auto;
+      margin-top: 0.5rem;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-create-menu {
+    transition: none;
   }
 }
 

@@ -132,7 +132,24 @@ describe('AppShellAccount', () => {
     expect(screen.getByText('Earn credits')).toBeInTheDocument();
   });
 
-  it('links the account menu to the credit history, under the balance, and closes on the way', async () => {
+  it('shows the balance in the top bar alone, the number by itself on a phone', async () => {
+    render(<AppShellAccount />);
+
+    const balance = await screen.findByRole('link', { name: '1295 credits' });
+    expect(balance).toHaveAttribute('href', '/pricing');
+    // Drawn at every width now: the phone layout had no balance anywhere.
+    expect(balance.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+    expect(within(balance).getByText('1295')).toHaveClass('sm:hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open account menu for Test Creator' }));
+
+    // Profile is the navigation's, and the balance the bar's: the menu named both again.
+    const menu = screen.getByRole('menu', { name: 'Account' });
+    expect(within(menu).queryByRole('menuitem', { name: /^Profile/ })).not.toBeInTheDocument();
+    expect(within(menu).queryByText(/1295/)).not.toBeInTheDocument();
+  });
+
+  it('links the account menu to the credit history, after Invite & Earn, and closes on the way', async () => {
     render(<AppShellAccount />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
@@ -140,7 +157,7 @@ describe('AppShellAccount', () => {
     const items = screen.getAllByRole('menuitem');
     const creditHistory = screen.getByRole('menuitem', { name: 'Credit history' });
     expect(creditHistory).toHaveAttribute('href', '/credits');
-    expect(items.indexOf(creditHistory)).toBe(items.indexOf(screen.getByRole('menuitem', { name: /^Profile/ })) + 1);
+    expect(items.indexOf(creditHistory)).toBe(items.indexOf(screen.getByRole('menuitem', { name: /Invite & Earn/ })) + 1);
 
     // jsdom cannot load another document; the menu's own click handler still runs.
     const stayOnPage = (event: MouseEvent) => event.preventDefault();

@@ -6,7 +6,6 @@ import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFee
 import WelcomeCreditsCard from '@/app/home/WelcomeCreditsCard';
 import HomeExperience from '@/components/HomeExperience';
 import HomeShelf, { HomeShelfPlaceholder } from '@/components/HomeShelf';
-import QuickStartsCard from '@/components/QuickStartsCard';
 import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
 import StaleSessionRecovery from '@/app/home/StaleSessionRecovery';
@@ -47,7 +46,6 @@ function HomeFeedSection({
     <FeedClient
       initialFeed={feed}
       initialChipId={initialChipId}
-      variant="embedded"
       detailContext={HOME_FEED_DETAIL_CONTEXT}
     />
   );
@@ -55,22 +53,14 @@ function HomeFeedSection({
 
 function HomeWorkspaceSection({
   data,
-  credits,
   variant,
 }: {
   data: Promise<HomeWorkspaceGenerationView[]>;
-  credits: number | null;
   variant: 'rail' | 'inline';
 }) {
   const generations = use(data);
 
-  return (
-    <WorkspaceCard
-      initialGenerations={generations}
-      initialCredits={credits}
-      variant={variant}
-    />
-  );
+  return <WorkspaceCard initialGenerations={generations} variant={variant} />;
 }
 
 function HomeModelsSection({ data }: { data: Promise<HomeWhatsNewModel[]> }) {
@@ -141,7 +131,7 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
         <>
           <WelcomeCreditsCard />
           <Suspense fallback={null}>
-            <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="inline" />
+            <HomeWorkspaceSection data={workspacePromise} variant="inline" />
           </Suspense>
         </>
       )}
@@ -154,9 +144,8 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
         <>
           <WelcomeCreditsCard />
           <Suspense fallback={<WorkspaceRailFallback />}>
-            <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="rail" />
+            <HomeWorkspaceSection data={workspacePromise} variant="rail" />
           </Suspense>
-          <QuickStartsCard />
           <Suspense fallback={null}>
             <HomeModelsSection data={modelsPromise} />
           </Suspense>

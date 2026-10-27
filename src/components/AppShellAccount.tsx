@@ -445,13 +445,23 @@ export default function AppShellAccount() {
 
   return (
     <>
+      {/* The one place the balance shows, at every width: a phone reads the
+          number alone, as the app's header does. */}
       <Link
         href="/pricing"
         prefetch={false}
-        className="ui-focus-ring hidden min-h-12 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/10 px-3 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15 sm:inline-flex"
+        aria-label={typeof credits === 'number' ? `${credits} credits` : 'Credits'}
+        className="ui-focus-ring inline-flex min-h-12 shrink-0 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/10 px-3 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15"
       >
-        <Sparkles className="h-4 w-4" />
-        <span>{typeof credits === 'number' ? `${credits} credits` : 'Credits'}</span>
+        <Sparkles className="h-4 w-4" aria-hidden />
+        {typeof credits === 'number' ? (
+          <>
+            <span className="sm:hidden">{credits}</span>
+            <span className="hidden sm:inline">{credits} credits</span>
+          </>
+        ) : (
+          <span>Credits</span>
+        )}
       </Link>
 
       <div className="relative" ref={accountMenuRef}>
@@ -493,19 +503,8 @@ export default function AppShellAccount() {
               </span>
               <span className="text-xs text-amber-200/75">Earn credits</span>
             </Link>
-            <Link
-              href="/profile"
-              prefetch={false}
-              role="menuitem"
-              onClick={() => setAccountOpen(false)}
-              className="ui-focus-ring mt-1 flex min-h-11 items-center justify-between rounded-2xl px-3 py-2 text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
-            >
-              Profile
-              <span className="text-xs text-[var(--ui-text-faint)]">
-                {typeof credits === 'number' ? `${credits} credits` : 'View account'}
-              </span>
-            </Link>
-            {/* Under the balance: where every credit in it came from and went. */}
+            {/* Profile is in the side and bottom navigation, and the balance in
+                the top bar. This is where every credit came from and went. */}
             <Link
               href="/credits"
               prefetch={false}

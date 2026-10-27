@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Flag, Globe, ImageIcon, Loader2, PencilLine, Plus, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
+import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Flag, Globe, ImageIcon, Loader2, PencilLine, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
 import MediaDetailsPreviewModal, {
     type MediaDetailsStatusNote,
@@ -1805,46 +1805,19 @@ export default function CreationsPage() {
                 onChange={(event) => void handlePreviewRestoreFile(event)}
             />
             <div className="studio-shell relative z-10 py-8">
-                {/* Header */}
-                <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-4">
-                        <div>
-                            <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">
-                                Studio
-                            </h1>
-                            <p className="text-sm text-zinc-500 font-medium tracking-wide">
-                                {activeView === 'creations'
-                                    ? `${profile?.stats?.creations ?? `${successfulGenerations.length}${generationsNextCursor ? '+' : ''}`} CREATION${(profile?.stats?.creations ?? successfulGenerations.length) !== 1 ? 'S' : ''} TOTAL`
-                                    : activeView === 'posts'
-                                        ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
-                                        : 'YOUR UNLOCKS'}
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2.5 self-start">
-                        <Link
-                            href="/create"
-                            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
-                        >
-                            <Wand2 className="h-4 w-4" />
-                            Create
-                        </Link>
-                        <Link
-                            href="/post/new?from=creations&returnTo=%2Fcreations%3Fview%3Dposts"
-                            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-5 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
-                        >
-                            <Plus className="h-4 w-4" />
-                            Post
-                        </Link>
-                        <Link
-                            href="/profile"
-                            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-5 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:border-[rgba(255,122,89,0.3)] hover:bg-[var(--ui-primary-soft)] hover:text-[var(--ui-text-primary)]"
-                        >
-                            <UserRound className="h-4 w-4" />
-                            Manage profile
-                        </Link>
-                    </div>
+                {/* Header. Create and Post are the top bar's Create menu, and
+                    Profile is in the navigation. */}
+                <div className="mb-8">
+                    <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">
+                        Studio
+                    </h1>
+                    <p className="text-sm text-zinc-500 font-medium tracking-wide">
+                        {activeView === 'creations'
+                            ? `${profile?.stats?.creations ?? `${successfulGenerations.length}${generationsNextCursor ? '+' : ''}`} CREATION${(profile?.stats?.creations ?? successfulGenerations.length) !== 1 ? 'S' : ''} TOTAL`
+                            : activeView === 'posts'
+                                ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
+                                : 'YOUR UNLOCKS'}
+                    </p>
                 </div>
 
                 <div className="mb-6 flex flex-wrap items-center gap-3">
@@ -1967,11 +1940,15 @@ export default function CreationsPage() {
                 {activeView === 'creations' && !isLoading && successfulGenerations.length > 0 && (
                     <div className="mb-8 flex gap-2 overflow-x-auto pb-1">
                         {([
-                            { key: 'all', label: `All (${successfulGenerations.length})` },
-                            { key: 'images', label: `Images (${imageCount})` },
-                            { key: 'videos', label: `Videos (${videoCount})` },
-                            { key: 'audio', label: `Audio (${audioCount})` },
-                        ] as { key: FilterType; label: string }[]).map(tab => (
+                            { key: 'all', label: `All (${successfulGenerations.length})`, count: successfulGenerations.length },
+                            { key: 'images', label: `Images (${imageCount})`, count: imageCount },
+                            { key: 'videos', label: `Videos (${videoCount})`, count: videoCount },
+                            { key: 'audio', label: `Audio (${audioCount})`, count: audioCount },
+                        ] as { key: FilterType; label: string; count: number }[])
+                            // A kind with nothing in it is no filter ("Audio (0)"), unless
+                            // it is the one chosen, whose last item just went.
+                            .filter((tab) => tab.key === 'all' || tab.count > 0 || filter === tab.key)
+                            .map(tab => (
                             <button
                                 key={tab.key}
                                 onClick={() => setFilter(tab.key)}
