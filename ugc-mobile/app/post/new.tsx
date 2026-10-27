@@ -3646,6 +3646,8 @@ function NewPostComposer() {
       loadedItemCount: loadedRecipe ? hydratePostComposerResourceCards(loadedRecipe).length : 0,
       buyerCount: recipeBuyerCount,
       nextAccessMode: draft.resource.accessMode,
+      // The same condition as the "Remix comes with this recipe" line above.
+      reopensPost: draft.mode === 'creation',
     });
     if (removal && loadedRecipe) {
       const remove = await showConfirmDialog(removal);

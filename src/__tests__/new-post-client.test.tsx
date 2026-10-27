@@ -454,6 +454,35 @@ describe('NewPostClient', () => {
     expect(within(question).getByRole('button', { name: 'Remove recipe' })).toBeInTheDocument();
   });
 
+  // A creation post without a recipe shows its prompt and lets anyone remix
+  // (S1), so taking the recipe off puts the post back that way: said in the
+  // question rather than found out (review of #567).
+  it('says a creation post reopens its prompt and Remix when its recipe is removed', async () => {
+    // A creation-backed edit reads its creation first, as the sold-generation save below does.
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [{ id: 'gen-1', output_url: 'https://proxy.example.com/generated_images/user-1/one.jpg', category: 'image', title: 'One', description: '', prompt: 'The prompt.', model: 'nano-banana-2' }],
+      }),
+    });
+    render(
+      <>
+        <NewPostClient initialPost={{ ...createLegacyPrivateResourcePost(), generationId: 'gen-1', resourceBundleBuyerCount: 2 }} />
+        <FeedbackViewport />
+      </>
+    );
+
+    // The creation loads first; until it has, the save is held.
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^make private/i })[0]).toBeEnabled());
+    fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
+    const question = await screen.findByRole('alertdialog', { name: 'Remove this recipe?' });
+    expect(question).toHaveAccessibleDescription(
+      'Its 1 item and files will be deleted. The 2 people who have it keep their copy; it comes off sale. '
+      + 'The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.',
+    );
+  });
+
   // The Free/Paid pills counted every click, the checkbox none; the cards
   // count a choice of Free or Paid, never No recipe or the card already chosen.
   it('counts a choice of free or paid once, and no recipe never', () => {

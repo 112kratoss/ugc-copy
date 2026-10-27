@@ -700,6 +700,11 @@ export function getRecipeRemovalConfirmation(input: {
   loadedItemCount: number;
   buyerCount: number | null | undefined;
   nextAccessMode: PostResourceBundleAccessMode;
+  /**
+   * The post is made from a creation: without a recipe its prompt and Remix
+   * are open to everyone (S1), which the question says (review of #567).
+   */
+  reopensPost?: boolean;
 }): RecipeRemovalConfirmation | null {
   if (input.nextAccessMode !== 'none') return null;
   if (input.loadedAccessMode !== 'free' && input.loadedAccessMode !== 'paid') return null;
@@ -711,9 +716,12 @@ export function getRecipeRemovalConfirmation(input: {
   const kept = buyers > 0
     ? ` The ${buyers} ${buyers === 1 ? 'person who has it keeps' : 'people who have it keep'} their copy; it comes off sale.`
     : '';
+  const reopened = input.reopensPost
+    ? ' The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.'
+    : '';
   return {
     title: 'Remove this recipe?',
-    message: `${deleted}${kept}`,
+    message: `${deleted}${kept}${reopened}`,
     confirmLabel: 'Remove recipe',
     cancelLabel: 'Keep recipe',
     destructive: true,

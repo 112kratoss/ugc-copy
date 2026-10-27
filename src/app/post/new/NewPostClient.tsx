@@ -116,7 +116,7 @@ const LEAVE_WITH_UNSAVED_CHANGES: ConfirmationRequest = {
  * 2026-10-27): the server deletes it with its files, or retires it when
  * people have it. The app's composer asks the same.
  */
-function getRecipeRemovalQuestion(itemCount: number, buyerCount: number): ConfirmationRequest {
+function getRecipeRemovalQuestion(itemCount: number, buyerCount: number, reopensPost: boolean): ConfirmationRequest {
   const items = itemCount > 0
     ? `Its ${itemCount} ${itemCount === 1 ? 'item' : 'items'} and files will be deleted.`
     : 'It will be deleted.';
@@ -125,9 +125,15 @@ function getRecipeRemovalQuestion(itemCount: number, buyerCount: number): Confir
     : buyerCount === 1
       ? ' The 1 person who has it keeps their copy; it comes off sale.'
       : ` The ${buyerCount} people who have it keep their copy; it comes off sale.`;
+  // A creation post without a recipe shows its prompt and lets anyone remix
+  // (S1): taking the recipe off puts the post back that way, said here rather
+  // than found out (review of #567, 2026-10-28).
+  const reopened = reopensPost
+    ? ' The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.'
+    : '';
   return {
     title: 'Remove this recipe?',
-    message: `${items}${buyers}`,
+    message: `${items}${buyers}${reopened}`,
     confirmLabel: 'Remove recipe',
     cancelLabel: 'Keep recipe',
     tone: 'danger',
@@ -2523,7 +2529,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     // H2 (2026-10-27): an edit's save that takes the recipe off deletes it and
     // its files (or retires it, when people have it), so it asks first.
     if (isEditMode && storedRecipe.accessMode !== 'none' && resourceAccessMode === 'none') {
-      const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount));
+      const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount, recipeIncludesRemix));
       if (!removes) {
         return;
       }
