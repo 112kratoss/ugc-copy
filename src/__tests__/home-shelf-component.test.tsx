@@ -180,13 +180,17 @@ describe('HomeShelf', () => {
     expect(container.querySelectorAll('video')).toHaveLength(0);
   });
 
-  it('leaves clips to the feed on a touch screen', () => {
+  it('plays the first clip card in view on a touch screen too, as the feed does there', () => {
     stubMatchMedia({ hover: false });
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
     const { container } = render(<HomeShelf items={SHELF} offerFreeToTry={false} />);
 
     reportVisible({ a: 1, b: 1, c: 1 });
+    reportClipOnScreen();
 
-    expect(container.querySelectorAll('video')).toHaveLength(0);
+    expect(container.querySelectorAll('video')).toHaveLength(1);
+    expect(container.querySelector('video')).toHaveAttribute('src', 'https://cdn.example.test/a/stream.mp4');
+    hidden.mockRestore();
   });
 
   it('draws the offers it is given in their place', () => {

@@ -39,7 +39,7 @@ import {
   type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
-import { homeShelfGuestReturnTo, readHomeShelfItems } from '@/lib/home-shelf-view-model';
+import { homeShelfGuestReturnTo, isHomeShelfInView, readHomeShelfItems } from '@/lib/home-shelf-view-model';
 import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
 import { useAppForeground } from '@/lib/app-foreground';
@@ -145,7 +145,7 @@ export function HomeDashboard() {
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, height: windowHeight } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
@@ -179,6 +179,37 @@ export function HomeDashboard() {
   useEffect(() => {
     if (!isFocused || !foreground) playbackController.dispatch({ type: 'stop' });
   }, [foreground, isFocused, playbackController]);
+  // Home's one playing clip may be the shelf's. While the shelf is mostly on
+  // screen and has a clip card in view (HomeShelf reports it), that card is
+  // the election's only candidate: the shelf heads the screen, and the feed's
+  // first video, half under it, would otherwise keep the slot it already held.
+  // Once the shelf has gone, or shows no clip, the feed's cards stand again,
+  // under the feed's rules for both. Where the shelf is gets read when the
+  // list comes to rest, never per scroll frame.
+  const shelfRef = useRef<View>(null);
+  const feedViewableRef = useRef<ShowcaseFeedItem[]>([]);
+  const shelfCandidateRef = useRef<ShowcaseFeedItem | null>(null);
+  const shelfInViewRef = useRef(true);
+  const windowHeightRef = useRef(windowHeight);
+  useEffect(() => {
+    windowHeightRef.current = windowHeight;
+  }, [windowHeight]);
+  const dispatchPlaybackCandidates = useCallback(() => {
+    const shelf = shelfInViewRef.current ? shelfCandidateRef.current : null;
+    playbackController.dispatch({ type: 'viewableItemsChanged', items: shelf ? [shelf] : feedViewableRef.current });
+  }, [playbackController]);
+  const measureShelf = useCallback(() => {
+    shelfRef.current?.measureInWindow((_x, top, _width, height) => {
+      const inView = isHomeShelfInView(top, height, windowHeightRef.current);
+      if (inView === shelfInViewRef.current) return;
+      shelfInViewRef.current = inView;
+      dispatchPlaybackCandidates();
+    });
+  }, [dispatchPlaybackCandidates]);
+  const onShelfPlaybackCandidateChange = useCallback((candidate: ShowcaseFeedItem | null) => {
+    shelfCandidateRef.current = candidate;
+    dispatchPlaybackCandidates();
+  }, [dispatchPlaybackCandidates]);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
@@ -286,11 +317,12 @@ export function HomeDashboard() {
 
   const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
     reportAmbientMedia({ viewableItems });
-    const visibleItems = viewableItems
+    feedViewableRef.current = viewableItems
       .filter((token) => token.isViewable && token.item)
       .map((token) => token.item.item);
-    playbackController.dispatch({ type: 'viewableItemsChanged', items: visibleItems });
-  }, [playbackController, reportAmbientMedia]);
+    dispatchPlaybackCandidates();
+    measureShelf();
+  }, [dispatchPlaybackCandidates, measureShelf, reportAmbientMedia]);
 
   const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
     if (!feedEventRuntimeRef.current.isFocused) return;
@@ -568,6 +600,7 @@ export function HomeDashboard() {
     recordAttention(attention.setVisible([], Date.now()));
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
+    feedViewableRef.current = [];
     playbackController.dispatch({ type: 'reset' });
     setActiveChipId(chipId);
   };
@@ -1000,9 +1033,15 @@ export function HomeDashboard() {
         )}
         showsVerticalScrollIndicator={false}
         onScrollBeginDrag={() => playbackController.dispatch({ type: 'dragBegin' })}
-        onScrollEndDrag={(event) => playbackController.dispatch({ type: 'dragEnd', velocityY: event.nativeEvent.velocity?.y })}
+        onScrollEndDrag={(event) => {
+          playbackController.dispatch({ type: 'dragEnd', velocityY: event.nativeEvent.velocity?.y });
+          measureShelf();
+        }}
         onMomentumScrollBegin={() => playbackController.dispatch({ type: 'momentumBegin' })}
-        onMomentumScrollEnd={() => playbackController.dispatch({ type: 'momentumEnd' })}
+        onMomentumScrollEnd={() => {
+          playbackController.dispatch({ type: 'momentumEnd' });
+          measureShelf();
+        }}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         contentInsetAdjustmentBehavior="never"
         // Home cards end in real controls and resource banners. Reserve the
@@ -1024,28 +1063,32 @@ export function HomeDashboard() {
               <GuestMergeBanner />
             </View>
 
-            <HomeShelf
-              items={shelfItems}
-              isLoading={shelfQuery.isPending}
-              offerFreeToTry={!user}
-              signsInFirst={!user}
-              horizontalPadding={horizontalPadding}
-              contentWidth={contentWidth}
-              activeRenders={activeGenerationCount}
-              pendingId={remixingItemId}
-              // One remix at a time: a second tap while the first is opening
-              // would stack a second creator over it. A guest signs in first
-              // and comes back to this remix's editor, as the web's card does,
-              // rather than to the post.
-              onMake={(creation) => {
-                if (remixingItemId) return;
-                if (!user) {
-                  router.push({ pathname: '/auth', params: { returnTo: homeShelfGuestReturnTo(creation) } } as never);
-                  return;
-                }
-                remixItem(creation.post);
-              }}
-            />
+            {/* Not flattened on Android: measureInWindow needs a real view. */}
+            <View ref={shelfRef} collapsable={false} onLayout={measureShelf}>
+              <HomeShelf
+                items={shelfItems}
+                isLoading={shelfQuery.isPending}
+                offerFreeToTry={!user}
+                signsInFirst={!user}
+                horizontalPadding={horizontalPadding}
+                contentWidth={contentWidth}
+                activeRenders={activeGenerationCount}
+                pendingId={remixingItemId}
+                // One remix at a time: a second tap while the first is opening
+                // would stack a second creator over it. A guest signs in first
+                // and comes back to this remix's editor, as the web's card does,
+                // rather than to the post.
+                onMake={(creation) => {
+                  if (remixingItemId) return;
+                  if (!user) {
+                    router.push({ pathname: '/auth', params: { returnTo: homeShelfGuestReturnTo(creation) } } as never);
+                    return;
+                  }
+                  remixItem(creation.post);
+                }}
+                onPlaybackCandidateChange={onShelfPlaybackCandidateChange}
+              />
+            </View>
 
             <View style={{ paddingHorizontal: horizontalPadding }}>
               <OnboardingResumeCard />

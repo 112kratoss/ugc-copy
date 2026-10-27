@@ -1,6 +1,14 @@
 import { formatCreditCost } from './generation-action-label';
+import { SHOWCASE_PLAYBACK_VIEWABILITY } from './showcase-feed-events';
 import type { ToolAccent } from './theme';
-import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, HomeShelfPrice, HomeShelfResponse } from './types';
+import type {
+  HomeShelfAction,
+  HomeShelfCreation,
+  HomeShelfItem,
+  HomeShelfPrice,
+  HomeShelfResponse,
+  ShowcaseFeedItem,
+} from './types';
 import { getNativeRemixCreateHref } from './viewer-actions';
 
 /**
@@ -111,6 +119,48 @@ export function homeShelfCreationHint(signsInFirst: boolean): string {
 export function homeShelfPosterCacheKey(creation: HomeShelfCreation): string {
   const lead = (creation.post.mediaItems ?? []).slice().sort((left, right) => left.sortOrder - right.sortOrder)[0];
   return lead?.previewCacheKey ?? creation.posterUrl;
+}
+
+/** How much of a card counts as in view: the feed's own playback threshold. */
+const IN_VIEW = SHOWCASE_PLAYBACK_VIEWABILITY.itemVisiblePercentThreshold / 100;
+
+/**
+ * The id a shelf card plays under in Home's one-clip election
+ * (`lib/home-feed-playback.ts`). Never the feed card's own: the same post can
+ * be on the shelf and in the feed, and the two tiles must not answer to one
+ * activation.
+ */
+export function homeShelfPlaybackId(creation: Pick<HomeShelfCreation, 'post'>): string {
+  return `home-shelf:${creation.post.id}`;
+}
+
+/**
+ * What the shelf puts up for Home's one playing clip: the first card with a
+ * clip that is mostly in the row's view, as a feed item under the shelf's own
+ * id, or null. Every card, offers included, sits `cardWidth + gap` after the
+ * one before it, the first at `leading`; `scrollX` is where the row rests.
+ */
+export function selectHomeShelfPlaybackCandidate(
+  items: HomeShelfItem[],
+  row: { scrollX: number; viewportWidth: number; cardWidth: number; gap: number; leading: number },
+): ShowcaseFeedItem | null {
+  if (!(row.cardWidth > 0) || !(row.viewportWidth > 0)) return null;
+  const viewStart = row.scrollX;
+  const viewEnd = row.scrollX + row.viewportWidth;
+  for (const [index, item] of items.entries()) {
+    if (item.kind !== 'creation' || !item.clipUrl) continue;
+    const start = row.leading + index * (row.cardWidth + row.gap);
+    const shown = Math.min(start + row.cardWidth, viewEnd) - Math.max(start, viewStart);
+    if (shown / row.cardWidth >= IN_VIEW) return { ...item.post, id: homeShelfPlaybackId(item) };
+  }
+  return null;
+}
+
+/** Whether a box at `top` (window points, `height` tall) is mostly on a screen `windowHeight` tall. */
+export function isHomeShelfInView(top: number, height: number, windowHeight: number): boolean {
+  if (!(height > 0)) return false;
+  const shown = Math.min(top + height, windowHeight) - Math.max(top, 0);
+  return shown / height >= IN_VIEW;
 }
 
 export type HomeShelfActionIcon = 'send' | 'gift' | 'coins';

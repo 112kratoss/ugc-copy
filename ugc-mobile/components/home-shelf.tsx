@@ -1,11 +1,24 @@
 import { router } from 'expo-router';
 import { Coins, Gift, ImageIcon, Play, Rocket, Send, Video, type LucideIcon } from 'lucide-react-native';
-import { Pressable, ScrollView, useWindowDimensions, View, type ViewStyle } from 'react-native';
+import { useCallback, useContext, useEffect, useRef } from 'react';
+import {
+  Pressable,
+  ScrollView,
+  useWindowDimensions,
+  View,
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  type ViewStyle,
+} from 'react-native';
 
+import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { StableMediaImage } from '@/components/media-preview';
 import { SkeletonBone } from '@/components/skeleton';
 import { AppText } from '@/components/ui';
+import { useAutoplayPreviewsEnabled } from '@/lib/autoplay-preference';
 import { hexWithAlpha, linearGradient } from '@/lib/eased-fade';
+import { FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { verticalHitSlop } from '@/lib/hit-target';
 import {
   HOME_SHELF_START_BLANK_TOOLS,
@@ -17,13 +30,15 @@ import {
   homeShelfCreationHint,
   homeShelfCreationLabel,
   homeShelfCreatorLabel,
+  homeShelfPlaybackId,
   homeShelfPosterCacheKey,
+  selectHomeShelfPlaybackCandidate,
   type HomeShelfActionIcon,
 } from '@/lib/home-shelf-view-model';
-import { MotionView, usePressMotion } from '@/lib/motion';
+import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { accentColor, appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem } from '@/lib/types';
+import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, ShowcaseFeedItem } from '@/lib/types';
 
 /**
  * Home's "Make this" shelf: real creations a viewer can make their own in one
@@ -31,6 +46,14 @@ import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem } from '@/lib/ty
  * `GET /api/home/shelf`). A row that holds still: two cards and a sliver of
  * the third, moved only by the person. No page control: it is not page by
  * page, and the sliver is what says it scrolls.
+ *
+ * A card with a clip plays it, muted and looping, when it holds Home's one
+ * playing slot: the row puts up its first clip card in view
+ * (`onPlaybackCandidateChange`), Home enters it in the feed's own election
+ * (`lib/home-feed-playback.ts`) as the only candidate while the shelf is on
+ * screen, and the card plays while it holds the slot. So the Autoplay previews
+ * setting, mobile data, Reduce Motion and the one-clip rule apply to it
+ * exactly as to a feed card.
  *
  * The row keeps one height in every state, because it sits in the feed's list
  * header and FlashList anchors on it: placeholders while the first answer
@@ -78,6 +101,7 @@ export function HomeShelf({
   activeRenders,
   pendingId,
   onMake,
+  onPlaybackCandidateChange,
 }: {
   items: HomeShelfItem[];
   /** The first answer has not come yet. */
@@ -93,10 +117,46 @@ export function HomeShelf({
   /** The post whose remix is being opened: every card waits for it. */
   pendingId: string | null;
   onMake: (creation: HomeShelfCreation) => void;
+  /**
+   * The row's first clip card in view, as the feed item it plays under
+   * (`homeShelfPlaybackId`), or null: told when it changes, as the row comes to
+   * rest or its cards change.
+   */
+  onPlaybackCandidateChange?: (candidate: ShowcaseFeedItem | null) => void;
 }) {
   const { fontScale } = useWindowDimensions();
   const card = getHomeShelfCardSize(contentWidth, SHELF_GAP, fontScale, appTheme.typeScale.control);
   const empty = !isLoading && items.length === 0;
+
+  // Where the row rests, read when it comes to rest rather than as it moves.
+  const rowRef = useRef({ scrollX: 0, viewportWidth: 0 });
+  const reportedIdRef = useRef<string | null | undefined>(undefined);
+  const reportCandidate = useCallback(() => {
+    const candidate = isLoading || empty ? null : selectHomeShelfPlaybackCandidate(items, {
+      ...rowRef.current,
+      cardWidth: card.width,
+      gap: SHELF_GAP,
+      leading: horizontalPadding,
+    });
+    const id = candidate?.id ?? null;
+    if (id === reportedIdRef.current) return;
+    reportedIdRef.current = id;
+    onPlaybackCandidateChange?.(candidate);
+  }, [card.width, empty, horizontalPadding, isLoading, items, onPlaybackCandidateChange]);
+  useEffect(() => {
+    reportCandidate();
+  }, [reportCandidate]);
+  const onRowLayout = (event: LayoutChangeEvent) => {
+    rowRef.current.viewportWidth = event.nativeEvent.layout.width;
+    reportCandidate();
+  };
+  const onRowRest = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    rowRef.current = {
+      scrollX: event.nativeEvent.contentOffset.x,
+      viewportWidth: event.nativeEvent.layoutMeasurement.width,
+    };
+    reportCandidate();
+  };
 
   return (
     <View style={{ gap: appTheme.spacing.compact }}>
@@ -156,6 +216,9 @@ export function HomeShelf({
         snapToAlignment="start"
         decelerationRate="fast"
         scrollEnabled={!isLoading}
+        onLayout={onRowLayout}
+        onScrollEndDrag={onRowRest}
+        onMomentumScrollEnd={onRowRest}
         // Each card is the shape's height at least, and the row stretches them
         // all to its tallest: an offer whose terms need more room (a 360dp
         // phone, larger text) makes the whole row taller instead of being cut.
@@ -257,6 +320,7 @@ function CreationCard({
   const badge = homeShelfBadge(creation, offerFreeToTry);
   const price = formatHomeShelfPrice(creation.price);
   const handle = homeShelfCreatorLabel(creation.creator);
+  const clip = useShelfClip(creation);
 
   return (
     // `width` on the wrapper, the scale a transform: the row lays the card out
@@ -283,14 +347,41 @@ function CreationCard({
           overflow: 'hidden',
         }}
       >
-        <StableMediaImage
-          url={creation.posterUrl}
-          cacheKey={homeShelfPosterCacheKey(creation)}
-          thumbhash={creation.posterThumbhash}
-          contentFit="cover"
-          diagnosticsSurface="home-shelf"
-          style={{ position: 'absolute', inset: 0 }}
-        />
+        {clip ? (
+          // The feed's own tile: the poster until this card holds the playing
+          // slot, then the clip over it, and back to the poster if it fails
+          // (no Retry: the card is the Make this button). Its frame is the
+          // card's, whatever height the row stretched it to.
+          <View style={{ position: 'absolute', inset: 0 }}>
+            <FeedVideoPreview
+              url={creation.post.mediaUrl ?? clip.streamUrl}
+              streamUrl={clip.streamUrl}
+              previewUrl={creation.posterUrl}
+              previewCacheKey={homeShelfPosterCacheKey(creation)}
+              previewThumbhash={creation.posterThumbhash}
+              active={clip.activation === 'visible'}
+              prepared={clip.activation === 'prepared'}
+              onReadyChange={clip.onReadyChange}
+              height="100%"
+              radius={0}
+              outlined={false}
+              accent={theme.colors.borderSubtle}
+              videoBackdrop="none"
+              videoContentFit="cover"
+              diagnosticsSurface="home-shelf"
+              retryable={false}
+            />
+          </View>
+        ) : (
+          <StableMediaImage
+            url={creation.posterUrl}
+            cacheKey={homeShelfPosterCacheKey(creation)}
+            thumbhash={creation.posterThumbhash}
+            contentFit="cover"
+            diagnosticsSurface="home-shelf"
+            style={{ position: 'absolute', inset: 0 }}
+          />
+        )}
         <View style={CAPTION_SHADE} />
 
         {badge ? (
@@ -308,7 +399,8 @@ function CreationCard({
             <AppText variant="caption" color={mediaColors.onMedia} numberOfLines={1}>{badge}</AppText>
           </View>
         ) : null}
-        {creation.clipUrl ? (
+        {creation.clipUrl && clip?.activation !== 'visible' ? (
+          // A clip that is not playing says it is one; a playing one needs no glyph.
           <View style={{ position: 'absolute', right: appTheme.spacing.compact, top: appTheme.spacing.compact }}>
             <Play size={appTheme.icon.sm} color={mediaColors.onMedia} />
           </View>
@@ -335,6 +427,29 @@ function CreationCard({
       </Pressable>
     </MotionView>
   );
+}
+
+/**
+ * A creation's clip as Home's election sees it: null without a clip or outside
+ * Home's feed (no store), else what the card does with it now. Reduce Motion
+ * and Autoplay previews set to Never keep it on its poster, as they keep a
+ * feed card (`components/showcase-media-preview.tsx`).
+ */
+function useShelfClip(creation: HomeShelfCreation) {
+  const store = useContext(FeedVideoActivationContext);
+  const playbackId = homeShelfPlaybackId(creation);
+  const elected = useFeedVideoActivation(creation.clipUrl ? store : null, playbackId);
+  const reduceMotion = useReducedMotion();
+  const previewsEnabled = useAutoplayPreviewsEnabled();
+  const onReadyChange = useCallback((ready: boolean) => {
+    store?.setReady(playbackId, ready);
+  }, [playbackId, store]);
+  if (!creation.clipUrl || !store) return null;
+  return {
+    streamUrl: creation.clipUrl,
+    activation: reduceMotion || !previewsEnabled ? 'never' as const : elected,
+    onReadyChange,
+  };
 }
 
 function ActionCard({ action, width, height }: { action: HomeShelfAction; width: number; height: number }) {

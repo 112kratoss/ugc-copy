@@ -3,7 +3,7 @@ import type { ImageProps } from 'expo-image';
 import { createVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { Play, RotateCcw } from 'lucide-react-native';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View, type DimensionValue } from 'react-native';
 
 import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
@@ -103,6 +103,7 @@ export function FeedVideoPreview({
   watchdog = false,
   diagnosticsSurface = 'feed',
   onPlaybackTime,
+  retryable = true,
 }: {
   /** Source of record — identity, cache keys, downloads. Never streamed here. */
   url: string;
@@ -138,7 +139,8 @@ export function FeedVideoPreview({
    * a mount (lib/home-feed-playback.ts). Withdrawn on unmount.
    */
   onReadyChange?: (ready: boolean) => void;
-  height: number;
+  /** Points, or `'100%'` inside a frame that sizes the tile (a Home shelf card that grew to its row). */
+  height: DimensionValue;
   radius: number;
   /**
    * The thin accent line round the tile. Off inside a tile UIKit's zoom shapes
@@ -160,6 +162,12 @@ export function FeedVideoPreview({
    * Without it the player reports no time, as a tile always has.
    */
   onPlaybackTime?: (currentTimeSeconds: number, durationSeconds: number) => void;
+  /**
+   * Offer Retry over a failed clip. Off where the whole tile is already a
+   * button for something else (a Home shelf card opens its remix): the poster
+   * simply stays.
+   */
+  retryable?: boolean;
 }) {
   const theme = useAppTheme();
   const { source: streamSource, requestKey } = useMediaSource(streamUrl || '');
@@ -384,7 +392,7 @@ export function FeedVideoPreview({
         </View>
       ) : null}
 
-      {canPlay && playbackFailed ? (
+      {canPlay && playbackFailed && retryable ? (
         <View pointerEvents="box-none" style={[absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
           <Pressable
             accessibilityRole="button"

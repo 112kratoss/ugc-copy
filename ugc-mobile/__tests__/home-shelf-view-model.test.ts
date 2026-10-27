@@ -11,8 +11,11 @@ import {
   homeShelfCreationHint,
   homeShelfCreationLabel,
   homeShelfGuestReturnTo,
+  homeShelfPlaybackId,
   homeShelfPosterCacheKey,
+  isHomeShelfInView,
   readHomeShelfItems,
+  selectHomeShelfPlaybackCandidate,
 } from '../lib/home-shelf-view-model';
 import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, HomeShelfPrice, HomeShelfResponse } from '../lib/types';
 
@@ -179,5 +182,40 @@ describe('the row', () => {
   it('counts renders in progress in words', () => {
     expect(formatActiveRenders(1)).toBe('1 render in progress');
     expect(formatActiveRenders(2)).toBe('2 renders in progress');
+  });
+});
+
+describe("the shelf's clip in Home's election", () => {
+  // The member row: the boat (a clip), the serum (a still), Post, the dance (a clip), Invite.
+  const items = endpoint.responseVariants.member.response.items;
+  const row = (scrollX: number) => ({ scrollX, viewportWidth: 390, cardWidth: 149, gap: 12, leading: 18 });
+
+  it('plays under an id of its own, never the feed card of the same post', () => {
+    expect(homeShelfPlaybackId(creations[0])).toBe('home-shelf:post-1');
+    expect(homeShelfPlaybackId(creations[0])).not.toBe(creations[0].post.id);
+  });
+
+  it('puts up the first clip card mostly in view, as the feed item it plays under', () => {
+    const first = selectHomeShelfPlaybackCandidate(items, row(0));
+    expect(first).toMatchObject({ id: 'home-shelf:post-1', mediaKind: 'video', mediaUrl: creations[0].post.mediaUrl });
+
+    // Rested on the Post offer: the boat has gone, the dance is two cards on and in view.
+    expect(selectHomeShelfPlaybackCandidate(items, row(2 * 161))?.id).toBe('home-shelf:post-3');
+  });
+
+  it('skips a clip card too little in view, and puts up nothing without one', () => {
+    // The boat is 45% in view: under the feed's 55%, so the next clip card is looked for and is off screen.
+    const almostGone = 18 + 149 * 0.55;
+    expect(selectHomeShelfPlaybackCandidate(items, { ...row(almostGone), viewportWidth: 300 })).toBeNull();
+    expect(selectHomeShelfPlaybackCandidate(items.filter((item) => item.kind !== 'creation' || !item.clipUrl), row(0))).toBeNull();
+    expect(selectHomeShelfPlaybackCandidate(items, { ...row(0), viewportWidth: 0 })).toBeNull();
+  });
+
+  it("counts the shelf in view while 55% of it is on screen, as the feed counts a card", () => {
+    expect(isHomeShelfInView(100, 270, 844)).toBe(true);
+    expect(isHomeShelfInView(-120, 270, 844)).toBe(true);
+    expect(isHomeShelfInView(-125, 270, 844)).toBe(false);
+    expect(isHomeShelfInView(700, 270, 844)).toBe(false);
+    expect(isHomeShelfInView(0, 0, 844)).toBe(false);
   });
 });

@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 const routerPush = vi.hoisted(() => vi.fn());
+// Reduce Motion and Settings → Playback → Autoplay previews, as a test sets them.
+const playbackSettings = vi.hoisted(() => ({ reduceMotion: false, previewsEnabled: true }));
 
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' },
@@ -34,10 +36,16 @@ vi.mock('lucide-react-native', () => {
   };
 });
 
-// The poster, the bones and the type have suites of their own; here they are
-// the props the shelf hands them.
+// The poster, the bones, the feed's video tile and the type have suites of
+// their own; here they are the props the shelf hands them.
 vi.mock('@/components/media-preview', () => ({
   StableMediaImage: (props: MockProps) => React.createElement('stable-image', props),
+}));
+vi.mock('@/components/feed-video-preview', () => ({
+  FeedVideoPreview: (props: MockProps) => React.createElement('feed-video-preview', props),
+}));
+vi.mock('@/lib/autoplay-preference', () => ({
+  useAutoplayPreviewsEnabled: () => playbackSettings.previewsEnabled,
 }));
 vi.mock('@/components/skeleton', () => ({
   SkeletonBone: (props: MockProps) => React.createElement('skeleton-bone', props),
@@ -49,6 +57,7 @@ vi.mock('@/components/ui', () => ({
 vi.mock('@/lib/motion', () => ({
   MotionView: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
   usePressMotion: () => ({ animatedStyle: {}, onPressIn: vi.fn(), onPressOut: vi.fn() }),
+  useReducedMotion: () => playbackSettings.reduceMotion,
 }));
 
 vi.mock('@/lib/theme-context', async () => {
@@ -58,6 +67,7 @@ vi.mock('@/lib/theme-context', async () => {
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { HomeShelf } from '../components/home-shelf';
+import { createFeedVideoActivationStore, FeedVideoActivationContext, type FeedVideoActivationStore } from '../lib/feed-video-activation';
 import { MIN_HIT_TARGET_PT } from '../lib/hit-target';
 import type { HomeShelfCreation, HomeShelfItem, HomeShelfResponse } from '../lib/types';
 
@@ -102,6 +112,8 @@ function renderShelf(items: HomeShelfItem[], overrides: Partial<React.ComponentP
 
 beforeEach(() => {
   routerPush.mockReset();
+  playbackSettings.reduceMotion = false;
+  playbackSettings.previewsEnabled = true;
 });
 
 describe('the Make this shelf', () => {
@@ -209,5 +221,96 @@ describe('the Make this shelf', () => {
         expect(drawn + slop.top + slop.bottom, String(node.props.accessibilityLabel)).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
       }
     }
+  });
+});
+
+describe("the shelf's clips", () => {
+  const items = () => shelf.responseVariants.member.response.items;
+  const renderInHome = (store: FeedVideoActivationStore, onPlaybackCandidateChange = vi.fn()) => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedVideoActivationContext.Provider value={store}>
+          <HomeShelf
+            items={items()}
+            isLoading={false}
+            offerFreeToTry={false}
+            horizontalPadding={18}
+            contentWidth={354}
+            activeRenders={0}
+            pendingId={null}
+            onMake={vi.fn()}
+            onPlaybackCandidateChange={onPlaybackCandidateChange}
+          />
+        </FeedVideoActivationContext.Provider>,
+      );
+    });
+    return { tree, onPlaybackCandidateChange };
+  };
+  const clipTile = (tree: renderer.ReactTestRenderer, postId: string) => tree.root
+    .findAll((node) => String(node.type) === 'feed-video-preview')
+    .find((node) => node.props.streamUrl === items()
+      .find((item): item is HomeShelfCreation => item.kind === 'creation' && item.id === postId)?.clipUrl)!;
+  const rowOf = (tree: renderer.ReactTestRenderer) => tree.root.find((node) => String(node.type) === 'scrollview');
+
+  it("plays a card's clip only while it holds Home's one playing slot, under its own id", () => {
+    const store = createFeedVideoActivationStore();
+    const { tree } = renderInHome(store);
+
+    expect(clipTile(tree, 'post-1').props).toMatchObject({ active: false, prepared: false, retryable: false, height: '100%' });
+    expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'Play')).toHaveLength(2);
+
+    // The feed's own card for the same post is not the shelf's.
+    renderer.act(() => store.publish({ activeIds: ['post-1'] }));
+    expect(clipTile(tree, 'post-1').props.active).toBe(false);
+
+    renderer.act(() => store.publish({ activeIds: ['home-shelf:post-1'] }));
+    expect(clipTile(tree, 'post-1').props.active).toBe(true);
+    expect(clipTile(tree, 'post-3').props.active).toBe(false);
+    // A playing clip wears no play glyph; the one waiting still does.
+    expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'Play')).toHaveLength(1);
+
+    renderer.act(() => clipTile(tree, 'post-1').props.onReadyChange(true));
+    expect(store.isReady('home-shelf:post-1')).toBe(true);
+  });
+
+  it('keeps every clip on its poster under Reduce Motion, or with Autoplay previews off', () => {
+    for (const settings of [{ reduceMotion: true, previewsEnabled: true }, { reduceMotion: false, previewsEnabled: false }]) {
+      Object.assign(playbackSettings, settings);
+      const store = createFeedVideoActivationStore();
+      store.publish({ activeIds: ['home-shelf:post-1'] });
+      const { tree } = renderInHome(store);
+
+      expect(clipTile(tree, 'post-1').props.active).toBe(false);
+    }
+  });
+
+  it('shows posters alone outside Home, where no election runs', () => {
+    const { tree } = renderShelf(items());
+
+    expect(tree.root.findAll((node) => String(node.type) === 'feed-video-preview')).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'stable-image')).toHaveLength(3);
+  });
+
+  it('puts up the first clip card in view, and the next once the row rests on it', () => {
+    const { tree, onPlaybackCandidateChange } = renderInHome(createFeedVideoActivationStore());
+    // Nothing is in view before the row has a width.
+    expect(onPlaybackCandidateChange).toHaveBeenLastCalledWith(null);
+
+    renderer.act(() => rowOf(tree).props.onLayout({ nativeEvent: { layout: { width: 390 } } }));
+    expect(onPlaybackCandidateChange.mock.lastCall?.[0]).toMatchObject({ id: 'home-shelf:post-1', mediaKind: 'video' });
+
+    // Resting on the fourth card (the motion clip), three card steps along.
+    renderer.act(() => rowOf(tree).props.onMomentumScrollEnd({
+      nativeEvent: { contentOffset: { x: 3 * (149 + 12) }, layoutMeasurement: { width: 390 } },
+    }));
+    expect(onPlaybackCandidateChange.mock.lastCall?.[0]).toMatchObject({ id: 'home-shelf:post-3' });
+
+    const calls = onPlaybackCandidateChange.mock.calls.length;
+    renderer.act(() => rowOf(tree).props.onScrollEndDrag({
+      nativeEvent: { contentOffset: { x: 3 * (149 + 12) + 4 }, layoutMeasurement: { width: 390 } },
+    }));
+    // The same card: nothing new to tell.
+    expect(onPlaybackCandidateChange.mock.calls).toHaveLength(calls);
   });
 });

@@ -21,16 +21,16 @@ import {
   homeShelfBadge,
   homeShelfCreatorLabel,
 } from '@/lib/home-shelf-copy';
-import { useMediaQuery } from '@/lib/use-media-query';
 
 /**
  * The "Make this" shelf at the top of the home column (`home-shelf.ts` says
  * what goes in it, `home-shelf-copy.ts` what it says). A row that holds still:
  * three cards and a sliver of the fourth on a laptop, two and a sliver on a
- * phone, scrolled by touch, trackpad or the arrows. On a device with a mouse
- * the first clip card in view plays a muted preview, one clip on the page at a
- * time, never under Reduce Motion or Save-Data; a phone shows posters, and its
- * feed keeps the one clip that plays.
+ * phone, scrolled by touch, trackpad or the arrows. The first clip card in
+ * view plays a muted preview, on a phone as with a mouse, never under Reduce
+ * Motion or Save-Data. One clip plays on the page at a time: as between the
+ * feed's own cards, the one that starts last pauses the rest
+ * (`useInlineMediaPlayback`).
  */
 
 const ACTION_LOOK: Record<HomeShelfAction['id'], { icon: LucideIcon; accent: UiAccent }> = {
@@ -41,9 +41,6 @@ const ACTION_LOOK: Record<HomeShelfAction['id'], { icon: LucideIcon; accent: UiA
 
 /** The tools the row ends on: the same catalogue as /create and the quick starts, without the canvas. */
 const START_BLANK_TOOLS = CREATOR_TOOLS.filter((tool) => tool.id !== 'workflow');
-
-/** A mouse or trackpad that hovers: where a preview can play without fighting the feed's own. */
-const POINTER_CAN_HOVER = '(hover: hover) and (pointer: fine)';
 
 export default function HomeShelf({
   items,
@@ -102,10 +99,9 @@ export function HomeShelfPlaceholder() {
 function HomeShelfRow({ items, offerFreeToTry }: { items: HomeShelfItem[]; offerFreeToTry: boolean }) {
   const trackRef = useRef<HTMLUListElement | null>(null);
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
-  const canHover = useMediaQuery(POINTER_CAN_HOVER);
   const [canScroll, setCanScroll] = useState({ back: false, forward: false });
   const [playingId, setPlayingId] = useState<string | null>(null);
-  const clipsAllowed = canHover && !prefersReducedMotion && !saveData;
+  const clipsAllowed = !prefersReducedMotion && !saveData;
 
   const syncScrollEnds = useCallback(() => {
     const track = trackRef.current;

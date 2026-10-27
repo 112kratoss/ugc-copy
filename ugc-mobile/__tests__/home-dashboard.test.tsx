@@ -1084,6 +1084,49 @@ describe('Home screen', () => {
     renderer.act(() => tree.unmount());
   });
 
+  it("gives Home's one clip to the shelf while it is on screen, and back to the feed once it has gone", () => {
+    queryState.pages = [page([videoItem('a', 'delivery-video-a')])];
+    const { tree } = renderHome();
+    const store = activationStores.at(-1)!;
+    // Where the shelf sits in the window, as measureInWindow reports it.
+    const shelfBox = { top: 120, height: 270 };
+    let header!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      header = renderer.create(listProps(tree).ListHeaderComponent as React.ReactElement, {
+        createNodeMock: (element) => ((element.props as { collapsable?: boolean }).collapsable === false
+          ? { measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(0, shelfBox.top, 390, shelfBox.height) }
+          : null),
+      });
+    });
+    const restScroll = () => renderer.act(() => {
+      listProps(tree).onScrollBeginDrag();
+      listProps(tree).onScrollEndDrag({ nativeEvent: { velocity: { y: 0 } } });
+    });
+
+    // The feed's first video plays until the shelf puts up a clip card.
+    reportViewable(tree, SHOWCASE_PLAYBACK_VIEWABILITY, [0]);
+    expect(store.snapshot().activeIds).toEqual(['a']);
+
+    // The shelf heads the screen: its card takes the slot from the card half under it.
+    const shelfClip = { ...videoItem('post-1', 'delivery-shelf'), id: 'home-shelf:post-1' };
+    renderer.act(() => hostProps(header, 'home-shelf').onPlaybackCandidateChange(shelfClip));
+    expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
+
+    // Scrolled until most of the shelf is off screen: the feed's card plays again.
+    shelfBox.top = -200;
+    restScroll();
+    expect(store.snapshot().activeIds).toEqual(['a']);
+
+    // Back at the top, but the row rests on cards without a clip: the feed keeps it.
+    shelfBox.top = 120;
+    renderer.act(() => hostProps(header, 'home-shelf').onPlaybackCandidateChange(null));
+    restScroll();
+    expect(store.snapshot().activeIds).toEqual(['a']);
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
   // 02-8: the merge outcome showed on Pricing alone, so a restart before a
   // visit there lost the only word that paid guest credits had not arrived.
   it.each([
