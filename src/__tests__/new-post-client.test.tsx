@@ -294,6 +294,9 @@ describe('NewPostClient', () => {
     const paid = screen.getByRole('radio', { name: /paid recipe/i });
     const none = screen.getByRole('radio', { name: /no recipe/i });
     expect(none).toBeChecked();
+    // One group: what makes the arrow keys move between the cards.
+    expect(new Set([free, paid, none].map((radio) => radio.getAttribute('name'))).size).toBe(1);
+    expect(free).toHaveAttribute('name', expect.stringMatching(/\S/));
     expect(screen.queryByRole('checkbox', { name: /add a reusable recipe/i })).toBeNull();
     expect(screen.queryByLabelText(/price in tokens/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /add your first resource/i })).toBeNull();
@@ -322,6 +325,91 @@ describe('NewPostClient', () => {
     expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeDisabled();
     expect(screen.getByRole('radio', { name: /no recipe/i })).toBeDisabled();
     expect(screen.getByText(/purchased resources are protected/i)).toBeInTheDocument();
+  });
+
+  // Chrome's implicit submission skips the composer's disabled first submit
+  // button for a non-text control and clicks the next one, "Save private":
+  // on the E2E harness Enter on a card posted the form. Enter chooses the
+  // card instead, and the form takes Enter from every checkbox too; a text
+  // field keeps it (the disabled first button makes it do nothing).
+  it('takes Enter on a recipe card as the choice, never as a submit', () => {
+    render(<NewPostClient />);
+
+    const paid = screen.getByRole('radio', { name: /paid recipe/i });
+    expect(fireEvent.keyDown(paid, { key: 'Enter' })).toBe(false);
+    expect(paid).toBeChecked();
+    expect(fireEvent.keyDown(paid, { key: 'Enter' })).toBe(false);
+    expect(paid).toBeChecked();
+    expect(fireEvent.keyDown(screen.getByRole('checkbox', { name: /mark as nsfw/i }), { key: 'Enter' })).toBe(false);
+    expect(fireEvent.keyDown(screen.getByRole('textbox', { name: /^title/i }), { key: 'Enter' })).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/posts', expect.anything());
+  });
+
+  // The cards are now the one control that takes a recipe off a post: the
+  // save must say so, since the update path keeps what is stored for a
+  // missing key (the sold case above).
+  it('sends the removal when No recipe is chosen on an unsold recipe', async () => {
+    render(<NewPostClient initialPost={createLegacyPrivateResourcePost()} />);
+
+    expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
+    expect(screen.queryByText('Secret client launch prompt')).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => String(url).startsWith('/api/posts/') && init?.method === 'PUT')).toBe(true);
+    });
+    const [, init] = fetchMock.mock.calls.find(([url, request]) => String(url).startsWith('/api/posts/') && request?.method === 'PUT')!;
+    const payload = JSON.parse(String((init as { body: string }).body));
+    expect(payload.resourceBundle).toEqual({ accessMode: 'none' });
+  });
+
+  // The Free/Paid pills counted every click, the checkbox none; the cards
+  // count a choice of Free or Paid, never No recipe or the card already chosen.
+  it('counts a choice of free or paid once, and no recipe never', () => {
+    searchParamsState.value = new URLSearchParams('from=creations');
+    const events: Array<{ eventName: string; parameters: Record<string, unknown> }> = [];
+    const recordEvent = (event: Event) => events.push((event as CustomEvent).detail);
+    window.addEventListener('magicbooklet:product-event', recordEvent);
+    try {
+      render(<NewPostClient />);
+      const selections = () => events
+        .filter((event) => event.eventName === 'recipe_access_mode_selected')
+        .map((event) => event.parameters);
+
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+      expect(selections()).toEqual([{ access_mode: 'free', entry_surface: 'creations' }]);
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+      expect(selections()).toHaveLength(1);
+      fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+      expect(selections()).toEqual([
+        { access_mode: 'free', entry_surface: 'creations' },
+        { access_mode: 'paid', entry_surface: 'creations' },
+      ]);
+      fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
+      expect(selections()).toHaveLength(2);
+    } finally {
+      window.removeEventListener('magicbooklet:product-event', recordEvent);
+    }
+  });
+
+  // Studio opens a free recipe's editor at the price too (`focus=price`): the
+  // request waited for Paid, so an arrow from Free to Paid pulled the focus
+  // into the price field, where the next arrow changed the price.
+  it('does not move the focus to the price when the creator changes a free recipe to paid', async () => {
+    searchParamsState.value = new URLSearchParams('resourceMode=free&focus=price&from=creations');
+    render(<NewPostClient initialPost={createLegacyPrivateResourcePost()} />);
+
+    expect(screen.getByText(/you came from my studio to manage this post/i)).toBeInTheDocument();
+    const free = screen.getByRole('radio', { name: /free recipe/i });
+    expect(free).toBeChecked();
+    free.focus();
+    fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+    const priceInput = screen.getByRole('spinbutton', { name: /price in tokens/i });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(priceInput).not.toHaveFocus();
   });
 
   // Saving an empty card produced a row the publish gate silently discarded,
@@ -4534,6 +4622,9 @@ describe('NewPostClient', () => {
       render(<NewPostClient />);
       await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Ghost rider'));
       expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
+      // The server refuses a recipe on a template result: no cards, the notice.
+      expect(screen.queryByRole('radio', { name: /free recipe/i })).not.toBeInTheDocument();
+      expect(screen.getByText(/shares final media only/i)).toBeInTheDocument();
     });
 
     // A motion prompt says how to move ("No distortion, …"), not what is shown.

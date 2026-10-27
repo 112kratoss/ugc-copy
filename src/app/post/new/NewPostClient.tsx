@@ -771,7 +771,6 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // Folded into one row that sums it up, as the app's.
   const [isMadeWithOpen, setIsMadeWithOpen] = useState(false);
   const madeWithPanelId = useId();
-  const recipeAccessGroupName = useId();
   const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
   // Read by the creation load below, which suggests a title for the recipe
   // state at the moment the creation arrives.
@@ -2874,7 +2873,25 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
 
             {/* noValidate: the browser's own bubble (a price of 95 against step=10)
                 blocked submit before the composer could name the rule. */}
-            <form id="post-composer-form" ref={formRef} noValidate className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
+            <form
+              id="post-composer-form"
+              ref={formRef}
+              noValidate
+              className="space-y-6 pb-28 lg:pb-0"
+              onSubmit={handleSubmit}
+              // Enter on a checkbox or radio never submits: Chrome's implicit
+              // submission skips the disabled first button above for a non-text
+              // control and clicks the next one, the phone bar's "Save private"
+              // (a title and Enter stop at that button; a NSFW tick and Enter
+              // saved the post privately and left the page).
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return;
+                const target = event.target;
+                if (target instanceof HTMLInputElement && (target.type === 'checkbox' || target.type === 'radio')) {
+                  event.preventDefault();
+                }
+              }}
+            >
               {initialPost?.archivedAt ? (
                 <div className="rounded-[24px] border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
                   This post is archived. It stays out of public surfaces until you restore it from My Studio.
@@ -3612,11 +3629,15 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                   </div>
                 ) : (
                   <RecipeAccessCards
-                    name={recipeAccessGroupName}
                     value={resourceAccessMode}
                     disabled={isResourceEditingLocked}
                     onChange={(nextMode) => {
                       changeResourceAccessMode(nextMode);
+                      // A focus request from Studio is for the mode the page
+                      // opened in: on a free recipe opened at the price, an
+                      // arrow from Free to Paid must not pull the focus into
+                      // the price field, where the next arrow changes the price.
+                      setDidFocusPriceInput(true);
                       if (nextMode !== 'none') {
                         trackProductEvent('recipe_access_mode_selected', {
                           access_mode: nextMode,

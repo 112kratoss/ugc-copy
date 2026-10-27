@@ -215,7 +215,7 @@ The two must look and behave like one product. A stale session falls back to the
   - Every state keeps a way back (`ShowcaseDetailBackLink`).
   - Shared links render a rich social card and structured data from the cover's poster frame.
   - A `?s=<surface>` parameter marks a visit that came from a share.
-- The composer lives at `/post/new` and editing at `/post/[id]/edit`. Its Recipe section offers Free, Paid and No recipe as one choice of three cards (`RecipeAccessCards.tsx`, the app's pattern: native radios in labels, the chosen one in its accent), so a creator sees that a recipe can be sold before choosing anything; Paid opens the price field under them.
+- The composer lives at `/post/new` and editing at `/post/[id]/edit`. Its Recipe section offers Free, Paid and No recipe as one choice of three cards (`RecipeAccessCards.tsx`: the app's choice, drawn here as native radios in labels, the chosen one in its accent's `selected` classes, three columns once the group itself is wide enough), so a creator sees that a recipe can be sold before choosing anything; Paid opens the price field under them.
 
 ### Create (`/create`, `/create-image`, `/create-video`, `/create-motion`, `/create-workflow`)
 

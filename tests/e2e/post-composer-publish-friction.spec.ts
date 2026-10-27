@@ -137,4 +137,36 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
     await expect.poll(() => order).toEqual(['profile', 'post']);
     await expect(page.getByText('Your post is live.')).toBeVisible();
   });
+
+  // Chrome's implicit submission skips the composer's disabled first submit
+  // button for a non-text control and clicks the next one, the phone bar's
+  // "Save private": Enter on a recipe card posted the form (2026-10-27). It
+  // chooses the card instead, which jsdom cannot show.
+  test('Enter on a recipe card chooses it and never posts', async ({ page }) => {
+    const order: string[] = [];
+    await answerTheComposer(page, { ...PLACEHOLDER_PROFILE, username: 'maya-k', displayName: 'Maya K' }, order);
+    await page.goto('/post/new');
+
+    await page.getByRole('button', { name: /^text$/i }).click(COLD_PAGE);
+    await page.getByRole('textbox', { name: /^post text/i }).fill('A note that stands on its own for the community.');
+    await page.getByRole('textbox', { name: /^title/i }).fill('Product demo with soft window light');
+
+    const paid = page.getByRole('radio', { name: /paid recipe/i });
+    await paid.focus();
+    await page.keyboard.press('Enter');
+    await expect(paid).toBeChecked();
+    await expect(page.getByLabel(/price in tokens/i)).toBeVisible();
+
+    // The arrow keys move the choice, as one radio group.
+    await page.keyboard.press('ArrowRight');
+    const none = page.getByRole('radio', { name: /no recipe/i });
+    await expect(none).toBeChecked();
+    await expect(none).toBeFocused();
+    await page.keyboard.press('ArrowLeft');
+    await expect(paid).toBeChecked();
+    await expect(paid).toBeFocused();
+
+    await expect(page).toHaveURL(/\/post\/new$/);
+    expect(order).toEqual([]);
+  });
 });
