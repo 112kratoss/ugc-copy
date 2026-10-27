@@ -270,7 +270,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A note that stands on its own for the community.' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
@@ -284,13 +284,141 @@ describe('NewPostClient', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  // The app's choice, as cards: a creator sees that a recipe can be sold
+  // before choosing anything, where a checkbox hid Paid behind a second step
+  // (and a status pill in the heading repeated what the controls said).
+  it('offers free, paid and no recipe as one choice of three cards', () => {
+    render(<NewPostClient />);
+
+    const free = screen.getByRole('radio', { name: /free recipe/i });
+    const paid = screen.getByRole('radio', { name: /paid recipe/i });
+    const none = screen.getByRole('radio', { name: /no recipe/i });
+    expect(none).toBeChecked();
+    // One group: what makes the arrow keys move between the cards.
+    expect(new Set([free, paid, none].map((radio) => radio.getAttribute('name'))).size).toBe(1);
+    expect(free).toHaveAttribute('name', expect.stringMatching(/\S/));
+    expect(screen.queryByRole('checkbox', { name: /add a reusable recipe/i })).toBeNull();
+    expect(screen.queryByLabelText(/price in tokens/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /add your first resource/i })).toBeNull();
+
+    fireEvent.click(paid);
+    expect(paid).toBeChecked();
+    expect(screen.getByLabelText(/price in tokens/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add your first resource/i })).toBeInTheDocument();
+
+    fireEvent.click(free);
+    expect(free).toBeChecked();
+    expect(screen.queryByLabelText(/price in tokens/i)).toBeNull();
+    expect(screen.getByText(/add a free recipe to their library/i)).toBeInTheDocument();
+
+    fireEvent.click(none);
+    expect(none).toBeChecked();
+    expect(screen.queryByRole('button', { name: /add your first resource/i })).toBeNull();
+  });
+
+  it('shows a sold recipe\'s mode on the cards and takes no change to it', () => {
+    render(<NewPostClient initialPost={{ ...createLegacyPrivateResourcePost(), hasPaidOrders: true }} />);
+
+    const free = screen.getByRole('radio', { name: /free recipe/i });
+    expect(free).toBeChecked();
+    expect(free).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /no recipe/i })).toBeDisabled();
+    expect(screen.getByText(/purchased resources are protected/i)).toBeInTheDocument();
+  });
+
+  // Chrome's implicit submission skips the composer's disabled first submit
+  // button for a non-text control and clicks the next one, "Save private":
+  // on the E2E harness Enter on a card posted the form. Enter chooses the
+  // card instead, and the form takes Enter from every checkbox too; a text
+  // field keeps it (the disabled first button makes it do nothing).
+  it('takes Enter on a recipe card as the choice, never as a submit', () => {
+    render(<NewPostClient />);
+
+    const paid = screen.getByRole('radio', { name: /paid recipe/i });
+    expect(fireEvent.keyDown(paid, { key: 'Enter' })).toBe(false);
+    expect(paid).toBeChecked();
+    expect(fireEvent.keyDown(paid, { key: 'Enter' })).toBe(false);
+    expect(paid).toBeChecked();
+    expect(fireEvent.keyDown(screen.getByRole('checkbox', { name: /mark as nsfw/i }), { key: 'Enter' })).toBe(false);
+    expect(fireEvent.keyDown(screen.getByRole('textbox', { name: /^title/i }), { key: 'Enter' })).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/posts', expect.anything());
+  });
+
+  // The cards are now the one control that takes a recipe off a post: the
+  // save must say so, since the update path keeps what is stored for a
+  // missing key (the sold case above).
+  it('sends the removal when No recipe is chosen on an unsold recipe', async () => {
+    render(<NewPostClient initialPost={createLegacyPrivateResourcePost()} />);
+
+    expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
+    expect(screen.queryByText('Secret client launch prompt')).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => String(url).startsWith('/api/posts/') && init?.method === 'PUT')).toBe(true);
+    });
+    const [, init] = fetchMock.mock.calls.find(([url, request]) => String(url).startsWith('/api/posts/') && request?.method === 'PUT')!;
+    const payload = JSON.parse(String((init as { body: string }).body));
+    expect(payload.resourceBundle).toEqual({ accessMode: 'none' });
+  });
+
+  // The Free/Paid pills counted every click, the checkbox none; the cards
+  // count a choice of Free or Paid, never No recipe or the card already chosen.
+  it('counts a choice of free or paid once, and no recipe never', () => {
+    searchParamsState.value = new URLSearchParams('from=creations');
+    const events: Array<{ eventName: string; parameters: Record<string, unknown> }> = [];
+    const recordEvent = (event: Event) => events.push((event as CustomEvent).detail);
+    window.addEventListener('magicbooklet:product-event', recordEvent);
+    try {
+      render(<NewPostClient />);
+      const selections = () => events
+        .filter((event) => event.eventName === 'recipe_access_mode_selected')
+        .map((event) => event.parameters);
+
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+      expect(selections()).toEqual([{ access_mode: 'free', entry_surface: 'creations' }]);
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+      expect(selections()).toHaveLength(1);
+      fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+      expect(selections()).toEqual([
+        { access_mode: 'free', entry_surface: 'creations' },
+        { access_mode: 'paid', entry_surface: 'creations' },
+      ]);
+      fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
+      expect(selections()).toHaveLength(2);
+    } finally {
+      window.removeEventListener('magicbooklet:product-event', recordEvent);
+    }
+  });
+
+  // Studio opens a free recipe's editor at the price too (`focus=price`): the
+  // request waited for Paid, so an arrow from Free to Paid pulled the focus
+  // into the price field, where the next arrow changed the price.
+  it('does not move the focus to the price when the creator changes a free recipe to paid', async () => {
+    searchParamsState.value = new URLSearchParams('resourceMode=free&focus=price&from=creations');
+    render(<NewPostClient initialPost={createLegacyPrivateResourcePost()} />);
+
+    expect(screen.getByText(/you came from my studio to manage this post/i)).toBeInTheDocument();
+    const free = screen.getByRole('radio', { name: /free recipe/i });
+    expect(free).toBeChecked();
+    free.focus();
+    fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+    const priceInput = screen.getByRole('spinbutton', { name: /price in tokens/i });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(priceInput).not.toHaveFocus();
+  });
+
   // Saving an empty card produced a row the publish gate silently discarded,
   // which read as the composer losing the resource. Mobile has always refused.
   it('refuses to save a resource card with no content', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /external link/i }));
 
@@ -313,7 +441,7 @@ describe('NewPostClient', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
@@ -343,7 +471,7 @@ describe('NewPostClient', () => {
       </>
     );
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     const content = screen.getByLabelText(/^protected content$/i);
@@ -399,7 +527,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
 
@@ -455,7 +583,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
 
@@ -503,7 +631,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
 
@@ -571,7 +699,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
 
@@ -594,7 +722,7 @@ describe('NewPostClient', () => {
   it('rejects documents in a reference-media card before upload', async () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /reference media/i }));
 
@@ -613,7 +741,7 @@ describe('NewPostClient', () => {
   it('contains focus in the resource dialog and restores it when closed', () => {
     const { container } = render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     const opener = screen.getByRole('button', { name: /add your first resource/i });
     opener.focus();
     fireEvent.click(opener);
@@ -672,7 +800,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A breakdown with a supporting still attached to it.' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /anything useful that does not fit above/i }));
     fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Extras' } });
@@ -1136,7 +1264,7 @@ describe('NewPostClient', () => {
   it('restores focus to the resource opener after closing the dialog', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     const opener = screen.getByRole('button', { name: /add your first resource/i });
     opener.focus();
 
@@ -1149,7 +1277,7 @@ describe('NewPostClient', () => {
   it('limits the general resource picker to server-supported file types', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
 
@@ -1662,7 +1790,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'Lead with a concrete before-and-after in the first line.' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
 
     // A package is a list of cards now: pick a type, fill it, save it.
     expect(screen.getByText(/what people receive/i)).toBeInTheDocument();
@@ -1738,8 +1866,8 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'Keep the hook direct and make the benefit visible instantly.' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^paid$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
 
     expect(screen.queryByText(/public post required/i)).not.toBeInTheDocument();
 
@@ -1813,7 +1941,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A compact breakdown for a multi-part creative.' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
@@ -1926,7 +2054,7 @@ describe('NewPostClient', () => {
     const readCards = renderComposerWithTwoImages();
     expect(readCards()).toHaveLength(2);
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Second shot prompt' } });
@@ -2019,7 +2147,7 @@ describe('NewPostClient', () => {
       });
     });
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'New shot prompt' } });
@@ -2068,7 +2196,7 @@ describe('NewPostClient', () => {
 
     const readCards = renderComposerWithTwoImages();
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Second shot prompt' } });
@@ -2116,7 +2244,7 @@ describe('NewPostClient', () => {
     });
 
     renderComposerWithTwoImages();
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Second shot prompt' } });
@@ -2153,7 +2281,7 @@ describe('NewPostClient', () => {
   it('asks for confirmation before removing a resource card', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Keepable prompt' } });
@@ -2757,8 +2885,8 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'test' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^paid$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Setup' } });
@@ -3506,7 +3634,7 @@ describe('NewPostClient', () => {
       fireEvent.change(caption, { target: { value: 'The saved caption.' } });
       expect(leaveWouldPrompt()).toBe(false);
 
-      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
       expect(leaveWouldPrompt()).toBe(true);
     });
 
@@ -4459,11 +4587,11 @@ describe('NewPostClient', () => {
       await waitFor(() => expect(titleInput).toHaveValue('Product still lit like a window display'));
       expect(screen.getByText('Suggested from your prompt. Edit it if you like.')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
       expect(titleInput).toHaveValue('Image recipe');
       expect(screen.getByText('Suggested. A recipe keeps your prompt off the post.')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
       expect(titleInput).toHaveValue('Product still lit like a window display');
     });
 
@@ -4477,7 +4605,7 @@ describe('NewPostClient', () => {
       fireEvent.change(titleInput, { target: { value: 'Window still, morning light' } });
       expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
       expect(titleInput).toHaveValue('Window still, morning light');
     });
 
@@ -4494,6 +4622,9 @@ describe('NewPostClient', () => {
       render(<NewPostClient />);
       await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Ghost rider'));
       expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
+      // The server refuses a recipe on a template result: no cards, the notice.
+      expect(screen.queryByRole('radio', { name: /free recipe/i })).not.toBeInTheDocument();
+      expect(screen.getByText(/shares final media only/i)).toBeInTheDocument();
     });
 
     // A motion prompt says how to move ("No distortion, …"), not what is shown.
@@ -4532,7 +4663,7 @@ describe('NewPostClient', () => {
       await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/generations'))).toBe(true));
       expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
       expect(titleInput).toHaveValue('Image recipe');
       expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
     });
@@ -4558,7 +4689,7 @@ describe('NewPostClient', () => {
       });
       // Offered inside a recipe only.
       expect(screen.queryByRole('checkbox', { name: /include exact prompt/i })).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
 
       const includePrompt = screen.getByRole('checkbox', { name: /include exact prompt/i });
       expect(includePrompt).not.toBeChecked();
@@ -4606,7 +4737,7 @@ describe('NewPostClient', () => {
       await waitFor(() => {
         expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
       });
-      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
       fireEvent.click(screen.getByRole('checkbox', { name: /include exact prompt/i }));
       expect(screen.queryByRole('checkbox', { name: /include creation references/i })).not.toBeInTheDocument();
 
