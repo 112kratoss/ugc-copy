@@ -101,6 +101,7 @@ vi.mock('react-native', () => ({
 import { FeedVideoPreview } from '../components/feed-video-preview';
 import { mediaColors } from '../lib/theme';
 import { MEDIA_DISPLAY_DEADLINE_MS } from '../lib/media-recovery';
+import { clearPlaybackMetricsForTests, readPlaybackMetrics } from '../lib/playback-metrics';
 import { MediaZoomTileKeyContext } from '../lib/media-zoom-video-offer';
 import {
   adoptVideoPlayer,
@@ -741,6 +742,48 @@ describe('FeedVideoPreview', () => {
     expect(onReadyChange).toHaveBeenLastCalledWith(false);
     expect(findRetry(tree)).toHaveLength(1);
     renderer.act(() => tree.unmount());
+  });
+
+  it('tells its owner when an attempt fails, by an error or at the deadline, and offers no Retry where told not to', () => {
+    vi.useFakeTimers();
+    try {
+      const onPlaybackFailed = vi.fn();
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => {
+        tree = renderer.create(<FeedVideoPreview {...posterProps} active retryable={false} onPlaybackFailed={onPlaybackFailed} />);
+      });
+      expect(onPlaybackFailed).not.toHaveBeenCalled();
+      renderer.act(() => {
+        vi.advanceTimersByTime(MEDIA_DISPLAY_DEADLINE_MS);
+      });
+      expect(onPlaybackFailed).toHaveBeenCalledOnce();
+      expect(findRetry(tree)).toHaveLength(0);
+      renderer.act(() => tree.unmount());
+
+      videoState.player.status = 'error';
+      const onEarlyError = vi.fn();
+      renderer.act(() => {
+        tree = renderer.create(<FeedVideoPreview {...posterProps} active retryable={false} onPlaybackFailed={onEarlyError} />);
+      });
+      expect(onEarlyError).toHaveBeenCalledOnce();
+      renderer.act(() => tree.unmount());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('files its starts in the fleet metrics under the surface it is given, and none when told to leave them out', () => {
+    for (const [metricsSurface, starts] of [['feed', 1], [null, 0]] as const) {
+      clearPlaybackMetricsForTests();
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => {
+        tree = renderer.create(<FeedVideoPreview {...posterProps} active metricsSurface={metricsSurface} />);
+      });
+      renderer.act(() => tree.root.findByType('video-view' as never).props.onFirstFrameRender());
+      expect(readPlaybackMetrics().buckets.reduce((sum, bucket) => sum + bucket.starts, 0)).toBe(starts);
+      renderer.act(() => tree.unmount());
+    }
+    clearPlaybackMetricsForTests();
   });
 
 });

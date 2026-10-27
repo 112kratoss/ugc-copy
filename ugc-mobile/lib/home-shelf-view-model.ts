@@ -1,6 +1,14 @@
 import { formatCreditCost } from './generation-action-label';
+import { SHOWCASE_PLAYBACK_VIEWABILITY } from './showcase-feed-events';
 import type { ToolAccent } from './theme';
-import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, HomeShelfPrice, HomeShelfResponse } from './types';
+import type {
+  HomeShelfAction,
+  HomeShelfCreation,
+  HomeShelfItem,
+  HomeShelfPrice,
+  HomeShelfResponse,
+  ShowcaseFeedItem,
+} from './types';
 import { getNativeRemixCreateHref } from './viewer-actions';
 
 /**
@@ -111,6 +119,59 @@ export function homeShelfCreationHint(signsInFirst: boolean): string {
 export function homeShelfPosterCacheKey(creation: HomeShelfCreation): string {
   const lead = (creation.post.mediaItems ?? []).slice().sort((left, right) => left.sortOrder - right.sortOrder)[0];
   return lead?.previewCacheKey ?? creation.posterUrl;
+}
+
+/** How much of a card counts as in view: the feed's own playback threshold. */
+const IN_VIEW = SHOWCASE_PLAYBACK_VIEWABILITY.itemVisiblePercentThreshold / 100;
+
+/** Whether at least `IN_VIEW` of the span from `start`, `length` long, lies between `viewStart` and `viewEnd`. */
+function mostlyInView(start: number, length: number, viewStart: number, viewEnd: number) {
+  if (!(length > 0)) return false;
+  return (Math.min(start + length, viewEnd) - Math.max(start, viewStart)) / length >= IN_VIEW;
+}
+
+/**
+ * The id a shelf card plays under in Home's one-clip election
+ * (`lib/home-feed-playback.ts`). Never the feed card's own: the same post can
+ * be on the shelf and in the feed, and the two tiles must not answer to one
+ * activation.
+ */
+export function homeShelfPlaybackId(creation: Pick<HomeShelfCreation, 'post'>): string {
+  return `home-shelf:${creation.post.id}`;
+}
+
+/**
+ * What the shelf puts up for Home's one playing clip: the first card with a
+ * clip that is mostly in the row's view, as a feed item under the shelf's own
+ * id, or null. Cards whose clip failed (`failedIds`, by that id) are passed
+ * over, so the slot goes on to a clip that plays. Every card, offers included,
+ * sits `cardWidth + gap` after the one before it, the first at `leading`, and
+ * the row ends in the Start from scratch tile. `scrollX` is where the row last
+ * came to rest, held to where the row can still be: one that has since lost
+ * cards was pulled back by the scroll view without a word.
+ */
+export function selectHomeShelfPlaybackCandidate(
+  items: HomeShelfItem[],
+  row: { scrollX: number; viewportWidth: number; cardWidth: number; gap: number; leading: number },
+  failedIds: readonly string[] = [],
+): ShowcaseFeedItem | null {
+  if (!(row.cardWidth > 0) || !(row.viewportWidth > 0)) return null;
+  const contentWidth = row.leading * 2 + (items.length + 1) * row.cardWidth + items.length * row.gap;
+  const viewStart = Math.min(Math.max(row.scrollX, 0), Math.max(0, contentWidth - row.viewportWidth));
+  const viewEnd = viewStart + row.viewportWidth;
+  for (const [index, item] of items.entries()) {
+    if (item.kind !== 'creation' || !item.clipUrl) continue;
+    const id = homeShelfPlaybackId(item);
+    if (failedIds.includes(id)) continue;
+    const start = row.leading + index * (row.cardWidth + row.gap);
+    if (mostlyInView(start, row.cardWidth, viewStart, viewEnd)) return { ...item.post, id };
+  }
+  return null;
+}
+
+/** Whether a box at `top` (window points, `height` tall) is mostly on a screen `windowHeight` tall. */
+export function isHomeShelfInView(top: number, height: number, windowHeight: number): boolean {
+  return mostlyInView(top, height, 0, windowHeight);
 }
 
 export type HomeShelfActionIcon = 'send' | 'gift' | 'coins';

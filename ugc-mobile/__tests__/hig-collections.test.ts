@@ -154,8 +154,8 @@ describe('HIG playing video — the play badge marks a poster, not a playing til
     expect(screen).toContain('{isVideoCard && !coverVideoStreaming ? <VideoCornerPlay /> : null}');
     // Both keep an elected tile on its poster without moving the election, so
     // the poster keeps its badge under either.
-    expect(screen).toContain('const previewsEnabled = useAutoplayPreviewsEnabled();');
-    expect(screen).toContain('isShowcaseCoverVideoStreaming(card.item, showActiveVideo && !reducedMotion && previewsEnabled)');
+    expect(screen).toContain('const previewsAllowed = usePreviewPlaybackAllowed();');
+    expect(screen).toContain('isShowcaseCoverVideoStreaming(card.item, showActiveVideo && previewsAllowed)');
   });
 });
 
@@ -205,9 +205,10 @@ describe('HIG motion — the Reduce Motion preference is read in exactly one pla
   });
 
   it('has the feed grid and the drawer reach for the shared hook', () => {
-    for (const name of ['components/showcase-media-preview.tsx', 'components/home-side-menu.tsx']) {
-      expect(file(name)).toContain("import { useReducedMotion } from '@/lib/motion';");
-    }
+    expect(file('components/home-side-menu.tsx')).toContain("import { useReducedMotion } from '@/lib/motion';");
+    // The feed grid asks through the preview gate, which asks the shared hook.
+    expect(file('components/showcase-media-preview.tsx')).toContain("import { usePreviewPlaybackAllowed } from '@/lib/use-preview-playback-allowed';");
+    expect(file('lib/use-preview-playback-allowed.ts')).toContain("import { useReducedMotion } from '@/lib/motion';");
   });
 });
 
