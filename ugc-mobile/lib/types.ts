@@ -830,6 +830,8 @@ export interface ShowcaseAssetSummary {
   priceUsdCents: number;
   previewText: string;
   allowRemix: boolean;
+  /** True when the signed-in viewer has unlocked this recipe (paid or free); left out otherwise. */
+  viewerHasUnlocked?: boolean;
   /** Paid unlocks; absent at 0. */
   salesCount?: number;
   /** Free unlocks; absent at 0, like `salesCount`. */

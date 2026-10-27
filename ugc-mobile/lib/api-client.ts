@@ -1715,6 +1715,8 @@ export function createApiClient({
         post: OwnerPostListItem & {
           resourceBundleInput?: PostResourceBundleInput | null;
           hasPaidOrders?: boolean;
+          /** People who have this recipe: paid sales plus free unlocks. */
+          resourceBundleBuyerCount?: number;
         };
       }>(`/api/posts/${postId}`),
     updatePost: (postId: string, body: Record<string, unknown>) =>

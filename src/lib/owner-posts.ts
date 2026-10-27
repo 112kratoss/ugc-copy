@@ -182,7 +182,10 @@ export interface OwnerPostListItem {
 
 export interface OwnerPostDetail extends OwnerPostListItem {
   resourceBundleInput: PostResourceBundleInput;
+  /** Always false since sold recipes became editable; kept for app builds that still read it. */
   hasPaidOrders: boolean;
+  /** People who have this recipe: paid sales plus free unlocks. 0 when there is none. */
+  resourceBundleBuyerCount?: number;
 }
 
 export type OwnerPostVisibilityFilter = ShowcaseVisibility | 'archived' | 'all';
