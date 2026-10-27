@@ -211,6 +211,22 @@ describe("the shelf's clip in Home's election", () => {
     expect(selectHomeShelfPlaybackCandidate(items, { ...row(0), viewportWidth: 0 })).toBeNull();
   });
 
+  it('passes over a clip that failed, for the next clip card in view', () => {
+    expect(selectHomeShelfPlaybackCandidate(items, row(0), ['home-shelf:post-1'])).toBeNull();
+    expect(selectHomeShelfPlaybackCandidate(items, row(2 * 161), ['home-shelf:post-1'])?.id).toBe('home-shelf:post-3');
+    expect(selectHomeShelfPlaybackCandidate(items, row(2 * 161), ['home-shelf:post-3'])).toBeNull();
+  });
+
+  it('reads a rest the row can no longer have as its end: a row that lost cards was pulled back', () => {
+    // Rested on the dance, then the lineup shrank to the boat alone: the row
+    // (the boat and the tools, narrower than the screen) can only be at 0.
+    const boatOnly = items.filter((item) => item.id === 'post-1');
+    expect(selectHomeShelfPlaybackCandidate(boatOnly, row(3 * 161))?.id).toBe('home-shelf:post-1');
+    // The serum and the dance: a rest past the end is the end, where the dance is in view.
+    const stillThenDance = items.filter((item) => item.id === 'post-2' || item.id === 'post-3');
+    expect(selectHomeShelfPlaybackCandidate(stillThenDance, row(5000))?.id).toBe('home-shelf:post-3');
+  });
+
   it("counts the shelf in view while 55% of it is on screen, as the feed counts a card", () => {
     expect(isHomeShelfInView(100, 270, 844)).toBe(true);
     expect(isHomeShelfInView(-120, 270, 844)).toBe(true);

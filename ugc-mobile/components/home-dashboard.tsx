@@ -4,7 +4,7 @@ import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Crown, Plus, Search } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Dimensions, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -145,7 +145,7 @@ export function HomeDashboard() {
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
-  const { width, height: windowHeight } = useWindowDimensions();
+  const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
@@ -187,29 +187,53 @@ export function HomeDashboard() {
   // under the feed's rules for both. Where the shelf is gets read when the
   // list comes to rest, never per scroll frame.
   const shelfRef = useRef<View>(null);
+  const feedItemsRef = useRef<ShowcaseFeedItem[]>([]);
   const feedViewableRef = useRef<ShowcaseFeedItem[]>([]);
   const shelfCandidateRef = useRef<ShowcaseFeedItem | null>(null);
   const shelfInViewRef = useRef(true);
-  const windowHeightRef = useRef(windowHeight);
-  useEffect(() => {
-    windowHeightRef.current = windowHeight;
-  }, [windowHeight]);
+  // The controller picks the prepared players in card order, so it needs the
+  // cards as the list shows them, after every page and refetch, and the
+  // shelf's candidate ahead of them: the shelf sits above the feed. So while
+  // the shelf plays, the feed's first video stays prepared under it, and the
+  // shelf's player stays in the window once the slot goes back to the feed.
+  const dispatchPlaybackItems = useCallback(() => {
+    const shelf = shelfCandidateRef.current;
+    playbackController.dispatch({ type: 'itemsChanged', items: shelf ? [shelf, ...feedItemsRef.current] : feedItemsRef.current });
+  }, [playbackController]);
+  // The search opened over Home covers it whole: nothing under it plays, and
+  // what played keeps its player for when the search closes.
+  const searchVisibleRef = useRef(false);
   const dispatchPlaybackCandidates = useCallback(() => {
     const shelf = shelfInViewRef.current ? shelfCandidateRef.current : null;
-    playbackController.dispatch({ type: 'viewableItemsChanged', items: shelf ? [shelf] : feedViewableRef.current });
+    const items = searchVisibleRef.current ? [] : shelf ? [shelf] : feedViewableRef.current;
+    playbackController.dispatch({ type: 'viewableItemsChanged', items });
   }, [playbackController]);
+  useEffect(() => {
+    searchVisibleRef.current = searchVisible;
+    dispatchPlaybackCandidates();
+  }, [dispatchPlaybackCandidates, searchVisible]);
+  // Synchronous on Fabric: a rest handler measures first, so the election at
+  // rest already has the right candidates. A shelf measured at no size is out
+  // of layout, not off screen (under a reel on Android the tabs are taken out
+  // of layout), so that answer changes nothing.
   const measureShelf = useCallback(() => {
     shelfRef.current?.measureInWindow((_x, top, _width, height) => {
-      const inView = isHomeShelfInView(top, height, windowHeightRef.current);
+      if (!(height > 0)) return;
+      const inView = isHomeShelfInView(top, height, Dimensions.get('window').height);
       if (inView === shelfInViewRef.current) return;
       shelfInViewRef.current = inView;
       dispatchPlaybackCandidates();
     });
   }, [dispatchPlaybackCandidates]);
+  // Back in front (a reel closed, the app came back): the shelf may have moved unseen.
+  useEffect(() => {
+    if (isFocused && foreground) measureShelf();
+  }, [foreground, isFocused, measureShelf]);
   const onShelfPlaybackCandidateChange = useCallback((candidate: ShowcaseFeedItem | null) => {
     shelfCandidateRef.current = candidate;
+    dispatchPlaybackItems();
     dispatchPlaybackCandidates();
-  }, [dispatchPlaybackCandidates]);
+  }, [dispatchPlaybackCandidates, dispatchPlaybackItems]);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
@@ -435,11 +459,10 @@ export function HomeDashboard() {
       .filter((item): item is ShowcaseFeedItem => Boolean(item));
     recordAttention(attention.setVisible(visible, Date.now()));
   }, [attention, cards, recordAttention]);
-  // The controller picks the prepared neighbours in card order, so it needs
-  // the cards as the list shows them, after every page and refetch.
   useEffect(() => {
-    playbackController.dispatch({ type: 'itemsChanged', items: cards.map((card) => card.item) });
-  }, [cards, playbackController]);
+    feedItemsRef.current = cards.map((card) => card.item);
+    dispatchPlaybackItems();
+  }, [cards, dispatchPlaybackItems]);
   // FlashList reports viewability by index, not by post: new posts landing on
   // the indices already on screen (a refresh, the network page replacing the
   // one restored at launch, a removed post) report nothing. Their impressions
@@ -1034,14 +1057,16 @@ export function HomeDashboard() {
         showsVerticalScrollIndicator={false}
         onScrollBeginDrag={() => playbackController.dispatch({ type: 'dragBegin' })}
         onScrollEndDrag={(event) => {
-          playbackController.dispatch({ type: 'dragEnd', velocityY: event.nativeEvent.velocity?.y });
           measureShelf();
+          playbackController.dispatch({ type: 'dragEnd', velocityY: event.nativeEvent.velocity?.y });
         }}
         onMomentumScrollBegin={() => playbackController.dispatch({ type: 'momentumBegin' })}
         onMomentumScrollEnd={() => {
-          playbackController.dispatch({ type: 'momentumEnd' });
           measureShelf();
+          playbackController.dispatch({ type: 'momentumEnd' });
         }}
+        // iOS's status-bar tap scrolls to the top with no drag of its own.
+        onScrollToTop={measureShelf}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         contentInsetAdjustmentBehavior="never"
         // Home cards end in real controls and resource banners. Reserve the

@@ -38,6 +38,7 @@ import {
   completePlaybackStart,
   endPlaybackStall,
   forgetPlayback,
+  type PlaybackSurface,
 } from '@/lib/playback-metrics';
 import { MEDIA_PLAYER_OPTIONS } from '@/lib/video-player-options';
 
@@ -104,6 +105,8 @@ export function FeedVideoPreview({
   diagnosticsSurface = 'feed',
   onPlaybackTime,
   retryable = true,
+  metricsSurface = 'feed',
+  onPlaybackFailed,
 }: {
   /** Source of record — identity, cache keys, downloads. Never streamed here. */
   url: string;
@@ -168,6 +171,18 @@ export function FeedVideoPreview({
    * simply stays.
    */
   retryable?: boolean;
+  /**
+   * Where this tile's starts and stalls are filed in the fleet's playback
+   * metrics (`lib/playback-metrics.ts`), or null to leave them out: a Home
+   * shelf card is not a feed card, and its starts would be read as the feed's.
+   */
+  metricsSurface?: PlaybackSurface | null;
+  /**
+   * Told when a playback attempt fails: an error, or no first frame by the
+   * deadline. Where there is no Retry, the tile's owner hands the playing slot
+   * to another clip with it.
+   */
+  onPlaybackFailed?: () => void;
 }) {
   const theme = useAppTheme();
   const { source: streamSource, requestKey } = useMediaSource(streamUrl || '');
@@ -250,6 +265,10 @@ export function FeedVideoPreview({
       if (ready) onReadyChange(false);
     };
   }, [onReadyChange, ready]);
+
+  useEffect(() => {
+    if (playbackFailed) onPlaybackFailed?.();
+  }, [onPlaybackFailed, playbackFailed]);
 
   useEffect(() => {
     setFailedPosterUrl(null);
@@ -348,6 +367,7 @@ export function FeedVideoPreview({
           onFirstFrame={handleFirstFrame}
           onPlaybackError={handlePlaybackError}
           onPlaybackTime={onPlaybackTime}
+          metricsSurface={metricsSurface}
         />
       ) : null}
 
@@ -432,6 +452,7 @@ function FeedVideoPlayerLayer({
   onFirstFrame,
   onPlaybackError,
   onPlaybackTime,
+  metricsSurface,
 }: {
   source: { uri: string; headers?: Record<string, string> };
   /** Offered to the zoom out of this tile under this stream; null offers nothing. */
@@ -445,6 +466,8 @@ function FeedVideoPlayerLayer({
   onFirstFrame: () => void;
   onPlaybackError: (errored: boolean) => void;
   onPlaybackTime?: (currentTimeSeconds: number, durationSeconds: number) => void;
+  /** Where the fleet metrics file this player's starts; null files none (and so no stalls). */
+  metricsSurface: PlaybackSurface | null;
 }) {
   // The player a reel closing into this tile handed back is carried on with in
   // place of a new one. A new one showed the poster — the clip's first frame —
@@ -547,14 +570,14 @@ function FeedVideoPlayerLayer({
     if (returning) return;
     if (playing) {
       // Asked to move: a player that has drawn is a warm start, one that has not is cold.
-      beginPlaybackStart(metricsKey, { surface: 'feed', kind: hasFrameRef.current ? 'warm' : 'cold' });
+      if (metricsSurface) beginPlaybackStart(metricsKey, { surface: metricsSurface, kind: hasFrameRef.current ? 'warm' : 'cold' });
       player.play();
     } else {
       cancelPlaybackStart(metricsKey);
       endPlaybackStall(metricsKey);
       player.pause();
     }
-  }, [metricsKey, player, playing, returning]);
+  }, [metricsKey, metricsSurface, player, playing, returning]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {

@@ -129,6 +129,7 @@ vi.mock('react-native', () => ({
   AccessibilityInfo: { announceForAccessibility: vi.fn() },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Alert: { alert: vi.fn() },
+  Dimensions: { get: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }) },
   Linking: { openURL: vi.fn() },
   Platform: {
     get OS() {
@@ -460,10 +461,18 @@ function hostProps(tree: renderer.ReactTestRenderer, type: string) {
 }
 
 /** The list header (top bar, rail and chips), drawn on its own so its controls can be pressed. */
-function renderHeader(tree: renderer.ReactTestRenderer) {
+/**
+ * The list's header on its own. With `shelfBox`, the shelf's wrapper (the one
+ * view not flattened) answers measureInWindow with the box as it stands then.
+ */
+function renderHeader(tree: renderer.ReactTestRenderer, shelfBox?: { top: number; height: number }) {
   let header: renderer.ReactTestRenderer | undefined;
   renderer.act(() => {
-    header = renderer.create(listProps(tree).ListHeaderComponent as React.ReactElement);
+    header = renderer.create(listProps(tree).ListHeaderComponent as React.ReactElement, {
+      createNodeMock: (element) => (shelfBox && (element.props as { collapsable?: boolean }).collapsable === false
+        ? { measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(0, shelfBox.top, 390, shelfBox.height) }
+        : null),
+    });
   });
   return header!;
 }
@@ -1090,14 +1099,7 @@ describe('Home screen', () => {
     const store = activationStores.at(-1)!;
     // Where the shelf sits in the window, as measureInWindow reports it.
     const shelfBox = { top: 120, height: 270 };
-    let header!: renderer.ReactTestRenderer;
-    renderer.act(() => {
-      header = renderer.create(listProps(tree).ListHeaderComponent as React.ReactElement, {
-        createNodeMock: (element) => ((element.props as { collapsable?: boolean }).collapsable === false
-          ? { measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(0, shelfBox.top, 390, shelfBox.height) }
-          : null),
-      });
-    });
+    const header = renderHeader(tree, shelfBox);
     const restScroll = () => renderer.act(() => {
       listProps(tree).onScrollBeginDrag();
       listProps(tree).onScrollEndDrag({ nativeEvent: { velocity: { y: 0 } } });
@@ -1123,6 +1125,132 @@ describe('Home screen', () => {
     restScroll();
     expect(store.snapshot().activeIds).toEqual(['a']);
 
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  it("keeps the feed's first video prepared under the shelf's clip, and the shelf's player once the slot goes back", () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    queryState.pages = [page(['a', 'b', 'c'].map((id) => videoItem(id, `delivery-video-${id}`)))];
+    const { tree } = renderHome();
+    const store = activationStores.at(-1)!;
+    const shelfBox = { top: 120, height: 270 };
+    const header = renderHeader(tree, shelfBox);
+    const settleWindow = () => renderer.act(() => {
+      vi.advanceTimersByTime(FEED_PREPARED_WINDOW_STEP_MS * 8);
+    });
+
+    reportViewable(tree, SHOWCASE_PLAYBACK_VIEWABILITY, [0]);
+    const shelfClip = { ...videoItem('post-1', 'delivery-shelf'), id: 'home-shelf:post-1' };
+    renderer.act(() => hostProps(header, 'home-shelf').onPlaybackCandidateChange(shelfClip));
+    settleWindow();
+    // The shelf sits above the feed: its clip plays, and the video under it is ready to take over.
+    expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
+    expect(store.snapshot().preparedIds).toContain('a');
+
+    shelfBox.top = -200;
+    renderer.act(() => {
+      listProps(tree).onScrollBeginDrag();
+      listProps(tree).onScrollEndDrag({ nativeEvent: { velocity: { y: 0 } } });
+    });
+    settleWindow();
+    // The feed's video takes the slot back, and the shelf's player stays one video away.
+    expect(store.snapshot().activeIds).toEqual(['a']);
+    expect(store.snapshot().preparedIds).toEqual(expect.arrayContaining(['home-shelf:post-1', 'b']));
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  it('plays nothing under the search, and the same clip again once it closes', () => {
+    queryState.pages = [page([videoItem('a', 'delivery-video-a')])];
+    const { tree } = renderHome();
+    const store = activationStores.at(-1)!;
+    const header = renderHeader(tree, { top: 120, height: 270 });
+    renderer.act(() => hostProps(header, 'home-shelf').onPlaybackCandidateChange({ ...videoItem('post-1', 'delivery-shelf'), id: 'home-shelf:post-1' }));
+    expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
+
+    press(header, 'Search creators, posts, and recipes');
+    expect(hostProps(tree, 'explore-search-overlay').visible).toBe(true);
+    expect(store.snapshot().activeIds).toEqual([]);
+    // Its player is kept for the close: coming back is a resume.
+    expect(store.snapshot().preparedIds).toContain('home-shelf:post-1');
+
+    renderer.act(() => hostProps(tree, 'explore-search-overlay').onClose());
+    expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  it('takes a shelf measured at no size for out of layout, and measures it again on coming back to the front', () => {
+    queryState.pages = [page([videoItem('a', 'delivery-video-a')])];
+    const { tree } = renderHome();
+    const store = activationStores.at(-1)!;
+    const shelfBox = { top: 120, height: 270 };
+    const header = renderHeader(tree, shelfBox);
+    reportViewable(tree, SHOWCASE_PLAYBACK_VIEWABILITY, [0]);
+    renderer.act(() => hostProps(header, 'home-shelf').onPlaybackCandidateChange({ ...videoItem('post-1', 'delivery-shelf'), id: 'home-shelf:post-1' }));
+    expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
+
+    // Under a reel on Android the tabs leave layout, and a new viewability report measures nothing.
+    navState.focused = false;
+    renderer.act(() => tree.update(<HomeDashboard />));
+    shelfBox.height = 0;
+    shelfBox.top = 0;
+    reportViewable(tree, SHOWCASE_PLAYBACK_VIEWABILITY, [0]);
+    expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
+    shelfBox.height = 270;
+    shelfBox.top = 120;
+    navState.focused = true;
+    renderer.act(() => tree.update(<HomeDashboard />));
+    expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
+
+    // Out of view while away, with no scroll to say so: coming back measures it.
+    navState.focused = false;
+    renderer.act(() => tree.update(<HomeDashboard />));
+    shelfBox.top = -200;
+    navState.focused = true;
+    renderer.act(() => tree.update(<HomeDashboard />));
+    expect(store.snapshot().activeIds).toEqual(['a']);
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  it('measures the shelf before the election at rest, so a fling back to the top elects only the shelf', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    queryState.pages = [page(['a', 'b', 'c', 'd'].map((id) => videoItem(id, `delivery-video-${id}`)))];
+    const { tree } = renderHome();
+    const store = activationStores.at(-1)!;
+    const shelfBox = { top: 120, height: 270 };
+    const header = renderHeader(tree, shelfBox);
+    renderer.act(() => hostProps(header, 'home-shelf').onPlaybackCandidateChange({ ...videoItem('post-1', 'delivery-shelf'), id: 'home-shelf:post-1' }));
+
+    // Deep in the feed: the shelf is long gone and the fourth video plays.
+    shelfBox.top = -2000;
+    reportViewable(tree, SHOWCASE_PLAYBACK_VIEWABILITY, [3]);
+    expect(store.snapshot().activeIds).toEqual(['d']);
+    const firstVideoElected = vi.fn();
+    const unsubscribe = store.subscribe('a', () => {
+      if (store.activationOf('a') === 'visible') firstVideoElected();
+    });
+
+    // A fling back up: the first card comes into view while the shelf is still half off screen.
+    renderer.act(() => {
+      listProps(tree).onScrollBeginDrag();
+      listProps(tree).onScrollEndDrag({ nativeEvent: { velocity: { y: -4 } } });
+      listProps(tree).onMomentumScrollBegin();
+    });
+    shelfBox.top = -150;
+    reportViewable(tree, SHOWCASE_PLAYBACK_VIEWABILITY, [0]);
+    // It comes to rest at the top, the shelf whole on screen.
+    shelfBox.top = 120;
+    renderer.act(() => listProps(tree).onMomentumScrollEnd());
+
+    expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
+    expect(firstVideoElected).not.toHaveBeenCalled();
+    unsubscribe();
     renderer.act(() => header.unmount());
     renderer.act(() => tree.unmount());
   });

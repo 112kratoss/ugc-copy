@@ -1,14 +1,12 @@
 import { router } from 'expo-router';
 import { Coins, Gift, ImageIcon, Play, Rocket, Send, Video, type LucideIcon } from 'lucide-react-native';
-import { useCallback, useContext, useEffect, useRef } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
   Pressable,
   ScrollView,
   useWindowDimensions,
   View,
   type LayoutChangeEvent,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
   type ViewStyle,
 } from 'react-native';
 
@@ -16,10 +14,11 @@ import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { StableMediaImage } from '@/components/media-preview';
 import { SkeletonBone } from '@/components/skeleton';
 import { AppText } from '@/components/ui';
-import { useAutoplayPreviewsEnabled } from '@/lib/autoplay-preference';
+import { usePreviewPlaybackAllowed } from '@/lib/use-preview-playback-allowed';
 import { hexWithAlpha, linearGradient } from '@/lib/eased-fade';
 import { FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { verticalHitSlop } from '@/lib/hit-target';
+import { createHomeShelfRowRest, type HomeShelfRowRest } from '@/lib/home-shelf-row-rest';
 import {
   HOME_SHELF_START_BLANK_TOOLS,
   formatActiveRenders,
@@ -35,7 +34,7 @@ import {
   selectHomeShelfPlaybackCandidate,
   type HomeShelfActionIcon,
 } from '@/lib/home-shelf-view-model';
-import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
+import { MotionView, usePressMotion } from '@/lib/motion';
 import { accentColor, appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, ShowcaseFeedItem } from '@/lib/types';
@@ -48,12 +47,14 @@ import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, ShowcaseFeedIte
  * page, and the sliver is what says it scrolls.
  *
  * A card with a clip plays it, muted and looping, when it holds Home's one
- * playing slot: the row puts up its first clip card in view
- * (`onPlaybackCandidateChange`), Home enters it in the feed's own election
- * (`lib/home-feed-playback.ts`) as the only candidate while the shelf is on
- * screen, and the card plays while it holds the slot. So the Autoplay previews
- * setting, mobile data, Reduce Motion and the one-clip rule apply to it
- * exactly as to a feed card.
+ * playing slot: the row puts up its first clip card in view each time it comes
+ * to rest (`onPlaybackCandidateChange`), Home enters it in the feed's own
+ * election (`lib/home-feed-playback.ts`) as the only candidate while the shelf
+ * is on screen, and the card plays while it holds the slot. So the Autoplay
+ * previews setting, mobile data, Reduce Motion and the one-clip rule apply to
+ * it exactly as to a feed card. A clip that fails is passed over for the next
+ * one in view until the lineup changes: the card has no Retry, and a failed
+ * clip holding the slot would leave Home's first screen still.
  *
  * The row keeps one height in every state, because it sits in the feed's list
  * header and FlashList anchors on it: placeholders while the first answer
@@ -65,6 +66,7 @@ import type { HomeShelfAction, HomeShelfCreation, HomeShelfItem, ShowcaseFeedIte
 const SHELF_GAP = appTheme.spacing.gap;
 const CARD_RADIUS = appTheme.radii.lg;
 const ROW_HEIGHT = 36;
+const NO_FAILED_CLIPS: readonly string[] = [];
 
 // The shade under a card's captions, drawn by the render server (a
 // CAGradientLayer on iOS) like the feed's. It shades pictures, so it is the
@@ -128,35 +130,42 @@ export function HomeShelf({
   const card = getHomeShelfCardSize(contentWidth, SHELF_GAP, fontScale, appTheme.typeScale.control);
   const empty = !isLoading && items.length === 0;
 
-  // Where the row rests, read when it comes to rest rather than as it moves.
-  const rowRef = useRef({ scrollX: 0, viewportWidth: 0 });
+  // Where the row rests, set when it comes to rest (after the snap) rather
+  // than as it moves: one render per rest, none per scroll frame.
+  const [rest, setRest] = useState<HomeShelfRowRest>({ scrollX: 0, viewportWidth: 0 });
+  const [rowRest] = useState(() => createHomeShelfRowRest((next) => {
+    setRest((current) => (
+      current.scrollX === next.scrollX && current.viewportWidth === next.viewportWidth ? current : next
+    ));
+  }));
+  useEffect(() => () => rowRest.cancel(), [rowRest]);
+  const onRowLayout = (event: LayoutChangeEvent) => {
+    const { width } = event.nativeEvent.layout;
+    setRest((current) => (current.viewportWidth === width ? current : { ...current, viewportWidth: width }));
+  };
+  // The clips that failed in this lineup, by playback id.
+  const [failures, setFailures] = useState<{ items: HomeShelfItem[]; ids: string[] }>({ items, ids: [] });
+  const failedIds = failures.items === items ? failures.ids : NO_FAILED_CLIPS;
+  const onClipFailed = useCallback((playbackId: string) => {
+    setFailures((current) => {
+      const ids = current.items === items ? current.ids : [];
+      return ids.includes(playbackId) ? current : { items, ids: [...ids, playbackId] };
+    });
+  }, [items]);
+
   const reportedIdRef = useRef<string | null | undefined>(undefined);
-  const reportCandidate = useCallback(() => {
-    const candidate = isLoading || empty ? null : selectHomeShelfPlaybackCandidate(items, {
-      ...rowRef.current,
+  useEffect(() => {
+    const candidate = isLoading ? null : selectHomeShelfPlaybackCandidate(items, {
+      ...rest,
       cardWidth: card.width,
       gap: SHELF_GAP,
       leading: horizontalPadding,
-    });
+    }, failedIds);
     const id = candidate?.id ?? null;
     if (id === reportedIdRef.current) return;
     reportedIdRef.current = id;
     onPlaybackCandidateChange?.(candidate);
-  }, [card.width, empty, horizontalPadding, isLoading, items, onPlaybackCandidateChange]);
-  useEffect(() => {
-    reportCandidate();
-  }, [reportCandidate]);
-  const onRowLayout = (event: LayoutChangeEvent) => {
-    rowRef.current.viewportWidth = event.nativeEvent.layout.width;
-    reportCandidate();
-  };
-  const onRowRest = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    rowRef.current = {
-      scrollX: event.nativeEvent.contentOffset.x,
-      viewportWidth: event.nativeEvent.layoutMeasurement.width,
-    };
-    reportCandidate();
-  };
+  }, [card.width, failedIds, horizontalPadding, isLoading, items, onPlaybackCandidateChange, rest]);
 
   return (
     <View style={{ gap: appTheme.spacing.compact }}>
@@ -217,8 +226,14 @@ export function HomeShelf({
         decelerationRate="fast"
         scrollEnabled={!isLoading}
         onLayout={onRowLayout}
-        onScrollEndDrag={onRowRest}
-        onMomentumScrollEnd={onRowRest}
+        onScrollBeginDrag={rowRest.dragBegin}
+        onScrollEndDrag={(event) => rowRest.dragEnd(event.nativeEvent)}
+        onMomentumScrollBegin={rowRest.momentumBegin}
+        onMomentumScrollEnd={(event) => rowRest.momentumEnd(event.nativeEvent)}
+        // Only for a scroll with no finger in it (TalkBack, a keyboard): the
+        // tracker leaves every event of a drag or a coast alone.
+        onScroll={(event) => rowRest.scrolled(event.nativeEvent)}
+        scrollEventThrottle={16}
         // Each card is the shape's height at least, and the row stretches them
         // all to its tallest: an offer whose terms need more room (a 360dp
         // phone, larger text) makes the whole row taller instead of being cut.
@@ -252,6 +267,7 @@ export function HomeShelf({
                 pending={pendingId === item.post.id}
                 disabled={pendingId !== null}
                 onMake={onMake}
+                onClipFailed={onClipFailed}
               />
             ) : (
               <ActionCard key={`action-${item.id}`} action={item} width={card.width} height={card.height} />
@@ -303,6 +319,7 @@ function CreationCard({
   pending,
   disabled,
   onMake,
+  onClipFailed,
 }: {
   creation: HomeShelfCreation;
   offerFreeToTry: boolean;
@@ -314,13 +331,15 @@ function CreationCard({
   /** A remix is being opened: a second tap must not open another. */
   disabled: boolean;
   onMake: (creation: HomeShelfCreation) => void;
+  /** This card's clip failed to play, by its playback id. */
+  onClipFailed: (playbackId: string) => void;
 }) {
   const theme = useAppTheme();
   const motion = usePressMotion(disabled, { scale: appTheme.motion.scale.pressedCard });
   const badge = homeShelfBadge(creation, offerFreeToTry);
   const price = formatHomeShelfPrice(creation.price);
   const handle = homeShelfCreatorLabel(creation.creator);
-  const clip = useShelfClip(creation);
+  const clip = useShelfClip(creation, onClipFailed);
 
   return (
     // `width` on the wrapper, the scale a transform: the row lays the card out
@@ -351,7 +370,8 @@ function CreationCard({
           // The feed's own tile: the poster until this card holds the playing
           // slot, then the clip over it, and back to the poster if it fails
           // (no Retry: the card is the Make this button). Its frame is the
-          // card's, whatever height the row stretched it to.
+          // card's, whatever height the row stretched it to. Its starts are not
+          // the feed's, so the fleet's feed playback metrics leave them out.
           <View style={{ position: 'absolute', inset: 0 }}>
             <FeedVideoPreview
               url={creation.post.mediaUrl ?? clip.streamUrl}
@@ -362,13 +382,15 @@ function CreationCard({
               active={clip.activation === 'visible'}
               prepared={clip.activation === 'prepared'}
               onReadyChange={clip.onReadyChange}
+              onPlaybackFailed={clip.onPlaybackFailed}
               height="100%"
               radius={0}
               outlined={false}
-              accent={theme.colors.borderSubtle}
+              accent={accentColor(creation.tool, theme.colors)}
               videoBackdrop="none"
               videoContentFit="cover"
               diagnosticsSurface="home-shelf"
+              metricsSurface={null}
               retryable={false}
             />
           </View>
@@ -399,7 +421,7 @@ function CreationCard({
             <AppText variant="caption" color={mediaColors.onMedia} numberOfLines={1}>{badge}</AppText>
           </View>
         ) : null}
-        {creation.clipUrl && clip?.activation !== 'visible' ? (
+        {creation.clipUrl && !clip?.playing ? (
           // A clip that is not playing says it is one; a playing one needs no glyph.
           <View style={{ position: 'absolute', right: appTheme.spacing.compact, top: appTheme.spacing.compact }}>
             <Play size={appTheme.icon.sm} color={mediaColors.onMedia} />
@@ -433,22 +455,29 @@ function CreationCard({
  * A creation's clip as Home's election sees it: null without a clip or outside
  * Home's feed (no store), else what the card does with it now. Reduce Motion
  * and Autoplay previews set to Never keep it on its poster, as they keep a
- * feed card (`components/showcase-media-preview.tsx`).
+ * feed card (`usePreviewPlaybackAllowed`). It is `playing` only once its player
+ * has drawn while it holds the slot: until then, and after a failure, the
+ * poster shows, and so does its Play glyph.
  */
-function useShelfClip(creation: HomeShelfCreation) {
+function useShelfClip(creation: HomeShelfCreation, onFailed: (playbackId: string) => void) {
   const store = useContext(FeedVideoActivationContext);
   const playbackId = homeShelfPlaybackId(creation);
   const elected = useFeedVideoActivation(creation.clipUrl ? store : null, playbackId);
-  const reduceMotion = useReducedMotion();
-  const previewsEnabled = useAutoplayPreviewsEnabled();
-  const onReadyChange = useCallback((ready: boolean) => {
-    store?.setReady(playbackId, ready);
+  const allowed = usePreviewPlaybackAllowed();
+  const [ready, setReady] = useState(false);
+  const onReadyChange = useCallback((next: boolean) => {
+    setReady(next);
+    store?.setReady(playbackId, next);
   }, [playbackId, store]);
+  const onPlaybackFailed = useCallback(() => onFailed(playbackId), [onFailed, playbackId]);
   if (!creation.clipUrl || !store) return null;
+  const activation = allowed ? elected : 'never';
   return {
     streamUrl: creation.clipUrl,
-    activation: reduceMotion || !previewsEnabled ? 'never' as const : elected,
+    activation,
+    playing: activation === 'visible' && ready,
     onReadyChange,
+    onPlaybackFailed,
   };
 }
 

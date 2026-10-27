@@ -65,9 +65,10 @@ describe('the Make this shelf', () => {
     expect(shelfSource).not.toContain('setInterval');
     expect(shelfSource).not.toContain('setTimeout');
     const clip = declaration(shelfSource, 'function useShelfClip(');
-    expect(clip).toContain('useReducedMotion()');
-    expect(clip).toContain('useAutoplayPreviewsEnabled()');
-    expect(clip).toContain("reduceMotion || !previewsEnabled ? 'never' as const : elected");
+    // The feed tile's own question (`usePreviewPlaybackAllowed`: Reduce Motion
+    // and Autoplay previews), so a condition added there reaches the shelf too.
+    expect(clip).toContain('usePreviewPlaybackAllowed()');
+    expect(clip).toContain("allowed ? elected : 'never'");
   });
 
   /**
