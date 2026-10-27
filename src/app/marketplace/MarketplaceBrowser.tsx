@@ -20,7 +20,6 @@ import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import {
   describePostResourceKinds,
   formatPostResourceBundleCountSummary,
-  formatPostResourcePriceLabel,
   formatUnlockCountLabel,
   getPostResourceKindLabel,
   type MarketplaceResourceFilter,
@@ -28,7 +27,8 @@ import {
   type MarketplaceResourceSort,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
+import { getMarketplaceCardAccess, type MarketplaceViewerState } from '@/app/marketplace/marketplace-card-access';
+import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { SourceToolFilterOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
@@ -90,6 +90,8 @@ export default function MarketplaceBrowser({
 }: MarketplaceBrowserProps) {
   const router = useRouter();
   const { session } = useAuth();
+  // The signed-in viewer's own recipes, read apart from the cached catalog.
+  const viewer = useViewerRecipeState();
   const [items, setItems] = useState(initialPage.items);
   const [pageInfo, setPageInfo] = useState(initialPage.pageInfo);
   const [searchInput, setSearchInput] = useState(initialFilters.q || shortQuery);
@@ -345,6 +347,7 @@ export default function MarketplaceBrowser({
               <MarketplaceCard
                 key={asset.id}
                 asset={asset}
+                viewer={viewer}
                 marketplaceReturnPath={marketplaceReturnPath}
               />
             ))}
@@ -442,19 +445,19 @@ function FilterGroup({
 
 function MarketplaceCard({
   asset,
+  viewer,
   marketplaceReturnPath,
 }: {
   asset: MarketplaceResourceListItem;
+  viewer: MarketplaceViewerState;
   marketplaceReturnPath: string;
 }) {
-  const isFree = asset.accessMode === 'free' || asset.priceUsdCents === 0;
   // The image badge prices it in credits, as every other chip does (audit
-  // B-F13); the cash figure stays on the pill and the button below.
-  const accessLabel = getAssetAccessLabel(asset);
-  // The pill and the button name every way to pay, as the post's panel does:
-  // the bare quote priced a credits-only recipe in a currency no checkout takes.
-  const priceLabel = isFree ? 'Free' : formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote.formatted);
-  const unlockCtaLabel = isFree ? 'View free recipe' : `Unlock for ${priceLabel}`;
+  // B-F13), or says "Unlocked" / "Your recipe" once the viewer's state is read;
+  // the cash figure stays on the pill and the button below, which name every
+  // way to pay, as the post's panel does: the bare quote priced a credits-only
+  // recipe in a currency no checkout takes.
+  const { accessLabel, priceLabel, unlockLabel: unlockCtaLabel } = getMarketplaceCardAccess(asset, viewer);
   const updatedLabel = formatMarketplaceDate(asset.updatedAt);
   const bundleCountSummary = formatPostResourceBundleCountSummary(asset.lockedPreview);
   const buyerPreviewText = bundleCountSummary
@@ -542,9 +545,11 @@ function MarketplaceCard({
               genuinely commercial element on the card, so it is the one thing
               that has earned an accent — everything around it stays neutral so
               the price is what the eye lands on. */}
-          <div className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
-            {priceLabel}
-          </div>
+          {priceLabel ? (
+            <div className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
+              {priceLabel}
+            </div>
+          ) : null}
         </div>
 
         <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">

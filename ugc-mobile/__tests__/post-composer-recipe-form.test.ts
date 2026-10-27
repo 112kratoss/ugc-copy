@@ -355,6 +355,18 @@ describe('removing a recipe is confirmed (A-F2)', () => {
     expect(getRecipeRemovalConfirmation({ loadedAccessMode: 'paid', loadedItemCount: 2, buyerCount: 1, nextAccessMode: 'none' })?.message)
       .toBe('Its 2 items and files will be deleted. The 1 person who has it keeps their copy; it comes off sale.');
   });
+
+  // A creation post without a recipe shows its prompt and lets anyone remix
+  // (S1): removing the recipe puts it back that way, and the question says so.
+  it('says a creation post reopens its prompt and Remix', () => {
+    expect(getRecipeRemovalConfirmation({ loadedAccessMode: 'paid', loadedItemCount: 2, buyerCount: 1, nextAccessMode: 'none', reopensPost: true })?.message)
+      .toBe('Its 2 items and files will be deleted. The 1 person who has it keeps their copy; it comes off sale. '
+        + 'The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.');
+    expect(getRecipeRemovalConfirmation({ loadedAccessMode: 'free', loadedItemCount: 1, buyerCount: 0, nextAccessMode: 'none', reopensPost: true })?.message)
+      .toBe('Its 1 item and files will be deleted. The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.');
+    expect(getRecipeRemovalConfirmation({ loadedAccessMode: 'free', loadedItemCount: 1, buyerCount: 0, nextAccessMode: 'none', reopensPost: false })?.message)
+      .toBe('Its 1 item and files will be deleted.');
+  });
 });
 
 describe('the item picker (S8)', () => {

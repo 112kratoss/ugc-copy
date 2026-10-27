@@ -14,8 +14,8 @@ import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
-import { formatPostResourcePriceLabel } from '@/lib/post-resource-bundles';
-import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
+import { getMarketplaceCardAccess, type MarketplaceViewerState } from '@/app/marketplace/marketplace-card-access';
+import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 export type MarketplaceBootstrapProps = ComponentProps<typeof MarketplaceBrowser>;
@@ -69,6 +69,8 @@ function loadMarketplaceBrowser() {
 export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   const { initialPage, initialFilters, shortQuery = '', sourceToolOptions } = props;
   const [InteractiveBrowser, setInteractiveBrowser] = useState<MarketplaceBrowserComponent | null>(null);
+  // The signed-in viewer's own recipes, read apart from the cached catalog.
+  const viewer = useViewerRecipeState();
   const [isActivating, setIsActivating] = useState(false);
   const [activationError, setActivationError] = useState(false);
   const activationPendingRef = useRef(false);
@@ -296,6 +298,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
               <BootstrapMarketplaceCard
                 key={asset.id}
                 asset={asset}
+                viewer={viewer}
                 marketplaceReturnPath={marketplaceReturnPath}
               />
             ))}
@@ -421,19 +424,19 @@ function BootstrapFilterLink({
 
 function BootstrapMarketplaceCard({
   asset,
+  viewer,
   marketplaceReturnPath,
 }: {
   asset: MarketplaceResourceListItem;
+  viewer: MarketplaceViewerState;
   marketplaceReturnPath: string;
 }) {
   // The same words the interactive browser draws once it takes over: one figure
-  // on the badge, every way to pay on the pill and the button. The bare quote
-  // priced a credits-only recipe in a currency no checkout takes.
-  const isFree = asset.accessMode === 'free' || asset.priceUsdCents === 0;
-  // In credits, as every other chip prices a recipe (audit B-F13).
-  const accessLabel = getAssetAccessLabel(asset);
-  const priceLabel = isFree ? 'Free' : formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote.formatted);
-  const unlockLabel = isFree ? 'View free recipe' : `Unlock for ${priceLabel}`;
+  // on the badge (in credits, as every other chip; "Unlocked" or "Your recipe"
+  // once the viewer's state is read), every way to pay on the pill and the
+  // button. The bare quote priced a credits-only recipe in a currency no
+  // checkout takes.
+  const { accessLabel, priceLabel, unlockLabel } = getMarketplaceCardAccess(asset, viewer);
   const previewText = asset.summary || asset.previewText || (
     asset.post?.postFormat === 'text'
       ? 'Reusable resources from this note are included.'
@@ -462,9 +465,11 @@ function BootstrapMarketplaceCard({
               <div className="mt-1 truncate text-xs font-medium text-zinc-500">Recipe: {asset.title}</div>
             ) : null}
           </div>
-          <span className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
-            {priceLabel}
-          </span>
+          {priceLabel ? (
+            <span className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
+              {priceLabel}
+            </span>
+          ) : null}
         </div>
 
         <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">{previewText}</p>

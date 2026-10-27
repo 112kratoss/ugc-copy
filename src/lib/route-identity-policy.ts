@@ -155,6 +155,7 @@ const REGISTERED_ROUTES = [
   '/api/marketplace/order',
   '/api/marketplace/verify',
   '/api/marketplace/sales/export',
+  '/api/me/unlocked-recipes',
   '/api/me/unlocks',
   '/api/me/unlocks/[unlockId]',
   '/api/me/unlocks/[unlockId]/file-url',
