@@ -36,7 +36,7 @@ import {
     CreatorUploadSlot,
 } from '@/components/CreatorColumn';
 import { getAccentClasses } from '@/components/DesignSystem';
-import { motionSettingsSummary } from '@/lib/creator-settings-summary';
+import { motionSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';

@@ -47,3 +47,10 @@ it('keeps the post publish policy, which the server and the web composers import
   // Its own config, extending nothing: see the comment in it.
   expect(readFileSync('ugc-mobile/lib/post-publish-policy/tsconfig.json', 'utf8')).not.toMatch(/"extends"/);
 });
+
+it('keeps the creator settings summary, which the web video and motion creators import, in web deployments', () => {
+  const lines = readFileSync('.vercelignore', 'utf8').split('\n');
+  expect(lines.indexOf('!ugc-mobile/lib/creator-settings-summary')).toBeGreaterThan(lines.indexOf('ugc-mobile/lib/*'));
+  // Its own config, extending nothing: see the comment in it.
+  expect(readFileSync('ugc-mobile/lib/creator-settings-summary/tsconfig.json', 'utf8')).not.toMatch(/"extends"/);
+});
