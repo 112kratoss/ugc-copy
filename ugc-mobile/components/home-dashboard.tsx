@@ -453,7 +453,8 @@ export function HomeDashboard() {
     })();
   }, [api, feedItems, requestedCommentsPostId, requestedReplyToId]);
 
-  const cards = useMemo(() => buildHomeFeedCards(feedItems), [feedItems]);
+  // With the viewer's id, so their own recipe reads "Your recipe" (`homeRecipeChip`).
+  const cards = useMemo(() => buildHomeFeedCards(feedItems, undefined, user?.id ?? null), [feedItems, user?.id]);
   useEffect(() => {
     const visible = dwellIndexesRef.current
       .map((index) => cards[index]?.item)

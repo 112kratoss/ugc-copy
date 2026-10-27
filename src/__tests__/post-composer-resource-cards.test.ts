@@ -438,7 +438,7 @@ describe('post composer resource cards', () => {
 
     it('names a single-card package after the card', () => {
       expect(getResourceCardSummary(cards.slice(0, 1))).toBe('One');
-      expect(getResourceCardSummary(cards)).toBe('4 reusable resources');
+      expect(getResourceCardSummary(cards)).toBe('4 items');
     });
 
     it('lists up to three cards and counts the rest', () => {

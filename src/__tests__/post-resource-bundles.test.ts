@@ -335,7 +335,7 @@ describe('post resource bundle validation', () => {
     })).toBeNull();
   });
 
-  it('requires paid prices to start at 10 and use 10-token increments', () => {
+  it('requires paid prices to start at 10 and use 10-credit increments', () => {
     const bundleForPrice = (priceUsdCents: number) => ({
       accessMode: 'paid' as const,
       priceUsdCents,
@@ -344,8 +344,8 @@ describe('post resource bundle validation', () => {
 
     expect(validatePostResourceBundleInput(bundleForPrice(10))).toBeNull();
     expect(validatePostResourceBundleInput(bundleForPrice(20))).toBeNull();
-    expect(validatePostResourceBundleInput(bundleForPrice(9))).toMatch(/at least 10 tokens/i);
-    expect(validatePostResourceBundleInput(bundleForPrice(15))).toMatch(/10-token increments/i);
+    expect(validatePostResourceBundleInput(bundleForPrice(9))).toMatch(/at least 10 credits/i);
+    expect(validatePostResourceBundleInput(bundleForPrice(15))).toMatch(/10-credit increments/i);
   });
 
   it('accepts bundles powered only by typed resource items', () => {

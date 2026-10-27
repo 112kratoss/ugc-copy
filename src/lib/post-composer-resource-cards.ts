@@ -766,9 +766,9 @@ export function buildResourceCardItems(cards: PostComposerResourceCardDraft[]): 
 
 export function getResourceCardSummary(cards: PostComposerResourceCardDraft[]) {
   if (cards.length === 1) {
-    return cards[0]?.title.trim() || 'Resource package';
+    return cards[0]?.title.trim() || 'Recipe';
   }
-  return `${cards.length} reusable resources`;
+  return `${cards.length} items`;
 }
 
 export function getResourceCardPreview(cards: PostComposerResourceCardDraft[]) {

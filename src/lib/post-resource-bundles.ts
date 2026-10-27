@@ -1172,7 +1172,7 @@ export function validatePostResourceBundleInput(
       || priceUsdCents % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
     )
   ) {
-    return 'Paid recipes must cost at least 10 tokens and use 10-token increments.';
+    return 'Paid recipes must cost at least 10 credits and use 10-credit increments.';
   }
 
   const resources = typedBundle?.resources ?? {};

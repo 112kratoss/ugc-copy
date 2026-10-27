@@ -39,7 +39,7 @@ Every screen should support one of these jobs:
 - Start creating.
 - Review or continue a generation.
 - Browse, save and discuss community work.
-- Publish or unlock creator resources.
+- Publish a post with a recipe, or unlock someone else's recipe.
 - Manage profile, credits, and settings.
 
 If a surface does not support one of these jobs, it should be simplified or moved deeper.
@@ -338,7 +338,7 @@ Keep generating and publishing visibly different.
 
 ### Side menu
 
-Home's menu button opens a drawer (`components/home-side-menu.tsx`) with Templates, Invite & Earn, Your Sales, Your Unlocks, Settings, and Help & Support. Secondary destinations belong there or behind Profile, not in the dock.
+Home's menu button opens a drawer (`components/home-side-menu.tsx`) with Templates, Invite & Earn, Recipe Sales, Unlocked recipes, Settings, and Help & Support. Secondary destinations belong there or behind Profile, not in the dock.
 
 ### Stack screens
 
@@ -416,7 +416,7 @@ Beyond `ui.tsx`:
 - `top-scrim.tsx`: the fade under the status bar on scrolling tab roots.
 - `double-tap-pressable.tsx`: a double-tap on media.
 
-Feed hierarchy: creator attribution, title, media, optional story preview, actions, and optional resource metadata. Text-only posts keep their body directly below the title. Other cards lead with media or an icon, then title, a short body, and one clear action. Avoid cards inside decorative cards, mixed radii in one list, and more than one primary action per card.
+Feed hierarchy: creator attribution, title, media, optional story preview, actions, and the recipe chip where it says something. Text-only posts keep their body directly below the title. Other cards lead with media or an icon, then title, a short body, and one clear action. Avoid cards inside decorative cards, mixed radii in one list, and more than one primary action per card.
 
 The public writing on a media post is labelled **Story** in the composer and Details. **Read more** in Home and Profile has its own compact tap target and opens the existing Details page directly, with the previewed Story first or the full Prompt expanded when that is what the card showed; tapping the title, media, or preview text opens the media or post normally. Text-only posts open their dedicated post screen. Feed previews stay clamped. Media taps retain their normal opening transition. Read-more navigation uses Expo Router’s existing native stack and the horizontal list’s native `contentOffset` for the first frame, with no new animation or native module. Back from Details returns to the remembered media page.
 
@@ -441,8 +441,8 @@ These describe the app as of 0.1.6; each screen's `hig-*` test pins the details.
    - media cards open the reel;
    - written posts open the post page;
    - the comment control opens comments directly;
-   - the unused space within a card opens that card's post, while its labelled controls keep their own actions. There is no footer beneath the action row: remix descriptions, resource summaries, and unlock labels belong in the post details.
-   - Remix is on every card whose post can be remixed, whoever is looking (`lib/showcase-remix-access.ts`). When the creator put remix behind a free unlock, the tap takes the unlock on its way to the editor. When the unlock is paid, the control shows a lock in place of the remix glyph and the unlock's price in credits in place of the word, in the commerce colour, and opens the unlock sheet, which carries on into the editor once paid; credits are never spent by a tap in the feed. An upload, a written post, or a template's result (its recipe and model are the template's) has nothing to remix and shows no Remix.
+   - the unused space within a card opens that card's post, while its labelled controls keep their own actions. There is no footer beneath the action row: remix descriptions, recipe summaries and unlock labels belong in the post details.
+   - Remix is on every card whose post can be remixed, whoever is looking (`lib/showcase-remix-access.ts`). A post made from a creation that has a recipe includes its Remix with the recipe: when the recipe is free, the tap takes it on its way to the editor; when it is paid, the control shows a lock in place of the remix glyph and the unlock's price in credits in place of the word, in the commerce colour, and opens the unlock sheet, which carries on into the editor once paid; credits are never spent by a tap in the feed. An upload, a written post, or a template's result (its recipe and model are the template's) has nothing to remix and shows no Remix.
    - A post's recipe has no row of its own. It is a chip, last in the action row, and only where it says something the row does not (`homeRecipeChip` in `lib/home-feed-view-model.ts`): the price in credits for a paid recipe that does not lock Remix, and "Free recipe" on a card with no Remix. Beside Remix a free recipe is not named, because that tap takes it. The chip opens the post's details. It is last so that on a narrow phone it is the one control that wraps. The web's card follows the same cases (`contracts/feed-recipe-chip-v1.json`), and a recipe that costs nothing is "Free recipe" on every listing in both (`FREE_RECIPE_LABEL`).
 
 Rules:
@@ -486,7 +486,7 @@ Rules:
 
 `app/post/[id].tsx` and `components/post-details-page.tsx`.
 
-- Written posts read as a page, not a reel. Page 0 is the post, and a swipe left reaches the same details page media posts have: how it was made, references, resources and unlock.
+- Written posts read as a page, not a reel. Page 0 is the post, and a swipe left reaches the same details page media posts have: how it was made, references, and the recipe with its unlock.
 - Every state keeps a way back: loaded, loading, or gone.
 
 ### Comments

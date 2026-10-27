@@ -15,7 +15,7 @@ describe('the way back from a post page opened from the unlock library', () => {
     expect(getShowcaseReturnContext({ from: 'library', returnTo: '/creations?view=unlocks' })).toEqual({
       source: 'library',
       href: '/creations?view=unlocks',
-      label: 'Back to your unlocks',
+      label: 'Back to unlocked recipes',
     });
   });
 
@@ -23,7 +23,7 @@ describe('the way back from a post page opened from the unlock library', () => {
     expect(getShowcaseReturnContext({ from: 'library' })).toEqual({
       source: 'library',
       href: '/creations?view=unlocks',
-      label: 'Back to your unlocks',
+      label: 'Back to unlocked recipes',
     });
   });
 

@@ -2203,6 +2203,7 @@
         "templateRun": "/template-runs/run-1",
         "workflowCanvas": "/studio?workflowCanvas=canvas-1",
         "showcasePost": "/showcase/post-1",
+        "showcasePostRecipe": "/showcase/post-1?page=details&section=resources",
         "marketplaceResource": "/marketplace/resource-1",
         "creatorProfile": "/creators/batman",
         "sellerDashboard": "/seller-dashboard",

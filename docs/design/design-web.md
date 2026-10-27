@@ -185,7 +185,7 @@ The two must look and behave like one product. A stale session falls back to the
 ### Feed (Home's lanes)
 
 - **Where:** Home's column, signed in and signed out (`FeedClient`). `/feed`, the same feed on a page of its own that nothing linked to, sends its visitors to Home on the lane it named (`?chip=`).
-- **Lanes:** For you, Notes, Recent, Recipes (`src/lib/post-feed-chips.ts`), as the app names them; Studio's Unlocks tab is what the viewer bought.
+- **Lanes:** For you, Notes, Recent, Recipes (`src/lib/post-feed-chips.ts`), as the app names them; Studio's "Unlocked recipes" tab is what the viewer bought.
 - **The list:** `WindowedFeedList`. A card with live state, such as an open comment composer, stays mounted, so windowing never loses a draft.
 - **Coming back:** leaving and returning restores the pages already loaded from a session snapshot rather than refetching page one.
 - **Card anatomy** (`FeedPostCard`):
@@ -213,7 +213,7 @@ The two must look and behave like one product. A stale session falls back to the
 
 ### Post page (`/showcase/[id]`)
 
-- **Contents:** the post (`ShowcaseDetailBody`), its engagement row and actions, the resource bundle panel for unlocks, report (not on the creator's own post; the server refuses a report on your own post too), and the comment thread (`PostComments`).
+- **Contents:** the post (`ShowcaseDetailBody`), its engagement row and actions, the recipe panel (`PostResourceBundlePanel`, before the comments; "Unlocked" / "Your recipe" / the price in credits on its badge, "Remix included" when the post's Remix comes with it, "Recipe unlocked" with an "Unlocked recipes" link after an unlock, items in the creator's order with settings as keys and values), report (not on the creator's own post; the server refuses a report on your own post too), and the comment thread (`PostComments`).
 - **Links in, links out:**
   - Every state keeps a way back (`ShowcaseDetailBackLink`).
   - Shared links render a rich social card and structured data from the cover's poster frame.
@@ -254,7 +254,7 @@ Failed and processing states say what happens next.
 
 ### Other signed-in pages
 
-- **Marketplace** (`/marketplace`): the resource bundles creators sell.
+- **Marketplace** (`/marketplace`): the recipes creators sell; badges price them in credits, as every other chip does.
 - **Search** (`/search`): one unified search, in tabs for Top, Creators, Posts and Recipes.
 - **Alerts** (`/notifications`): every alert links to its target (`resolveWebNotificationPath`).
 - **Profile** (`/profile`): the owner's card and media hub. The reel over Saved carries the ⋯ menu's safety rows; the reel over your own posts has no ⋯.

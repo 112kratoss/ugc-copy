@@ -112,6 +112,35 @@ select is(pg_temp.words('b4994000-0000-4000-8000-000000000008'),
   'Someone remixed your post · @kai bought the resources attached to your post.',
   'another alert type is not this migration''s to change');
 
+-- 4. The words written since 2026-10-27 (20261027180743) name the recipe; a
+-- block takes the name out of them as it did of the old words, which rows
+-- written before keep (above).
+insert into sale_alert values
+('b4994000-0000-4000-8000-000000000009','b4990004-0000-4000-8000-000000000004','You made a sale','@ana bought your recipe.','p4'),
+('b4994000-0000-4000-8000-000000000010','b4990005-0000-4000-8000-000000000005','@sam got your free recipe','They have the prompt and files now.','p4'),
+('b4994000-0000-4000-8000-000000000011','b4990002-0000-4000-8000-000000000002','You made a sale','@maya bought your recipe.','p5');
+select pg_temp.write_sale_alert('b4994000-0000-4000-8000-000000000009');
+select pg_temp.write_sale_alert('b4994000-0000-4000-8000-000000000010');
+select is(pg_temp.words('b4994000-0000-4000-8000-000000000009'),
+  'You made a sale · A creator bought your recipe.',
+  'a sale in the recipe words, written across a block, is stored without the name');
+select is(pg_temp.words('b4994000-0000-4000-8000-000000000010'),
+  'Someone got your free recipe · A creator got the free recipe on your post.',
+  'and so is a free open in the recipe words');
+
+-- Between accounts with no block (maya's block of the seller is removed first).
+delete from public.user_blocks
+where blocker_user_id = 'b4990002-0000-4000-8000-000000000002' and blocked_user_id = 'b4990001-0000-4000-8000-000000000001';
+select pg_temp.write_sale_alert('b4994000-0000-4000-8000-000000000011');
+select is(pg_temp.words('b4994000-0000-4000-8000-000000000011'),
+  'You made a sale · @maya bought your recipe.',
+  'a sale in the recipe words between accounts with no block names its buyer');
+insert into public.user_blocks (blocker_user_id, blocked_user_id) values
+('b4990002-0000-4000-8000-000000000002','b4990001-0000-4000-8000-000000000001');
+select is(pg_temp.words('b4994000-0000-4000-8000-000000000011'),
+  'You made a sale · A creator bought your recipe.',
+  'and a block made afterwards takes the name out of it');
+
 -- The words function returns words that name no one unchanged.
 select is((select title || ' · ' || body from public.unnamed_sale_alert_words(
   'You made a sale', 'A creator bought the resources attached to your post.')),
@@ -121,6 +150,14 @@ select is((select title || ' · ' || body from public.unnamed_sale_alert_words(
   '@maya saved your post', 'It is in their saved media now.')),
   '@maya saved your post · It is in their saved media now.',
   'and so do another alert''s words');
+select is((select title || ' · ' || body from public.unnamed_sale_alert_words(
+  'You made a sale', 'A creator bought your recipe.')),
+  'You made a sale · A creator bought your recipe.',
+  'and the recipe words that name no one');
+select is((select title || ' · ' || body from public.unnamed_sale_alert_words(
+  '@lee got your free recipe', 'They have the prompt and files now.')),
+  'Someone got your free recipe · A creator got the free recipe on your post.',
+  'a free open in the recipe words loses its name through the function itself');
 
 -- Nothing here is callable through the Data API.
 reset role;
