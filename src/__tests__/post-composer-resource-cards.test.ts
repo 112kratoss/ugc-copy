@@ -4,12 +4,17 @@ import {
   buildResourceCardBundleInput,
   createPostComposerResourceCard,
   getPostComposerResourceCardErrors,
+  getPostComposerResourceCardSaveHint,
   getResourceCardPreview,
   getResourceCardSummary,
+  getSuggestedRecipePreview,
   hydratePostComposerResourceCards,
   isPostComposerResourceCardReady,
+  POST_COMPOSER_MORE_RESOURCE_CARD_TYPES,
+  POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   resourceCardHasContent,
+  type PostComposerResourceCardType,
 } from '@/lib/post-composer-resource-cards';
 
 // Payload equality with the mobile composer is covered by
@@ -30,6 +35,23 @@ describe('post composer resource cards', () => {
     ]);
   });
 
+  // S8: four rows a first-timer recognises, the other five behind "More
+  // types". The stored order above stays (the contract pins its labels).
+  it('puts four types first and the other five behind More types', () => {
+    expect(POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES).toEqual(['prompt', 'reference_media', 'settings', 'guide']);
+    expect(POST_COMPOSER_MORE_RESOURCE_CARD_TYPES).toEqual([
+      'workflow',
+      'source_assets',
+      'external_link',
+      'remix_link',
+      'other',
+    ]);
+    expect(new Set([
+      ...POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES,
+      ...POST_COMPOSER_MORE_RESOURCE_CARD_TYPES,
+    ])).toEqual(new Set(POST_COMPOSER_RESOURCE_CARD_OPTIONS.map((option) => option.id)));
+  });
+
   it('titles a new card after its type so a section always has a public title', () => {
     const card = createPostComposerResourceCard('reference_media');
 
@@ -47,7 +69,7 @@ describe('post composer resource cards', () => {
 
       expect(resourceCardHasContent(card)).toBe(false);
       expect(getPostComposerResourceCardErrors(card)).toEqual({
-        content: 'Add the protected content, link, or file for this resource.',
+        content: 'Add the content, link, or file for this item.',
       });
       expect(isPostComposerResourceCardReady({ ...card, textContent: 'A prompt' })).toBe(true);
     });
@@ -149,7 +171,84 @@ describe('post composer resource cards', () => {
     it('reports a missing title separately from missing content', () => {
       const card = createPostComposerResourceCard('prompt', { title: '  ', textContent: 'A prompt' });
 
-      expect(getPostComposerResourceCardErrors(card)).toEqual({ title: 'Add a resource title.' });
+      expect(getPostComposerResourceCardErrors(card)).toEqual({ title: 'Add an item title.' });
+    });
+  });
+
+  // A-F14: the editor keeps Save disabled with a plain line about what is
+  // missing, and says it in red only once a field was touched.
+  describe('the line beside a disabled Save', () => {
+    const hintFor = (type: PostComposerResourceCardType, partial = {}) => (
+      getPostComposerResourceCardSaveHint(createPostComposerResourceCard(type, partial))
+    );
+
+    it('names what each type still needs', () => {
+      expect(hintFor('prompt')).toBe('Add the prompt to save this item.');
+      expect(hintFor('settings')).toBe('Add the settings to save this item.');
+      expect(hintFor('guide')).toBe('Add the guide or notes to save this item.');
+      expect(hintFor('reference_media')).toBe('Add a file to save this item.');
+      expect(hintFor('source_assets')).toBe('Add a file to save this item.');
+      expect(hintFor('external_link')).toBe('Add a link to save this item.');
+      expect(hintFor('remix_link')).toBe('Add a link to save this item.');
+      expect(hintFor('workflow')).toBe('Add a link, a file or text to save this item.');
+      expect(hintFor('other')).toBe('Add text or a file to save this item.');
+    });
+
+    it('asks for a title first, then a valid link, and nothing once the item is ready', () => {
+      expect(hintFor('prompt', { title: ' ' })).toBe('Add an item title to save this item.');
+      expect(hintFor('external_link', { externalUrl: 'example.com' })).toBe(
+        'Use a link that starts with http:// or https://.',
+      );
+      expect(hintFor('prompt', { textContent: 'A prompt' })).toBeNull();
+    });
+  });
+
+  // S7: both composers suggest the same preview, one phrase per type in the
+  // order the items come, counted where a count reads naturally.
+  describe('the suggested recipe preview', () => {
+    const suggest = (...types: PostComposerResourceCardType[]) => getSuggestedRecipePreview(
+      types.map((type, index) => createPostComposerResourceCard(type, { id: `item-${index}` })),
+    );
+
+    it('says nothing for a recipe without items', () => {
+      expect(getSuggestedRecipePreview([])).toBe('');
+    });
+
+    it('joins the phrases with commas and a last "and"', () => {
+      expect(suggest('prompt')).toBe('Includes the prompt.');
+      expect(suggest('prompt', 'guide')).toBe('Includes the prompt and a guide.');
+      expect(suggest('prompt', 'reference_media', 'reference_media', 'settings')).toBe(
+        'Includes the prompt, reference media and the model settings.',
+      );
+    });
+
+    it('counts the types that read as a number, and keeps the order items first appear in', () => {
+      expect(suggest('prompt', 'prompt')).toBe('Includes 2 prompts.');
+      expect(suggest('guide', 'prompt', 'guide')).toBe('Includes 2 guides and the prompt.');
+      expect(suggest('workflow')).toBe('Includes the workflow.');
+      expect(suggest('workflow', 'workflow', 'workflow')).toBe('Includes 3 workflows.');
+      expect(suggest('source_assets', 'source_assets')).toBe('Includes source files.');
+      expect(suggest('settings', 'settings')).toBe('Includes the model settings.');
+      expect(suggest('external_link')).toBe('Includes a link.');
+      expect(suggest('external_link', 'external_link')).toBe('Includes 2 links.');
+      expect(suggest('remix_link')).toBe('Includes a remix link.');
+      expect(suggest('remix_link', 'remix_link')).toBe('Includes 2 remix links.');
+      expect(suggest('other')).toBe('Includes one more item.');
+      expect(suggest('other', 'other')).toBe('Includes 2 more items.');
+    });
+
+    // The publish route appends a creation's saved inputs after the items.
+    it('reads a creation’s references as reference media after the items', () => {
+      const cards = (...types: PostComposerResourceCardType[]) => types.map((type, index) => (
+        createPostComposerResourceCard(type, { id: `item-${index}` })
+      ));
+      expect(getSuggestedRecipePreview([], { creationReferences: true })).toBe('Includes reference media.');
+      expect(getSuggestedRecipePreview(cards('prompt'), { creationReferences: true })).toBe(
+        'Includes the prompt and reference media.',
+      );
+      expect(getSuggestedRecipePreview(cards('reference_media', 'prompt'), { creationReferences: true })).toBe(
+        'Includes reference media and the prompt.',
+      );
     });
   });
 
@@ -283,6 +382,28 @@ describe('post composer resource cards', () => {
       previewText: '',
       priceTokens: 0,
     })).toBeNull();
+  });
+
+  // A-F9: a creation's saved inputs alone are a recipe. The publish route adds
+  // them to the recipe it is sent, so it is sent without items of its own.
+  it('keeps a recipe whose only items the publish route adds', () => {
+    const bundle = buildResourceCardBundleInput({
+      accessMode: 'paid',
+      cards: [],
+      allowRemix: false,
+      summary: '',
+      previewText: 'Includes reference media.',
+      priceTokens: 900,
+      includesServerItems: true,
+    });
+
+    expect(bundle).toMatchObject({
+      accessMode: 'paid',
+      summary: 'Includes reference media.',
+      previewText: 'Includes reference media.',
+      priceUsdCents: 900,
+      resources: { allowRemix: false, sections: [], items: [] },
+    });
   });
 
   // A bundle written before the card model can grant remix and nothing else.

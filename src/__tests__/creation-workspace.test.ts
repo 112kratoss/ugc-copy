@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { getCreationMediaFilters, resolveCreationWorkspaceCardState } from '@/lib/creation-workspace';
+import {
+  buildPostRecipeManagementPath,
+  getCreationMediaFilters,
+  resolveCreationWorkspaceCardState,
+} from '@/lib/creation-workspace';
 
 const baseGeneration = {
   id: 'gen-1',
@@ -48,10 +52,12 @@ describe('resolveCreationWorkspaceCardState', () => {
     expect(state.state).toBe('published_no_bundle');
     expect(state.publishBadge).toBe('Public');
     expect(state.monetizationLabel).toBe('No recipe');
+    // A-F17: adding a recipe chooses no mode for the creator and focuses no
+    // price; the editor heads the page "Add a recipe to this post".
     expect(state.primaryAction).toMatchObject({
       type: 'add-paywall',
       label: 'Add recipe',
-      href: '/post/post-1/edit?resourceMode=paid&focus=price&from=creations#recipe',
+      href: '/post/post-1/edit?recipe=add&from=creations#recipe',
     });
     expect(state.secondaryAction).toMatchObject({
       type: 'open-post',
@@ -195,7 +201,18 @@ describe('resolveCreationWorkspaceCardState', () => {
         expect(state.state).toBe('published_no_bundle');
         expect(state.monetizationLabel).toBe('No recipe');
         expect(state.primaryAction.label).toBe('Add recipe');
+        expect(state.primaryAction.href).toBe('/post/post-old/edit?recipe=add&from=creations#recipe');
       }
+    });
+
+    // Studio's posts tab builds its Add / Manage recipe link from the post.
+    it('builds the add path for a post without a recipe and the manage path otherwise', () => {
+      expect(buildPostRecipeManagementPath({ id: 'post-9', bundle: null })).toBe(
+        '/post/post-9/edit?recipe=add&from=creations#recipe',
+      );
+      expect(buildPostRecipeManagementPath({ id: 'post-9', bundle: { accessMode: 'free' } })).toBe(
+        '/post/post-9/edit?resourceMode=free&focus=price&from=creations#recipe',
+      );
     });
 
     it('lets a loaded post answer for itself', () => {

@@ -25,7 +25,7 @@ import {
   type PublicIdentityErrors,
 } from '@/lib/public-identity';
 import {
-  formatUsdCents,
+  formatPostResourceCreditAmount,
   getPostResourceKindLabel,
   POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
   POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
@@ -34,6 +34,7 @@ import {
   type PostResourceBundleInput,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import { formatRecipeMoneyLine } from '@/lib/recipe-money-line';
 
 /** A post is public or private (decision 12, 2026-10-17); the server answers no other. */
 type PostVisibility = 'public' | 'private';
@@ -53,7 +54,7 @@ const RECIPE_ACCESS_OPTIONS: ReadonlyArray<{
 }> = [
   {
     value: 'none',
-    label: 'Off',
+    label: 'No recipe',
     hint: 'Only the media is published. Your prompt, files, and notes stay private.',
   },
   {
@@ -64,7 +65,7 @@ const RECIPE_ACCESS_OPTIONS: ReadonlyArray<{
   {
     value: 'paid',
     label: 'Paid',
-    hint: 'Buyers see the price before paying. Until then only the summary and resource types are public.',
+    hint: 'Buyers see the price before paying. Until then only the recipe preview and item types are public.',
   },
 ];
 
@@ -95,8 +96,8 @@ function getDefaultPublishTitle(defaultTitle: string): string {
 const DEFAULT_PRICE_TOKENS = 900;
 
 /**
- * Prices are token counts. `price_usd_cents` stores the token value directly --
- * at the fixed 100-token/$1 rate the two numbers are the same.
+ * Prices are credit counts. `price_usd_cents` stores the count directly -- at
+ * the fixed 100 credits to $1 the two numbers are the same.
  */
 function parsePriceTokens(value: string): number | null {
   const normalized = Number.parseInt(value.trim(), 10);
@@ -129,17 +130,23 @@ function formatReferenceCountLabel(count: number): string {
   return count === 1 ? '1 reference included' : `${count} references included`;
 }
 
+/** "prompt, files and notes": the kinds in words, the last joined with "and". */
+function listAutoUnlockKinds(kinds: PostResourceKind[]): string {
+  const labels = kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase());
+  return labels.length === 1
+    ? labels[0]
+    : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+// Buyers read this first, as a listing's line: it starts with a capital
+// (A-F8) where several kinds read "prompt, files and notes from…".
 function buildAutoUnlockSummary(kinds: PostResourceKind[]): string {
   if (kinds.length === 0) {
     return 'Saved creation setup';
   }
 
-  if (kinds.length === 1) {
-    return `${getPostResourceKindLabel(kinds[0])} from this creation`;
-  }
-
-  const labels = kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase());
-  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]} from this creation`;
+  const listed = listAutoUnlockKinds(kinds);
+  return `${listed.charAt(0).toUpperCase()}${listed.slice(1)} from this creation`;
 }
 
 function buildAutoUnlockPreview(kinds: PostResourceKind[]): string {
@@ -147,8 +154,7 @@ function buildAutoUnlockPreview(kinds: PostResourceKind[]): string {
     return 'Unlock the saved system details behind this generated media.';
   }
 
-  const labels = kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase());
-  return `Unlock the saved ${labels.join(', ')} used to create this result.`;
+  return `Unlock the saved ${listAutoUnlockKinds(kinds)} used to create this result.`;
 }
 
 function buildAutoResourceBundle({
@@ -277,7 +283,7 @@ export default function PublishToShowcaseModal({
     : recipeAccess === 'free'
       ? 'Free recipe'
       : parsedPriceTokens !== null && parsedPriceTokens >= POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
-        ? `${parsedPriceTokens} token recipe`
+        ? `Paid recipe · ${formatPostResourceCreditAmount(parsedPriceTokens)}`
         : 'Paid recipe';
 
   useEffect(() => {
@@ -451,7 +457,7 @@ export default function PublishToShowcaseModal({
     let resourceBundle: PostResourceBundleInput | null = mediaOnly ? null : { accessMode: 'none' };
     if (recipeAccess !== 'none') {
       if (!paywallPrefill || autoUnlockKinds.length === 0) {
-        setFormError('This creation does not have enough saved setup data to package automatically yet.');
+        setFormError('This creation does not have enough saved setup to make a recipe from yet.');
         return;
       }
 
@@ -464,7 +470,7 @@ export default function PublishToShowcaseModal({
           || parsedPriceTokens % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
         ) {
           setFormError(
-            `Paid unlocks start at ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} tokens and go up in ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}-token steps.`,
+            `Paid recipes start at ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} credits, in steps of ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}.`,
           );
           return;
         }
@@ -633,7 +639,10 @@ export default function PublishToShowcaseModal({
           </button>
         </div>
 
-        <form onSubmit={handleFormSubmit} className="space-y-5">
+        {/* noValidate, as the composer's form: the browser's own bubble (a
+            price of 95 against step=10) blocked the submit before the window
+            could say its price rule. */}
+        <form onSubmit={handleFormSubmit} noValidate className="space-y-5">
           <div>
             <label className="flex min-h-11 items-center gap-3 text-sm text-zinc-200"><input type="checkbox" checked={isNsfw} onChange={(event) => setIsNsfw(event.target.checked)} />Mark as NSFW / mature</label>
             <label htmlFor="publish-title-input" className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Title</label>
@@ -726,7 +735,7 @@ export default function PublishToShowcaseModal({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
                   <div>
-                    <div className="text-sm font-semibold text-white">Saved system package</div>
+                    <div className="text-sm font-semibold text-white">Recipe</div>
                     {hasGenerationReferences ? (
                       <p className="mt-1 text-xs font-semibold text-emerald-100">
                         {formatReferenceCountLabel(generationReferenceCount)}
@@ -734,7 +743,7 @@ export default function PublishToShowcaseModal({
                     ) : null}
                     {!hasAutoUnlock ? (
                       <p className="mt-1 text-sm leading-6 text-zinc-400">
-                        Publish the media now; custom resources can be added from the post later if needed.
+                        Publish the media now; you can add a recipe from the post later.
                       </p>
                     ) : null}
                   </div>
@@ -823,32 +832,36 @@ export default function PublishToShowcaseModal({
                     </p>
 
                     {isPaidRecipe ? (
-                      <div className="ui-enter-pop mt-4 flex origin-top flex-col gap-3 rounded-[20px] border border-emerald-300/20 bg-black/30 p-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">Price</div>
-                          <p className="mt-1 text-xs text-zinc-400">
-                            From {POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} tokens, in steps of {POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}.
-                            {parsedPriceTokens !== null && parsedPriceTokens > 0
-                              ? ` ≈ ${formatUsdCents(parsedPriceTokens)}`
-                              : ''}
-                          </p>
+                      <div className="ui-enter-pop mt-4 origin-top rounded-[20px] border border-emerald-300/20 bg-black/30 p-3">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">Price</div>
+                            <p className="mt-1 text-xs text-zinc-400">
+                              {`From ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} credits, in steps of ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}.`}
+                            </p>
+                          </div>
+                          <div className="relative w-full sm:w-36">
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min={POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS}
+                              step={POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}
+                              value={priceTokens}
+                              onChange={(event) => {
+                                setPriceTokens(event.target.value);
+                                setFormError(null);
+                              }}
+                              aria-label="Recipe price in credits"
+                              aria-describedby="publish-recipe-money-line"
+                              className="w-full rounded-full border border-white/10 bg-white/[0.04] py-2 pl-4 pr-16 text-center text-sm font-semibold text-white outline-none transition-colors duration-150 focus:border-emerald-300/50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            />
+                            <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs text-zinc-500">credits</span>
+                          </div>
                         </div>
-                        <div className="relative w-full sm:w-36">
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            min={POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS}
-                            step={POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}
-                            value={priceTokens}
-                            onChange={(event) => {
-                              setPriceTokens(event.target.value);
-                              setFormError(null);
-                            }}
-                            aria-label="Recipe price in tokens"
-                            className="w-full rounded-full border border-white/10 bg-white/[0.04] py-2 pl-4 pr-16 text-center text-sm font-semibold text-white outline-none transition-colors duration-150 focus:border-emerald-300/50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                          />
-                          <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs text-zinc-500">tokens</span>
-                        </div>
+                        {/* The composer's line under every price (A-F5). */}
+                        <p id="publish-recipe-money-line" className="mt-3 text-xs font-medium leading-5 text-emerald-200">
+                          {formatRecipeMoneyLine(parsedPriceTokens ?? 0)}
+                        </p>
                       </div>
                     ) : null}
                   </div>
@@ -859,7 +872,7 @@ export default function PublishToShowcaseModal({
                       Optional recipe
                     </div>
                     <p className="mt-2 text-sm leading-6 text-zinc-300">
-                      This creation can publish without pricing. Add paid resources later from the post if the setup becomes reusable.
+                      This creation can publish without a price. Add a recipe from the post later if the setup becomes reusable.
                     </p>
                   </div>
                 ) : null}

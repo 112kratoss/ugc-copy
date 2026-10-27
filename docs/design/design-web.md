@@ -218,7 +218,14 @@ The two must look and behave like one product. A stale session falls back to the
   - Every state keeps a way back (`ShowcaseDetailBackLink`).
   - Shared links render a rich social card and structured data from the cover's poster frame.
   - A `?s=<surface>` parameter marks a visit that came from a share.
-- The composer lives at `/post/new` and editing at `/post/[id]/edit`. Its Recipe section offers Free, Paid and No recipe as one choice of three cards (`RecipeAccessCards.tsx`: the app's choice, drawn here as native radios in labels, the chosen one in its accent's `selected` classes, three columns once the group itself is wide enough), so a creator sees that a recipe can be sold before choosing anything; Paid opens the price field under them.
+- The composer lives at `/post/new` and editing at `/post/[id]/edit`. Its Recipe section offers Free, Paid and No recipe as one choice of three cards (`RecipeAccessCards.tsx`: the app's choice, drawn here as native radios in labels, the chosen one in its accent's `selected` classes, three columns once the group itself is wide enough), so a creator sees that a recipe can be sold before choosing anything; Paid opens the price field under them. The recipe speaks the glossary of the recipe audit (2026-10-27): the whole is a recipe, one entry an item, money is credits. Under the cards, top to bottom:
+  - **Price** (Paid only): "Price in credits", and under it the one money line, "Buyers pay $9.00 · You earn ~$7.65 (85%) · Payouts from $100" (`formatRecipeMoneyLine`, `src/lib/recipe-money-line.ts`, also under the quick publish window's price), then "Before buying, people see your recipe preview and item titles — never what's inside."
+  - **From this creation** (a post made from a creation, not a template result): "Include exact prompt" adds the item "Exact generation prompt", as the app does; "Include creation references" (a new post only) shows in the list as a read-only row, "Creation references · N files", and counts as the recipe's item.
+  - **What people receive**: the items, "Add item" and "Add your first item"; on a creation post the line "Remix comes with this recipe: people who unlock it can remix your post." There is no remix switch: the server gates a creation post's Remix at its recipe's unlock. A recipe people already have stays editable, with "N people have this recipe. They keep the version they got and see your changes." over its items. Removing the last item keeps the recipe chosen, and Publish asks for an item.
+  - **Recipe preview** (required, 180, "Everyone sees this before unlocking."): the one public text, sent as the preview and copied into the summary. It is suggested from the items ("Includes the prompt, reference media and the model settings.", `getSuggestedRecipePreview`, the app's sentence too) and follows them while it still says what was suggested or nothing; what the creator writes stays. The listing rule's preview half speaks under it.
+  - **The item picker and editor** (`ResourceCardEditorDialog.tsx`): "Add an item" lists Prompt or script, Reference media, Model settings and Guide or notes, then "More types" (a disclosure) for the other five, each type with an icon of its own. The editor's fields are "Item title" ("Everyone sees this before unlocking."), "Note shown after unlock" and the content; a field's error waits until the field was touched, and until then a plain line beside the disabled "Save item" says what it needs.
+  - **Leaving with a recipe off**: an edit's save that takes a stored recipe off asks first with `useConfirmation` ("Remove this recipe?", "Its N items and files will be deleted." and, when people have it, "The N people who have it keep their copy; it comes off sale.", "Remove recipe" / "Keep recipe").
+  - **From Studio**: "Add recipe" opens the post headed "Add a recipe to this post", no mode chosen and nothing focused; "Manage recipe" opens at the recipe's mode with its price focused.
 
 ### Create (`/create`, `/create-image`, `/create-video`, `/create-motion`, `/create-workflow`)
 
@@ -240,7 +247,7 @@ The two must look and behave like one product. A stale session falls back to the
 The creator's own generations. From here they:
 - open a generation's details (`MediaDetailsPreviewModal`);
 - set post visibility;
-- publish to Explore (`PublishToShowcaseModal`);
+- publish to Explore (`PublishToShowcaseModal`): its recipe box is "Recipe" with No recipe, Free and Paid, packed from the creation's saved setup (its saved inputs included, decision D5 of the recipe audit); Paid's price is in credits with the composer's money line under it;
 - reach the rest through an overflow menu.
 
 Failed and processing states say what happens next.

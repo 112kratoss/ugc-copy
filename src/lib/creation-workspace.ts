@@ -111,14 +111,25 @@ function buildGeneratedPaywallComposerPath(generationId: string): string {
  * loads the stored bundle. The quick publish modal is for first publish only:
  * it rebuilds the bundle from the generation prefill and would replace a
  * hand-built recipe with the automatic one.
+ *
+ * "Add recipe" (a post without one) opens the editor at its recipe with no
+ * mode chosen and no field focused, headed "Add a recipe to this post": it
+ * used to choose Paid and put the cursor in the price before there was
+ * anything to sell (A-F17). "Manage recipe" opens at the recipe's own mode
+ * with its price focused.
  */
 export function buildPostRecipeManagementPath(post: {
   id: string;
   bundle: { accessMode: 'free' | 'paid' } | null;
 }): string {
-  const resourceMode = post.bundle?.accessMode ?? 'paid';
+  if (!post.bundle) {
+    return `/post/${post.id}/edit?${buildCreationsQuery({
+      recipe: 'add',
+      from: 'creations',
+    })}#recipe`;
+  }
   return `/post/${post.id}/edit?${buildCreationsQuery({
-    resourceMode,
+    resourceMode: post.bundle.accessMode,
     focus: 'price',
     from: 'creations',
   })}#recipe`;

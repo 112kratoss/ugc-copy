@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 
@@ -404,7 +404,7 @@ describe('PublishToShowcaseModal', () => {
       const title = screen.getByRole('textbox', { name: /^title$/i });
       fireEvent.click(screen.getByRole('radio', { name: 'Paid' }));
       expect(title).toHaveValue('Image recipe');
-      fireEvent.click(screen.getByRole('radio', { name: 'Off' }));
+      fireEvent.click(screen.getByRole('radio', { name: 'No recipe' }));
       expect(title).toHaveValue('Product still lit like a window display');
       unmount();
 
@@ -666,6 +666,10 @@ describe('PublishToShowcaseModal', () => {
       resourceBundle: {
         accessMode: 'paid',
         priceUsdCents: 900,
+        // A-F8: the generated summary starts with a capital, and both lists
+        // end with "and".
+        summary: 'Prompt, notes and remix from this creation',
+        previewText: 'Unlock the saved prompt, notes and remix used to create this result.',
         resources: {
           promptText: 'Create a moody editorial portrait with soft bathroom light and natural pose.',
           notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5',
@@ -673,6 +677,43 @@ describe('PublishToShowcaseModal', () => {
         },
       },
     });
+  });
+
+  // A-F4, A-F5, A-F12: the quick recipe is a "Recipe" with "No recipe" as its
+  // first choice, and its price is in credits with the money line under it.
+  it('names the quick recipe a Recipe and prices it in credits with the money line', async () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Moody portrait setup"
+        accessToken="layout-session-token"
+        paywallPrefill={{
+          resourceKinds: ['prompt', 'notes'],
+          promptText: 'Create a moody editorial portrait.',
+          notesMarkdown: 'Saved generation setup',
+          allowRemix: false,
+        }}
+      />
+    );
+
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getByText('Recipe')).toBeInTheDocument();
+    expect(dialog.queryByText(/system package|resource/i)).toBeNull();
+    expect(dialog.getByRole('radio', { name: 'No recipe' })).toBeChecked();
+
+    fireEvent.click(dialog.getByRole('radio', { name: 'Paid' }));
+    const price = dialog.getByRole('spinbutton', { name: 'Recipe price in credits' });
+    expect(price).toHaveValue(900);
+    expect(dialog.getByText('Paid recipe · 900 credits')).toBeInTheDocument();
+    expect(dialog.getByText('From 10 credits, in steps of 10.')).toBeInTheDocument();
+    expect(dialog.getByText('Buyers pay $9.00 · You earn ~$7.65 (85%) · Payouts from $100')).toBeInTheDocument();
+    expect(dialog.queryByText(/token/i)).toBeNull();
+
+    fireEvent.change(price, { target: { value: '95' } });
+    fireEvent.click(dialog.getByRole('button', { name: /^public post$/i }));
+    expect(await dialog.findByRole('alert')).toHaveTextContent('Paid recipes start at 10 credits, in steps of 10.');
   });
 
   it('publishes a free recipe without asking for a price', async () => {
@@ -692,7 +733,7 @@ describe('PublishToShowcaseModal', () => {
       />
     );
 
-    expect(screen.getByRole('radio', { name: 'Off' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'No recipe' })).toBeChecked();
 
     fireEvent.click(screen.getByRole('radio', { name: 'Free' }));
 
