@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryCli
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
-import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Pencil, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { BookOpen, Check, ChevronDown, ChevronRight, CircleMinus, Ellipsis, ExternalLink, FileText, FolderOpen, Globe2, ImageIcon, Images, Lock, Package, Pencil, Play, Plus, Repeat2, ScrollText, Shapes, SlidersHorizontal, Sparkles, Trash2, Upload, Workflow, X } from 'lucide-react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -34,12 +34,17 @@ import {
 } from '@/lib/public-identity';
 import {
   assetDurationSeconds,
+  describeOversizedResourceFiles,
   describePostMediaPickRefusals,
   getPostMediaPickRefusal,
+  partitionResourceFilesBySize,
   pickMediaList,
   pickResourceDocument,
+  pickResourcePhotos,
+  RESOURCE_FILE_SIZE_LIMIT_LABEL,
   uploadPickedMedia,
   uploadResourceDocument,
+  type PickedResourceFile,
 } from '@/lib/media';
 import {
   clearPersistedPostComposerDraft,
@@ -76,8 +81,23 @@ import {
   getPostComposerDetailErrors,
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
-  getPostComposerResourceCardErrors,
+  getPostComposerResourceCardSaveHint,
   getPostComposerSubmitLabel,
+  getVisiblePostComposerResourceCardErrors,
+  countCreationReferenceFiles,
+  describeRecipeBuyers,
+  followSuggestedRecipePreview,
+  foldRecipeSummaryIntoPreview,
+  getRecipeMoneyLine,
+  getRecipePriceError,
+  getRecipeRemovalConfirmation,
+  POST_COMPOSER_MORE_RESOURCE_CARD_TYPES,
+  POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES,
+  RECIPE_PREVIEW_MAX_LENGTH,
+  RECIPE_PREVIEW_QUALITY_MESSAGE,
+  RECIPE_PREVIEW_REQUIRED_MESSAGE,
+  willAttachGenerationReferences,
+  type PostComposerResourceCardTouched,
   getExplicitPublishGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationTitle,
@@ -145,6 +165,7 @@ import { useReducedMotion } from '@/lib/motion';
 import { BackGlyph, CloseGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { hexWithAlpha } from '@/lib/eased-fade';
+import { formatCreditAmount } from '@/lib/pricing';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
@@ -173,19 +194,21 @@ interface MediaUploadBatchProgress {
   totalBytes: number;
 }
 
-type PickedResourceDocument = NonNullable<Awaited<ReturnType<typeof pickResourceDocument>>>;
-
 interface ResourceUploadProgress {
   bytesSent: number;
   cardId: string;
   percent: number;
   totalBytes: number;
+  /** Which of the picked files is going up, from 0, and how many there are. */
+  fileIndex: number;
+  fileCount: number;
 }
 
+/** The picked files of one item still to upload, in the order they were chosen; Retry sends these. */
 interface PendingResourceUpload {
   cardId: string;
   cardType: PostComposerResourceCardType;
-  document: PickedResourceDocument;
+  files: PickedResourceFile[];
 }
 
 function PostComposerHeader({
@@ -488,7 +511,7 @@ function PostResourcesPage({
   selectedGeneration,
   isTemplateBacked,
   isEditMode,
-  resourceEditingLocked,
+  buyerCount,
   packageStatus,
   publishValidation,
   onResourceChange,
@@ -504,7 +527,8 @@ function PostResourcesPage({
   isTemplateBacked: boolean;
   /** Only the publish route copies a creation's references; an edit has no such step. */
   isEditMode: boolean;
-  resourceEditingLocked: boolean;
+  /** People who have the loaded recipe, paid or free (an edit's `resourceBundleBuyerCount`). */
+  buyerCount: number;
   packageStatus: ReturnType<typeof getPostComposerPackageStatus>;
   publishValidation: PostComposerValidationResult;
   onResourceChange: (patch: Partial<PostComposerDraft['resource']>) => void;
@@ -518,25 +542,18 @@ function PostResourcesPage({
   const theme = useAppTheme();
   const resourceActive = draft.resource.accessMode !== 'none';
   const priceTokens = getPostComposerPriceTokens(draft.resource);
-  const creatorEarnings = Math.floor(priceTokens * 0.85 * 100) / 100;
-  const packageListingCopyError = !publishValidation.valid
-    && publishValidation.message
-    && /useful preview or summary/i.test(publishValidation.message)
-      ? publishValidation.message
-      : undefined;
-  const packagePreviewRequiredError = !publishValidation.valid
-    && publishValidation.message
-    && /add a buyer preview/i.test(publishValidation.message)
-      ? publishValidation.message
-      : undefined;
-  // A non-empty summary is evaluated before preview text. Route marketplace
-  // feedback to the field that is actually deciding readiness instead of making
-  // a valid preview look broken because an old hidden summary shadows it.
-  const packageSummaryError = packageListingCopyError && draft.resource.summary.trim()
-    ? packageListingCopyError
+  // The checks that speak of the Recipe preview are said under it, live, as before.
+  const previewError = !publishValidation.valid
+    && (publishValidation.message === RECIPE_PREVIEW_REQUIRED_MESSAGE || publishValidation.message === RECIPE_PREVIEW_QUALITY_MESSAGE)
+    ? publishValidation.message
     : undefined;
-  const packagePreviewError = packagePreviewRequiredError
-    ?? (packageListingCopyError && !draft.resource.summary.trim() ? packageListingCopyError : undefined);
+  // Only a new post's publish copies the creation's saved inputs.
+  const includesCreationReferences = !isEditMode && willAttachGenerationReferences(selectedGeneration, draft);
+  const cardCount = draft.resource.cards.length;
+  const itemsLabel = cardCount === 0
+    ? includesCreationReferences ? 'Creation references' : 'Add at least one item.'
+    : `${cardCount} ${cardCount === 1 ? 'item' : 'items'}${includesCreationReferences ? ' and creation references' : ''}`;
+  const buyersNote = describeRecipeBuyers(buyerCount);
 
   if (isTemplateBacked) {
     return (
@@ -551,22 +568,6 @@ function PostResourcesPage({
     );
   }
 
-  if (resourceEditingLocked) {
-    const itemCount = draft.resource.cards.length;
-    const packageDescription = `${draft.resource.accessMode === 'paid' ? `Paid recipe · ${getPostComposerPriceTokens(draft.resource)} tokens` : 'Recipe'} · ${itemCount} ${itemCount === 1 ? 'item' : 'items'}`;
-    return (
-      <View style={{ gap: 16 }}>
-        <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
-        <StatusBlock
-          title="Purchased recipe is protected"
-          body="People have already unlocked this recipe, so its access mode, price, and contents cannot be changed. Visibility changes still apply to the post."
-          tone="neutral"
-        />
-        <ReadinessRow label="Existing recipe preserved" body={packageDescription} state="ready" />
-      </View>
-    );
-  }
-
   return (
     <View style={{ gap: 18 }}>
       <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
@@ -576,46 +577,36 @@ function PostResourcesPage({
           <AppText variant="caption" color="faint">Optional</AppText>
         </View>
         <AppText variant="bodySm" color="muted">
-          Share reusable prompts, files, links, or guidance for free or at a token price.
+          Share reusable prompts, files, links, or guidance for free or for credits.
         </AppText>
       </View>
 
-      <View style={{ flexDirection: 'row', gap: 10 }}>
-        <ResourceAccessChoice
-          label="Free recipe"
-          body="Reward useful work"
-          active={draft.resource.accessMode === 'free'}
-          accent="workflow"
-          onPress={() => onResourceChange({ accessMode: 'free' })}
-        />
-        <ResourceAccessChoice
-          label="Paid recipe"
-          body="Set a token price"
-          active={draft.resource.accessMode === 'paid'}
-          accent="commerce"
-          onPress={() => onResourceChange({ accessMode: 'paid' })}
-        />
-      </View>
+      <RecipeAccessCards value={draft.resource.accessMode} onChange={(accessMode) => onResourceChange({ accessMode })} />
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ selected: draft.resource.accessMode === 'none' }}
-        onPress={() => onResourceChange({ accessMode: 'none' })}
-        style={({ pressed }) => ({
-          minHeight: 48,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: 14,
-          backgroundColor: draft.resource.accessMode === 'none'
-            ? theme.colors.surfaceStrong
-            : pressed ? theme.colors.surface : 'transparent',
-          opacity: pressed ? appTheme.opacity.pressed : 1,
-        })}
-      >
-        <AppText variant="label" color={draft.resource.accessMode === 'none' ? 'text' : 'muted'}>
-          No recipe
-        </AppText>
-      </Pressable>
+      {/* The price sits where Paid is chosen (recipe audit A-F5): it was the last block of the step,
+          below the fold, so tapping Paid changed nothing a creator could see. */}
+      {draft.resource.accessMode === 'paid' ? (
+        <ComposerFieldShell>
+          <CompactFieldLabel label="Price in credits" required />
+          <ComposerInput
+            accessibilityLabel="Price in credits, required"
+            accessibilityHint="Enter at least 10 credits, in steps of 10."
+            value={draft.resource.priceTokens}
+            onChangeText={(value) => {
+              const priceTokens = value.replace(/[^0-9]/g, '');
+              const numeric = Number.parseInt(priceTokens || '0', 10);
+              onResourceChange({ priceTokens, priceUsd: String((Number.isFinite(numeric) ? numeric : 0) / 100) });
+            }}
+            placeholder="900"
+            keyboardType="number-pad"
+          />
+          <AppText variant="caption" color="commerce">{getRecipeMoneyLine(priceTokens)}</AppText>
+          <AppText variant="caption" color="muted">
+            {'Before buying, people see your recipe preview and item titles — never what\'s inside.'}
+          </AppText>
+          <FieldErrorText message={getRecipePriceError(draft.resource)} />
+        </ComposerFieldShell>
+      ) : null}
 
       {resourceActive && selectedGeneration ? (
         <ComposerFieldShell>
@@ -646,13 +637,11 @@ function PostResourcesPage({
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <View style={{ flex: 1, gap: 2 }}>
                 <AppText variant="cardTitle">What people receive</AppText>
-                <AppText variant="caption" color="muted">
-                  {draft.resource.cards.length === 0 ? 'Add at least one useful resource.' : `${draft.resource.cards.length} resource ${draft.resource.cards.length === 1 ? 'card' : 'cards'}`}
-                </AppText>
+                <AppText variant="caption" color="muted">{itemsLabel}</AppText>
               </View>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Add resource"
+                accessibilityLabel="Add item"
                 onPress={onAddResource}
                 style={({ pressed }) => ({
                   minHeight: 48,
@@ -669,7 +658,15 @@ function PostResourcesPage({
               </Pressable>
             </View>
 
-            {draft.resource.cards.length > 0 ? (
+            {/* A recipe people have is edited like any other (recipe audit S2): each save is a new
+                version, and the people who have it keep theirs. */}
+            {buyersNote ? (
+              <View style={{ borderRadius: 14, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 12, paddingVertical: 10 }}>
+                <AppText variant="caption" color="textSecondary">{buyersNote}</AppText>
+              </View>
+            ) : null}
+
+            {cardCount > 0 ? (
               <View style={{ gap: 8 }}>
                 {draft.resource.cards.map((card) => (
                   <ResourceCardRow
@@ -681,7 +678,7 @@ function PostResourcesPage({
                   />
                 ))}
               </View>
-            ) : (
+            ) : includesCreationReferences ? null : (
               <Pressable
                 accessibilityRole="button"
                 onPress={onAddResource}
@@ -698,89 +695,44 @@ function PostResourcesPage({
                 })}
               >
                 <Package size={27} color={theme.colors.muted} />
-                <AppText variant="label" color="muted">Add your first resource</AppText>
+                <AppText variant="label" color="muted">Add your first item</AppText>
               </Pressable>
             )}
+
+            {includesCreationReferences ? (
+              <CreationReferencesRow fileCount={countCreationReferenceFiles(selectedGeneration)} />
+            ) : null}
+
+            {/* Remix comes with any recipe on a post made from a creation (recipe audit S1): the
+                "Allow direct remix" switch it replaces left Remix, and the prompt it hands over, free
+                when it was off. */}
+            {draft.mode === 'creation' ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 2 }}>
+                <Repeat2 size={appTheme.icon.sm} color={theme.colors.workflow} />
+                <AppText variant="caption" color="muted" style={{ flex: 1 }}>
+                  Remix comes with this recipe: people who unlock it can remix your post.
+                </AppText>
+              </View>
+            ) : null}
           </View>
 
-          {/*
-            Remix permission cannot live on a card: a remix_access item carries
-            no text, link or file, so the content gate would drop it.
-          */}
+          {/* One public text (recipe audit S6): "Public summary" and "Package preview" were two, and
+              the optional one silently replaced the required one in listings. */}
           <ComposerFieldShell>
-            <ToggleRow
-              label="Allow direct remix"
-              body="People who unlock this can remix the post directly."
-              value={draft.resource.allowRemix}
-              onValueChange={(allowRemix) => onResourceChange({ allowRemix })}
-              accent="workflow"
-            />
-          </ComposerFieldShell>
-
-          <ComposerFieldShell>
-            <CompactFieldLabel label="Public summary" optional valueLength={draft.resource.summary.length} maxLength={180} />
+            <CompactFieldLabel label="Recipe preview" required valueLength={draft.resource.previewText.length} maxLength={RECIPE_PREVIEW_MAX_LENGTH} />
             <ComposerInput
-              accessibilityLabel="Public package summary, optional"
-              accessibilityHint="When filled, this is the first package description buyers hear or read before unlock. Leave it blank to use the required package preview. Maximum 180 characters."
-              value={draft.resource.summary}
-              onChangeText={(summary) => onResourceChange({ summary: summary.slice(0, 180) })}
-              placeholder="A short public headline for this package"
-              maxLength={180}
-            />
-            <AppText variant="caption" color="faint">
-              When filled, this is the first package description buyers see before unlock.
-            </AppText>
-            <FieldErrorText message={packageSummaryError} />
-          </ComposerFieldShell>
-
-          <ComposerFieldShell>
-            <CompactFieldLabel label="Package preview" required valueLength={draft.resource.previewText.length} maxLength={180} />
-            <ComposerInput
-              accessibilityLabel="Package preview, required"
-              accessibilityHint="Required public detail saved with the package. If the public summary is blank, buyers see this as the listing description. Maximum 180 characters."
+              accessibilityLabel="Recipe preview, required"
+              accessibilityHint={`Say what people get. Everyone sees this before unlocking. Maximum ${RECIPE_PREVIEW_MAX_LENGTH} characters.`}
               value={draft.resource.previewText}
-              onChangeText={(previewText) => onResourceChange({ previewText: previewText.slice(0, 180) })}
+              onChangeText={(previewText) => onResourceChange({ previewText: previewText.slice(0, RECIPE_PREVIEW_MAX_LENGTH) })}
               placeholder="Tell people what they will receive"
-              maxLength={180}
+              maxLength={RECIPE_PREVIEW_MAX_LENGTH}
               multiline
               minHeight={82}
             />
-            {!draft.resource.previewText.trim() && draft.resource.cards.length > 0 ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => onResourceChange({ previewText: buildResourcePreviewFromCards(draft.resource.cards) })}
-                style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-              >
-                <AppText variant="caption" color="primary">Use suggested preview</AppText>
-              </Pressable>
-            ) : null}
-            <FieldErrorText message={packagePreviewError} />
+            <AppText variant="caption" color="muted">Everyone sees this before unlocking.</AppText>
+            <FieldErrorText message={previewError} />
           </ComposerFieldShell>
-
-          {draft.resource.accessMode === 'paid' ? (
-            <ComposerFieldShell>
-              <CompactFieldLabel label="Price in tokens" required />
-              <ComposerInput
-                accessibilityLabel="Price in tokens, required"
-                accessibilityHint="Enter at least 10 tokens using increments of 10."
-                value={draft.resource.priceTokens}
-                onChangeText={(value) => {
-                  const priceTokens = value.replace(/[^0-9]/g, '');
-                  const numeric = Number.parseInt(priceTokens || '0', 10);
-                  onResourceChange({ priceTokens, priceUsd: String((Number.isFinite(numeric) ? numeric : 0) / 100) });
-                }}
-                placeholder="100"
-                keyboardType="number-pad"
-              />
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <AppText variant="caption" color="muted">Minimum 10 · increments of 10</AppText>
-                <AppText variant="caption" color="commerce">{`You earn ~${creatorEarnings} tokens`}</AppText>
-              </View>
-              {priceTokens < 100 ? (
-                <AppText variant="caption" color="muted">Credit-only purchase on web and mobile below 100 tokens.</AppText>
-              ) : null}
-            </ComposerFieldShell>
-          ) : null}
 
           <ReadinessRow label={packageStatus.label} body={packageStatus.body} state={packageStatus.state} />
         </>
@@ -789,46 +741,119 @@ function PostResourcesPage({
   );
 }
 
-function ResourceAccessChoice({
-  label,
-  body,
-  active,
-  accent,
-  onPress,
-}: {
+/**
+ * The recipe's three choices as one radio group of equal cards, as the web's
+ * `RecipeAccessCards` draws them on a phone (recipe audit A-F15): "No recipe"
+ * was a plain row under two cards and read as a status line, not an option.
+ */
+const RECIPE_ACCESS_CHOICES: ReadonlyArray<{
+  value: PostComposerDraft['resource']['accessMode'];
   label: string;
   body: string;
-  active: boolean;
-  accent: 'workflow' | 'commerce';
-  onPress: () => void;
+}> = [
+  { value: 'free', label: 'Free recipe', body: 'Reward useful work' },
+  { value: 'paid', label: 'Paid recipe', body: 'Set a credit price' },
+  { value: 'none', label: 'No recipe', body: 'Just the post' },
+];
+
+function RecipeAccessCards({
+  value,
+  onChange,
+}: {
+  value: PostComposerDraft['resource']['accessMode'];
+  onChange: (accessMode: PostComposerDraft['resource']['accessMode']) => void;
 }) {
   const theme = useAppTheme();
-  const color = theme.colors[accent];
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        flex: 1,
-        minHeight: 92,
-        justifyContent: 'space-between',
+    <View accessibilityRole="radiogroup" accessibilityLabel="Recipe" style={{ gap: 8 }}>
+      {RECIPE_ACCESS_CHOICES.map((choice) => {
+        const checked = choice.value === value;
+        const color = choice.value === 'free'
+          ? theme.colors.workflow
+          : choice.value === 'paid'
+            ? theme.colors.commerce
+            : theme.colors.textSecondary;
+        return (
+          <Pressable
+            key={choice.value}
+            accessibilityRole="radio"
+            accessibilityLabel={`${choice.label}, ${choice.body}`}
+            accessibilityState={{ checked, selected: checked }}
+            onPress={() => {
+              if (checked) return;
+              haptic.select();
+              onChange(choice.value);
+            }}
+            style={({ pressed }) => ({
+              minHeight: 64,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 12,
+              borderRadius: 18,
+              borderCurve: 'continuous',
+              borderWidth: 1,
+              borderColor: checked ? hexWithAlpha(color, 0.6) : theme.colors.border,
+              backgroundColor: checked ? hexWithAlpha(color, 0.09) : pressed ? theme.colors.surfaceStrong : theme.colors.surface,
+              paddingVertical: 10,
+              paddingLeft: 12,
+              paddingRight: 14,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(color, 0.13) }}>
+              {choice.value === 'free'
+                ? <Sparkles size={appTheme.icon.sm} color={color} />
+                : choice.value === 'paid'
+                  ? <Lock size={appTheme.icon.sm} color={color} />
+                  : <CircleMinus size={appTheme.icon.sm} color={color} />}
+            </View>
+            <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+              <AppText variant="label">{choice.label}</AppText>
+              <AppText variant="caption" color="muted">{choice.body}</AppText>
+            </View>
+            {/* The mark's slot is always kept, so choosing a card never moves its text. */}
+            <View style={{ width: appTheme.icon.compact, alignItems: 'center' }}>
+              {checked ? <Check size={appTheme.icon.compact} color={color} /> : null}
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * What "Include creation references" adds, drawn with the items (recipe audit
+ * A-F9): the server copies the creation's saved inputs in at publish, so they
+ * have no editor of their own; the toggle above takes them out again.
+ */
+function CreationReferencesRow({ fileCount }: { fileCount: number }) {
+  const theme = useAppTheme();
+  const files = `${fileCount} ${fileCount === 1 ? 'file' : 'files'}`;
+  return (
+    <View
+      accessible
+      accessibilityLabel={`Creation references · ${files}`}
+      style={{
+        minHeight: 72,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
         borderRadius: 18,
         borderWidth: 1,
-        borderColor: active ? `${color}99` : theme.colors.border,
-        backgroundColor: active ? `${color}18` : pressed ? theme.colors.surfaceStrong : theme.colors.surface,
-        padding: 14,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.surface,
+        padding: 12,
+      }}
     >
-      <View style={{ width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: `${color}20` }}>
-        {accent === 'workflow' ? <Sparkles size={16} color={color} /> : <Lock size={16} color={color} />}
+      <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+        <ResourceTypeIcon type="reference_media" color={theme.colors.textSecondary} />
       </View>
-      <View style={{ gap: 2 }}>
-        <AppText variant="label">{label}</AppText>
-        <AppText variant="caption" color="muted">{body}</AppText>
+      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <AppText variant="label" numberOfLines={1}>Creation references</AppText>
+        <AppText variant="caption" color="muted" numberOfLines={1}>{`Reference media · ${files}`}</AppText>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -858,7 +883,7 @@ function PostPublishSummary({
     || null;
   const visibilityLabel = draft.visibility === 'public' ? 'Public' : 'Private';
   const resourceLabel = draft.resource.accessMode === 'paid'
-    ? `Paid recipe · ${getPostComposerPriceTokens(draft.resource)} tokens`
+    ? `Paid recipe · ${formatCreditAmount(getPostComposerPriceTokens(draft.resource))} credits`
     : draft.resource.accessMode === 'free'
       ? 'Free recipe'
       : 'No recipe';
@@ -950,7 +975,7 @@ function ResourceCardRow({
   onRemove: () => void;
 }) {
   const theme = useAppTheme();
-  const typeLabel = POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((option) => option.id === card.type)?.label ?? 'Resource';
+  const typeLabel = POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((option) => option.id === card.type)?.label ?? 'Item';
   const scopeLabel = card.appliesToAll || mediaItems.length <= 1
     ? 'All outputs'
     : `${card.mediaKeys.length} ${card.mediaKeys.length === 1 ? 'output' : 'outputs'}`;
@@ -1002,11 +1027,32 @@ function ResourceCardRow({
   );
 }
 
-function ResourceTypeIcon({ type, color, size = 20 }: { type: PostComposerResourceCardType; color: string; size?: number }) {
-  if (type === 'prompt' || type === 'guide' || type === 'settings') return <FileText size={size} color={color} />;
-  if (type === 'reference_media') return <ImageIcon size={size} color={color} />;
-  if (type === 'workflow' || type === 'remix_link' || type === 'external_link') return <Link2 size={size} color={color} />;
-  return <Package size={size} color={color} />;
+/**
+ * One glyph per kind of item, none shared (recipe audit S8): the picker drew
+ * three documents, three links and two boxes for nine kinds. Remix link takes
+ * Remix's own glyph, as the reel's rail draws it.
+ */
+function ResourceTypeIcon({ type, color, size = appTheme.icon.default }: { type: PostComposerResourceCardType; color: string; size?: number }) {
+  switch (type) {
+    case 'prompt':
+      return <ScrollText size={size} color={color} />;
+    case 'reference_media':
+      return <ImageIcon size={size} color={color} />;
+    case 'settings':
+      return <SlidersHorizontal size={size} color={color} />;
+    case 'guide':
+      return <BookOpen size={size} color={color} />;
+    case 'workflow':
+      return <Workflow size={size} color={color} />;
+    case 'source_assets':
+      return <FolderOpen size={size} color={color} />;
+    case 'external_link':
+      return <ExternalLink size={size} color={color} />;
+    case 'remix_link':
+      return <Repeat2 size={size} color={color} />;
+    default:
+      return <Shapes size={size} color={color} />;
+  }
 }
 
 /**
@@ -1270,6 +1316,7 @@ function VisibilitySheet({
 type ResourceSheetContent = {
   mode: 'type' | 'editor';
   card: PostComposerResourceCardDraft | null;
+  touched: PostComposerResourceCardTouched;
   isUploading: boolean;
   uploadProgress: ResourceUploadProgress | null;
   uploadError: string | null;
@@ -1280,6 +1327,7 @@ function sameResourceSheetContent(held: ResourceSheetContent | null, live: Resou
   return held !== null
     && held.mode === live.mode
     && held.card === live.card
+    && held.touched === live.touched
     && held.isUploading === live.isUploading
     && held.uploadProgress === live.uploadProgress
     && held.uploadError === live.uploadError
@@ -1289,6 +1337,8 @@ function sameResourceSheetContent(held: ResourceSheetContent | null, live: Resou
 type ResourceComposerSheetProps = {
   mode: 'type' | 'editor' | null;
   card: PostComposerResourceCardDraft | null;
+  /** The editor's fields the creator has typed in or left: their errors are drawn, no others. */
+  touched: PostComposerResourceCardTouched;
   mediaItems: PostComposerMediaItem[];
   bottomInset: number;
   isUploading: boolean;
@@ -1299,15 +1349,17 @@ type ResourceComposerSheetProps = {
   onSave: () => void;
   onChooseType: (type: PostComposerResourceCardType) => void;
   onChange: (patch: Partial<PostComposerResourceCardDraft>) => void;
+  onTouchField: (field: keyof PostComposerResourceCardTouched) => void;
   onPickFile: () => void;
+  onPickPhotos: () => void;
   onRetryUpload: () => void;
   onCancelUpload: () => void;
   onRemoveAttachment: (id: string) => void;
 };
 
 /**
- * The sheet the Resources step opens: first what kind of resource to add, then
- * its editor.
+ * The sheet the Recipe step opens: first what kind of item to add, then its
+ * editor.
  *
  * Through the overlay host, not a `Modal`, because the editor holds text
  * fields. As a Modal on Android it could not follow the keyboard. The area
@@ -1328,6 +1380,7 @@ type ResourceComposerSheetProps = {
 function ResourceComposerSheet({
   mode,
   card,
+  touched,
   mediaItems,
   bottomInset,
   isUploading,
@@ -1338,7 +1391,9 @@ function ResourceComposerSheet({
   onSave,
   onChooseType,
   onChange,
+  onTouchField,
   onPickFile,
+  onPickPhotos,
   onRetryUpload,
   onCancelUpload,
   onRemoveAttachment,
@@ -1354,7 +1409,7 @@ function ResourceComposerSheet({
   // in one frame, which is how the Modal left on the iPhone.
   const [held, setHeld] = useState<ResourceSheetContent | null>(null);
   const live: ResourceSheetContent | null = mode !== null
-    ? { mode, card, isUploading, uploadProgress, uploadError, canRetryUpload }
+    ? { mode, card, touched, isUploading, uploadProgress, uploadError, canRetryUpload }
     : null;
   if (live && !sameResourceSheetContent(held, live)) setHeld(live);
   const shown = live ?? held;
@@ -1430,7 +1485,9 @@ function ResourceComposerSheet({
               onSave={onSave}
               onChooseType={onChooseType}
               onChange={onChange}
+              onTouchField={onTouchField}
               onPickFile={onPickFile}
+              onPickPhotos={onPickPhotos}
               onRetryUpload={onRetryUpload}
               onCancelUpload={onCancelUpload}
               onRemoveAttachment={onRemoveAttachment}
@@ -1442,11 +1499,12 @@ function ResourceComposerSheet({
   );
 }
 
-/** What the resource sheet's panel holds: its title row, then the list of kinds or the editor. */
+/** What the item sheet's panel holds: its title row, then the list of kinds or the editor. */
 function ResourceComposerContent({
   drag,
   mode,
   card,
+  touched,
   mediaItems,
   bottomInset,
   isUploading,
@@ -1457,12 +1515,16 @@ function ResourceComposerContent({
   onSave,
   onChooseType,
   onChange,
+  onTouchField,
   onPickFile,
+  onPickPhotos,
   onRetryUpload,
   onCancelUpload,
   onRemoveAttachment,
 }: Omit<ResourceComposerSheetProps, 'mode'> & { drag: SheetDismissDrag; mode: 'type' | 'editor' }) {
   const theme = useAppTheme();
+  // Four kinds first, the other five under "More types" (recipe audit S8).
+  const [showMoreTypes, setShowMoreTypes] = useState(false);
   const option = card ? POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((candidate) => candidate.id === card.type) : null;
   const textType = card?.type === 'prompt' || card?.type === 'settings' || card?.type === 'guide' || card?.type === 'other';
   const linkType = card?.type === 'external_link' || card?.type === 'remix_link' || card?.type === 'workflow';
@@ -1474,8 +1536,54 @@ function ResourceComposerContent({
     // those hydrated uploads visible and removable even though the card's
     // inferred primary type is text-oriented.
     || Boolean(card?.attachments.length);
-  const cardErrors = card ? getPostComposerResourceCardErrors(card) : {};
+  // Pictures and videos come from the photo library as well as from Files
+  // (recipe audit H6): on an iPhone the document picker opens Files alone.
+  const offersPhotoLibrary = card?.type === 'reference_media' || card?.type === 'source_assets' || card?.type === 'other';
+  const cardErrors = card ? getVisiblePostComposerResourceCardErrors(card, touched) : {};
+  const saveHint = card ? getPostComposerResourceCardSaveHint(card, touched) : null;
   const isReady = card ? isPostComposerResourceCardReady(card) : false;
+  const textLabel = card?.type === 'prompt'
+    ? 'Prompt or script'
+    : card?.type === 'settings'
+      ? 'Settings'
+      : card?.type === 'guide'
+        ? 'Guide or notes'
+        : 'Content';
+  const textRequired = !fileType || (card?.attachments.length ?? 0) === 0;
+  const linkLabel = card?.type === 'remix_link' ? 'Remix URL' : card?.type === 'workflow' ? 'Workflow link' : 'URL';
+  const linkRequired = card?.type !== 'workflow' || (card?.attachments.length ?? 0) === 0;
+  const legacyTitle = card?.publicTitleIntent === 'legacy_private';
+  const typeRow = (type: PostComposerResourceCardType) => {
+    const resourceOption = POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((candidate) => candidate.id === type);
+    if (!resourceOption) return null;
+    return (
+      <Pressable
+        key={resourceOption.id}
+        accessibilityRole="button"
+        onPress={() => onChooseType(resourceOption.id)}
+        style={({ pressed }) => ({
+          minHeight: 68,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 12,
+          borderRadius: 17,
+          borderWidth: 1,
+          borderColor: theme.colors.borderSubtle,
+          backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
+          padding: 12,
+        })}
+      >
+        <View style={{ width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+          <ResourceTypeIcon type={resourceOption.id} color={theme.colors.textSecondary} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <AppText variant="label">{resourceOption.label}</AppText>
+          <AppText variant="caption" color="muted" numberOfLines={2}>{resourceOption.body}</AppText>
+        </View>
+        <ChevronRight size={18} color={theme.colors.faint} />
+      </Pressable>
+    );
+  };
 
   return (
     <>
@@ -1485,7 +1593,7 @@ function ResourceComposerContent({
             drag waits for the body to be at its top, so a pull from here did nothing once it had scrolled. */}
         <View {...drag.panHandlers} style={{ minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-            <AppText heading variant="sectionTitle">{mode === 'type' ? 'Add a resource' : option?.label ?? 'Edit resource'}</AppText>
+            <AppText heading variant="sectionTitle">{mode === 'type' ? 'Add an item' : option?.label ?? 'Edit item'}</AppText>
             <AppText variant="caption" color="muted">
               {mode === 'type'
                 ? 'Choose what people will receive.'
@@ -1494,7 +1602,7 @@ function ResourceComposerContent({
                   : 'Contents stay protected until unlock.'}
             </AppText>
           </View>
-          <HeaderIconButton label="Close resource editor" icon="close" onPress={onRequestClose} />
+          <HeaderIconButton label="Close item editor" icon="close" onPress={onRequestClose} />
         </View>
       </View>
 
@@ -1505,33 +1613,35 @@ function ResourceComposerContent({
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: bottomInset + 20, gap: 9 }}
         >
-          {POST_COMPOSER_RESOURCE_CARD_OPTIONS.map((resourceOption) => (
-            <Pressable
-              key={resourceOption.id}
-              accessibilityRole="button"
-              onPress={() => onChooseType(resourceOption.id)}
-              style={({ pressed }) => ({
-                minHeight: 68,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 12,
-                borderRadius: 17,
-                borderWidth: 1,
-                borderColor: theme.colors.borderSubtle,
-                backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
-                padding: 12,
-              })}
-            >
-              <View style={{ width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
-                <ResourceTypeIcon type={resourceOption.id} color={theme.colors.textSecondary} />
-              </View>
-              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                <AppText variant="label">{resourceOption.label}</AppText>
-                <AppText variant="caption" color="muted" numberOfLines={2}>{resourceOption.body}</AppText>
-              </View>
-              <ChevronRight size={18} color={theme.colors.faint} />
-            </Pressable>
-          ))}
+          {POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES.map(typeRow)}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="More types"
+            accessibilityHint="Shows the workflow, source assets, link, remix link and other kinds of item."
+            accessibilityState={{ expanded: showMoreTypes }}
+            onPress={() => setShowMoreTypes((current) => !current)}
+            style={({ pressed }) => ({
+              minHeight: 56,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 12,
+              borderRadius: 17,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
+            })}
+          >
+            <View style={{ width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceInset }}>
+              <Ellipsis size={appTheme.icon.default} color={theme.colors.textSecondary} />
+            </View>
+            <AppText variant="label" color="textSecondary" style={{ flex: 1 }}>More types</AppText>
+            <ChevronDown
+              size={18}
+              color={theme.colors.faint}
+              style={{ transform: [{ rotate: showMoreTypes ? '180deg' : '0deg' }] }}
+            />
+          </Pressable>
+          {showMoreTypes ? POST_COMPOSER_MORE_RESOURCE_CARD_TYPES.map(typeRow) : null}
         </ScrollView>
       ) : card ? (
         <>
@@ -1544,32 +1654,36 @@ function ResourceComposerContent({
             contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: bottomInset + 24, gap: 14 }}
           >
             <ComposerFieldShell>
-              <CompactFieldLabel label="Resource title" required valueLength={card.title.length} maxLength={80} />
+              <CompactFieldLabel label="Item title" required valueLength={card.title.length} maxLength={80} />
               <ComposerInput
-                accessibilityLabel="Resource title, required"
-                accessibilityHint={card.publicTitleIntent === 'legacy_private'
-                  ? 'This existing title stays protected unless you edit it. Editing opts the updated title into the locked public package preview.'
-                  : 'Enter a public title for this protected resource. Maximum 80 characters.'}
+                accessibilityLabel="Item title, required"
+                accessibilityHint={legacyTitle
+                  ? 'This older title stays private unless you edit it. Once edited, everyone sees it before unlocking.'
+                  : 'Everyone sees this title before unlocking. Maximum 80 characters.'}
                 value={card.title}
                 onChangeText={(title) => onChange({
                   title: title.slice(0, 80),
                   publicTitleIntent: 'explicit',
                 })}
-                placeholder={option?.label ?? 'Resource title'}
+                onBlur={() => onTouchField('title')}
+                placeholder={option?.label ?? 'Item title'}
               />
-              <FieldErrorText message={cardErrors.title} />
-              {card.publicTitleIntent === 'legacy_private' ? (
+              {/* Item titles are public before unlock (recipe audit A-F6); the app said so only to a screen reader. */}
+              {legacyTitle ? (
                 <AppText variant="caption" color="muted">
-                  This legacy title stays private. Editing it makes the updated title visible in the locked package preview.
+                  This older title stays private. Editing it shows the new title to everyone before unlocking.
                 </AppText>
-              ) : null}
-              <CompactFieldLabel label="Unlocked description" optional valueLength={card.preview.length} maxLength={120} />
+              ) : (
+                <AppText variant="caption" color="muted">Everyone sees this before unlocking.</AppText>
+              )}
+              <FieldErrorText message={cardErrors.title} />
+              <CompactFieldLabel label="Note shown after unlock" optional valueLength={card.preview.length} maxLength={120} />
               <ComposerInput
-                accessibilityLabel="Unlocked description, optional"
-                accessibilityHint="Add a short note buyers see with this resource after they unlock the package. Maximum 120 characters."
+                accessibilityLabel="Note shown after unlock, optional"
+                accessibilityHint="A short note people see with this item once they unlock the recipe. Maximum 120 characters."
                 value={card.preview}
                 onChangeText={(preview) => onChange({ preview: preview.slice(0, 120) })}
-                placeholder="Optional note shown after unlock"
+                placeholder="How to use it, what to change"
                 multiline
                 minHeight={66}
               />
@@ -1577,15 +1691,13 @@ function ResourceComposerContent({
 
             {textType ? (
               <ComposerFieldShell>
-                <CompactFieldLabel
-                  label={card.type === 'prompt' ? 'Prompt or script' : card.type === 'settings' ? 'Settings' : card.type === 'guide' ? 'Guide or notes' : 'Resource content'}
-                  required={!fileType || card.attachments.length === 0}
-                />
+                <CompactFieldLabel label={textLabel} required={textRequired} optional={!textRequired} />
                 <ComposerInput
-                  accessibilityLabel={`${card.type === 'prompt' ? 'Prompt or script' : card.type === 'settings' ? 'Settings' : card.type === 'guide' ? 'Guide or notes' : 'Resource content'}, required`}
+                  accessibilityLabel={`${textLabel}, ${textRequired ? 'required' : 'optional'}`}
                   accessibilityHint="This protected content is revealed only after the recipe is unlocked."
                   value={card.textContent}
                   onChangeText={(textContent) => onChange({ textContent })}
+                  onBlur={() => onTouchField('content')}
                   placeholder="This content is revealed only after unlock"
                   multiline
                   minHeight={150}
@@ -1596,18 +1708,19 @@ function ResourceComposerContent({
 
             {linkType ? (
               <ComposerFieldShell>
-                <CompactFieldLabel label={card.type === 'remix_link' ? 'Remix URL' : card.type === 'workflow' ? 'Workflow link' : 'URL'} required={card.type !== 'workflow' || card.attachments.length === 0} />
+                <CompactFieldLabel label={linkLabel} required={linkRequired} optional={!linkRequired} />
                 <ComposerInput
-                  accessibilityLabel={`${card.type === 'remix_link' ? 'Remix URL' : card.type === 'workflow' ? 'Workflow link' : 'URL'}, required`}
+                  accessibilityLabel={`${linkLabel}, ${linkRequired ? 'required' : 'optional'}`}
                   accessibilityHint="Enter the protected destination URL."
                   value={card.externalUrl}
                   onChangeText={(externalUrl) => onChange({ externalUrl })}
+                  onBlur={() => onTouchField('content')}
                   placeholder="https://"
                   autoCapitalize="none"
                   keyboardType="url"
                 />
                 <FieldErrorText message={cardErrors.content} />
-                {card.type === 'remix_link' ? <AppText variant="caption" color="muted">The URL remains hidden until the package is unlocked.</AppText> : null}
+                {card.type === 'remix_link' ? <AppText variant="caption" color="muted">The link stays hidden until the recipe is unlocked.</AppText> : null}
               </ComposerFieldShell>
             ) : null}
 
@@ -1623,31 +1736,36 @@ function ResourceComposerContent({
                     </Pressable>
                   </View>
                 ))}
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={isUploading}
-                  onPress={onPickFile}
-                  style={({ pressed }) => ({
-                    minHeight: 50,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 8,
-                    borderRadius: 15,
-                    borderWidth: 1,
-                    borderStyle: 'dashed',
-                    borderColor: theme.colors.border,
-                    backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
-                    opacity: isUploading ? appTheme.opacity.disabled : 1,
-                  })}
-                >
-                  {isUploading ? <ActivityIndicator size="small" color={theme.colors.primary} /> : <Upload size={17} color={theme.colors.textSecondary} />}
-                  <AppText variant="label" color="textSecondary">{isUploading ? 'Uploading' : 'Add file'}</AppText>
-                </Pressable>
+                {offersPhotoLibrary ? (
+                  // Side by side where they fit, one above the other on a narrow phone or at a large text size.
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 9 }}>
+                    <ResourceFilePickButton
+                      label="Photo library"
+                      icon={<Images size={appTheme.icon.sm} color={theme.colors.textSecondary} />}
+                      disabled={isUploading}
+                      onPress={onPickPhotos}
+                    />
+                    <ResourceFilePickButton
+                      label="Files"
+                      icon={<FolderOpen size={appTheme.icon.sm} color={theme.colors.textSecondary} />}
+                      disabled={isUploading}
+                      onPress={onPickFile}
+                    />
+                  </View>
+                ) : (
+                  <ResourceFilePickButton
+                    label="Add file"
+                    icon={<Upload size={appTheme.icon.sm} color={theme.colors.textSecondary} />}
+                    disabled={isUploading}
+                    onPress={onPickFile}
+                  />
+                )}
+                {/* Said before anything is picked: the limit was told only by a refused upload. */}
+                <AppText variant="caption" color="muted">{RESOURCE_FILE_SIZE_LIMIT_LABEL}</AppText>
                 {isUploading ? (
                   <View
                     accessible
-                    accessibilityLabel="Resource file upload progress"
+                    accessibilityLabel="File upload progress"
                     accessibilityRole="progressbar"
                     accessibilityValue={{ min: 0, max: 100, now: uploadProgress?.percent ?? 0 }}
                     style={{ gap: 9 }}
@@ -1655,12 +1773,14 @@ function ResourceComposerContent({
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                       <AppText variant="caption" color="muted">
                         {uploadProgress
-                          ? `Uploading file · ${uploadProgress.percent}%`
+                          ? uploadProgress.fileCount > 1
+                            ? `Uploading ${uploadProgress.fileIndex + 1} of ${uploadProgress.fileCount} · ${uploadProgress.percent}%`
+                            : `Uploading file · ${uploadProgress.percent}%`
                           : 'Preparing file…'}
                       </AppText>
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel="Cancel resource upload"
+                        accessibilityLabel="Cancel file upload"
                         onPress={onCancelUpload}
                         style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
                       >
@@ -1693,7 +1813,7 @@ function ResourceComposerContent({
                     {canRetryUpload ? (
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel="Retry resource upload"
+                        accessibilityLabel="Retry file upload"
                         onPress={onRetryUpload}
                         style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
                       >
@@ -1710,10 +1830,14 @@ function ResourceComposerContent({
               <ResourceScopePicker card={card} mediaItems={mediaItems} onChange={onChange} />
             ) : null}
           </ScrollView>
-          <View style={{ paddingHorizontal: 18, paddingTop: 10, paddingBottom: bottomInset + 12, borderTopWidth: 1, borderTopColor: theme.colors.borderSubtle }}>
+          <View style={{ paddingHorizontal: 18, paddingTop: 10, paddingBottom: bottomInset + 12, gap: 8, borderTopWidth: 1, borderTopColor: theme.colors.borderSubtle }}>
+            {/* What the item still needs, said plainly until its field is touched (recipe audit A-F14). */}
+            {saveHint && !isUploading ? (
+              <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>{saveHint}</AppText>
+            ) : null}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Save resource"
+              accessibilityLabel="Save item"
               accessibilityState={{ disabled: !isReady || isUploading }}
               disabled={!isReady || isUploading}
               onPress={() => {
@@ -1729,12 +1853,55 @@ function ResourceComposerContent({
                 opacity: !isReady || isUploading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              <AppText variant="button" color="onPrimary">Save resource</AppText>
+              <AppText variant="button" color="onPrimary">Save item</AppText>
             </Pressable>
           </View>
         </>
       ) : null}
     </>
+  );
+}
+
+/** One of the item editor's file buttons: Photo library, Files, or Add file where there is one way. */
+function ResourceFilePickButton({
+  label,
+  icon,
+  disabled,
+  onPress,
+}: {
+  label: string;
+  icon: ReactNode;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const theme = useAppTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexGrow: 1,
+        flexBasis: 140,
+        minHeight: 50,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        borderRadius: 15,
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        borderColor: theme.colors.border,
+        backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
+        paddingHorizontal: 10,
+        opacity: disabled ? appTheme.opacity.disabled : 1,
+      })}
+    >
+      {icon}
+      <AppText variant="label" color="textSecondary" numberOfLines={1}>{label}</AppText>
+    </Pressable>
   );
 }
 
@@ -1830,12 +1997,11 @@ function inferResourceAttachmentType(contentType: string | null): PostResourceIt
   return 'source_file';
 }
 
-function buildResourcePreviewFromCards(cards: PostComposerResourceCardDraft[]) {
-  const labels = cards.slice(0, 3).map((card) => card.title.trim()).filter(Boolean);
-  if (labels.length === 0) return 'Includes reusable resources from this creation.';
-  const joined = labels.join(', ').replace(/, ([^,]*)$/, ', and $1');
-  const extra = Math.max(0, cards.length - labels.length);
-  return `Includes ${joined}${extra > 0 ? ` and ${extra} more` : ''}.`;
+/** What the item editor says when an upload is cancelled, with what Retry would send. */
+function describeCancelledResourceUpload(remaining: number) {
+  return remaining > 1
+    ? `Upload cancelled. You can retry the ${remaining} files left.`
+    : 'Upload cancelled. You can retry the selected file.';
 }
 
 function cloneResourceCard(card: PostComposerResourceCardDraft): PostComposerResourceCardDraft {
@@ -1940,6 +2106,8 @@ function NewPostComposer() {
   const [editingResourceId, setEditingResourceId] = useState<string | null>(null);
   const [resourceEditorCard, setResourceEditorCard] = useState<PostComposerResourceCardDraft | null>(null);
   const [resourceEditorOriginal, setResourceEditorOriginal] = useState<PostComposerResourceCardDraft | null>(null);
+  // The editor's fields the creator has typed in or left (recipe audit A-F14): only their errors are drawn.
+  const [resourceEditorTouched, setResourceEditorTouched] = useState<PostComposerResourceCardTouched>({});
   const [isVisibilityOpen, setIsVisibilityOpen] = useState(false);
   const [isNavigationAllowed, setIsNavigationAllowed] = useState(false);
   const [pendingPublishVisibility, setPendingPublishVisibility] = useState<PostComposerDraft['visibility'] | null>(null);
@@ -2019,7 +2187,9 @@ function NewPostComposer() {
   const isGenerationBacked = Boolean(postQuery.data?.post?.generationId) || draft.mode === 'creation';
   const isEditMode = Boolean(postId);
   const isMediaLocked = isEditMode && isGenerationBacked;
-  const hasPaidOrders = postQuery.data?.post?.hasPaidOrders === true;
+  // People who have the loaded recipe. A recipe they have is edited like any other (recipe audit S2):
+  // `hasPaidOrders`, which froze it, is always false from the server now and is not read.
+  const recipeBuyerCount = postQuery.data?.post?.resourceBundleBuyerCount ?? 0;
   const canSubmit = !isPickingMedia
     && !isPickingResourceFile
     // A publish racing draft-media recovery would submit a reclaimed path and
@@ -2032,8 +2202,8 @@ function NewPostComposer() {
     [draft, selectedGeneration]
   );
   const publishValidation = useMemo(
-    () => validateCurrentDraft(draft, selectedGeneration, isEditMode && isGenerationBacked, hasPaidOrders, { grandfatheredTitle: initialTitleRef.current }),
-    [draft, hasPaidOrders, isEditMode, isGenerationBacked, selectedGeneration]
+    () => validateCurrentDraft(draft, selectedGeneration, isEditMode, isEditMode && isGenerationBacked, { grandfatheredTitle: initialTitleRef.current }),
+    [draft, isEditMode, isGenerationBacked, selectedGeneration]
   );
   const hasUnsavedChanges = hasHydratedPersistedDraft && (
     isEditMode || Boolean(generationId)
@@ -2144,7 +2314,8 @@ function NewPostComposer() {
         // and an edit attaches no creation references: only the publish route
         // copies them, so the editor does not offer them.
         creationPackage: getDefaultCreationPackageDraft(),
-        resource: resourceBundleInput ? {
+        // One Recipe preview, starting from the summary listings showed first (recipe audit S6).
+        resource: resourceBundleInput ? foldRecipeSummaryIntoPreview({
           accessMode: resourceBundleInput.accessMode || 'none',
           cardAuthoringMode: 'cards',
           selectedKinds: deriveResourceSelections(resourceBundleInput),
@@ -2175,7 +2346,7 @@ function NewPostComposer() {
           // showed 100 tokens and saved 900 through the legacy-USD rule.
           priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : '9',
           priceTokens: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents) : '900',
-        } : getDefaultResourceDraft(),
+        }) : getDefaultResourceDraft(),
       });
       setHasPrefilledEdit(true);
     }
@@ -2209,10 +2380,11 @@ function NewPostComposer() {
           // Opened from Share, the post is being published, as in the prefill.
           visibility: shareAfterPublish && isEditMode ? 'public' : getComposerVisibility(persisted.draft.visibility),
           // Drafts saved by older builds can carry duplicate card ids; dedupe
-          // them before they become React keys and edit/remove targets.
-          resource: sanitizePostComposerResourceCardIds(
+          // them before they become React keys and edit/remove targets. Their
+          // summary, a field the composer no longer has, becomes the one preview.
+          resource: foldRecipeSummaryIntoPreview(sanitizePostComposerResourceCardIds(
             migratePostComposerResourceDraftToCards(persisted.draft.resource),
-          ),
+          )),
         };
         // A kept edit names its media by the ids from when it was kept, and a
         // save since then (one that went through and then failed included)
@@ -2398,8 +2570,8 @@ function NewPostComposer() {
       const validation = validateCurrentDraft(
         effectiveDraft,
         selectedGeneration,
+        isEditMode,
         isEditMode && isGenerationBacked,
-        hasPaidOrders,
         { grandfatheredTitle: initialTitleRef.current },
       );
       if (!validation.valid) {
@@ -2414,9 +2586,7 @@ function NewPostComposer() {
       try {
         if (postId) {
           const isGen = Boolean(postQuery.data?.post?.generationId);
-          const payload = buildUpdatePostPayload(isGen, submittedDraft, {
-            preserveSoldResourceBundle: hasPaidOrders,
-          });
+          const payload = buildUpdatePostPayload(isGen, submittedDraft);
           sentPostMedia = 'mediaItems' in payload;
           return await api.updatePost(postId, payload);
         }
@@ -2680,7 +2850,6 @@ function NewPostComposer() {
   };
 
   const updateResource = (patch: Partial<PostComposerDraft['resource']>) => {
-    if (hasPaidOrders) return;
     setDraft((current) => followCreationTitleSuggestion(
       current,
       { ...current, resource: { ...current.resource, ...patch } },
@@ -2688,13 +2857,17 @@ function NewPostComposer() {
     ));
   };
 
+  // The creation's references are part of what the recipe holds, so the
+  // suggested Recipe preview follows them in and out as it follows the items.
   const updateCreationPackage = (patch: Partial<PostComposerDraft['creationPackage']>) => {
-    if (hasPaidOrders) return;
-    setDraft((current) => ({ ...current, creationPackage: { ...current.creationPackage, ...patch } }));
+    setDraft((current) => followSuggestedRecipePreview(
+      current,
+      { ...current, creationPackage: { ...current.creationPackage, ...patch } },
+      selectedGeneration,
+    ));
   };
 
   const togglePromptResource = (enabled: boolean) => {
-    if (hasPaidOrders) return;
     setDraft((current) => followCreationTitleSuggestion(
       current,
       applyCreationPromptResource(current, selectedGeneration, enabled),
@@ -3104,8 +3277,9 @@ function NewPostComposer() {
     const { removal, scrollY } = undoEntry;
     dismissUndo();
     // Onto the draft as it is now: the offer can be taken mid-typing, and what
-    // was typed since the removal stays.
-    setDraft((current) => putBackComposerRemoval(current, removal));
+    // was typed since the removal stays. An item put back is named again in a
+    // Recipe preview that still says what was suggested.
+    setDraft((current) => followSuggestedRecipePreview(current, putBackComposerRemoval(current, removal), selectedGeneration));
     setDetailErrors((current) => (
       Object.keys(current).length > 0
         ? getPostComposerDetailErrors(putBackComposerRemoval(draft, removal), { grandfatheredTitle: initialTitleRef.current })
@@ -3148,75 +3322,95 @@ function NewPostComposer() {
     });
   };
 
-  const uploadPendingResourceFile = async (pending: PendingResourceUpload) => {
-    if (isPickingResourceFile || hasPaidOrders || resourceEditorCard?.id !== pending.cardId) return;
+  /**
+   * Uploads an item's picked files one after another, each through the signed
+   * resource upload, into the item being edited. What fails or is cancelled
+   * stays pending with whatever was not sent yet, for Retry; what went up
+   * stays on the item. `notice` is said once the files are in: photos left out
+   * for their size.
+   */
+  const uploadPendingResourceFiles = async (pending: PendingResourceUpload, notice: string | null = null) => {
+    if (isPickingResourceFile || resourceEditorCard?.id !== pending.cardId || pending.files.length === 0) return;
 
     const controller = new AbortController();
     resourceUploadAbortRef.current = controller;
     activeUploadControllersRef.current.add(controller);
     setIsPickingResourceFile(true);
     setResourceUploadError(null);
-    setResourceUploadProgress({
-      bytesSent: 0,
-      cardId: pending.cardId,
-      percent: 0,
-      totalBytes: pending.document.size ?? 0,
-    });
+    let remaining = pending.files;
+    const fileCount = pending.files.length;
 
     try {
-      const uploaded = await uploadResourceDocument(pending.document.uri, {
-        api,
-        fileName: pending.document.name,
-        mimeType: pending.document.mimeType,
-        sizeBytes: pending.document.size,
-        mediaOnly: pending.cardType === 'reference_media',
-        signal: controller.signal,
-        onProgress: (progress) => {
-          if (controller.signal.aborted) return;
-          setResourceUploadProgress((current) => current?.cardId === pending.cardId
-            ? {
-                bytesSent: progress.bytesSent,
-                cardId: pending.cardId,
-                percent: Math.round(progress.fraction * 100),
-                totalBytes: progress.totalBytes,
-              }
-            : current);
-        },
-      });
+      for (const [fileIndex, file] of pending.files.entries()) {
+        setResourceUploadProgress({
+          bytesSent: 0,
+          cardId: pending.cardId,
+          percent: 0,
+          totalBytes: file.size ?? 0,
+          fileIndex,
+          fileCount,
+        });
+        const uploaded = await uploadResourceDocument(file.uri, {
+          api,
+          fileName: file.name,
+          mimeType: file.mimeType,
+          sizeBytes: file.size,
+          mediaOnly: pending.cardType === 'reference_media',
+          signal: controller.signal,
+          onProgress: (progress) => {
+            if (controller.signal.aborted) return;
+            setResourceUploadProgress((current) => current?.cardId === pending.cardId
+              ? {
+                  bytesSent: progress.bytesSent,
+                  cardId: pending.cardId,
+                  percent: Math.round(progress.fraction * 100),
+                  totalBytes: progress.totalBytes,
+                  fileIndex,
+                  fileCount,
+                }
+              : current);
+          },
+        });
 
-      // Honor a cancellation that lands at the end of finalization, and never
-      // write its result into a different editor card.
-      if (controller.signal.aborted) {
-        setResourceUploadError('Upload cancelled. You can retry the selected file.');
-        return;
+        // Honor a cancellation that lands at the end of finalization, and never
+        // write its result into a different editor card.
+        if (controller.signal.aborted) {
+          setPendingResourceUpload({ ...pending, files: remaining });
+          setResourceUploadError(describeCancelledResourceUpload(remaining.length));
+          return;
+        }
+
+        const contentType = uploaded.contentType ?? null;
+        const attachment = {
+          // Several files can finish within one millisecond.
+          id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          kind: 'file',
+          label: uploaded.label,
+          storagePath: uploaded.storagePath ?? '',
+          contentType,
+          sizeBytes: uploaded.sizeBytes ?? null,
+          // Finalize only reports what it verified in storage, so the editorial
+          // fields are inferred here. The card serializer overrides them for
+          // every card type except 'other', where these are the fallback.
+          resourceType: inferResourceAttachmentType(contentType),
+          role: 'primary',
+          remixUse: 'none',
+        } satisfies PostComposerResourceCardDraft['attachments'][number];
+        setResourceEditorCard((current) => current?.id === pending.cardId
+          ? { ...current, attachments: [...current.attachments, attachment] }
+          : current);
+        remaining = remaining.slice(1);
       }
-
-      const contentType = uploaded.contentType ?? null;
-      const attachment = {
-        id: `att-${Date.now()}`,
-        kind: 'file',
-        label: uploaded.label,
-        storagePath: uploaded.storagePath ?? '',
-        contentType,
-        sizeBytes: uploaded.sizeBytes ?? null,
-        // Finalize only reports what it verified in storage, so the editorial
-        // fields are inferred here. The card serializer overrides them for
-        // every card type except 'other', where these are the fallback.
-        resourceType: inferResourceAttachmentType(contentType),
-        role: 'primary',
-        remixUse: 'none',
-      } satisfies PostComposerResourceCardDraft['attachments'][number];
-      setResourceEditorCard((current) => current?.id === pending.cardId
-        ? { ...current, attachments: [...current.attachments, attachment] }
-        : current);
       setPendingResourceUpload(null);
-      setResourceUploadError(null);
+      setResourceUploadError(notice);
     } catch (error) {
-      setResourceUploadError(isUploadCancelledError(error)
-        ? 'Upload cancelled. You can retry the selected file.'
+      setPendingResourceUpload({ ...pending, files: remaining });
+      const failure = isUploadCancelledError(error)
+        ? describeCancelledResourceUpload(remaining.length)
         : error instanceof Error
           ? error.message
-          : 'Try again.');
+          : 'Try again.';
+      setResourceUploadError(notice ? `${failure} ${notice}` : failure);
     } finally {
       activeUploadControllersRef.current.delete(controller);
       if (resourceUploadAbortRef.current === controller) {
@@ -3227,28 +3421,49 @@ function NewPostComposer() {
     }
   };
 
-  const chooseResourceFile = async () => {
-    if (!resourceEditorCard || isPickingResourceFile || hasPaidOrders) return;
+  /**
+   * Files for the item being edited: from the photo library (pictures and
+   * videos, several at once; recipe audit H6) or from Files (one document). A
+   * photo over 50 MB is left out before anything is sent, and said.
+   */
+  const chooseResourceFiles = async (source: 'files' | 'photos') => {
+    if (!resourceEditorCard || isPickingResourceFile) return;
     const targetCardId = resourceEditorCard.id;
     const targetCardType = resourceEditorCard.type;
     setIsPickingResourceFile(true);
     setResourceUploadError(null);
     setPendingResourceUpload(null);
     try {
-      const picked = await pickResourceDocument(targetCardType === 'reference_media' ? 'reference_media' : 'resource');
-      if (!picked) return;
+      let picked: PickedResourceFile[];
+      if (source === 'photos') {
+        picked = await pickResourcePhotos();
+      } else {
+        const document = await pickResourceDocument(targetCardType === 'reference_media' ? 'reference_media' : 'resource');
+        picked = document ? [document] : [];
+      }
+      if (picked.length === 0) return;
+      const { accepted, oversized } = partitionResourceFilesBySize(picked);
+      const notice = describeOversizedResourceFiles(oversized.length);
+      if (accepted.length === 0) {
+        setResourceUploadError(notice);
+        return;
+      }
       const pending = {
         cardId: targetCardId,
         cardType: targetCardType,
-        document: picked,
+        files: accepted,
       } satisfies PendingResourceUpload;
       setPendingResourceUpload(pending);
       // The picker phase and transfer share the same busy state. Clear it here
       // so the upload helper can acquire and own the state/controller.
       setIsPickingResourceFile(false);
-      await uploadPendingResourceFile(pending);
+      await uploadPendingResourceFiles(pending, notice);
     } catch (error) {
-      setResourceUploadError(error instanceof Error ? error.message : 'Could not open the file picker. Try again.');
+      setResourceUploadError(error instanceof Error
+        ? error.message
+        : source === 'photos'
+          ? 'Could not open the photo library. Try again.'
+          : 'Could not open the file picker. Try again.');
     } finally {
       if (!resourceUploadAbortRef.current) setIsPickingResourceFile(false);
     }
@@ -3256,48 +3471,60 @@ function NewPostComposer() {
 
   const retryResourceFileUpload = () => {
     if (!pendingResourceUpload || isPickingResourceFile) return;
-    void uploadPendingResourceFile(pendingResourceUpload);
+    void uploadPendingResourceFiles(pendingResourceUpload);
   };
 
   const cancelResourceFileUpload = () => {
     resourceUploadAbortRef.current?.abort();
   };
 
+  const touchResourceEditorField = (field: keyof PostComposerResourceCardTouched) => {
+    setResourceEditorTouched((current) => (current[field] ? current : { ...current, [field]: true }));
+  };
+
   const updateResourceEditorCard = (patch: Partial<PostComposerResourceCardDraft>) => {
-    if (hasPaidOrders) return;
     setResourceEditorCard((current) => current ? { ...current, ...patch } : current);
+    // A field typed in, or a file taken away, may now say what it lacks.
+    if ('title' in patch) touchResourceEditorField('title');
+    if ('textContent' in patch || 'externalUrl' in patch || 'attachments' in patch) touchResourceEditorField('content');
   };
 
   const removeResourceCard = (id: string) => {
-    if (hasPaidOrders || (isPickingResourceFile && editingResourceId === id)) return;
+    if (isPickingResourceFile && editingResourceId === id) return;
     const taken = takeComposerResourceCard(draft, id);
     if (!taken) return;
-    offerUndo(taken.removal.card.title.trim() || 'resource', taken.removal);
-    setDraft((current) => takeComposerResourceCard(current, id)?.draft ?? current);
+    offerUndo(taken.removal.card.title.trim() || 'item', taken.removal);
+    setDraft((current) => {
+      const next = takeComposerResourceCard(current, id)?.draft;
+      return next ? followSuggestedRecipePreview(current, next, selectedGeneration) : current;
+    });
     if (editingResourceId === id) {
       setEditingResourceId(null);
       setResourceEditorCard(null);
       setResourceEditorOriginal(null);
+      setResourceEditorTouched({});
       setResourceSheetMode(null);
     }
   };
 
   const startResourceCard = (type: PostComposerResourceCardType) => {
-    if (hasPaidOrders || isPickingResourceFile) return;
+    if (isPickingResourceFile) return;
     const card = createPostComposerResourceCard(type);
     setEditingResourceId(card.id);
     setResourceEditorCard(cloneResourceCard(card));
     setResourceEditorOriginal(cloneResourceCard(card));
+    setResourceEditorTouched({});
     setResourceSheetMode('editor');
   };
 
   const openResourceCard = (id: string) => {
-    if (hasPaidOrders || isPickingResourceFile) return;
+    if (isPickingResourceFile) return;
     const card = draft.resource.cards.find((candidate) => candidate.id === id);
     if (!card) return;
     setEditingResourceId(id);
     setResourceEditorCard(cloneResourceCard(card));
     setResourceEditorOriginal(cloneResourceCard(card));
+    setResourceEditorTouched({});
     setResourceSheetMode('editor');
   };
 
@@ -3305,6 +3532,7 @@ function NewPostComposer() {
     setEditingResourceId(null);
     setResourceEditorCard(null);
     setResourceEditorOriginal(null);
+    setResourceEditorTouched({});
     setResourceSheetMode(null);
     setResourceUploadProgress(null);
     setResourceUploadError(null);
@@ -3315,7 +3543,7 @@ function NewPostComposer() {
     if (isPickingResourceFile) {
       void showConfirmDialog({
         title: 'File upload in progress',
-        message: 'Keep this resource editor open until the upload finishes, or cancel the upload first.',
+        message: 'Keep this item editor open until the upload finishes, or cancel the upload first.',
         cancelLabel: 'Keep uploading',
         confirmLabel: 'Cancel upload',
         destructive: true,
@@ -3334,8 +3562,8 @@ function NewPostComposer() {
       return;
     }
     void showConfirmDialog({
-      title: 'Discard resource changes?',
-      message: 'This resource has unsaved changes.',
+      title: 'Discard item changes?',
+      message: 'This item has unsaved changes.',
       cancelLabel: 'Keep editing',
       confirmLabel: 'Discard',
       destructive: true,
@@ -3345,20 +3573,19 @@ function NewPostComposer() {
   };
 
   const saveResourceEditor = () => {
-    if (!resourceEditorCard || isPickingResourceFile || !isPostComposerResourceCardReady(resourceEditorCard) || hasPaidOrders) return;
+    if (!resourceEditorCard || isPickingResourceFile || !isPostComposerResourceCardReady(resourceEditorCard)) return;
     const savedCard = cloneResourceCard(resourceEditorCard);
     setDraft((current) => {
       const exists = current.resource.cards.some((card) => card.id === savedCard.id);
       const cards = exists
         ? current.resource.cards.map((card) => card.id === savedCard.id ? savedCard : card)
         : [...current.resource.cards, savedCard];
-      const previewText = current.resource.previewText.trim()
-        ? current.resource.previewText
-        : buildResourcePreviewFromCards(cards);
-      return {
+      // The Recipe preview is suggested from the items when the first is saved,
+      // and follows them while it still says what was suggested (recipe audit S6).
+      return followSuggestedRecipePreview(current, {
         ...current,
-        resource: { ...current.resource, cardAuthoringMode: 'cards', cards, previewText },
-      };
+        resource: { ...current.resource, cardAuthoringMode: 'cards', cards },
+      }, selectedGeneration);
     });
     clearResourceEditor();
   };
@@ -3410,6 +3637,23 @@ function NewPostComposer() {
 
   const submitPost = async () => {
     setMessage(null);
+    // Saving "No recipe" over the recipe an edit loaded deletes it, or takes it
+    // off sale when people have it: asked first (recipe audit A-F2), and Keep
+    // recipe puts the choice back as it was.
+    const loadedRecipe = isEditMode ? postQuery.data?.post?.resourceBundleInput ?? null : null;
+    const removal = getRecipeRemovalConfirmation({
+      loadedAccessMode: loadedRecipe?.accessMode ?? null,
+      loadedItemCount: loadedRecipe ? hydratePostComposerResourceCards(loadedRecipe).length : 0,
+      buyerCount: recipeBuyerCount,
+      nextAccessMode: draft.resource.accessMode,
+    });
+    if (removal && loadedRecipe) {
+      const remove = await showConfirmDialog(removal);
+      if (!remove) {
+        updateResource({ accessMode: loadedRecipe.accessMode });
+        return;
+      }
+    }
     if (needsPublicIdentity) {
       setIsSavingIdentity(true);
       try {
@@ -3598,15 +3842,13 @@ function NewPostComposer() {
             selectedGeneration={selectedGeneration}
             isTemplateBacked={isTemplateBacked}
             isEditMode={isEditMode}
-            resourceEditingLocked={hasPaidOrders}
+            buyerCount={recipeBuyerCount}
             packageStatus={packageStatus}
             publishValidation={stepTwoValidation}
             onResourceChange={updateResource}
             onCreationPackageChange={updateCreationPackage}
             onTogglePromptResource={togglePromptResource}
-            onAddResource={() => {
-              if (!hasPaidOrders) setResourceSheetMode('type');
-            }}
+            onAddResource={() => setResourceSheetMode('type')}
             onEditResource={openResourceCard}
             onRemoveResource={removeResourceCard}
             onEditDetails={() => setComposerStep('details')}
@@ -3633,6 +3875,7 @@ function NewPostComposer() {
       <ResourceComposerSheet
         mode={resourceSheetMode}
         card={editingResource}
+        touched={resourceEditorTouched}
         mediaItems={draft.mediaItems}
         bottomInset={bottomInset}
         isUploading={isPickingResourceFile}
@@ -3643,7 +3886,9 @@ function NewPostComposer() {
         onSave={saveResourceEditor}
         onChooseType={startResourceCard}
         onChange={updateResourceEditorCard}
-        onPickFile={() => void chooseResourceFile()}
+        onTouchField={touchResourceEditorField}
+        onPickFile={() => void chooseResourceFiles('files')}
+        onPickPhotos={() => void chooseResourceFiles('photos')}
         onRetryUpload={retryResourceFileUpload}
         onCancelUpload={cancelResourceFileUpload}
         onRemoveAttachment={(attachmentId) => {
@@ -4942,16 +5187,15 @@ function MiniAction({
 function validateCurrentDraft(
   draft: PostComposerDraft,
   selectedGeneration: GenerationListItem | null,
+  isEditMode: boolean,
   skipGenerationSelection = false,
-  preserveSoldResourceBundle = false,
   options: PostComposerValidationOptions = {},
 ) {
-  const result = validatePostComposerDraft(preserveSoldResourceBundle
-    ? {
-        ...draft,
-        resource: { ...draft.resource, accessMode: 'none' },
-      }
-    : draft, { ...options, hasSoldRecipe: preserveSoldResourceBundle });
+  const result = validatePostComposerDraft(draft, {
+    ...options,
+    // Only a new post's publish copies the creation's saved inputs into its recipe.
+    includesCreationReferences: !isEditMode && willAttachGenerationReferences(selectedGeneration, draft),
+  });
   if (!result.valid) return result;
   if (draft.mode === 'creation' && !selectedGeneration && !skipGenerationSelection) {
     return { valid: false, message: 'Choose a finished creation before publishing.' };
