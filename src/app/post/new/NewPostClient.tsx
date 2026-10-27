@@ -98,6 +98,7 @@ import {
 } from '@/lib/post-composer-resource-cards';
 import ComposerMediaLightbox, { getComposerMediaLabel } from './ComposerMediaLightbox';
 import ResourceCardEditorDialog from './ResourceCardEditorDialog';
+import RecipeAccessCards from './RecipeAccessCards';
 import ResourceCardsSection from './ResourceCardsSection';
 import CreatableCombobox, { type CreatableComboboxOption } from './CreatableCombobox';
 import type { EditablePostDraft } from './post-editor-types';
@@ -770,6 +771,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // Folded into one row that sums it up, as the app's.
   const [isMadeWithOpen, setIsMadeWithOpen] = useState(false);
   const madeWithPanelId = useId();
+  const recipeAccessGroupName = useId();
   const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
   // Read by the creation load below, which suggests a title for the recipe
   // state at the moment the creation arrives.
@@ -3570,16 +3572,14 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                 className="rounded-3xl border border-emerald-500/15 bg-emerald-500/5 p-5 outline-none"
               >
                 <span id="resources" aria-hidden className="sr-only" />
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
+                <div>
+                  <div className="flex items-baseline gap-2">
                     <h2 className="text-lg font-semibold text-white">Recipe</h2>
-                    <p className="mt-1 text-xs text-zinc-400">
-                      Add optional reusable inputs (prompts, files, notes, or remix access) to this post. Paid inputs stay hidden until purchase.
-                    </p>
+                    <span className="text-xs font-medium text-zinc-500">Optional</span>
                   </div>
-                  <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
-                    {resourceAccessMode === 'none' ? 'No recipe' : resourceAccessMode === 'free' ? 'Free recipe' : 'Paid recipe'}
-                  </div>
+                  <p className="mt-1 text-xs text-zinc-400">
+                    Share reusable prompts, files, links, or guidance for free or at a token price.
+                  </p>
                 </div>
 
                 {isGeneratedPaywallIntent ? (
@@ -3611,19 +3611,21 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     This template result shares final media only. Its private recipe remains protected.
                   </div>
                 ) : (
-                <label className="mt-4 flex items-center gap-3 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={resourceAccessMode !== 'none'}
+                  <RecipeAccessCards
+                    name={recipeAccessGroupName}
+                    value={resourceAccessMode}
                     disabled={isResourceEditingLocked}
-                    onChange={(e) => {
-                      changeResourceAccessMode(e.target.checked ? 'free' : 'none');
+                    onChange={(nextMode) => {
+                      changeResourceAccessMode(nextMode);
+                      if (nextMode !== 'none') {
+                        trackProductEvent('recipe_access_mode_selected', {
+                          access_mode: nextMode,
+                          entry_surface: entrySurface ?? 'direct',
+                        });
+                      }
                       resetFeedback();
                     }}
-                    className="h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50"
                   />
-                  <span className="text-sm font-semibold text-white">Add a reusable recipe</span>
-                </label>
                 )}
 
                 {isResourceEditingLocked ? (
@@ -3662,88 +3664,51 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                   </div>
                 ) : resourceAccessMode !== 'none' ? (
                   <div className="mt-5 space-y-5">
-                    <div className="rounded-[24px] border border-white/8 bg-black/25 p-4 space-y-4">
-                      <div className="flex flex-wrap items-center gap-4 sm:justify-between">
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Access Mode:</span>
-                          <div className="inline-flex rounded-full border border-white/10 bg-black/30 p-1">
-                            {([
-                              { value: 'free', label: 'Free' },
-                              { value: 'paid', label: 'Paid' },
-                            ] as const).map((mode) => {
-                              const active = (resourceAccessMode === 'paid' ? 'paid' : 'free') === mode.value;
-                              return (
-                                <button
-                                  key={mode.value}
-                                  type="button"
-                                  onClick={() => {
-                                    changeResourceAccessMode(mode.value);
-                                    trackProductEvent('recipe_access_mode_selected', {
-                                      access_mode: mode.value,
-                                      entry_surface: entrySurface ?? 'direct',
-                                    });
-                                    resetFeedback();
-                                  }}
-                                  className={`rounded-full px-4 py-1 text-xs font-semibold transition ${
-                                    active
-                                      ? 'bg-emerald-300 text-emerald-950'
-                                      : 'text-zinc-300 hover:text-white'
-                                  }`}
-                                >
-                                  {mode.label}
-                                </button>
-                              );
-                            })}
+                    {resourceAccessMode === 'paid' ? (
+                      <div className="rounded-[24px] border border-white/8 bg-black/25 p-4 space-y-4">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price:</span>
+                          <div className="relative inline-flex items-center">
+                            <input
+                              ref={priceInputRef}
+                              type="number"
+                              inputMode="numeric"
+                              min={POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS}
+                              step={POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}
+                              aria-label="Price in tokens"
+                              placeholder={String(DEFAULT_PRICE_TOKENS)}
+                              value={resourcePriceTokens}
+                              onChange={(event) => {
+                                setResourcePriceTokens(event.target.value);
+                                resetFeedback();
+                              }}
+                              className="w-24 rounded-full border border-white/10 bg-white/[0.03] pl-3 pr-14 py-1 text-center text-xs font-semibold text-white outline-none focus:border-emerald-300/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            />
+                            <span className="pointer-events-none absolute right-3 text-xs text-zinc-500">tokens</span>
                           </div>
+                          <span className="text-xs text-emerald-200">
+                            You earn ~{creatorEarningsTokens} tokens
+                          </span>
                         </div>
 
-                        {resourceAccessMode === 'paid' ? (
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                            <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price:</span>
-                            <div className="relative inline-flex items-center">
-                              <input
-                                ref={priceInputRef}
-                                type="number"
-                                inputMode="numeric"
-                                min={POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS}
-                                step={POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}
-                                aria-label="Price in tokens"
-                                placeholder={String(DEFAULT_PRICE_TOKENS)}
-                                value={resourcePriceTokens}
-                                onChange={(event) => {
-                                  setResourcePriceTokens(event.target.value);
-                                  resetFeedback();
-                                }}
-                                className="w-24 rounded-full border border-white/10 bg-white/[0.03] pl-3 pr-14 py-1 text-center text-xs font-semibold text-white outline-none focus:border-emerald-300/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                              />
-                              <span className="pointer-events-none absolute right-3 text-xs text-zinc-500">tokens</span>
-                            </div>
-                            <span className="text-xs text-emerald-200">
-                              You earn ~{creatorEarningsTokens} tokens
-                            </span>
-                          </div>
-                        ) : null}
+                        <div className="rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3 text-xs leading-5 text-zinc-400">
+                          Buyers see the full price before payment, and you keep 85% of it. Before purchase,
+                          your public summary, package preview, and the resource titles below are visible.
+                          {Number.isFinite(parsedResourcePriceTokens)
+                            && parsedResourcePriceTokens > 0
+                            && parsedResourcePriceTokens < POST_RESOURCE_WEB_CASH_MIN_TOKENS ? (
+                              <>
+                                {' '}Under {POST_RESOURCE_WEB_CASH_MIN_TOKENS} tokens, buyers unlock with
+                                credits rather than a card checkout.
+                              </>
+                            ) : null}
+                        </div>
                       </div>
-
-                      <div className="rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3 text-xs leading-5 text-zinc-400">
-                        {resourceAccessMode === 'paid' ? (
-                          <>
-                            Buyers see the full price before payment, and you keep 85% of it. Before purchase,
-                            your public summary, package preview, and the resource titles below are visible.
-                            {Number.isFinite(parsedResourcePriceTokens)
-                              && parsedResourcePriceTokens > 0
-                              && parsedResourcePriceTokens < POST_RESOURCE_WEB_CASH_MIN_TOKENS ? (
-                                <>
-                                  {' '}Under {POST_RESOURCE_WEB_CASH_MIN_TOKENS} tokens, buyers unlock with
-                                  credits rather than a card checkout.
-                                </>
-                              ) : null}
-                          </>
-                        ) : (
-                          <>People can add a free recipe to their library with one click.</>
-                        )}
-                      </div>
-                    </div>
+                    ) : (
+                      <p className="text-xs leading-5 text-zinc-400">
+                        People can add a free recipe to their library with one click.
+                      </p>
+                    )}
 
                     {canOfferCreationResources ? (
                       <div role="group" aria-labelledby="from-this-creation-label" className="rounded-[24px] border border-white/8 bg-black/25 p-4 space-y-3">

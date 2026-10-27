@@ -89,12 +89,15 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
     await title.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath('suggested-title.png') });
 
-    await page.getByRole('checkbox', { name: /add a reusable recipe/i }).check();
+    // The recipe cards are labels around visually hidden radios: click the card.
+    await page.getByText('Free recipe', { exact: true }).click();
+    await expect(page.getByRole('radio', { name: /free recipe/i })).toBeChecked();
     await expect(title).toHaveValue('Image recipe');
     await expect(page.getByText('Suggested. A recipe keeps your prompt off the post.')).toBeVisible();
     await title.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath('suggested-title-with-recipe.png') });
-    await page.getByRole('checkbox', { name: /add a reusable recipe/i }).uncheck();
+    await page.getByText('No recipe', { exact: true }).click();
+    await expect(page.getByRole('radio', { name: /no recipe/i })).toBeChecked();
     await expect(title).toHaveValue('Product still lit like a window display');
 
     // A ready profile is asked nothing.
