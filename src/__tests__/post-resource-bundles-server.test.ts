@@ -60,6 +60,9 @@ let orderRows: Record<string, unknown>[];
 let deletionAuditRows: Record<string, unknown>[];
 let buyerProfileRows: Array<{ id: string; username: string | null; display_name: string | null; avatar_url: string | null }>;
 let profileReadError: unknown;
+// The content revisions the hydrate path reads its `updatedAt` from.
+let revisionRows: Array<{ bundle_id: string; revision_number: number; created_at: string }>;
+let revisionReadError: unknown;
 
 // Calls through, so a test can see whether the bundle read asked posts itself.
 vi.mock('@/lib/nsfw-content-server', async (importOriginal) => {
@@ -275,6 +278,29 @@ vi.mock('@/lib/server-helpers', () => ({
         };
       }
 
+      if (table === 'post_resource_bundle_revisions') {
+        let bundleIds: unknown[] = [];
+        const query = {
+          select() { return query; },
+          in(column: string, values: unknown[]) {
+            if (column === 'bundle_id') bundleIds = values;
+            return query;
+          },
+          async order(column: string, options?: { ascending?: boolean }) {
+            if (revisionReadError) return { data: null, error: revisionReadError };
+            const rows = revisionRows
+              .filter((row) => bundleIds.includes(row.bundle_id))
+              .sort((first, second) => (
+                column === 'revision_number' && options?.ascending === false
+                  ? second.revision_number - first.revision_number
+                  : first.revision_number - second.revision_number
+              ));
+            return { data: rows, error: null };
+          },
+        };
+        return query;
+      }
+
       if (table === 'generation_input_media') {
         let generationIds: unknown[] = [];
 
@@ -457,6 +483,8 @@ describe('post resource bundle server access', () => {
     deletionAuditRows = [];
     buyerProfileRows = [];
     profileReadError = null;
+    revisionRows = [];
+    revisionReadError = null;
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -609,7 +637,7 @@ describe('post resource bundle server access', () => {
     ]);
   });
 
-  it('does not expose remix inputs when the bundle owner disabled remixing', async () => {
+  it('does not expose remix inputs to someone who has not unlocked a switch-off recipe', async () => {
     bundleRow = {
       ...(bundleRow as BundleRow),
       access_mode: 'free',
@@ -729,19 +757,150 @@ describe('post resource bundle server access', () => {
     ]));
   });
 
-  it('keeps references out of bundles whose creator disabled remixing', async () => {
+  // Recipe audit H1 (2026-10-27): a creation post's published recipe includes
+  // its Remix whatever its stored switch says, so every read reports it as a
+  // remix-included recipe and its buyers get what such a recipe always gave.
+  describe('a published creation recipe whose stored remix switch is off', () => {
+    it('reads as remix-included, with Remix locked, for someone who has not unlocked it', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      // allow_remix stays false from the fixture.
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+      expect(detail?.viewerCanAccess).toBe(false);
+      expect(detail?.allowRemix).toBe(true);
+      expect(detail?.remixCapability).toBe('unlock_required');
+      expect(detail?.resourceKinds).toContain('remix');
+      expect(detail?.lockedPreview.hasRemix).toBe(true);
+    });
+
+    // The creation's saved inputs can be personal (a selfie used as a
+    // reference), and only the creator's stored switch ever offered them, so
+    // the Remix that now comes with every recipe hands them to nobody new
+    // (main session, 2026-10-27): what gives access is normalised, what hands
+    // over inputs keys on the stored `allow_remix`.
+    it('lets whoever unlocked it remix, without handing them the creation’s inputs', async () => {
+      viewerHasPurchased = true;
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+      expect(detail?.viewerCanAccess).toBe(true);
+      expect(detail?.remixCapability).toBe('public');
+      expect(detail?.allowRemix).toBe(true);
+      // The stored payload says what the creator chose.
+      expect(detail?.resources?.allowRemix).toBe(false);
+      expect(detail?.resources?.items?.some(
+        (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+      )).toBe(false);
+    });
+
+    it('restores none of the creation’s inputs into the remix of whoever unlocked it', async () => {
+      viewerHasPurchased = true;
+      const { loadGenerationRecipeRemixInputMediaByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const media = await loadGenerationRecipeRemixInputMediaByPostId({
+        postId: 'post-1',
+        generationId: 'gen-1',
+        viewerUserId: 'viewer-1',
+      });
+
+      expect(media).toEqual([]);
+    });
+
+    // The editor round-trips `resources`, so it must hold the stored switch:
+    // a re-save of an old recipe never turns the creator's inputs on.
+    it('hands its owner the stored switch, while reporting the Remix that comes with it', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'owner-1' });
+
+      expect(detail?.viewerIsOwner).toBe(true);
+      expect(detail?.allowRemix).toBe(true);
+      expect(detail?.resourceKinds).toContain('remix');
+      expect(detail?.resources?.allowRemix).toBe(false);
+      expect(detail?.resources?.items?.some(
+        (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+      )).toBe(false);
+    });
+
+    it('reports a recipe that is no longer published as it is stored', async () => {
+      bundleRow = { ...(bundleRow as BundleRow), status: 'draft' as BundleRow['status'] };
+      viewerHasPurchased = true;
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+      expect(detail?.allowRemix).toBe(false);
+      expect(detail?.resourceKinds).not.toContain('remix');
+    });
+
+    it('leaves an upload post’s recipe as it is stored', async () => {
+      postRow = { ...(postRow as Record<string, unknown>), generation_id: null, source_kind: 'external' };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+      expect(detail?.allowRemix).toBe(false);
+      expect(detail?.resourceKinds).not.toContain('remix');
+    });
+  });
+
+  // Recipe audit S-F8: "Include creation references" stores copies of the
+  // creation's inputs as `reference-<input id>` items, and a remix-included
+  // recipe merged the same inputs again at read time.
+  it('does not list a creation reference twice when the recipe stores a copy of it', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      allow_remix: true,
+      resource_items: [
+        { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Public prompt text' },
+        {
+          id: 'reference-input-1',
+          type: 'reference_image',
+          title: 'Image input',
+          storagePath: 'owner-1/generation-references/gen-1/input.png',
+          contentType: 'image/png',
+        },
+      ],
+    };
     viewerHasPurchased = true;
     const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
 
-    // allow_remix stays false from the fixture.
-    const detail = await getPostResourceBundleDetailByPostId('post-1', {
-      viewerUserId: 'viewer-1',
+    const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+    const references = (detail?.resources?.items ?? []).filter((item) => item.type === 'reference_image');
+    expect(references.map((item) => item.storagePath)).toEqual([
+      'owner-1/generation-references/gen-1/input.png',
+    ]);
+  });
+
+  // Recipe audit B-F4: "Updated <date>" moved with every sale and free open.
+  describe('the date a recipe was updated', () => {
+    it('is the time of its latest content revision, not of its last sale', async () => {
+      bundleRow = { ...(bundleRow as BundleRow), updated_at: '2026-10-27T09:00:00.000Z' };
+      revisionRows = [
+        { bundle_id: 'bundle-1', revision_number: 1, created_at: '2026-06-05T00:00:00.000Z' },
+        { bundle_id: 'bundle-1', revision_number: 2, created_at: '2026-08-01T12:00:00.000Z' },
+        { bundle_id: 'other-bundle', revision_number: 7, created_at: '2026-10-26T00:00:00.000Z' },
+      ];
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.updatedAt).toBe('2026-08-01T12:00:00.000Z');
+      expect(detail?.lockedPreview.updatedAt).toBe('2026-08-01T12:00:00.000Z');
     });
 
-    expect(detail?.viewerCanAccess).toBe(true);
-    expect(detail?.resources?.items?.some(
-      (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
-    )).toBe(false);
+    it('falls back to the row’s own time when no revision can be read', async () => {
+      bundleRow = { ...(bundleRow as BundleRow), updated_at: '2026-10-27T09:00:00.000Z' };
+      revisionReadError = { code: '57014', message: 'canceling statement due to statement timeout' };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.updatedAt).toBe('2026-10-27T09:00:00.000Z');
+    });
   });
 
   it('refuses to attach references from a generation the post creator does not own', async () => {

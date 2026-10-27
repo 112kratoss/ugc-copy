@@ -294,9 +294,68 @@ describe('resolveRemixAccess', () => {
     expect(stranger).toEqual({ allowed: false, reason: 'unlock_required' });
   });
 
+  // Recipe audit H1 (2026-10-27): a recipe whose stored remix switch is off
+  // used to leave Remix public, and remix-source handed anyone the creation's
+  // prompt and settings, the very thing the recipe sold. A creation post's
+  // published recipe now includes its Remix, whatever the switch says.
+  describe('a published recipe whose stored remix switch is off', () => {
+    const SWITCH_OFF_RECIPE = { ...REMIX_RECIPE, allow_remix: false };
+
+    it.each([
+      ['paid'],
+      ['free'],
+    ])('asks someone who has not unlocked a %s recipe to unlock it', async (accessMode) => {
+      const { client } = createClient({
+        tables: { post_resource_bundles: [{ ...SWITCH_OFF_RECIPE, access_mode: accessMode }] },
+      });
+
+      const decision = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'viewer-1',
+        generation: GENERATION,
+        dependencies: notBlocked(),
+      });
+
+      expect(decision).toEqual({ allowed: false, reason: 'unlock_required' });
+    });
+
+    // Who may remix is normalised; the creation's inputs still go only where
+    // the creator's stored switch offered them (`recipeEntitled`).
+    it('opens to the viewer who unlocked it, without the creation’s inputs, and to the owner', async () => {
+      const { client } = createClient({
+        tables: {
+          post_resource_bundles: [SWITCH_OFF_RECIPE],
+          post_resource_bundle_purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'buyer-1' }],
+        },
+      });
+
+      const buyer = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'buyer-1',
+        generation: { ...GENERATION, share_input_media_for_remix: false },
+        dependencies: notBlocked(),
+      });
+      const owner = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'creator-1',
+        generation: GENERATION,
+        dependencies: notBlocked(),
+      });
+
+      expect(buyer).toEqual({
+        allowed: true,
+        basis: 'unlocked',
+        post: EXPOSED_POST,
+        includeSharedInputMedia: false,
+        recipeEntitled: false,
+      });
+      expect(owner).toMatchObject({ allowed: true, basis: 'owner' });
+    });
+  });
+
   it.each([
-    ['a recipe that does not sell remixing', { ...REMIX_RECIPE, allow_remix: false }],
-    ['a remix-enabled recipe that is not published', { ...REMIX_RECIPE, status: 'draft' }],
+    ['a recipe that is not published', { ...REMIX_RECIPE, status: 'draft' }],
+    ['a recipe removed after people had it', { ...REMIX_RECIPE, allow_remix: false, status: 'draft' }],
   ])('keeps remixing public for %s', async (_label, bundle) => {
     const { client } = createClient({ tables: { post_resource_bundles: [bundle] } });
 

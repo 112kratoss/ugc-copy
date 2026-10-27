@@ -181,21 +181,21 @@ update public.posts
 set review_status = 'hidden'
 where id = '21000000-0000-4000-8000-000000000003'::uuid;
 
--- Sold content is frozen: the rewrite is refused, so a paid unlock can never
--- dangle a newer version under its buyer.
-select throws_ok(
+-- A sold recipe can be corrected (20261027172920): the edit is a new
+-- revision, and the buyer's library says a newer version exists beside the
+-- one they unlocked.
+select lives_ok(
   $$update public.post_resource_bundles
     set prompt_text = 'Rewritten prompt'
     where id = '31000000-0000-4000-8000-000000000001'::uuid$$,
-  'RESOURCE_BUNDLE_LOCKED: purchased package content cannot be changed',
-  'sold bundle content cannot change under the buyer'
+  'a sold recipe can be corrected'
 );
 
 select ok(
-  not (select has_newer_revision from public.list_viewer_post_resource_unlocks(
+  (select has_newer_revision from public.list_viewer_post_resource_unlocks(
     '12000000-0000-4000-8000-000000000002'::uuid, 24, 0)
    where post_id = '21000000-0000-4000-8000-000000000001'::uuid),
-  'a frozen purchase never reports a newer version'
+  'the buyer''s library reports the newer version'
 );
 
 select is(

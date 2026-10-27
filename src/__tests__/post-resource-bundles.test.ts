@@ -13,6 +13,7 @@ import {
   normalizePostResourceItems,
   normalizePostResourceSections,
   resolvePostRemixCapability,
+  resolveRecipeAllowRemix,
   sanitizePostResourceBundleLockedPreview,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
@@ -213,7 +214,8 @@ describe('post resource bundle validation', () => {
     expect(items[1]?.sectionId).toBeNull();
     expect(preview.sectionCount).toBe(2);
     expect(preview.sectionPreviews?.map((section) => section.title)).toEqual(['Hook', 'Section 2']);
-    expect(formatPostResourceBundleCountSummary(preview)).toBe('2 sections, 1 prompt, 1 reference image');
+    // Buyers never meet "sections" (B-F16): the count names what they get.
+    expect(formatPostResourceBundleCountSummary(preview)).toBe('1 prompt, 1 reference image');
   });
 
   it('removes paid input names and section metadata from locked previews', () => {
@@ -537,6 +539,97 @@ describe('post resource bundle validation', () => {
       capability: 'unsupported',
       target: null,
     });
+  });
+});
+
+// Recipe audit H1 (2026-10-27): a creation post's published recipe includes
+// its Remix. Whoever has not unlocked the recipe unlocks it to remix, whatever
+// the stored "Allow direct remix" switch says, so the creation's prompt and
+// settings never reach someone who has not unlocked a recipe that sells them.
+describe('a creation post’s recipe includes its Remix', () => {
+  const creationPost = {
+    generationId: 'generation-1',
+    postFormat: 'media',
+    category: 'image',
+    sourceKind: 'magicbooklet',
+  };
+  const promptItems = normalizePostResourceItems([{
+    type: 'prompt',
+    title: 'Exact generation prompt',
+    textContent: 'A neon portrait with rim light.',
+  }]);
+
+  it.each([
+    ['free or paid, switch off', false],
+    ['switch on', true],
+  ])('asks someone who has not unlocked it to unlock first (%s)', (_label, allowRemix) => {
+    expect(resolvePostRemixCapability({
+      ...creationPost,
+      resourceBundle: { viewerCanAccess: false, allowRemix, items: promptItems },
+    })).toEqual({ capability: 'unlock_required', target: 'image' });
+  });
+
+  it('opens Remix to the owner and to whoever unlocked it', () => {
+    expect(resolvePostRemixCapability({
+      ...creationPost,
+      resourceBundle: { viewerCanAccess: true, allowRemix: false, items: promptItems },
+    })).toEqual({ capability: 'public', target: 'image' });
+  });
+
+  it('leaves a creation post without a recipe, an upload and a template result as they were', () => {
+    expect(resolvePostRemixCapability({ ...creationPost, resourceBundle: null }))
+      .toEqual({ capability: 'public', target: 'image' });
+    expect(resolvePostRemixCapability({
+      generationId: null,
+      postFormat: 'media',
+      category: 'image',
+      sourceKind: 'external',
+      resourceBundle: { viewerCanAccess: false, allowRemix: false, items: promptItems },
+    })).toEqual({ capability: 'unsupported', target: null });
+    expect(resolvePostRemixCapability({
+      ...creationPost,
+      templateResult: true,
+      resourceBundle: { viewerCanAccess: false, allowRemix: false, items: promptItems },
+    })).toEqual({ capability: 'none', target: null });
+  });
+
+  it('reads a published creation recipe as remix-included, and nothing else', () => {
+    const published = { storedAllowRemix: false, status: 'published', generationId: 'generation-1' };
+
+    expect(resolveRecipeAllowRemix(published)).toBe(true);
+    expect(resolveRecipeAllowRemix({ ...published, storedAllowRemix: null })).toBe(true);
+    // A draft or retired recipe sells nothing, so it gates nothing.
+    expect(resolveRecipeAllowRemix({ ...published, status: 'draft' })).toBe(false);
+    expect(resolveRecipeAllowRemix({ ...published, generationId: null })).toBe(false);
+    expect(resolveRecipeAllowRemix({ ...published, templateResult: true })).toBe(false);
+    // What is stored on is still on.
+    expect(resolveRecipeAllowRemix({ ...published, status: 'draft', storedAllowRemix: true })).toBe(true);
+  });
+
+  it('lists Remix among a remix-included recipe’s kinds, beside its items', () => {
+    expect(buildPostResourceBundleLockedPreview({ items: promptItems, allowRemix: true }).resourceKinds)
+      .toEqual(['prompt', 'remix']);
+    expect(buildPostResourceBundleLockedPreview({ items: promptItems, allowRemix: false }).resourceKinds)
+      .toEqual(['prompt']);
+  });
+});
+
+describe('buyer-facing recipe counts', () => {
+  it('counts items in plain words, without sections', () => {
+    const items = normalizePostResourceItems([
+      { type: 'prompt', title: 'Prompt', textContent: 'A neon portrait.' },
+      { type: 'settings', title: 'Model settings', textContent: 'Seed 42' },
+      { type: 'source_file', title: 'Project file', storagePath: 'user-1/project.zip' },
+      { type: 'source_file', title: 'Brushes', storagePath: 'user-1/brushes.zip' },
+      { type: 'external_link', title: 'Tutorial', externalUrl: 'https://example.com/tutorial' },
+    ]);
+    const preview = buildPostResourceBundleLockedPreview({
+      sections: normalizePostResourceSections([{ id: 'one', title: 'One' }, { id: 'two', title: 'Two' }]),
+      items,
+    });
+
+    expect(formatPostResourceBundleCountSummary(preview)).toBe('1 prompt, 2 files, settings, 1 link');
+    expect(formatPostResourceItemCountSummary({ settings: 2, source_file: 1 })).toBe('1 file, settings');
   });
 });
 

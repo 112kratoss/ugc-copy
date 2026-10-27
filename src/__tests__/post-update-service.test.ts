@@ -700,9 +700,10 @@ describe('updateOwnerPostForRoute', () => {
     expect(persistedItems.some((item) => item.storagePath)).toBe(false);
   });
 
-  // Both composers already refuse to edit a sold package, but that is a rule
-  // about what buyers paid for, so a stale client or a direct API call must not
-  // be able to rewrite, reprice, or retire it either.
+  // Owner decision D1 (recipe audit, 2026-10-27): a sold recipe can be
+  // corrected. Each save is a new revision; buyers see the latest and keep the
+  // version they unlocked, and removing it retires it (the database's
+  // retire-instead-of-delete), so the route no longer refuses any of it.
   describe('sold resource bundles', () => {
     const SOLD_BUNDLE = { access_mode: 'paid', status: 'published', sales_count: 3 };
 
@@ -726,8 +727,25 @@ describe('updateOwnerPostForRoute', () => {
       } satisfies PostUpdateDependencies;
     }
 
-    it('rejects a bundle payload once the package has sales', async () => {
-      const { client } = createSupabaseMock({ bundle: SOLD_BUNDLE });
+    const CORRECTED_RECIPE = {
+      accessMode: 'paid' as const,
+      summary: 'A reusable launch prompt for a proof-led product hook.',
+      previewText: 'Includes the prompt structure and CTA guidance buyers can reuse.',
+      priceUsdCents: 500,
+      resources: {
+        promptText: 'Use a before and after hook with one product proof frame and a short CTA.',
+        attachments: [],
+        allowRemix: false,
+      },
+    };
+
+    it.each([
+      ['has paid sales', SOLD_BUNDLE],
+      // Recipe audit H3: a free recipe switched to paid after free unlocks
+      // locked itself "as sold" with nobody having paid.
+      ['was unlocked only while it was free', { access_mode: 'paid', status: 'published', sales_count: 0, free_unlock_count: 2 }],
+    ])('saves a correction to a recipe that %s, content, price and all', async (_label, bundle) => {
+      const { client } = createSupabaseMock({ bundle });
       const dependencies = createDependencies();
 
       const result = await updateOwnerPostForRoute({
@@ -738,65 +756,32 @@ describe('updateOwnerPostForRoute', () => {
           title: 'Helpful launch proof',
           body: 'A draft post with an unlock package.',
           visibility: 'private',
-          resourceBundle: {
-            accessMode: 'paid',
-            summary: 'A hollowed-out package.',
-            previewText: 'Nothing like what buyers paid for.',
-            priceUsdCents: 100,
-            resources: { promptText: 'Gutted.', attachments: [], allowRemix: false },
-          },
+          resourceBundle: CORRECTED_RECIPE,
         },
         dependencies,
       });
 
-      expect(result).toEqual({
-        ok: false,
-        status: 409,
-        body: {
-          error: 'People have already purchased this package, so its contents, price, and access mode are locked.',
-          code: 'RESOURCE_BUNDLE_LOCKED',
-        },
-      });
-      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
-      expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hasBundlePayload: true,
+          bundle: expect.objectContaining({ accessMode: 'paid', priceUsdCents: 500 }),
+        }),
+      );
     });
 
-    // Free unlocks left sales_count on 2026-10-17 (decision 6); a paid recipe
-    // whose unlocks came while it was free stays locked, as it was before.
-    it('rejects a bundle payload when its only unlocks were free ones', async () => {
-      const { client } = createSupabaseMock({
-        bundle: { access_mode: 'paid', status: 'published', sales_count: 0, free_unlock_count: 2 },
-      });
-      const dependencies = createDependencies();
-
-      const result = await updateOwnerPostForRoute({
-        adminSupabase: client,
-        ownerUserId: 'user-1',
-        postId: 'post-1',
-        body: {
-          title: 'Helpful launch proof',
-          body: 'A draft post with an unlock package.',
-          visibility: 'private',
-          resourceBundle: {
-            accessMode: 'paid',
-            summary: 'A hollowed-out package.',
-            previewText: 'Nothing like what buyers paid for.',
-            priceUsdCents: 100,
-            resources: { promptText: 'Gutted.', attachments: [], allowRemix: false },
-          },
-        },
-        dependencies,
-      });
-
-      expect(result).toMatchObject({ ok: false, status: 409, body: { code: 'RESOURCE_BUNDLE_LOCKED' } });
-      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
-    });
-
-    // Without this the delete is caught by a trigger that retires the bundle
-    // instead, so the storefront listing disappears with no error at all.
-    it('rejects retiring a sold package through an accessMode none payload', async () => {
+    // The database retires a recipe that anyone has instead of deleting it
+    // (delisted, `retired_at` set, buyers keep it), so the route passes the
+    // removal through rather than refusing it.
+    it('hands the removal of a sold recipe to the database, which retires it', async () => {
       const { client } = createSupabaseMock({ bundle: SOLD_BUNDLE });
       const dependencies = createDependencies();
+      dependencies.updatePostWithResourceBundleAtomically.mockResolvedValueOnce({
+        postId: 'post-1',
+        visibility: 'private',
+        bundleId: 'bundle-1',
+        bundleStatus: 'draft',
+      });
 
       const result = await updateOwnerPostForRoute({
         adminSupabase: client,
@@ -806,8 +791,43 @@ describe('updateOwnerPostForRoute', () => {
         dependencies,
       });
 
-      expect(result).toMatchObject({ ok: false, status: 409, body: { code: 'RESOURCE_BUNDLE_LOCKED' } });
-      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(
+        expect.objectContaining({ hasBundlePayload: true, bundle: { accessMode: 'none' } }),
+      );
+    });
+
+    // A retired recipe stays retired through a visibility change (the
+    // exposure trigger skips it), so it is not the post's recipe any more: its
+    // stored text is neither graded nor safety-checked for the republish.
+    it('makes a post public without grading the recipe it retired', async () => {
+      const { client } = createSupabaseMock({
+        bundle: { ...SOLD_BUNDLE, status: 'draft', retired_at: '2026-10-27T10:00:00.000Z' },
+      });
+      const dependencies = createDependencies();
+      // The stored text would fail the listing check, were it graded.
+      dependencies.getMarketplaceQualityErrorForPostBundle.mockImplementation(async ({ bundle }) => (
+        bundle ? 'Add a recipe preview of at least 18 characters before listing it.' : null
+      ));
+      dependencies.updatePostWithResourceBundleAtomically.mockResolvedValueOnce({
+        postId: 'post-1',
+        visibility: 'public',
+        bundleId: 'bundle-1',
+        bundleStatus: 'draft',
+      });
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'public' },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.getMarketplaceQualityErrorForPostBundle).toHaveBeenCalledWith(
+        expect.objectContaining({ bundle: null }),
+      );
     });
 
     // The guard freezes the package, not the post: everything else stays editable.

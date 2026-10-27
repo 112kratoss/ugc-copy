@@ -1776,6 +1776,8 @@
             },
             "retiredAt": null
           },
+          "hasPaidOrders": false,
+          "resourceBundleBuyerCount": 0,
           "archivedAt": null,
           "tombstonedAt": null,
           "generationId": "generation-1",
@@ -2048,6 +2050,11 @@
         "postId": "post-1",
         "message": "Unlocked."
       },
+      "requestVariants": {
+        "confirmedPrice": {
+          "expectedPriceCredits": 900
+        }
+      },
       "errors": {
         "insufficientCredits": {
           "status": 402,
@@ -2057,6 +2064,15 @@
             "creditCost": 900,
             "remainingCredits": 1200,
             "marketplaceSpendableCredits": 0
+          }
+        },
+        "priceChanged": {
+          "status": 409,
+          "response": {
+            "success": false,
+            "code": "RESOURCE_PRICE_CHANGED",
+            "error": "The price changed to 1,500 credits.",
+            "priceCredits": 1500
           }
         }
       }

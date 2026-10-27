@@ -42,6 +42,7 @@ import {
   normalizePostResourceSections,
   POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
   resolvePostRemixCapability,
+  resolveRecipeAllowRemix,
   sanitizePostResourceBundleLockedPreview,
   validatePostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
@@ -864,10 +865,13 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
     viewerUserId: params.viewerUserId,
     adminSupabase,
   });
+  // The creator's stored switch (`resources.allowRemix`), not the Remix every
+  // published creation recipe comes with: unlocking one lets a buyer remix it,
+  // and hands over the creation's inputs only where the creator opted in.
   if (
     !entitlement
     || !entitlement.viewerCanAccess
-    || !entitlement.allowRemix
+    || entitlement.resources?.allowRemix !== true
     || entitlement.post?.generationId !== params.generationId
   ) {
     return [];
@@ -917,6 +921,48 @@ export async function getPostResourceBundlePriceQuote(
   countryCode?: string | null
 ): Promise<MarketplacePriceQuote> {
   return buildPriceQuote(priceUsdCents, countryCode);
+}
+
+/**
+ * When each recipe's content last changed: its latest revision's time. A
+ * revision is minted only when buyer-visible content changes
+ * (`capture_post_resource_bundle_revision`), while the row's `updated_at`
+ * also moves with every sale, free open and status sync, so "Updated <date>"
+ * read from the row said a recipe nobody had touched in months was updated
+ * today (recipe audit B-F4). One read per batch; a bundle with no revision, or
+ * a read that fails, falls back to the row's own time.
+ */
+async function loadLatestContentRevisionTimes(bundleIds: string[]): Promise<Map<string, string>> {
+  const uniqueBundleIds = Array.from(new Set(bundleIds.filter(Boolean)));
+  if (uniqueBundleIds.length === 0) {
+    return new Map();
+  }
+
+  try {
+    const { data, error } = await createServiceClient()
+      .from('post_resource_bundle_revisions')
+      .select('bundle_id, revision_number, created_at')
+      .in('bundle_id', uniqueBundleIds)
+      .order('revision_number', { ascending: false });
+
+    if (error) {
+      if (!isMissingPostResourceBundlesSchemaError(error)) {
+        logBackendError('post_resource_revision_times_load_failed', { error: error });
+      }
+      return new Map();
+    }
+
+    const latest = new Map<string, string>();
+    for (const row of (data ?? []) as Array<{ bundle_id: string | null; created_at: string | null }>) {
+      if (row.bundle_id && row.created_at && !latest.has(row.bundle_id)) {
+        latest.set(row.bundle_id, row.created_at);
+      }
+    }
+    return latest;
+  } catch (error) {
+    logBackendError('post_resource_revision_times_load_failed', { error: error });
+    return new Map();
+  }
 }
 
 async function loadProfileMap(userIds: string[]) {
@@ -1199,19 +1245,29 @@ async function hydrateBundleRows(
     const nsfwIds = await loadNsfwPostIds(createServiceClient(), rows.map((row) => row.post_id));
     rows = rows.filter((row) => !nsfwIds.has(row.post_id));
   }
-  const [profilesMap, postMap] = await Promise.all([
+  const [profilesMap, postMap, contentUpdatedAtMap] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
     loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews),
+    loadLatestContentRevisionTimes(rows.map((row) => row.id)),
   ]);
 
   return Promise.all(
     rows.map(async (row) => {
-      const normalizedResources = normalizeResources(row);
-      const fullLockedPreview = buildPostResourceBundleLockedPreview(normalizedResources, row.updated_at);
+      const post = postMap.get(row.post_id) ?? null;
+      // A creation post's published recipe includes its Remix, whatever its
+      // stored switch says (2026-10-27): reported as such on every read, so its
+      // kinds, chips and remix gate agree.
+      const allowRemix = resolveRecipeAllowRemix({
+        storedAllowRemix: row.allow_remix,
+        status: row.status,
+        generationId: post?.generationId ?? null,
+      });
+      const normalizedResources = { ...normalizeResources(row), allowRemix };
+      const updatedAt = contentUpdatedAtMap.get(row.id) ?? row.updated_at;
+      const fullLockedPreview = buildPostResourceBundleLockedPreview(normalizedResources, updatedAt);
       const lockedPreview = scope === 'owner'
         ? fullLockedPreview
         : sanitizePostResourceBundleLockedPreview(fullLockedPreview) ?? fullLockedPreview;
-      const post = postMap.get(row.post_id) ?? null;
       const remix = resolvePostRemixCapability({
         generationId: post?.generationId ?? null,
         postFormat: post?.postFormat ?? null,
@@ -1219,7 +1275,7 @@ async function hydrateBundleRows(
         sourceKind: post?.sourceKind ?? null,
         resourceBundle: {
           viewerCanAccess: scope === 'owner',
-          allowRemix: row.allow_remix,
+          allowRemix,
           items: normalizedResources.items ?? [],
         },
       });
@@ -1236,11 +1292,11 @@ async function hydrateBundleRows(
         salesCount: row.sales_count,
         freeUnlockCount: row.free_unlock_count ?? 0,
         ...(scope === 'owner' ? { earningsUsdCents: row.earnings_usd_cents } : {}),
-        allowRemix: row.allow_remix,
+        allowRemix,
         resourceKinds: lockedPreview.resourceKinds,
         lockedPreview,
         createdAt: row.created_at,
-        updatedAt: row.updated_at,
+        updatedAt,
         seller: toSellerSummary(row.owner_user_id, profilesMap),
         post,
         priceQuote: await buildPriceQuote(row.price_usd_cents, countryCode),
@@ -1523,6 +1579,9 @@ export async function savePostResourceBundle(params: {
   const accessMode = bundle?.accessMode ?? 'none';
 
   if (accessMode === 'none') {
+    // A recipe that anyone has (a sale or a free unlock) is retired rather
+    // than deleted by the database (post_resource_bundles_retire_instead_of_delete,
+    // 20261027172920): delisted with retired_at set, and its buyers keep it.
     const { error } = await supabase
       .from('post_resource_bundles')
       .delete()
@@ -2181,6 +2240,10 @@ export async function getPostResourceBundleDetailByPostId(
   if (!hydrated || (!viewerIsOwner && !hydrated.post)) {
     return null;
   }
+  // The payload as stored, the creator's own `allowRemix` switch included:
+  // the editor round-trips it, and it alone decides whether the creation's
+  // inputs go to the people who unlock the recipe. Whether the recipe comes
+  // with its Remix is `hydrated.allowRemix` (resolveRecipeAllowRemix).
   const normalizedResources = normalizeResources(row);
 
   // What the buyer actually paid for. Later edits reach them as improvements,
@@ -2203,14 +2266,16 @@ export async function getPostResourceBundleDetailByPostId(
   // references live in generation_input_media and are surfaced here at read
   // time, as the recipe layer did before it was folded into stored bundles.
   // The gate is entitlement (viewerCanAccess covers owner, free unlock, and
-  // paid purchase) plus the creator's remix opt-in on the bundle; for
+  // paid purchase) plus the creator's stored remix opt-in on the bundle --
+  // never the Remix every published creation recipe comes with since
+  // 2026-10-27: the inputs can be personal and nobody else opted them in. For
   // non-owners the generation must also still be public, which is how a
   // moderation take-down retracts it. share_input_media_for_remix is
   // deliberately not consulted here — it governs restoring these files into a
   // viewer's own remix (/api/remix-source), not seeing them inside an unlock
   // they are entitled to. Failing to load references must degrade to the
   // bundle without them, never take the whole unlock down.
-  if (viewerCanAccess && row.allow_remix && hydrated.post?.generationId) {
+  if (viewerCanAccess && row.allow_remix === true && hydrated.post?.generationId) {
     try {
       const eligible = await loadEligibleGenerationRecipeInputMedia({
         adminSupabase,
@@ -2237,12 +2302,19 @@ export async function getPostResourceBundleDetailByPostId(
           || (viewerHasPurchased && hydrated.post?.tombstoned === true)
         ),
       );
-      if (eligible && canViewReferences && eligible.inputMedia.length > 0) {
+      // "Include creation references" already stored a copy of an input as
+      // `reference-<input id>` (buildGenerationReferenceResourceItems); listing
+      // the live input beside it showed every reference twice (S-F8).
+      const storedItemIds = new Set((normalizedResources.items ?? []).map((item) => item.id));
+      const unstoredInputMedia = (eligible?.inputMedia ?? []).filter((input, index) => (
+        !storedItemIds.has(`reference-${sanitizePathSegment(input.id, String(index + 1))}`)
+      ));
+      if (eligible && canViewReferences && unstoredInputMedia.length > 0) {
         const referenceItems = buildGenerationRecipeResourceItems({
           promptText: null,
           notesMarkdown: null,
           allowRemix: false,
-          inputMedia: eligible.inputMedia,
+          inputMedia: unstoredInputMedia,
         });
         normalizedResources.items = mergeResourceItems(
           normalizedResources.items ?? [],
@@ -2260,7 +2332,7 @@ export async function getPostResourceBundleDetailByPostId(
     sourceKind: hydrated.post?.sourceKind ?? null,
     resourceBundle: {
       viewerCanAccess,
-      allowRemix: row.allow_remix,
+      allowRemix: hydrated.allowRemix,
       items: normalizedResources.items ?? [],
     },
   });

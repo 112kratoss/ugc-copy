@@ -4,6 +4,8 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import {
   getPostResourceKinds,
+  resolveRecipeAllowRemix,
+  stripDerivedGenerationReferenceItems,
   normalizePostResourceAttachments,
   normalizePostResourceItems,
   normalizePostResourceSections,
@@ -661,7 +663,18 @@ async function toOwnerPostListItem(
   const normalizedBundleResources = bundleRow && !bundleRow.resource_kinds
     ? normalizeBundleResources(bundleRow)
     : null;
-  const resourceKinds = bundleRow?.resource_kinds ?? getPostResourceKinds(normalizedBundleResources);
+  const storedResourceKinds = bundleRow?.resource_kinds ?? getPostResourceKinds(normalizedBundleResources);
+  // A creation post's published recipe includes its Remix whatever its stored
+  // switch says (2026-10-27), which the summary RPC's kinds do not know.
+  const resourceKinds: PostResourceKind[] = bundleRow
+    && !storedResourceKinds.includes('remix')
+    && resolveRecipeAllowRemix({
+      storedAllowRemix: bundleRow.allow_remix,
+      status: bundleRow.status,
+      generationId: row.generation_id,
+    })
+    ? [...storedResourceKinds, 'remix']
+    : storedResourceKinds;
   const title =
     row.title?.trim() ||
     deriveTitleFromBody(row.body) ||
@@ -831,25 +844,35 @@ export async function getOwnerPostDetail(
     countryCode: options?.countryCode ?? null,
   });
 
+  // A recipe removed while people had it is retired: its row stays for them,
+  // but the post has no recipe, so the editor opens on "No recipe".
+  const liveBundle = bundleDetail && !bundleDetail.retiredAt ? bundleDetail : null;
+
   return {
     ...listItem,
-    resourceBundleInput: bundleDetail
-      ? {
-          accessMode: bundleDetail.accessMode,
-          summary: bundleDetail.summary,
-          previewText: bundleDetail.previewText,
-          priceUsdCents: bundleDetail.priceUsdCents,
-          resources: bundleDetail.resources,
-        }
+    // The recipe as stored: the read merges the creation's references into a
+    // recipe that includes its Remix (every published creation recipe since
+    // 2026-10-27), and every save drops them again, so they are not offered to
+    // the editor as items the creator could change.
+    resourceBundleInput: liveBundle
+      ? stripDerivedGenerationReferenceItems({
+          accessMode: liveBundle.accessMode,
+          summary: liveBundle.summary,
+          previewText: liveBundle.previewText,
+          priceUsdCents: liveBundle.priceUsdCents,
+          resources: liveBundle.resources,
+        })
       : {
           accessMode: 'none',
         },
-    // Any unlock of a paid recipe locks its editor, as it did while free
-    // unlocks were counted in salesCount.
-    hasPaidOrders: Boolean(
-      bundleDetail &&
-        bundleDetail.accessMode === 'paid' &&
-        bundleDetail.salesCount + bundleDetail.freeUnlockCount > 0
-    ),
+    // A recipe people have can be corrected since 2026-10-27 (owner decision
+    // D1), so nothing locks the editor. Kept, always false, for app builds
+    // that still read it.
+    hasPaidOrders: false,
+    // Everyone who has it, paid or free: the composers say they keep the
+    // version they got and see the changes, and confirm before a removal.
+    resourceBundleBuyerCount: liveBundle
+      ? Math.max(0, liveBundle.salesCount) + Math.max(0, liveBundle.freeUnlockCount ?? 0)
+      : 0,
   };
 }

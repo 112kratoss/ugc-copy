@@ -53,7 +53,10 @@ export type RemixAccessDecision =
       post: RemixAccessPost;
       /** The creator chose to hand their own input files to remixers. */
       includeSharedInputMedia: boolean;
-      /** The viewer bought the recipe, so its reference media is theirs to restore. */
+      /**
+       * The viewer unlocked a recipe whose creator offered its inputs (the
+       * stored `allow_remix`), so its reference media is theirs to restore.
+       */
       recipeEntitled: boolean;
     }
   | {
@@ -138,11 +141,13 @@ async function hasPurchasedBundle(
  *   right now: public, not archived, visible to moderation, and the creator's
  *   own. The generation flag alone is not trusted, because it is a copy of the
  *   post's state and a copy can lag behind the post.
- * - When a published recipe has remixing switched on (`allow_remix`), the
- *   unlock protects the original recipe as well as the files attached to it:
- *   a viewer who has not bought it gets `unlock_required`. A recipe that does
- *   not sell remixing leaves remixing public; its unlock covers only the
- *   attached resources.
+ * - A published recipe on the post includes its Remix, free or paid, whatever
+ *   its stored `allow_remix` says (2026-10-27): the unlock protects the
+ *   creation's prompt and settings as well as the items attached to it, so a
+ *   viewer who has not unlocked it gets `unlock_required`. A free recipe is
+ *   claimed by the Remix tap itself, on the clients. The creation's inputs are
+ *   another matter: they go to someone who unlocked it (`recipeEntitled`) only
+ *   where the creator's stored switch offered them, as before.
  *
  * A read that fails throws instead of allowing. The routes turn that into a
  * 500, and a blocked-state check that fails counts as blocked.
@@ -223,7 +228,7 @@ export async function resolveRemixAccess({
   }
 
   const bundle = await loadPublishedBundle(adminSupabase, post.id);
-  const viewerHasPurchased = bundle?.allow_remix === true
+  const viewerHasPurchased = bundle
     ? await hasPurchasedBundle(adminSupabase, bundle.id, viewerUserId)
     : false;
 
@@ -233,7 +238,7 @@ export async function resolveRemixAccess({
     category: post.category,
     sourceKind: post.source_kind,
     resourceBundle: bundle
-      ? { viewerCanAccess: viewerHasPurchased, allowRemix: bundle.allow_remix, items: [] }
+      ? { viewerCanAccess: viewerHasPurchased, allowRemix: true, items: [] }
       : null,
   });
 
@@ -244,12 +249,12 @@ export async function resolveRemixAccess({
     return NOT_FOUND;
   }
 
-  const unlocked = bundle?.allow_remix === true && viewerHasPurchased;
   return {
     allowed: true,
-    basis: unlocked ? 'unlocked' : 'public',
+    basis: viewerHasPurchased ? 'unlocked' : 'public',
     post,
     includeSharedInputMedia: generation.share_input_media_for_remix === true,
-    recipeEntitled: unlocked,
+    // Only the creator's stored switch hands the creation's inputs to a buyer.
+    recipeEntitled: viewerHasPurchased && bundle?.allow_remix === true,
   };
 }
