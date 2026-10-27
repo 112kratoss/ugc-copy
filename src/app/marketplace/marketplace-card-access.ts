@@ -19,8 +19,9 @@ export const NO_VIEWER_STATE: MarketplaceViewerState = { viewerUserId: null, unl
 /**
  * A card's words for one recipe and this viewer: the badge prices it in
  * credits, or says "Unlocked" for one they have and "Your recipe" for their
- * own, as every other card does (audit B-F2); the pill names the way to pay,
- * or "View recipe" once there is nothing to pay.
+ * own, as every other card does (audit B-F2). The price pill names the ways to
+ * pay, and is not drawn once there is nothing to pay (the glossary: never the
+ * price on a recipe the viewer has); the card's action then reads "View recipe".
  */
 export function getMarketplaceCardAccess(
   asset: Pick<MarketplaceResourceListItem, 'id' | 'accessMode' | 'priceUsdCents' | 'seller'> & {
@@ -33,16 +34,18 @@ export function getMarketplaceCardAccess(
   const isFree = asset.accessMode === 'free' || asset.priceUsdCents === 0;
   const priceLabel = isFree ? 'Free' : formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote.formatted);
 
+  const hasIt = isOwner || viewerHasUnlocked;
+
   return {
     isFree,
     isOwner,
     viewerHasUnlocked,
-    priceLabel,
+    priceLabel: hasIt ? null : priceLabel,
     accessLabel: getAssetAccessLabel(
       { accessMode: asset.accessMode, priceUsdCents: asset.priceUsdCents, viewerHasUnlocked },
       { isOwner },
     ),
-    unlockLabel: isOwner || viewerHasUnlocked
+    unlockLabel: hasIt
       ? 'View recipe'
       : isFree
         ? 'View free recipe'

@@ -545,9 +545,11 @@ function MarketplaceCard({
               genuinely commercial element on the card, so it is the one thing
               that has earned an accent — everything around it stays neutral so
               the price is what the eye lands on. */}
-          <div className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
-            {priceLabel}
-          </div>
+          {priceLabel ? (
+            <div className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
+              {priceLabel}
+            </div>
+          ) : null}
         </div>
 
         <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">

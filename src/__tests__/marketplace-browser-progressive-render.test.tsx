@@ -16,10 +16,11 @@ vi.mock('next/navigation', () => ({
 
 const authState = vi.hoisted(() => ({
   session: null as { access_token: string } | null,
+  user: null as { id: string } | null,
 }));
 
 vi.mock('@/components/AuthProvider', () => ({
-  useAuth: () => ({ session: authState.session }),
+  useAuth: () => ({ session: authState.session, user: authState.user }),
 }));
 
 vi.mock('next/link', () => ({
@@ -44,6 +45,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
   beforeEach(() => {
     pushMock.mockReset();
     authState.session = null;
+    authState.user = null;
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -103,6 +105,46 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     expect(within(freeCard).getByText('Free recipe')).toBeInTheDocument();
     expect(within(freeCard).getByText('Free')).toBeInTheDocument();
     expect(freeCard).not.toHaveTextContent('$0.00');
+  });
+
+  // The catalog is the same cached page for everyone; a signed-in viewer's own
+  // recipes are read apart from it, and their cards say so with no price
+  // (glossary: "Unlocked" / "Your recipe", never the price).
+  it("re-labels the signed-in viewer's unlocked and own recipes, without a price", async () => {
+    authState.session = { access_token: 'token-1' };
+    authState.user = { id: 'creator-2' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => (
+      String(input) === '/api/me/unlocked-recipes'
+        ? new Response(JSON.stringify({ success: true, bundleIds: ['bundle-1'] }))
+        : new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 })
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const page = createPage(3, false);
+    page.items[0] = {
+      ...page.items[0],
+      accessMode: 'paid',
+      priceUsdCents: 900,
+      priceQuote: { currency: 'USD', amountSubunits: 900, formatted: '$9.00', note: null },
+    };
+    page.items[1] = {
+      ...page.items[1],
+      accessMode: 'paid',
+      priceUsdCents: 300,
+      priceQuote: { currency: 'USD', amountSubunits: 300, formatted: '$3.00', note: null },
+    };
+
+    renderMarketplace(page);
+
+    const unlocked = await screen.findByRole('link', { name: 'View recipe: Unlock 1' });
+    expect(within(unlocked).getByText('Unlocked')).toBeInTheDocument();
+    expect(unlocked).not.toHaveTextContent('900 credits');
+    expect(unlocked).not.toHaveTextContent('$9.00');
+    const own = screen.getByRole('link', { name: 'View recipe: Unlock 2' });
+    expect(within(own).getByText('Your recipe')).toBeInTheDocument();
+    expect(own).not.toHaveTextContent('300 credits');
+    // Anyone else's recipe keeps its words.
+    expect(screen.getByRole('link', { name: 'View free recipe: Unlock 3' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   // A free unlock stopped counting as a sale on 2026-10-17 (decision 6).

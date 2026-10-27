@@ -465,9 +465,11 @@ function BootstrapMarketplaceCard({
               <div className="mt-1 truncate text-xs font-medium text-zinc-500">Recipe: {asset.title}</div>
             ) : null}
           </div>
-          <span className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
-            {priceLabel}
-          </span>
+          {priceLabel ? (
+            <span className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
+              {priceLabel}
+            </span>
+          ) : null}
         </div>
 
         <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">{previewText}</p>
