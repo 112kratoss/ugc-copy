@@ -17,7 +17,6 @@ import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { PostResourceReferences, getReferenceResourceItems } from '@/components/post-resource-references';
 import {
   creatorAuthoredDescription,
-  formatItemCount,
   getResourceGroupSubtitle,
   parseGenerationSetupNotes,
   resourceTypeLabel,
@@ -169,12 +168,12 @@ export function PostResourceBundleContent({
         ) : null}
         {activeSelectedMediaKey && cardPreviews.length > 0 && visibleCardPreviews.length === 0 && redactedAttachments.length === 0 ? (
           <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-            No resources apply to this output.
+            No items apply to this output.
           </Text>
         ) : null}
         {cardPreviews.length === 0 && redactedAttachments.length === 0 ? (
           <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-            Resource details stay private until this recipe is unlocked.
+            What&apos;s inside stays private until you unlock this recipe.
           </Text>
         ) : null}
       </View>
@@ -206,7 +205,7 @@ export function PostResourceBundleContent({
         />
       )) : (
         <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-          No resources apply to this output.
+          No items apply to this output.
         </Text>
       )}
     </View>
@@ -282,7 +281,7 @@ function ResourceMediaSelector({
   return (
     <View style={{ gap: 8 }}>
       <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800', textTransform: 'uppercase' }}>
-        Resources for
+        Items for
       </Text>
       <ScrollView horizontal keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8 }} showsHorizontalScrollIndicator={false}>
         <Pressable
@@ -302,7 +301,7 @@ function ResourceMediaSelector({
           })}
         >
           <Text style={{ color: selectedMediaKey === null ? theme.colors.primary : theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800' }}>
-            All resources
+            All items
           </Text>
         </Pressable>
         {mediaItems.map((item, index) => {
@@ -311,7 +310,7 @@ function ResourceMediaSelector({
           const selected = selectedMediaKey === mediaKey;
           return (
             <Pressable
-              accessibilityLabel={`Resources for output ${index + 1}`}
+              accessibilityLabel={`Items for output ${index + 1}`}
               accessibilityRole="button"
               accessibilityState={{ selected }}
               key={mediaKey}
@@ -348,6 +347,10 @@ function LockedResourceCard({
   mediaItems: ShowcaseMediaItem[];
 }) {
   const theme = useAppTheme();
+  // The type only where the title does not say it, and the count only past
+  // one, as the unlocked group's subtitle reads (audit B-F16): a card titled
+  // "Prompt or script" read "Prompt or script · 1 item" under it.
+  const subtitle = getResourceGroupSubtitle({ title: card.publicTitle, resourceType: card.resourceType, itemCount: card.itemCount });
   return (
     <View style={{ borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface, padding: appTheme.spacing.gap, gap: 9 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 11 }}>
@@ -356,9 +359,9 @@ function LockedResourceCard({
           <Text selectable style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
             {card.publicTitle}
           </Text>
-          <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>
-            {resourceTypeLabel(card.resourceType)} · {formatItemCount(card.itemCount)}
-          </Text>
+          {subtitle ? (
+            <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{subtitle}</Text>
+          ) : null}
         </View>
         {card.hasRemix ? (
           <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: `${theme.colors.primary}18`, paddingHorizontal: 9, paddingVertical: 5 }}>

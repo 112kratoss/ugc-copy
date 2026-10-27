@@ -15,16 +15,22 @@ type UnlockCacheClient = Pick<QueryClient, 'invalidateQueries' | 'setQueriesData
  * `resolvePostRemixCapability` turns `unlock_required` into `public`, and
  * `canRemix` follows unless the remix opens on the web (src/lib/showcase-feed.ts).
  * A post with no capability on it (an older source) was locked only by its
- * recipe, so it opens the same way.
+ * recipe, so it opens the same way. Its recipe is the viewer's now
+ * (`viewerHasUnlocked`), which the cards read to say "Unlocked" instead of
+ * the price, as the server's next read of it will.
  */
 export function applyBundleUnlockToItem(item: ShowcaseFeedItem, postId: string): ShowcaseFeedItem {
-  if (item.id !== postId || item.canRemix) return item;
-  const lockedByRecipe = item.remixCapability === 'unlock_required'
-    || (item.remixCapability === undefined && Boolean(item.asset?.allowRemix));
-  if (!lockedByRecipe) return item;
+  if (item.id !== postId) return item;
+  const owned = item.asset && !item.asset.viewerHasUnlocked
+    ? { ...item, asset: { ...item.asset, viewerHasUnlocked: true } }
+    : item;
+  if (owned.canRemix) return owned;
+  const lockedByRecipe = owned.remixCapability === 'unlock_required'
+    || (owned.remixCapability === undefined && Boolean(owned.asset?.allowRemix));
+  if (!lockedByRecipe) return owned;
   return {
-    ...item,
-    canRemix: item.remixTarget !== 'workflow' && item.remixTarget !== 'text_template',
+    ...owned,
+    canRemix: owned.remixTarget !== 'workflow' && owned.remixTarget !== 'text_template',
     remixCapability: 'public',
   };
 }

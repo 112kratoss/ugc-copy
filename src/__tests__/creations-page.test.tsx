@@ -210,7 +210,8 @@ describe('CreationsPage', () => {
     const sections = await screen.findByRole('navigation', { name: 'Studio sections' });
     const creations = within(sections).getByRole('link', { name: 'Creations' });
     const posts = within(sections).getByRole('link', { name: 'Post Library' });
-    const unlocks = within(sections).getByRole('link', { name: 'Unlocks' });
+    // One name for the buyer's library on both platforms (B-F9, glossary).
+    const unlocks = within(sections).getByRole('link', { name: 'Unlocked recipes' });
 
     expect(creations).toHaveAttribute('href', '/creations');
     expect(posts).toHaveAttribute('href', '/creations?view=posts');
@@ -220,7 +221,7 @@ describe('CreationsPage', () => {
     expect(creations).not.toHaveAttribute('aria-current');
     expect(posts).not.toHaveAttribute('aria-current');
     expect(screen.queryByRole('button', { name: 'Post Library' })).not.toBeInTheDocument();
-    expect(screen.getByText('YOUR UNLOCKS')).toBeInTheDocument();
+    expect(screen.getByText('UNLOCKED RECIPES')).toBeInTheDocument();
   });
 
   it('keeps the visibility filter in the URL and counts the current section in the header', async () => {
@@ -778,7 +779,7 @@ describe('CreationsPage', () => {
     const addRecipeLink = await screen.findByRole('link', { name: /^add recipe$/i });
     expect(addRecipeLink).toHaveAttribute(
       'href',
-      '/post/post-linked/edit?resourceMode=paid&focus=price&from=creations#recipe',
+      '/post/post-linked/edit?recipe=add&from=creations#recipe',
     );
     expect(screen.queryByRole('button', { name: /^add recipe$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: /publish this creation/i })).not.toBeInTheDocument();
@@ -895,7 +896,7 @@ describe('CreationsPage', () => {
     // An uploaded post with no recipe gets the same entry point.
     expect(screen.getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
       'href',
-      '/post/post-uploaded/edit?resourceMode=paid&focus=price&from=creations#recipe',
+      '/post/post-uploaded/edit?recipe=add&from=creations#recipe',
     );
     expect(navigationState.push).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());

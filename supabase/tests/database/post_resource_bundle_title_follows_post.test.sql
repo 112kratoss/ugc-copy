@@ -1,5 +1,6 @@
 -- A save that sends no recipe and changes its post's title takes the title of
--- the post's recipe along, unless the recipe is sold.
+-- the post's recipe along, sold or not (since 20261027172920: a sold recipe can
+-- be corrected, and its buyers keep the revision they bought).
 --
 -- The recipe row keeps a copy of its post's title, written only by a save that
 -- carries the recipe. A visibility change from Studio or a list sends none, and
@@ -7,7 +8,7 @@
 -- prompt goes out as the recipe's kind title ("Image recipe"). The recipe
 -- panel, the marketplace card and search then kept the old title -- the
 -- prompt's opening. A sold recipe's title is part of the revision its buyers
--- hold, so it stays, and the save still succeeds.
+-- hold, so retitling it mints a new revision and theirs stays as it was.
 
 begin;
 
@@ -209,7 +210,7 @@ select is(
   'the retitled recipe is a new revision, so a later checkout quotes the new title'
 );
 
--- ─── Edit route: a sold recipe keeps the title its buyers hold ───────────────
+-- ─── Edit route: a sold recipe follows too; its buyer keeps their title ──────
 
 select lives_ok(
   $$ select * from public.update_post_with_resource_bundle(
@@ -217,7 +218,7 @@ select lives_ok(
        'e7a00000-0000-4000-8000-0000000000a1'::uuid,
        '{"visibility": "private", "title": "Image recipe"}'::jsonb
      ) $$,
-  'the same save on a post with a sold recipe still succeeds'
+  'the same save on a post with a sold recipe succeeds'
 );
 select is(
   (select title from public.posts where id = 'e7b00000-0000-4000-8000-000000000002'::uuid),
@@ -226,23 +227,22 @@ select is(
 );
 select is(
   (select title from public.post_resource_bundles where id = 'e7c00000-0000-4000-8000-000000000002'::uuid),
-  'A neon city street at night',
-  'the sold recipe keeps the title it was bought with'
+  'Image recipe',
+  'the sold recipe takes the post''s new title'
 );
 select is(
   (select count(*)::int from public.post_resource_bundle_revisions
    where bundle_id = 'e7c00000-0000-4000-8000-000000000002'::uuid),
-  1,
-  'the sold recipe gains no revision'
+  2,
+  'the retitled sold recipe is a new revision'
 );
--- Why the save must leave it: writing a sold recipe's title raises, and the
--- raise would take the whole save down with it.
-select throws_ok(
-  $$ update public.post_resource_bundles set title = 'Image recipe'
-     where id = 'e7c00000-0000-4000-8000-000000000002'::uuid $$,
-  'P0001',
-  'RESOURCE_BUNDLE_LOCKED: purchased package content cannot be changed',
-  'a sold recipe''s title cannot be written at all'
+select is(
+  (select revisions.title
+   from public.post_resource_bundle_purchases as purchases
+   join public.post_resource_bundle_revisions as revisions on revisions.id = purchases.revision_id
+   where purchases.bundle_id = 'e7c00000-0000-4000-8000-000000000002'::uuid),
+  'A neon city street at night',
+  'the buyer keeps the title they bought'
 );
 
 -- ─── Edit route: only a changed title moves the recipe's ─────────────────────
@@ -274,9 +274,8 @@ select is(
   'once the post''s title changes, the recipe takes it, as a save with the recipe would'
 );
 
--- ─── Edit route: a free unlock does not freeze the title ─────────────────────
--- Only a paid purchase freezes a recipe. Someone who unlocked a free one keeps
--- the revision they opened.
+-- ─── Edit route: a free unlock does not hold the title back ──────────────────
+-- Someone who unlocked a free recipe keeps the revision they opened.
 
 select lives_ok(
   $$ select * from public.update_post_with_resource_bundle(
@@ -391,8 +390,8 @@ select lives_ok(
 );
 select is(
   (select title from public.post_resource_bundles where id = 'e7c00000-0000-4000-8000-000000000008'::uuid),
-  'A drone shot over a glacier',
-  'the publish route leaves a sold recipe''s title as it was bought'
+  'Video recipe',
+  'the publish route takes a sold recipe''s title along too'
 );
 
 -- ─── The upsert, with the post named by its id ───────────────────────────────

@@ -534,7 +534,7 @@ function parsePostVisibilityFilter(value: string | null): OwnerPostVisibilityFil
 const WORKSPACE_TABS: ReadonlyArray<{ key: WorkspaceView; label: string; lede: string }> = [
     { key: 'creations', label: 'Creations', lede: 'Preview private outputs, then turn the strongest ones into posts.' },
     { key: 'posts', label: 'Post Library', lede: 'Use Post Library for full post edits, archive state, and cleanup after publishing.' },
-    { key: 'unlocks', label: 'Unlocks', lede: 'Everything you have unlocked from other creators, yours to keep.' },
+    { key: 'unlocks', label: 'Unlocked recipes', lede: 'Everything you have unlocked from other creators, yours to keep.' },
 ];
 
 export default function CreationsPage() {
@@ -1818,7 +1818,7 @@ export default function CreationsPage() {
                             ? `${profile?.stats?.creations ?? `${successfulGenerations.length}${generationsNextCursor ? '+' : ''}`} CREATION${(profile?.stats?.creations ?? successfulGenerations.length) !== 1 ? 'S' : ''} TOTAL`
                             : activeView === 'posts'
                                 ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
-                                : 'YOUR UNLOCKS'}
+                                : 'UNLOCKED RECIPES'}
                     </p>
                 </div>
 

@@ -353,28 +353,123 @@ describe('owner posts', () => {
     expect(createServiceClientMock).toHaveBeenCalledTimes(1);
   });
 
-  // Decision 6 (2026-10-17): sales_count counts paid unlocks only. The editor's
-  // lock still follows any unlock of a paid recipe, as it did while free
-  // unlocks were counted as sales, so the composer and the update service agree.
+  // Owner decision D1 (recipe audit, 2026-10-27): a recipe people have can be
+  // corrected, so nothing locks the editor. `hasPaidOrders` stays in the
+  // payload, always false, for app builds that still read it; the composers
+  // read how many people have the recipe instead.
   it.each([
-    ['unlocked only while it was free', { salesCount: 0, freeUnlockCount: 3 }, true],
-    ['sold', { salesCount: 1, freeUnlockCount: 0 }, true],
-    ['never unlocked', { salesCount: 0, freeUnlockCount: 0 }, false],
-  ])('locks a paid recipe in the editor when it was %s', async (_label, counts, locked) => {
+    ['unlocked only while it was free', { accessMode: 'paid', salesCount: 0, freeUnlockCount: 3 }, 3],
+    ['sold and opened free', { accessMode: 'paid', salesCount: 2, freeUnlockCount: 1 }, 3],
+    ['a free recipe opened', { accessMode: 'free', salesCount: 0, freeUnlockCount: 4 }, 4],
+    ['never unlocked', { accessMode: 'paid', salesCount: 0, freeUnlockCount: 0 }, 0],
+  ])('never locks a recipe in the editor, and counts who has it, when it was %s', async (_label, fields, buyerCount) => {
     const bundles = await import('@/lib/post-resource-bundles-server');
     vi.mocked(bundles.getPostResourceBundleDetailByPostId).mockResolvedValueOnce({
-      accessMode: 'paid',
       summary: '',
       previewText: '',
       priceUsdCents: 900,
       resources: null,
-      ...counts,
+      retiredAt: null,
+      ...fields,
     } as never);
     const { getOwnerPostDetail } = await import('@/lib/owner-posts');
 
     const post = await getOwnerPostDetail('post-1', 'user-1');
 
-    expect(post?.hasPaidOrders).toBe(locked);
+    expect(post?.hasPaidOrders).toBe(false);
+    expect(post?.resourceBundleBuyerCount).toBe(buyerCount);
+    expect(post?.resourceBundleInput.accessMode).toBe(fields.accessMode);
+  });
+
+  it('counts nobody for a post without a recipe', async () => {
+    const bundles = await import('@/lib/post-resource-bundles-server');
+    vi.mocked(bundles.getPostResourceBundleDetailByPostId).mockResolvedValueOnce(null as never);
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const post = await getOwnerPostDetail('post-1', 'user-1');
+
+    expect(post?.resourceBundleInput).toEqual({ accessMode: 'none' });
+    expect(post?.resourceBundleBuyerCount).toBe(0);
+    expect(post?.hasPaidOrders).toBe(false);
+  });
+
+  // Every published creation recipe includes its Remix since 2026-10-27, so
+  // the owner read merges the creation's references into its items. They are
+  // re-derived on every read and dropped by every save, so the editor gets the
+  // recipe as stored: an item the creator cannot keep is not offered to edit.
+  it('hands the editor the recipe as stored, without the creation references a read adds', async () => {
+    const bundles = await import('@/lib/post-resource-bundles-server');
+    vi.mocked(bundles.getPostResourceBundleDetailByPostId).mockResolvedValueOnce({
+      accessMode: 'paid',
+      summary: '',
+      previewText: 'Includes the prompt.',
+      priceUsdCents: 900,
+      salesCount: 0,
+      freeUnlockCount: 0,
+      retiredAt: null,
+      resources: {
+        allowRemix: true,
+        items: [
+          { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'A neon portrait.' },
+          { id: 'reference-copy', type: 'reference_image', title: 'Stored copy', storagePath: 'user-1/generation-references/gen-1/input.png' },
+          { type: 'reference_image', title: 'Image input', storagePath: 'generation_inputs/user-1/gen-1/00-reference-image.png' },
+        ],
+      },
+    } as never);
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const post = await getOwnerPostDetail('post-1', 'user-1');
+
+    expect(post?.resourceBundleInput.resources?.items?.map((item) => item.title)).toEqual(['Prompt', 'Stored copy']);
+    expect(post?.resourceBundleInput.resources?.allowRemix).toBe(true);
+  });
+
+  // The editor's switch is the stored one (`resources.allowRemix`), never the
+  // read's "Remix included" (`allowRemix`), so a re-save cannot turn the
+  // creator's inputs on for buyers.
+  it('hands the editor the stored remix switch, not the Remix the read reports', async () => {
+    const bundles = await import('@/lib/post-resource-bundles-server');
+    vi.mocked(bundles.getPostResourceBundleDetailByPostId).mockResolvedValueOnce({
+      accessMode: 'free',
+      summary: '',
+      previewText: 'Includes the prompt.',
+      priceUsdCents: 0,
+      salesCount: 0,
+      freeUnlockCount: 2,
+      retiredAt: null,
+      allowRemix: true,
+      resources: {
+        allowRemix: false,
+        items: [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'A neon portrait.' }],
+      },
+    } as never);
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const post = await getOwnerPostDetail('post-1', 'user-1');
+
+    expect(post?.resourceBundleInput.resources?.allowRemix).toBe(false);
+  });
+
+  // Removing a recipe people have retires it: the row stays for them, but the
+  // post has no recipe, so the editor opens on "No recipe".
+  it('opens a retired recipe in the editor as no recipe', async () => {
+    const bundles = await import('@/lib/post-resource-bundles-server');
+    vi.mocked(bundles.getPostResourceBundleDetailByPostId).mockResolvedValueOnce({
+      accessMode: 'paid',
+      summary: 'Old summary',
+      previewText: 'Old preview',
+      priceUsdCents: 900,
+      resources: null,
+      salesCount: 2,
+      freeUnlockCount: 0,
+      retiredAt: '2026-10-27T10:00:00.000Z',
+    } as never);
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const post = await getOwnerPostDetail('post-1', 'user-1');
+
+    expect(post?.resourceBundleInput).toEqual({ accessMode: 'none' });
+    expect(post?.resourceBundleBuyerCount).toBe(0);
   });
 
   // 03-3 / 03-7: the app found listings by paging every own post and filtering
@@ -460,6 +555,27 @@ describe('owner posts', () => {
       const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
 
       expect(listings.find((post) => post.id === 'listing-ready')?.bundle).toMatchObject({ salesCount: 2, freeUnlockCount: 5 });
+    });
+
+    // Recipe audit H1 (2026-10-27): a creation post's published recipe
+    // includes its Remix, which the stored switch and the summary RPC's kinds
+    // do not say.
+    it.each([
+      ['the compact summary RPC', true],
+      ['the bundle select fallback', false],
+    ])('lists Remix among a creation recipe’s kinds through %s', async (_label, rpcEnabled) => {
+      compactSummaryRpc.enabled = rpcEnabled;
+      postRows.value = [
+        ...postRows.value,
+        listingPost('creation-listing', '2026-07-05T00:00:00.000Z', { generation_id: 'gen-9', source_kind: 'magicbooklet' }),
+      ] as unknown as typeof postRows.value;
+      bundleRows.value = [recipe('creation-listing'), recipe('listing-ready')];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
+
+      expect(listings.find((post) => post.id === 'creation-listing')?.bundle?.resourceKinds).toEqual(['prompt', 'remix']);
+      expect(listings.find((post) => post.id === 'listing-ready')?.bundle?.resourceKinds).toEqual(['prompt']);
     });
 
     it('reads no free unlocks through the select fallback, which serves a database older than the column', async () => {

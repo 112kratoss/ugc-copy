@@ -58,12 +58,15 @@ export function UnlockRemixPrompt({
   const accent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
   const accentValue = accentColor(accent, theme.colors);
   const resourceKinds = unlock?.resourceKinds ?? [];
+  // The price the hook holds: the feed's, or the one the server answered with
+  // when the creator repriced since the feed was read (S3).
+  const priceLabel = bundleUnlock.priceLabel ?? unlock?.priceLabel ?? null;
   // A paid unlock spends credits once confirmed, so the button says how many.
   const ctaLabel = !user
     ? 'Sign in to unlock'
-    : unlock?.accessMode === 'paid' && unlock.priceLabel
-      ? `Unlock for ${unlock.priceLabel}`
-      : 'Unlock to remix';
+    : unlock?.accessMode === 'paid'
+      ? priceLabel ? `Unlock for ${priceLabel}` : 'Unlock with credits'
+      : 'Get free recipe';
   const ctaDisabled = bundleUnlock.isPending || bundleUnlock.shortfall > 0;
 
   if (!item || !unlock) {
@@ -106,7 +109,7 @@ export function UnlockRemixPrompt({
                 Remix locked
               </Text>
               <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
-                Unlock resources to remix
+                Unlock the recipe to remix
               </Text>
             </View>
             <Pressable
@@ -137,12 +140,12 @@ export function UnlockRemixPrompt({
                   {unlock.title || item.title}
                 </Text>
                 <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-                  {unlock.previewText || 'Unlock the creator resources attached to this post, then remix it in the editor.'}
+                  {unlock.previewText || 'Unlock the recipe behind this post, then remix it in the editor.'}
                 </Text>
               </View>
-              {unlock.priceLabel ? (
+              {priceLabel ? (
                 <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: `${accentValue}24`, paddingHorizontal: 10, paddingVertical: 6 }}>
-                  <Text style={{ color: accentValue, ...appTheme.type.caption, fontWeight: '800' }}>{unlock.priceLabel}</Text>
+                  <Text style={{ color: accentValue, ...appTheme.type.caption, fontWeight: '800' }}>{priceLabel}</Text>
                 </View>
               ) : null}
             </View>

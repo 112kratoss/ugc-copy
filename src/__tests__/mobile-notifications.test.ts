@@ -637,8 +637,8 @@ function unlockNotification(adminSupabase: unknown) {
     userId: 'user-1',
     type: 'post_resource_unlocked',
     category: 'commerce',
-    title: 'Post resources unlocked',
-    body: 'The prompt, files, or workflow are ready to view.',
+    title: 'Recipe unlocked',
+    body: 'The prompt and files are ready.',
     deepLink: '/showcase/post-1',
     objectType: 'post',
     objectId: 'post-1',
@@ -770,6 +770,9 @@ describe('mobile notifications', () => {
     // The post page, which keeps a text or covered post off the For You reel.
     expect(buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: 'post-1' }))
       .toBe('/showcase/post-1');
+    // The post page at its recipe, for the buyer's "Recipe unlocked" alert.
+    expect(buildMobileNotificationDeepLink({ kind: 'showcasePostRecipe', postId: 'post-1' }))
+      .toBe('/showcase/post-1?page=details&section=resources');
     expect(buildMobileNotificationDeepLink({ kind: 'creatorProfile', username: 'athul' }))
       .toBe('/creators/athul');
     expect(buildMobileNotificationDeepLink({ kind: 'notifications' }))
@@ -1826,8 +1829,8 @@ describe('mobile notifications', () => {
       method: 'POST',
     }));
     const message = {
-      title: 'Post resources unlocked',
-      body: 'The prompt, files, or workflow are ready to view.',
+      title: 'Recipe unlocked',
+      body: 'The prompt and files are ready.',
       sound: 'default',
       channelId: 'default',
       priority: 'high',
@@ -2495,7 +2498,7 @@ describe('what each alert opens and says', () => {
     expect(history.sent.map((row) => [row.type, row.user_id, row.deep_link])).toEqual([
       ['post_saved', 'creator-1', '/showcase/post-1'],
       ['post_shared', 'creator-1', '/showcase/post-1'],
-      ['post_resource_unlocked', 'reader-1', '/showcase/post-1'],
+      ['post_resource_unlocked', 'reader-1', '/showcase/post-1?page=details&section=resources'],
       // The seller's is a sale: it opens where the listing and the payout balance are.
       ['post_resource_unlocked', 'creator-1', buildMobileNotificationDeepLink({ kind: 'sellerDashboard' })],
     ]);
@@ -2520,23 +2523,23 @@ describe('what each alert opens and says', () => {
         actor_user_id: 'reader-1',
         category: 'commerce',
         title: 'You made a sale',
-        body: 'A creator bought the resources attached to your post.',
+        body: 'A creator bought your recipe.',
         deep_link: '/seller-dashboard',
         dedupe_key: 'post-resource-sale:post-1:reader-1',
       },
       {
         actor_user_id: 'reader-2',
         category: 'commerce',
-        title: 'Someone opened your free resources',
-        body: 'A creator opened the resources attached to your post.',
+        title: 'Someone got your free recipe',
+        body: 'A creator got the free recipe on your post.',
         deep_link: '/seller-dashboard',
         dedupe_key: 'post-resource-sale:post-1:reader-2',
       },
     ]);
     // The buyer's alert is the same either way.
     expect(history.sent.filter((row) => row.user_id !== 'creator-1').map((row) => [row.title, row.deep_link])).toEqual([
-      ['Post resources unlocked', '/showcase/post-1'],
-      ['Post resources unlocked', '/showcase/post-1'],
+      ['Recipe unlocked', '/showcase/post-1?page=details&section=resources'],
+      ['Recipe unlocked', '/showcase/post-1?page=details&section=resources'],
     ]);
   });
 
@@ -2559,23 +2562,23 @@ describe('what each alert opens and says', () => {
         actor_user_id: 'reader-1',
         category: 'commerce',
         title: 'You made a sale',
-        body: '@maya bought the resources attached to your post.',
+        body: '@maya bought your recipe.',
         deep_link: '/seller-dashboard',
         dedupe_key: 'post-resource-sale:post-1:reader-1',
       },
       {
         actor_user_id: 'reader-2',
         category: 'commerce',
-        title: '@creator-0a1b2c3d opened your free resources',
-        body: 'They can view the prompt, files, or workflow now.',
+        title: '@creator-0a1b2c3d got your free recipe',
+        body: 'They have the prompt and files now.',
         deep_link: '/seller-dashboard',
         dedupe_key: 'post-resource-sale:post-1:reader-2',
       },
     ]);
     // The buyer's own alert names no one.
     expect(history.sent.filter((row) => row.user_id !== 'creator-1').map((row) => [row.title, row.body])).toEqual([
-      ['Post resources unlocked', 'The prompt, files, or workflow are ready to view.'],
-      ['Post resources unlocked', 'The prompt, files, or workflow are ready to view.'],
+      ['Recipe unlocked', 'The prompt and files are ready.'],
+      ['Recipe unlocked', 'The prompt and files are ready.'],
     ]);
   });
 
@@ -2583,8 +2586,8 @@ describe('what each alert opens and says', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const unlock = { ownerUserId: 'creator-1', postId: 'post-1', bundleId: 'bundle-1' };
     const unnamed = [
-      ['You made a sale', 'A creator bought the resources attached to your post.'],
-      ['Someone opened your free resources', 'A creator opened the resources attached to your post.'],
+      ['You made a sale', 'A creator bought your recipe.'],
+      ['Someone got your free recipe', 'A creator got the free recipe on your post.'],
     ];
 
     // reader-1 has no handle; reader-2 has no profile row.

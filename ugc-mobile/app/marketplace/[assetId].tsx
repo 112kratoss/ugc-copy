@@ -31,8 +31,20 @@ function marketplaceAccent(accessMode?: MarketplaceResource['accessMode']): Tool
   return accessMode === 'free' ? 'workflow' : 'commerce';
 }
 
-function marketplacePriceLabel(detail: MarketplaceResource) {
-  return detail.accessMode === 'free' ? FREE_RECIPE_LABEL : formatUnlockPrice(detail.priceUsdCents ?? 0);
+function normalizeLine(value: string | null | undefined) {
+  return (value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * The creator's line, and the preview under it only when it says something
+ * else. Both composers copy the preview into the summary when no summary was
+ * written, so the same sentence used to print twice (audit B-F19).
+ */
+export function getRecipeScreenLines(detail: Pick<MarketplaceResource, 'summary' | 'description' | 'previewText'>) {
+  const summary = detail.summary?.trim() || detail.description?.trim() || detail.previewText?.trim()
+    || 'The prompt, files and notes behind this post.';
+  const preview = detail.previewText?.trim() ?? '';
+  return { summary, preview: preview && normalizeLine(preview) !== normalizeLine(summary) ? preview : null };
 }
 
 export default function MarketplaceAssetScreen() {
@@ -75,6 +87,12 @@ export default function MarketplaceAssetScreen() {
       }
       : null,
   });
+  // The hook's price follows a reprice the server reported before the read
+  // below catches up (S3); free is the recipe's own word.
+  const priceLabel = detail?.accessMode === 'free'
+    ? FREE_RECIPE_LABEL
+    : bundleUnlock.priceLabel ?? formatUnlockPrice(unlockPrice);
+  const lines = detail ? getRecipeScreenLines(detail) : null;
   const resourceMediaItems = useMemo(() => {
     if (!detail?.post) return [];
     if (detail.post.mediaItems?.length) return detail.post.mediaItems;
@@ -97,7 +115,7 @@ export default function MarketplaceAssetScreen() {
   // one render mounts are signed together in one request.
   const bundlePostId = detail?.postId;
   const resolveResourceFileUrl = useCallback(async (storagePath: string) => {
-    if (!bundlePostId) throw new Error('Missing post for this resource.');
+    if (!bundlePostId) throw new Error('Missing post for this recipe.');
     return api.resolvePostResourceFileUrl(bundlePostId, storagePath, { disposition: 'inline' });
   }, [api, bundlePostId]);
 
@@ -107,7 +125,7 @@ export default function MarketplaceAssetScreen() {
       setFileLoadingPath(storagePath);
       await Linking.openURL(await resolveResourceFileUrl(storagePath));
     } catch (error) {
-      setResourceError(error instanceof Error ? error.message : 'Could not open this resource.');
+      setResourceError(error instanceof Error ? error.message : 'Could not open this file.');
     } finally {
       setFileLoadingPath(null);
     }
@@ -144,7 +162,7 @@ export default function MarketplaceAssetScreen() {
         // A 404 is the unlock being gone (a removed listing opened from an
         // alert), not a connection problem; the two used to show together.
         isUnlockGone ? (
-          <StatusBlock title="Recipe unavailable" body="This resource may be unlisted, private, or removed." />
+          <StatusBlock title="Recipe unavailable" body="This recipe may be unlisted, private, or removed." />
         ) : (
           <View style={{ gap: appTheme.spacing.gap }}>
             <StatusBlock
@@ -158,7 +176,7 @@ export default function MarketplaceAssetScreen() {
       ) : null}
       {detailQuery.isLoading ? <DetailSkeleton label="Loading recipe details" /> : null}
       {bundleUnlock.error ? (
-        <StatusBlock tone="danger" title="Unlock failed" body={bundleUnlock.error} />
+        <StatusBlock tone="danger" title={bundleUnlock.priceChanged ? 'Price changed' : 'Unlock failed'} body={bundleUnlock.error} />
       ) : null}
 
       {detail ? (
@@ -166,19 +184,22 @@ export default function MarketplaceAssetScreen() {
           <Card accent={marketplaceAccent(detail.accessMode)}>
             <MediaPreview url={detail.post?.mediaUrl ?? detail.mediaUrl ?? null} kind={detail.post?.mediaKind ?? null} />
             <View style={{ gap: appTheme.spacing.compact }}>
-              <Pill label={marketplacePriceLabel(detail)} accent={marketplaceAccent(detail.accessMode)} />
-              <AppText variant="body" color="text">
-                {detail.summary || detail.description || detail.previewText || 'Reusable creator resource.'}
-              </AppText>
-              <AppText variant="bodySm" color="muted">
-                {detail.previewText || 'This recipe includes creator-facing resources for this post.'}
-              </AppText>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: appTheme.spacing.compact }}>
+                <Pill label={priceLabel} accent={marketplaceAccent(detail.accessMode)} />
+                {/* A creation post's recipe comes with its Remix (S1): said before
+                    the unlock, as after it. */}
+                {detail.allowRemix ? <Pill label="Remix included" accent="primary" /> : null}
+              </View>
+              <AppText variant="body" color="text">{lines?.summary}</AppText>
+              {lines?.preview ? (
+                <AppText variant="bodySm" color="muted">{lines.preview}</AppText>
+              ) : null}
             </View>
           </Card>
 
           <Card accent={detail.viewerCanAccess ? 'workflow' : marketplaceAccent(detail.accessMode)}>
             <View style={{ gap: 4 }}>
-              <AppText variant="cardTitle">{detail.viewerCanAccess ? 'Your recipe' : 'In this recipe'}</AppText>
+              <AppText variant="cardTitle">In this recipe</AppText>
               <AppText variant="caption" color="faint">{resourceLabel(detail.resourceKinds)}</AppText>
             </View>
             <PostResourceBundleContent
@@ -192,14 +213,14 @@ export default function MarketplaceAssetScreen() {
               resolveFileUrl={resolveResourceFileUrl}
               resources={detail.viewerCanAccess ? resources ?? null : null}
             />
-            {resourceError ? <StatusBlock tone="danger" title="Resource unavailable" body={resourceError} /> : null}
+            {resourceError ? <StatusBlock tone="danger" title="File unavailable" body={resourceError} /> : null}
           </Card>
 
           <Card>
             {!user ? (
               <View style={{ gap: appTheme.spacing.gap }}>
                 <AppText variant="label">Sign in required</AppText>
-                <AppText variant="bodySm" color="muted">Sign in before unlocking free or paid resources.</AppText>
+                <AppText variant="bodySm" color="muted">Sign in to unlock this recipe.</AppText>
                 <PrimaryButton label="Sign in to unlock" onPress={bundleUnlock.request} accent="primary" />
               </View>
             ) : detail.viewerCanAccess ? (
@@ -207,11 +228,13 @@ export default function MarketplaceAssetScreen() {
                 {/* The creator reads their own recipe by owning it, not by
                     having unlocked it, as Details and the web panel say. */}
                 <AppText variant="label" color="success">{detail.viewerIsOwner ? 'Owner access' : 'Unlocked'}</AppText>
-                <AppText variant="bodySm" color="muted">This resource is available on your account.</AppText>
+                <AppText variant="bodySm" color="muted">
+                  {detail.viewerIsOwner ? 'You made this recipe.' : 'This recipe is on your account.'}
+                </AppText>
               </View>
             ) : detail.accessMode === 'free' ? (
               <PrimaryButton
-                label={bundleUnlock.isPending ? 'Getting resources…' : 'Get resources — Free'}
+                label={bundleUnlock.isPending ? 'Getting recipe…' : 'Get free recipe'}
                 loading={bundleUnlock.isPending}
                 onPress={bundleUnlock.request}
                 accent="primary"
@@ -221,10 +244,10 @@ export default function MarketplaceAssetScreen() {
                 <View style={{ gap: 4 }}>
                   <AppText variant="label">Unlock with credits</AppText>
                   <AppText variant="bodySm" color="muted">
-                    Paid mobile unlocks use your Magicbooklet credit balance instead of a separate store checkout.
+                    Recipes are paid for from your credit balance.
                   </AppText>
                   <AppText variant="label" color={!balanceKnown ? 'muted' : bundleUnlock.shortfall > 0 ? 'warning' : 'success'}>
-                    Costs {formatUnlockPrice(unlockPrice)} · {balanceKnown ? `Balance ${formatCreditAmount(spendableCredits)}` : CREDIT_BALANCE_LOADING_LABEL}
+                    Costs {priceLabel} · {balanceKnown ? `Balance ${formatCreditAmount(spendableCredits)}` : CREDIT_BALANCE_LOADING_LABEL}
                   </AppText>
                   {/* The note rides with a shortfall (`formatBundleUnlockShortfall`);
                       with none it stands alone, since this balance is still
@@ -236,7 +259,7 @@ export default function MarketplaceAssetScreen() {
                   ) : null}
                 </View>
                 <PrimaryButton
-                  label={bundleUnlock.isPending ? 'Unlocking…' : `Unlock for ${formatUnlockPrice(unlockPrice)}`}
+                  label={bundleUnlock.isPending ? 'Unlocking…' : `Unlock for ${priceLabel}`}
                   loading={bundleUnlock.isPending}
                   disabled={bundleUnlock.shortfall > 0 || bundleUnlock.isPending}
                   onPress={bundleUnlock.request}
@@ -250,7 +273,7 @@ export default function MarketplaceAssetScreen() {
           </Card>
         </>
       ) : !detailQuery.isLoading && !loadError ? (
-        <StatusBlock title="Recipe unavailable" body="This resource may be unlisted, private, or removed." />
+        <StatusBlock title="Recipe unavailable" body="This recipe may be unlisted, private, or removed." />
       ) : null}
     </Screen>
   );

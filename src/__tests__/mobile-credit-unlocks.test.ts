@@ -712,6 +712,79 @@ describe('credit-funded mobile unlocks', () => {
   });
 });
 
+// Recipe audit H4 (2026-10-27): "Use 100 credits" charged whatever the price
+// was at the tap. A client that sends the price the buyer confirmed has the
+// RPC compare it under the bundle's row lock; a different price spends nothing.
+describe('the confirmed price of a credits unlock', () => {
+  it('hands the confirmed price to the spend, and leaves it out when none was sent', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'completed',
+        remaining_credits: 100,
+        marketplace_spendable_credits: 100,
+        bundle_id: 'bundle-1',
+        owner_user_id: 'creator-1',
+        credit_cost: 900,
+      },
+      error: null,
+    }));
+    const adminSupabase = { rpc } as unknown as SupabaseClient;
+    const quiet = {
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      notifyPostResourceUnlockCompleted: vi.fn(async () => null),
+      recordPurchaseFeedEvent: vi.fn(async () => ({ status: 'recorded' as const, deliveryId: null })),
+    };
+
+    await unlockPostResourceBundleWithCredits({ adminSupabase, userId, postId: 'post-1', expectedPriceCredits: 900, ...quiet });
+    await unlockPostResourceBundleWithCredits({ adminSupabase, userId, postId: 'post-1', ...quiet });
+
+    expect(rpc).toHaveBeenNthCalledWith(1, 'unlock_post_resource_bundle_with_credits', {
+      p_user_id: userId,
+      p_post_id: 'post-1',
+      p_expected_credit_cost: 900,
+    });
+    // An app build from before the check calls the RPC as it always did.
+    expect(rpc).toHaveBeenNthCalledWith(2, 'unlock_post_resource_bundle_with_credits', {
+      p_user_id: userId,
+      p_post_id: 'post-1',
+    });
+  });
+
+  it('refuses with the new price, spending and announcing nothing, when the price changed', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'price_changed',
+        remaining_credits: 5000,
+        marketplace_spendable_credits: 5000,
+        bundle_id: 'bundle-1',
+        owner_user_id: 'creator-1',
+        credit_cost: 1500,
+      },
+      error: null,
+    }));
+    const notifyPostResourceUnlockCompleted = vi.fn(async () => null);
+    const invalidateMarketplaceResourceListCache = vi.fn();
+
+    const refusal = await unlockPostResourceBundleWithCredits({
+      adminSupabase: { rpc } as unknown as SupabaseClient,
+      userId,
+      postId: 'post-1',
+      expectedPriceCredits: 100,
+      invalidateMarketplaceResourceListCache,
+      notifyPostResourceUnlockCompleted,
+    }).then(() => null, (error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(MobileCommerceError);
+    expect(refusal).toMatchObject({
+      status: 409,
+      message: 'The price changed to 1,500 credits.',
+      details: { success: false, code: 'RESOURCE_PRICE_CHANGED', priceCredits: 1500 },
+    });
+    expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+    expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
+  });
+});
+
 describe('post resource credit unlock notifications', () => {
   it('answers before the notifications go out when the caller can run work after the response', async () => {
     // Measured in production on 2026-10-01 on the free unlock, which sends the

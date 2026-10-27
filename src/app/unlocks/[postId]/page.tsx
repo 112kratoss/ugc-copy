@@ -3,9 +3,10 @@ import { redirect } from 'next/navigation';
 import { createServiceClient } from '@/lib/server-helpers';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { getServerAuthState } from '@/lib/supabase-server';
-import { getViewerUnlockDetail } from '@/lib/viewer-unlock-detail';
+import { getViewerUnlockDetail, getViewerUnlockRemoval } from '@/lib/viewer-unlock-detail';
 
 import UnlockDetail from './UnlockDetail';
+import UnlockRemoved from './UnlockRemoved';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,15 +37,21 @@ export default async function UnlockDetailPage({ params }: UnlockDetailPageProps
   }
 
   const viewerUserId = auth.session.user.id;
+  const adminSupabase = createServiceClient();
   // A malformed id names no unlock, so it comes back null like another
   // buyer's purchase and lands in the library rather than on an error page.
   const detail = await getViewerUnlockDetail({
-    adminSupabase: createServiceClient(),
+    adminSupabase,
     unlockId,
     viewerUserId,
   });
 
   if (!detail) {
+    // The buyer's own purchase, taken back by moderation, is said to be so
+    // rather than dropped on the library without a word (D2, 2026-10-27).
+    if (await getViewerUnlockRemoval({ adminSupabase, unlockId, viewerUserId }) === 'moderation') {
+      return <UnlockRemoved />;
+    }
     redirect('/creations?view=unlocks');
   }
 

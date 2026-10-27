@@ -13,7 +13,7 @@ vi.mock('@/lib/post-media', () => ({
   loadPostMediaItemsMap: loadMediaItems,
 }));
 
-import { getViewerUnlockDetail } from '@/lib/viewer-unlock-detail';
+import { getViewerUnlockDetail, getViewerUnlockRemoval } from '@/lib/viewer-unlock-detail';
 import { createViewerUnlockFileUrl } from '@/lib/viewer-unlock-file-url-service';
 
 const UNLOCK_ID = '11111111-1111-4111-8111-111111111111';
@@ -541,5 +541,51 @@ describe('viewer unlock entitlement and state', () => {
       viewerUserId: 'buyer-1',
     })).resolves.toBeNull();
     expect(admin.rpc).not.toHaveBeenCalled();
+  });
+});
+
+// D2 (2026-10-27): the receipt read answers nothing for a purchase moderation
+// retracted, as for another buyer's. The purchase row itself says which:
+// `moderation_retracted_at`, kept in step with the post's take-down.
+describe('an unlock moderation took back', () => {
+  function adminWithPurchase(row: Record<string, unknown> | null, error: unknown = null) {
+    const filters: Array<[string, unknown]> = [];
+    const query = {
+      select: vi.fn(() => query),
+      eq: vi.fn((column: string, value: unknown) => {
+        filters.push([column, value]);
+        return query;
+      }),
+      maybeSingle: vi.fn(async () => ({ data: row, error })),
+    };
+    const from = vi.fn(() => query);
+    return { client: { from } as never, from, filters, query };
+  }
+
+  it("names a take-down of the buyer's own purchase", async () => {
+    const admin = adminWithPurchase({ moderation_retracted_at: '2026-10-20T00:00:00.000Z' });
+
+    await expect(getViewerUnlockRemoval({ adminSupabase: admin.client, unlockId: UNLOCK_ID, viewerUserId: 'buyer-1' }))
+      .resolves.toBe('moderation');
+    expect(admin.from).toHaveBeenCalledWith('post_resource_bundle_purchases');
+    expect(admin.query.select).toHaveBeenCalledWith('moderation_retracted_at');
+    expect(admin.filters).toEqual([['id', UNLOCK_ID], ['buyer_user_id', 'buyer-1']]);
+  });
+
+  it('says nothing of a purchase that was not taken back, or is not theirs', async () => {
+    await expect(getViewerUnlockRemoval({ adminSupabase: adminWithPurchase({ moderation_retracted_at: null }).client, unlockId: UNLOCK_ID, viewerUserId: 'buyer-1' }))
+      .resolves.toBeNull();
+    await expect(getViewerUnlockRemoval({ adminSupabase: adminWithPurchase(null).client, unlockId: UNLOCK_ID, viewerUserId: 'buyer-1' }))
+      .resolves.toBeNull();
+  });
+
+  it('asks nothing for a malformed id, and claims nothing when the read fails', async () => {
+    const admin = adminWithPurchase(null);
+    await expect(getViewerUnlockRemoval({ adminSupabase: admin.client, unlockId: 'not-an-id', viewerUserId: 'buyer-1' }))
+      .resolves.toBeNull();
+    expect(admin.from).not.toHaveBeenCalled();
+
+    await expect(getViewerUnlockRemoval({ adminSupabase: adminWithPurchase(null, { message: 'down' }).client, unlockId: UNLOCK_ID, viewerUserId: 'buyer-1' }))
+      .resolves.toBeNull();
   });
 });

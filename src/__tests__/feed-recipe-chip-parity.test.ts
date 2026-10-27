@@ -6,7 +6,13 @@ import contract from '../../contracts/feed-recipe-chip-v1.json';
 import { getPostFeedRecipeChip } from '../lib/post-feed-presentation';
 import { POST_RESOURCE_WEB_CASH_MIN_TOKENS } from '../lib/post-resource-commerce';
 import type { ShowcaseAssetSummary } from '../lib/showcase';
-import { FREE_RECIPE_LABEL, getAssetAccessLabel, isFreeRecipeAsset } from '../lib/showcase-asset-labels';
+import {
+  FREE_RECIPE_LABEL,
+  OWN_RECIPE_LABEL,
+  RECIPE_UNLOCKED_LABEL,
+  getAssetAccessLabel,
+  isFreeRecipeAsset,
+} from '../lib/showcase-asset-labels';
 
 // A feed card used to carry a full-width bar under its media, "Free recipe" on
 // the web and "Free unlock" in the app, followed by the post's own title again.
@@ -16,7 +22,7 @@ import { FREE_RECIPE_LABEL, getAssetAccessLabel, isFreeRecipeAsset } from '../li
 // workspace never installs the app's dependencies), so both suites answer the
 // same contract: this one for the web's rule,
 // `ugc-mobile/__tests__/home-feed-view-model.test.ts` for the app's.
-function asset(fields: { accessMode: string; priceUsdCents: number }): ShowcaseAssetSummary {
+function asset(fields: { accessMode: string; priceUsdCents: number; viewerHasUnlocked?: boolean }): ShowcaseAssetSummary {
   return {
     id: 'bundle-1',
     postId: 'post-1',
@@ -28,10 +34,29 @@ function asset(fields: { accessMode: string; priceUsdCents: number }): ShowcaseA
 }
 
 describe("a feed card's recipe chip, on the web and in the app", () => {
-  it.each(contract.cases)('draws $name as the contract says', ({ asset: fields, remix, chip }) => {
-    const drawn = getPostFeedRecipeChip({ asset: fields ? asset(fields) : null, canRemix: remix });
+  it.each(contract.cases)('draws $name as the contract says', (entry) => {
+    const { asset: fields, remix, chip } = entry;
+    // The owner is the viewer's to know, not the post's: the card passes it.
+    const viewerIsOwner = 'viewerIsOwner' in entry && entry.viewerIsOwner === true;
+    const drawn = getPostFeedRecipeChip(
+      { asset: fields ? asset(fields) : null, canRemix: remix },
+      { isOwner: viewerIsOwner },
+    );
 
-    expect(drawn).toEqual(chip ? { tone: chip.tone, label: chip.label.web } : null);
+    expect(drawn).toEqual(chip ? { tone: chip.tone, kind: chip.kind, label: chip.label.web } : null);
+  });
+
+  // A recipe the viewer has, or their own, no longer reads as for sale on
+  // its card: the price stayed after buying (audit B-F2, 2026-10-27).
+  it('names a recipe the viewer has, and their own, by the same words on both', () => {
+    expect(RECIPE_UNLOCKED_LABEL).toBe(contract.unlockedLabel);
+    expect(OWN_RECIPE_LABEL).toBe(contract.ownerLabel);
+    const unlocked = contract.cases.filter((entry) => entry.chip?.kind === 'unlocked');
+    const owned = contract.cases.filter((entry) => entry.chip?.kind === 'owner');
+    expect(unlocked.length).toBeGreaterThan(0);
+    expect(owned.length).toBeGreaterThan(0);
+    for (const entry of unlocked) expect(entry.chip?.label.web).toBe(contract.unlockedLabel);
+    for (const entry of owned) expect(entry.chip?.label.web).toBe(contract.ownerLabel);
   });
 
   // The web chip read "$2.50" where the app read "250 credits" (and before
@@ -66,7 +91,7 @@ describe("a feed card's recipe chip, on the web and in the app", () => {
     const summary = { ...asset({ accessMode: 'paid', priceUsdCents }), priceQuote } as ShowcaseAssetSummary;
 
     expect(getAssetAccessLabel(summary)).toBe(label);
-    expect(getPostFeedRecipeChip({ asset: summary, canRemix: false })).toEqual({ tone: 'paid', label });
+    expect(getPostFeedRecipeChip({ asset: summary, canRemix: false })).toEqual({ tone: 'paid', kind: 'price', label });
   });
 
   it('is asked the same cases by the app', () => {
@@ -127,8 +152,10 @@ describe("a feed card's recipe chip, on the web and in the app", () => {
   it('gives the web card the chip from its model, and no bar of its own', () => {
     const card = readFileSync('src/app/feed/FeedPostCard.tsx', 'utf8');
 
-    expect(card).toContain('{card.recipeChip ? (');
-    expect(card).toContain('{card.recipeChip.label}');
+    // The card's own chip, or the owner's from the same rule.
+    expect(card).toContain('const recipeChip = viewerIsOwner ? getPostFeedRecipeChip(item, { isOwner: true }) : card.recipeChip;');
+    expect(card).toContain('{recipeChip ? (');
+    expect(card).toContain('{recipeChip.label}');
     // The bar named the recipe by its title, which is the post's title again.
     expect(card).not.toContain('item.asset.title');
     expect(card).not.toContain('getAssetAccessLabel');

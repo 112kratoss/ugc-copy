@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { getAppVersionRouteResponse } from '@/lib/app-version-route-adapter-service';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import { getCreditHistoryRouteResponse } from '@/lib/credit-history-route-adapter-service';
+import { postResourceBundleCreditUnlockRouteResponse } from '@/lib/credit-unlock-route-adapter-service';
 import type { HomeShelfAction, HomeShelfBadge, HomeShelfCreation, HomeShelfPrice } from '@/lib/home-shelf';
 import { formatHomeShelfPrice, homeShelfActionCopy, homeShelfBadge } from '@/lib/home-shelf-copy';
 import {
@@ -950,6 +951,68 @@ describe('shared mobile API v1 contract fixture', () => {
     const { status, message, details } = refusal as MobileCommerceError;
     expect(status).toBe(refused.status);
     expect({ error: message, ...details }).toEqual(refused.response);
+  });
+
+  // Recipe audit H4 (2026-10-27): both clients send the price the buyer
+  // confirmed; a reprice in between is refused with the new price, nothing
+  // spent. The request and the refusal are the fixture's, field for field.
+  it('hands the confirmed price to the spend and answers a changed one in the fixture words', async () => {
+    const endpoint = mobileApiContract.endpoints.unlockBundleWithCredits;
+    const changed = endpoint.errors.priceChanged;
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'price_changed',
+        remaining_credits: 5000,
+        marketplace_spendable_credits: 5000,
+        bundle_id: 'bundle-1',
+        owner_user_id: 'creator-1',
+        credit_cost: changed.response.priceCredits,
+      },
+      error: null,
+    }));
+
+    const response = await postResourceBundleCreditUnlockRouteResponse({
+      request: new Request(`http://localhost${endpoint.path.replace(':postId', 'post-1')}`, {
+        method: endpoint.method,
+        headers: { authorization: 'Bearer token-1', 'content-type': 'application/json' },
+        body: JSON.stringify(endpoint.requestVariants.confirmedPrice),
+      }),
+      context: { params: Promise.resolve({ postId: 'post-1' }) },
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ rpc }) as unknown as SupabaseClient),
+        createUserClient: () => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'buyer-1' } }, error: null })) },
+        }) as unknown as SupabaseClient,
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 20,
+          remaining: 19,
+          retryAfterSeconds: 0,
+          resetAt: '2026-10-27T08:30:00.000Z',
+        })),
+        isPostResourceBundleBuyWithheld: vi.fn(async () => false),
+        runAfterResponse: vi.fn(),
+      },
+    });
+
+    expect(rpc).toHaveBeenCalledWith('unlock_post_resource_bundle_with_credits', {
+      p_user_id: 'buyer-1',
+      p_post_id: 'post-1',
+      p_expected_credit_cost: endpoint.requestVariants.confirmedPrice.expectedPriceCredits,
+    });
+    expect(response.status).toBe(changed.status);
+    expect(response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    await expect(response.json()).resolves.toEqual(changed.response);
+  });
+
+  // Sold recipes can be corrected (owner decision D1): the editor reads how
+  // many people have the recipe, and `hasPaidOrders` stays, always false, for
+  // app builds that still read it.
+  it('documents the owner post fields the composers read about a recipe’s buyers', () => {
+    const post = mobileApiContract.endpoints.getOwnerPost.response.post;
+
+    expect(post.hasPaidOrders).toBe(false);
+    expect(post.resourceBundleBuyerCount).toBe(post.bundle.salesCount + post.bundle.freeUnlockCount);
   });
 
   // The unified start carries the price its quote showed (`expectedCostCredits`). The

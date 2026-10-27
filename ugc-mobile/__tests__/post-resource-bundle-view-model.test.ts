@@ -9,6 +9,7 @@ import {
   resourceKindLabel,
   shouldShowResourceItemTitle,
 } from '@/lib/post-resource-bundle-view-model';
+import type { PostResourceBundleLockedPreview } from '@/lib/types';
 import { formatUnlockDate } from '@/lib/unlock-library-view-model';
 
 describe('parseGenerationSetupNotes', () => {
@@ -98,15 +99,24 @@ describe('resourceKindLabel', () => {
 });
 
 describe('formatPostResourceBundleCountSummary', () => {
-  it("counts sections first, then items in the web's order and words", () => {
-    expect(formatPostResourceBundleCountSummary({
-      sectionCount: 1,
-      itemCounts: { reference_image: 3, prompt: 1, settings: 2, reference_audio: 2 },
-    })).toBe('1 section, 1 prompt, 3 reference images, 2 reference audio files, 2 settings notes');
+  // Recipe audit B-F16: "sections" are the composer's cards, not something a
+  // buyer gets, and "source file" and "settings note" are composer words. The
+  // web's `formatPostResourceBundleCountSummary` says the same since 2026-10-27.
+  // The locked preview as the server sends it, sections counted and all.
+  const preview = (sectionCount: number, itemCounts: PostResourceBundleLockedPreview['itemCounts']): PostResourceBundleLockedPreview => (
+    { sectionCount, itemCounts }
+  );
+
+  it('counts what a buyer gets in plain words, in the web\'s order, without sections', () => {
+    expect(formatPostResourceBundleCountSummary(preview(3, { settings: 1, reference_audio: 2, prompt: 1, reference_image: 3 })))
+      .toBe('1 prompt, 3 reference images, 2 reference audio files, settings');
+    expect(formatPostResourceBundleCountSummary(preview(4, { prompt: 1, source_file: 2, settings: 2, external_link: 1 })))
+      .toBe('1 prompt, 2 files, settings, 1 link');
+    expect(formatPostResourceBundleCountSummary({ itemCounts: { source_file: 1 } })).toBe('1 file');
   });
 
-  it('says nothing when the preview counts nothing', () => {
-    expect(formatPostResourceBundleCountSummary({ sectionCount: 0, itemCounts: {} })).toBe('');
+  it('says nothing for a recipe with nothing counted', () => {
+    expect(formatPostResourceBundleCountSummary(preview(2, {}))).toBe('');
     expect(formatPostResourceBundleCountSummary(null)).toBe('');
   });
 });

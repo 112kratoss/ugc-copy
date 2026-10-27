@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { UnlockRemixPrompt } from '../components/unlock-remix-prompt';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
+import { readRecipeUnlockedNotice } from '../lib/recipe-unlocked-notice';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
@@ -38,7 +39,7 @@ const authState = vi.hoisted(() => ({
 
 const dialogState = vi.hoisted(() => ({ showConfirmDialog: vi.fn() }));
 
-const PROMOTIONAL_SHORTFALL = "You need 900 more credits for this unlock. Welcome and referral credits can't be spent on creator resources.";
+const PROMOTIONAL_SHORTFALL = "You need 900 more credits. Welcome and referral credits can't be spent on recipes.";
 
 /** What the auth context does with a balance it is handed (`updateCredits` in lib/auth.tsx). */
 function applyCredits(credits: number | null, options?: { marketplaceSpendableCredits?: number | null }) {
@@ -229,11 +230,12 @@ describe('UnlockRemixPrompt', () => {
     await flush();
 
     expect(dialogState.showConfirmDialog).toHaveBeenCalledWith({
-      title: 'Unlock this resource?',
-      message: '900 credits will come off your credit balance right away.',
+      title: 'Unlock this recipe?',
+      message: '900 credits will come off your balance.',
       confirmLabel: 'Unlock for 900 credits',
     });
-    expect(authState.api.unlockBundleWithCredits).toHaveBeenCalledWith('post-123');
+    // With the price the buyer confirmed (S3).
+    expect(authState.api.unlockBundleWithCredits).toHaveBeenCalledWith('post-123', 900);
     expect(authState.updateCredits).toHaveBeenCalledWith(4100);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['post-resource-bundle', 'post-123', 'asset-123'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['marketplace-resource', 'asset-123'] });
@@ -268,7 +270,7 @@ describe('UnlockRemixPrompt', () => {
     const cta = findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits');
     expect(cta.props.disabled).toBe(true);
     const texts = tree.root.findAll((node) => String(node.type) === 'text').map((node) => node.props.children);
-    expect(texts).toContain('You need 800 more credits for this unlock.');
+    expect(texts).toContain('You need 800 more credits.');
 
     renderer.act(() => {
       findPressableByAccessibilityLabel(tree.root, 'Get credits').props.onPress();
@@ -325,7 +327,7 @@ describe('UnlockRemixPrompt', () => {
     });
 
     renderer.act(() => {
-      findPressableByAccessibilityLabel(tree.root, 'Unlock to remix').props.onPress();
+      findPressableByAccessibilityLabel(tree.root, 'Get free recipe').props.onPress();
     });
     await flush();
 
@@ -349,4 +351,60 @@ describe('UnlockRemixPrompt', () => {
     expect(onClose).toHaveBeenCalled();
     expect(onUnlocked).not.toHaveBeenCalled();
   });
+
+  // Recipe audit B-F10 / B-F20: the sheet spoke of "resources", and paying here
+  // went on to the editor with nothing said about what else was bought.
+  it('asks for the recipe in the glossary words', () => {
+    const { tree } = renderPrompt();
+    const texts = tree.root.findAll((node) => String(node.type) === 'text').map((node) => node.props.children);
+
+    expect(texts).toContain('Unlock the recipe to remix');
+    expect(texts.some((text) => typeof text === 'string' && /resource/i.test(text))).toBe(false);
+  });
+
+  it('falls back to recipe words when the creator wrote no preview', () => {
+    const details = lockedRemixItem().details!;
+    const { tree } = renderPrompt({ item: lockedRemixItem({ details: { ...details, unlock: { ...details.unlock!, previewText: null } } }) });
+    const texts = tree.root.findAll((node) => String(node.type) === 'text').map((node) => node.props.children);
+
+    expect(texts).toContain('Unlock the recipe behind this post, then remix it in the editor.');
+  });
+
+  it('still goes on to the editor once paid, with "Recipe unlocked" said over it', async () => {
+    authState.api.unlockBundleWithCredits.mockResolvedValue({ success: true, entitlement: 'post_resource_unlock', credits: 4100 });
+    dialogState.showConfirmDialog.mockResolvedValue(true);
+    const before = readRecipeUnlockedNotice();
+    const { onUnlocked, tree } = renderPrompt();
+
+    renderer.act(() => {
+      findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits').props.onPress();
+    });
+    await flush();
+
+    expect(onUnlocked).toHaveBeenCalledTimes(1);
+    expect(readRecipeUnlockedNotice()).not.toBeNull();
+    expect(readRecipeUnlockedNotice()).not.toBe(before);
+  });
+
+  it('shows the new price on its button when the server says the price moved', async () => {
+    dialogState.showConfirmDialog.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    authState.api.unlockBundleWithCredits.mockRejectedValue(Object.assign(new Error('The price changed to 1200 credits.'), {
+      status: 409,
+      code: 'RESOURCE_PRICE_CHANGED',
+      details: { success: false, code: 'RESOURCE_PRICE_CHANGED', error: 'The price changed to 1200 credits.', priceCredits: 1200 },
+    }));
+    const { onUnlocked, tree } = renderPrompt();
+
+    renderer.act(() => {
+      findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits').props.onPress();
+    });
+    await flush();
+    await flush();
+
+    expect(onUnlocked).not.toHaveBeenCalled();
+    expect(findPressableByAccessibilityLabel(tree.root, 'Unlock for 1,200 credits')).toBeDefined();
+    const texts = tree.root.findAll((node) => String(node.type) === 'text').map((node) => node.props.children);
+    expect(texts).toEqual(expect.arrayContaining(['1,200 credits', 'The price changed to 1,200 credits.']));
+  });
 });
+

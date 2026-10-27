@@ -43,4 +43,6 @@ export interface EditablePostDraft {
   archivedAt: string | null;
   resourceBundle: PostResourceBundleInput;
   hasPaidOrders: boolean;
+  /** People who have this recipe: paid sales plus free unlocks. */
+  resourceBundleBuyerCount?: number;
 }

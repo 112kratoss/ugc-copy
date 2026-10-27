@@ -105,28 +105,41 @@ const AVERAGE_GLYPH_WIDTH_RATIO = 0.52;
  * the lane's cards; a save writes a new object for the saved post alone
  * (`applyShowcaseSaveStateToFeedResponse`), and a refetch keeps the objects of
  * the posts it did not change. Items are never edited in place, so a card can
- * be handed back while its item is the same object and the clock, its one
- * other input, still gives the same `timeLabel`.
+ * be handed back while its item is the same object and the clock and the
+ * viewer, its other inputs, still give the same `timeLabel` and owner.
  */
-const homeFeedCardCache = new WeakMap<ShowcaseFeedItem, HomeFeedCard>();
+const homeFeedCardCache = new WeakMap<ShowcaseFeedItem, { card: HomeFeedCard; viewerId: string | null }>();
 
 /**
  * Sibling of `buildShowcaseMasonry`. Home renders every post format in one
  * column, so — unlike the grid — it keeps text posts and never drops an item
- * for a preview that has not finished baking.
+ * for a preview that has not finished baking. `viewerId` is the signed-in
+ * viewer's, so their own recipe reads "Your recipe" (`homeRecipeChip`).
  */
-export function buildHomeFeedCards(items: ShowcaseFeedItem[], now = new Date()): HomeFeedCard[] {
+export function buildHomeFeedCards(
+  items: ShowcaseFeedItem[],
+  now = new Date(),
+  viewerId: string | null = null,
+): HomeFeedCard[] {
   return items.map((item) => {
     const cached = homeFeedCardCache.get(item);
-    if (cached && cached.timeLabel === formatRelativeTime(item.createdAt, now)) return cached;
+    if (
+      cached
+      && cached.viewerId === viewerId
+      && cached.card.timeLabel === formatRelativeTime(item.createdAt, now)
+    ) return cached.card;
 
-    const card = showcaseToHomeFeedCard(item, now);
-    homeFeedCardCache.set(item, card);
+    const card = showcaseToHomeFeedCard(item, now, viewerId);
+    homeFeedCardCache.set(item, { card, viewerId });
     return card;
   });
 }
 
-export function showcaseToHomeFeedCard(item: ShowcaseFeedItem, now = new Date()): HomeFeedCard {
+export function showcaseToHomeFeedCard(
+  item: ShowcaseFeedItem,
+  now = new Date(),
+  viewerId: string | null = null,
+): HomeFeedCard {
   const hasMedia = Boolean(item.mediaUrl);
   const bodyText = (item.body || '').trim();
   const previewKind = resolveHomePreviewKind(item, hasMedia, bodyText);
@@ -169,22 +182,33 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem, now = new Date())
     remixAccessibilityLabel: remixAccess === 'paid-unlock'
       ? `Unlock ${title} to remix it${remixPrice ? `, ${remixPrice}` : ''}`
       : `Remix ${title}`,
-    recipeChip: homeRecipeChip(item, title, remixAccess),
+    recipeChip: homeRecipeChip(item, title, remixAccess, {
+      isOwner: Boolean(viewerId && item.creator.id === viewerId),
+    }),
     isSaved: Boolean(item.isSaved),
   };
 }
 
 export interface HomeFeedRecipeChip {
-  /** `Free recipe`, or the price in credits, as the app sells an unlock. */
+  /** `Free recipe`, the price in credits as the app sells an unlock, `Unlocked` or `Your recipe`. */
   label: string;
   accessibilityLabel: string;
   tone: 'free' | 'paid';
+  /**
+   * What the chip says, which picks its icon: a price, a free recipe, one the
+   * viewer has (a check), or the viewer's own.
+   */
+  kind: 'price' | 'free' | 'unlocked' | 'owner';
 }
 
 /**
  * The recipe behind a post, as a chip at the end of the card's action row. It
  * is drawn only where it says something the row does not already:
  *
+ * - the viewer's own recipe says "Your recipe", and one they have (bought or
+ *   opened free) "Unlocked", wherever it is, in place of the price it kept
+ *   after buying (audit B-F2, 2026-10-27). The owner is asked first; whose
+ *   post it is comes from the caller, who knows the signed-in viewer;
  * - a paid recipe always shows its price, so a post that sells something is
  *   visible while scrolling. Where the recipe is what locks Remix, that pill
  *   carries the price instead, and there is no second one;
@@ -200,19 +224,28 @@ export function homeRecipeChip(
   item: Pick<ShowcaseFeedItem, 'asset'>,
   title: string,
   remixAccess: ShowcaseRemixAccess | null,
+  viewer: { isOwner?: boolean } = {},
 ): HomeFeedRecipeChip | null {
   const asset = item.asset;
   if (!asset) return null;
+
+  // The web's words (`OWN_RECIPE_LABEL`, `RECIPE_UNLOCKED_LABEL`), held to the contract.
+  if (viewer.isOwner) {
+    return { label: 'Your recipe', accessibilityLabel: `Your recipe for ${title}`, tone: 'free', kind: 'owner' };
+  }
+  if (asset.viewerHasUnlocked) {
+    return { label: 'Unlocked', accessibilityLabel: `Recipe for ${title}, unlocked`, tone: 'free', kind: 'unlocked' };
+  }
 
   if (asset.accessMode !== 'free' && asset.priceUsdCents > 0) {
     // The locked Remix pill already carries this price (`remixLabel`).
     if (remixAccess === 'paid-unlock') return null;
     const price = formatUnlockCreditPrice(asset.priceUsdCents);
-    return { label: price, accessibilityLabel: `Recipe for ${title}, ${price}`, tone: 'paid' };
+    return { label: price, accessibilityLabel: `Recipe for ${title}, ${price}`, tone: 'paid', kind: 'price' };
   }
 
   if (remixAccess) return null;
-  return { label: FREE_RECIPE_LABEL, accessibilityLabel: `${FREE_RECIPE_LABEL} for ${title}`, tone: 'free' };
+  return { label: FREE_RECIPE_LABEL, accessibilityLabel: `${FREE_RECIPE_LABEL} for ${title}`, tone: 'free', kind: 'free' };
 }
 
 /**

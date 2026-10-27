@@ -56,7 +56,7 @@ async function handleViewerUnlocksGET(
     return NextResponse.json({ success: true, ...page });
   } catch (error) {
     dependencies.logError('Failed to load viewer unlocks:', error);
-    return NextResponse.json({ error: 'Failed to load your unlocks.' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to load your unlocked recipes.' }, { status: 500 });
   }
 }
 

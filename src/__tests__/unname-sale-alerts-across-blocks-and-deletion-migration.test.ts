@@ -3,8 +3,6 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { sellerUnlockWords } from '@/lib/mobile-notifications';
-
 const read = (file: string) => fs.readFileSync(path.resolve(process.cwd(), 'supabase/migrations', file), 'utf8');
 const migration = read('20261020053858_unname_sale_alerts_across_blocks_and_deletion.sql');
 
@@ -17,24 +15,23 @@ const code = migration
 // What the triggers do to stored alerts is pinned live in
 // supabase/tests/database/sale_alert_names.test.sql.
 describe('unname sale alerts across blocks and deletion migration', () => {
-  it('takes the name out of the words the server writes, back to the words it writes with no name', () => {
+  it('takes the name out of the words the server wrote then, back to the words it wrote with no name', () => {
+    // The words of 2026-10-20, which rows written until 20261027180743 keep;
+    // that migration's test holds the live words (`sellerUnlockWords`) to the
+    // function as it is now, which matches both.
     const freeOpenNames = new RegExp(/p_title ~ '([^']+)'/.exec(code)![1]);
     const saleNames = new RegExp(/p_body ~ '([^']+)'/.exec(code)![1]);
 
     for (const handle of ['maya', 'creator-0a1b2c3d']) {
-      expect(sellerUnlockWords(true, handle).title).toMatch(freeOpenNames);
-      expect(sellerUnlockWords(false, handle).body).toMatch(saleNames);
+      expect(`@${handle} opened your free resources`).toMatch(freeOpenNames);
+      expect(`@${handle} bought the resources attached to your post.`).toMatch(saleNames);
     }
-    expect(sellerUnlockWords(true, null).title).not.toMatch(freeOpenNames);
-    expect(sellerUnlockWords(false, null).body).not.toMatch(saleNames);
+    expect('Someone opened your free resources').not.toMatch(freeOpenNames);
+    expect('A creator bought the resources attached to your post.').not.toMatch(saleNames);
 
-    const unnamedFreeOpen = sellerUnlockWords(true, null);
-    const unnamedSale = sellerUnlockWords(false, null);
-    expect(code).toContain(`title := '${unnamedFreeOpen.title}';`);
-    expect(code).toContain(`body := '${unnamedFreeOpen.body}';`);
-    expect(code).toContain(`body := '${unnamedSale.body}';`);
-    // A sale's title names no one, so it is never rewritten.
-    expect(sellerUnlockWords(false, 'maya').title).toBe(unnamedSale.title);
+    expect(code).toContain("title := 'Someone opened your free resources';");
+    expect(code).toContain("body := 'A creator opened the resources attached to your post.';");
+    expect(code).toContain("body := 'A creator bought the resources attached to your post.';");
   });
 
   it('stores an alert unnamed when it is written across a block, or once its buyer is deleted', () => {

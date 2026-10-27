@@ -1,6 +1,12 @@
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
-import { getAssetAccessLabel, isFreeRecipeAsset } from '@/lib/showcase-asset-labels';
+import {
+    OWN_RECIPE_LABEL,
+    RECIPE_UNLOCKED_LABEL,
+    getAssetAccessLabel,
+    getRecipeOfferLabel,
+    isFreeRecipeAsset,
+} from '@/lib/showcase-asset-labels';
 
 /**
  * How a post presents in a single-column feed.
@@ -163,9 +169,14 @@ export interface PostFeedCard {
 }
 
 export interface PostFeedRecipeChip {
-    /** `Free recipe`, or the price as this viewer pays it. */
+    /** `Free recipe`, the price as this viewer pays it, `Unlocked` or `Your recipe`. */
     label: string;
     tone: 'free' | 'paid';
+    /**
+     * What the chip says, which picks its icon: a price, a free recipe, one
+     * the viewer has (a check), or the viewer's own.
+     */
+    kind: 'price' | 'free' | 'unlocked' | 'owner';
 }
 
 /**
@@ -179,7 +190,9 @@ export interface PostFeedRecipeChip {
 export type PostFeedRemixAccess = 'open' | 'free-unlock' | 'paid-unlock';
 
 export function getPostFeedRemixAccess(
-    item: Pick<ShowcaseFeedItem, 'asset' | 'canRemix' | 'remixCapability' | 'remixTarget'>,
+    item: Pick<ShowcaseFeedItem, 'canRemix' | 'remixCapability' | 'remixTarget'> & {
+        asset: Pick<NonNullable<ShowcaseFeedItem['asset']>, 'allowRemix' | 'accessMode'> | null;
+    },
 ): PostFeedRemixAccess | null {
     if (item.canRemix) return 'open';
     if (item.remixCapability !== 'unlock_required' || !item.asset?.allowRemix) return null;
@@ -194,6 +207,10 @@ export function getPostFeedRemixAccess(
  * The recipe behind a post, as a chip at the end of the card's action row. It
  * is drawn only where it says something the row does not already:
  *
+ * - the viewer's own recipe says "Your recipe", and one they have (bought or
+ *   opened free) "Unlocked", wherever it is, in place of the price it kept
+ *   after buying (audit B-F2, 2026-10-27). The owner is asked first: whose
+ *   post it is outranks whatever else is on record;
  * - a paid recipe always shows its price, so a post that sells something is
  *   visible while scrolling. Where the recipe is what locks Remix, the locked
  *   Remix carries the price instead, and there is no second pill;
@@ -207,15 +224,18 @@ export function getPostFeedRemixAccess(
  */
 export function getPostFeedRecipeChip(
     item: Pick<ShowcaseFeedItem, 'asset' | 'canRemix' | 'remixCapability' | 'remixTarget'>,
+    viewer: { isOwner?: boolean } = {},
 ): PostFeedRecipeChip | null {
     if (!item.asset) return null;
+    if (viewer.isOwner) return { label: OWN_RECIPE_LABEL, tone: 'free', kind: 'owner' };
+    if (item.asset.viewerHasUnlocked) return { label: RECIPE_UNLOCKED_LABEL, tone: 'free', kind: 'unlocked' };
     const remixAccess = getPostFeedRemixAccess(item);
 
     if (!isFreeRecipeAsset(item.asset)) {
-        return remixAccess === 'paid-unlock' ? null : { label: getAssetAccessLabel(item.asset), tone: 'paid' };
+        return remixAccess === 'paid-unlock' ? null : { label: getAssetAccessLabel(item.asset), tone: 'paid', kind: 'price' };
     }
 
-    return remixAccess ? null : { label: getAssetAccessLabel(item.asset), tone: 'free' };
+    return remixAccess ? null : { label: getAssetAccessLabel(item.asset), tone: 'free', kind: 'free' };
 }
 
 /** Width the feed column gives body text, used only for the line estimate. */
@@ -286,7 +306,7 @@ export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): Pos
         // A remix sold with its recipe wears the recipe's price, as the app's
         // locked Remix does: the lock says the rest.
         remixLabel: remixAccess === 'paid-unlock' && item.asset
-            ? getAssetAccessLabel(item.asset)
+            ? getRecipeOfferLabel(item.asset)
             : item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
         recipeChip: getPostFeedRecipeChip(item),
         // A text post never expands in place — the card itself opens the post,

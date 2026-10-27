@@ -518,6 +518,28 @@ describe("FeedPostCard's recipe chip", () => {
         expect(onOpenPost).not.toHaveBeenCalled();
     });
 
+    // A recipe the viewer has kept its price on the card (audit B-F2): it reads
+    // "Unlocked" now, with a check, and the viewer's own reads "Your recipe".
+    it('says Unlocked, with a check, on a recipe the viewer has, beside Remix too', () => {
+        renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 250, viewerHasUnlocked: true }), canRemix: true });
+
+        const chip = screen.getByRole('link', { name: 'Unlocked: A launch frame' });
+
+        expect(chip).toHaveAttribute('href', recipeHref);
+        expect(chip.textContent).toBe('Unlocked');
+        expect(chip.querySelector('[data-recipe-chip-icon="check"]')).not.toBeNull();
+        expect(document.body.textContent).not.toContain('250 credits');
+    });
+
+    it("says Your recipe on the viewer's own post, whatever it costs", () => {
+        renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 250 }), canRemix: true }, { viewerIsOwner: true });
+
+        const chip = screen.getByRole('link', { name: 'Your recipe: A launch frame' });
+
+        expect(chip.textContent).toBe('Your recipe');
+        expect(document.body.textContent).not.toContain('250 credits');
+    });
+
     it('tells the feed the card’s resources were opened', () => {
         const onOpenResources = vi.fn();
         const { onRecordOpen } = renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 250 }), canRemix: true }, { onOpenResources });

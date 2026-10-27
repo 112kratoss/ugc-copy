@@ -198,6 +198,48 @@ export function getUnlockPriceLabel(
     : unlock.priceLabel;
 }
 
+/**
+ * Whether the Details page asks the post itself for its recipe. The card was
+ * drawn from the listing the feed carries, and listings carry published
+ * recipes only, so a buyer lost the recipe on its post once the creator
+ * unlisted or retired it (audit B-F7). The post's own read still answers a
+ * buyer; it is asked only for a signed-in viewer, never for the post's own
+ * creator, and only where no listing came with the post.
+ */
+export function shouldReadRetainedRecipe(
+  item: Pick<ImmersivePreviewItem, 'sourceType' | 'showcasePostId' | 'creatorId' | 'details'>,
+  viewerUserId: string | null | undefined,
+): boolean {
+  return Boolean(viewerUserId)
+    && item.sourceType === 'showcase'
+    && Boolean(item.showcasePostId)
+    && item.creatorId !== viewerUserId
+    && !item.details?.unlock;
+}
+
+/**
+ * The card's details for a recipe the post's own read says this viewer has;
+ * null for one they do not, which is not for sale on a post with no listing.
+ */
+export function retainedRecipeUnlock(
+  bundle: Pick<MarketplaceResourceDetail, 'id' | 'postId' | 'title' | 'accessMode' | 'priceUsdCents' | 'previewText'
+    | 'resourceKinds' | 'allowRemix' | 'viewerCanAccess' | 'viewerIsOwner'> | null | undefined,
+  postId: string,
+): ImmersivePostUnlockDetails | null {
+  if (!bundle?.viewerCanAccess || bundle.viewerIsOwner) return null;
+  const accessMode = bundle.accessMode === 'free' ? 'free' : 'paid';
+  return {
+    resourceId: bundle.id,
+    postId: bundle.postId || postId,
+    title: bundle.title,
+    accessMode,
+    priceLabel: accessMode === 'free' ? 'Free' : formatUnlockCreditPrice(bundle.priceUsdCents ?? 0),
+    previewText: bundle.previewText?.trim() || null,
+    resourceKinds: bundle.resourceKinds ?? [],
+    allowRemix: Boolean(bundle.allowRemix),
+  };
+}
+
 export type ResourceSectionState = 'none' | 'loading' | 'error' | 'locked' | 'unlocked';
 
 /**

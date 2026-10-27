@@ -19,7 +19,7 @@ export const RECIPE_ACCESS_CHOICES: ReadonlyArray<{
   icon: LucideIcon;
 }> = [
   { value: 'free', label: 'Free recipe', body: 'Reward useful work', accent: 'workflow', icon: Sparkles },
-  { value: 'paid', label: 'Paid recipe', body: 'Set a token price', accent: 'commerce', icon: Lock },
+  { value: 'paid', label: 'Paid recipe', body: 'Set a credit price', accent: 'commerce', icon: Lock },
   { value: 'none', label: 'No recipe', body: 'Just the post', accent: 'neutral', icon: CircleMinus },
 ];
 
@@ -34,7 +34,7 @@ export default function RecipeAccessCards({
   onChange,
 }: {
   value: PostResourceBundleAccessMode;
-  /** A bundle someone has paid for keeps its mode: the cards show it and take nothing. */
+  /** The cards show the mode and take nothing (a form that cannot change it). */
   disabled?: boolean;
   onChange: (mode: PostResourceBundleAccessMode) => void;
 }) {

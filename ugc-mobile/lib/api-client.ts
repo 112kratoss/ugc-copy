@@ -1715,6 +1715,8 @@ export function createApiClient({
         post: OwnerPostListItem & {
           resourceBundleInput?: PostResourceBundleInput | null;
           hasPaidOrders?: boolean;
+          /** People who have this recipe: paid sales plus free unlocks. */
+          resourceBundleBuyerCount?: number;
         };
       }>(`/api/posts/${postId}`),
     updatePost: (postId: string, body: Record<string, unknown>) =>
@@ -1736,7 +1738,15 @@ export function createApiClient({
         auth: false,
         cacheTtlMs: CONTENT_CACHE_TTL_MS,
       }),
-    getMarketplaceResourceDetail: async (resourceId: string, options?: { postId?: string | null }) => {
+    /**
+     * A recipe by its id, or, with no id, a post's own recipe: the Details
+     * page asks a post it has no listing for, which answers a buyer whatever
+     * the recipe's listing state (recipe audit B-F7).
+     */
+    getMarketplaceResourceDetail: async (resourceId: string | null, options?: { postId?: string | null }) => {
+      if (!resourceId && options?.postId) {
+        return request<MarketplaceResourceDetailResponse>(`/api/posts/${options.postId}/resource-bundle`);
+      }
       try {
         return await request<MarketplaceResourceDetailResponse>(`/api/marketplace/resources/${resourceId}`);
       } catch (error) {
@@ -1749,8 +1759,17 @@ export function createApiClient({
     },
     unlockFreeBundle: (postId: string) =>
       request<PostResourceBundleFreeUnlockResponse>(`/api/posts/${postId}/resource-bundle/unlock-free`, { method: 'POST' }),
-    unlockBundleWithCredits: (postId: string) =>
-      request<MobileCommerceSyncResponse>(`/api/posts/${postId}/resource-bundle/unlock-with-credits`, { method: 'POST' }),
+    /**
+     * `expectedPriceCredits` is the price the buyer confirmed. With it the
+     * server charges nothing when the price has moved since, and answers 409
+     * `RESOURCE_PRICE_CHANGED` with the price now (`priceCredits`); without it
+     * (builds before that check) it charges the price it holds.
+     */
+    unlockBundleWithCredits: (postId: string, expectedPriceCredits?: number) =>
+      request<MobileCommerceSyncResponse>(`/api/posts/${postId}/resource-bundle/unlock-with-credits`, {
+        method: 'POST',
+        ...(typeof expectedPriceCredits === 'number' ? { body: JSON.stringify({ expectedPriceCredits }) } : {}),
+      }),
     listViewerUnlocks: (params?: { limit?: number; offset?: number }) => {
       const query = new URLSearchParams();
       if (params?.limit != null) query.set('limit', String(params.limit));

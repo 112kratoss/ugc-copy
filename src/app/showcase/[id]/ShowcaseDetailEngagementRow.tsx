@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { Eye, Heart, Loader2, MessageCircle, Repeat2 } from 'lucide-react';
+import { Eye, Heart, Loader2, LockKeyhole, MessageCircle, Repeat2 } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
 import { useNsfwPostRevealed } from '@/components/NsfwPostReveal';
@@ -31,6 +31,7 @@ export default function ShowcaseDetailEngagementRow({
   remixCount,
   shareVisitCount,
   showComments,
+  recipeRemix = null,
 }: {
   postId: string;
   generationId: string | null;
@@ -45,6 +46,13 @@ export default function ShowcaseDetailEngagementRow({
   shareVisitCount: number;
   /** Comments only mount on public posts; the anchor follows them. */
   showComments: boolean;
+  /**
+   * The post's Remix comes with its recipe and this viewer has not got it
+   * (S1): Remix is drawn locked, with the recipe's price, and leads to the
+   * recipe, as the feed's locked Remix does (B-F3). Null when Remix is open
+   * or there is none.
+   */
+  recipeRemix?: { access: 'paid' | 'free'; priceLabel: string } | null;
 }) {
   const router = useRouter();
   const { session, user } = useAuth();
@@ -113,6 +121,25 @@ export default function ShowcaseDetailEngagementRow({
   return (
     <div className="mt-6 border-y border-white/8 py-1 text-xs font-semibold text-zinc-400">
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+        {/* The pill leads to the recipe, which under an NSFW gate is on the page only after the reveal. */}
+        {!canRemix && recipeRemix && nsfwRevealed !== false ? (
+          <a
+            href="#recipe"
+            aria-label={recipeRemix.access === 'paid'
+              ? `Unlock the recipe to remix ${title}, ${recipeRemix.priceLabel}`
+              : `Get the free recipe to remix ${title}`}
+            className={`ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full px-4 text-xs font-extrabold transition ${
+              recipeRemix.access === 'paid'
+                ? 'border border-amber-300/20 bg-amber-400/[0.08] text-amber-100 hover:border-amber-300/35'
+                : 'border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 text-[var(--ui-primary)] hover:bg-[var(--ui-primary)]/20'
+            }`}
+          >
+            {recipeRemix.access === 'paid'
+              ? <LockKeyhole className="h-4 w-4" aria-hidden="true" data-remix-lock />
+              : <Repeat2 className="h-4 w-4" aria-hidden="true" />}
+            {`Remix · ${recipeRemix.priceLabel}`}
+          </a>
+        ) : null}
         {canRemix ? (
           <button
             type="button"

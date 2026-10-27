@@ -125,3 +125,19 @@ describe('HomeSideMenu earnings', () => {
     expect(earningsCard(tree).props.accessibilityLabel).toBe('Tracked earnings loading');
   });
 });
+
+// Recipe audit B-F9: the buyer's library was "Your Recipes", which read like
+// the recipes they made, under "Recipe Sales"; the web called it "Unlocks".
+describe('HomeSideMenu library row', () => {
+  it('calls the buyer\'s library "Unlocked recipes" and opens it', () => {
+    routerState.push.mockClear();
+    const tree = renderMenu(1250);
+
+    expect(texts(tree)).toContain('Unlocked recipes');
+    expect(texts(tree)).not.toContain('Your Recipes');
+    const row = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Unlocked recipes');
+    renderer.act(() => row.props.onPress());
+    expect(routerState.push).toHaveBeenCalledWith('/unlocks');
+  });
+});
+

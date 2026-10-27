@@ -39,7 +39,7 @@ Every screen should support one of these jobs:
 - Start creating.
 - Review or continue a generation.
 - Browse, save and discuss community work.
-- Publish or unlock creator resources.
+- Publish a post with a recipe, or unlock someone else's recipe.
 - Manage profile, credits, and settings.
 
 If a surface does not support one of these jobs, it should be simplified or moved deeper.
@@ -338,7 +338,7 @@ Keep generating and publishing visibly different.
 
 ### Side menu
 
-Home's menu button opens a drawer (`components/home-side-menu.tsx`) with Templates, Invite & Earn, Your Sales, Your Unlocks, Settings, and Help & Support. Secondary destinations belong there or behind Profile, not in the dock.
+Home's menu button opens a drawer (`components/home-side-menu.tsx`) with Templates, Invite & Earn, Recipe Sales, Unlocked recipes, Settings, and Help & Support. Secondary destinations belong there or behind Profile, not in the dock.
 
 ### Stack screens
 
@@ -416,7 +416,7 @@ Beyond `ui.tsx`:
 - `top-scrim.tsx`: the fade under the status bar on scrolling tab roots.
 - `double-tap-pressable.tsx`: a double-tap on media.
 
-Feed hierarchy: creator attribution, title, media, optional story preview, actions, and optional resource metadata. Text-only posts keep their body directly below the title. Other cards lead with media or an icon, then title, a short body, and one clear action. Avoid cards inside decorative cards, mixed radii in one list, and more than one primary action per card.
+Feed hierarchy: creator attribution, title, media, optional story preview, actions, and the recipe chip where it says something. Text-only posts keep their body directly below the title. Other cards lead with media or an icon, then title, a short body, and one clear action. Avoid cards inside decorative cards, mixed radii in one list, and more than one primary action per card.
 
 The public writing on a media post is labelled **Story** in the composer and Details. **Read more** in Home and Profile has its own compact tap target and opens the existing Details page directly, with the previewed Story first or the full Prompt expanded when that is what the card showed; tapping the title, media, or preview text opens the media or post normally. Text-only posts open their dedicated post screen. Feed previews stay clamped. Media taps retain their normal opening transition. Read-more navigation uses Expo Router’s existing native stack and the horizontal list’s native `contentOffset` for the first frame, with no new animation or native module. Back from Details returns to the remembered media page.
 
@@ -441,8 +441,8 @@ These describe the app as of 0.1.6; each screen's `hig-*` test pins the details.
    - media cards open the reel;
    - written posts open the post page;
    - the comment control opens comments directly;
-   - the unused space within a card opens that card's post, while its labelled controls keep their own actions. There is no footer beneath the action row: remix descriptions, resource summaries, and unlock labels belong in the post details.
-   - Remix is on every card whose post can be remixed, whoever is looking (`lib/showcase-remix-access.ts`). When the creator put remix behind a free unlock, the tap takes the unlock on its way to the editor. When the unlock is paid, the control shows a lock in place of the remix glyph and the unlock's price in credits in place of the word, in the commerce colour, and opens the unlock sheet, which carries on into the editor once paid; credits are never spent by a tap in the feed. An upload, a written post, or a template's result (its recipe and model are the template's) has nothing to remix and shows no Remix.
+   - the unused space within a card opens that card's post, while its labelled controls keep their own actions. There is no footer beneath the action row: remix descriptions, recipe summaries and unlock labels belong in the post details.
+   - Remix is on every card whose post can be remixed, whoever is looking (`lib/showcase-remix-access.ts`). A post made from a creation that has a recipe includes its Remix with the recipe: when the recipe is free, the tap takes it on its way to the editor; when it is paid, the control shows a lock in place of the remix glyph and the unlock's price in credits in place of the word, in the commerce colour, and opens the unlock sheet, which carries on into the editor once paid; credits are never spent by a tap in the feed. An upload, a written post, or a template's result (its recipe and model are the template's) has nothing to remix and shows no Remix.
    - A post's recipe has no row of its own. It is a chip, last in the action row, and only where it says something the row does not (`homeRecipeChip` in `lib/home-feed-view-model.ts`): the price in credits for a paid recipe that does not lock Remix, and "Free recipe" on a card with no Remix. Beside Remix a free recipe is not named, because that tap takes it. The chip opens the post's details. It is last so that on a narrow phone it is the one control that wraps. The web's card follows the same cases (`contracts/feed-recipe-chip-v1.json`), and a recipe that costs nothing is "Free recipe" on every listing in both (`FREE_RECIPE_LABEL`).
 
 Rules:
@@ -486,7 +486,7 @@ Rules:
 
 `app/post/[id].tsx` and `components/post-details-page.tsx`.
 
-- Written posts read as a page, not a reel. Page 0 is the post, and a swipe left reaches the same details page media posts have: how it was made, references, resources and unlock.
+- Written posts read as a page, not a reel. Page 0 is the post, and a swipe left reaches the same details page media posts have: how it was made, references, and the recipe with its unlock.
 - Every state keeps a way back: loaded, loading, or gone.
 
 ### Comments
@@ -514,8 +514,16 @@ A text post has no media, Made with or Story: its title comes first, then its po
 **Step 2, "Review & publish"** (or "Edit post"):
 
 1. **Your name and handle** (only for a public post from a profile that cannot publish publicly yet: no claimed handle, or no display name): two fields filled in from the sign-in, the handle suggested from the name or the email. Until both are valid the summary reads "Needs attention" ("Add your name and handle to publish publicly.") and Publish public waits; pressing it saves them to the profile first, then publishes. A taken handle comes back on its field and nothing is published. A private post asks nothing.
-2. **Summary:** the cover and title (the title goes back to step 1 to edit), "Ready to publish" or "Needs attention", and chips for the visibility and the recipe ("No recipe", "Free recipe", "Paid recipe · 900 tokens"). A public post is held to the server's public-post rule first (`contracts/public-post-quality-v1.json`): a placeholder title, or a text post without enough useful text, reads "Needs attention" in the rule's words. A private post is not checked.
-3. **Recipe** (optional): Free recipe, Paid recipe (a token price), or No recipe. A new post's recipe from a creation can also carry the creation's references and its exact prompt; an edit offers the exact prompt only, because only publishing copies references. "Include exact prompt" reads the cards by their text, as the web does, so a prompt card made on the web counts and removing the card switches it off.
+2. **Summary:** the cover and title (the title goes back to step 1 to edit), "Ready to publish" or "Needs attention", and chips for the visibility and the recipe ("No recipe", "Free recipe", "Paid recipe · 900 credits"). A public post is held to the server's public-post rule first (`contracts/public-post-quality-v1.json`): a placeholder title, or a text post without enough useful text, reads "Needs attention" in the rule's words. A private post is not checked.
+3. **Recipe** (optional), in the recipe glossary's words (recipe audit 2026-10-27: a recipe, its items, its Recipe preview, credits):
+   - **Access:** Free recipe ("Reward useful work"), Paid recipe ("Set a credit price") and No recipe ("Just the post"), three equal cards in one radio group (`radio`, checked and selected), as the web's `RecipeAccessCards` draws them on a phone.
+   - **Price** (Paid only), directly under the cards: "Price in credits" (900 by default and as the placeholder; from 10, in steps of 10), then the money line, "Buyers pay 900 credits · You earn ~$7.65 (85%) · Payouts from $100", then "Before buying, people see your recipe preview and item titles — never what's inside." The web's line says "Buyers pay $9.00": the app never puts a cash price beside a recipe (App Review 2.1(b), 0.1.6), while what the seller earns is money, as Your Sales says it. A price the server would refuse says "Paid recipes start at 10 credits, in steps of 10." under the field.
+   - **From this creation** (a new post's recipe from a creation): "Include creation references" and "Include exact prompt"; an edit offers the exact prompt only, because only publishing copies references. "Include exact prompt" reads the items by their text, as the web does, so a prompt item made on the web counts and removing it switches the toggle off. The creation's references are content: they show in What people receive as a read-only row ("Creation references", "Reference media · 2 files", taken out by the toggle) and make a recipe on their own.
+   - **What people receive:** the items, "Add item", and "Add your first item" while there are none. A post made from a creation says "Remix comes with this recipe: people who unlock it can remix your post.": any recipe on such a post includes its Remix, so there is no remix switch. Once people have the recipe, "3 people have this recipe. They keep the version they got and see your changes." sits above the items, and the recipe is edited like any other.
+   - **Recipe preview** (required, 180): the one public text, with "Everyone sees this before unlocking." under it. It is suggested from the items as the first is saved ("Includes the prompt, reference media and the model settings.", the same sentence as the web's) and follows them while it still says what was suggested; once the creator writes their own it is theirs. An edit starts from the stored summary, else the preview, and saves it as both.
+   - **Readiness:** "Finish the recipe" with what is missing ("Add at least one item."), "Set a valid price", or the recipe's ready state.
+
+**Adding an item** opens a sheet (overlay host): "Add an item" lists Prompt or script, Reference media, Model settings and Guide or notes, then "More types" (expanded state spoken) for Workflow or project, Source assets, External link, Remix link and Other, each kind with a glyph of its own. Its editor holds "Item title" (public: "Everyone sees this before unlocking."), "Note shown after unlock", and the item's content. Reference media, Source assets and Other take files from **Photo library** (the system photo picker, several photos and videos at once) or **Files** (the document picker, for audio and documents); "Up to 50 MB each" is said before picking, and a photo over it is left out and named. A field's error shows only once the field is touched; until then a plain line beside the disabled "Save item" says what is missing ("Add a file to save this item.").
 
 The footer holds the visibility (Public or Private) and the publish action: Publish public, Save private, or Save changes when editing. Unlike Next, the publish action waits: it is disabled while the summary says "Needs attention", while media is being picked, while the name and handle are being saved, and while a failed upload waits for Retry or Remove failed.
 
@@ -527,7 +535,9 @@ Rules:
 - Only step 2 publishes. Step 1's button is Next, never a publish word. It once carried step 2's title and read as if the tap would publish.
 - Generation references and exact prompts attach only when the creator chooses them.
 - Marketplace details appear only once a free or paid recipe is chosen.
-- A template result posts its final media only, and a recipe people have already bought cannot change; step 2 says so in place of the recipe choices.
+- A template result posts its final media only; step 2 says so in place of the recipe choices.
+- A recipe people have bought can be corrected: each save is a new version, and they keep the one they got.
+- Saving an edit with "No recipe" over the recipe the post had asks first: "Remove this recipe?", "Its 4 items and files will be deleted." (and, when people have it, "The 3 people who have it keep their copy; it comes off sale."), Remove recipe or Keep recipe, which puts the choice back.
 - A public post needs a claimed handle and a display name. Step 2 asks for them (above) when the profile was read; a refusal for an incomplete profile, which now happens only when it could not be read, offers Complete profile under the message. It opens Edit profile over the composer, which is there as it was when the profile saves or closes.
 - When a save may have used the staged uploads (no answer, a server error, or the Made with refusal, which the server makes after moving them), the next publish uploads the new media again from the device, under the usual progress and Cancel. After any other refusal it sends the same uploads again.
 - Removing something offers Undo just above the footer, where it stays in reach.

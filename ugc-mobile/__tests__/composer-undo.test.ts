@@ -153,12 +153,14 @@ describe('composer undo — Undo puts back what the removal took, onto the draft
   });
 
   describe('resource cards', () => {
-    it('switch resources back on when taking the last one switched them off', () => {
+    // Removing a recipe is the creator's choice of "No recipe", asked about on
+    // save; taking the last item away only leaves the recipe empty, as on the web.
+    it('keep the recipe on when the last one is taken, and come back on Undo', () => {
       const draft = getDefaultPostComposerDraft();
       const card = createPostComposerResourceCard('prompt', { id: 'prompt' });
       const before = { ...draft, resource: { ...draft.resource, accessMode: 'free' as const, cards: [card] } };
       const taken = takeComposerResourceCard(before, 'prompt')!;
-      expect(taken.draft.resource.accessMode).toBe('none');
+      expect(taken.draft.resource).toMatchObject({ accessMode: 'free', cards: [] });
       expect(putBackComposerRemoval(taken.draft, taken.removal).resource).toMatchObject({ accessMode: 'free', cards: [card] });
 
       // A choice made since stands.

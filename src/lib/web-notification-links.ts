@@ -44,6 +44,15 @@ export function resolveWebNotificationPath(deepLink: string | null | undefined) 
       return '/marketplace/sell';
     }
     if (!url.pathname.startsWith('/')) return null;
+    if (
+      /^\/showcase\/[^/]+$/.test(url.pathname)
+      && url.searchParams.get('page') === 'details'
+      && url.searchParams.get('section') === 'resources'
+    ) {
+      // The app's post page at its recipe, where a "Recipe unlocked" alert
+      // leads (B-F9): the web post page's own recipe anchor.
+      return `${url.pathname}#recipe`;
+    }
     return `${url.pathname}${url.search}${url.hash}`;
   } catch {
     return null;

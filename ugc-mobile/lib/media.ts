@@ -282,7 +282,106 @@ const RESOURCE_DOCUMENT_TYPES = [
   'text/yaml',
 ] as const;
 
-export async function pickResourceDocument(mode: ResourceDocumentPickerMode = 'resource') {
+/** A file picked for a recipe item, from Files or from the photo library. */
+export interface PickedResourceFile {
+  uri: string;
+  name: string;
+  mimeType?: string | null;
+  size?: number | null;
+}
+
+/** Said under the item editor's file buttons, before anything is picked. */
+export const RESOURCE_FILE_SIZE_LIMIT_LABEL = 'Up to 50 MB each';
+
+/**
+ * The picked files an upload can take, and those over the 50 MB a recipe file
+ * may be, which are left out before any of them is sent. A size the picker
+ * could not read passes: the upload measures the file itself.
+ */
+export function partitionResourceFilesBySize<T extends { size?: number | null }>(files: readonly T[]) {
+  const accepted: T[] = [];
+  const oversized: T[] = [];
+  for (const file of files) {
+    const tooLarge = typeof file.size === 'number' && file.size > MAX_RESOURCE_FILE_SIZE_BYTES;
+    (tooLarge ? oversized : accepted).push(file);
+  }
+  return { accepted, oversized };
+}
+
+export function describeOversizedResourceFiles(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1 ? 'A file over 50 MB was not added.' : `${count} files over 50 MB were not added.`;
+}
+
+const LIBRARY_MEDIA_EXTENSION_BY_MIME = new Map<string, string>([
+  ['image/jpeg', 'jpg'],
+  ['image/png', 'png'],
+  ['image/webp', 'webp'],
+  ['image/gif', 'gif'],
+  ['image/heic', 'heic'],
+  ['image/heif', 'heif'],
+  ['video/mp4', 'mp4'],
+  ['video/x-m4v', 'm4v'],
+  ['video/quicktime', 'mov'],
+  ['video/webm', 'webm'],
+]);
+
+function knownMediaExtension(fileName: string | null | undefined): string | null {
+  const extension = getFileNameExtension(fileName);
+  return extension && REFERENCE_MEDIA_FAMILY_BY_EXTENSION.has(extension) ? extension : null;
+}
+
+/**
+ * A name for a photo or video from the library that says what its bytes are,
+ * which the reference-media check and the server both read the extension of.
+ * The library's own name is kept for its stem (on an iPhone "IMG_0001"), and
+ * the extension comes from the copy the picker wrote, which can be in another
+ * format than the original ("IMG_0001.HEIC" handed over as a JPEG). Some
+ * pickers give no name at all, and without one the upload refused the file.
+ */
+function getLibraryFileName(asset: ImagePicker.ImagePickerAsset, index: number): string {
+  const isVideo = asset.type === 'video' || Boolean(asset.mimeType?.startsWith('video/'));
+  const copyName = asset.uri.split('?')[0]?.split(/[\\/]/).filter(Boolean).pop();
+  const extension = knownMediaExtension(copyName)
+    ?? LIBRARY_MEDIA_EXTENSION_BY_MIME.get(asset.mimeType?.split(';')[0]?.trim().toLowerCase() ?? '')
+    ?? knownMediaExtension(asset.fileName)
+    ?? (isVideo ? 'mp4' : 'jpg');
+  const libraryName = asset.fileName?.split(/[\\/]/).filter(Boolean).pop()?.trim() ?? '';
+  const dotIndex = libraryName.lastIndexOf('.');
+  const stem = (dotIndex > 0 ? libraryName.slice(0, dotIndex) : libraryName).trim();
+  return `${stem || `${isVideo ? 'video' : 'photo'}-${index + 1}`}.${extension}`;
+}
+
+/**
+ * Photos and videos from the library for a recipe item (recipe audit H6,
+ * 2026-10-27). The item editor had only the document picker, which on an
+ * iPhone opens Files, so a reference in the camera roll could not be attached
+ * without saving it to Files first. The system's own photo picker (PHPicker on
+ * iOS, the photo picker on Android) needs no permission, and expo-image-picker
+ * is in every binary already: the post's own media are picked with it. Full
+ * quality, several at once, in the order they were chosen.
+ */
+export async function pickResourcePhotos(): Promise<PickedResourceFile[]> {
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images', 'videos'],
+    allowsMultipleSelection: true,
+    orderedSelection: true,
+    quality: 1,
+  });
+
+  if (result.canceled || !result.assets) {
+    return [];
+  }
+
+  return result.assets.map((asset, index) => ({
+    uri: asset.uri,
+    name: getLibraryFileName(asset, index),
+    mimeType: asset.mimeType ?? null,
+    size: typeof asset.fileSize === 'number' && Number.isFinite(asset.fileSize) ? asset.fileSize : null,
+  }));
+}
+
+export async function pickResourceDocument(mode: ResourceDocumentPickerMode = 'resource'): Promise<PickedResourceFile | null> {
   const result = await DocumentPicker.getDocumentAsync({
     // Deliberately no '*/*' entry: with the wildcard present the picker offers
     // every file on the device and the allowlist becomes decoration. Reference
@@ -465,7 +564,7 @@ export async function uploadResourceDocument(
   if (options.mediaOnly) validateReferenceMediaFile(options.fileName, upload.mimeType);
 
   if (upload.sizeBytes > MAX_RESOURCE_FILE_SIZE_BYTES) {
-    throw new Error('Resource files must be 50MB or smaller.');
+    throw new Error('Files must be 50 MB or smaller.');
   }
 
   const extension = getFileNameExtension(options.fileName)

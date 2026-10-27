@@ -103,6 +103,25 @@ export const POST_COMPOSER_RESOURCE_CARD_OPTIONS: Array<{
   { id: 'other', label: 'Other', body: 'Anything useful that does not fit above.' },
 ];
 
+/**
+ * The item picker's rows (S8, 2026-10-27), as both composers draw them: the
+ * four types nearly every recipe uses, then "More types" for the rest, each
+ * group in the order above. The list above keeps its order for the contract.
+ */
+export const POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES: PostComposerResourceCardType[] = [
+  'prompt',
+  'reference_media',
+  'settings',
+  'guide',
+];
+export const POST_COMPOSER_MORE_RESOURCE_CARD_TYPES: PostComposerResourceCardType[] = [
+  'workflow',
+  'source_assets',
+  'external_link',
+  'remix_link',
+  'other',
+];
+
 function trimOrUndefined(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -186,30 +205,63 @@ export function resourceCardHasContent(
   return hasText || hasUrl || hasAttachments || hasWorkflowSnapshot || hasPreservedContent;
 }
 
-export function getPostComposerResourceCardErrors(
-  card: PostComposerResourceCardDraft
-): Partial<Record<'title' | 'content', string>> {
-  const errors: Partial<Record<'title' | 'content', string>> = {};
-  if (!card.title.trim()) {
-    errors.title = 'Add a resource title.';
-  }
-  const hasInvalidUrl = (
+function hasInvalidResourceUrl(card: PostComposerResourceCardDraft): boolean {
+  return (
     Boolean(card.externalUrl.trim())
     && !isSafeResourceUrl(card.externalUrl)
   ) || card.attachments.some((attachment) => (
     Boolean(attachment.url?.trim())
     && !isSafeResourceUrl(attachment.url)
   ));
-  if (hasInvalidUrl) {
+}
+
+export function getPostComposerResourceCardErrors(
+  card: PostComposerResourceCardDraft
+): Partial<Record<'title' | 'content', string>> {
+  const errors: Partial<Record<'title' | 'content', string>> = {};
+  if (!card.title.trim()) {
+    errors.title = 'Add an item title.';
+  }
+  if (hasInvalidResourceUrl(card)) {
     errors.content = 'Add a valid http:// or https:// link.';
   } else if (!resourceCardHasContent(card, { ignoreTitle: true })) {
-    errors.content = 'Add the protected content, link, or file for this resource.';
+    errors.content = 'Add the content, link, or file for this item.';
   }
   return errors;
 }
 
 export function isPostComposerResourceCardReady(card: PostComposerResourceCardDraft) {
   return Object.keys(getPostComposerResourceCardErrors(card)).length === 0;
+}
+
+const MISSING_CONTENT_HINTS: Record<PostComposerResourceCardType, string> = {
+  prompt: 'Add the prompt to save this item.',
+  reference_media: 'Add a file to save this item.',
+  settings: 'Add the settings to save this item.',
+  workflow: 'Add a link, a file or text to save this item.',
+  source_assets: 'Add a file to save this item.',
+  guide: 'Add the guide or notes to save this item.',
+  external_link: 'Add a link to save this item.',
+  remix_link: 'Add a link to save this item.',
+  other: 'Add text or a file to save this item.',
+};
+
+/**
+ * What the item editor says beside its disabled Save before any field has
+ * been touched (A-F14): a plain line about the first thing missing, where the
+ * errors above wait for a touch. Null once the item can be saved.
+ */
+export function getPostComposerResourceCardSaveHint(card: PostComposerResourceCardDraft): string | null {
+  if (!card.title.trim()) {
+    return 'Add an item title to save this item.';
+  }
+  if (hasInvalidResourceUrl(card)) {
+    return 'Use a link that starts with http:// or https://.';
+  }
+  if (!resourceCardHasContent(card, { ignoreTitle: true })) {
+    return MISSING_CONTENT_HINTS[card.type];
+  }
+  return null;
 }
 
 function resolveCardScope(card: PostComposerResourceCardDraft): PostResourceItemScope {
@@ -728,6 +780,49 @@ export function getResourceCardPreview(cards: PostComposerResourceCardDraft[]) {
     : 'Includes reusable resources from this creation.';
 }
 
+// One phrase per type, for one item of it and for several. A type whose
+// phrase reads the same either way has one string.
+const SUGGESTED_PREVIEW_PHRASES: Record<PostComposerResourceCardType, (count: number) => string> = {
+  prompt: (count) => (count === 1 ? 'the prompt' : `${count} prompts`),
+  reference_media: () => 'reference media',
+  settings: () => 'the model settings',
+  workflow: (count) => (count === 1 ? 'the workflow' : `${count} workflows`),
+  source_assets: () => 'source files',
+  guide: (count) => (count === 1 ? 'a written guide' : `${count} guides`),
+  external_link: (count) => (count === 1 ? 'a useful link' : `${count} links`),
+  remix_link: (count) => (count === 1 ? 'a remix link' : `${count} remix links`),
+  other: (count) => (count === 1 ? 'one more item' : `${count} more items`),
+};
+
+/**
+ * The Recipe preview the composers suggest (S7, 2026-10-27): "Includes the
+ * prompt, reference media and the model settings." One phrase per type, in
+ * the order the items first come, with no serial comma; '' for no items. A
+ * creation's saved inputs, which the publish route appends to the recipe
+ * (A-F9), read as reference media after the items. The app's composer builds
+ * the same sentence. Unlike `getResourceCardPreview`, the serializer's
+ * fallback that the authoring contract pins, it never quotes an item's
+ * title, which was often just its type's label.
+ */
+export function getSuggestedRecipePreview(
+  cards: PostComposerResourceCardDraft[],
+  options: { creationReferences?: boolean } = {},
+): string {
+  const counts = new Map<PostComposerResourceCardType, number>();
+  cards.forEach((card) => counts.set(card.type, (counts.get(card.type) ?? 0) + 1));
+  if (options.creationReferences && !counts.has('reference_media')) {
+    counts.set('reference_media', 1);
+  }
+  const phrases = [...counts].map(([type, count]) => SUGGESTED_PREVIEW_PHRASES[type](count));
+  if (phrases.length === 0) {
+    return '';
+  }
+  const listed = phrases.length === 1
+    ? phrases[0]
+    : `${phrases.slice(0, -1).join(', ')} and ${phrases[phrases.length - 1]}`;
+  return `Includes ${listed}.`;
+}
+
 export function inferResourceCardType(items: PostResourceItem[]): PostComposerResourceCardType {
   const types = new Set(items.map((item) => item.type));
   if (types.has('remix_link')) return 'remix_link';
@@ -813,6 +908,7 @@ export function buildResourceCardBundleInput({
   summary,
   previewText,
   priceTokens,
+  includesServerItems = false,
 }: {
   accessMode: PostResourceBundleAccessMode;
   cards: PostComposerResourceCardDraft[];
@@ -820,6 +916,12 @@ export function buildResourceCardBundleInput({
   summary: string;
   previewText: string;
   priceTokens: number;
+  /**
+   * The server adds items of its own to this recipe: a creation's saved
+   * inputs, which the publish route merges into the recipe it is sent. Such a
+   * recipe is sent even without a card.
+   */
+  includesServerItems?: boolean;
 }): PostResourceBundleInput | null {
   if (accessMode === 'none') {
     return null;
@@ -833,7 +935,7 @@ export function buildResourceCardBundleInput({
   // before the card model can grant remix and nothing else. Returning null for
   // it would delete the permission on the next save, so it survives as a
   // bundle the server synthesizes a remix_access item for.
-  if (items.length === 0 && !allowRemix) {
+  if (items.length === 0 && !allowRemix && !includesServerItems) {
     return null;
   }
 

@@ -525,7 +525,12 @@ export function CreatorContentTabs({
         ) : visibleItems.length > 0 ? (
           <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4">
             {visibleItems.map((item) => (
-              <CreatorCard key={item.id} item={item} onOpen={openViewer} />
+              <CreatorCard
+                key={item.id}
+                item={item}
+                isOwner={Boolean(user?.id) && item.creator.id === user?.id}
+                onOpen={openViewer}
+              />
             ))}
           </div>
         ) : isLookingForRecipes ? null : (
@@ -599,16 +604,19 @@ export function CreatorContentTabs({
 
 function CreatorCard({
   item,
+  isOwner,
   onOpen,
 }: {
   item: ShowcaseFeedItem;
+  /** The viewer's own page: their recipe reads "Your recipe", not a price. */
+  isOwner: boolean;
   onOpen: (item: ShowcaseFeedItem, mediaIndex?: number) => void;
 }) {
   const mediaItems = getShowcaseItemMediaItems(item);
   const isText = item.postFormat === 'text';
   // The label Explore and the feed give the same recipe, so a credits-only one
-  // is priced in credits here too.
-  const unlockLabel = item.asset ? getAssetAccessLabel(item.asset) : null;
+  // is priced in credits here too, and one the viewer has reads "Unlocked".
+  const unlockLabel = item.asset ? getAssetAccessLabel(item.asset, { isOwner }) : null;
 
   return (
     <article className="group min-w-0 overflow-hidden rounded-[20px] border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24">

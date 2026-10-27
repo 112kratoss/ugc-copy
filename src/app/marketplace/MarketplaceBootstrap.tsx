@@ -14,7 +14,8 @@ import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
-import { formatPostResourcePriceLabel, getBundleAccessLabel } from '@/lib/post-resource-bundles';
+import { formatPostResourcePriceLabel } from '@/lib/post-resource-bundles';
+import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 export type MarketplaceBootstrapProps = ComponentProps<typeof MarketplaceBrowser>;
@@ -429,7 +430,8 @@ function BootstrapMarketplaceCard({
   // on the badge, every way to pay on the pill and the button. The bare quote
   // priced a credits-only recipe in a currency no checkout takes.
   const isFree = asset.accessMode === 'free' || asset.priceUsdCents === 0;
-  const accessLabel = getBundleAccessLabel(asset.accessMode, asset.priceUsdCents, asset.priceQuote.formatted);
+  // In credits, as every other chip prices a recipe (audit B-F13).
+  const accessLabel = getAssetAccessLabel(asset);
   const priceLabel = isFree ? 'Free' : formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote.formatted);
   const unlockLabel = isFree ? 'View free recipe' : `Unlock for ${priceLabel}`;
   const previewText = asset.summary || asset.previewText || (

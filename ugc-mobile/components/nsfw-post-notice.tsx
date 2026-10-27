@@ -19,6 +19,7 @@ export function NsfwPostNotice({
   postId,
   width,
   onRevealedChange,
+  onOpenRecipe,
 }: {
   postId: string;
   /** The column the notice is drawn in; revealed media fills it. */
@@ -26,9 +27,13 @@ export function NsfwPostNotice({
   /**
    * Told each time the original appears or goes again (a reveal, Hide, the
    * ten-minute expiry, the app leaving the foreground), so the page can keep
-   * the post's thread covered while the post is.
+   * the post's thread covered while the post is. With the revealed post, or
+   * null once it is covered again: its Details page and its recipe are drawn
+   * from it (decision D4, 2026-10-27).
    */
-  onRevealedChange?: (revealed: boolean) => void;
+  onRevealedChange?: (revealed: boolean, item: ShowcaseFeedItem | null) => void;
+  /** Opens the revealed post's Details at its recipe; offered while the revealed post carries one. */
+  onOpenRecipe?: () => void;
 }) {
   const { api, user } = useAuth();
   const theme = useAppTheme();
@@ -47,7 +52,7 @@ export function NsfwPostNotice({
     return () => clearTimeout(timeout);
   }, [item]);
   useEffect(() => { setItem(null); }, [postId, user?.id]);
-  useEffect(() => { onRevealedChange?.(revealed); }, [onRevealedChange, revealed]);
+  useEffect(() => { onRevealedChange?.(revealed, item); }, [onRevealedChange, revealed, item]);
   async function reveal() {
     if (!revealAllowed) return;
     setLoading(true); setError(null);
@@ -70,6 +75,9 @@ export function NsfwPostNotice({
         width={mediaWidth} height={mediaWidth * 1.25} radius={16}
         recyclingKey={`revealed:${postId}`} videoActivation="visible"
       /></View> : null}
+      {/* A recipe on a mature post is reachable once the post is (D4): the
+          cover drops it, and before this nothing showed it after a reveal. */}
+      {item.asset && onOpenRecipe ? <PrimaryButton label="View recipe" onPress={onOpenRecipe} /> : null}
       <SecondaryButton label="Hide this post" onPress={() => setItem(null)} />
     </> : !revealAllowed ? <>
       <AppText variant="body">The creator marked this post NSFW. Mature posts stay covered in this app.</AppText>

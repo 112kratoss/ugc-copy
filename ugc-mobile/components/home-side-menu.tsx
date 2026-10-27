@@ -43,6 +43,7 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { CREDIT_BALANCE_LOADING_LABEL, UNKNOWN_AMOUNT_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme } from '@/lib/theme';
+import { UNLOCKED_RECIPES_LABEL, UNLOCKED_RECIPES_PATH } from '@/lib/recipe-unlocked-notice';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ProfileResponse } from '@/lib/types';
 
@@ -403,7 +404,9 @@ export function HomeSideMenu({
               <MenuRow icon={<Layers3 size={21} color={theme.colors.text} />} label="Templates" onPress={() => navigateAndClose('/templates')} />
               <MenuRow icon={<Gift size={21} color={theme.colors.commerce} />} label="Invite & Earn" onPress={() => navigateAndClose('/invite')} />
               <MenuRow icon={<LayoutDashboard size={21} color={theme.colors.text} />} label="Recipe Sales" onPress={() => navigateAndClose('/seller-dashboard')} />
-              <MenuRow icon={<PackageOpen size={21} color={theme.colors.text} />} label="Your Recipes" onPress={() => navigateAndClose('/unlocks')} />
+              {/* The recipes this account unlocked from other creators, in the
+                  glossary's words: "Your Recipes" read like the ones it made. */}
+              <MenuRow icon={<PackageOpen size={21} color={theme.colors.text} />} label={UNLOCKED_RECIPES_LABEL} onPress={() => navigateAndClose(UNLOCKED_RECIPES_PATH)} />
               <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle, marginVertical: 4 }} />
               <MenuRow icon={<Settings size={21} color={theme.colors.text} />} label="Settings" onPress={() => navigateAndClose('/settings')} />
               <MenuRow icon={<CircleHelp size={21} color={theme.colors.text} />} label="Help & Support" onPress={() => navigateAndClose('/help')} />

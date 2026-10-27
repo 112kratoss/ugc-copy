@@ -79,7 +79,7 @@ const SHOWCASE_RETURN_SOURCES: ShowcaseReturnSource[] = [
 const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
   community: 'Back to Community',
   unlocks: 'Back to Marketplace',
-  library: 'Back to your unlocks',
+  library: 'Back to unlocked recipes',
   creator: 'Back to Creator Portfolio',
   seller: 'Back to Seller Dashboard',
   studio: 'Back to My Studio',

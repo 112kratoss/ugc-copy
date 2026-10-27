@@ -174,6 +174,35 @@ describe('ShowcaseDetailEngagementRow', () => {
     }
   });
 
+  // A creator sells the remix with the recipe (S1): the page drew no Remix at
+  // all for a viewer without it, and nothing said the recipe would bring it
+  // (B-F3). It is a locked Remix now, as the feed's is, that goes to the recipe.
+  it('draws a locked Remix with its price that leads to the recipe, where the recipe sells it', () => {
+    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'paid', priceLabel: '900 credits' } })} />);
+
+    const remix = screen.getByRole('link', { name: 'Unlock the recipe to remix Shared creation, 900 credits' });
+    expect(remix).toHaveAttribute('href', '#recipe');
+    expect(remix).toHaveTextContent('Remix · 900 credits');
+    expect(remix.querySelector('[data-remix-lock]')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /remix/i })).toBeNull();
+  });
+
+  it('says a free recipe brings the remix with it', () => {
+    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } })} />);
+
+    const remix = screen.getByRole('link', { name: 'Get the free recipe to remix Shared creation' });
+    expect(remix).toHaveAttribute('href', '#recipe');
+    expect(remix).toHaveTextContent('Remix · Free');
+    expect(remix.querySelector('[data-remix-lock]')).toBeNull();
+  });
+
+  it('keeps the open Remix for a viewer who may remix', () => {
+    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: true, recipeRemix: null })} />);
+
+    expect(screen.getByRole('button', { name: /remix/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /remix/i })).toBeNull();
+  });
+
   it('sends a signed-out viewer to login instead of saving', () => {
     useAuthMock.mockReturnValue({ user: null, session: null });
 
@@ -237,5 +266,31 @@ describe('ShowcaseDetailEngagementRow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
 
     expect(await screen.findByRole('link', { name: /comment/i })).toHaveAttribute('href', '#comments');
+  });
+
+  // The locked Remix pill leads to the recipe, which under an NSFW gate is on
+  // the page only after the reveal: before it, the pill would scroll nowhere.
+  it('holds the locked Remix pill until an NSFW gate opens', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const reply = (body: unknown) => ({ ok: true, json: async () => body }) as Response;
+      if (url === '/api/content-preferences') return reply({ showMature: true });
+      if (url === '/api/posts/post-1/reveal') {
+        return reply({ success: true, detail: { title: 'Shared creation', body: '', mediaItems: [] } });
+      }
+      return reply([]);
+    }));
+    render(
+      <NsfwPostReveal postId="post-1">
+        <ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'paid', priceLabel: '900 credits' } })} />
+      </NsfwPostReveal>,
+    );
+
+    expect(screen.queryByRole('link', { name: /unlock the recipe to remix/i })).not.toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reveal post' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
+
+    expect(await screen.findByRole('link', { name: /unlock the recipe to remix/i })).toHaveAttribute('href', '#recipe');
   });
 });

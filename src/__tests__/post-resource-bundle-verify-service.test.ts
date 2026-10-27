@@ -460,7 +460,7 @@ describe('alerts for a recipe bought on the web', () => {
       user_id: 'buyer-1',
       type: 'post_resource_unlocked',
       category: 'commerce',
-      deep_link: '/showcase/post-1',
+      deep_link: '/showcase/post-1?page=details&section=resources',
       dedupe_key: 'post-resource-unlock:post-1:buyer-1',
     }),
     expect.objectContaining({
@@ -469,7 +469,7 @@ describe('alerts for a recipe bought on the web', () => {
       type: 'post_resource_unlocked',
       category: 'commerce',
       title: 'You made a sale',
-      body: '@maya bought the resources attached to your post.',
+      body: '@maya bought your recipe.',
       deep_link: '/seller-dashboard',
       dedupe_key: 'post-resource-sale:post-1:buyer-1',
     }),

@@ -194,7 +194,7 @@ export default function UnlockLibrary() {
     });
 
     if (!response.ok) {
-      throw new Error('Failed to load your unlocks.');
+      throw new Error('Failed to load your unlocked recipes.');
     }
 
     return await response.json() as UnlockPage;
@@ -214,7 +214,7 @@ export default function UnlockLibrary() {
         setNextOffset(page.pageInfo.nextOffset);
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Failed to load your unlocks.');
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load your unlocked recipes.');
         }
       } finally {
         if (!cancelled) {
@@ -239,7 +239,7 @@ export default function UnlockLibrary() {
     } catch (loadError) {
       // Kept apart from the first-load error: that one replaces the grid,
       // and a failed page 2 used to wipe the unlocks already on screen.
-      setLoadMoreError(loadError instanceof Error ? loadError.message : 'Failed to load more unlocks.');
+      setLoadMoreError(loadError instanceof Error ? loadError.message : 'Failed to load more recipes.');
     } finally {
       setIsLoadingMore(false);
     }
@@ -249,7 +249,7 @@ export default function UnlockLibrary() {
     return (
       <div className="flex items-center justify-center py-16 text-sm text-zinc-500">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        Loading your unlocks...
+        Loading your unlocked recipes…
       </div>
     );
   }
@@ -273,16 +273,16 @@ export default function UnlockLibrary() {
     return (
       <div className="rounded-3xl border border-white/8 bg-zinc-900/40 px-6 py-14 text-center">
         <PackageOpen className="mx-auto h-8 w-8 text-zinc-600" />
-        <h3 className="mt-4 text-base font-semibold text-white">No unlocks yet</h3>
+        <h3 className="mt-4 text-base font-semibold text-white">No unlocked recipes yet</h3>
         <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-400">
-          When you unlock a creator&apos;s prompt, workflow, or reference files, it lands here — and
-          stays here, even if they later change or remove the post.
+          When you unlock a creator&apos;s recipe, it lands here — and stays here, even if they
+          later change or remove the post.
         </p>
         <Link
           href="/marketplace"
           className="mt-6 inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200"
         >
-          Browse unlocks
+          Browse recipes
           <ArrowRight className="h-4 w-4" />
         </Link>
       </div>
@@ -292,7 +292,8 @@ export default function UnlockLibrary() {
   return (
     <div className="space-y-4">
       <div className="text-sm text-zinc-500">
-        {total} {total === 1 ? 'unlock' : 'unlocks'} · yours permanently
+        {/* The library is "Unlocked recipes" on both platforms (B-F9); it counted "unlocks". */}
+        {total} {total === 1 ? 'recipe' : 'recipes'} · yours permanently
       </div>
 
       <ul className={STUDIO_GRID_CLASS}>

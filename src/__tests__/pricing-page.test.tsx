@@ -315,7 +315,8 @@ describe('pricing page server render', () => {
     const { default: Pricing } = await import('@/app/pricing/page');
     const element = await Pricing();
 
-    expect(element.props).toEqual({ initialCountryCode: 'IN', referralProgram: terms });
+    // No recipe to go back to on a plain visit.
+    expect(element.props).toEqual({ initialCountryCode: 'IN', referralProgram: terms, returnTo: null });
   });
 
   it('passes null, never made-up numbers, while no program can be read', async () => {
@@ -325,7 +326,7 @@ describe('pricing page server render', () => {
     const { default: Pricing } = await import('@/app/pricing/page');
     const element = await Pricing();
 
-    expect(element.props).toEqual({ initialCountryCode: null, referralProgram: null });
+    expect(element.props).toEqual({ initialCountryCode: null, referralProgram: null, returnTo: null });
   });
 });
 
@@ -369,9 +370,9 @@ describe('pricing page checkout', () => {
     }
   }
 
-  async function openSheetForStarter() {
+  async function openSheetForStarter(returnTo: string | null = null) {
     const { PricingClient } = await import('@/app/pricing/PricingClient');
-    render(<PricingClient initialCountryCode="IN" />);
+    render(<PricingClient initialCountryCode="IN" returnTo={returnTo} />);
     fireEvent.click(screen.getByRole('button', { name: 'Get 500 Credits' }));
     await waitFor(() => {
       expect(sheet.opened).toBe(1);
@@ -412,6 +413,21 @@ describe('pricing page checkout', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  // B-F8: a buyer who came from a recipe is offered the recipe, not Studio.
+  it('leads a settled payment back to the recipe the buyer came from', async () => {
+    verifyResponses.push(async () => json({ success: true }));
+    const handler = await openSheetForStarter('/showcase/post-1#recipe');
+
+    await act(async () => {
+      await handler(payment);
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent('Payment successful! Credits added to your account.');
+    expect(screen.getAllByRole('link', { name: 'Back to the recipe' }).map((link) => link.getAttribute('href')))
+      .toEqual(['/showcase/post-1#recipe', '/showcase/post-1#recipe']);
+    expect(screen.queryByRole('link', { name: 'Start creating' })).toBeNull();
   });
 
   it('confirms a settled payment inline with a token read after the sheet, and refreshes the balance', async () => {
@@ -594,5 +610,52 @@ describe('pricing page checkout', () => {
       expect(routerMock.push).toHaveBeenCalledWith('/login?redirect=/pricing');
     });
     expect(requestsTo('/api/razorpay/order')).toHaveLength(0);
+  });
+});
+
+// B-F8 (2026-10-27): "Buy credits" on a recipe led to Pricing, whose only ways
+// on were "Back to Home" and, after paying, "Start creating"; the buyer had to
+// find the recipe again. Pricing takes the recipe's path and offers it back.
+describe('pricing page sent from a recipe', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    sessionState.session = null;
+    pageMocks.headers.mockResolvedValue(new Headers());
+    pageMocks.loadReferralProgramTerms.mockResolvedValue(null);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ base: 'INR', rates: { INR: 1, USD: 0.012 }, updatedAt: '2026-10-15' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('offers the way back to the recipe in place of Home', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" returnTo="/showcase/post-1?from=home#recipe" />);
+
+    expect(await screen.findByRole('link', { name: 'Back to the recipe' })).toHaveAttribute('href', '/showcase/post-1?from=home#recipe');
+    expect(screen.queryByRole('link', { name: 'Back to Home' })).toBeNull();
+  });
+
+  it('keeps Home without one', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    expect(await screen.findByRole('link', { name: 'Back to Home' })).toHaveAttribute('href', '/');
+  });
+
+  it('takes the recipe from the address, and only a path on this site', async () => {
+    const { default: Pricing } = await import('@/app/pricing/page');
+
+    const fromRecipe = render(await Pricing({ searchParams: Promise.resolve({ returnTo: '/showcase/post-1#recipe' }) }));
+    expect(await screen.findByRole('link', { name: 'Back to the recipe' })).toHaveAttribute('href', '/showcase/post-1#recipe');
+    fromRecipe.unmount();
+
+    render(await Pricing({ searchParams: Promise.resolve({ returnTo: 'https://evil.example/showcase' }) }));
+    expect(await screen.findByRole('link', { name: 'Back to Home' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Back to the recipe' })).toBeNull();
   });
 });

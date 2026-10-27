@@ -183,6 +183,22 @@ describe('posts-server marketplace summaries', () => {
     ]);
   });
 
+  // Recipe audit H1 (2026-10-27): the summaries RPC answers allow_remix true
+  // for a creation post's published recipe (its Remix comes with it), and the
+  // summary lists Remix among the recipe's kinds beside its items.
+  it('lists Remix among the kinds of a recipe that includes it', async () => {
+    resourceBundlesState[0] = {
+      ...resourceBundlesState[0],
+      resource_items: [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'A neon portrait.' }],
+    };
+    const { getMarketplaceAssetSummaryMap } = await import('@/lib/posts-server');
+
+    const assetMap = await getMarketplaceAssetSummaryMap(['post-1']);
+
+    expect(assetMap.get('post-1')).toMatchObject({ allowRemix: true, resourceKinds: ['prompt', 'remix'] });
+    expect(assetMap.get('post-1')?.lockedPreview?.hasRemix).toBe(true);
+  });
+
   // Decision 6 (2026-10-17): the feed card's "N sold" counts paid unlocks and a
   // free recipe's "N opened" counts free ones, so the asset carries both.
   it('carries a recipe\'s paid sales and free unlocks apart, leaving out a zero', async () => {
