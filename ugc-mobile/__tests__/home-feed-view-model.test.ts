@@ -408,7 +408,10 @@ describe('home feed view model', () => {
 describe("a Home card's recipe chip", () => {
   const read = (name: string) => readFileSync(path.resolve(__dirname, '..', name), 'utf8');
 
-  function recipePost({ asset, remix }: { asset: { accessMode: string; priceUsdCents: number } | null; remix: boolean }) {
+  function recipePost({ asset, remix }: {
+    asset: { accessMode: string; priceUsdCents: number; viewerHasUnlocked?: boolean } | null;
+    remix: boolean;
+  }) {
     return item({
       // `none` is the server saying there is nothing to remix, whatever is attached.
       canRemix: remix,
@@ -424,12 +427,38 @@ describe("a Home card's recipe chip", () => {
     } as Partial<ShowcaseFeedItem>);
   }
 
-  it.each(feedRecipeChipContract.cases)('draws $name as the contract says', ({ asset, remix, chip }) => {
-    const card = showcaseToHomeFeedCard(recipePost({ asset, remix }));
+  it.each(feedRecipeChipContract.cases)('draws $name as the contract says', (entry) => {
+    const { asset, remix, chip } = entry;
+    const post = recipePost({ asset, remix });
+    // Whose post it is is the viewer's to know, not the item's: the card is
+    // built for the signed-in viewer, here the post's creator or someone else.
+    const viewerIsOwner = 'viewerIsOwner' in entry && entry.viewerIsOwner === true;
+    const card = showcaseToHomeFeedCard(post, new Date(), viewerIsOwner ? post.creator.id : 'someone-else');
 
     expect(Boolean(card.remixAccess)).toBe(remix);
     expect(card.recipeChip?.tone ?? null).toBe(chip?.tone ?? null);
+    expect(card.recipeChip?.kind ?? null).toBe(chip?.kind ?? null);
     expect(card.recipeChip?.label ?? null).toBe(chip?.label.mobile ?? null);
+  });
+
+  it("says Your recipe on the viewer's own card, and builds the card again for another viewer", () => {
+    const own = recipePost({ asset: { accessMode: 'paid', priceUsdCents: 250 }, remix: false });
+    const now = new Date();
+
+    expect(buildHomeFeedCards([own], now, own.creator.id)[0].recipeChip)
+      .toMatchObject({ kind: 'owner', label: 'Your recipe' });
+    // The same item object, read for someone else or signed out: not theirs.
+    expect(buildHomeFeedCards([own], now, 'viewer-2')[0].recipeChip).toMatchObject({ kind: 'price', label: '250 credits' });
+    expect(buildHomeFeedCards([own], now)[0].recipeChip).toMatchObject({ kind: 'price', label: '250 credits' });
+  });
+
+  it('calls a recipe the viewer has, and their own, what the web calls them', () => {
+    const paid = { accessMode: 'paid', priceUsdCents: 250 };
+
+    expect(homeRecipeChip(recipePost({ asset: { ...paid, viewerHasUnlocked: true }, remix: false }), 'A launch frame', null))
+      .toMatchObject({ label: feedRecipeChipContract.unlockedLabel, kind: 'unlocked' });
+    expect(homeRecipeChip(recipePost({ asset: paid, remix: false }), 'A launch frame', null, { isOwner: true }))
+      .toMatchObject({ label: feedRecipeChipContract.ownerLabel, kind: 'owner' });
   });
 
   it('calls a recipe that costs nothing what the web calls it', () => {
@@ -496,7 +525,7 @@ describe("a Home card's recipe chip", () => {
 
   it('says whose recipe it is to a screen reader', () => {
     expect(homeRecipeChip(recipePost({ asset: { accessMode: 'free', priceUsdCents: 0 }, remix: false }), 'A launch frame', null))
-      .toEqual({ label: 'Free recipe', accessibilityLabel: 'Free recipe for A launch frame', tone: 'free' });
+      .toEqual({ label: 'Free recipe', accessibilityLabel: 'Free recipe for A launch frame', tone: 'free', kind: 'free' });
   });
 
   it('draws the chip as the last action of the row, and no row of its own', () => {

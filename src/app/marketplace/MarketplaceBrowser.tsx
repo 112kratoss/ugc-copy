@@ -28,7 +28,7 @@ import {
   type MarketplaceResourceSort,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
+import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { SourceToolFilterOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
@@ -448,11 +448,9 @@ function MarketplaceCard({
   marketplaceReturnPath: string;
 }) {
   const isFree = asset.accessMode === 'free' || asset.priceUsdCents === 0;
-  const accessLabel = formatBundleAccessLabel({
-    accessMode: asset.accessMode,
-    priceUsdCents: asset.priceUsdCents,
-    priceQuote: asset.priceQuote,
-  });
+  // The image badge prices it in credits, as every other chip does (audit
+  // B-F13); the cash figure stays on the pill and the button below.
+  const accessLabel = getAssetAccessLabel(asset);
   // The pill and the button name every way to pay, as the post's panel does:
   // the bare quote priced a credits-only recipe in a currency no checkout takes.
   const priceLabel = isFree ? 'Free' : formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote.formatted);

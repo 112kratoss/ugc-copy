@@ -366,7 +366,7 @@ describe('PostResourceBundlePanel', () => {
       priceUsdCents: 900,
     });
 
-    expect(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^pay \$9\.00/i })).toBeInTheDocument();
     expect(screen.getByText(/the prompt text stays locked until this recipe is unlocked/i)).toBeInTheDocument();
     expect(screen.queryByText(/labels and file types can be shown publicly/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/secret prompt/i)).not.toBeInTheDocument();
@@ -395,7 +395,7 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText('Public recipe prompt')).toBeInTheDocument();
     expect(screen.getByText('Public recipe notes')).toBeInTheDocument();
     expect(screen.getByText('Image input')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /get resources — free/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
     expect(screen.queryByText(/buyer trust/i)).toBeNull();
     expect(screen.queryByText(/digital recipes are final sale/i)).toBeNull();
   });
@@ -403,9 +403,9 @@ describe('PostResourceBundlePanel', () => {
   it('offers one-click access for a gated free recipe without checkout choices', () => {
     renderPanel();
 
-    expect(screen.getByRole('button', { name: /get resources — free/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /get free recipe/i })).toBeInTheDocument();
     expect(screen.getByText(/get the full recipe free with one click/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /pay .* with razorpay/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^pay /i })).toBeNull();
   });
 
   it('shows owner prompt access with buyer-facing context', () => {
@@ -432,7 +432,7 @@ describe('PostResourceBundlePanel', () => {
       priceNote: 'Charged in INR for buyers in India.',
     });
 
-    expect(screen.getByRole('button', { name: /pay ₹189 with razorpay/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^pay ₹189/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeInTheDocument();
     expect(screen.getByText(/credit cost: 900 credits/i)).toBeInTheDocument();
     // Both ways to pay, named in the price chip.
@@ -471,10 +471,14 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.queryByText(/includes 2 workflows, 2 reference images/i)).not.toBeInTheDocument();
-    expect(screen.getByText('Workflows')).toBeInTheDocument();
-    expect(screen.getByText('Reference images')).toBeInTheDocument();
-    expect(screen.getByText('Main workflow')).toBeInTheDocument();
-    expect(screen.getByText('Style frame')).toBeInTheDocument();
+    // A recipe with no sections reads as one list, in the creator's order: no
+    // type headings regrouping it (B-F17).
+    expect(screen.queryByText('Workflows')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reference images')).not.toBeInTheDocument();
+    const titles = ['Main workflow', 'Variation workflow', 'Style frame', 'Product frame'];
+    const positions = titles.map((title) => document.body.textContent?.indexOf(title) ?? -1);
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
   });
 
   it('shows section counts while locked and groups unlocked resources by section', () => {
@@ -484,7 +488,8 @@ describe('PostResourceBundlePanel', () => {
       initialResources: null,
     });
 
-    expect(screen.getByText(/includes 1 section, 1 prompt, 1 reference image/i)).toBeInTheDocument();
+    // A card is how the creator arranged it, not something a buyer gets (B-F16).
+    expect(screen.getByText(/includes 1 prompt, 1 reference image/i)).toBeInTheDocument();
     expect(screen.queryByText('Hook prompt')).not.toBeInTheDocument();
 
     locked.unmount();
@@ -504,8 +509,8 @@ describe('PostResourceBundlePanel', () => {
       viewerCanAccess: true,
     });
 
-    expect(screen.getByText('Full post resources')).toBeInTheDocument();
-    expect(screen.getByText('Hook')).toBeInTheDocument();
+    // The creator's section first, then what has no section of its own (B-F17).
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['Hook', 'More from this post']);
     expect(screen.getByText('Hook prompt')).toBeInTheDocument();
     expect(screen.getByText('Global style reference')).toBeInTheDocument();
   });
@@ -542,18 +547,18 @@ describe('PostResourceBundlePanel', () => {
         mediaItems: scopedMediaItems,
       });
 
-      expect(screen.getByRole('button', { name: /all resources/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /all items/i })).toBeInTheDocument();
       expect(screen.getByText('Hook video references')).toBeInTheDocument();
 
       // The card is scoped to media-1 and media-2, so a third output hides it.
-      fireEvent.click(screen.getByRole('button', { name: /show resources for output 1/i }));
+      fireEvent.click(screen.getByRole('button', { name: /show items for output 1/i }));
       expect(screen.getByText('Hook video references')).toBeInTheDocument();
     });
 
     it('stays hidden when nothing is scoped to a specific output', () => {
       renderPanel({ mediaItems: scopedMediaItems });
 
-      expect(screen.queryByRole('button', { name: /all resources/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /all items/i })).not.toBeInTheDocument();
     });
 
     it('stays hidden when the post has a single output', () => {
@@ -563,7 +568,7 @@ describe('PostResourceBundlePanel', () => {
         mediaItems: scopedMediaItems.slice(0, 1),
       });
 
-      expect(screen.queryByRole('button', { name: /all resources/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /all items/i })).not.toBeInTheDocument();
     });
 
     it('says so when the selected output has no resources at all', () => {
@@ -579,9 +584,9 @@ describe('PostResourceBundlePanel', () => {
         mediaItems: scopedMediaItems,
       });
 
-      fireEvent.click(screen.getByRole('button', { name: /show resources for output 1/i }));
+      fireEvent.click(screen.getByRole('button', { name: /show items for output 1/i }));
       expect(screen.queryByText('Hook video references')).not.toBeInTheDocument();
-      expect(screen.getByText(/no resources apply to this output/i)).toBeInTheDocument();
+      expect(screen.getByText(/no items apply to this output/i)).toBeInTheDocument();
     });
 
     // A section carries a scope of its own, and its items may leave theirs at
@@ -621,13 +626,13 @@ describe('PostResourceBundlePanel', () => {
 
       expect(screen.getByText('Hero output')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: /show resources for output 2/i }));
+      fireEvent.click(screen.getByRole('button', { name: /show items for output 2/i }));
       expect(screen.queryByText('Hero output')).not.toBeInTheDocument();
-      expect(screen.getByText(/no resources apply to this output/i)).toBeInTheDocument();
+      expect(screen.getByText(/no items apply to this output/i)).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: /show resources for output 1/i }));
+      fireEvent.click(screen.getByRole('button', { name: /show items for output 1/i }));
       expect(screen.getByText('Hero output')).toBeInTheDocument();
-      expect(screen.queryByText(/no resources apply to this output/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/no items apply to this output/i)).not.toBeInTheDocument();
     });
 
     it('narrows items inside a section that does match the selected output', () => {
@@ -669,7 +674,7 @@ describe('PostResourceBundlePanel', () => {
         },
       });
 
-      fireEvent.click(screen.getByRole('button', { name: /show resources for output 1/i }));
+      fireEvent.click(screen.getByRole('button', { name: /show items for output 1/i }));
       expect(screen.getByText('Hero output')).toBeInTheDocument();
       expect(screen.getByText('Both outputs')).toBeInTheDocument();
       expect(screen.queryByText('Second output only')).not.toBeInTheDocument();
@@ -697,7 +702,7 @@ describe('PostResourceBundlePanel', () => {
         mediaItems: scopedMediaItems,
       });
 
-      fireEvent.click(screen.getByRole('button', { name: /show resources for output 2/i }));
+      fireEvent.click(screen.getByRole('button', { name: /show items for output 2/i }));
       expect(screen.getByText('Applies everywhere')).toBeInTheDocument();
     });
 
@@ -751,14 +756,14 @@ describe('PostResourceBundlePanel', () => {
         },
       });
 
-      expect(screen.getByRole('button', { name: /show resources for output 3/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /show items for output 3/i })).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: /the version you unlocked/i }));
 
-      expect(screen.queryByRole('button', { name: /show resources for output 3/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /show items for output 3/i })).not.toBeInTheDocument();
       expect(screen.getByText('Purchased output')).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: /show resources for output 2/i }));
-      expect(screen.getByText(/no resources apply to this output/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /show items for output 2/i }));
+      expect(screen.getByText(/no items apply to this output/i)).toBeInTheDocument();
     });
   });
 
@@ -867,10 +872,10 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.getByText('Hero output')).toBeInTheDocument();
-    expect(screen.getByText('Full post resources')).toBeInTheDocument();
-    expect(screen.getByText('Reference video')).toBeInTheDocument();
-    expect(screen.getByText('Reference audio')).toBeInTheDocument();
-    expect(screen.getByText('Remix link')).toBeInTheDocument();
+    expect(screen.getByText('More from this post')).toBeInTheDocument();
+    // Each item under its own title, its link named by what it opens (B-F17):
+    // no type headings over them any more.
+    expect(screen.getByRole('link', { name: 'Open remix' })).toHaveAttribute('href', 'https://example.com/remix');
     expect(screen.getByText('Motion reference')).toBeInTheDocument();
     expect(screen.getByText('Shared voice reference')).toBeInTheDocument();
     expect(screen.getByText('Open remix template')).toBeInTheDocument();
@@ -888,7 +893,7 @@ describe('PostResourceBundlePanel', () => {
       priceNote: 'Cash conversion note',
     });
 
-    expect(screen.queryByRole('button', { name: /pay .* with razorpay/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^pay /i })).toBeNull();
     expect(screen.getByRole('button', { name: /use 50 credits/i })).toBeInTheDocument();
     expect(screen.getByText('Credit-only purchase')).toBeInTheDocument();
     expect(screen.getByText(/unlock the full recipe for 50 credits/i)).toBeInTheDocument();
@@ -940,8 +945,11 @@ describe('PostResourceBundlePanel', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-with-credits', expect.objectContaining({
         method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           Authorization: 'Bearer token-1',
         },
+        // The price the buyer confirmed (S3).
+        body: JSON.stringify({ expectedPriceCredits: 900 }),
       }));
     });
     expect(mockUpdateCredits).toHaveBeenCalledWith(100);
@@ -962,7 +970,8 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText(/120 credits available/i)).toBeInTheDocument();
     expect(screen.queryByText(UNSPENDABLE_NOTE)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
-    expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', '/pricing');
+    // With the way back to this recipe (B-F8).
+    expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
   });
 
   // A new account holds only welcome credits: the total covers the price, the
@@ -978,7 +987,8 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.queryByText(/1,200 credits available/)).not.toBeInTheDocument();
     expect(screen.getByText(UNSPENDABLE_NOTE)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
-    expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', '/pricing');
+    // With the way back to this recipe (B-F8).
+    expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
   });
 
   it('prints the spendable balance and the note when only part of the balance can buy recipes', () => {
@@ -1030,7 +1040,8 @@ describe('PostResourceBundlePanel', () => {
 
     expect(await screen.findByText('Insufficient credits. This unlock costs 900 credits.')).toBeInTheDocument();
     expect(mockUpdateCredits).toHaveBeenCalledWith(1200, { marketplaceSpendableCredits: 0 });
-    expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', '/pricing');
+    // With the way back to this recipe (B-F8).
+    expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
   });
 
   it('hands the spendable figure the unlock answered to the balance with the new total', async () => {
@@ -1086,7 +1097,7 @@ describe('PostResourceBundlePanel', () => {
       priceUsdCents: 900,
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /pay ₹189 with razorpay/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^pay ₹189/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/order', expect.objectContaining({
@@ -1259,7 +1270,7 @@ describe('PostResourceBundlePanel', () => {
       // One plate per preview, and the outputs' row.
       expect(screen.getAllByRole('button', { name: 'Show mature content' })).toHaveLength(4);
       expect(screen.getAllByText('Mature content')).toHaveLength(4);
-      expect(screen.getByRole('button', { name: /show resources for output 1/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /show items for output 1/i })).toBeInTheDocument();
       expect(container.querySelector('img, video, audio')).toBeNull();
       expect(screen.queryAllByText(/^Loading (image|video|audio)/)).toHaveLength(0);
       expect(screen.getByText('Reference 1')).toBeInTheDocument();
@@ -1357,7 +1368,7 @@ describe('PostResourceBundlePanel', () => {
       renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
 
       expect(document.getElementById('post-resource-bundle-razorpay-checkout')).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^pay \$9\.00/i }));
       const script = document.getElementById('post-resource-bundle-razorpay-checkout') as HTMLScriptElement | null;
       expect(script?.src).toBe('https://checkout.razorpay.com/v1/checkout.js');
 
@@ -1436,7 +1447,7 @@ describe('PostResourceBundlePanel', () => {
       stubSheetThatPays();
       renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
 
-      fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^pay \$9\.00/i }));
 
       expect(await screen.findByText('captured prompt')).toBeInTheDocument();
       const verifyArguments = mockVerifyCheckout.mock.calls[0][0] as { body: unknown; token: () => Promise<string> };
@@ -1464,12 +1475,12 @@ describe('PostResourceBundlePanel', () => {
       try {
         renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
 
-        fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+        fireEvent.click(screen.getByRole('button', { name: /^pay \$9\.00/i }));
 
         expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
         expect(intentKeyDuringVerify).toEqual(expect.any(String));
         expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
-        expect(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /^pay \$9\.00/i })).toBeDisabled();
         expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
         // The re-read carries the session as it is now, not the one from the click.
         await waitFor(() => {
@@ -1498,13 +1509,13 @@ describe('PostResourceBundlePanel', () => {
       try {
         renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
 
-        fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+        fireEvent.click(screen.getByRole('button', { name: /^pay \$9\.00/i }));
 
         expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
         expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
         expect(screen.queryByText(/try again/i)).not.toBeInTheDocument();
         expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
-        expect(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /^pay \$9\.00/i })).toBeDisabled();
         expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
         await waitFor(() => {
           expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', {
@@ -1529,7 +1540,7 @@ describe('PostResourceBundlePanel', () => {
       stubSheetThatPays();
       const { unmount } = renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
 
-      fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^pay \$9\.00/i }));
       await waitFor(() => expect(mockVerifyCheckout).toHaveBeenCalledTimes(1));
       unmount();
       failVerify(new Error('Failed to fetch'));

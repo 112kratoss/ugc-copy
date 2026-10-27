@@ -240,6 +240,11 @@ export function sanitizeShowcaseAssetSummary(
         sanitized.priceQuote = asset.priceQuote;
     }
 
+    // Set only where a viewer is known (`attachViewerStateToFeed`).
+    if (typeof asset.viewerHasUnlocked === 'boolean') {
+        sanitized.viewerHasUnlocked = asset.viewerHasUnlocked;
+    }
+
     if (typeof asset.salesCount === 'number') {
         sanitized.salesCount = asset.salesCount;
     }

@@ -367,6 +367,43 @@ export async function getViewerUnlockDetail({
   };
 }
 
+/**
+ * Why a buyer's own unlock is gone, where the receipt read (above) answers
+ * nothing, as it does for another buyer's purchase. A moderation take-down
+ * retracts a purchase: `moderation_retracted_at`, which a trigger keeps in step
+ * with the post's `hidden` state (20260801150000). The buyer is told so,
+ * where the link used to drop them on the library without a word (D2, B-F12,
+ * 2026-10-27). Null for anything else, a read that fails included: the page
+ * then sends the buyer to the library, as it always has.
+ */
+export async function getViewerUnlockRemoval({
+  adminSupabase,
+  unlockId,
+  viewerUserId,
+}: {
+  adminSupabase: SupabaseClient;
+  unlockId: string;
+  viewerUserId: string;
+}): Promise<'moderation' | null> {
+  if (!isViewerUnlockId(unlockId)) return null;
+
+  const { data, error } = await adminSupabase
+    .from('post_resource_bundle_purchases')
+    .select('moderation_retracted_at')
+    .eq('id', unlockId)
+    .eq('buyer_user_id', viewerUserId)
+    .maybeSingle();
+
+  if (error) {
+    logBackendError('viewer_unlock_removal_load_failed', { error });
+    return null;
+  }
+
+  return (data as { moderation_retracted_at?: string | null } | null)?.moderation_retracted_at
+    ? 'moderation'
+    : null;
+}
+
 export function listViewerUnlockStoragePaths(detail: ViewerUnlockDetail): Set<string> {
   const resources = [detail.currentResources, detail.purchasedRevision.resources]
     .filter((value): value is PostResourceBundleResources => Boolean(value));

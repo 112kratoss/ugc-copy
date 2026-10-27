@@ -174,6 +174,35 @@ describe('ShowcaseDetailEngagementRow', () => {
     }
   });
 
+  // A creator sells the remix with the recipe (S1): the page drew no Remix at
+  // all for a viewer without it, and nothing said the recipe would bring it
+  // (B-F3). It is a locked Remix now, as the feed's is, that goes to the recipe.
+  it('draws a locked Remix with its price that leads to the recipe, where the recipe sells it', () => {
+    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'paid', priceLabel: '900 credits' } })} />);
+
+    const remix = screen.getByRole('link', { name: 'Unlock the recipe to remix Shared creation, 900 credits' });
+    expect(remix).toHaveAttribute('href', '#recipe');
+    expect(remix).toHaveTextContent('Remix · 900 credits');
+    expect(remix.querySelector('[data-remix-lock]')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /remix/i })).toBeNull();
+  });
+
+  it('says a free recipe brings the remix with it', () => {
+    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } })} />);
+
+    const remix = screen.getByRole('link', { name: 'Get the free recipe to remix Shared creation' });
+    expect(remix).toHaveAttribute('href', '#recipe');
+    expect(remix).toHaveTextContent('Remix · Free');
+    expect(remix.querySelector('[data-remix-lock]')).toBeNull();
+  });
+
+  it('keeps the open Remix for a viewer who may remix', () => {
+    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: true, recipeRemix: null })} />);
+
+    expect(screen.getByRole('button', { name: /remix/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /remix/i })).toBeNull();
+  });
+
   it('sends a signed-out viewer to login instead of saving', () => {
     useAuthMock.mockReturnValue({ user: null, session: null });
 

@@ -127,7 +127,7 @@ describe('UnlockDetail', () => {
   it('gives one neutral reason when the post is out of reach, whatever kept it there', () => {
     renderDetail({ postReachable: false, postVisibility: 'public' });
 
-    expect(screen.getByText("This post isn't available to you. Your unlock stays here.")).toBeInTheDocument();
+    expect(screen.getByText("This post isn't available to you. Your recipe stays here.")).toBeInTheDocument();
     // A block used to read as this, which was not true of a public post.
     expect(screen.queryByText(/no longer public/)).toBeNull();
   });
@@ -135,12 +135,20 @@ describe('UnlockDetail', () => {
   it.each([
     ['a deleted account', { detached: true, postId: null, bundleId: null }, /The creator deleted their account/],
     ['a removed post', { tombstoned: true }, /The creator removed this post/],
-    ['a retired unlock', { retired: true }, /This unlock is no longer sold/],
+    ['a retired unlock', { retired: true }, /This recipe is no longer sold/],
   ])('keeps the specific reason for %s', (_name, state, reason) => {
     renderDetail(state);
 
     expect(screen.getByText(reason)).toBeInTheDocument();
     expect(screen.queryByText(/isn't available to you/)).toBeNull();
+  });
+
+  it('leads back to the library by its name', () => {
+    renderDetail({});
+
+    // `next/link` is a bare fragment in this file: the words are what is asked.
+    expect(screen.getByText('Unlocked recipes')).toBeInTheDocument();
+    expect(screen.queryByText(/your unlocks/i)).toBeNull();
   });
 
   it('explains nothing when the post is reachable and the page holds it only for its mature label', () => {

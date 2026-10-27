@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
   "freeLabel": "Free recipe",
+  "unlockedLabel": "Unlocked",
+  "ownerLabel": "Your recipe",
   "cases": [
     {
       "name": "a post with no recipe, beside Remix",
@@ -16,69 +18,326 @@
     },
     {
       "name": "a free recipe beside Remix",
-      "asset": { "accessMode": "free", "priceUsdCents": 0 },
+      "asset": {
+        "accessMode": "free",
+        "priceUsdCents": 0
+      },
       "remix": true,
       "chip": null
     },
     {
       "name": "a free recipe on a card with no Remix",
-      "asset": { "accessMode": "free", "priceUsdCents": 0 },
+      "asset": {
+        "accessMode": "free",
+        "priceUsdCents": 0
+      },
       "remix": false,
-      "chip": { "tone": "free", "label": { "web": "Free recipe", "mobile": "Free recipe" } }
+      "chip": {
+        "tone": "free",
+        "kind": "free",
+        "label": {
+          "web": "Free recipe",
+          "mobile": "Free recipe"
+        }
+      }
     },
     {
       "name": "a free recipe that still carries a price, on a card with no Remix",
-      "asset": { "accessMode": "free", "priceUsdCents": 500 },
+      "asset": {
+        "accessMode": "free",
+        "priceUsdCents": 500
+      },
       "remix": false,
-      "chip": { "tone": "free", "label": { "web": "Free recipe", "mobile": "Free recipe" } }
+      "chip": {
+        "tone": "free",
+        "kind": "free",
+        "label": {
+          "web": "Free recipe",
+          "mobile": "Free recipe"
+        }
+      }
     },
     {
       "name": "a paid recipe beside Remix",
-      "asset": { "accessMode": "paid", "priceUsdCents": 250 },
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 250
+      },
       "remix": true,
-      "chip": { "tone": "paid", "label": { "web": "250 credits", "mobile": "250 credits" } }
+      "chip": {
+        "tone": "paid",
+        "kind": "price",
+        "label": {
+          "web": "250 credits",
+          "mobile": "250 credits"
+        }
+      }
     },
     {
       "name": "a paid recipe on a card with no Remix",
-      "asset": { "accessMode": "paid", "priceUsdCents": 250 },
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 250
+      },
       "remix": false,
-      "chip": { "tone": "paid", "label": { "web": "250 credits", "mobile": "250 credits" } }
+      "chip": {
+        "tone": "paid",
+        "kind": "price",
+        "label": {
+          "web": "250 credits",
+          "mobile": "250 credits"
+        }
+      }
     },
     {
       "name": "a paid recipe at the cash minimum, on a card with no Remix",
-      "asset": { "accessMode": "paid", "priceUsdCents": 100 },
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 100
+      },
       "remix": false,
-      "chip": { "tone": "paid", "label": { "web": "100 credits", "mobile": "100 credits" } }
+      "chip": {
+        "tone": "paid",
+        "kind": "price",
+        "label": {
+          "web": "100 credits",
+          "mobile": "100 credits"
+        }
+      }
     },
     {
       "name": "a paid recipe past a lakh of credits, on a card with no Remix",
-      "asset": { "accessMode": "paid", "priceUsdCents": 125000 },
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 125000
+      },
       "remix": false,
-      "chip": { "tone": "paid", "label": { "web": "1,25,000 credits", "mobile": "1,25,000 credits" } }
+      "chip": {
+        "tone": "paid",
+        "kind": "price",
+        "label": {
+          "web": "1,25,000 credits",
+          "mobile": "1,25,000 credits"
+        }
+      }
     },
     {
       "name": "a credits-only recipe beside Remix",
-      "asset": { "accessMode": "paid", "priceUsdCents": 50 },
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 50
+      },
       "remix": true,
-      "chip": { "tone": "paid", "label": { "web": "50 credits", "mobile": "50 credits" } }
+      "chip": {
+        "tone": "paid",
+        "kind": "price",
+        "label": {
+          "web": "50 credits",
+          "mobile": "50 credits"
+        }
+      }
     },
     {
       "name": "a credits-only recipe on a card with no Remix",
-      "asset": { "accessMode": "paid", "priceUsdCents": 50 },
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 50
+      },
       "remix": false,
-      "chip": { "tone": "paid", "label": { "web": "50 credits", "mobile": "50 credits" } }
+      "chip": {
+        "tone": "paid",
+        "kind": "price",
+        "label": {
+          "web": "50 credits",
+          "mobile": "50 credits"
+        }
+      }
     },
     {
       "name": "a paid recipe at no price, beside Remix",
-      "asset": { "accessMode": "paid", "priceUsdCents": 0 },
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 0
+      },
       "remix": true,
       "chip": null
     },
     {
       "name": "a paid recipe at no price, on a card with no Remix",
-      "asset": { "accessMode": "paid", "priceUsdCents": 0 },
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 0
+      },
       "remix": false,
-      "chip": { "tone": "free", "label": { "web": "Free recipe", "mobile": "Free recipe" } }
+      "chip": {
+        "tone": "free",
+        "kind": "free",
+        "label": {
+          "web": "Free recipe",
+          "mobile": "Free recipe"
+        }
+      }
+    },
+    {
+      "name": "a paid recipe the viewer has unlocked, beside Remix",
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 250,
+        "viewerHasUnlocked": true
+      },
+      "remix": true,
+      "chip": {
+        "tone": "free",
+        "kind": "unlocked",
+        "label": {
+          "web": "Unlocked",
+          "mobile": "Unlocked"
+        }
+      }
+    },
+    {
+      "name": "a paid recipe the viewer has unlocked, on a card with no Remix",
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 250,
+        "viewerHasUnlocked": true
+      },
+      "remix": false,
+      "chip": {
+        "tone": "free",
+        "kind": "unlocked",
+        "label": {
+          "web": "Unlocked",
+          "mobile": "Unlocked"
+        }
+      }
+    },
+    {
+      "name": "a free recipe the viewer has unlocked, beside Remix",
+      "asset": {
+        "accessMode": "free",
+        "priceUsdCents": 0,
+        "viewerHasUnlocked": true
+      },
+      "remix": true,
+      "chip": {
+        "tone": "free",
+        "kind": "unlocked",
+        "label": {
+          "web": "Unlocked",
+          "mobile": "Unlocked"
+        }
+      }
+    },
+    {
+      "name": "a free recipe the viewer has unlocked, on a card with no Remix",
+      "asset": {
+        "accessMode": "free",
+        "priceUsdCents": 0,
+        "viewerHasUnlocked": true
+      },
+      "remix": false,
+      "chip": {
+        "tone": "free",
+        "kind": "unlocked",
+        "label": {
+          "web": "Unlocked",
+          "mobile": "Unlocked"
+        }
+      }
+    },
+    {
+      "name": "a paid recipe the viewer has not unlocked, said so, on a card with no Remix",
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 250,
+        "viewerHasUnlocked": false
+      },
+      "remix": false,
+      "chip": {
+        "tone": "paid",
+        "kind": "price",
+        "label": {
+          "web": "250 credits",
+          "mobile": "250 credits"
+        }
+      }
+    },
+    {
+      "name": "the viewer's own paid recipe, beside Remix",
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 250
+      },
+      "remix": true,
+      "viewerIsOwner": true,
+      "chip": {
+        "tone": "free",
+        "kind": "owner",
+        "label": {
+          "web": "Your recipe",
+          "mobile": "Your recipe"
+        }
+      }
+    },
+    {
+      "name": "the viewer's own paid recipe, on a card with no Remix",
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 250
+      },
+      "remix": false,
+      "viewerIsOwner": true,
+      "chip": {
+        "tone": "free",
+        "kind": "owner",
+        "label": {
+          "web": "Your recipe",
+          "mobile": "Your recipe"
+        }
+      }
+    },
+    {
+      "name": "the viewer's own free recipe, beside Remix",
+      "asset": {
+        "accessMode": "free",
+        "priceUsdCents": 0
+      },
+      "remix": true,
+      "viewerIsOwner": true,
+      "chip": {
+        "tone": "free",
+        "kind": "owner",
+        "label": {
+          "web": "Your recipe",
+          "mobile": "Your recipe"
+        }
+      }
+    },
+    {
+      "name": "the viewer's own recipe that also reads as unlocked",
+      "asset": {
+        "accessMode": "paid",
+        "priceUsdCents": 250,
+        "viewerHasUnlocked": true
+      },
+      "remix": false,
+      "viewerIsOwner": true,
+      "chip": {
+        "tone": "free",
+        "kind": "owner",
+        "label": {
+          "web": "Your recipe",
+          "mobile": "Your recipe"
+        }
+      }
+    },
+    {
+      "name": "the viewer's own post with no recipe",
+      "asset": null,
+      "remix": true,
+      "viewerIsOwner": true,
+      "chip": null
     }
   ]
 }

@@ -1,8 +1,9 @@
 'use client';
 
 import PostComments from '@/components/PostComments';
-import ResourceFileLink from '@/components/ResourceFileLink';
-import ResourceMediaPreview, { createBatchedUrlResolver } from '@/components/ResourceMediaPreview';
+import PostResourceBundlePanel from '@/app/showcase/[id]/PostResourceBundlePanel';
+import { buildRecipePanelProps } from '@/app/showcase/[id]/recipe-panel-props';
+import { buildRecipeTopUpHref } from '@/app/showcase/recipe-reading';
 
 import Link from 'next/link';
 import Script from 'next/script';
@@ -44,17 +45,14 @@ import {
   type ShowcaseMediaProgressTracker,
 } from '@/lib/showcase-media-progress';
 import {
-  POST_RESOURCE_FILE_URL_BATCH_LIMIT,
   formatPostResourceBundleCountSummary,
   formatPostResourcePriceLabel,
+  formatUsdCents,
   getPostResourceKindLabel,
   isPostResourceKind,
-  type PostResourceAttachment,
-  type PostResourceItem,
   type PostResourceKind,
-  type PostResourceSection,
-  type PostResourceSignedFileUrl,
 } from '@/lib/post-resource-bundles';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { formatCompactCount } from '@/lib/post-feed-presentation';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
@@ -140,26 +138,37 @@ const QUALIFIED_REEL_VIEW_DURATION_MS = 1000;
 /** The credit unlock spends neither, though both count in the balance. */
 const UNSPENDABLE_CREDITS_NOTE = "Welcome and referral credits can't be spent on recipes.";
 
-interface ReelBundleResources {
-  promptText: string | null;
-  notesMarkdown: string | null;
-  workflowShareUrl: string | null;
-  attachments: PostResourceAttachment[];
-  allowRemix: boolean;
-  sections?: PostResourceSection[];
-  items?: PostResourceItem[];
-}
+/**
+ * The recipe as `GET /api/posts/{id}/resource-bundle` answers it for this
+ * viewer. Typed loosely: whatever the answer leaves out, the post's own
+ * listing supplies (`toReelRecipeSource`).
+ */
+type ReelBundle = Partial<PostResourceBundleDetail> & Pick<PostResourceBundleDetail, 'viewerCanAccess' | 'viewerIsOwner' | 'resources'>;
 
-interface ReelBundleRefreshPayload {
-  viewerCanAccess: boolean;
-  viewerIsOwner: boolean;
-  resources: ReelBundleResources | null;
-}
-
-interface ActiveReferencePreview {
-  src: string;
-  storagePath?: string | null;
-  alt: string;
+/**
+ * The recipe the post page's panel draws, read from the reel's answer with
+ * the listing beneath it, so a partial answer still draws a whole panel.
+ */
+function toReelRecipeSource(asset: NonNullable<ShowcaseFeedItem['asset']>, bundle: ReelBundle) {
+  return {
+    title: bundle.title ?? asset.title,
+    summary: bundle.summary ?? '',
+    previewText: bundle.previewText ?? asset.previewText,
+    accessMode: bundle.accessMode ?? asset.accessMode,
+    priceUsdCents: bundle.priceUsdCents ?? asset.priceUsdCents,
+    priceQuote: bundle.priceQuote ?? {
+      formatted: asset.priceQuote?.formatted ?? formatUsdCents(asset.priceUsdCents),
+      note: asset.priceQuote?.note ?? null,
+    },
+    viewerCanAccess: bundle.viewerCanAccess,
+    viewerIsOwner: bundle.viewerIsOwner,
+    resourceKinds: bundle.resourceKinds ?? (asset.resourceKinds ?? []).filter(isPostResourceKind),
+    lockedPreview: bundle.lockedPreview ?? asset.lockedPreview ?? null,
+    salesCount: bundle.salesCount ?? asset.salesCount ?? 0,
+    freeUnlockCount: bundle.freeUnlockCount ?? asset.freeUnlockCount ?? 0,
+    resources: bundle.resources,
+    purchasedRevision: bundle.purchasedRevision ?? null,
+  };
 }
 
 function getFocusableElements(container: HTMLElement | null) {
@@ -187,20 +196,6 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
-// Both ways to pay, for the unlock button and the checkout's price pill. The
-// recipe's chips (its badge, a text post's card) take `getAssetAccessLabel`:
-// credits alone, as the feed and the app price a recipe.
-function getAssetPriceLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-  return formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote?.formatted);
-}
-
-function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-  if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
-    return 'Get free recipe';
-  }
-
-  return `Unlock for ${getAssetPriceLabel(asset)}`;
-}
 
 function getItemSummary(item: ShowcaseFeedItem): string {
   if (item.body.trim()) {
@@ -283,9 +278,7 @@ export default function ShowcaseReelViewer({
   const reelDialogRef = useRef<HTMLDivElement | null>(null);
   const reelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const referenceDialogRef = useRef<HTMLDivElement | null>(null);
-  const referenceCloseButtonRef = useRef<HTMLButtonElement | null>(null);
-  const referencePreviousFocusRef = useRef<HTMLElement | null>(null);
+  const recipePanelRef = useRef<HTMLDivElement | null>(null);
   const prefersReducedMotion = useReducedMotion();
 
   // While the reel is up it draws the app's toasts: inside its `aria-modal`
@@ -312,9 +305,13 @@ export default function ShowcaseReelViewer({
   const [remixWorkingItemId, setRemixWorkingItemId] = useState<string | null>(null);
   const [remixError, setRemixError] = useState<string | null>(null);
   const [unlockSuccessItemId, setUnlockSuccessItemId] = useState<string | null>(null);
-  const [unlockedResources, setUnlockedResources] = useState<ReelBundleResources | null>(null);
-  const [showUnlockedDetails, setShowUnlockedDetails] = useState(false);
-  const [activeReferencePreview, setActiveReferencePreview] = useState<ActiveReferencePreview | null>(null);
+  // The recipe the reader has, as the post page's panel draws it (B-F1).
+  const [unlockedBundle, setUnlockedBundle] = useState<ReelBundle | null>(null);
+  // The post the reader unlocked in this reel just now: its panel says so.
+  const [justUnlockedItemId, setJustUnlockedItemId] = useState<string | null>(null);
+  // A credit unlock answered 409 RESOURCE_PRICE_CHANGED: the price the server
+  // holds now for that post, until its listing says otherwise (S3).
+  const [priceChanges, setPriceChanges] = useState<Record<string, { fromPriceCredits: number; priceCredits: number }>>({});
   // The thread is open for one post; moving to another closes it.
   const [commentsItemId, setCommentsItemId] = useState<string | null>(null);
   // Counts the open threads have read, ahead of the host's copy of the post.
@@ -380,7 +377,6 @@ export default function ShowcaseReelViewer({
     setUnlockError(null);
     setUnlockNotice(null);
     setRemixError(null);
-    setShowUnlockedDetails(false);
     setCommentsItemId(null);
     setActiveMediaIndex(0);
     setTransitionDirection(direction);
@@ -429,7 +425,6 @@ export default function ShowcaseReelViewer({
     setUnlockWorkingAction(null);
     setUnlockError(null);
     setUnlockNotice(null);
-    setShowUnlockedDetails(false);
     setTransitionDirection('neutral');
     onClose();
   }, [onClose]);
@@ -448,7 +443,7 @@ export default function ShowcaseReelViewer({
       throw new Error(data.error || 'Failed to refresh recipe access.');
     }
 
-    return data.bundle as ReelBundleRefreshPayload;
+    return data.bundle as ReelBundle;
   }, [session]);
 
   const openUnlockCheckout = () => {
@@ -459,7 +454,6 @@ export default function ShowcaseReelViewer({
     setActiveUnlockCheckoutItemId(item.id);
     setUnlockError(null);
     setUnlockNotice(null);
-    setShowUnlockedDetails(false);
     window.requestAnimationFrame(() => {
       detailsScrollerRef.current?.scrollTo({
         top: 0,
@@ -559,21 +553,6 @@ export default function ShowcaseReelViewer({
       reelCloseButtonRef.current?.focus();
     }
   }, [hasItem, isOpen]);
-
-  useEffect(() => {
-    if (!activeReferencePreview) return;
-
-    referencePreviousFocusRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    const focusFrame = window.requestAnimationFrame(() => referenceCloseButtonRef.current?.focus());
-
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      referencePreviousFocusRef.current?.focus();
-      referencePreviousFocusRef.current = null;
-    };
-  }, [activeReferencePreview]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -719,38 +698,6 @@ export default function ShowcaseReelViewer({
     return () => window.clearTimeout(timer);
   }, [copiedPromptItemId]);
 
-  const fetchResourceFileUrls = useCallback(async (
-    storagePaths: string[],
-    signal: AbortSignal,
-  ): Promise<ReadonlyMap<string, string>> => {
-    if (!item?.id) throw new Error('Resource unavailable');
-    const response = await fetch(`/api/posts/${item.id}/resource-bundle/file-url`, {
-      method: 'POST', signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify({ storagePaths, disposition: 'inline' }),
-    });
-    const data = await response.json();
-    if (!response.ok || !Array.isArray(data?.files)) throw new Error('Resource unavailable');
-    return new Map((data.files as PostResourceSignedFileUrl[]).map((file) => [file.storagePath, file.url]));
-  }, [item?.id, session?.access_token]);
-  // The recipe card's files are signed together, as the post page's panel
-  // signs its previews: the ones asked for in the same tick leave as one
-  // request (one entitlement load on the server, one count against the
-  // signing limit), where each preview used to sign its own. Inline, so Open
-  // shows a file the browser can show rather than saving it.
-  const fetchResourceFileUrl = useMemo(
-    () => createBatchedUrlResolver(fetchResourceFileUrls, POST_RESOURCE_FILE_URL_BATCH_LIMIT),
-    [fetchResourceFileUrls],
-  );
-
-  useEffect(() => {
-    // Reference previews cannot carry across reel items.
-    setActiveReferencePreview(null);
-  }, [item?.id]);
-
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -769,9 +716,7 @@ export default function ShowcaseReelViewer({
       }
 
       if (event.key === 'Tab') {
-        const activeDialog = activeReferencePreview
-          ? referenceDialogRef.current
-          : reelDialogRef.current;
+        const activeDialog = reelDialogRef.current;
         const focusable = getFocusableElements(activeDialog);
         if (focusable.length === 0) return;
 
@@ -799,16 +744,7 @@ export default function ShowcaseReelViewer({
       }
 
       if (event.key === 'Escape') {
-        if (activeReferencePreview) {
-          setActiveReferencePreview(null);
-          return;
-        }
-
         handleClose();
-        return;
-      }
-
-      if (activeReferencePreview) {
         return;
       }
 
@@ -827,7 +763,7 @@ export default function ShowcaseReelViewer({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [activeReferencePreview, goNext, goPrevious, handleClose, isOpen]);
+  }, [goNext, goPrevious, handleClose, isOpen]);
 
   // Re-check access for both free and paid recipes, including purchases made
   // on the detail page before returning to this viewer.
@@ -850,8 +786,7 @@ export default function ShowcaseReelViewer({
 
         if (bundle.viewerCanAccess && bundle.resources) {
           setUnlockSuccessItemId(item.id);
-          setUnlockedResources(bundle.resources);
-          setShowUnlockedDetails(false);
+          setUnlockedBundle(bundle);
           setUnlockError(null);
         }
       })
@@ -946,14 +881,30 @@ export default function ShowcaseReelViewer({
   const summary = getItemSummary(item);
   const dateLabel = formatDate(item.createdAt);
   const mediaTypeLabel = getMediaTypeLabel(item);
-  const unlockCtaLabel = item.asset ? getAssetPurchaseCtaLabel(item.asset) : null;
   const isUnlockCheckoutOpen = Boolean(item.asset && activeUnlockCheckoutItemId === item.id);
   const hasReelUnlockAccess = unlockSuccessItemId === item.id;
   const isFreeUnlock = Boolean(item.asset && (item.asset.accessMode === 'free' || item.asset.priceUsdCents === 0));
+  const listedPriceCredits = item.asset ? Math.max(0, Math.round(item.asset.priceUsdCents)) : 0;
+  // The price the server answered a credit unlock with (409), while the
+  // listing still carries the one the reel was drawn with.
+  const priceChange = priceChanges[item.id];
+  const tokenCost = priceChange && priceChange.fromPriceCredits === listedPriceCredits
+    ? priceChange.priceCredits
+    : listedPriceCredits;
+  const priceChanged = tokenCost !== listedPriceCredits;
+  const formattedCreditCost = tokenCost.toLocaleString('en-US');
+  // The card's figure: the viewer's quote, or dollars once the price moved
+  // past the quote the listing carries.
+  const cashLabel = item.asset
+    ? (!priceChanged && item.asset.priceQuote?.formatted) || formatUsdCents(tokenCost)
+    : '';
+  // Both ways to pay, for the unlock button and the checkout's price pill. The
+  // recipe's chips (its badge, a text post's card) take `getAssetAccessLabel`:
+  // credits alone, as the feed and the app price a recipe.
+  const priceLabel = item.asset ? formatPostResourcePriceLabel(tokenCost, cashLabel) : '';
+  const unlockCtaLabel = item.asset ? (isFreeUnlock ? 'Get free recipe' : `Unlock for ${priceLabel}`) : null;
+  // The rail's button holds "Recipe"; the whole offer is its accessible name (B-F14).
   const reelRecipeActionLabel = hasReelUnlockAccess ? 'View recipe' : unlockCtaLabel;
-  const priceLabel = item.asset ? getAssetPriceLabel(item.asset) : '';
-  const tokenCost = item.asset ? Math.max(0, item.asset.priceUsdCents) : 0;
-  const formattedCreditCost = tokenCost.toLocaleString();
   // Below the cash minimum a recipe is credits-only, and the server refuses a
   // cash order for it, as the post page's panel already knows.
   const offersCashCheckout = !isFreeUnlock && isPostResourceWebCashEligible(tokenCost);
@@ -1014,10 +965,13 @@ export default function ShowcaseReelViewer({
     return false;
   };
 
-  const applyReelUnlock = (postId: string, bundle: ReelBundleRefreshPayload) => {
+  // An unlock made in the reel: the post page's panel opens in the details,
+  // saying so and where the recipe is kept.
+  const applyReelUnlock = (postId: string, bundle: ReelBundle) => {
     setUnlockSuccessItemId(postId);
-    setUnlockedResources(bundle.resources);
-    setShowUnlockedDetails(false);
+    setUnlockedBundle(bundle);
+    setJustUnlockedItemId(postId);
+    setActiveUnlockCheckoutItemId((current) => (current === postId ? null : current));
     setUnlockError(null);
     setUnlockNotice(null);
   };
@@ -1040,7 +994,7 @@ export default function ShowcaseReelViewer({
 
   // A paid recipe opens on the post it was bought for. If the reader has moved
   // on meanwhile, the reel's own access check opens it when they come back.
-  const showPaidRecipe = (postId: string, bundle: ReelBundleRefreshPayload) => {
+  const showPaidRecipe = (postId: string, bundle: ReelBundle) => {
     setAwaitingPaymentItemId((current) => (current === postId ? null : current));
     trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
     if (feedEventItemRef.current?.id === postId) {
@@ -1060,7 +1014,7 @@ export default function ShowcaseReelViewer({
     setUnlockNotice(null);
     setAwaitingPaymentItemId(postId);
     stopBundlePollRef.current?.();
-    stopBundlePollRef.current = pollBundleUntilUnlocked<ReelBundleRefreshPayload>({
+    stopBundlePollRef.current = pollBundleUntilUnlocked<ReelBundle>({
       postId,
       token: readCheckoutAccessToken,
       onUnlocked: (bundle) => {
@@ -1103,7 +1057,6 @@ export default function ShowcaseReelViewer({
       }
 
       await finishReelUnlock();
-      setActiveUnlockCheckoutItemId(item.id);
       trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: item.id });
     } catch (unlockError) {
       trackProductEvent('recipe_unlock_failed', { method: 'free', post_id: item.id });
@@ -1172,7 +1125,7 @@ export default function ShowcaseReelViewer({
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
         currency: orderData.currency,
-        name: 'magicbooklet recipe',
+        name: 'Magicbooklet recipe',
         description: orderData.bundleTitle || item.asset.title,
         order_id: orderData.orderId,
         handler: async (response: {
@@ -1250,10 +1203,11 @@ export default function ShowcaseReelViewer({
 
     // The spend cannot be undone: asked first, with the post page's words.
     // (A known shortfall never gets here: the button is held and "Buy credits" shows.)
+    const confirmedPriceCredits = tokenCost;
     const confirmed = await requestConfirmation({
       title: 'Unlock this recipe?',
-      message: `${formattedCreditCost} credits will come off your balance right away.`,
-      confirmLabel: `Use ${formattedCreditCost} credits`,
+      message: `${formattedCreditCost} credits will come off your balance.`,
+      confirmLabel: `Unlock for ${formattedCreditCost} credits`,
     });
     if (!confirmed) {
       return;
@@ -1264,11 +1218,14 @@ export default function ShowcaseReelViewer({
       setUnlockWorkingAction('tokens');
       setUnlockError(null);
       setUnlockNotice(null);
+      // The price the reader said yes to: nothing is charged if it has moved (S3).
       const response = await fetch(`/api/posts/${item.id}/resource-bundle/unlock-with-credits`, {
         method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           Authorization: `Bearer ${session?.access_token}`,
         },
+        body: JSON.stringify({ expectedPriceCredits: confirmedPriceCredits }),
       });
       const data = await response.json();
 
@@ -1277,6 +1234,18 @@ export default function ShowcaseReelViewer({
           // The server's count is what refused, so it replaces the page's.
           applyServerBalance(data.remainingCredits, data.marketplaceSpendableCredits);
           setCreditsRefusedItemId(item.id);
+        }
+        if (response.status === 409 && data?.code === 'RESOURCE_PRICE_CHANGED' && typeof data.priceCredits === 'number') {
+          // Nothing was charged: the reel shows the price the server holds,
+          // and the reader confirms again at it.
+          const priceCredits = Math.max(0, Math.round(data.priceCredits));
+          setPriceChanges((current) => ({
+            ...current,
+            [item.id]: { fromPriceCredits: listedPriceCredits, priceCredits },
+          }));
+          trackProductEvent('recipe_unlock_failed', { method: 'credits', post_id: item.id });
+          setUnlockError(`The price changed to ${priceCredits.toLocaleString('en-US')} credits.`);
+          return;
         }
         throw new Error(data.error || 'Failed to unlock with credits.');
       }
@@ -1450,163 +1419,6 @@ export default function ShowcaseReelViewer({
     }
   };
 
-  const renderRecipeResourcesCard = (
-    resources: ReelBundleResources,
-    options?: { title?: string; compact?: boolean }
-  ) => {
-    const resourceItems = resources.items ?? [];
-    const promptText = resources.promptText
-      || resourceItems.find((resourceItem) => resourceItem.type === 'prompt' && resourceItem.textContent)?.textContent
-      || null;
-    const notesMarkdown = resources.notesMarkdown
-      || resourceItems.find((resourceItem) => resourceItem.type === 'note' && resourceItem.textContent)?.textContent
-      || null;
-    const referenceItems = resourceItems.filter((resourceItem) =>
-      resourceItem.storagePath
-      || resourceItem.externalUrl
-      || resourceItem.type === 'reference_image'
-      || resourceItem.type === 'source_file'
-    );
-    const attachmentItems = resources.attachments.filter((attachment) => attachment.url || attachment.storagePath);
-    const hasRecipeContent = Boolean(
-      promptText
-      || notesMarkdown
-      || referenceItems.length > 0
-      || attachmentItems.length > 0
-      || resources.allowRemix
-    );
-
-    if (!hasRecipeContent) {
-      return null;
-    }
-
-    return (
-      <div className={`${options?.compact ? 'mt-3' : 'mt-5'} rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4`}>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
-              {options?.title ?? 'Creation recipe'}
-            </div>
-            <p className="mt-1 text-sm leading-6 text-emerald-50/75">
-              Prompt, references, notes, and remix access available here.
-            </p>
-          </div>
-          <span className="shrink-0 rounded-full border border-emerald-300/20 bg-black/25 px-2.5 py-1 text-xs font-medium text-emerald-50">
-            Ready
-          </span>
-        </div>
-
-        {promptText ? (
-          <div className="mt-4 rounded-2xl border border-white/8 bg-black/35 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Prompt</div>
-              <button
-                type="button"
-                onClick={() => void navigator.clipboard?.writeText(promptText)}
-                className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08]"
-              >
-                Copy
-              </button>
-            </div>
-            <p className="mt-3 max-h-56 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-200 [overflow-wrap:anywhere] app-scrollbar">
-              {promptText}
-            </p>
-          </div>
-        ) : null}
-
-        {referenceItems.length > 0 || attachmentItems.length > 0 ? (
-          <div className="mt-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">References</div>
-            <div className="mt-3 flex flex-wrap gap-3">
-              {referenceItems.map((resourceItem, index) => {
-                const hasFile = Boolean(resourceItem.storagePath || resourceItem.externalUrl);
-                const fileUrl = hasFile
-                  ? resourceItem.externalUrl
-                  : null;
-                const isImage = resourceItem.type === 'reference_image' || resourceItem.contentType?.startsWith('image/');
-                const isVideo = resourceItem.contentType?.startsWith('video/');
-                const isAudio = resourceItem.contentType?.startsWith('audio/');
-                const showMediaPreview = hasFile && (isImage || isVideo || isAudio);
-
-                return (
-                  isImage && hasFile ? (
-                    <div key={`${item.id}:${resourceItem.storagePath || fileUrl}`} className="w-[112px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/35">
-                      <ResourceMediaPreview mediaType="image" label={resourceItem.title}
-                        url={resourceItem.storagePath ? null : fileUrl}
-                        resolveUrl={resourceItem.storagePath ? signal => fetchResourceFileUrl(resourceItem.storagePath!, signal) : undefined}
-                        onOpenImage={src => setActiveReferencePreview({ src, alt: resourceItem.title, storagePath: resourceItem.storagePath })}
-                        imageClassName="aspect-[3/4] h-full w-full object-contain"
-                      />
-                      <div className="truncate border-t border-white/8 px-3 py-2 text-xs font-medium text-zinc-100">{resourceItem.title}</div>
-                    </div>
-                  ) : (
-                    <div
-                      key={`${resourceItem.storagePath ?? resourceItem.externalUrl ?? resourceItem.title}:${index}`}
-                      className="min-w-0 basis-[180px] overflow-hidden rounded-2xl border border-white/10 bg-black/35 p-3"
-                    >
-                      {showMediaPreview && (isVideo || isAudio) ? (
-                        <ResourceMediaPreview
-                          key={`${item.id}:${resourceItem.storagePath || fileUrl}`}
-                          mediaType={isAudio ? 'audio' : 'video'}
-                          label={resourceItem.title}
-                          url={resourceItem.storagePath ? null : fileUrl}
-                          resolveUrl={resourceItem.storagePath ? signal => fetchResourceFileUrl(resourceItem.storagePath!, signal) : undefined}
-                        />
-                      ) : (
-                        <div className="text-xs text-zinc-400">{resourceItem.title}</div>
-                      )}
-                    </div>
-                  )
-                );
-              })}
-
-              {attachmentItems.map((attachment, index) => {
-                const fileUrl = attachment.url;
-
-                return (
-                  <div
-                    key={`${attachment.storagePath ?? attachment.url ?? attachment.label}:${index}`}
-                    className="min-w-0 basis-[180px] rounded-2xl border border-white/10 bg-black/35 p-3"
-                  >
-                    <div className="truncate text-xs font-semibold text-zinc-100">{attachment.label}</div>
-                    {attachment.storagePath ? (
-                      <ResourceFileLink key={`${item.id}:${attachment.storagePath}`} label={attachment.label}
-                        resolveUrl={signal => fetchResourceFileUrl(attachment.storagePath!, signal)} />
-                    ) : fileUrl ? (
-                      <a
-                        href={fileUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-2 inline-flex text-xs font-medium text-emerald-200 hover:text-emerald-100"
-                      >
-                        Open
-                      </a>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        {notesMarkdown ? (
-          <div className="mt-4 rounded-2xl border border-white/8 bg-black/35 p-3">
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Notes</div>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-200 [overflow-wrap:anywhere]">
-              {notesMarkdown}
-            </p>
-          </div>
-        ) : null}
-
-        {resources.allowRemix ? (
-          <div className="mt-4 rounded-2xl border border-[var(--ui-primary)]/25 bg-[var(--ui-primary-soft)] px-3 py-2 text-sm font-medium text-[var(--ui-primary-strong)]">
-            Remix access is included.
-          </div>
-        ) : null}
-      </div>
-    );
-  };
-
   const renderCompactUnlockCard = () => {
     if (!item.asset) {
       return null;
@@ -1643,33 +1455,7 @@ export default function ShowcaseReelViewer({
           </p>
         ) : null}
 
-        {hasReelUnlockAccess ? (
-          <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-black/25 p-4">
-            <div className="text-sm font-semibold text-emerald-100">
-              {isFreeUnlock ? 'Added to your recipes' : 'Unlocked'}
-            </div>
-            <p className="mt-1 text-sm leading-6 text-emerald-50/75">
-              {isFreeUnlock ? 'It is saved to your library and ready here.' : 'Your recipe is ready here.'}
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                if (!showUnlockedDetails) reportResourceOpen();
-                setShowUnlockedDetails((currentValue) => !currentValue);
-              }}
-              className="mt-3 inline-flex w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
-              aria-expanded={showUnlockedDetails}
-            >
-              View recipe details
-            </button>
-            {showUnlockedDetails ? (
-              unlockedResources ? renderRecipeResourcesCard(unlockedResources, {
-                title: 'Recipe details',
-                compact: true,
-              }) : null
-            ) : null}
-          </div>
-        ) : isFreeUnlock ? (
+        {isFreeUnlock ? (
           <button
             type="button"
             onClick={() => void openFreeUnlock()}
@@ -1689,7 +1475,7 @@ export default function ShowcaseReelViewer({
                 className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
               >
                 {unlockWorkingAction === 'cash' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingBag className="h-4 w-4" />}
-                Pay with cash
+                {`Pay ${cashLabel}`}
               </button>
             ) : null}
             <button
@@ -1707,7 +1493,8 @@ export default function ShowcaseReelViewer({
                 {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString()} credits available`}</span> : null}
                 {holdsUnspendableCredits ? <span>{UNSPENDABLE_CREDITS_NOTE}</span> : null}
                 {offersBuyCredits ? (
-                  <Link href="/pricing" className="font-semibold text-emerald-200 transition hover:text-emerald-100">
+                  // With the way back to the post's recipe (B-F8).
+                  <Link href={buildRecipeTopUpHref(buildDetailPath(item.id))} className="font-semibold text-emerald-200 transition hover:text-emerald-100">
                     Buy credits
                   </Link>
                 ) : null}
@@ -1742,7 +1529,7 @@ export default function ShowcaseReelViewer({
             dateLabel={dateLabel}
             saveCount={item.saveCount}
             remixCount={item.remixCount}
-            unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
+            unlockLabel={item.asset ? getAssetAccessLabel(item.asset, { isOwner: isOwnPost }) : null}
             resourceKinds={resourceKinds}
             showStats={false}
             className="w-full max-w-xl border-white/10 bg-zinc-950/90"
@@ -1807,43 +1594,6 @@ export default function ShowcaseReelViewer({
       {item.asset && isUnlockCheckoutOpen && offersCashCheckout ? (
         <Script id="showcase-reel-razorpay-checkout" src="https://checkout.razorpay.com/v1/checkout.js" />
       ) : null}
-
-      <AnimatePresence>
-        {activeReferencePreview ? (
-          <motion.div
-            ref={referenceDialogRef}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: prefersReducedMotion ? 0.12 : 0.18 }}
-            className="absolute inset-0 z-[120] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md"
-            onClick={() => setActiveReferencePreview(null)}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Reference image preview"
-          >
-            <div
-              className="relative flex max-h-full w-full max-w-5xl items-center justify-center"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <button
-                ref={referenceCloseButtonRef}
-                type="button"
-                onClick={() => setActiveReferencePreview(null)}
-                className="ui-focus-ring absolute right-3 top-3 z-10 inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/65 text-zinc-300 transition hover:bg-zinc-900 hover:text-white"
-                aria-label="Close reference preview"
-              >
-                <X className="h-5 w-5" />
-              </button>
-              <div className="flex min-h-[220px] w-full items-center justify-center rounded-[24px] border border-white/10 bg-black p-4 sm:min-h-[420px] sm:p-6">
-                <ResourceMediaPreview mediaType="image" url={activeReferencePreview.src} label={activeReferencePreview.alt}
-                  resolveUrl={activeReferencePreview.storagePath ? signal => fetchResourceFileUrl(activeReferencePreview.storagePath!, signal) : undefined}
-                  imageClassName="max-h-[calc(100dvh-7rem)] max-w-full object-contain" />
-              </div>
-            </div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
 
       {/*
         Above the body below (z-10): the ⋯ menu hangs from this bar over the
@@ -2069,8 +1819,8 @@ export default function ShowcaseReelViewer({
               onClick={() => {
                 if (hasReelUnlockAccess) {
                   reportResourceOpen();
-                  detailsScrollerRef.current?.scrollTo({
-                    top: 220,
+                  recipePanelRef.current?.scrollIntoView({
+                    block: 'start',
                     behavior: prefersReducedMotion ? 'auto' : 'smooth',
                   });
                 } else {
@@ -2084,7 +1834,7 @@ export default function ShowcaseReelViewer({
               {unlockWorkingAction === 'free'
                 ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
                 : <ShoppingBag size={20} className="h-5 w-5 shrink-0" />}
-              <span>{unlockWorkingAction === 'free' ? 'Adding…' : reelRecipeActionLabel}</span>
+              <span>{unlockWorkingAction === 'free' ? 'Adding…' : 'Recipe'}</span>
             </button>
           ) : null}
 
@@ -2225,7 +1975,7 @@ export default function ShowcaseReelViewer({
                         <h3 className="mt-2 text-base font-semibold text-white">{item.asset.title}</h3>
                       </div>
                       <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300 px-2.5 py-1 text-xs font-bold text-slate-950">
-                        {getAssetAccessLabel(item.asset)}
+                        {getAssetAccessLabel(item.asset, { isOwner: isOwnPost })}
                       </span>
                     </div>
                     <p className="mt-3 text-sm leading-6 text-emerald-50/80">
@@ -2257,14 +2007,28 @@ export default function ShowcaseReelViewer({
                   </div>
                 ) : null}
 
-                {item.asset && isUnlockCheckoutOpen ? (
+                {item.asset && isUnlockCheckoutOpen && !hasReelUnlockAccess ? (
                   renderCompactUnlockCard()
                 ) : null}
 
-                {item.asset && hasReelUnlockAccess && !isUnlockCheckoutOpen && unlockedResources ? (
-                  renderRecipeResourcesCard(unlockedResources, {
-                    title: 'Recipe details',
-                  })
+                {item.asset && hasReelUnlockAccess && unlockedBundle ? (
+                  // The post page's own panel, whole (B-F1): every item, files
+                  // to open and save, links to follow, settings as keys and
+                  // values. The partial card it replaces showed the first
+                  // prompt and note alone.
+                  <div ref={recipePanelRef} className="mt-5 scroll-mt-4 rounded-[22px] border border-emerald-300/20 bg-black/30 p-4">
+                    <PostResourceBundlePanel
+                      key={item.id}
+                      {...buildRecipePanelProps(toReelRecipeSource(item.asset, unlockedBundle), {
+                        postId: item.id,
+                        mediaItems,
+                        displayTitle: item.title,
+                        remixIncluded: Boolean(item.asset.allowRemix) && (item.canRemix || remixNeedsUnlock),
+                        returnPath: buildDetailPath(item.id),
+                      })}
+                      announceUnlock={justUnlockedItemId === item.id}
+                    />
+                  </div>
                 ) : null}
 
                 {item.body.trim() ? (

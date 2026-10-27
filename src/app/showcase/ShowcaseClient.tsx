@@ -644,7 +644,8 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
                     <div className="flex flex-wrap items-center gap-1.5 mt-1">
                         {item.asset ? (
                             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/10 bg-emerald-500/[0.06] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                                {getAssetAccessLabel(item.asset)}
+                                {/* "Unlocked" or "Your recipe" in place of a price the viewer need not pay. */}
+                                {getAssetAccessLabel(item.asset, { isOwner: isOwnPost })}
                             </span>
                         ) : null}
                         {resourceKinds.map((kind) => (
