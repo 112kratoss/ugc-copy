@@ -20,7 +20,7 @@ import {
   subscribeToVideoLoanHolds,
   subscribeToVideoReturns,
 } from '@/lib/video-player-loans';
-import { useAppForeground } from '@/lib/app-foreground';
+import { isAppForeground, subscribeToAppForeground, useAppForeground } from '@/lib/app-foreground';
 import { recordMediaDiagnostic } from '@/lib/media-diagnostics';
 import {
   FEED_PREVIEW_BUFFERING_INDICATOR_DELAY_MS,
@@ -58,6 +58,20 @@ const FEED_PREVIEW_TIME_UPDATE_INTERVAL_SECONDS = 0.25;
 // trying to attach a dead player. Keep the paused player alive long enough for
 // the native view transaction to detach before releasing it.
 const PLAYER_RELEASE_GRACE_MS = 100;
+
+/**
+ * Asks a player the tile still holds the slot for to play again, after the app
+ * or a loan paused it. Nothing to do when it already plays (iOS's `inactive`,
+ * Control Center or a system alert, pauses nothing); a player released under
+ * a hand-back race throws, and then there is nothing to resume.
+ */
+function resumePlayer(player: VideoPlayer) {
+  try {
+    if (!player.playing) player.play();
+  } catch {
+    // Released already: its native side is gone.
+  }
+}
 
 /**
  * A feed video tile: poster while idle, muted looping preview while active.
@@ -498,6 +512,7 @@ function FeedVideoPlayerLayer({
   // Fleet metrics (lib/playback-metrics): one key per player this layer holds.
   const [metricsKey] = useState(() => `feed:${(feedPlaybackSequence += 1)}`);
   const playingRef = useRef(playing);
+  const returningRef = useRef(returning);
   useEffect(() => () => forgetPlayback(metricsKey), [metricsKey]);
 
   // Offered to the zoom out of the tile, which lends it to the flight and the
@@ -514,7 +529,12 @@ function FeedVideoPlayerLayer({
       player,
       url: lendableUrl,
       hasFrame: () => hasFrameRef.current,
-      reattach: () => setSurfaceGeneration((generation) => generation + 1),
+      reattach: () => {
+        setSurfaceGeneration((generation) => generation + 1);
+        // A loan that ends with the tile still holding the slot hands back a
+        // player the app may have paused meanwhile (a trip away mid-flight).
+        if (playingRef.current && !returningRef.current && isAppForeground()) resumePlayer(player);
+      },
     });
   }, [lendableUrl, offerVideo, player]);
 
@@ -567,8 +587,13 @@ function FeedVideoPlayerLayer({
   // says until the reel has gone; only then does this tile's own decision apply.
   useEffect(() => {
     playingRef.current = playing;
+    returningRef.current = returning;
     if (returning) return;
     if (playing) {
+      // Given the slot after the app has gone (Home settles its election as
+      // the app leaves): it starts when the app comes back, below, and not
+      // behind the launcher, where Android would run it.
+      if (!isAppForeground()) return;
       // Asked to move: a player that has drawn is a warm start, one that has not is cold.
       if (metricsSurface) beginPlaybackStart(metricsKey, { surface: metricsSurface, kind: hasFrameRef.current ? 'warm' : 'cold' });
       player.play();
@@ -578,6 +603,28 @@ function FeedVideoPlayerLayer({
       player.pause();
     }
   }, [metricsKey, metricsSurface, player, playing, returning]);
+
+  // Both platforms pause a playing clip as the app leaves the foreground
+  // (expo-video's VideoManager.onAppBackgrounded) and start none again when it
+  // comes back, and the effect above calls play() only when `playing` changes.
+  // So a tile still holding the playing slot sat on one frame after every
+  // return to the app: the shelf clip on top of Home, on the owner's iPhone
+  // (2026-10-27). While the tile holds the slot it hears the app go and come
+  // back, from the events themselves, so a trip React would batch into no
+  // change of state is not lost. Going withdraws a start or a stall still being
+  // timed, as scrolling away does: time away is not start-up time. Coming back
+  // asks the player to play again, unless the reel has it on loan.
+  useEffect(() => {
+    if (!playing || returning) return undefined;
+    return subscribeToAppForeground((foreground) => {
+      if (!foreground) {
+        cancelPlaybackStart(metricsKey);
+        endPlaybackStall(metricsKey);
+      } else if (!isVideoPlayerOnLoan(player)) {
+        resumePlayer(player);
+      }
+    });
+  }, [metricsKey, player, playing, returning]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {

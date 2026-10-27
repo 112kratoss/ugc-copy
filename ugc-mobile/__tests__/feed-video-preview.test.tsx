@@ -16,6 +16,7 @@ const videoState = vi.hoisted(() => ({
     staysActiveInBackground: true,
     bufferOptions: undefined as { preferredForwardBufferDuration?: number } | undefined,
     status: undefined as string | undefined,
+    playing: false,
   },
   createVideoPlayer: vi.fn(),
 }));
@@ -102,7 +103,7 @@ import { FeedVideoPreview } from '../components/feed-video-preview';
 import { mediaColors } from '../lib/theme';
 import { MEDIA_DISPLAY_DEADLINE_MS } from '../lib/media-recovery';
 import { clearPlaybackMetricsForTests, readPlaybackMetrics } from '../lib/playback-metrics';
-import { MediaZoomTileKeyContext } from '../lib/media-zoom-video-offer';
+import { MediaZoomTileKeyContext, MediaZoomVideoOfferContext, type MediaZoomVideoOffer } from '../lib/media-zoom-video-offer';
 import {
   adoptVideoPlayer,
   endVideoReturn,
@@ -111,6 +112,7 @@ import {
   lendVideoPlayer,
   lenderUnmounting,
   resetVideoPlayerLoans,
+  returnVideoPlayer,
   tileAcceptsVideoReturn,
   whenReturnedVideoDrawn,
 } from '../lib/video-player-loans';
@@ -131,9 +133,14 @@ describe('FeedVideoPreview', () => {
     videoState.player.staysActiveInBackground = true;
     videoState.player.bufferOptions = undefined;
     videoState.player.status = undefined;
+    videoState.player.playing = false;
     imageState.mounts = 0;
     appState.currentState = 'active';
     appState.listeners = [];
+  });
+  // A loan left by a failed assertion would make every later unmount skip its release.
+  afterEach(() => {
+    resetVideoPlayerLoans();
   });
 
   function findRetry(tree: renderer.ReactTestRenderer) {
@@ -520,6 +527,105 @@ describe('FeedVideoPreview', () => {
 
     renderer.act(() => tree.unmount());
     vi.useRealTimers();
+  });
+
+  // Both platforms pause a playing clip as the app leaves (expo-video's
+  // VideoManager.onAppBackgrounded) and start none again when it returns: on
+  // the owner's iPhone the shelf clip on top of Home sat on one frame after
+  // every return to the app (2026-10-27).
+  it('asks its player to play again when the app comes back while it still holds the slot', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+    renderer.act(() => tree.root.findByType('video-view' as never).props.onFirstFrameRender());
+    const plays = videoState.player.play.mock.calls.length;
+
+    setAppState('background');
+    expect(videoState.player.play).toHaveBeenCalledTimes(plays);
+    setAppState('active');
+    expect(videoState.player.play).toHaveBeenCalledTimes(plays + 1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('leaves alone a tile that lost the slot while the app was away', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+    setAppState('background');
+    renderer.act(() => tree.update(<FeedVideoPreview {...posterProps} active={false} prepared />));
+    const plays = videoState.player.play.mock.calls.length;
+    setAppState('active');
+    expect(videoState.player.play).toHaveBeenCalledTimes(plays);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('starts a tile given the slot while the app is away when it comes back, not behind the launcher', () => {
+    setAppState('background');
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+    expect(videoState.player.play).not.toHaveBeenCalled();
+    setAppState('active');
+    expect(videoState.player.play).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('withdraws a start still waiting for motion when the app leaves: time away is not start-up time', () => {
+    clearPlaybackMetricsForTests();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+    setAppState('background');
+    setAppState('active');
+    renderer.act(() => tree.root.findByType('video-view' as never).props.onFirstFrameRender());
+    expect(readPlaybackMetrics().buckets.reduce((sum, bucket) => sum + bucket.starts, 0)).toBe(0);
+    renderer.act(() => tree.unmount());
+    clearPlaybackMetricsForTests();
+  });
+
+  it('asks nothing of a player that already plays, as after iOS\'s inactive', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+    const plays = videoState.player.play.mock.calls.length;
+    videoState.player.playing = true;
+    setAppState('inactive');
+    setAppState('active');
+    expect(videoState.player.play).toHaveBeenCalledTimes(plays);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('leaves a player out on loan to the reel, and plays it once the loan ends with the tile still holding the slot', () => {
+    let offer: MediaZoomVideoOffer | null = null;
+    const offerVideo = (next: MediaZoomVideoOffer) => {
+      offer = next;
+      return () => undefined;
+    };
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <MediaZoomVideoOfferContext.Provider value={offerVideo}>
+          <FeedVideoPreview {...posterProps} lendableStreamUrl={posterProps.streamUrl} active />
+        </MediaZoomVideoOfferContext.Provider>,
+      );
+    });
+    expect(offer).not.toBeNull();
+    const lent = offer!;
+    lendVideoPlayer(lent.player, lent.reattach);
+    const plays = videoState.player.play.mock.calls.length;
+    // The reader leaves mid-flight and comes back: the reel decides while it has the player.
+    setAppState('background');
+    setAppState('active');
+    expect(videoState.player.play).toHaveBeenCalledTimes(plays);
+    // The flight turns round and the player comes back to the tile, paused by the trip.
+    renderer.act(() => returnVideoPlayer(lent.player));
+    expect(videoState.player.play).toHaveBeenCalledTimes(plays + 1);
+    renderer.act(() => tree.unmount());
   });
 
   it('offers no retry on a tile that is not playing', () => {
