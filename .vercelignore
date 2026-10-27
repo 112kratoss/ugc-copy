@@ -7,18 +7,14 @@ test-results
 output
 docs/model-api-references
 supabase/backups
-# The mobile workspace stays out of the web upload, except the platform-free
-# folders shared with the web app (model catalog, resumable media transport,
-# saver notice policy, post publish policy, creator settings summary).
-# Gitignore semantics cannot re-include a file whose parent directory is
-# excluded, so the contents are excluded level by level and the path down to
-# each folder is re-included. Without this the Vercel build fails with
-# "Module not found".
+# The mobile workspace stays out of the web upload, except ugc-mobile/lib, which
+# is uploaded whole. The web app and the server import its platform-free folders
+# (model catalog, resumable media transport, saver notice policy, post publish
+# policy, creator settings summary). `next build` also type-checks against the
+# upload, so even a file they reach only with `import type` must be in it.
+# Gitignore semantics cannot re-include a path whose parent directory is
+# excluded, so the workspace's contents are excluded one level down and lib is
+# re-included. Without this the Vercel build fails with "Module not found".
+# src/__tests__/vercelignore-shared-catalog-modules.test.ts pins these two lines.
 ugc-mobile/*
 !ugc-mobile/lib
-ugc-mobile/lib/*
-!ugc-mobile/lib/model-catalog
-!ugc-mobile/lib/media-upload
-!ugc-mobile/lib/saver-notice-policy
-!ugc-mobile/lib/post-publish-policy
-!ugc-mobile/lib/creator-settings-summary
