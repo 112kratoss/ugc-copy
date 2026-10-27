@@ -364,6 +364,7 @@ export function FeedVideoPreview({
           returning={returning}
           contentFit={videoContentFit}
           playing={canPlay}
+          foreground={foreground}
           onFirstFrame={handleFirstFrame}
           onPlaybackError={handlePlaybackError}
           onPlaybackTime={onPlaybackTime}
@@ -449,6 +450,7 @@ function FeedVideoPlayerLayer({
   returning,
   contentFit,
   playing,
+  foreground,
   onFirstFrame,
   onPlaybackError,
   onPlaybackTime,
@@ -463,6 +465,8 @@ function FeedVideoPlayerLayer({
   returning: boolean;
   contentFit: 'cover' | 'contain';
   playing: boolean;
+  /** The app is in the foreground (`useAppForeground`, tracked while the tile may play). */
+  foreground: boolean;
   onFirstFrame: () => void;
   onPlaybackError: (errored: boolean) => void;
   onPlaybackTime?: (currentTimeSeconds: number, durationSeconds: number) => void;
@@ -578,6 +582,24 @@ function FeedVideoPlayerLayer({
       player.pause();
     }
   }, [metricsKey, metricsSurface, player, playing, returning]);
+
+  // Both platforms pause a playing clip as the app leaves the foreground
+  // (expo-video's VideoManager.onAppBackgrounded) and start none again when it
+  // comes back, and the effect above calls play() only when `playing` changes.
+  // So a tile still holding the playing slot sat on one frame after every
+  // return to the app: the shelf clip on top of Home, on the owner's iPhone
+  // (2026-10-27). It asks again on the way back. That is a resume, not a start,
+  // so the fleet metrics hear nothing; a player out on loan is the reel's to run.
+  const awayRef = useRef(!foreground);
+  useEffect(() => {
+    if (!foreground) {
+      awayRef.current = true;
+      return;
+    }
+    if (!awayRef.current) return;
+    awayRef.current = false;
+    if (playingRef.current && !returning && !isVideoPlayerOnLoan(player)) player.play();
+  }, [foreground, player, returning]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {

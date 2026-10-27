@@ -522,6 +522,48 @@ describe('FeedVideoPreview', () => {
     vi.useRealTimers();
   });
 
+  // Both platforms pause a playing clip as the app leaves (expo-video's
+  // VideoManager.onAppBackgrounded) and start none again when it returns: on
+  // the owner's iPhone the shelf clip on top of Home sat on one frame after
+  // every return to the app (2026-10-27).
+  it('asks its player to play again when the app comes back while it still holds the slot', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+    renderer.act(() => tree.root.findByType('video-view' as never).props.onFirstFrameRender());
+    const plays = videoState.player.play.mock.calls.length;
+
+    setAppState('background');
+    expect(videoState.player.play).toHaveBeenCalledTimes(plays);
+    setAppState('active');
+    expect(videoState.player.play).toHaveBeenCalledTimes(plays + 1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('leaves a prepared tile paused when the app comes back, and a player out on loan to the reel', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active={false} prepared />);
+    });
+    setAppState('background');
+    setAppState('active');
+    expect(videoState.player.play).not.toHaveBeenCalled();
+    renderer.act(() => tree.unmount());
+
+    // A playing tile whose player went to the reel: the reel decides whether it plays.
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
+    });
+    const plays = videoState.player.play.mock.calls.length;
+    lendVideoPlayer(videoState.player as unknown as Parameters<typeof lendVideoPlayer>[0], vi.fn());
+    setAppState('background');
+    setAppState('active');
+    expect(videoState.player.play).toHaveBeenCalledTimes(plays);
+    resetVideoPlayerLoans();
+    renderer.act(() => tree.unmount());
+  });
+
   it('offers no retry on a tile that is not playing', () => {
     videoState.player.status = 'error';
     let tree!: renderer.ReactTestRenderer;
