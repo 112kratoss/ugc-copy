@@ -299,18 +299,64 @@ jobs:
 
       # The SQL-only job deliberately excludes these API services. This job
       # replays independently and exercises actual Auth, Storage and PostgREST.
-      # Keep generated local keys in private runner files, never log/artifact them.
+      # Keep generated local keys in private runner files, never log/artifact them:
+      # a successful start ends with the key table, so its output goes to a file.
+      # A failed start prints no keys and removes its own containers first, so
+      # that file (the stop step deletes it) is the only record of the cause: a
+      # pull, a port, a health check or a migration. On failure the step prints
+      # it with key-shaped values masked, plus what listens on the stack's ports
+      # and which containers are left. A failed db reset prints its own output;
+      # the step adds the containers that are not up and healthy.
       - name: Start isolated Supabase API stack
         run: |
           set -euo pipefail
           umask 077
           fixture_dir="$RUNNER_TEMP/supabase-api"
           status_file="$RUNNER_TEMP/supabase-api-status.json"
+          start_log="$RUNNER_TEMP/supabase-api-start.log"
           mkdir -p "$fixture_dir/supabase"
           cp supabase/config.api-tests.toml "$fixture_dir/supabase/config.toml"
           ln -s "$GITHUB_WORKSPACE/supabase/migrations" "$fixture_dir/supabase/migrations"
-          supabase --workdir "$fixture_dir" start --exclude realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > "$RUNNER_TEMP/supabase-api-start.log" 2>&1
-          supabase --workdir "$fixture_dir" db reset --local --no-seed --yes
+          redact() {
+            sed -E -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/[jwt redacted]/g' \
+              -e 's/sb_(publishable|secret)_[A-Za-z0-9_-]+/sb_\1_[redacted]/g' \
+              -e 's/((SECRET|PASSWORD|KEY)[A-Z_]*[=:] *)[^ ,"]+/\1[redacted]/g'
+          }
+          show_containers() {
+            echo "::group::Containers on the runner"
+            docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+            echo "::endgroup::"
+            docker ps -a --filter label=com.supabase.cli.project --format '{{.Names}} {{.Status}}' |
+              while read -r name status; do
+                case "$status" in
+                  *unhealthy* | *'health: starting'*) ;;
+                  Up*) continue ;;
+                esac
+                echo "::group::Last 50 log lines of $name ($status)"
+                docker logs --tail 50 "$name" 2>&1 | redact
+                echo "::endgroup::"
+              done
+          }
+          start_code=0
+          supabase --workdir "$fixture_dir" start --exclude realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > "$start_log" 2>&1 || start_code=$?
+          if [ "$start_code" != 0 ]; then
+            set +e
+            redact < "$start_log"
+            cause="$(grep -v -e '^Try ' -e '^[[:space:]]*$' "$start_log" | tail -n 1 | tr -d '\r' | sed 's/%/%25/g' | redact)"
+            echo "::error title=supabase start exited $start_code::${cause:-no output}"
+            echo "::group::Listening on the stack's ports (543xx)"
+            sudo -n ss -ltnp | grep -F ':543'
+            echo "::endgroup::"
+            show_containers
+            exit "$start_code"
+          fi
+          reset_code=0
+          supabase --workdir "$fixture_dir" db reset --local --no-seed --yes || reset_code=$?
+          if [ "$reset_code" != 0 ]; then
+            set +e
+            show_containers
+            exit "$reset_code"
+          fi
           supabase --workdir "$fixture_dir" status -o json > "$status_file"
           printf 'AUDIT_STORAGE_CONFIG=%s\n' "$status_file" >> "$GITHUB_ENV"
 
