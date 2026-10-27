@@ -824,7 +824,7 @@ export default function PostResourceBundlePanel({
           const priceCredits = Math.max(0, Math.round(data.priceCredits));
           setPriceChange({ fromPriceCredits: basePriceCredits, priceCredits });
           trackProductEvent('recipe_unlock_failed', { method: 'credits', post_id: postId });
-          setError(`The price changed to ${priceCredits.toLocaleString('en-US')} credits.`);
+          setError(priceCredits > 0 ? `The price changed to ${priceCredits.toLocaleString('en-US')} credits.` : 'This recipe is free now.');
           router.refresh();
           return;
         }
@@ -1003,7 +1003,7 @@ export default function PostResourceBundlePanel({
         type="button"
         onClick={() => void copyText(value, key)}
         aria-label={copied ? `Copied ${what}` : `Copy ${what}`}
-        className="inline-flex min-h-9 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+        className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
       >
         {copied ? <CircleCheck className="h-3.5 w-3.5 text-emerald-300" /> : <Copy className="h-3.5 w-3.5" />}
         <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
@@ -1063,7 +1063,7 @@ export default function PostResourceBundlePanel({
                 href={item.externalUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
               >
                 <ExternalLink className="h-4 w-4" />
                 {getRecipeItemLinkLabel(item.type)}
@@ -1074,7 +1074,7 @@ export default function PostResourceBundlePanel({
                 <button
                   type="button"
                   onClick={() => void openResourceFile(item.storagePath ?? '')}
-                  className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
+                  className="inline-flex min-h-11 items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
                 >
                   <ExternalLink className="h-4 w-4" />
                   Open file
@@ -1082,7 +1082,7 @@ export default function PostResourceBundlePanel({
                 <button
                   type="button"
                   onClick={() => void downloadResourceFile(item.storagePath ?? '', formatPostResourceDownloadName(item.title, item.contentType))}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                  className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                 >
                   <Download className="h-4 w-4" />
                   Download
@@ -1106,7 +1106,8 @@ export default function PostResourceBundlePanel({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-zinc-500">
         <span className="font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Recipe</span>
         <span className="rounded-full border border-emerald-300/25 bg-emerald-300 px-2.5 py-0.5 font-bold text-slate-950">
-          {isRecipeVisible ? (viewerIsOwner ? 'Your recipe' : activeIsFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
+          {/* One word for one state: a recipe the viewer has is "Unlocked" here as on every card. */}
+          {isRecipeVisible ? (viewerIsOwner ? 'Your recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
         </span>
         {typeof activeUnlockCount === 'number' ? (
           <span>{formatUnlockCountLabel(activeIsFree ? 'free' : 'paid', activeUnlockCount)}</span>

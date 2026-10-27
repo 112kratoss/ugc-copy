@@ -376,6 +376,9 @@ export default function ShowcaseReelViewer({
     setUnlockWorkingAction(null);
     setUnlockError(null);
     setUnlockNotice(null);
+    // "Recipe unlocked" is said once, on the post it was made on: coming back
+    // to that post draws its panel without the announcement.
+    setJustUnlockedItemId(null);
     setRemixError(null);
     setCommentsItemId(null);
     setActiveMediaIndex(0);
@@ -425,6 +428,7 @@ export default function ShowcaseReelViewer({
     setUnlockWorkingAction(null);
     setUnlockError(null);
     setUnlockNotice(null);
+    setJustUnlockedItemId(null);
     setTransitionDirection('neutral');
     onClose();
   }, [onClose]);
@@ -1244,7 +1248,7 @@ export default function ShowcaseReelViewer({
             [item.id]: { fromPriceCredits: listedPriceCredits, priceCredits },
           }));
           trackProductEvent('recipe_unlock_failed', { method: 'credits', post_id: item.id });
-          setUnlockError(`The price changed to ${priceCredits.toLocaleString('en-US')} credits.`);
+          setUnlockError(priceCredits > 0 ? `The price changed to ${priceCredits.toLocaleString('en-US')} credits.` : 'This recipe is free now.');
           return;
         }
         throw new Error(data.error || 'Failed to unlock with credits.');

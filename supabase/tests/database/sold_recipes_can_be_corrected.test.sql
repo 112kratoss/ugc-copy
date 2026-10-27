@@ -295,6 +295,28 @@ select is(
   0,
   'the refused unlock records no purchase'
 );
+
+-- A recipe made free after the buyer saw its price: a price change to 0, not
+-- "not paid", so the client can take the free path.
+update public.post_resource_bundles set access_mode = 'free', price_usd_cents = 0
+where id = 'c7c00004-0000-4000-8000-000000000004'::uuid;
+select is(
+  (select array[result->>'status', result->>'credit_cost']
+   from (select public.unlock_post_resource_bundle_with_credits(
+     'a7c00002-0000-4000-8000-000000000002'::uuid,
+     'b7c00004-0000-4000-8000-000000000004'::uuid,
+     300
+   ) as result) as unlock),
+  array['price_changed', '0'],
+  'a confirmed price on a recipe made free meanwhile is refused with 0'
+);
+select is(
+  (select credits from public.profiles where id = 'a7c00002-0000-4000-8000-000000000002'::uuid),
+  4500,
+  'and that spends nothing either'
+);
+update public.post_resource_bundles set access_mode = 'paid', price_usd_cents = 300
+where id = 'c7c00004-0000-4000-8000-000000000004'::uuid;
 select is(
   public.unlock_post_resource_bundle_with_credits(
     'a7c00002-0000-4000-8000-000000000002'::uuid,

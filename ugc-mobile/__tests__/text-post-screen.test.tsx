@@ -516,6 +516,17 @@ describe('a shared link', () => {
     mocks.params = { id: 'post-1' };
     renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
     expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1');
+
+    // A "Recipe unlocked" alert links the post's Details page at its recipe
+    // (contracts/mobile-api-v1.json showcasePostRecipe); the post page reads both.
+    mocks.params = { id: 'post-1', page: 'details', section: 'resources' };
+    renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+    expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1?page=details&section=resources');
+
+    // Any other page request is not a Details request and is dropped.
+    mocks.params = { id: 'post-1', s: 'feed', page: 'other', section: 'resources' };
+    renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+    expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1?s=feed');
   });
 });
 

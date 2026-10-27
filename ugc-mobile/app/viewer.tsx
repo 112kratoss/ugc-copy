@@ -72,6 +72,7 @@ import {
   type ImmersiveSlidePage,
 } from '@/lib/immersive-slide-pages';
 import { getReelFollowAttribution, getReelFollowTarget } from '@/lib/reel-overlay-view-model';
+import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
 import { startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useCreatorFollow } from '@/lib/use-creator-follow';
@@ -1019,6 +1020,8 @@ function ImmersivePreviewViewer() {
         // Not awaited: the editor opens now, and the reel learns that this
         // viewer holds the unlock behind it.
         void refreshUnlockedBundleCaches(queryClient, unlock);
+        // The recipe is theirs now, said as every unlock is (B-F9).
+        announceRecipeUnlocked();
       }
       const response = started.response;
       if (source === 'showcase-feed') {

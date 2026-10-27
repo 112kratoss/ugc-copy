@@ -121,7 +121,8 @@ export default function ShowcaseDetailEngagementRow({
   return (
     <div className="mt-6 border-y border-white/8 py-1 text-xs font-semibold text-zinc-400">
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-        {!canRemix && recipeRemix ? (
+        {/* The pill leads to the recipe, which under an NSFW gate is on the page only after the reveal. */}
+        {!canRemix && recipeRemix && nsfwRevealed !== false ? (
           <a
             href="#recipe"
             aria-label={recipeRemix.access === 'paid'

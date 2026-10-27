@@ -267,4 +267,30 @@ describe('ShowcaseDetailEngagementRow', () => {
 
     expect(await screen.findByRole('link', { name: /comment/i })).toHaveAttribute('href', '#comments');
   });
+
+  // The locked Remix pill leads to the recipe, which under an NSFW gate is on
+  // the page only after the reveal: before it, the pill would scroll nowhere.
+  it('holds the locked Remix pill until an NSFW gate opens', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const reply = (body: unknown) => ({ ok: true, json: async () => body }) as Response;
+      if (url === '/api/content-preferences') return reply({ showMature: true });
+      if (url === '/api/posts/post-1/reveal') {
+        return reply({ success: true, detail: { title: 'Shared creation', body: '', mediaItems: [] } });
+      }
+      return reply([]);
+    }));
+    render(
+      <NsfwPostReveal postId="post-1">
+        <ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'paid', priceLabel: '900 credits' } })} />
+      </NsfwPostReveal>,
+    );
+
+    expect(screen.queryByRole('link', { name: /unlock the recipe to remix/i })).not.toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reveal post' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
+
+    expect(await screen.findByRole('link', { name: /unlock the recipe to remix/i })).toHaveAttribute('href', '#recipe');
+  });
 });

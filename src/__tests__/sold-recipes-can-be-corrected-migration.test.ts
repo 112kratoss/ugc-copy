@@ -97,8 +97,12 @@ describe('sold recipes can be corrected migration', () => {
     expect(lockAt).toBeGreaterThan(0);
     expect(checkAt).toBeGreaterThan(lockAt);
     expect(spendAt).toBeGreaterThan(checkAt);
-    expect(body).toContain('p_expected_credit_cost IS DISTINCT FROM v_bundle.price_usd_cents');
-    expect(body).toMatch(/'status', 'price_changed'[\s\S]*'credit_cost', v_bundle\.price_usd_cents/);
+    // Compared with the live cost (0 for a recipe made free meanwhile), and
+    // before the "not paid" answer, so a buyer whose recipe went free is told
+    // the price changed to 0 rather than refused.
+    expect(body).toContain('p_expected_credit_cost IS DISTINCT FROM (');
+    expect(checkAt).toBeLessThan(body.indexOf("'status', 'not_paid'"));
+    expect(body).toMatch(/'status', 'price_changed'[\s\S]*?'credit_cost', CASE WHEN v_bundle\.access_mode = 'paid' AND v_bundle\.price_usd_cents > 0/);
     expect(body).toContain('SECURITY INVOKER');
     expect(migration).toContain('REVOKE ALL ON FUNCTION public.unlock_post_resource_bundle_with_credits(uuid, uuid, integer)\n  FROM PUBLIC, anon, authenticated;');
     expect(migration).toContain('GRANT EXECUTE ON FUNCTION public.unlock_post_resource_bundle_with_credits(uuid, uuid, integer)\n  TO service_role;');

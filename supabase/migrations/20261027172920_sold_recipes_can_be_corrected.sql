@@ -415,18 +415,6 @@ BEGIN
     );
   END IF;
 
-  IF v_bundle.access_mode <> 'paid' OR v_bundle.price_usd_cents <= 0 THEN
-    RETURN jsonb_build_object(
-      'status', 'not_paid',
-      'remaining_credits', v_credits,
-      'marketplace_spendable_credits', v_marketplace_credits,
-      'post_id', v_bundle.post_id,
-      'bundle_id', v_bundle.id,
-      'owner_user_id', v_bundle.owner_user_id,
-      'credit_cost', v_bundle.price_usd_cents
-    );
-  END IF;
-
   IF EXISTS (
     SELECT 1 FROM public.post_resource_bundle_purchases
     WHERE bundle_id = v_bundle.id AND buyer_user_id = p_user_id
@@ -444,11 +432,29 @@ BEGIN
 
   -- The price the buyer confirmed, compared under the row lock a reprice also
   -- takes: a recipe repriced after the buyer saw it spends nothing, and the
-  -- answer carries the live price for them to confirm again.
+  -- answer carries the live price for them to confirm again. A recipe made
+  -- free meanwhile is a price change to 0, answered before "not paid", so the
+  -- client can take the free path rather than fail.
   IF p_expected_credit_cost IS NOT NULL
-    AND p_expected_credit_cost IS DISTINCT FROM v_bundle.price_usd_cents THEN
+    AND p_expected_credit_cost IS DISTINCT FROM (
+      CASE WHEN v_bundle.access_mode = 'paid' AND v_bundle.price_usd_cents > 0
+        THEN v_bundle.price_usd_cents ELSE 0 END
+    ) THEN
     RETURN jsonb_build_object(
       'status', 'price_changed',
+      'remaining_credits', v_credits,
+      'marketplace_spendable_credits', v_marketplace_credits,
+      'post_id', v_bundle.post_id,
+      'bundle_id', v_bundle.id,
+      'owner_user_id', v_bundle.owner_user_id,
+      'credit_cost', CASE WHEN v_bundle.access_mode = 'paid' AND v_bundle.price_usd_cents > 0
+        THEN v_bundle.price_usd_cents ELSE 0 END
+    );
+  END IF;
+
+  IF v_bundle.access_mode <> 'paid' OR v_bundle.price_usd_cents <= 0 THEN
+    RETURN jsonb_build_object(
+      'status', 'not_paid',
       'remaining_credits', v_credits,
       'marketplace_spendable_credits', v_marketplace_credits,
       'post_id', v_bundle.post_id,

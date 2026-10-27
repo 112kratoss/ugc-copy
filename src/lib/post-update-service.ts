@@ -1909,6 +1909,13 @@ export async function updateOwnerPostForRoute({
       logBackendWarning('failed_to_read_post_media_after_update', { error: mediaReadError });
     }
 
+    // A recipe this save removed (deleted, or retired for the people who have
+    // it) is not the post's recipe any more, whatever row the read behind
+    // `bundleStatus` found; nor is one retired by an earlier save.
+    const removedRecipe = resourceBundle?.accessMode === 'none'
+      || (!resourceBundle && Boolean(existingBundle?.retired_at));
+    const savedBundleStatus = removedRecipe ? null : updatedPost.bundleStatus;
+
     return {
       ok: true,
       body: {
@@ -1918,10 +1925,10 @@ export async function updateOwnerPostForRoute({
         showcasePath: updatedPost.visibility === 'private' ? null : `/showcase/${postId}`,
         ownerPath: `/post/${postId}/edit`,
         resourceBundlePath:
-          updatedPost.bundleStatus === 'draft' || updatedPost.visibility === 'private'
+          savedBundleStatus === 'draft' || updatedPost.visibility === 'private'
             ? `/post/${postId}/edit#recipe`
             : `/showcase/${postId}#recipe`,
-        resourceBundleStatus: updatedPost.bundleStatus,
+        resourceBundleStatus: savedBundleStatus,
         ...(savedMediaItems ? { mediaItems: savedMediaItems } : {}),
       },
     };

@@ -390,8 +390,10 @@ describe('PostResourceBundlePanel', () => {
     });
 
     // The content is the message: an open recipe shows its parts directly,
-    // with just the status chip saying what it is.
-    expect(screen.getByText('Free recipe')).toBeInTheDocument();
+    // with just the status chip saying it is the viewer's ("Unlocked", as on
+    // every card of a recipe they have, free or paid).
+    expect(screen.getByText('Unlocked')).toBeInTheDocument();
+    expect(screen.queryByText('Free recipe')).not.toBeInTheDocument();
     expect(screen.getByText('Public recipe prompt')).toBeInTheDocument();
     expect(screen.getByText('Public recipe notes')).toBeInTheDocument();
     expect(screen.getByText('Image input')).toBeInTheDocument();

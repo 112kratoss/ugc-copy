@@ -54,6 +54,7 @@ import { SHOWCASE_DRAW_DISTANCE } from '@/lib/media-performance';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion } from '@/lib/motion';
+import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
 import { startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcaseRemixAccess } from '@/lib/showcase-remix-access';
@@ -748,6 +749,8 @@ export function HomeDashboard() {
           postId: item.asset.postId || item.id,
           resourceId: item.asset.id,
         });
+        // The recipe is theirs now, said as every unlock is (B-F9).
+        announceRecipeUnlocked();
       }
       const result = started.response;
       recordFeedEvent(item, 'remix_start');

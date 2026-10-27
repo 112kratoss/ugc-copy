@@ -795,6 +795,10 @@ describe('updateOwnerPostForRoute', () => {
       expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(
         expect.objectContaining({ hasBundlePayload: true, bundle: { accessMode: 'none' } }),
       );
+      // The database's read after the save still finds the retired row (as a
+      // draft); the removed recipe is reported as none all the same, so the
+      // composer does not offer to "continue editing" it.
+      expect(result.ok && result.body).toMatchObject({ resourceBundleStatus: null });
     });
 
     // A retired recipe stays retired through a visibility change (the
@@ -828,6 +832,11 @@ describe('updateOwnerPostForRoute', () => {
       expect(dependencies.getMarketplaceQualityErrorForPostBundle).toHaveBeenCalledWith(
         expect.objectContaining({ bundle: null }),
       );
+      // Nor is the retired row reported as this post's recipe afterwards.
+      expect(result.ok && result.body).toMatchObject({
+        resourceBundleStatus: null,
+        resourceBundlePath: '/showcase/post-1#recipe',
+      });
     });
 
     // The guard freezes the package, not the post: everything else stays editable.
