@@ -3,7 +3,7 @@ import type { ImageProps } from 'expo-image';
 import { createVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { Play, RotateCcw } from 'lucide-react-native';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Pressable, Text, View, type DimensionValue } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, Text, View, type DimensionValue } from 'react-native';
 
 import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
@@ -614,12 +614,22 @@ function FeedVideoPlayerLayer({
   // change of state is not lost. Going withdraws a start or a stall still being
   // timed, as scrolling away does: time away is not start-up time. Coming back
   // asks the player to play again, unless the reel has it on loan.
+  //
+  // On Android going also pauses the player. expo-video pauses it as the
+  // activity pauses, playing or waiting for data, but JS hears of the leaving
+  // only once its thread is free: a play() sent by work already under way
+  // (Home electing this tile as Home was pressed) reached the player after that
+  // pause, and the clip ran muted behind the launcher once its data came
+  // (Pixel 9a emulator, 2026-10-27). Not on iOS, where Control Center or a
+  // system alert makes the app `inactive`, a leaving here too, and the clip
+  // plays on under it.
   useEffect(() => {
     if (!playing || returning) return undefined;
     return subscribeToAppForeground((foreground) => {
       if (!foreground) {
         cancelPlaybackStart(metricsKey);
         endPlaybackStall(metricsKey);
+        if (Platform.OS === 'android' && !isVideoPlayerOnLoan(player)) player.pause();
       } else if (!isVideoPlayerOnLoan(player)) {
         resumePlayer(player);
       }
