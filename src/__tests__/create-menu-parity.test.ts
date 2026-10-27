@@ -42,15 +42,17 @@ describe('the Create menu', () => {
       return { path: url.pathname, from: url.searchParams.get('from'), returnTo: url.searchParams.get('returnTo') };
     };
 
-    expect(composer('/')).toEqual({ path: '/post/new', from: 'home', returnTo: '/' });
+    // The source alone: the composer takes its Back from it (Home's `/`, the profile's
+    // posts, Studio's posts view, and so on), so the menu sends no address of its own.
+    expect(composer('/')).toEqual({ path: '/post/new', from: 'home', returnTo: null });
     // The server sees the signed-in Home at its rewrite target.
-    expect(composer('/home')).toEqual({ path: '/post/new', from: 'home', returnTo: '/' });
-    expect(composer('/showcase')).toEqual({ path: '/post/new', from: 'community', returnTo: '/showcase' });
-    expect(composer('/profile')).toEqual({ path: '/post/new', from: 'profile', returnTo: '/profile?tab=posts' });
-    expect(composer('/profile/edit')).toEqual({ path: '/post/new', from: 'profile', returnTo: '/profile?tab=posts' });
-    expect(composer('/marketplace')).toEqual({ path: '/post/new', from: 'marketplace', returnTo: '/marketplace' });
-    expect(composer('/marketplace/sell')).toEqual({ path: '/post/new', from: 'seller', returnTo: '/marketplace/sell' });
-    expect(composer('/creations')).toEqual({ path: '/post/new', from: 'creations', returnTo: '/creations?view=posts' });
+    expect(composer('/home')).toEqual({ path: '/post/new', from: 'home', returnTo: null });
+    expect(composer('/showcase')).toEqual({ path: '/post/new', from: 'community', returnTo: null });
+    expect(composer('/profile')).toEqual({ path: '/post/new', from: 'profile', returnTo: null });
+    expect(composer('/profile/edit')).toEqual({ path: '/post/new', from: 'profile', returnTo: null });
+    expect(composer('/marketplace')).toEqual({ path: '/post/new', from: 'marketplace', returnTo: null });
+    expect(composer('/marketplace/sell')).toEqual({ path: '/post/new', from: 'seller', returnTo: null });
+    expect(composer('/creations')).toEqual({ path: '/post/new', from: 'creations', returnTo: null });
   });
 
   it("leaves the composer's own default on any other page", () => {

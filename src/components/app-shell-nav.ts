@@ -41,7 +41,7 @@ const isDetailChildOf = (pathname: string, href: string) => {
 /**
  * A post and a creator profile are their own surfaces, not sub-pages of the
  * Explore feed they happen to sit under in the path. Either can be reached
- * from Home, `/feed`, Marketplace, Studio, or a shared link, so claiming the
+ * from Home, Marketplace, Studio, a profile, or a shared link, so claiming the
  * Explore nav item would tell the viewer they are somewhere they are not.
  * Both get their own title below instead.
  */
@@ -174,6 +174,7 @@ const OWN_HEADING_PATHS = new Set([
   '/invite',
   '/credits',
   '/pricing',
+  '/templates',
 ]);
 const OWN_HEADING_SECTIONS = ['/profile', '/models', '/marketplace/sell', '/post'];
 
@@ -251,23 +252,22 @@ export const CREATE_MENU_ITEMS: readonly CreateMenuItem[] = [
 ];
 
 /**
- * Where the composer's Back goes for a post started from the menu on a page it
- * knows (`NewPostClient`'s `from`): the page the post was started on. Any other
- * page opens the composer with its own default, Explore.
+ * The page a post was started on, for the composer: its `from` decides where
+ * the composer's Back goes and what it says (`NewPostClient`), so the menu
+ * names the page and no more. A page the composer has no Back for sends none,
+ * and the composer goes back to Explore.
  */
-const POST_COMPOSER_RETURNS: ReadonlyArray<{ matches: (pathname: string) => boolean; from: string; returnTo: string }> = [
-  { matches: (pathname) => pathname === '/' || pathname === '/home', from: 'home', returnTo: '/' },
-  { matches: (pathname) => pathname === '/showcase', from: 'community', returnTo: '/showcase' },
-  { matches: (pathname) => isExactOrChild(pathname, '/profile'), from: 'profile', returnTo: '/profile?tab=posts' },
-  { matches: (pathname) => isExactOrChild(pathname, '/marketplace/sell'), from: 'seller', returnTo: '/marketplace/sell' },
-  { matches: (pathname) => pathname === '/marketplace', from: 'marketplace', returnTo: '/marketplace' },
-  { matches: (pathname) => pathname === '/creations', from: 'creations', returnTo: '/creations?view=posts' },
+const POST_COMPOSER_SOURCES: ReadonlyArray<{ matches: (pathname: string) => boolean; from: string }> = [
+  { matches: (pathname) => pathname === '/' || pathname === '/home', from: 'home' },
+  { matches: (pathname) => pathname === '/showcase', from: 'community' },
+  { matches: (pathname) => isExactOrChild(pathname, '/profile'), from: 'profile' },
+  { matches: (pathname) => isExactOrChild(pathname, '/marketplace/sell'), from: 'seller' },
+  { matches: (pathname) => pathname === '/marketplace', from: 'marketplace' },
+  { matches: (pathname) => pathname === '/creations', from: 'creations' },
 ];
 
 export function getCreateMenuHref(id: CreateMenuItem['id'], pathname: string): string {
   if (id === 'create') return '/create';
-  const known = POST_COMPOSER_RETURNS.find((entry) => entry.matches(pathname));
-  return known
-    ? `/post/new?${new URLSearchParams({ from: known.from, returnTo: known.returnTo })}`
-    : '/post/new';
+  const source = POST_COMPOSER_SOURCES.find((entry) => entry.matches(pathname));
+  return source ? `/post/new?${new URLSearchParams({ from: source.from })}` : '/post/new';
 }

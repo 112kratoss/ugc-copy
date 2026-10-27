@@ -129,6 +129,18 @@ function createMenu() {
   return menu;
 }
 
+/**
+ * Stands the menu open as a browser with popovers would. jsdom has none, and
+ * the menu asks the prototype whether the browser does, so this goes after
+ * the render: the menu's effects ran as in a browser without them.
+ */
+function standMenuOpen(menu: HTMLElement) {
+  const hidePopover = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, 'showPopover', { configurable: true, value: vi.fn() });
+  Object.assign(menu, { hidePopover, matches: (selector: string) => selector === ':popover-open' });
+  return hidePopover;
+}
+
 describe('AppShellClient', () => {
   beforeEach(() => {
     mockedPathname = '/';
@@ -363,6 +375,10 @@ describe('AppShellClient', () => {
   });
 
   describe('the Create menu', () => {
+    afterEach(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, 'showPopover');
+    });
+
     it("opens from the top bar's Create and the phone layout's +, as the app's centre + does", () => {
       render(
         <AppShellClient>
@@ -386,7 +402,7 @@ describe('AppShellClient', () => {
         link.getAttribute('href'),
       ])).toEqual([
         ['Create', '/create'],
-        ['Post', '/post/new?from=home&returnTo=%2F'],
+        ['Post', '/post/new?from=home'],
       ]);
       const post = within(menu).getByRole('link', { name: 'Post', hidden: true });
       expect(document.getElementById(post.getAttribute('aria-describedby')!)).toHaveTextContent('Share finished media');
@@ -399,9 +415,7 @@ describe('AppShellClient', () => {
         </AppShellClient>
       );
       const menu = createMenu();
-      // jsdom has no popovers: this one stands open.
-      const hidePopover = vi.fn();
-      Object.assign(menu, { hidePopover, matches: (selector: string) => selector === ':popover-open' });
+      const hidePopover = standMenuOpen(menu);
       const heardOpen: boolean[] = [];
       const listener = () => heardOpen.push(hidePopover.mock.calls.length === 0);
       document.addEventListener('click', listener, true);
@@ -424,9 +438,7 @@ describe('AppShellClient', () => {
           <div>Home content</div>
         </AppShellClient>
       );
-      const menu = createMenu();
-      const hidePopover = vi.fn();
-      Object.assign(menu, { hidePopover, matches: (selector: string) => selector === ':popover-open' });
+      const hidePopover = standMenuOpen(createMenu());
 
       mockedPathname = '/showcase';
       view.rerender(
@@ -436,6 +448,58 @@ describe('AppShellClient', () => {
       );
 
       expect(hidePopover).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers no link to the composer on the composer itself: Post there only closes the menu', () => {
+      mockedPathname = '/post/new';
+      render(
+        <AppShellClient>
+          <div>Composer</div>
+        </AppShellClient>
+      );
+      const menu = createMenu();
+      const hidePopover = standMenuOpen(menu);
+
+      expect(within(menu).getAllByRole('link', { hidden: true }).map((link) => link.getAttribute('href'))).toEqual(['/create']);
+      const post = within(menu).getByRole('button', { name: 'Post', hidden: true });
+      expect(post).toHaveAttribute('aria-current', 'page');
+      fireEvent.click(post);
+
+      expect(hidePopover).toHaveBeenCalledTimes(1);
+      expect(navigations).toEqual([]);
+    });
+
+    it('in a browser without popovers, draws itself, takes the focus, keeps the keys from the page, and closes on Escape', () => {
+      render(
+        <AppShellClient>
+          <div>Home content</div>
+        </AppShellClient>
+      );
+      const menu = createMenu();
+      const topBarCreate = within(screen.getByRole('banner')).getByRole('button', { name: 'Create' });
+      // A page's own key handler on the window, as the workflow canvas has.
+      const heardByPage: string[] = [];
+      const pageKeys = (event: KeyboardEvent) => heardByPage.push(event.key);
+      window.addEventListener('keydown', pageKeys);
+
+      try {
+        topBarCreate.focus();
+        fireEvent.click(topBarCreate);
+        expect(menu).toHaveAttribute('data-open');
+        const create = within(menu).getByRole('link', { name: 'Create', hidden: true });
+        expect(create).toHaveFocus();
+
+        // A key on the page is the page's; one in the menu, and Escape, are the menu's.
+        fireEvent.keyDown(document.body, { key: 'n' });
+        fireEvent.keyDown(create, { key: 'Enter' });
+        fireEvent.keyDown(create, { key: 'Escape' });
+      } finally {
+        window.removeEventListener('keydown', pageKeys);
+      }
+
+      expect(menu).not.toHaveAttribute('data-open');
+      expect(topBarCreate).toHaveFocus();
+      expect(heardByPage).toEqual(['n']);
     });
   });
 

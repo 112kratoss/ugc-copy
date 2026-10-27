@@ -33,7 +33,6 @@ export interface CreatorToolDefinition {
 }
 
 export interface CreatorStarterRecipe {
-  id: string;
   toolId: CreatorToolId;
   title: string;
   href: string;
@@ -122,7 +121,6 @@ export const CREATOR_TOOLS: CreatorToolDefinition[] = [
 // workflow canvas has none: its card already opens an empty canvas.
 export const CREATOR_STARTER_RECIPES: CreatorStarterRecipe[] = [
   {
-    id: 'product-hero',
     toolId: 'image',
     title: 'Launch a premium product visual',
     href: buildImageLaunchUrl(
@@ -132,7 +130,6 @@ export const CREATOR_STARTER_RECIPES: CreatorStarterRecipe[] = [
     ),
   },
   {
-    id: 'founder-teaser',
     toolId: 'video',
     title: 'Create a founder-style teaser',
     href: buildVideoLaunchUrl(
@@ -143,7 +140,6 @@ export const CREATOR_STARTER_RECIPES: CreatorStarterRecipe[] = [
     ),
   },
   {
-    id: 'ugc-motion',
     toolId: 'motion',
     title: 'Animate a UGC-style performance',
     href: buildMotionLaunchUrl(

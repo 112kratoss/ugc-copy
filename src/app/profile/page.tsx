@@ -1,4 +1,5 @@
 import { BadgeCheck, CheckCircle2, Sparkles } from 'lucide-react';
+import { redirect } from 'next/navigation';
 
 import DeferredCreatorProfileCard from './DeferredCreatorProfileCard';
 import { loadOwnerProfile } from './load-owner-profile';
@@ -54,6 +55,15 @@ async function loadWalletBalance(): Promise<OwnerWalletBalance | null> {
 
 export default async function ProfilePage({ searchParams }: ProfilePageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
+  // The profile drew the creations library again as a tab of its own, and
+  // opened a creation from `?generation=`; both are Studio's. An address kept
+  // from then (history, a bookmark) opens there.
+  const legacyGenerationId = getParam(resolvedSearchParams.generation);
+  if (legacyGenerationId || getParam(resolvedSearchParams.tab) === 'creations') {
+    redirect(legacyGenerationId
+      ? `/creations?${new URLSearchParams({ generation: legacyGenerationId })}`
+      : '/creations');
+  }
   const requestedNextPath = getParam(resolvedSearchParams.next);
   const nextPath = getSafeProfileNextPath(requestedNextPath);
   const profileReturnPath = buildProfileReturnPath(resolvedSearchParams);
@@ -96,15 +106,17 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
   return (
     <div className="ui-page ui-page-ambient min-h-screen">
       <div className="studio-shell relative z-10 py-7 sm:py-9">
-        <header className="ui-enter mb-7 hidden sm:block">
-          <div className="mb-3 inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)]">
+        {/* The page's name on a phone too, where the top bar no longer gives
+            one: the kicker and the line under it from 640px only. */}
+        <header className="ui-enter mb-5 sm:mb-7">
+          <div className="mb-3 hidden items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)] sm:inline-flex">
             <Sparkles className="h-3.5 w-3.5" aria-hidden />
             Creator account
           </div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)] sm:text-4xl">
+          <h1 className="text-2xl font-extrabold tracking-tight text-[var(--ui-text-primary)] sm:text-4xl">
             {isFirstRunProfile ? 'Set up your creator profile' : 'Profile'}
           </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+          <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-zinc-400 sm:block">
             {isFirstRunProfile
               ? 'Choose the identity your public posts will point to. Optional details can wait.'
               : 'Your identity, creator account, and published work in one place.'}

@@ -1279,7 +1279,7 @@ describe('FeedClient lanes and card actions', () => {
         it("shows on a return five minutes after the lane came, asks for no lane page, and its tap loads page one from the lane's top", async () => {
             const fetchMock = mockLaneAndProbe();
             const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
-            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+            const { container } = render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
 
             await comeBackAfter(NEW_POSTS_PROBE_AFTER_MS / 60_000);
 
@@ -1292,11 +1292,13 @@ describe('FeedClient lanes and card actions', () => {
             expect(laneRequests(fetchMock)).toEqual([]);
             expect(screen.queryByText('Newest')).not.toBeInTheDocument();
 
+            // The lane starts 400 px down the page, which is scrolled to 1,200 px.
             Object.defineProperty(window, 'scrollY', { configurable: true, value: 1_200 });
+            (container.firstElementChild as HTMLElement).getBoundingClientRect = () => ({ top: -800 } as DOMRect);
             fireEvent.click(pill);
 
-            // jsdom lays nothing out: the lane's top is where the page is, less the bar and a rem.
-            expect(scrollTo).toHaveBeenCalledWith({ top: 1_120, behavior: 'smooth' });
+            // The lane's top, less the bar and a rem.
+            expect(scrollTo).toHaveBeenCalledWith({ top: 320, behavior: 'smooth' });
             expect(screen.queryByRole('button', { name: 'New posts' })).not.toBeInTheDocument();
             expect(await screen.findByText('Newest')).toBeInTheDocument();
             expect(laneRequests(fetchMock)).toHaveLength(1);

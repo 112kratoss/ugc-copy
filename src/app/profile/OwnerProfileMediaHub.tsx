@@ -778,7 +778,9 @@ export default function OwnerProfileMediaHub({
           <div className="text-xs font-bold uppercase tracking-[0.2em] text-[var(--ui-primary)]">Your media</div>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Your posts and saves</h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-            Explore viewers see your posts in the reel. Your creations stay private in Studio until you post them.
+            Explore viewers see your posts in the reel. Your creations stay private in{' '}
+            <Link href="/creations" className="ui-focus-ring rounded font-semibold text-zinc-200 underline-offset-4 hover:underline">Studio</Link>
+            {' '}until you post them.
           </p>
         </div>
 

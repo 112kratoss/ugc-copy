@@ -32,7 +32,7 @@ import {
   isNotFoundRouteSegment,
   type AppNavItem,
 } from './app-shell-nav';
-import AppShellCreateMenu, { APP_SHELL_CREATE_MENU_ID, goToCreateWithoutPopovers } from './AppShellCreateMenu';
+import AppShellCreateMenu, { APP_SHELL_CREATE_MENU_ID, openCreateMenuWithoutPopovers } from './AppShellCreateMenu';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
 import AlertsBadge from '@/components/AlertsBadge';
 import { holdForLeaveGuard } from '@/lib/use-leave-guard';
@@ -45,6 +45,8 @@ const NAV_GROUPS = [
   { label: 'Create', ids: ['studio', 'workflow'] },
   { label: 'Account', ids: ['profile'] },
 ] as const;
+
+const ALERTS_NAV_ITEM = APP_NAV_ITEMS.find((item) => item.id === 'alerts')!;
 
 const subscribeToHydration = () => () => undefined;
 const getHydratedSnapshot = () => true;
@@ -185,7 +187,6 @@ function DrawerNavItem({
     >
       <Icon className={`h-[18px] w-[18px] ${active ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-faint)]'}`} aria-hidden />
       <span>{item.label}</span>
-      {item.id === 'alerts' ? <AlertsBadge className="ml-auto" /> : null}
     </Link>
   );
 }
@@ -208,7 +209,7 @@ function BottomNavItem({
       <button
         type="button"
         popoverTarget={APP_SHELL_CREATE_MENU_ID}
-        onClick={goToCreateWithoutPopovers}
+        onClick={openCreateMenuWithoutPopovers}
         aria-label="Create"
         className="ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-end gap-0.5 rounded-2xl pb-1 text-xs font-extrabold text-[var(--ui-primary)]"
       >
@@ -515,11 +516,18 @@ const AppShellFrame = memo(function AppShellFrame({
                 <Search className="h-[18px] w-[18px]" aria-hidden />
               </Link>
             ) : null}
+            {/* Alerts' only control from 768px, where the side navigation does
+                not name it: pressed on Alerts, it brings the page to its top as
+                the tabs do. */}
             <Link
-              href="/notifications"
+              href={ALERTS_NAV_ITEM.href}
               prefetch={false}
               aria-label="Open alerts"
-              className="ui-focus-ring relative hidden h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] sm:inline-flex"
+              aria-current={activeItem?.id === 'alerts' ? 'page' : undefined}
+              onClick={(event) => handleAppNavClick(event, ALERTS_NAV_ITEM)}
+              className={`ui-focus-ring relative hidden h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] sm:inline-flex ${
+                activeItem?.id === 'alerts' ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)]'
+              }`}
             >
               <Bell className="h-[18px] w-[18px]" aria-hidden />
               <AlertsBadge className="absolute -right-1 -top-1" />
@@ -527,7 +535,7 @@ const AppShellFrame = memo(function AppShellFrame({
             <button
               type="button"
               popoverTarget={APP_SHELL_CREATE_MENU_ID}
-              onClick={goToCreateWithoutPopovers}
+              onClick={openCreateMenuWithoutPopovers}
               aria-label="Create"
               className="app-shell-create ui-focus-ring min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
             >

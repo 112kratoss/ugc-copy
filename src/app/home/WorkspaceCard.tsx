@@ -178,7 +178,18 @@ export default function WorkspaceCard({
 
   return (
     <section aria-label="Workspace overview" className="ui-card flex flex-col gap-4 p-5">
-      <Kicker>Workspace</Kicker>
+      {/* The one way to Studio from here, whether runs are going, done or none. */}
+      <div className="flex items-center justify-between gap-3">
+        <Kicker>Workspace</Kicker>
+        <Link
+          href="/creations"
+          prefetch={false}
+          className="ui-focus-ring inline-flex items-center gap-1 rounded-full text-xs font-bold text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
+        >
+          Open Studio
+          <ArrowRight className="h-3 w-3" aria-hidden />
+        </Link>
+      </div>
 
       {active.length > 0 ? (
         <ul className="flex flex-col gap-4">
@@ -211,17 +222,7 @@ export default function WorkspaceCard({
 
       {recent.length > 0 ? (
         <div>
-          <div className="mb-2 flex items-center justify-between">
-            <Text variant="label" className="text-[var(--ui-text-faint)]">Recent</Text>
-            <Link
-              href="/creations"
-              prefetch={false}
-              className="ui-focus-ring inline-flex items-center gap-1 rounded-full text-xs font-bold text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
-            >
-              Open Studio
-              <ArrowRight className="h-3 w-3" aria-hidden />
-            </Link>
-          </div>
+          <Text variant="label" className="mb-2 block text-[var(--ui-text-faint)]">Recent</Text>
           <ul className="grid grid-cols-4 gap-2">
             {recent.map((view) => {
               const kind = toGenerationKind(view);

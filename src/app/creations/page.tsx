@@ -31,7 +31,9 @@ import StudioCard, {
 } from '@/app/creations/StudioCard';
 import {
     buildPostRecipeManagementPath,
+    getCreationMediaFilters,
     resolveCreationWorkspaceCardState,
+    type CreationMediaFilter,
     type CreationWorkspaceCardState,
     type CreationWorkspaceMonetizationKind,
     type CreationWorkspacePublishBadge,
@@ -107,7 +109,7 @@ interface Generation {
     } | null;
 }
 
-type FilterType = 'all' | 'images' | 'videos' | 'audio';
+type FilterType = CreationMediaFilter;
 type WorkspaceView = 'creations' | 'posts' | 'unlocks';
 type OwnerPostVisibilityFilter = 'all' | 'public' | 'unlisted' | 'private' | 'archived';
 
@@ -1939,16 +1941,10 @@ export default function CreationsPage() {
                 {/* Filter Tabs */}
                 {activeView === 'creations' && !isLoading && successfulGenerations.length > 0 && (
                     <div className="mb-8 flex gap-2 overflow-x-auto pb-1">
-                        {([
-                            { key: 'all', label: `All (${successfulGenerations.length})`, count: successfulGenerations.length },
-                            { key: 'images', label: `Images (${imageCount})`, count: imageCount },
-                            { key: 'videos', label: `Videos (${videoCount})`, count: videoCount },
-                            { key: 'audio', label: `Audio (${audioCount})`, count: audioCount },
-                        ] as { key: FilterType; label: string; count: number }[])
-                            // A kind with nothing in it is no filter ("Audio (0)"), unless
-                            // it is the one chosen, whose last item just went.
-                            .filter((tab) => tab.key === 'all' || tab.count > 0 || filter === tab.key)
-                            .map(tab => (
+                        {getCreationMediaFilters(
+                            { all: successfulGenerations.length, images: imageCount, videos: videoCount, audio: audioCount },
+                            filter,
+                        ).map(tab => (
                             <button
                                 key={tab.key}
                                 onClick={() => setFilter(tab.key)}

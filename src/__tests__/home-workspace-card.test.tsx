@@ -65,8 +65,9 @@ describe('WorkspaceCard', () => {
     render(<WorkspaceCard initialGenerations={[]} />);
 
     expect(screen.getByText(/Nothing in flight yet/)).toBeInTheDocument();
-    // The top bar's Create menu starts one; the card used to offer it again, with Studio twice.
-    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    // The top bar's Create menu starts one; the card used to offer it again, with Studio
+    // twice. Studio itself stays a link away: on a phone it is otherwise in the drawer only.
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual(['/creations']);
   });
 
   it('opens each recent creation in Studio, with one link to Studio itself', () => {

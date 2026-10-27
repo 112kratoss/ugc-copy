@@ -22,7 +22,8 @@ export interface FeedDetailContext {
     returnTo: string;
 }
 
-const DEFAULT_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
+// Home's lanes are the feed's only place (the /feed page sends its visitors there).
+const DEFAULT_DETAIL_CONTEXT: FeedDetailContext = { from: 'home', returnTo: '/' };
 
 /**
  * Everything on the card that owns its own click. The card-level handler below
@@ -68,8 +69,8 @@ interface FeedPostCardProps {
         dataUrl: string;
     } | null;
     /**
-     * Where detail links say the viewer came from (and return to). Defaults to
-     * the /feed page; the embedded home-dashboard feed passes its own.
+     * Where detail links say the viewer came from (and return to): Home's
+     * lane, which the feed passes with its chip, by default Home itself.
      */
     detailContext?: FeedDetailContext;
     /** The card's position in the lane, reported with a share. */

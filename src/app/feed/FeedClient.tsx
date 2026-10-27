@@ -370,7 +370,7 @@ export default function FeedClient({
         accessToken,
         isSignedIn: Boolean(user),
         // With the way back: a bare /login landed the viewer on /create afterwards.
-        onAuthRequired: () => { router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/feed'))}`); },
+        onAuthRequired: () => { router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/'))}`); },
         onError: (error) => {
             console.error('Failed to save feed post:', error);
             // The notice, not the load alert: that alert's Retry loads a page,
@@ -539,7 +539,7 @@ export default function FeedClient({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [fetchPage, initialChipId, needsInitialFetch]);
 
-    // A guest's page one on the static `/` (and on a signed-out `/feed`) is
+    // A guest's page one on the static `/` is
     // built for everyone: it has no session and no card has a delivery, so
     // nothing on it reaches the ranker and the menu's feedback has nothing to
     // name. The guest's own page one, asked for once the page is live (the
@@ -1171,7 +1171,7 @@ export default function FeedClient({
                             Switch lanes, or share a note, prompt, or creation to start it.
                         </p>
                         <Link
-                            href={`/post/new?from=community&returnTo=${encodeURIComponent(laneDetailContext.returnTo)}`}
+                            href={`/post/new?${new URLSearchParams({ from: laneDetailContext.from, returnTo: laneDetailContext.returnTo })}`}
                             className="ui-focus-ring mt-5 inline-flex min-h-12 items-center rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)]"
                         >
                             Share the first post

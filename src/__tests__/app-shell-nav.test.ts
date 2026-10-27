@@ -33,6 +33,7 @@ describe('app shell navigation', () => {
       '/invite',
       '/credits',
       '/pricing',
+      '/templates',
       '/models',
       '/models/kling-3-0',
       '/profile',
@@ -48,7 +49,7 @@ describe('app shell navigation', () => {
     expect(getAppShellTitle('/')).toBe('Home');
     expect(getAppShellTitle('/create-image')).toBe('Create');
     expect(getAppShellTitle('/create-workflow')).toBe('Workflow Canvas');
-    expect(getAppShellTitle('/templates')).toBe('Templates');
+    expect(getAppShellTitle('/templates/ghost-rider')).toBe('Templates');
   });
 
   it('no longer has a separate Feed section: /feed sends its visitors Home', () => {
@@ -86,7 +87,6 @@ describe('app shell navigation', () => {
     expect(getActiveAppNavItem('/templates')?.id).toBe('create');
     expect(getActiveAppNavItem('/templates/ghost-rider')?.id).toBe('create');
     expect(getActiveAppNavItem('/template-runs/run-1')?.id).toBe('create');
-    expect(getAppShellTitle('/templates')).toBe('Templates');
     expect(getAppShellTitle('/templates/new')).toBe('Create Template');
     expect(getAppShellTitle('/template-runs/run-1')).toBe('Create From Template');
   });

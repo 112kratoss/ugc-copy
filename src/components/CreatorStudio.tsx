@@ -82,11 +82,13 @@ export function CreatorToolCard({
 
   // One link opens the tool from anywhere on the card, title, summary and call
   // to action in it; a ready-made setup is a second link in the card's foot,
-  // beside that one rather than inside it.
+  // beside that one rather than inside it. The card draws the launch link's
+  // focus ring (`.creator-tool-card` in globals.css): the link fills it, and
+  // the card's overflow would clip a ring the link drew itself.
   return (
     <div
       className={clsx(
-        'ui-card ui-card-interactive group relative flex h-full min-h-[318px] flex-col overflow-hidden rounded-3xl bg-[var(--ui-surface-1)]',
+        'creator-tool-card ui-card ui-card-interactive group relative flex h-full min-h-[318px] flex-col overflow-hidden rounded-3xl bg-[var(--ui-surface-1)]',
         theme.border
       )}
     >
@@ -94,10 +96,7 @@ export function CreatorToolCard({
       <Link
         href={tool.href}
         prefetch={prefetch}
-        className={clsx(
-          'ui-focus-ring flex flex-1 cursor-pointer flex-col rounded-3xl p-4 sm:p-5',
-          theme.focusRing
-        )}
+        className="group flex flex-1 cursor-pointer flex-col rounded-3xl p-4 outline-none sm:p-5"
       >
         <article className="flex h-full flex-col">
           <MediaFrame className="relative rounded-3xl">
