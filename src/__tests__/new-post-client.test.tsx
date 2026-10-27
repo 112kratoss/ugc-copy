@@ -323,7 +323,7 @@ describe('NewPostClient', () => {
     addItem(/prompt or script/i, 'Open with the before state, then reveal the product.');
     expect(preview()).toHaveValue('Includes the prompt.');
     addItem(/guide or notes/i, 'Keep the first shot under seven seconds.');
-    expect(preview()).toHaveValue('Includes the prompt and a guide.');
+    expect(preview()).toHaveValue('Includes the prompt and a written guide.');
 
     fireEvent.change(preview(), { target: { value: 'The hook prompt and the timing notes behind it.' } });
     addItem(/prompt or script/i, 'A second prompt for the closing shot.');
@@ -2840,7 +2840,7 @@ describe('NewPostClient', () => {
     expect(screen.queryByRole('checkbox', { name: /remix/i })).not.toBeInTheDocument();
     expect(screen.getByText('Remix comes with this recipe: people who unlock it can remix your post.')).toBeInTheDocument();
     expect(screen.getByText('Guide or notes')).toBeInTheDocument();
-    expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt and a guide.');
+    expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt and a written guide.');
 
     const priceInput = screen.getByRole('spinbutton', { name: /price in credits/i });
     await waitFor(() => {

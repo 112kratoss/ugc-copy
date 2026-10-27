@@ -214,9 +214,18 @@ describe('post composer resource cards', () => {
       expect(getSuggestedRecipePreview([])).toBe('');
     });
 
+    // A public recipe's preview must have 18 characters to list
+    // (assessMarketplaceListingQuality), and the composer writes this text for
+    // the creator: "Includes a guide." would have refused the post it suggested.
+    it('suggests a preview long enough to list for a recipe of any one item', () => {
+      for (const option of POST_COMPOSER_RESOURCE_CARD_OPTIONS) {
+        expect(suggest(option.id).length, option.id).toBeGreaterThanOrEqual(18);
+      }
+    });
+
     it('joins the phrases with commas and a last "and"', () => {
       expect(suggest('prompt')).toBe('Includes the prompt.');
-      expect(suggest('prompt', 'guide')).toBe('Includes the prompt and a guide.');
+      expect(suggest('prompt', 'guide')).toBe('Includes the prompt and a written guide.');
       expect(suggest('prompt', 'reference_media', 'reference_media', 'settings')).toBe(
         'Includes the prompt, reference media and the model settings.',
       );
@@ -229,7 +238,7 @@ describe('post composer resource cards', () => {
       expect(suggest('workflow', 'workflow', 'workflow')).toBe('Includes 3 workflows.');
       expect(suggest('source_assets', 'source_assets')).toBe('Includes source files.');
       expect(suggest('settings', 'settings')).toBe('Includes the model settings.');
-      expect(suggest('external_link')).toBe('Includes a link.');
+      expect(suggest('external_link')).toBe('Includes a useful link.');
       expect(suggest('external_link', 'external_link')).toBe('Includes 2 links.');
       expect(suggest('remix_link')).toBe('Includes a remix link.');
       expect(suggest('remix_link', 'remix_link')).toBe('Includes 2 remix links.');

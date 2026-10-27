@@ -1113,9 +1113,11 @@ describe('mobile external post composer', () => {
     const context = mutationState.options?.onMutate?.('public') as {
       submittedDraft?: PostComposerDraft;
     } | void;
+    // Taking the last item leaves the recipe on (removing it is "No recipe",
+    // asked about on save); either way the legacy prompt must not come back.
     expect(context?.submittedDraft?.resource).toMatchObject({
       cardAuthoringMode: 'cards',
-      accessMode: 'none',
+      accessMode: 'free',
       cards: [],
       promptText: 'Old protected prompt that must stay deleted',
     });
@@ -2967,7 +2969,7 @@ describe('mobile external post composer', () => {
       expect(collectText(tree.root)).not.toContain('Use suggested preview');
 
       addTextItem(tree, 'Guide or notes', 'Light from the left.');
-      expect(previewField(tree).props.value).toBe('Includes the prompt and a guide.');
+      expect(previewField(tree).props.value).toBe('Includes the prompt and a written guide.');
 
       renderer.act(() => previewField(tree).props.onChangeText('My exact neon portrait prompt, with notes.'));
       addTextItem(tree, 'Model settings', 'Seed 42');

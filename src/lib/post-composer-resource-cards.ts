@@ -788,8 +788,8 @@ const SUGGESTED_PREVIEW_PHRASES: Record<PostComposerResourceCardType, (count: nu
   settings: () => 'the model settings',
   workflow: (count) => (count === 1 ? 'the workflow' : `${count} workflows`),
   source_assets: () => 'source files',
-  guide: (count) => (count === 1 ? 'a guide' : `${count} guides`),
-  external_link: (count) => (count === 1 ? 'a link' : `${count} links`),
+  guide: (count) => (count === 1 ? 'a written guide' : `${count} guides`),
+  external_link: (count) => (count === 1 ? 'a useful link' : `${count} links`),
   remix_link: (count) => (count === 1 ? 'a remix link' : `${count} remix links`),
   other: (count) => (count === 1 ? 'one more item' : `${count} more items`),
 };

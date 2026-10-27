@@ -108,9 +108,9 @@ describe('the suggested Recipe preview (S7)', () => {
     expect(buildSuggestedRecipePreview([card('prompt', 'p1'), card('prompt', 'p2')])).toBe('Includes 2 prompts.');
     expect(buildSuggestedRecipePreview([card('workflow')])).toBe('Includes the workflow.');
     expect(buildSuggestedRecipePreview([card('workflow', 'w1'), card('workflow', 'w2'), card('workflow', 'w3')])).toBe('Includes 3 workflows.');
-    expect(buildSuggestedRecipePreview([card('guide')])).toBe('Includes a guide.');
+    expect(buildSuggestedRecipePreview([card('guide')])).toBe('Includes a written guide.');
     expect(buildSuggestedRecipePreview([card('guide', 'g1'), card('guide', 'g2')])).toBe('Includes 2 guides.');
-    expect(buildSuggestedRecipePreview([card('external_link')])).toBe('Includes a link.');
+    expect(buildSuggestedRecipePreview([card('external_link')])).toBe('Includes a useful link.');
     expect(buildSuggestedRecipePreview([card('external_link', 'l1'), card('external_link', 'l2')])).toBe('Includes 2 links.');
     expect(buildSuggestedRecipePreview([card('remix_link')])).toBe('Includes a remix link.');
     expect(buildSuggestedRecipePreview([card('remix_link', 'r1'), card('remix_link', 'r2')])).toBe('Includes 2 remix links.');
@@ -118,11 +118,20 @@ describe('the suggested Recipe preview (S7)', () => {
     expect(buildSuggestedRecipePreview([card('other', 'o1'), card('other', 'o2')])).toBe('Includes 2 more items.');
     expect(buildSuggestedRecipePreview([card('source_assets', 's1'), card('source_assets', 's2')])).toBe('Includes source files.');
     expect(buildSuggestedRecipePreview([card('settings', 's1'), card('settings', 's2')])).toBe('Includes the model settings.');
-    expect(buildSuggestedRecipePreview([card('guide'), card('external_link')])).toBe('Includes a guide and a link.');
+    expect(buildSuggestedRecipePreview([card('guide'), card('external_link')])).toBe('Includes a written guide and a useful link.');
   });
 
   it('is empty with no items', () => {
     expect(buildSuggestedRecipePreview([])).toBe('');
+  });
+
+  // A public recipe's preview must have 18 characters to list, and the composer
+  // writes this text for the creator: "Includes a guide." would have refused the
+  // post it suggested.
+  it('suggests a preview long enough to list for a recipe of any one item', () => {
+    for (const option of POST_COMPOSER_RESOURCE_CARD_OPTIONS) {
+      expect(buildSuggestedRecipePreview([card(option.id)]).length, option.id).toBeGreaterThanOrEqual(18);
+    }
   });
 
   // The server appends a creation's references after the items (A-F9).
@@ -146,7 +155,7 @@ describe('the Recipe preview follows the items until the creator writes it (S6)'
   it('is refreshed while it still says what was suggested', () => {
     const before = recipeDraft({ cards: [card('prompt')], previewText: 'Includes the prompt.' });
     const after = { ...before, resource: { ...before.resource, cards: [card('prompt'), card('guide')] } };
-    expect(followSuggestedRecipePreview(before, after, null).resource.previewText).toBe('Includes the prompt and a guide.');
+    expect(followSuggestedRecipePreview(before, after, null).resource.previewText).toBe('Includes the prompt and a written guide.');
 
     // A removal takes its phrase away, down to nothing.
     const removed = { ...before, resource: { ...before.resource, cards: [] } };
