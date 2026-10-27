@@ -56,12 +56,19 @@ describe('the home top bar', () => {
 describe('the Make this shelf', () => {
   /**
    * Motion: "Make motion optional", and "let people cancel motion". The rail
-   * this replaced turned itself every 4.6 s; the shelf holds still, so nothing
-   * on Home moves unless the person moves it.
+   * this replaced turned itself every 4.6 s; the shelf's row holds still, so it
+   * moves only when the person moves it. Its clips play as feed previews do:
+   * one at a time, and never under Reduce Motion or with Autoplay previews set
+   * to Never (Settings → Playback).
    */
-  it('holds still until the person moves it', () => {
+  it('holds still until the person moves it, and plays clips only as the feed does', () => {
     expect(shelfSource).not.toContain('setInterval');
     expect(shelfSource).not.toContain('setTimeout');
+    const clip = declaration(shelfSource, 'function useShelfClip(');
+    // The feed tile's own question (`usePreviewPlaybackAllowed`: Reduce Motion
+    // and Autoplay previews), so a condition added there reaches the shelf too.
+    expect(clip).toContain('usePreviewPlaybackAllowed()');
+    expect(clip).toContain("allowed ? elected : 'never'");
   });
 
   /**

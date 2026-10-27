@@ -38,7 +38,7 @@ import {
   useWorkspaceSideMenu,
 } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
-import { useAutoplayPreviewsEnabled } from '@/lib/autoplay-preference';
+import { usePreviewPlaybackAllowed } from '@/lib/use-preview-playback-allowed';
 import { setCachedCreatorProfileBlocked } from '@/lib/creator-profile-view-model';
 import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { buildFeedFeedbackMenu, canHideFeedCreator, isOwnFeedPost } from '@/lib/feed-feedback-menu';
@@ -110,7 +110,7 @@ import { SkeletonBone } from '@/components/skeleton';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
-import { MotionView, useOverlayPresence, usePressMotion, useReducedMotion } from '@/lib/motion';
+import { MotionView, useOverlayPresence, usePressMotion } from '@/lib/motion';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -1354,9 +1354,8 @@ const MasonryPin = memo(function MasonryPin({
   // Reduce Motion and Autoplay previews → Never turn every preview back into a
   // poster without changing the election, so the badge asks the same question
   // the tile does.
-  const reducedMotion = useReducedMotion();
-  const previewsEnabled = useAutoplayPreviewsEnabled();
-  const coverVideoStreaming = isShowcaseCoverVideoStreaming(card.item, showActiveVideo && !reducedMotion && previewsEnabled);
+  const previewsAllowed = usePreviewPlaybackAllowed();
+  const coverVideoStreaming = isShowcaseCoverVideoStreaming(card.item, showActiveVideo && previewsAllowed);
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
   const signal = card.unlock;
   // The pin is the rectangle the reel grows out of, and empties into while the

@@ -44,9 +44,9 @@ type ObserverCallback = (entries: Array<{ target: Element; intersectionRatio: nu
 /** Every observer the page made: the shelf's watches its cards, a playing clip watches itself. */
 let observers: Array<{ callback: ObserverCallback; elements: Element[] }> = [];
 
-function stubMatchMedia({ reduceMotion = false, hover = true }: { reduceMotion?: boolean; hover?: boolean } = {}) {
+function stubMatchMedia({ reduceMotion = false }: { reduceMotion?: boolean } = {}) {
   vi.stubGlobal('matchMedia', (query: string) => ({
-    matches: (query.includes('prefers-reduced-motion') && reduceMotion) || (query.includes('hover: hover') && hover),
+    matches: query.includes('prefers-reduced-motion') && reduceMotion,
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   }));
@@ -72,6 +72,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -138,9 +139,10 @@ describe('HomeShelf', () => {
     expect(screen.queryByText('Free to try')).toBeNull();
   });
 
-  it('plays the clip of the first card in view only, and hands it on', () => {
-    // jsdom reads as a hidden tab; the clip plays only on a visible one.
-    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+  it('plays the clip of the first card in view only, and hands it on, on a touch screen as with a mouse', () => {
+    // jsdom reads as a hidden tab; the clip plays only on a visible one. No
+    // pointer is asked about: a phone plays the clip in view as a mouse does.
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
     const { container } = render(<HomeShelf items={SHELF} offerFreeToTry={false} />);
     expect(container.querySelectorAll('video')).toHaveLength(0);
 
@@ -154,7 +156,6 @@ describe('HomeShelf', () => {
     reportVisible({ a: 0.1, b: 1, c: 1 });
     reportClipOnScreen();
     expect(container.querySelector('video')).toHaveAttribute('src', 'https://cdn.example.test/b/stream.mp4');
-    hidden.mockRestore();
   });
 
   it('lets a card go when the viewer blocks, hides or reports it in the feed, and the row when too few are left', () => {
@@ -173,15 +174,6 @@ describe('HomeShelf', () => {
 
   it('plays nothing under Reduce Motion', () => {
     stubMatchMedia({ reduceMotion: true });
-    const { container } = render(<HomeShelf items={SHELF} offerFreeToTry={false} />);
-
-    reportVisible({ a: 1, b: 1, c: 1 });
-
-    expect(container.querySelectorAll('video')).toHaveLength(0);
-  });
-
-  it('leaves clips to the feed on a touch screen', () => {
-    stubMatchMedia({ hover: false });
     const { container } = render(<HomeShelf items={SHELF} offerFreeToTry={false} />);
 
     reportVisible({ a: 1, b: 1, c: 1 });

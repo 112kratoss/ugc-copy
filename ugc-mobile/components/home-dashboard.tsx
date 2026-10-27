@@ -4,7 +4,7 @@ import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Crown, Plus, Search } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Dimensions, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -39,7 +39,7 @@ import {
   type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
-import { homeShelfGuestReturnTo, readHomeShelfItems } from '@/lib/home-shelf-view-model';
+import { homeShelfGuestReturnTo, isHomeShelfInView, readHomeShelfItems } from '@/lib/home-shelf-view-model';
 import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
 import { useAppForeground } from '@/lib/app-foreground';
@@ -179,6 +179,61 @@ export function HomeDashboard() {
   useEffect(() => {
     if (!isFocused || !foreground) playbackController.dispatch({ type: 'stop' });
   }, [foreground, isFocused, playbackController]);
+  // Home's one playing clip may be the shelf's. While the shelf is mostly on
+  // screen and has a clip card in view (HomeShelf reports it), that card is
+  // the election's only candidate: the shelf heads the screen, and the feed's
+  // first video, half under it, would otherwise keep the slot it already held.
+  // Once the shelf has gone, or shows no clip, the feed's cards stand again,
+  // under the feed's rules for both. Where the shelf is gets read when the
+  // list comes to rest, never per scroll frame.
+  const shelfRef = useRef<View>(null);
+  const feedItemsRef = useRef<ShowcaseFeedItem[]>([]);
+  const feedViewableRef = useRef<ShowcaseFeedItem[]>([]);
+  const shelfCandidateRef = useRef<ShowcaseFeedItem | null>(null);
+  const shelfInViewRef = useRef(true);
+  // The controller picks the prepared players in card order, so it needs the
+  // cards as the list shows them, after every page and refetch, and the
+  // shelf's candidate ahead of them: the shelf sits above the feed. So while
+  // the shelf plays, the feed's first video stays prepared under it, and the
+  // shelf's player stays in the window once the slot goes back to the feed.
+  const dispatchPlaybackItems = useCallback(() => {
+    const shelf = shelfCandidateRef.current;
+    playbackController.dispatch({ type: 'itemsChanged', items: shelf ? [shelf, ...feedItemsRef.current] : feedItemsRef.current });
+  }, [playbackController]);
+  // The search opened over Home covers it whole: nothing under it plays, and
+  // what played keeps its player for when the search closes.
+  const searchVisibleRef = useRef(false);
+  const dispatchPlaybackCandidates = useCallback(() => {
+    const shelf = shelfInViewRef.current ? shelfCandidateRef.current : null;
+    const items = searchVisibleRef.current ? [] : shelf ? [shelf] : feedViewableRef.current;
+    playbackController.dispatch({ type: 'viewableItemsChanged', items });
+  }, [playbackController]);
+  useEffect(() => {
+    searchVisibleRef.current = searchVisible;
+    dispatchPlaybackCandidates();
+  }, [dispatchPlaybackCandidates, searchVisible]);
+  // Synchronous on Fabric: a rest handler measures first, so the election at
+  // rest already has the right candidates. A shelf measured at no size is out
+  // of layout, not off screen (under a reel on Android the tabs are taken out
+  // of layout), so that answer changes nothing.
+  const measureShelf = useCallback(() => {
+    shelfRef.current?.measureInWindow((_x, top, _width, height) => {
+      if (!(height > 0)) return;
+      const inView = isHomeShelfInView(top, height, Dimensions.get('window').height);
+      if (inView === shelfInViewRef.current) return;
+      shelfInViewRef.current = inView;
+      dispatchPlaybackCandidates();
+    });
+  }, [dispatchPlaybackCandidates]);
+  // Back in front (a reel closed, the app came back): the shelf may have moved unseen.
+  useEffect(() => {
+    if (isFocused && foreground) measureShelf();
+  }, [foreground, isFocused, measureShelf]);
+  const onShelfPlaybackCandidateChange = useCallback((candidate: ShowcaseFeedItem | null) => {
+    shelfCandidateRef.current = candidate;
+    dispatchPlaybackItems();
+    dispatchPlaybackCandidates();
+  }, [dispatchPlaybackCandidates, dispatchPlaybackItems]);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
@@ -286,11 +341,12 @@ export function HomeDashboard() {
 
   const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
     reportAmbientMedia({ viewableItems });
-    const visibleItems = viewableItems
+    feedViewableRef.current = viewableItems
       .filter((token) => token.isViewable && token.item)
       .map((token) => token.item.item);
-    playbackController.dispatch({ type: 'viewableItemsChanged', items: visibleItems });
-  }, [playbackController, reportAmbientMedia]);
+    dispatchPlaybackCandidates();
+    measureShelf();
+  }, [dispatchPlaybackCandidates, measureShelf, reportAmbientMedia]);
 
   const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
     if (!feedEventRuntimeRef.current.isFocused) return;
@@ -403,11 +459,10 @@ export function HomeDashboard() {
       .filter((item): item is ShowcaseFeedItem => Boolean(item));
     recordAttention(attention.setVisible(visible, Date.now()));
   }, [attention, cards, recordAttention]);
-  // The controller picks the prepared neighbours in card order, so it needs
-  // the cards as the list shows them, after every page and refetch.
   useEffect(() => {
-    playbackController.dispatch({ type: 'itemsChanged', items: cards.map((card) => card.item) });
-  }, [cards, playbackController]);
+    feedItemsRef.current = cards.map((card) => card.item);
+    dispatchPlaybackItems();
+  }, [cards, dispatchPlaybackItems]);
   // FlashList reports viewability by index, not by post: new posts landing on
   // the indices already on screen (a refresh, the network page replacing the
   // one restored at launch, a removed post) report nothing. Their impressions
@@ -568,6 +623,7 @@ export function HomeDashboard() {
     recordAttention(attention.setVisible([], Date.now()));
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
+    feedViewableRef.current = [];
     playbackController.dispatch({ type: 'reset' });
     setActiveChipId(chipId);
   };
@@ -1000,9 +1056,17 @@ export function HomeDashboard() {
         )}
         showsVerticalScrollIndicator={false}
         onScrollBeginDrag={() => playbackController.dispatch({ type: 'dragBegin' })}
-        onScrollEndDrag={(event) => playbackController.dispatch({ type: 'dragEnd', velocityY: event.nativeEvent.velocity?.y })}
+        onScrollEndDrag={(event) => {
+          measureShelf();
+          playbackController.dispatch({ type: 'dragEnd', velocityY: event.nativeEvent.velocity?.y });
+        }}
         onMomentumScrollBegin={() => playbackController.dispatch({ type: 'momentumBegin' })}
-        onMomentumScrollEnd={() => playbackController.dispatch({ type: 'momentumEnd' })}
+        onMomentumScrollEnd={() => {
+          measureShelf();
+          playbackController.dispatch({ type: 'momentumEnd' });
+        }}
+        // iOS's status-bar tap scrolls to the top with no drag of its own.
+        onScrollToTop={measureShelf}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         contentInsetAdjustmentBehavior="never"
         // Home cards end in real controls and resource banners. Reserve the
@@ -1024,28 +1088,32 @@ export function HomeDashboard() {
               <GuestMergeBanner />
             </View>
 
-            <HomeShelf
-              items={shelfItems}
-              isLoading={shelfQuery.isPending}
-              offerFreeToTry={!user}
-              signsInFirst={!user}
-              horizontalPadding={horizontalPadding}
-              contentWidth={contentWidth}
-              activeRenders={activeGenerationCount}
-              pendingId={remixingItemId}
-              // One remix at a time: a second tap while the first is opening
-              // would stack a second creator over it. A guest signs in first
-              // and comes back to this remix's editor, as the web's card does,
-              // rather than to the post.
-              onMake={(creation) => {
-                if (remixingItemId) return;
-                if (!user) {
-                  router.push({ pathname: '/auth', params: { returnTo: homeShelfGuestReturnTo(creation) } } as never);
-                  return;
-                }
-                remixItem(creation.post);
-              }}
-            />
+            {/* Not flattened on Android: measureInWindow needs a real view. */}
+            <View ref={shelfRef} collapsable={false} onLayout={measureShelf}>
+              <HomeShelf
+                items={shelfItems}
+                isLoading={shelfQuery.isPending}
+                offerFreeToTry={!user}
+                signsInFirst={!user}
+                horizontalPadding={horizontalPadding}
+                contentWidth={contentWidth}
+                activeRenders={activeGenerationCount}
+                pendingId={remixingItemId}
+                // One remix at a time: a second tap while the first is opening
+                // would stack a second creator over it. A guest signs in first
+                // and comes back to this remix's editor, as the web's card does,
+                // rather than to the post.
+                onMake={(creation) => {
+                  if (remixingItemId) return;
+                  if (!user) {
+                    router.push({ pathname: '/auth', params: { returnTo: homeShelfGuestReturnTo(creation) } } as never);
+                    return;
+                  }
+                  remixItem(creation.post);
+                }}
+                onPlaybackCandidateChange={onShelfPlaybackCandidateChange}
+              />
+            </View>
 
             <View style={{ paddingHorizontal: horizontalPadding }}>
               <OnboardingResumeCard />

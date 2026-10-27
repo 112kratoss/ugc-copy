@@ -37,6 +37,10 @@ vi.mock('@/lib/playback-device', async () => {
   return { useNetworkKind: () => useSyncExternalStore(subscribe, () => network.kind) };
 });
 
+// Reduce Motion, as lib/motion.ts reads it from the phone.
+const motion = vi.hoisted(() => ({ reduced: false }));
+vi.mock('@/lib/motion', () => ({ useReducedMotion: () => motion.reduced }));
+
 import {
   AUTOPLAY_PREFERENCES,
   getAutoplayPreference,
@@ -51,6 +55,7 @@ import {
   type AutoplayPreference,
 } from '../lib/autoplay-preference';
 import { SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS } from '../lib/media-performance';
+import { usePreviewPlaybackAllowed } from '../lib/use-preview-playback-allowed';
 
 const STORAGE_KEY = 'autoplay-preference-v1';
 
@@ -66,6 +71,7 @@ async function flush() {
 }
 
 beforeEach(() => {
+  motion.reduced = false;
   storage.values.clear();
   storage.getItem.mockReset();
   storage.getItem.mockImplementation(async (key: string) => storage.values.get(key) ?? null);
@@ -252,6 +258,30 @@ describe('the stored preference', () => {
     const renders = seen.length;
     switchNetwork('cellular');
     expect(seen).toHaveLength(renders);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('lets a preview play only with previews on and Reduce Motion off: the one question every tile asks', async () => {
+    const seen: boolean[] = [];
+    function Probe() {
+      seen.push(usePreviewPlaybackAllowed());
+      return null;
+    }
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<Probe />);
+    });
+    await renderer.act(flush);
+    expect(seen.at(-1)).toBe(true);
+
+    await renderer.act(() => writeAutoplayPreference('never'));
+    expect(seen.at(-1)).toBe(false);
+    await renderer.act(() => writeAutoplayPreference('always'));
+    expect(seen.at(-1)).toBe(true);
+
+    motion.reduced = true;
+    renderer.act(() => tree.update(<Probe />));
+    expect(seen.at(-1)).toBe(false);
     renderer.act(() => tree.unmount());
   });
 });

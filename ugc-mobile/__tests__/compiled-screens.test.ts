@@ -24,6 +24,11 @@ const SCREENS = [
   // The video tool's composer, re-rendered the same way (2026-10-22: a useMemo over `subjects`,
   // an array the compiler could not hold still past the memo, was a memo it could not keep).
   ['components/media-creation-screen.tsx', 'VideoCreatorComposer'],
+  // Home's "Make this" shelf, drawn again at every rest of its row, its cards,
+  // and the tile they and every feed card play in (2026-10-27).
+  ['components/home-shelf.tsx', 'HomeShelf'],
+  ['components/home-shelf.tsx', 'CreationCard'],
+  ['components/feed-video-preview.tsx', 'FeedVideoPreview'],
 ] as const;
 
 const metroCaller = {

@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 const routerPush = vi.hoisted(() => vi.fn());
+// Reduce Motion and Settings → Playback → Autoplay previews, as a test sets them.
+const playbackSettings = vi.hoisted(() => ({ previewsAllowed: true }));
 
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' },
@@ -34,10 +36,16 @@ vi.mock('lucide-react-native', () => {
   };
 });
 
-// The poster, the bones and the type have suites of their own; here they are
-// the props the shelf hands them.
+// The poster, the bones, the feed's video tile and the type have suites of
+// their own; here they are the props the shelf hands them.
 vi.mock('@/components/media-preview', () => ({
   StableMediaImage: (props: MockProps) => React.createElement('stable-image', props),
+}));
+vi.mock('@/components/feed-video-preview', () => ({
+  FeedVideoPreview: (props: MockProps) => React.createElement('feed-video-preview', props),
+}));
+vi.mock('@/lib/use-preview-playback-allowed', () => ({
+  usePreviewPlaybackAllowed: () => playbackSettings.previewsAllowed,
 }));
 vi.mock('@/components/skeleton', () => ({
   SkeletonBone: (props: MockProps) => React.createElement('skeleton-bone', props),
@@ -58,7 +66,9 @@ vi.mock('@/lib/theme-context', async () => {
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { HomeShelf } from '../components/home-shelf';
+import { createFeedVideoActivationStore, FeedVideoActivationContext, type FeedVideoActivationStore } from '../lib/feed-video-activation';
 import { MIN_HIT_TARGET_PT } from '../lib/hit-target';
+import { SHOWCASE_SETTLE_CONFIRM_MS } from '../lib/showcase-feed-activation';
 import type { HomeShelfCreation, HomeShelfItem, HomeShelfResponse } from '../lib/types';
 
 const shelf = mobileApiContract.endpoints.getHomeShelf as unknown as {
@@ -102,6 +112,7 @@ function renderShelf(items: HomeShelfItem[], overrides: Partial<React.ComponentP
 
 beforeEach(() => {
   routerPush.mockReset();
+  playbackSettings.previewsAllowed = true;
 });
 
 describe('the Make this shelf', () => {
@@ -209,5 +220,177 @@ describe('the Make this shelf', () => {
         expect(drawn + slop.top + slop.bottom, String(node.props.accessibilityLabel)).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
       }
     }
+  });
+});
+
+describe("the shelf's clips", () => {
+  const items = () => shelf.responseVariants.member.response.items;
+  const inHome = (store: FeedVideoActivationStore, lineup: HomeShelfItem[], onPlaybackCandidateChange: () => void) => (
+    <FeedVideoActivationContext.Provider value={store}>
+      <HomeShelf
+        items={lineup}
+        isLoading={false}
+        offerFreeToTry={false}
+        horizontalPadding={18}
+        contentWidth={354}
+        activeRenders={0}
+        pendingId={null}
+        onMake={vi.fn()}
+        onPlaybackCandidateChange={onPlaybackCandidateChange}
+      />
+    </FeedVideoActivationContext.Provider>
+  );
+  const renderInHome = (store: FeedVideoActivationStore, onPlaybackCandidateChange = vi.fn()) => {
+    const tree = render(inHome(store, items(), onPlaybackCandidateChange));
+    return { tree, onPlaybackCandidateChange };
+  };
+  const playGlyphs = (tree: renderer.ReactTestRenderer) => tree.root
+    .findAll((node) => String(node.type) === 'icon' && node.props.name === 'Play');
+  // Resting at `x` in a 390pt row, as a momentum end reports it.
+  const restAt = (x: number) => ({ nativeEvent: { contentOffset: { x }, layoutMeasurement: { width: 390 } } });
+  // One card step: a card (149pt at this width) and the gap after it.
+  const STEP = 149 + 12;
+  const clipTile = (tree: renderer.ReactTestRenderer, postId: string) => tree.root
+    .findAll((node) => String(node.type) === 'feed-video-preview')
+    .find((node) => node.props.streamUrl === items()
+      .find((item): item is HomeShelfCreation => item.kind === 'creation' && item.id === postId)?.clipUrl)!;
+  const rowOf = (tree: renderer.ReactTestRenderer) => tree.root.find((node) => String(node.type) === 'scrollview');
+
+  it("plays a card's clip only while it holds Home's one playing slot, under its own id", () => {
+    const store = createFeedVideoActivationStore();
+    const { tree } = renderInHome(store);
+
+    expect(clipTile(tree, 'post-1').props).toMatchObject({
+      active: false,
+      prepared: false,
+      retryable: false,
+      height: '100%',
+      // Shelf starts are not feed starts: the fleet's feed metrics leave them out.
+      metricsSurface: null,
+    });
+    // The tool's own accent, as a hex the tile can add an alpha to.
+    expect(clipTile(tree, 'post-1').props.accent).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(playGlyphs(tree)).toHaveLength(2);
+
+    // The feed's own card for the same post is not the shelf's.
+    renderer.act(() => store.publish({ activeIds: ['post-1'] }));
+    expect(clipTile(tree, 'post-1').props.active).toBe(false);
+
+    renderer.act(() => store.publish({ activeIds: ['home-shelf:post-1'] }));
+    expect(clipTile(tree, 'post-1').props.active).toBe(true);
+    expect(clipTile(tree, 'post-3').props.active).toBe(false);
+    // Elected, but its player has not drawn: the poster shows, with its glyph.
+    expect(playGlyphs(tree)).toHaveLength(2);
+
+    renderer.act(() => clipTile(tree, 'post-1').props.onReadyChange(true));
+    expect(store.isReady('home-shelf:post-1')).toBe(true);
+    // A playing clip wears no play glyph; the one waiting still does.
+    expect(playGlyphs(tree)).toHaveLength(1);
+
+    // A failure takes the frame away, and the glyph comes back with the poster.
+    renderer.act(() => clipTile(tree, 'post-1').props.onReadyChange(false));
+    expect(playGlyphs(tree)).toHaveLength(2);
+  });
+
+  it('keeps every clip on its poster where previews may not play (Reduce Motion, Autoplay previews off)', () => {
+    playbackSettings.previewsAllowed = false;
+    const store = createFeedVideoActivationStore();
+    store.publish({ activeIds: ['home-shelf:post-1'] });
+    const { tree } = renderInHome(store);
+
+    expect(clipTile(tree, 'post-1').props.active).toBe(false);
+  });
+
+  it('shows posters alone outside Home, where no election runs', () => {
+    const { tree } = renderShelf(items());
+
+    expect(tree.root.findAll((node) => String(node.type) === 'feed-video-preview')).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'stable-image')).toHaveLength(3);
+  });
+
+  it('puts up the first clip card in view, and the next once the row rests on it', () => {
+    const { tree, onPlaybackCandidateChange } = renderInHome(createFeedVideoActivationStore());
+    // Nothing is in view before the row has a width.
+    expect(onPlaybackCandidateChange).toHaveBeenLastCalledWith(null);
+
+    renderer.act(() => rowOf(tree).props.onLayout({ nativeEvent: { layout: { width: 390 } } }));
+    expect(onPlaybackCandidateChange.mock.lastCall?.[0]).toMatchObject({ id: 'home-shelf:post-1', mediaKind: 'video' });
+
+    // Resting on the fourth card (the motion clip), three card steps along.
+    renderer.act(() => rowOf(tree).props.onMomentumScrollEnd(restAt(3 * STEP)));
+    expect(onPlaybackCandidateChange.mock.lastCall?.[0]).toMatchObject({ id: 'home-shelf:post-3' });
+
+    const calls = onPlaybackCandidateChange.mock.calls.length;
+    renderer.act(() => rowOf(tree).props.onMomentumScrollEnd(restAt(3 * STEP + 4)));
+    // The same card: nothing new to tell.
+    expect(onPlaybackCandidateChange.mock.calls).toHaveLength(calls);
+  });
+
+  it("waits out a finger's lift: the snap and any coast come first", () => {
+    vi.useFakeTimers();
+    try {
+      const { tree, onPlaybackCandidateChange } = renderInHome(createFeedVideoActivationStore());
+      const lastCandidate = () => onPlaybackCandidateChange.mock.lastCall?.[0];
+      renderer.act(() => rowOf(tree).props.onLayout({ nativeEvent: { layout: { width: 390 } } }));
+      expect(lastCandidate()).toMatchObject({ id: 'home-shelf:post-1' });
+
+      // A fling: lifted at x 120, which shows no clip card, with momentum after it.
+      const calls = onPlaybackCandidateChange.mock.calls.length;
+      renderer.act(() => rowOf(tree).props.onScrollBeginDrag());
+      renderer.act(() => rowOf(tree).props.onScrollEndDrag(restAt(120)));
+      renderer.act(() => rowOf(tree).props.onMomentumScrollBegin());
+      renderer.act(() => { vi.advanceTimersByTime(SHOWCASE_SETTLE_CONFIRM_MS); });
+      expect(onPlaybackCandidateChange.mock.calls).toHaveLength(calls);
+      renderer.act(() => rowOf(tree).props.onMomentumScrollEnd(restAt(3 * STEP)));
+      expect(lastCandidate()).toMatchObject({ id: 'home-shelf:post-3' });
+
+      // A lift no momentum follows rests where iOS says the snap lands, once
+      // the confirm window has passed with no momentum.
+      renderer.act(() => rowOf(tree).props.onScrollBeginDrag());
+      renderer.act(() => rowOf(tree).props.onScrollEndDrag({
+        nativeEvent: { contentOffset: { x: 40 }, targetContentOffset: { x: 0, y: 0 }, layoutMeasurement: { width: 390 } },
+      }));
+      expect(lastCandidate()).toMatchObject({ id: 'home-shelf:post-3' });
+      renderer.act(() => { vi.advanceTimersByTime(SHOWCASE_SETTLE_CONFIRM_MS); });
+      expect(lastCandidate()).toMatchObject({ id: 'home-shelf:post-1' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('follows a scroll with no finger in it (TalkBack, a keyboard) once it stops', () => {
+    vi.useFakeTimers();
+    try {
+      const { tree, onPlaybackCandidateChange } = renderInHome(createFeedVideoActivationStore());
+      renderer.act(() => rowOf(tree).props.onLayout({ nativeEvent: { layout: { width: 390 } } }));
+      renderer.act(() => rowOf(tree).props.onScroll(restAt(2 * STEP)));
+      renderer.act(() => rowOf(tree).props.onScroll(restAt(3 * STEP)));
+      expect(onPlaybackCandidateChange.mock.lastCall?.[0]).toMatchObject({ id: 'home-shelf:post-1' });
+      renderer.act(() => { vi.advanceTimersByTime(SHOWCASE_SETTLE_CONFIRM_MS); });
+      expect(onPlaybackCandidateChange.mock.lastCall?.[0]).toMatchObject({ id: 'home-shelf:post-3' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('passes over a clip that failed, until the lineup changes', () => {
+    const store = createFeedVideoActivationStore();
+    const onPlaybackCandidateChange = vi.fn();
+    const lineup = items();
+    const tree = render(inHome(store, lineup, onPlaybackCandidateChange));
+    renderer.act(() => rowOf(tree).props.onLayout({ nativeEvent: { layout: { width: 390 } } }));
+    expect(onPlaybackCandidateChange.mock.lastCall?.[0]).toMatchObject({ id: 'home-shelf:post-1' });
+
+    renderer.act(() => clipTile(tree, 'post-1').props.onPlaybackFailed());
+    // No other clip card in view: the slot goes back to the feed.
+    expect(onPlaybackCandidateChange).toHaveBeenLastCalledWith(null);
+    renderer.act(() => rowOf(tree).props.onMomentumScrollEnd(restAt(3 * STEP)));
+    expect(onPlaybackCandidateChange.mock.lastCall?.[0]).toMatchObject({ id: 'home-shelf:post-3' });
+    renderer.act(() => rowOf(tree).props.onMomentumScrollEnd(restAt(0)));
+    expect(onPlaybackCandidateChange).toHaveBeenLastCalledWith(null);
+
+    // A new answer from the server is a new lineup: its clips all get a try.
+    renderer.act(() => tree.update(inHome(store, [...lineup], onPlaybackCandidateChange)));
+    expect(onPlaybackCandidateChange.mock.lastCall?.[0]).toMatchObject({ id: 'home-shelf:post-1' });
   });
 });

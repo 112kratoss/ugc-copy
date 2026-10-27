@@ -5,14 +5,13 @@ import { FlatList, Platform, Pressable, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
-import { useAutoplayPreviewsEnabled } from '@/lib/autoplay-preference';
+import { usePreviewPlaybackAllowed } from '@/lib/use-preview-playback-allowed';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
 import { useMediaZoomTileShaped } from '@/lib/media-zoom-tile-shape';
-import { useReducedMotion } from '@/lib/motion';
 import { measureSourceVideoProgress } from '@/lib/showcase-media-progress';
 import {
   getShowcaseFeedStreamUrl,
@@ -87,11 +86,10 @@ export function ShowcaseMediaPreview({
   diagnosticsSurface,
   width,
 }: ShowcaseMediaPreviewProps) {
-  const reduceMotionEnabled = useReducedMotion();
-  // Autoplay previews set to Never (Settings → Playback) gets what Reduce
-  // Motion gets: the poster, and no player at all.
-  const previewsEnabled = useAutoplayPreviewsEnabled();
-  const resolvedVideoActivation = reduceMotionEnabled || !previewsEnabled ? 'never' : videoActivation;
+  // Reduce Motion, and Autoplay previews set to Never (Settings → Playback):
+  // the poster, and no player at all.
+  const previewsAllowed = usePreviewPlaybackAllowed();
+  const resolvedVideoActivation = previewsAllowed ? videoActivation : 'never';
   // A tile UIKit's zoom grows into the reel gets its corners from its zoom
   // source (`MediaZoomSourceView`), and the media inside is a plain rectangle.
   const shaped = useMediaZoomTileShaped();
