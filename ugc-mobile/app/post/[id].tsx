@@ -36,6 +36,7 @@ import {
 import { readCachedImmersiveSourceData, readCachedProfile } from '@/lib/immersive-preview-source-data';
 import { getCommentCountLabel } from '@/lib/comments-view-model';
 import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
+import { readPostDetailsSection } from '@/lib/post-details-view-model';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -43,7 +44,7 @@ import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { buildTextPostPage } from '@/lib/text-post-page-view-model';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import type { ShowcasePostResponse } from '@/lib/types';
+import type { ShowcaseFeedItem, ShowcasePostResponse } from '@/lib/types';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { getThemedSaveHeartIconProps, getViewerActionSlots, getViewerShareIntent, getViewerStateChip } from '@/lib/viewer-actions';
@@ -63,7 +64,7 @@ const CREATOR_ROW_HEIGHT = 32;
  */
 export default function PostScreen() {
   const theme = useAppTheme();
-  const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string; deliveryId?: string; s?: string }>();
+  const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string; deliveryId?: string; s?: string; page?: string; section?: string }>();
   const postId = Array.isArray(params.id) ? params.id[0] : params.id;
   const source = Array.isArray(params.source) ? params.source[0] : params.source;
   const requestedCommentsPostId = Array.isArray(params.comments) ? params.comments[0] : params.comments;
@@ -75,6 +76,13 @@ export default function PostScreen() {
   // (`src/app/showcase/[id]/page.tsx`). Sent as it came: the server counts a
   // surface it does not know as the detail page.
   const shareVisitSurface = (Array.isArray(params.s) ? params.s[0] : params.s)?.trim() || null;
+  // A link that asks for the post's Details page, and the part of it to lead
+  // with: a Home card's recipe chip opens the recipe (audit B-F6), as it does
+  // over the reel.
+  const requestedPage = (Array.isArray(params.page) ? params.page[0] : params.page) === 'details' ? 'details' : undefined;
+  const requestedSection = requestedPage
+    ? readPostDetailsSection(Array.isArray(params.section) ? params.section[0] : params.section)
+    : undefined;
   const isOwnerPost = source === 'profile-posts';
   const showcaseSource = source === 'profile-saved' ? 'profile-saved' : 'showcase-feed';
   const { api, user } = useAuth();
@@ -97,6 +105,12 @@ export default function PostScreen() {
   // Whether `NsfwPostNotice` is showing a covered post's original right now:
   // the thread waits for it.
   const [nsfwRevealed, setNsfwRevealed] = useState(false);
+  // The original it shows, which the covered post's Details page and its
+  // recipe are drawn from (D4, 2026-10-27).
+  const [revealedPost, setRevealedPost] = useState<ShowcaseFeedItem | null>(null);
+  // The revealed post's "View recipe" asked for Details at the recipe.
+  const [recipeRequested, setRecipeRequested] = useState(false);
+  const openedDetailsRef = useRef<string | null>(null);
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
@@ -211,8 +225,20 @@ export default function PostScreen() {
     setCommentCountOverride(null);
     setRestoredReplyToId(null);
     setNsfwRevealed(false);
+    setRevealedPost(null);
+    setRecipeRequested(false);
     restoredCommentContextRef.current = null;
   }, [item?.id]);
+
+  const handleNsfwRevealedChange = useCallback((revealed: boolean, post: ShowcaseFeedItem | null) => {
+    setNsfwRevealed(revealed);
+    setRevealedPost(revealed ? post ?? null : null);
+  }, []);
+
+  // The revealed original as the reel builds a post, its recipe included.
+  const revealedItem = useMemo(() => (
+    revealedPost ? buildImmersiveShowcaseItems(showcaseSource, [revealedPost], user?.id ?? null)[0] ?? null : null
+  ), [revealedPost, showcaseSource, user?.id]);
 
   const displayItem = useMemo(() => {
     if (!item || commentCountOverride == null) return item;
@@ -239,21 +265,44 @@ export default function PostScreen() {
   const { toggleSave, isSaving } = useShowcaseSaveMutation({ sourceSurface: 'mobile-post-page', authReturnTo });
 
   // A covered NSFW post has no details page: everything one would show is
-  // what the cover leaves out.
+  // what the cover leaves out. Once revealed it has the original's (D4).
+  const detailsItem = item && isCoveredNsfwPost(item) ? revealedItem : item;
   const pages = useMemo<Array<'post' | 'details'>>(
-    () => (item && hasImmersiveDetailsPage(item) && !isCoveredNsfwPost(item) ? ['post', 'details'] : ['post']),
-    [item]
+    () => (detailsItem && hasImmersiveDetailsPage(detailsItem) ? ['post', 'details'] : ['post']),
+    [detailsItem]
   );
 
-  const goToPage = useCallback((index: number) => {
+  const goToPage = useCallback((index: number, { animated = true }: { animated?: boolean } = {}) => {
     if (index >= pages.length) return;
     // A turn the finger does not drag never reaches the pager's on-drag: TalkBack's double tap on
     // Details opened the details page under the comment keyboard (Pixel_9a, 2026-10-22), and so
     // would the ••• menu's View details. The keyboard goes here instead.
     if (index > 0) Keyboard.dismiss();
     setPageIndex(index);
-    pagerRef.current?.scrollToOffset({ offset: index * width, animated: true });
+    pagerRef.current?.scrollToOffset({ offset: index * width, animated });
   }, [pages.length, width]);
+
+  // Covered again (Hide, the expiry, the app leaving): the details page goes
+  // with the original, and the pager comes back to the post.
+  useEffect(() => {
+    if (pageIndex < pages.length) return;
+    setPageIndex(0);
+    pagerRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, [pageIndex, pages.length]);
+
+  // A link that asks for Details opens on it, once per post, after the pager
+  // has laid out its pages (as the comment link below waits a frame).
+  const itemId = item?.id ?? null;
+  const canOpenDetails = pages.length > 1;
+  useEffect(() => {
+    if (requestedPage !== 'details' || !itemId || !canOpenDetails || openedDetailsRef.current === itemId) return undefined;
+    const frame = requestAnimationFrame(() => {
+      openedDetailsRef.current = itemId;
+      goToPage(1, { animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [canOpenDetails, goToPage, itemId, requestedPage]);
+  const detailsSection = recipeRequested ? 'resources' : requestedSection;
   const showPost = useCallback(() => goToPage(0), [goToPage]);
   const onDetailsPage = pageIndex === 1;
   // Back from the details page returns to the post; only from the post does it
@@ -359,6 +408,8 @@ export default function PostScreen() {
         href={immersiveViewerHref({
           source: isOwnerPost ? 'profile-posts' : showcaseSource,
           initialId: item.id,
+          // The reel's Details page takes the same request.
+          ...(requestedPage ? { initialPage: requestedPage, initialSection: requestedSection } : {}),
         }) as never}
       />
     );
@@ -427,12 +478,17 @@ export default function PostScreen() {
                   <TextPostContent
                     item={resolvedItem}
                     commentsHidden={commentsHidden}
+                    hasDetailsPage={pages.length > 1}
                     nsfwNotice={nsfwCovered ? (
                       <NsfwPostNotice
                         key={resolvedItem.id}
                         postId={resolvedItem.id}
                         width={width - appTheme.spacing.panel * 2}
-                        onRevealedChange={setNsfwRevealed}
+                        onRevealedChange={handleNsfwRevealedChange}
+                        onOpenRecipe={() => {
+                          setRecipeRequested(true);
+                          goToPage(1);
+                        }}
                       />
                     ) : null}
                     topInset={topInset}
@@ -477,7 +533,8 @@ export default function PostScreen() {
               bottomInset={bottomInset}
               height={height}
               hostRendersPostText
-              item={resolvedItem}
+              initialSection={detailsSection}
+              item={nsfwCovered && revealedItem ? revealedItem : resolvedItem}
               onActionsOpen={() => setActionsVisible(true)}
               onBack={showPost}
               onComments={openComments}
@@ -571,6 +628,7 @@ function isCoveredNsfwPost(item: { isNsfw?: boolean; nsfwRevealed?: boolean }) {
 function TextPostContent({
   item,
   commentsHidden = false,
+  hasDetailsPage,
   nsfwNotice,
   topInset,
   saving,
@@ -584,9 +642,11 @@ function TextPostContent({
   item: Parameters<typeof buildTextPostPage>[0];
   /** The thread is held back, so nothing here offers to open it. */
   commentsHidden?: boolean;
+  /** The screen has a details page to turn to: a covered post has one only once revealed. */
+  hasDetailsPage: boolean;
   /**
    * Drawn in place of the title and body while the post is an NSFW cover. The
-   * cover has no details page, so Details goes with them.
+   * cover has no details page until it is revealed (`hasDetailsPage`).
    */
   nsfwNotice?: React.ReactNode;
   topInset: number;
@@ -602,7 +662,7 @@ function TextPostContent({
   const content = buildTextPostPage(item);
   const stateChip = getViewerStateChip(item);
   const slots = getViewerActionSlots(item);
-  const hasDetails = !nsfwNotice && hasImmersiveDetailsPage(item);
+  const hasDetails = hasDetailsPage;
   // Menu rows for what the page is not showing: a details page it does not
   // have, a thread it is holding back.
   const excludeActions = [

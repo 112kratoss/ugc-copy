@@ -30,14 +30,17 @@ vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 vi.mock('@/lib/action-sheet', () => ({ showActionSheet }));
 vi.mock('@/lib/dialog', () => ({ showConfirmDialog }));
 
+import { readRecipeUnlockedNotice } from '@/lib/recipe-unlocked-notice';
 import {
   describePaidUnlockConfirmation,
   formatBundleUnlockShortfall,
   getBundleUnlockShortfall,
   getUnlockSpendableCredits,
   holdsPromotionalCredits,
+  formatPriceChange,
   isInsufficientCreditsError,
   readInsufficientCreditsRefusal,
+  readPriceChangedRefusal,
   useBundleUnlock,
   type BundleUnlockTarget,
 } from '@/lib/use-bundle-unlock';
@@ -49,7 +52,7 @@ type SheetRequest = { actions: Array<{ label: string; onPress: () => void }> };
 const paid: BundleUnlockTarget = { postId: 'post-1', resourceId: 'asset-1', accessMode: 'paid', priceUsdCents: 900 };
 const free: BundleUnlockTarget = { postId: 'post-1', resourceId: 'asset-1', accessMode: 'free', priceUsdCents: 0 };
 
-const PROMOTIONAL_SHORTFALL = "You need 900 more credits for this unlock. Welcome and referral credits can't be spent on creator resources.";
+const PROMOTIONAL_SHORTFALL = "You need 900 more credits. Welcome and referral credits can't be spent on recipes.";
 
 /**
  * The credit unlock's 402 as the API client throws it: an `ApiError` whose
@@ -71,6 +74,19 @@ function insufficientCreditsError(
     status: 402,
     code: 'INSUFFICIENT_CREDITS',
     details: { error: message, ...body },
+  });
+}
+
+/**
+ * The credit unlock's 409 when the price is no longer the one the buyer
+ * confirmed (S3): nothing was charged, and the body names the price now.
+ */
+function priceChangedError(priceCredits: number) {
+  const message = `The price changed to ${priceCredits} credits.`;
+  return Object.assign(new Error(message), {
+    status: 409,
+    code: 'RESOURCE_PRICE_CHANGED',
+    details: { success: false, code: 'RESOURCE_PRICE_CHANGED', error: message, priceCredits },
   });
 }
 
@@ -135,8 +151,9 @@ describe('bundle unlock rules', () => {
     expect(getBundleUnlockShortfall(free, 0)).toBe(0);
   });
 
-  it('says the shortfall in the marketplace words, with a thousands separator', () => {
-    expect(formatBundleUnlockShortfall(1800)).toBe('You need 1,800 more credits for this unlock.');
+  it('says the shortfall in the recipe words, with a thousands separator and one credit as one', () => {
+    expect(formatBundleUnlockShortfall(1800)).toBe('You need 1,800 more credits.');
+    expect(formatBundleUnlockShortfall(1)).toBe('You need 1 more credit.');
     expect(formatBundleUnlockShortfall(0)).toBeNull();
   });
 
@@ -179,13 +196,25 @@ describe('bundle unlock rules', () => {
     expect(readInsufficientCreditsRefusal(new Error('offline'))).toBeNull();
   });
 
-  it('asks in the marketplace words, and never with an empty price', () => {
+  it('asks in the glossary words, and never with an empty price', () => {
     expect(describePaidUnlockConfirmation('900 credits')).toEqual({
-      title: 'Unlock this resource?',
-      message: '900 credits will come off your credit balance right away.',
+      title: 'Unlock this recipe?',
+      message: '900 credits will come off your balance.',
       confirmLabel: 'Unlock for 900 credits',
     });
     expect(describePaidUnlockConfirmation(null).confirmLabel).toBe('Unlock with credits');
+    // Asked again after the price moved: the change leads.
+    expect(describePaidUnlockConfirmation('1,200 credits', { priceChanged: true }).message)
+      .toBe('The price changed to 1,200 credits. 1,200 credits will come off your balance.');
+  });
+
+  it("reads the server's refusal when the price moved under the buyer, and nothing else", () => {
+    expect(readPriceChangedRefusal(priceChangedError(1200))).toEqual({ priceCredits: 1200 });
+    expect(readPriceChangedRefusal(insufficientCreditsError())).toBeNull();
+    expect(readPriceChangedRefusal(Object.assign(new Error('Conflict'), { status: 409, code: 'SESSION_MERGED', details: { priceCredits: 5 } }))).toBeNull();
+    expect(readPriceChangedRefusal(new Error('offline'))).toBeNull();
+    expect(formatPriceChange(1200)).toBe('The price changed to 1,200 credits.');
+    expect(formatPriceChange(1)).toBe('The price changed to 1 credit.');
   });
 
   it("recognises the server's refusal for want of credits, by its status or its code", () => {
@@ -222,14 +251,16 @@ describe('useBundleUnlock', () => {
     renderer.act(() => state.current!.request());
     expect(authState.api.unlockBundleWithCredits).not.toHaveBeenCalled();
     const sheet = showActionSheet.mock.calls[0]?.[0] as { title: string; message: string; actions: Array<{ label: string; onPress: () => void }> };
-    expect(sheet.title).toBe('Unlock this resource?');
-    expect(sheet.message).toBe('900 credits will come off your credit balance right away.');
+    expect(sheet.title).toBe('Unlock this recipe?');
+    expect(sheet.message).toBe('900 credits will come off your balance.');
     expect(sheet.actions.map((action) => action.label)).toEqual(['Unlock for 900 credits']);
 
     renderer.act(() => sheet.actions[0]!.onPress());
     await settle();
 
-    expect(authState.api.unlockBundleWithCredits).toHaveBeenCalledWith('post-1');
+    // The price the buyer confirmed goes with the spend, so a reprice in
+    // between charges nothing (S3).
+    expect(authState.api.unlockBundleWithCredits).toHaveBeenCalledWith('post-1', 900);
     expect(authState.updateCredits).toHaveBeenCalledWith(1100);
     expect(onUnlocked).toHaveBeenCalledTimes(1);
   });
@@ -243,8 +274,8 @@ describe('useBundleUnlock', () => {
     await settle();
     expect(showActionSheet).not.toHaveBeenCalled();
     expect(showConfirmDialog).toHaveBeenCalledWith({
-      title: 'Unlock this resource?',
-      message: '900 credits will come off your credit balance right away.',
+      title: 'Unlock this recipe?',
+      message: '900 credits will come off your balance.',
       confirmLabel: 'Unlock for 900 credits',
     });
     expect(authState.api.unlockBundleWithCredits).not.toHaveBeenCalled();
@@ -261,7 +292,7 @@ describe('useBundleUnlock', () => {
     const { state } = renderHook({ target: paid, onLeave });
 
     expect(state.current!.shortfall).toBe(800);
-    expect(state.current!.shortfallMessage).toBe('You need 800 more credits for this unlock.');
+    expect(state.current!.shortfallMessage).toBe('You need 800 more credits.');
     expect(state.current!.offersCredits).toBe(true);
 
     renderer.act(() => state.current!.request());
@@ -322,7 +353,7 @@ describe('useBundleUnlock', () => {
     const { state } = renderHook({ target: paid });
 
     expect(state.current!.shortfall).toBe(800);
-    expect(state.current!.shortfallMessage).toBe('You need 800 more credits for this unlock.');
+    expect(state.current!.shortfallMessage).toBe('You need 800 more credits.');
   });
 
   it('applies the spendable figure the unlock answers with', async () => {
@@ -454,5 +485,131 @@ describe('useBundleUnlock', () => {
 
     renderer.act(() => state.current!.request());
     expect(router.push).toHaveBeenCalledWith('/auth');
+  });
+});
+
+describe('a price that moved under the buyer (S3)', () => {
+  it('says so, has the hosts read the recipe again, and asks again at the new price', async () => {
+    authState.api.unlockBundleWithCredits
+      .mockRejectedValueOnce(priceChangedError(1200))
+      .mockResolvedValueOnce({ success: true, entitlement: 'post_resource_unlock', credits: 800 });
+    const onUnlocked = vi.fn();
+    const { invalidate, state } = renderHook({ target: paid, onUnlocked });
+
+    renderer.act(() => state.current!.request());
+    renderer.act(() => (showActionSheet.mock.calls[0]?.[0] as SheetRequest).actions[0]!.onPress());
+    await settle();
+
+    // Nothing was charged; the buyer is told, in credits, and asked again.
+    expect(authState.api.unlockBundleWithCredits).toHaveBeenCalledTimes(1);
+    expect(authState.api.unlockBundleWithCredits).toHaveBeenLastCalledWith('post-1', 900);
+    expect(onUnlocked).not.toHaveBeenCalled();
+    expect(state.current!.error).toBe('The price changed to 1,200 credits.');
+    expect(state.current!.priceChanged).toBe(true);
+    expect(state.current!.priceLabel).toBe('1,200 credits');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['post-resource-bundle', 'post-1', 'asset-1'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['marketplace-resource', 'asset-1'] });
+    expect(showActionSheet).toHaveBeenCalledTimes(2);
+    const again = showActionSheet.mock.calls[1]?.[0] as { title: string; message: string; actions: Array<{ label: string; onPress: () => void }> };
+    expect(again.title).toBe('Unlock this recipe?');
+    expect(again.message).toBe('The price changed to 1,200 credits. 1,200 credits will come off your balance.');
+    expect(again.actions.map((action) => action.label)).toEqual(['Unlock for 1,200 credits']);
+
+    renderer.act(() => again.actions[0]!.onPress());
+    await settle();
+
+    expect(authState.api.unlockBundleWithCredits).toHaveBeenLastCalledWith('post-1', 1200);
+    expect(onUnlocked).toHaveBeenCalledTimes(1);
+    expect(state.current!.error).toBeNull();
+  });
+
+  it('asks again through the dialog for a host drawn in a Modal', async () => {
+    authState.api.unlockBundleWithCredits.mockRejectedValueOnce(priceChangedError(1200));
+    showConfirmDialog.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const { state } = renderHook({ target: paid, confirmWith: 'dialog' });
+
+    renderer.act(() => state.current!.request());
+    await settle();
+    await settle();
+
+    expect(showActionSheet).not.toHaveBeenCalled();
+    expect(showConfirmDialog).toHaveBeenLastCalledWith({
+      title: 'Unlock this recipe?',
+      message: 'The price changed to 1,200 credits. 1,200 credits will come off your balance.',
+      confirmLabel: 'Unlock for 1,200 credits',
+    });
+    // Declined: nothing more is spent, and the new price stays on the button.
+    expect(authState.api.unlockBundleWithCredits).toHaveBeenCalledTimes(1);
+    expect(state.current!.priceLabel).toBe('1,200 credits');
+  });
+
+  it('keeps the new price until the host reads it, then follows the host', async () => {
+    authState.api.unlockBundleWithCredits.mockRejectedValueOnce(priceChangedError(1200));
+    const { state, update } = renderHook({ target: paid });
+
+    renderer.act(() => state.current!.request());
+    renderer.act(() => (showActionSheet.mock.calls[0]?.[0] as SheetRequest).actions[0]!.onPress());
+    await settle();
+    expect(state.current!.priceLabel).toBe('1,200 credits');
+
+    // The host's read of the recipe catches up, then moves again.
+    update({ target: { ...paid, priceUsdCents: 1200 } });
+    expect(state.current!.priceLabel).toBe('1,200 credits');
+    update({ target: { ...paid, priceUsdCents: 1500 } });
+    expect(state.current!.priceLabel).toBe('1,500 credits');
+  });
+
+  it('asks nothing when the new price is beyond the balance, and offers credits instead', async () => {
+    authState.credits = 1000;
+    authState.marketplaceSpendableCredits = 1000;
+    authState.api.unlockBundleWithCredits.mockRejectedValueOnce(priceChangedError(1200));
+    const { state } = renderHook({ target: paid });
+
+    renderer.act(() => state.current!.request());
+    renderer.act(() => (showActionSheet.mock.calls[0]?.[0] as SheetRequest).actions[0]!.onPress());
+    await settle();
+
+    expect(showActionSheet).toHaveBeenCalledTimes(1);
+    expect(state.current!.error).toBe('The price changed to 1,200 credits.');
+    expect(state.current!.shortfall).toBe(200);
+    expect(state.current!.shortfallMessage).toBe('You need 200 more credits.');
+    expect(state.current!.offersCredits).toBe(true);
+  });
+
+  it('sends no price when the host could not say one, as builds before the change did', async () => {
+    authState.api.unlockBundleWithCredits.mockResolvedValue({ success: true, entitlement: 'post_resource_unlock', credits: 1100 });
+    showConfirmDialog.mockResolvedValue(true);
+    const { state } = renderHook({ target: { ...paid, priceUsdCents: null, priceLabel: '900 credits' }, confirmWith: 'dialog' });
+
+    renderer.act(() => state.current!.request());
+    await settle();
+
+    expect(authState.api.unlockBundleWithCredits).toHaveBeenCalledWith('post-1', undefined);
+  });
+});
+
+describe('after an unlock', () => {
+  it('says "Recipe unlocked" with the way to Unlocked recipes, from every host', async () => {
+    authState.api.unlockFreeBundle.mockResolvedValue({ success: true, free: true, alreadyProcessed: false });
+    const before = readRecipeUnlockedNotice();
+    const { state } = renderHook({ target: free });
+
+    renderer.act(() => state.current!.request());
+    await settle();
+
+    const shown = readRecipeUnlockedNotice();
+    expect(shown).not.toBeNull();
+    expect(shown).not.toBe(before);
+  });
+
+  it('says nothing when the unlock fails', async () => {
+    authState.api.unlockFreeBundle.mockRejectedValue(new Error('offline'));
+    const before = readRecipeUnlockedNotice();
+    const { state } = renderHook({ target: free });
+
+    renderer.act(() => state.current!.request());
+    await settle();
+
+    expect(readRecipeUnlockedNotice()).toBe(before);
   });
 });

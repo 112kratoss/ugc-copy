@@ -79,15 +79,15 @@ describe('NsfwPostNotice', () => {
   it('tells the page when the original appears and when Hide covers it again', async () => {
     const onRevealedChange = vi.fn();
     const tree = renderNotice(onRevealedChange);
-    expect(onRevealedChange).toHaveBeenLastCalledWith(false);
+    expect(onRevealedChange).toHaveBeenLastCalledWith(false, null);
 
     await reveal(tree);
-    expect(onRevealedChange).toHaveBeenLastCalledWith(true);
+    expect(onRevealedChange).toHaveBeenLastCalledWith(true, expect.objectContaining({ id: 'post-1' }));
     const texts = tree.root.findAll((node) => String(node.type) === 'text').map((node) => node.props.children);
     expect(texts).toContain('The original');
 
     renderer.act(() => { (button(tree, 'secondary-button', 'Hide this post').props.onPress as () => void)(); });
-    expect(onRevealedChange).toHaveBeenLastCalledWith(false);
+    expect(onRevealedChange).toHaveBeenLastCalledWith(false, null);
   });
 
   it('covers the post again after ten minutes, and says so', async () => {
@@ -95,12 +95,12 @@ describe('NsfwPostNotice', () => {
     const onRevealedChange = vi.fn();
     const tree = renderNotice(onRevealedChange);
     await reveal(tree);
-    expect(onRevealedChange).toHaveBeenLastCalledWith(true);
+    expect(onRevealedChange).toHaveBeenLastCalledWith(true, expect.objectContaining({ id: 'post-1' }));
 
     renderer.act(() => { vi.advanceTimersByTime(10 * 60 * 1000 - 1); });
-    expect(onRevealedChange).toHaveBeenLastCalledWith(true);
+    expect(onRevealedChange).toHaveBeenLastCalledWith(true, expect.objectContaining({ id: 'post-1' }));
     renderer.act(() => { vi.advanceTimersByTime(1); });
-    expect(onRevealedChange).toHaveBeenLastCalledWith(false);
+    expect(onRevealedChange).toHaveBeenLastCalledWith(false, null);
   });
 
   it('covers the post when the app leaves the foreground, and says so', async () => {
@@ -109,7 +109,7 @@ describe('NsfwPostNotice', () => {
     await reveal(tree);
 
     renderer.act(() => { for (const listener of mocks.appStateListeners) listener('background'); });
-    expect(onRevealedChange).toHaveBeenLastCalledWith(false);
+    expect(onRevealedChange).toHaveBeenLastCalledWith(false, null);
   });
 
   it('fills the column it is given with the revealed media', async () => {
@@ -124,3 +124,46 @@ describe('NsfwPostNotice', () => {
     expect(preview?.props.width).toBe(360);
   });
 });
+
+// D4 (2026-10-27): after a reveal the recipe is reachable.
+describe('NsfwPostNotice and the recipe', () => {
+  const asset = { id: 'asset-7', postId: 'post-1', title: 'Kit', accessMode: 'paid', priceUsdCents: 900, previewText: '', allowRemix: false };
+
+  it('hands the page the revealed post, and nothing once it is covered again', async () => {
+    const revealed = { id: 'post-1', title: 'The original', body: '', mediaItems: [], nsfwRevealed: true, asset };
+    mocks.revealNsfwPost.mockResolvedValue({ success: true, item: revealed });
+    const onRevealedChange = vi.fn();
+    const tree = renderNotice(onRevealedChange);
+
+    await reveal(tree);
+    expect(onRevealedChange).toHaveBeenLastCalledWith(true, revealed);
+
+    renderer.act(() => { (button(tree, 'secondary-button', 'Hide this post').props.onPress as () => void)(); });
+    expect(onRevealedChange).toHaveBeenLastCalledWith(false, null);
+  });
+
+  it("offers the post's recipe once revealed, and opens it", async () => {
+    mocks.revealNsfwPost.mockResolvedValue({
+      success: true,
+      item: { id: 'post-1', title: 'The original', body: '', mediaItems: [], nsfwRevealed: true, asset },
+    });
+    const onOpenRecipe = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<NsfwPostNotice postId="post-1" width={360} onOpenRecipe={onOpenRecipe} />);
+    });
+    expect(tree.root.findAll((node) => String(node.type) === 'primary-button' && node.props.label === 'View recipe')).toHaveLength(0);
+
+    await reveal(tree);
+    renderer.act(() => { (button(tree, 'primary-button', 'View recipe').props.onPress as () => void)(); });
+    expect(onOpenRecipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers nothing more for a revealed post without a recipe', async () => {
+    const tree = renderNotice(vi.fn());
+    await reveal(tree);
+
+    expect(tree.root.findAll((node) => String(node.type) === 'primary-button' && node.props.label === 'View recipe')).toHaveLength(0);
+  });
+});
+

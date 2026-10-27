@@ -11,6 +11,9 @@ type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 const routerPush = vi.hoisted(() => vi.fn());
 const mutate = vi.hoisted(() => vi.fn());
 const showActionSheet = vi.hoisted(() => vi.fn());
+// The last attempt, as React Query keeps it: the hook shows an attempt's
+// refusal only on the bundle it was made for.
+const mutationState = vi.hoisted(() => ({ error: null as unknown, variables: undefined as unknown }));
 
 const authState = vi.hoisted(() => ({
   api: { resolvePostResourceFileUrl: vi.fn() },
@@ -73,7 +76,7 @@ vi.mock('@/lib/pricing', async (importOriginal) => ({
 vi.mock('@/lib/unlock-cache', () => ({ refreshUnlockedBundleCaches: vi.fn() }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useMutation: () => ({ mutate, isPending: false, error: null }),
+  useMutation: () => ({ mutate, isPending: false, error: mutationState.error, variables: mutationState.variables }),
   useQuery: () => ({ data: queryState.data, error: queryState.error, isError: Boolean(queryState.error), isLoading: queryState.isLoading, refetch: vi.fn() }),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
@@ -106,7 +109,7 @@ function renderScreen() {
   return tree;
 }
 
-const PROMOTIONAL_NOTE = "Welcome and referral credits can't be spent on creator resources.";
+const PROMOTIONAL_NOTE = "Welcome and referral credits can't be spent on recipes.";
 
 /** A text node's words, however JSX split them into children. */
 function textOf(node: renderer.ReactTestInstance) {
@@ -133,6 +136,8 @@ beforeEach(() => {
   queryState.data = paidDetail();
   queryState.error = null;
   queryState.isLoading = false;
+  mutationState.error = null;
+  mutationState.variables = undefined;
 });
 
 describe('marketplace asset screen (HIG S18)', () => {
@@ -147,7 +152,7 @@ describe('marketplace asset screen (HIG S18)', () => {
     expect(showActionSheet).toHaveBeenCalledTimes(1);
 
     const request = showActionSheet.mock.calls[0]?.[0] as { message: string; actions: Array<{ label: string; onPress?: () => void }> };
-    expect(request.message).toBe('900 credits will come off your credit balance right away.');
+    expect(request.message).toBe('900 credits will come off your balance.');
     request.actions[0]?.onPress?.();
     expect(mutate).toHaveBeenCalledTimes(1);
   });
@@ -178,7 +183,7 @@ describe('marketplace asset screen (HIG S18)', () => {
 
     expect(textOf(balanceLine(tree))).toBe('Costs 900 credits · Balance 0');
     expect(balanceLine(tree).props.color).toBe('warning');
-    expect(texts(tree)).toContain(`You need 900 more credits for this unlock. ${PROMOTIONAL_NOTE}`);
+    expect(texts(tree)).toContain(`You need 900 more credits. ${PROMOTIONAL_NOTE}`);
     // Said once, with the shortfall.
     expect(texts(tree).filter((text) => text.includes(PROMOTIONAL_NOTE))).toHaveLength(1);
 
@@ -240,7 +245,7 @@ describe('marketplace asset screen (HIG S18)', () => {
 
     const get = tree.root.findAll((node) => String(node.type) === 'primary-button')[0];
     if (!get) throw new Error('No free unlock button');
-    expect(String(get.props.label)).toContain('Free');
+    expect(get.props.label).toBe('Get free recipe');
 
     renderer.act(() => { (get.props.onPress as () => void)(); });
     expect(showActionSheet).not.toHaveBeenCalled();
@@ -268,12 +273,15 @@ describe('marketplace asset screen recipe words', () => {
     expect(tree.root.findAll((node) => String(node.type) === 'primary-button')[0]?.props.label).toBe('Unlock for 900 credits');
   });
 
-  it('tells a buyer the recipe is theirs and unlocked', () => {
+  it('tells a buyer the recipe is unlocked and on their account', () => {
     queryState.data = { ...paidDetail(), viewerCanAccess: true, viewerHasPurchased: true, viewerIsOwner: false };
     const tree = renderScreen();
 
-    expect(texts(tree)).toEqual(expect.arrayContaining(['Your recipe', 'Unlocked']));
+    expect(texts(tree)).toEqual(expect.arrayContaining(['In this recipe', 'Unlocked', 'This recipe is on your account.']));
+    // "Your recipe" is the creator's own (glossary, 2026-10-27).
+    expect(texts(tree)).not.toContain('Your recipe');
     expect(texts(tree)).not.toContain('Owner access');
+    expect(texts(tree).some((text) => /resource/i.test(text))).toBe(false);
   });
 
   it('tells the creator they read it as its owner, not that they unlocked it', () => {
@@ -291,6 +299,7 @@ describe('marketplace asset screen recipe words', () => {
     queryState.error = new ApiError('Not found', 404);
     const gone = renderScreen();
     expect(statusTitles(gone)).toEqual(['Recipe unavailable']);
+    expect(gone.root.findAll((node) => String(node.type) === 'status-block')[0]?.props.body).toBe('This recipe may be unlisted, private, or removed.');
     expect(sectionTitle(gone)).toBeUndefined();
     expect(gone.root.findAll((node) => String(node.type) === 'detail-skeleton')).toHaveLength(0);
 
@@ -323,3 +332,65 @@ describe('marketplace asset screen recipe words', () => {
     expect(statusTitles(tree)).toEqual([]);
   });
 });
+
+// Recipe audit 2026-10-27: B-F19 (the creator's blurb printed twice), B-F3
+// (Remix sold with the recipe never named), B-F10 (one action, many words),
+// S3 (a price that moved under the buyer).
+describe('marketplace asset screen after the recipe audit', () => {
+  function textCount(tree: renderer.ReactTestRenderer, value: string) {
+    return texts(tree).filter((text) => text === value).length;
+  }
+
+  it('prints the creator\'s line once when the preview repeats the summary', () => {
+    queryState.data = { ...paidDetail(), summary: 'Three looks from one prompt.', previewText: 'Three looks from one prompt.' };
+    const tree = renderScreen();
+
+    expect(textCount(tree, 'Three looks from one prompt.')).toBe(1);
+  });
+
+  it('prints a preview that says something else under the summary, and no filler without one', () => {
+    queryState.data = { ...paidDetail(), summary: 'Three looks.', previewText: 'Includes the prompt.' };
+    const both = renderScreen();
+    expect(texts(both)).toEqual(expect.arrayContaining(['Three looks.', 'Includes the prompt.']));
+
+    queryState.data = { ...paidDetail(), summary: 'Three looks.', previewText: '' };
+    const summaryOnly = renderScreen();
+    expect(texts(summaryOnly).filter((text) => text.startsWith('This recipe includes'))).toEqual([]);
+  });
+
+  it('names the Remix a recipe comes with, before and after unlocking', () => {
+    queryState.data = { ...paidDetail(), allowRemix: true };
+    const locked = renderScreen();
+    expect(locked.root.findAll((node) => String(node.type) === 'pill').map((node) => node.props.label)).toContain('Remix included');
+
+    queryState.data = { ...paidDetail(), allowRemix: true, viewerCanAccess: true, viewerHasPurchased: true };
+    const unlocked = renderScreen();
+    expect(unlocked.root.findAll((node) => String(node.type) === 'pill').map((node) => node.props.label)).toContain('Remix included');
+
+    queryState.data = { ...paidDetail(), allowRemix: false };
+    const without = renderScreen();
+    expect(without.root.findAll((node) => String(node.type) === 'pill').map((node) => node.props.label)).not.toContain('Remix included');
+  });
+
+  it('asks a signed-out reader to sign in to unlock the recipe', () => {
+    authState.user = null;
+    const tree = renderScreen();
+
+    expect(texts(tree)).toContain('Sign in to unlock this recipe.');
+    expect(texts(tree).some((text) => /resource/i.test(text))).toBe(false);
+  });
+
+  it('says the price moved, not that the unlock failed, when the creator repriced it', () => {
+    mutationState.variables = { postId: 'post-1', resourceId: 'asset-1', accessMode: 'paid', priceUsdCents: 900 };
+    mutationState.error = Object.assign(new Error('The price changed to 1200 credits.'), {
+      status: 409,
+      code: 'RESOURCE_PRICE_CHANGED',
+      details: { success: false, code: 'RESOURCE_PRICE_CHANGED', error: 'The price changed to 1200 credits.', priceCredits: 1200 },
+    });
+    const tree = renderScreen();
+
+    const notice = tree.root.findAll((node) => String(node.type) === 'status-block')[0];
+    expect(notice?.props).toMatchObject({ title: 'Price changed', body: 'The price changed to 1,200 credits.' });
+  });
+});
+

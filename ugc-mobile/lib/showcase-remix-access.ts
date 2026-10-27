@@ -30,7 +30,12 @@ export function getShowcaseRemixAccess(item: ShowcaseFeedItem): ShowcaseRemixAcc
   if (item.remixCapability && item.remixCapability !== 'unlock_required') return null;
   // These remixes open on the web; an unlock would lead nowhere in the app.
   if (item.remixTarget === 'workflow' || item.remixTarget === 'text_template') return null;
-  if (!item.asset?.allowRemix) return null;
+  if (!item.asset) return null;
+  // Since 2026-10-27 a creation post's published recipe always comes with its
+  // Remix, and every read says `allowRemix: true` for it. The server's own
+  // `unlock_required` is the same answer, so it stands even over a summary that
+  // still carries the stored flag.
+  if (item.remixCapability !== 'unlock_required' && !item.asset.allowRemix) return null;
 
   return item.asset.accessMode === 'free' ? 'free-unlock' : 'paid-unlock';
 }

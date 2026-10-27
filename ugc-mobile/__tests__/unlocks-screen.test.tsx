@@ -28,6 +28,7 @@ const useMatureReveal = vi.hoisted(() => vi.fn((_needed: boolean) => reveal.curr
 
 vi.mock('expo-router', () => ({
   router: { push: routerPush, replace: vi.fn(), dismissTo: routerDismissTo, canGoBack: () => true },
+  Stack: { Screen: (props: MockProps) => React.createElement('stack-screen', props) },
 }));
 
 vi.mock('react-native', () => ({
@@ -369,9 +370,40 @@ describe('loading and empty states (03-6, 03-10)', () => {
     loaded([]);
     const tree = renderScreen();
 
-    expect(tree.root.findAll((node) => String(node.type) === 'status-block').map((node) => node.props.title)).toEqual(['No recipes yet']);
+    expect(tree.root.findAll((node) => String(node.type) === 'status-block').map((node) => node.props.title)).toEqual(['No unlocked recipes yet']);
     const browse = tree.root.find((node) => String(node.type) === 'primary-button' && node.props.label === 'Browse recipes');
     renderer.act(() => { (browse.props.onPress as () => void)(); });
     expect(routerDismissTo).toHaveBeenCalledWith('/(tabs)');
   });
 });
+
+// Recipe audit B-F9: the library was "Your Recipes" here and "Unlocks" on the
+// web. It is "Unlocked recipes" on both; the header holds the short form, as a
+// title stays under 15 characters (hig-navigation-chrome).
+describe('the library name', () => {
+  it('titles the screen Unlocked, under the menu row that says Unlocked recipes', () => {
+    const tree = renderScreen();
+    expect(tree.root.findAll((node) => String(node.type) === 'stack-screen')[0]?.props.options).toMatchObject({ title: 'Unlocked' });
+  });
+
+  it('names what a signed-out reader would find here in recipe words', () => {
+    authUser.current = null;
+    const tree = renderScreen();
+
+    const heading = tree.root.findAll((node) => String(node.type) === 'section-title')[0]?.props;
+    expect(heading).toMatchObject({
+      title: 'Sign in to see your unlocked recipes.',
+      body: 'Recipes you unlock from other creators are kept here.',
+    });
+    expect(tree.root.findAll((node) => String(node.type) === 'stack-screen')[0]?.props.options).toMatchObject({ title: 'Unlocked' });
+  });
+
+  it('says what lands here in recipe words when the library is empty', () => {
+    loaded([]);
+    const tree = renderScreen();
+
+    expect(tree.root.findAll((node) => String(node.type) === 'status-block')[0]?.props.body)
+      .toBe('When you unlock a recipe from a creator, it lands here and stays here.');
+  });
+});
+

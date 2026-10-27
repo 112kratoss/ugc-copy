@@ -46,7 +46,8 @@ import { useAppForeground } from '@/lib/app-foreground';
 import { buildFeedFeedbackMenu, canHideFeedCreator, isOwnFeedPost } from '@/lib/feed-feedback-menu';
 import { hideCreatorLabel } from '@/lib/hide-creator-label';
 import { buildImmersiveShowcaseItems, immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
-import { feedReadMoreSection, type FeedReadMoreSection } from '@/lib/feed-read-more';
+import { feedReadMoreSection } from '@/lib/feed-read-more';
+import type { PostDetailsSection } from '@/lib/post-details-view-model';
 import type { NativeMenuModel } from '@/lib/native-menu';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { SHOWCASE_DRAW_DISTANCE } from '@/lib/media-performance';
@@ -628,7 +629,7 @@ export function HomeDashboard() {
     setActiveChipId(chipId);
   };
 
-  const openPost = (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null, initialPage?: 'details', initialSection?: FeedReadMoreSection) => {
+  const openPost = (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null, initialPage?: 'details', initialSection?: PostDetailsSection) => {
     // The reel reads this very delivery from the lane and files its dwell as
     // the reader leaves the post. The server keeps a delivery's first dwell,
     // which would otherwise be the card's seconds before the tap, filed as
@@ -657,7 +658,7 @@ export function HomeDashboard() {
    * through other showcase posts — so a written post opens its own screen
    * rather than being dropped into a reel of other people's media.
    */
-  const openCard = (card: HomeFeedCard, options: { comments?: boolean; initialPage?: 'details'; initialSection?: FeedReadMoreSection; zoom?: AppleZoomOpen | null; recordOpen?: boolean } = {}) => {
+  const openCard = (card: HomeFeedCard, options: { comments?: boolean; initialPage?: 'details'; initialSection?: PostDetailsSection; zoom?: AppleZoomOpen | null; recordOpen?: boolean } = {}) => {
     // Every way into the post is an `open` but the recipe chip, which reports
     // its resources opening instead (`resource_open`, as the web defines it).
     if (options.recordOpen !== false) recordFeedEvent(card.item, 'open');
@@ -671,6 +672,9 @@ export function HomeDashboard() {
         comments: options.comments,
         // Comments written on the post's screen are credited to this delivery.
         deliveryId: card.item.recommendation?.deliveryId,
+        // The note's own page already prints its text in full, so only the
+        // recipe chip goes on to Details, where the recipe is (B-F6).
+        ...(options.initialSection === 'resources' ? { initialPage: 'details' as const, initialSection: 'resources' as const } : {}),
         postId: card.item.id,
       }) as never);
       return;
@@ -1014,7 +1018,8 @@ export function HomeDashboard() {
         onShare={() => void shareItem(card.item)}
         onAssetPress={() => {
           recordResourceOpen(card.item);
-          openCard(card, { initialPage: 'details', recordOpen: false });
+          // Details leads with the recipe the chip names, as search opens it (B-F6).
+          openCard(card, { initialPage: 'details', initialSection: 'resources', recordOpen: false });
         }}
         onVideoProgress={(progress, durationMs) => (
           recordAttention(attention.recordProgress(card.item, progress, durationMs))

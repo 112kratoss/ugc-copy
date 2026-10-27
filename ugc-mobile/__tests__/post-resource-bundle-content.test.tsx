@@ -105,6 +105,31 @@ function renderContent(element: React.ReactElement) {
   return tree!;
 }
 
+describe('the locked item previews (recipe audit B-F16)', () => {
+  function lockedCard(publicTitle: string, resourceType: PostResourceItem['type'], itemCount: number) {
+    return renderContent(
+      <PostResourceBundleContent
+        lockedPreview={{
+          cardPreviews: [{ sectionId: 's1', publicTitle, resourceType, scope: { kind: 'all' }, itemCount, hasRemix: false }],
+        }}
+        resources={null}
+      />
+    );
+  }
+
+  it('says a card\'s type only where its title does not, and its count only past one', () => {
+    // "Prompt or script" over "Prompt or script · 1 item" said one word three times.
+    expect(textValues(lockedCard('Prompt or script', 'prompt', 1))).toEqual(['Prompt or script']);
+    expect(textValues(lockedCard('The exact prompt', 'prompt', 1))).toEqual(['The exact prompt', 'Prompt or script']);
+    expect(textValues(lockedCard('Reference media', 'reference_image', 3))).toEqual(['Reference media', '3 items']);
+  });
+
+  it('says what stays private in recipe words, and names items, not resources', () => {
+    const tree = renderContent(<PostResourceBundleContent lockedPreview={{ cardPreviews: [] }} resources={null} />);
+    expect(textValues(tree)).toEqual(["What's inside stays private until you unlock this recipe."]);
+  });
+});
+
 describe('PostResourceBundleContent', () => {
   it('shows only explicit public card previews while a package is locked', () => {
     const tree = renderContent(
@@ -159,7 +184,7 @@ describe('PostResourceBundleContent', () => {
     const values = textValues(tree);
     expect(values).toContain('File 1');
     expect(values).toContain('Link 1');
-    expect(values).not.toContain('Resource details stay private until this recipe is unlocked.');
+    expect(values).not.toContain("What's inside stays private until you unlock this recipe.");
   });
 
   it('renders the section description a creator wrote after unlock', () => {
@@ -304,7 +329,7 @@ describe('PostResourceBundleContent', () => {
     );
 
     renderer.act(() => {
-      pressable(tree, 'Resources for output 2').props.onPress();
+      pressable(tree, 'Items for output 2').props.onPress();
     });
     const values = textValues(tree);
     expect(values).toContain('Shared guide');
@@ -326,11 +351,11 @@ describe('PostResourceBundleContent', () => {
     );
 
     renderer.act(() => {
-      pressable(tree, 'Resources for output 1').props.onPress();
+      pressable(tree, 'Items for output 1').props.onPress();
     });
 
     const values = textValues(tree);
-    expect(values).toContain('No resources apply to this output.');
+    expect(values).toContain('No items apply to this output.');
     expect(values).not.toContain('Second image prompt');
   });
 
@@ -358,7 +383,7 @@ describe('PostResourceBundleContent', () => {
     );
 
     renderer.act(() => {
-      pressable(tree, 'Resources for output 2').props.onPress();
+      pressable(tree, 'Items for output 2').props.onPress();
     });
 
     const values = textValues(tree);
@@ -404,7 +429,7 @@ describe('PostResourceBundleContent', () => {
     );
 
     renderer.act(() => {
-      pressable(tree, 'Resources for output 2').props.onPress();
+      pressable(tree, 'Items for output 2').props.onPress();
     });
     expect(textValues(tree)).toContain('Latest output');
 
@@ -418,7 +443,7 @@ describe('PostResourceBundleContent', () => {
     });
 
     expect(textValues(tree)).toContain('Purchased output');
-    expect(textValues(tree)).not.toContain('No resources apply to this output.');
+    expect(textValues(tree)).not.toContain('No items apply to this output.');
   });
 
   it('shows a saved generation setup as settings and copies the raw note', async () => {

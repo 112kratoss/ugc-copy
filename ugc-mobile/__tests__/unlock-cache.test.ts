@@ -52,6 +52,21 @@ describe('applyBundleUnlockToItem', () => {
     expect(applyBundleUnlockToItem(legacy, 'post-123').canRemix).toBe(true);
   });
 
+  // S4 (recipe audit 2026-10-27): a recipe the viewer has reads "Unlocked" on
+  // its card instead of its price, from the moment it is unlocked here.
+  it('marks the recipe as the viewer\'s, whether or not it opened Remix', () => {
+    const recipe = { id: 'asset-123', postId: 'post-123', title: 'Kit', accessMode: 'paid' as const, priceUsdCents: 900, previewText: '', allowRemix: true };
+    expect(applyBundleUnlockToItem(feedItem({ asset: recipe }), 'post-123').asset).toMatchObject({ viewerHasUnlocked: true });
+    // An upload's recipe opens no Remix, and is still the viewer's now.
+    const upload = feedItem({ generationId: null, canRemix: false, remixCapability: 'unsupported', asset: recipe });
+    const patched = applyBundleUnlockToItem(upload, 'post-123');
+    expect(patched.asset).toMatchObject({ viewerHasUnlocked: true });
+    expect(patched).toMatchObject({ canRemix: false, remixCapability: 'unsupported' });
+    // The owner's open post, too, keeps its Remix as it was.
+    const open = applyBundleUnlockToItem(feedItem({ canRemix: true, remixCapability: 'public', asset: recipe }), 'post-123');
+    expect(open).toMatchObject({ canRemix: true, remixCapability: 'public', asset: { viewerHasUnlocked: true } });
+  });
+
   it('leaves other posts, open posts and posts with nothing to remix alone', () => {
     const other = feedItem({ id: 'post-999' });
     const open = feedItem({ canRemix: true, remixCapability: 'public' });
