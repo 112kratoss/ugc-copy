@@ -9,15 +9,22 @@
  * imports.
  */
 
+/** The resolution a run shows: the one its mode names ("Pro 1080p"), else its own setting. */
+function shownVideoResolution(modeLabel: string, resolution: string): string {
+  return (modeLabel.match(/(?:\d{3,4}p|4k)/i)?.[0] ?? resolution).toUpperCase();
+}
+
 /**
- * A video's resolution, or the mode that names one ("Pro 1080p"), then its ratio and
- * its length: "720P · 16:9 · 5s". With neither, the first part is left out.
+ * A video's resolution, or the mode that names one ("Pro 1080p"), then its ratio, its
+ * length and its sound: "480P · 9:16 · 5s · Sound off". With neither resolution, the
+ * first part is left out; on a model with no sound to switch, the last.
  */
 export function videoSettingsSummary({
   modeLabel,
   resolution,
   aspectRatio,
   durationSeconds,
+  sound = null,
 }: {
   /** The chosen mode's label, or its value where it has none; only a resolution it names is read. */
   modeLabel: string;
@@ -26,9 +33,31 @@ export function videoSettingsSummary({
   aspectRatio: string;
   /** The whole run's: a multi-shot run's is its shots' together. */
   durationSeconds: number;
+  /** Whether the run makes sound, on a model that can switch it; null where it cannot. */
+  sound?: boolean | null;
 }): string {
-  const shownResolution = modeLabel.match(/(?:\d{3,4}p|4k)/i)?.[0] ?? resolution;
-  return [shownResolution.toUpperCase(), aspectRatio, `${durationSeconds}s`].filter(Boolean).join(' · ');
+  return [
+    shownVideoResolution(modeLabel, resolution),
+    aspectRatio,
+    `${durationSeconds}s`,
+    sound === null ? '' : sound ? 'Sound on' : 'Sound off',
+  ].filter(Boolean).join(' · ');
+}
+
+/**
+ * A video run's resolution and length alone, "480P · 5s": what a narrow chip keeps of
+ * the settings, and what a model row says its price is for.
+ */
+export function videoRunShortSummary({
+  modeLabel,
+  resolution,
+  durationSeconds,
+}: {
+  modeLabel: string;
+  resolution: string;
+  durationSeconds: number;
+}): string {
+  return [shownVideoResolution(modeLabel, resolution), `${durationSeconds}s`].filter(Boolean).join(' · ');
 }
 
 /**

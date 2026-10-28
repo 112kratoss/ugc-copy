@@ -37,6 +37,11 @@ export const MODEL_CATALOG_BUDGETS = {
   details: 131072,
 } as const;
 /**
+ * The most runs one price-list request carries (`POST /api/generation-models/quotes`):
+ * a whole settings panel or a whole model list. A client splits a longer list.
+ */
+export const GENERATION_MODEL_QUOTE_BATCH_MAX = 48;
+/**
  * Model IDs and revisions share one character set on every route, cursor and
  * client, so an ID that a client would send is one the server will accept.
  */

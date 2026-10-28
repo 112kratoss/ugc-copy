@@ -26,6 +26,7 @@ vi.mock('@/lib/server-helpers', () => ({
 
 import { GET } from '@/app/api/generation-models/route';
 import { POST } from '@/app/api/generation-models/quote/route';
+import { POST as POST_QUOTES } from '@/app/api/generation-models/quotes/route';
 
 describe('GET /api/generation-models', () => {
   it('returns a cacheable compatible catalog with an ETag', async () => {
@@ -181,5 +182,48 @@ describe('POST /api/generation-models/quote', () => {
       p_limit: 240,
       p_window_seconds: 600,
     });
+  });
+});
+
+describe('POST /api/generation-models/quotes', () => {
+  beforeEach(() => {
+    mocks.createServiceClient.mockClear();
+    mocks.rpc.mockClear();
+    mocks.rpc.mockResolvedValue({
+      data: { allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0, resetAt: '2026-10-28T12:00:00.000Z' },
+      error: null,
+    });
+  });
+
+  it('prices many runs in one no-store request, each as the single quote does', async () => {
+    const motion = {
+      kind: 'motion',
+      modelId: 'kling-2.6',
+      settings: { resolution: '1080p', duration: 10, characterOrientation: 'video' },
+      inputCounts: { images: 1, videos: 1, audios: 0 },
+    };
+    const response = await POST_QUOTES(new NextRequest('http://localhost/api/generation-models/quotes', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '203.0.113.10', 'x-request-id': 'quotes-1' },
+      body: JSON.stringify({
+        quotes: [motion, { ...motion, settings: { ...motion.settings, resolution: '720p' } }, { kind: 'image', modelId: 'grok-imagine-image', settings: { aspectRatio: '21:9' } }],
+      }),
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('quotes-1');
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.rpc).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'generation-model:quote-batch',
+      p_subject_key: '203.0.113.10',
+      p_limit: 120,
+      p_window_seconds: 600,
+    });
+    expect(body.quotes.map((entry: { ok: boolean; quote?: { costCredits: number }; code?: string }) => (
+      entry.ok ? entry.quote?.costCredits : entry.code
+    ))).toEqual([180, expect.any(Number), 'INVALID_MODEL_SETTINGS']);
+    expect(body.quotes[1].quote.costCredits).toBeLessThan(180);
   });
 });

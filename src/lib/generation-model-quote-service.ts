@@ -32,6 +32,13 @@ export type GenerationModelQuoteServiceResult =
     resetAt?: string;
   };
 
+/**
+ * A quote refused, as the single quote and the batch (`generation-model-quote-batch-service.ts`)
+ * both answer it: the batch answers a run's refusal in the run's place, and its whole
+ * request's (the limit) as the single quote does.
+ */
+export type GenerationModelQuoteRefusal = Extract<GenerationModelQuoteServiceResult, { ok: false }>;
+
 type CreateGenerationModelQuoteInput = {
   body: Partial<GenerationModelQuoteInput>;
   rateLimitKey: string;
@@ -43,27 +50,43 @@ function isGenerationModelKind(value: unknown): value is GenerationModelKind {
   return value === 'image' || value === 'video' || value === 'motion';
 }
 
-export async function createGenerationModelQuote({
-  body,
-  rateLimitKey,
-  rateLimitClient,
-  platform = 'web',
-}: CreateGenerationModelQuoteInput): Promise<GenerationModelQuoteServiceResult> {
-  if (!isGenerationModelKind(body.kind) || typeof body.modelId !== 'string' || !body.modelId) {
-    return {
-      ok: false,
-      status: 422,
-      code: 'INVALID_MODEL_SETTINGS',
-      error: 'A valid kind and modelId are required.',
-      fieldErrors: {},
-    };
-  }
+/** Whether a body names a run the catalog can price: a known kind and a model id. */
+export function isQuotableRun(value: unknown): value is GenerationModelQuoteInput {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const run = value as Partial<GenerationModelQuoteInput>;
+  return isGenerationModelKind(run.kind) && typeof run.modelId === 'string' && run.modelId.length > 0;
+}
 
+export const INVALID_QUOTE_RUN: GenerationModelQuoteRefusal = {
+  ok: false,
+  status: 422,
+  code: 'INVALID_MODEL_SETTINGS',
+  error: 'A valid kind and modelId are required.',
+  fieldErrors: {},
+};
+
+/** What of a run the catalog prices, and nothing else of the body it came in. */
+export function quoteInputOf(run: GenerationModelQuoteInput): GenerationModelQuoteInput {
+  return {
+    kind: run.kind,
+    modelId: run.modelId,
+    schemaVersion: run.schemaVersion,
+    settings: run.settings,
+    inputCounts: run.inputCounts,
+    inputMetadata: run.inputMetadata,
+    catalogRevision: run.catalogRevision,
+  };
+}
+
+/** The refusal of a request past its limit, or null when it may be priced. */
+export async function refuseQuoteOverLimit(
+  rateLimitClient: GenerationModelQuoteRateLimitClient,
+  limit: Omit<Parameters<typeof enforceBackendRateLimit>[1], 'key'>,
+  rateLimitKey: string,
+): Promise<GenerationModelQuoteRefusal | null> {
   try {
-    await enforceBackendRateLimit(rateLimitClient, {
-      ...GENERATION_MODEL_QUOTE_RATE_LIMIT,
-      key: rateLimitKey,
-    });
+    await enforceBackendRateLimit(rateLimitClient, { ...limit, key: rateLimitKey });
+    return null;
   } catch (error) {
     if (error instanceof BackendRateLimitError) {
       return {
@@ -87,38 +110,46 @@ export async function createGenerationModelQuote({
       fieldErrors: {},
     };
   }
+}
 
-  try {
-    return {
-      ok: true,
-      quote: await quotePublishedGenerationModel({
-        kind: body.kind,
-        modelId: body.modelId,
-        schemaVersion: body.schemaVersion,
-        settings: body.settings,
-        inputCounts: body.inputCounts,
-        inputMetadata: body.inputMetadata,
-        catalogRevision: body.catalogRevision,
-      }, { platform }),
-    };
-  } catch (error) {
-    if (error instanceof CatalogError) {
-      return {
-        ok: false,
-        status: error.status,
-        code: error.code,
-        error: error.message,
-        fieldErrors: error.fieldErrors,
-      };
-    }
-
-    logBackendError('authoritative_generation_model_catalog_quote_failed', { error: error });
+/** A run the catalog did not price: its own refusal, or pricing not to be had now (the caller logs that). */
+export function quoteRefusal(error: unknown): GenerationModelQuoteRefusal {
+  if (error instanceof CatalogError) {
     return {
       ok: false,
-      status: 503,
-      code: 'CATALOG_UNAVAILABLE',
-      error: 'Generation pricing is temporarily unavailable. Refresh the model catalog and try again.',
-      fieldErrors: {},
+      status: error.status,
+      code: error.code,
+      error: error.message,
+      fieldErrors: error.fieldErrors,
     };
+  }
+
+  return {
+    ok: false,
+    status: 503,
+    code: 'CATALOG_UNAVAILABLE',
+    error: 'Generation pricing is temporarily unavailable. Refresh the model catalog and try again.',
+    fieldErrors: {},
+  };
+}
+
+export async function createGenerationModelQuote({
+  body,
+  rateLimitKey,
+  rateLimitClient,
+  platform = 'web',
+}: CreateGenerationModelQuoteInput): Promise<GenerationModelQuoteServiceResult> {
+  if (!isQuotableRun(body)) return INVALID_QUOTE_RUN;
+
+  const overLimit = await refuseQuoteOverLimit(rateLimitClient, GENERATION_MODEL_QUOTE_RATE_LIMIT, rateLimitKey);
+  if (overLimit) return overLimit;
+
+  try {
+    return { ok: true, quote: await quotePublishedGenerationModel(quoteInputOf(body), { platform }) };
+  } catch (error) {
+    if (!(error instanceof CatalogError)) {
+      logBackendError('authoritative_generation_model_catalog_quote_failed', { error: error });
+    }
+    return quoteRefusal(error);
   }
 }

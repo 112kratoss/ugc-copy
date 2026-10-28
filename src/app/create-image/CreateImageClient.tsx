@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Sparkles, Loader2, Download, Image as ImageIcon, Check, Plus } from 'lucide-react';
+import { Sparkles, Loader2, Download, Image as ImageIcon, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
@@ -25,6 +25,7 @@ import {
 import {
     CreatorAddTile,
     CreatorBackgroundRunLine,
+    CreatorBalanceNote,
     CreatorBarAction,
     CreatorCanvas,
     CreatorCanvasFrame,
@@ -32,10 +33,12 @@ import {
     CreatorColumnLayout,
     CreatorMentionPanel,
     CreatorModelChip,
+    CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorReferenceRow,
     CreatorResultActions,
     CreatorSettingChoices,
+    CreatorSettingsFootNote,
     CreatorSettingSwitch,
     CreatorTemplatesTile,
     CreatorToolTabs,
@@ -43,13 +46,30 @@ import {
     CreatorVisitorNote,
     CREATOR_VISITOR_CANVAS_HINT,
 } from '@/components/CreatorColumn';
+import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
+import { referenceKeepWords, samePriceForEach } from '../../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
+import {
+    fitImageFormToModel,
+    imageRunOnModel,
+    imageRunSummary,
+    type ImageFormSettings,
+    type ImageRunOnModel,
+} from '@/lib/creator-image-candidates';
+import {
+    listedFromQuote,
+    NO_SETTINGS_VARIANTS,
+    optionPricesOf,
+    settingsVariants,
+    smallestOverBalance,
+    useQuotePrices,
+} from '@/lib/use-quote-prices';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
-import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
+import CatalogAdditionalControls, { useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
@@ -405,6 +425,8 @@ export default function CreateImageClient({
     const [isPreparingPublish, setIsPreparingPublish] = useState(false);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+    // Open settings price each of their options; the bar says when they open and close.
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const modelCatalog = useWebGenerationModelCatalog({ kind: 'image', selectedIds: [selectedModel], pickerOpen: isModelDropdownOpen });
     const catalogDescriptor = modelCatalog.catalog?.models.find(item => item.id === selectedModel);
     const refetchModelCatalog = modelCatalog.refetch;
@@ -593,32 +615,20 @@ export default function CreateImageClient({
         setActiveMentionQuery(getMentionQueryAtCaret(nextPrompt, fallbackCaret));
     };
 
-    // When model or aspect changes, clamp model-specific controls.
+    // When model or aspect changes, clamp model-specific controls, by the rule the model
+    // list prices each model with (`fitImageFormToModel`).
     useEffect(() => {
         if (!modelCatalog.detailsReady) return;
-
-        const nextAspectRatio = (model.aspectRatios as readonly string[]).includes(aspectRatio)
-            ? aspectRatio
-            : catalogChoiceDefault(catalogDescriptor, 'aspectRatio', model.aspectRatios[0]);
-        if (nextAspectRatio !== aspectRatio) {
-            setAspectRatio(nextAspectRatio);
+        const fitted = fitImageFormToModel(selectedModel, { aspectRatio, resolution, qualityMode, googleSearch });
+        if (!fitted) return;
+        if (fitted.aspectRatio !== aspectRatio || fitted.resolution !== resolution) {
             setCatalogNotice('Model settings changed. Unsupported choices were reset; your prompt and references are preserved.');
         }
-
-        const nextResolutionOptions = getImageResolutionOptions(selectedModel, nextAspectRatio);
-        if (!nextResolutionOptions.includes(resolution)) {
-            const preferred = catalogChoiceDefault(catalogDescriptor, 'resolution', nextResolutionOptions[0]) as ImageResolution;
-            setResolution(nextResolutionOptions.includes(preferred) ? preferred : nextResolutionOptions[0]);
-            setCatalogNotice('Model settings changed. Unsupported choices were reset; your prompt and references are preserved.');
-        }
-        if (!model.supportsGoogleSearch) {
-            setGoogleSearch(false);
-        }
-        const qualityModes = getImageQualityModes(selectedModel);
-        if (qualityModes.length > 0 && !qualityModes.includes(qualityMode)) {
-            setQualityMode(catalogChoiceDefault(catalogDescriptor, 'qualityMode', qualityModes[0]) as ImageQualityMode);
-        }
-    }, [aspectRatio, catalogDescriptor, model, modelCatalog.detailsReady, qualityMode, resolution, selectedModel]);
+        if (fitted.aspectRatio !== aspectRatio) setAspectRatio(fitted.aspectRatio);
+        if (fitted.resolution !== resolution) setResolution(fitted.resolution as ImageResolution);
+        if (fitted.googleSearch !== googleSearch) setGoogleSearch(fitted.googleSearch);
+        if (fitted.qualityMode !== qualityMode) setQualityMode(fitted.qualityMode as ImageQualityMode);
+    }, [aspectRatio, googleSearch, modelCatalog.detailsReady, qualityMode, resolution, selectedModel]);
 
     // Close dropdown on click outside
     useEffect(() => {
@@ -1201,6 +1211,45 @@ export default function CreateImageClient({
         ? creditRefusal.message
         : null;
     const showTopUp = insufficientCredits || Boolean(creditRefusalMessage);
+
+    // The model list and the settings priced (owner, 2026-10-28): every model at this run's
+    // settings, as the page lands on it, and every option of the settings, read against the
+    // balance or a visitor's welcome credits.
+    const listBalance = isVisitor ? visitorWelcomeCredits : userCredits;
+    const pageForm = useMemo<ImageFormSettings>(() => ({
+        aspectRatio, resolution, qualityMode, googleSearch: model.supportsGoogleSearch ? googleSearch : false,
+    }), [aspectRatio, resolution, qualityMode, googleSearch, model.supportsGoogleSearch]);
+    const imageModelIdsKey = imageModelOptions.map((option) => option.id).join(',');
+    const ensureModelDetails = modelCatalog.ensureDetails;
+    useEffect(() => {
+        if (isModelDropdownOpen && imageModelIdsKey) ensureModelDetails?.(imageModelIdsKey.split(','));
+    }, [ensureModelDetails, isModelDropdownOpen, imageModelIdsKey]);
+    const modelRuns = useMemo(() => {
+        const catalog = modelCatalog.catalog;
+        const runs = new Map<string, ImageRunOnModel<ImageElementDraft>>();
+        if (!isModelDropdownOpen || !catalog || !imageModelIdsKey) return runs;
+        const detailed = new Set(catalog.models.map((detail) => detail.id));
+        for (const id of imageModelIdsKey.split(',')) {
+            if (id === selectedModel || !detailed.has(id)) continue;
+            const run = imageRunOnModel({ modelId: id, catalogRevision: catalog.revision, form: pageForm, elements });
+            if (run) runs.set(id, run);
+        }
+        return runs;
+    }, [isModelDropdownOpen, modelCatalog.catalog, imageModelIdsKey, selectedModel, pageForm, elements]);
+    // Each option is the run with that option, as the clamp would leave it: a ratio moves
+    // the resolution where the model ties the two (GPT Image 2's 4K is 16:9's alone).
+    const settingsAxes = useMemo<Array<readonly [string, readonly CatalogPrimitive[]]>>(() => [
+        ['aspectRatio', model.aspectRatios],
+        showResolutionControl ? ['resolution', availableResolutions] : ['qualityMode', qualityModes],
+    ], [model.aspectRatios, showResolutionControl, availableResolutions, qualityModes]);
+    const variants = useMemo(() => (settingsOpen ? settingsVariants(quoteRequest, settingsAxes, (settings) => ({
+        ...settings,
+        ...fitImageFormToModel(selectedModel, settings as ImageFormSettings),
+    })) : NO_SETTINGS_VARIANTS), [settingsOpen, quoteRequest, settingsAxes, selectedModel]);
+    const priceOf = useQuotePrices([...[...modelRuns.values()].map((run) => run.quoteInput), ...variants.values()]);
+    const optionPrice = optionPricesOf(variants, priceOf, listBalance, isVisitor ? 'the free credits' : 'your balance');
+    const sameRatioPrice = samePriceForEach(model.aspectRatios.map((ratio) => optionPrice('aspectRatio', ratio)?.cost ?? null));
+    const smallestOver = smallestOverBalance(optionPrice, sameRatioPrice ? settingsAxes.slice(1) : settingsAxes);
     // A page the start keeps refusing at its own price waits for a reload, not another press.
     const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
     const quoteRetry = quoteState.status === 'error' ? <StudioQuoteRetry message={quoteUi.message} onRetry={quoteState.retry} /> : null;
@@ -1804,14 +1853,38 @@ export default function CreateImageClient({
         />
     );
 
+    // The model list's rows: each model's price at this run's settings, what it is for, and
+    // what it keeps of the run's pictures.
+    const selectedPrice = listedFromQuote(quoteState);
+    const pickerRows: PickerModelRow[] = filteredImageModelOptions.map((option) => {
+        const run = modelRuns.get(option.id);
+        const isSelected = option.id === selectedModel;
+        // What each model sends of the pictures on the grid, which stay there for a model that takes them.
+        const kept = isSelected ? runInputs.length : run?.inputs.length ?? null;
+        return {
+            id: option.id,
+            name: option.displayName,
+            description: option.description,
+            price: isSelected
+                ? selectedPrice
+                : run
+                    ? priceOf(run.quoteInput)
+                    : { status: modelCatalog.error || modelCatalog.missingIds.includes(option.id) ? 'unavailable' : 'pending' },
+            summary: isSelected ? imageRunSummary({ resolution, aspectRatio }) : run?.summary ?? null,
+            keeps: kept === null ? null : referenceKeepWords(elements.length, kept),
+        };
+    });
+
     const settingsPanel = (
         <div className="space-y-5">
             <CreatorSettingChoices
                 label="Aspect ratio"
+                hint={sameRatioPrice ? 'Same price for each' : undefined}
                 options={model.aspectRatios}
                 value={aspectRatio}
                 onChange={setAspectRatio}
                 columns={5}
+                optionPrice={sameRatioPrice ? undefined : (value) => optionPrice('aspectRatio', value)}
             />
 
             {showResolutionControl ? (
@@ -1822,6 +1895,7 @@ export default function CreateImageClient({
                     value={resolution}
                     onChange={setResolution}
                     columns={3}
+                    optionPrice={(value) => optionPrice('resolution', value)}
                 />
             ) : qualityModes.length > 0 ? (
                 <CreatorSettingChoices
@@ -1839,6 +1913,7 @@ export default function CreateImageClient({
                     onChange={setQualityMode}
                     columns={qualityModes.length === 3 ? 3 : 2}
                     capitalize
+                    optionPrice={(value) => optionPrice('qualityMode', value)}
                 />
             ) : null}
 
@@ -1850,6 +1925,8 @@ export default function CreateImageClient({
                     onChange={setGoogleSearch}
                 />
             ) : null}
+
+            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} offersTopUp={!isVisitor} />
 
             <CatalogAdditionalControls appearance="panel" descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ aspectRatio, resolution, qualityMode, googleSearch, ...additionalSettings.settings }} inputCounts={{ images: elements.length, videos: 0, audios: 0 }} onChange={additionalSettings.onChange} />
         </div>
@@ -1924,51 +2001,22 @@ export default function CreateImageClient({
                                 resultListLabel="Image models"
                                 resultCount={filteredImageModelOptions.length}
                                 accent="blue"
+                                footer={<CreatorModelPickerFoot />}
                             >
-                                        {filteredImageModelOptions.map((m) => {
-                                            const isActive = selectedModel === m.id;
-                                            return (
-                                                <button
-                                                    key={m.id}
-                                                    type="button"
-                                                    role="option"
-                                                    aria-selected={isActive}
-                                                    onClick={() => {
-                                                        // A notice about the previous model no longer applies.
-                                                        if (m.id !== selectedModel) setCatalogNotice(null);
-                                                        setSelectedModel(m.id as ModelId);
-                                                        setIsModelDropdownOpen(false);
-                                                        setModelSearchQuery('');
-                                                    }}
-                                                    className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${
-                                                        isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'
-                                                    }`}
-                                                >
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="flex items-center gap-2">
-                                                            <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
-                                                                {m.displayName}
-                                                            </span>
-                                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r ${m.badgeColor} text-white`}>
-                                                                {m.badge}
-                                                            </span>
-                                                        </div>
-                                                        <p className="text-xs text-zinc-500 mt-0.5">{m.description}</p>
-                                                        <div className="flex flex-wrap gap-1.5 mt-2">
-                                                            {m.supportsGoogleSearch && (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                                                    Google Search
-                                                                </span>
-                                                            )}
-                                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
-                                                                {m.maxImages > 0 ? `Up to ${m.maxImages} ref images` : 'Prompt only'}
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                    {isActive && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
-                                                </button>
-                                            );
-                                        })}
+                                <CreatorModelPickerRows
+                                    rows={pickerRows}
+                                    selectedId={selectedModel}
+                                    balance={listBalance}
+                                    balanceLabel={isVisitor ? `the ${listBalance} free credits` : `your ${listBalance} credits`}
+                                    accent="image"
+                                    onSelect={(id) => {
+                                        // A notice about the previous model no longer applies.
+                                        if (id !== selectedModel) setCatalogNotice(null);
+                                        setSelectedModel(id as ModelId);
+                                        setIsModelDropdownOpen(false);
+                                        setModelSearchQuery('');
+                                    }}
+                                />
                             </StudioModelPicker>
                         </div>
                         </div>
@@ -2206,9 +2254,14 @@ export default function CreateImageClient({
                         <CreatorColumnBar
                             settingsSummary={settingsSummary}
                             settings={settingsPanel}
+                            settingsFootNote={<CreatorSettingsFootNote cost={currentCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
+                            settingsOpen={settingsOpen}
+                            onSettingsOpenChange={setSettingsOpen}
                             status={barStatus}
                             action={barAction}
-                            note={isVisitor ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={currentCost} /> : undefined}
+                            note={isVisitor
+                                ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={currentCost} />
+                                : userCredits !== null ? <CreatorBalanceNote balance={userCredits} cost={currentCost} /> : undefined}
                         />
                     </>
                 }

@@ -25,6 +25,8 @@ export const quoteStandIn = {
   forAnotherRequest: false,
   /** Every answer is this refusal, as for a catalog that changed under the page. */
   errorCode: null as string | null,
+  /** A price by the request itself, in place of `answers`: a run on each model its own, or one not in yet. */
+  priceFor: null as ((request: GenerationModelQuoteInput) => number | 'pending') | null,
   /** The page's last quote request (a render without one counts). */
   lastRequest(): GenerationModelQuoteInput | null | undefined {
     return quoteStandIn.requests.at(-1);
@@ -40,6 +42,7 @@ export const quoteStandIn = {
     quoteStandIn.answers = [price];
     quoteStandIn.forAnotherRequest = false;
     quoteStandIn.errorCode = null;
+    quoteStandIn.priceFor = null;
   },
 };
 
@@ -55,7 +58,7 @@ export function quoteHookStandIn(RequestError: RequestErrorClass) {
     if (quoteStandIn.errorCode) {
       return { status: 'error' as const, quote: null, error: new RequestError('The model catalog changed.', 409, quoteStandIn.errorCode), key };
     }
-    const answer = quoteStandIn.answers[Math.min(attempt, quoteStandIn.answers.length - 1)];
+    const answer = quoteStandIn.priceFor?.(request) ?? quoteStandIn.answers[Math.min(attempt, quoteStandIn.answers.length - 1)];
     if (answer === 'pending') return { status: 'pending' as const, quote: null, error: null, key };
     if (answer === 'error') {
       return { status: 'error' as const, quote: null, error: new RequestError('Could not calculate generation cost.', 503), key };

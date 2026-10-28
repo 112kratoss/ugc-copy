@@ -21,6 +21,8 @@ export function creatorParameterSummary(
       resolution: draft.resolution,
       aspectRatio: draft.aspectRatio,
       durationSeconds: draft.isMultiShot ? multiShotTotalDuration(draft.multiPrompts) : draft.duration,
+      // Said only where the model has sound to switch, as the web chip says it.
+      sound: model?.controls.some((control) => control.key === 'sound' && control.type === 'boolean') ? draft.sound : null,
     });
   }
   return motionSettingsSummary({

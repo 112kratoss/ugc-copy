@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode } from 'react';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronDown, Download, Images, LayoutTemplate, Loader2, Share2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
@@ -18,6 +18,8 @@ import {
 import { getAccentClasses, IconButton, Text, type UiAccent } from '@/components/DesignSystem';
 import PublicShareButton from '@/components/PublicShareButton';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
+import { PRICING_PLANS } from '@/lib/pricing';
+import type { OptionPrice } from '@/lib/use-quote-prices';
 
 /**
  * The creator pages as the app draws them: one column that holds the whole
@@ -193,6 +195,7 @@ export function CreatorSettingChoices<T extends string>({
   columns,
   accent = 'image',
   capitalize = false,
+  optionPrice,
 }: {
   label: string;
   /** For a group whose options say what it is, as the shot mode's do. */
@@ -206,6 +209,13 @@ export function CreatorSettingChoices<T extends string>({
   columns: keyof typeof CHOICE_COLUMNS;
   accent?: UiAccent;
   capitalize?: boolean;
+  /**
+   * What the run costs with each option, under it: "19", or "23 · +1" in amber past the
+   * balance, with the words a screen reader says ("23 credits, 1 more than your balance";
+   * `optionPricesOf`); null where it is not known yet. An option past the balance stays
+   * selectable: the bar offers a top-up in Generate's place.
+   */
+  optionPrice?: (option: T) => OptionPrice | null;
 }) {
   const labelId = useId();
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -244,6 +254,8 @@ export function CreatorSettingChoices<T extends string>({
       <div role="radiogroup" aria-labelledby={labelId} className={clsx('grid gap-1.5', CHOICE_COLUMNS[columns])}>
         {options.map((option, index) => {
           const checked = index === selectedIndex;
+          const price = optionPrice?.(option) ?? null;
+          const text = optionLabel ? optionLabel(option) : option;
           return (
             <button
               key={option}
@@ -253,19 +265,31 @@ export function CreatorSettingChoices<T extends string>({
               type="button"
               role="radio"
               aria-checked={checked}
+              // One name for the option and its price: read from two pieces, browsers
+              // joined them differently ("4s , 16 credits").
+              aria-label={price ? `${text}, ${price.spoken}` : undefined}
               // One stop in the tab order, on the chosen option (the first while none is).
               tabIndex={checked || (selectedIndex === -1 && index === 0) ? 0 : -1}
               onClick={() => onChange(option)}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={clsx(
                 'ui-focus-ring min-h-10 rounded-ui-md border px-2 text-xs font-bold transition-colors duration-150',
+                optionPrice && 'flex min-h-12 flex-col items-center justify-center gap-0.5 py-1',
                 capitalize && 'capitalize',
                 checked
                   ? selectedClasses
                   : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
-              {optionLabel ? optionLabel(option) : option}
+              <span>{text}</span>
+              {price ? (
+                <span
+                  data-testid="creator-option-price"
+                  className={clsx('text-[11px] font-semibold tabular-nums', price.over !== null ? 'text-amber-300' : 'text-[var(--ui-text-faint)]')}
+                >
+                  {price.text}
+                </span>
+              ) : null}
             </button>
           );
         })}
@@ -333,20 +357,40 @@ export function CreatorSettingSwitch({
  */
 export function CreatorColumnBar({
   settingsSummary,
+  settingsSummaryShort,
   settings,
+  settingsFootNote,
+  settingsOpen,
+  onSettingsOpenChange,
   status,
   action,
   note,
+  stacked = false,
 }: {
   settingsSummary: string;
+  /** What the chip keeps of the summary where it is narrow ("480P · 5s"); the summary is its name either way. */
+  settingsSummaryShort?: string;
   /** The controls the chip opens; null where the model has nothing to set. */
   settings: ReactNode | null;
+  /** At the foot of the open settings, beside Done: what the run costs as set ("This run 19 credits · leaves 3"). */
+  settingsFootNote?: ReactNode;
+  /** Whether the settings are open, where the page keeps it: it prices their options only while they show. */
+  settingsOpen?: boolean;
+  /** Told when the settings open and close. */
+  onSettingsOpenChange?: (open: boolean) => void;
   status?: ReactNode;
   action: ReactNode;
-  /** A quiet line under the buttons: what signing up gives a visitor. */
+  /** A quiet line under the buttons: the balance and what the run leaves of it, or what signing up gives a visitor. */
   note?: ReactNode;
+  /** The action's words need the bar's width ("Switch back to Seedance 2 Mini"): the chip goes above it at every width. */
+  stacked?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const isOpen = settingsOpen ?? ownOpen;
+  const setIsOpen = useCallback((open: boolean) => {
+    setOwnOpen(open);
+    onSettingsOpenChange?.(open);
+  }, [onSettingsOpenChange]);
   const barRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
@@ -368,7 +412,7 @@ export function CreatorColumnBar({
     };
     document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [showsSettings]);
+  }, [setIsOpen, showsSettings]);
 
   // Opened, the panel takes the focus, and its height is what the window has
   // between the top bar and this bar: on a short phone a fixed cap put its top
@@ -415,23 +459,42 @@ export function CreatorColumnBar({
           </div>
         ) : null}
 
-        <div className="flex items-stretch gap-2 p-2">
+        {/* Beside the result (two panes) the chip has a row of its own, so the whole
+            summary fits; in one column it shares the row with Generate, and on a
+            phone it keeps the resolution and length. */}
+        <div className={clsx('flex items-stretch gap-2 p-2', stacked ? 'flex-col' : 'min-[1120px]:flex-col')}>
           {settings !== null ? (
             <button
               ref={chipRef}
               type="button"
-              onClick={() => setIsOpen((open) => !open)}
+              onClick={() => setIsOpen(!isOpen)}
               onKeyDown={onEscape}
               aria-expanded={showsSettings}
               aria-controls={showsSettings ? panelId : undefined}
               aria-label={`Generation settings: ${settingsSummary}`}
-              className="ui-focus-ring flex min-h-12 min-w-0 flex-[0.9] items-center justify-center gap-2 rounded-full bg-[var(--ui-surface-2)] px-3 text-xs font-extrabold text-[var(--ui-text-primary)] transition-[background-color,transform] duration-150 hover:bg-[var(--ui-surface-3)] active:scale-[0.98]"
+              className={clsx(
+                'ui-focus-ring flex min-h-12 min-w-0 flex-[0.9] items-center justify-center gap-2 rounded-full px-3 text-xs font-extrabold text-[var(--ui-text-primary)] transition-[background-color,transform] duration-150 hover:bg-[var(--ui-surface-3)] active:scale-[0.98]',
+                stacked ? 'flex-none' : 'min-[1120px]:flex-none',
+                showsSettings ? 'bg-[var(--ui-surface-3)]' : 'bg-[var(--ui-surface-2)]',
+              )}
             >
               <SlidersHorizontal aria-hidden className="h-4 w-4 shrink-0 text-[var(--ui-text-secondary)]" />
-              <span data-testid="creator-settings-summary" className="truncate">{settingsSummary}</span>
+              <span
+                data-testid="creator-settings-summary"
+                className={clsx('truncate', settingsSummaryShort && 'max-sm:hidden')}
+              >
+                {settingsSummary}
+              </span>
+              {settingsSummaryShort ? (
+                <span aria-hidden className="truncate sm:hidden">{settingsSummaryShort}</span>
+              ) : null}
+              <ChevronDown
+                aria-hidden
+                className={clsx('h-4 w-4 shrink-0 text-[var(--ui-text-muted)] transition-transform duration-200', !showsSettings && 'rotate-180')}
+              />
             </button>
           ) : null}
-          <div className="flex min-w-0 flex-[1.2]">{action}</div>
+          <div className={clsx('flex min-w-0 flex-[1.2]', stacked ? 'flex-none' : 'min-[1120px]:flex-none')}>{action}</div>
         </div>
         {note ? (
           <div data-creator-bar-note className="px-4 pb-3 text-xs leading-5 text-[var(--ui-text-muted)]">
@@ -474,6 +537,19 @@ export function CreatorColumnBar({
               <IconButton label="Close settings" icon={X} onClick={() => closeSettings(true)} className="-mr-1" />
             </div>
             {settings}
+            {settingsFootNote !== undefined ? (
+              // Held at the foot of the panel while its options scroll, as the artboard has it.
+              <div className="sticky -bottom-4 -mx-4 -mb-4 mt-4 flex items-center justify-between gap-3 border-t border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-4 py-3 text-sm text-[var(--ui-text-secondary)]">
+                <div aria-live="polite" className="min-w-0">{settingsFootNote}</div>
+                <button
+                  type="button"
+                  onClick={() => closeSettings(true)}
+                  className="ui-button ui-button-secondary ui-focus-ring min-h-11 shrink-0 px-4"
+                >
+                  Done
+                </button>
+              </div>
+            ) : null}
           </motion.div>
         ) : null}
       </AnimatePresence>
@@ -601,6 +677,144 @@ export function CreatorTopUpNotice({ cost, balance, message }: {
         ) : message}
       </p>
     </div>
+  );
+}
+
+/** "1 credit", "19 credits". */
+export function creditsWords(count: number): string {
+  return `${count} ${count === 1 ? 'credit' : 'credits'}`;
+}
+
+/** The smallest credit pack, as a top-up names it: "500 credits for ₹415", or "500 for ₹415" `short`. */
+export function smallestCreditPackLabel({ short = false }: { short?: boolean } = {}): string {
+  const pack = PRICING_PLANS.reduce((smallest, plan) => (plan.credits < smallest.credits ? plan : smallest));
+  const credits = pack.credits.toLocaleString('en-IN');
+  return `${short ? credits : `${credits} credits`} for ₹${pack.priceInr.toLocaleString('en-IN')}`;
+}
+
+const NOTE_STRONG_CLASS = 'font-bold text-[var(--ui-text-secondary)]';
+
+/** A link in the line under the bar: the words' size, its press area the 44px of a control. */
+export const CREATOR_NOTE_LINK_CLASS =
+  "ui-focus-ring relative rounded-sm font-semibold text-[var(--ui-text-secondary)] underline underline-offset-4 after:absolute after:inset-x-0 after:-inset-y-3 after:content-[''] hover:text-[var(--ui-text-primary)]";
+
+/** Under a signed-in creator's bar: the balance, and what this run leaves of it ("Balance 22 · leaves 3"). */
+export function CreatorBalanceNote({ balance, cost }: { balance: number; cost: number | null }) {
+  return (
+    <div className="flex flex-wrap justify-between gap-x-4 gap-y-1">
+      <span>Balance <strong className={NOTE_STRONG_CLASS}>{balance}</strong></span>
+      {cost !== null && cost <= balance ? (
+        <span>Leaves <strong className={NOTE_STRONG_CLASS}>{balance - cost}</strong></span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * At the foot of the open settings, beside Done (owner, 2026-10-28): what the run costs as
+ * set and what it leaves of the balance ("This run 19 credits · leaves 6"), or how far past
+ * it the run is. A visitor's is read against the welcome credits.
+ */
+export function CreatorSettingsFootNote({ cost, costLabel, balance, isVisitor }: {
+  /** The run's price; null while it is not known, when `costLabel` says why. */
+  cost: number | null;
+  costLabel: string;
+  balance: number | null;
+  isVisitor: boolean;
+}) {
+  if (cost === null) return <span>{costLabel}</span>;
+  return (
+    <span>
+      This run <strong className="text-[var(--ui-text-primary)]">{creditsWords(cost)}</strong>
+      {balance === null
+        ? null
+        : cost <= balance
+          ? ` · leaves ${balance - cost}`
+          : ` · ${cost - balance} more than ${isVisitor ? 'the free credits' : 'your balance'}`}
+    </span>
+  );
+}
+
+/**
+ * Under the settings while an option shown costs more than the balance: what "+N" means
+ * (the least such N), and that those options can still be chosen.
+ */
+export function CreatorOverBalanceLegend({ over, balance, isVisitor, offersTopUp }: {
+  over: number | null;
+  balance: number | null;
+  isVisitor: boolean;
+  /** Such an option puts Top up in Generate's place (not where the bar offers something else, or for a visitor). */
+  offersTopUp: boolean;
+}) {
+  if (over === null || balance === null) return null;
+  return (
+    <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
+      “+{over}” means {creditsWords(over)} more than {isVisitor ? `the ${balance} free credits` : `your balance of ${balance}`}.
+      {offersTopUp ? ' Those options stay selectable, and show Top up in place of Generate.' : ' Those options stay selectable.'}
+    </p>
+  );
+}
+
+/**
+ * In Generate's place while the balance is short of every video model's run (owner,
+ * 2026-10-28): an image first, on the image model that costs least, with the prompt.
+ */
+export function CreatorMakeImageInstead({ href, fromCost }: { href: string; fromCost: number }) {
+  return (
+    <Link href={href} className={CREATOR_BAR_PRIMARY_CLASS}>
+      <span className="truncate">{`Make an image instead · from ${creditsWords(fromCost)}`}</span>
+    </Link>
+  );
+}
+
+/** Under that bar: the balance, where videos start, and a top-up second. */
+export function CreatorLowBalanceNote({ balance, videosFrom }: { balance: number; videosFrom: number }) {
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+      <span>Balance <strong className={NOTE_STRONG_CLASS}>{balance}</strong> · videos from {videosFrom}</span>
+      <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>
+        Top up: {smallestCreditPackLabel({ short: true })}
+      </Link>
+    </div>
+  );
+}
+
+/** Over the column while the balance is short of every video: what it does cover. */
+export function CreatorLowBalanceNotice({ balance, videosFrom, image }: {
+  balance: number;
+  videosFrom: number;
+  /** The image model that costs least, and its price; null while unknown. */
+  image: { name: string; cost: number } | null;
+}) {
+  const coversImage = image !== null && image.cost <= balance;
+  return (
+    <div role="status" className="rounded-ui-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-4">
+      <p className="text-sm font-bold text-[var(--ui-text-primary)]">
+        {creditsWords(balance)}{coversImage ? ': enough for images' : ''}
+      </p>
+      <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
+        Videos start at {creditsWords(videosFrom)}.
+        {image ? ` ${image.name} makes a picture for ${image.cost}, and you can turn a picture into a video later.` : ''}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Over the bar on a remix moved back to its original model when the balance is short
+ * of it: what the original needs, and what the run fitted to the balance would cost.
+ */
+export function CreatorFitNotice({ original, balance, fitted }: {
+  original: { name: string; cost: number };
+  balance: number;
+  fitted: { name: string; cost: number; keeps: string };
+}) {
+  const strong = 'font-bold text-[var(--ui-text-primary)]';
+  return (
+    <p className="text-[var(--ui-text-secondary)]">
+      {original.name} needs <strong className={strong}>{creditsWords(original.cost)}</strong>; you have <strong className={strong}>{balance}</strong>.
+      {' '}{fitted.name} runs {fitted.keeps} for <strong className={strong}>{fitted.cost}</strong>.
+    </p>
   );
 }
 

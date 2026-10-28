@@ -19,6 +19,7 @@ import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 // What the server quotes when it starts a run: for "the price of the run the page sends".
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
+import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, queryGenerateButton } from './fixtures/creator-column-bar';
 
 // One router for every render: a new object per render restarts effects that read it.
@@ -143,6 +144,13 @@ vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
 }));
 
+// The creators' price lists answer from the stand-in: nothing is priced unless a test says so.
+// The module's pure helpers stay its own.
+vi.mock('@/lib/use-quote-prices', async (importOriginal) => {
+  const { quotePricesHookStandIn } = await import('./fixtures/quote-prices-stand-in');
+  return { ...await importOriginal<typeof import('@/lib/use-quote-prices')>(), useQuotePrices: quotePricesHookStandIn };
+});
+
 vi.mock('@/lib/persisted-creator-draft', () => ({
   loadCreatorDraft: loadCreatorDraftMock,
   saveCreatorDraft: saveCreatorDraftMock,
@@ -160,16 +168,17 @@ vi.mock('@/lib/use-deployment-refresh', async (importOriginal) => ({
   },
 }));
 
-// Signed in as user-1, unless a test signs out to use the page as a visitor.
-const authState = vi.hoisted(() => ({ signedIn: true }));
+// Signed in as user-1 with 10,000 credits, unless a test signs out to use the page as a
+// visitor or sets a balance of its own.
+const authState = vi.hoisted(() => ({ signedIn: true, credits: 10_000, token: 'test-token' }));
 
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
-    credits: authState.signedIn ? 10_000 : null,
+    credits: authState.signedIn ? authState.credits : null,
     isLoading: false,
     session: authState.signedIn
       ? {
-        access_token: 'test-token',
+        access_token: authState.token,
         user: { id: 'user-1' },
       }
       : null,
@@ -441,6 +450,9 @@ describe('CreateVideoClient Kling video elements', () => {
 
   beforeEach(() => {
     authState.signedIn = true;
+    authState.credits = 10_000;
+    authState.token = 'test-token';
+    priceListStandIn.reset();
     // A start kept from another test would be replayed when the page opens.
     window.sessionStorage.clear();
     deployState.newBuildAvailable = false;
@@ -2623,7 +2635,7 @@ describe('CreateVideoClient Kling video elements', () => {
       const request = quoteStandIn.lastRequest()!;
       expect(request.settings).toMatchObject({ aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false });
       expect(screen.getByRole('button', { name: /^Generation settings: / }))
-        .toHaveAccessibleName('Generation settings: 480P · 16:9 · 5s');
+        .toHaveAccessibleName('Generation settings: 480P · 16:9 · 5s · Sound off');
       // The server's own price for the request the page asks.
       expect(serverCatalog.quoteGenerationModel({ ...request, catalogRevision: undefined }).costCredits).toBe(19);
     });
@@ -2650,7 +2662,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(quoteStandIn.lastRequest()!.settings)
         .toMatchObject({ aspectRatio: '9:16', resolution: '480p', duration: 6, sound: true }));
       expect(screen.getByRole('button', { name: /^Generation settings: / }))
-        .toHaveAccessibleName('Generation settings: 480P · 9:16 · 6s');
+        .toHaveAccessibleName('Generation settings: 480P · 9:16 · 6s · Sound on');
     });
 
     it('keeps a ratio and a length the link asked for, even the stand-in\'s own', async () => {
@@ -4545,11 +4557,11 @@ describe('CreateVideoClient Kling video elements', () => {
     it('reads the run\'s settings back on the bar\'s chip, and follows a change made in them', async () => {
       render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
       const chip = await screen.findByRole('button', { name: /^Generation settings: / });
-      expect(chip).toHaveAccessibleName(/^Generation settings: (\d{3,4}P · )?\d+:\d+ · \d+s$/);
+      expect(chip).toHaveAccessibleName(/^Generation settings: (\d{3,4}P · )?\d+:\d+ · \d+s · Sound (on|off)$/);
 
       chooseAspectRatio('9:16');
 
-      expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName(/ · 9:16 · \d+s$/);
+      expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName(/ · 9:16 · \d+s · Sound (on|off)$/);
     });
 
     it('keeps the prompt the run was sent with under its clip while the next one is written', async () => {
@@ -4691,6 +4703,350 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(icon).toContain('lucide-images');
         expect(icon).not.toContain('lucide-download');
       }
+    });
+  });
+
+  // PR 2 of the creator redesign (owner, 2026-10-28): every model and every option priced, the
+  // balance read under the bar, a remix fitted to the balance and an image offered first when
+  // the balance is short of every video. Prices come from the price lists' stand-in.
+  describe('prices and affordability', () => {
+    const MINI = { id: 'seedance-2-mini', kind: 'video', displayName: 'Seedance 2 Mini', description: 'Lower cost' };
+    const summaries = [
+      MINI,
+      { id: 'seedance-1.5-pro', kind: 'video', displayName: 'Seedance 1.5 Pro', description: 'Resolution, duration and audio controls' },
+      { id: 'kling-3.0-video', kind: 'video', displayName: 'Kling 3.0 Cinematic', description: 'Test video model' },
+      { id: 'seedance-2-5', kind: 'video', displayName: 'Seedance 2.5', description: 'Runs up to 30s' },
+    ];
+    // Production's prices for these runs (release mini-default-video-20261028).
+    const MINI_PER_LENGTH: Record<number, number> = { 4: 16, 5: 19, 6: 23, 7: 27, 8: 31, 9: 35, 10: 38, 11: 42, 12: 46, 13: 50, 14: 54, 15: 57 };
+    function videoPrice(request: GenerationModelQuoteInput): number {
+      const duration = Number(request.settings?.duration);
+      if (request.modelId === 'seedance-2-mini') return request.settings?.resolution === '720p' ? 41 : MINI_PER_LENGTH[duration];
+      if (request.modelId === 'seedance-1.5-pro') return 7;
+      if (request.modelId === 'seedance-2-5') return 28 * duration;
+      return 14 * duration;
+    }
+
+    beforeEach(() => {
+      modelCatalogState.summaries = summaries;
+      modelCatalogState.extraModels = [{ ...MINI, controls: [], capabilities: {}, inputs: {} }];
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      quoteStandIn.priceFor = videoPrice;
+      priceListStandIn.price = pricedBy(videoPrice);
+    });
+
+    function openModelList() {
+      fireEvent.click(document.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')!);
+    }
+
+    function rowNames(group: HTMLElement) {
+      return within(group).getAllByRole('option').map((option) => option.querySelector('span span')?.textContent?.trim());
+    }
+
+    it('prices each model at this run\'s settings, and splits the list by the balance', async () => {
+      authState.credits = 22;
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(costShown()).toBe('19 credits'));
+
+      openModelList();
+
+      const fits = screen.getByRole('group', { name: 'Fits your 22 credits' });
+      expect(rowNames(fits)).toEqual(['Seedance 2 Mini', 'Seedance 1.5 Pro']);
+      expect(within(fits).getByRole('option', { name: /Seedance 1\.5 Pro/ })).toHaveTextContent('7 credits480P · 4s');
+      expect(within(fits).getByRole('option', { name: /Seedance 2 Mini/ })).toHaveTextContent('19 credits480P · 5s');
+      const needsMore = screen.getByRole('group', { name: 'Needs more credits' });
+      expect(rowNames(needsMore)).toEqual(['Kling 3.0 Cinematic', 'Seedance 2.5']);
+      expect(within(needsMore).getByRole('option', { name: /Seedance 2\.5/ })).toHaveTextContent('140 credits480P · 5s');
+      // Each run is this one moved to its model: Seedance 1.5 Pro makes 4, 8 or 12 seconds.
+      expect(priceListStandIn.askedRuns().find((run) => run.modelId === 'seedance-1.5-pro')?.settings)
+        .toMatchObject({ duration: 4, resolution: '480p', aspectRatio: '16:9' });
+    });
+
+    it('opens a picked model on this run\'s settings where it offers them', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(costShown()).toBe('19 credits'));
+      chooseAspectRatio('9:16');
+
+      chooseModel(document.body, 'Seedance 1.5 Pro');
+
+      // It opened on its first ratio (1:1) and its first length before.
+      await waitFor(() => expect(screen.getByRole('button', { name: /^Generation settings: / }))
+        .toHaveAccessibleName('Generation settings: 480P · 9:16 · 4s · Sound off'));
+    });
+
+    it('prices every option of the settings, past the balance too, and says what the run leaves', async () => {
+      authState.credits = 22;
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(costShown()).toBe('19 credits'));
+
+      fireEvent.click(screen.getByRole('button', { name: /^Generation settings/ }));
+
+      const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+      expect(within(settings).getByRole('radio', { name: '4s, 16 credits' })).toBeInTheDocument();
+      expect(within(settings).getByRole('radio', { name: '5s, 19 credits' })).toBeChecked();
+      expect(within(settings).getByRole('radio', { name: '6s, 23 credits, 1 more than your balance' })).toHaveTextContent('6s23 · +1');
+      expect(within(settings).getByRole('radio', { name: '720p, 41 credits, 19 more than your balance' })).toBeInTheDocument();
+      expect(within(settings).getByRole('radiogroup', { name: 'Aspect ratio' }).parentElement).toHaveTextContent('Same price for each');
+      expect(within(settings).getByRole('switch', { name: /Generated sound/ })).toHaveTextContent('No extra cost on Seedance 2 Mini');
+      expect(settings).toHaveTextContent('“+1” means 1 credit more than your balance of 22.');
+      expect(settings).toHaveTextContent('This run 19 credits · leaves 3');
+
+      // Past the balance, an option is still chosen, and Top up stands in Generate's place.
+      fireEvent.click(within(settings).getByRole('radio', { name: /^6s/ }));
+      await waitFor(() => expect(screen.getByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument());
+      expect(settings).toHaveTextContent('This run 23 credits · 1 more than your balance');
+    });
+
+    it('reads a visitor\'s option prices against the free credits, aloud too', async () => {
+      authState.signedIn = false;
+      render(<CreateVideoClient prefill={{}} visitorWelcomeCredits={22} />);
+      fireEvent.click(await screen.findByRole('button', { name: /^Generation settings: / }));
+
+      const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+      expect(await within(settings).findByRole('radio', { name: '6s, 23 credits, 1 more than the free credits' })).toHaveTextContent('6s23 · +1');
+      expect(settings).toHaveTextContent('“+1” means 1 credit more than the 22 free credits. Those options stay selectable.');
+    });
+
+    it('reads the balance under the bar, and what the run leaves of it', async () => {
+      authState.credits = 22;
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(costShown()).toBe('19 credits'));
+
+      const note = document.querySelector('[data-creator-bar-note]');
+      expect(note).toHaveTextContent('Balance 22');
+      expect(note).toHaveTextContent('Leaves 3');
+    });
+
+    it('offers an image first, with the prompt, when the balance is short of every video', async () => {
+      authState.credits = 3;
+      priceListStandIn.price = pricedBy((request) => (
+        request.kind === 'image' ? (request.modelId === 'z-image' ? 1 : 8) : videoPrice(request)
+      ));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'A paper boat on a sunlit pond' } });
+
+      const offer = await screen.findByRole('link', { name: 'Make an image instead · from 1 credit' });
+      expect(offer).toHaveAttribute('href', '/create-image?model=z-image&prompt=A+paper+boat+on+a+sunlit+pond');
+      expect(queryGenerateButton()).toBeNull();
+      expect(document.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 3 · videos from 7');
+      expect(screen.getByRole('link', { name: 'Top up: 500 for ₹415' })).toHaveAttribute('href', '/pricing');
+      expect(screen.getByText('3 credits: enough for images')).toBeInTheDocument();
+      expect(screen.getByText(/Videos start at 7 credits\. Z-Image makes a picture for 1/)).toBeInTheDocument();
+    });
+
+    // A settings press asks for the run's price again (a debounce and a round trip): the bar
+    // holds what it offers meanwhile, rather than swapping its action and layout and back.
+    it('keeps the image offer in place while a changed setting is being priced', async () => {
+      authState.credits = 3;
+      priceListStandIn.price = pricedBy((request) => (
+        request.kind === 'image' ? (request.modelId === 'z-image' ? 1 : 8) : videoPrice(request)
+      ));
+      render(<CreateVideoClient prefill={{}} />);
+      expect(await screen.findByRole('link', { name: 'Make an image instead · from 1 credit' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
+      const ratios = within(screen.getByRole('radiogroup', { name: /^Aspect ratio/ })).getAllByRole('radio');
+      const other = ratios.find((radio) => radio.getAttribute('aria-checked') === 'false')!;
+      const otherRatio = other.textContent;
+      quoteStandIn.priceFor = (request) => (request.settings?.aspectRatio === otherRatio ? 'pending' : videoPrice(request));
+      fireEvent.click(other);
+
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.settings?.aspectRatio).toBe(otherRatio));
+      expect(screen.getByRole('link', { name: 'Make an image instead · from 1 credit' })).toBeInTheDocument();
+      expect(queryGenerateButton()).toBeNull();
+    });
+
+    // "+N" is explained by the options on screen: a slider shows only its own length's price.
+    it('explains "+N" by the options shown, not by a slider\'s other lengths', async () => {
+      authState.credits = 25;
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(costShown()).toBe('19 credits'));
+      openModelList();
+      fireEvent.click(screen.getByRole('option', { name: /Seedance 2\.5/ }));
+      // Past the 25, Top up stands in Generate's place: the run is read off its quote request.
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5'));
+
+      fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
+      const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+      // Seedance 2.5 makes 4 to 30 s: a slider, at 5 s for 140. Its 4 s (112, "+87") is priced but not shown.
+      await waitFor(() => expect(settings).toHaveTextContent('5s · 140 credits · +115'));
+      expect(settings).toHaveTextContent('“+115” means 115 credits more than your balance of 25.');
+    });
+
+    it('keeps Generate\'s place for a top-up while some video still fits the balance', async () => {
+      authState.credits = 10;
+      priceListStandIn.price = pricedBy((request) => (request.kind === 'image' ? 1 : videoPrice(request)));
+      render(<CreateVideoClient prefill={{}} />);
+
+      expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /Make an image instead/ })).toBeNull();
+    });
+
+    describe('a remix', () => {
+      function remixOf(settings: Record<string, unknown>): RemixSourceBundle {
+        return {
+          generation: { id: 'gen-1', title: 'intense', prompt: 'Two figures face off in a dim hall.', category: 'video', model: 'seedance-2-5' },
+          result: { mediaType: 'video', url: 'https://example.com/intense.mp4' },
+          inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+          workflowSettings: { model: 'seedance-2-5', aspectRatio: '9:16', resolution: '480p', sound: false, ...settings },
+          restoreIssues: [],
+        } as unknown as RemixSourceBundle;
+      }
+
+      it('opens on Seedance 2 Mini at the same length when the balance is short of the original', async () => {
+        authState.credits = 22;
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
+        await waitFor(() => expect(costShown()).toBe('19 credits'));
+        expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 480P · 9:16 · 5s · Sound off');
+
+        // The original is one press away; short of it, the bar offers the fitted run back.
+        fireEvent.click(screen.getByRole('button', { name: 'Use the original · 140 credits' }));
+        expect(await screen.findByText('On the original settings: Seedance 2.5 at 5s.')).toBeInTheDocument();
+        await waitFor(() => expect(document.querySelector('[data-creator-bar-status]'))
+          .toHaveTextContent('Seedance 2.5 needs 140 credits; you have 22. Seedance 2 Mini runs the same prompt and 5s for 19.'));
+        expect(screen.getByRole('link', { name: 'Top up · 500 credits for ₹415' })).toHaveAttribute('href', '/pricing');
+        // Here the bar offers Switch back, not Top up: the "+N" line says only that options stay selectable.
+        fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
+        const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+        await waitFor(() => expect(settings).toHaveTextContent(/more than your balance of 22\. Those options stay selectable\./));
+        expect(settings).not.toHaveTextContent('show Top up in place of Generate');
+        fireEvent.click(within(settings).getByRole('button', { name: 'Done' }));
+
+        fireEvent.click(screen.getByRole('button', { name: 'Switch back to Seedance 2 Mini' }));
+        await waitFor(() => expect(costShown()).toBe('19 credits'));
+      });
+
+      // Owner, 2026-10-28: "Seedance 2 Mini first", then the cheapest model that takes the inputs and fits.
+      describe('beside a model cheaper than Seedance 2 Mini', () => {
+        const klingCheaper = (request: GenerationModelQuoteInput) => (request.modelId === 'kling-3.0-video' ? 12 : videoPrice(request));
+        beforeEach(() => {
+          quoteStandIn.priceFor = klingCheaper;
+          priceListStandIn.price = pricedBy(klingCheaper);
+        });
+
+        it('opens on Seedance 2 Mini, the catalog default, while it fits the balance', async () => {
+          authState.credits = 22;
+          stubRemix(remixOf({ duration: 5 }));
+          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+          expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
+          await waitFor(() => expect(costShown()).toBe('19 credits'));
+        });
+
+        it('opens on the cheapest model that fits when Seedance 2 Mini does not', async () => {
+          authState.credits = 15;
+          stubRemix(remixOf({ duration: 5 }));
+          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+          expect(await screen.findByText(/Fitted to your 15 credits: Kling 3\.0 Cinematic instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
+          await waitFor(() => expect(costShown()).toBe('12 credits'));
+        });
+      });
+
+      // A creator who moves off the original while it is being fitted has chosen.
+      it('keeps the model the creator picks while shorter lengths are being priced', async () => {
+        authState.credits = 22;
+        let shorterPriced = false;
+        priceListStandIn.price = (request) => (
+          request.modelId === 'seedance-2-mini' && Number(request.settings?.duration) < 10 && !shorterPriced
+            ? { status: 'pending' }
+            : pricedBy(videoPrice)(request)
+        );
+        stubRemix(remixOf({ duration: 10 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        // Seedance 2 Mini at 10 s is 38: past the 22, so its shorter lengths are asked for.
+        await waitFor(() => expect(priceListStandIn.askedRuns()
+          .some((run) => run.modelId === 'seedance-2-mini' && Number(run.settings?.duration) === 9)).toBe(true));
+
+        openModelList();
+        fireEvent.click(screen.getByRole('option', { name: /Kling 3\.0 Cinematic/ }));
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('kling-3.0-video'));
+
+        shorterPriced = true;
+        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Two figures face off in a dim hall, slowly.' } });
+        await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue('Two figures face off in a dim hall, slowly.'));
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('kling-3.0-video');
+        expect(screen.queryByText(/Fitted to your/)).toBeNull();
+      });
+
+      it('opens on a model that fits at a length of its own when no shorter length does', async () => {
+        // Seedance 2 Mini is 19 at 5 s and 16 at 4 s, both past 15; Seedance 1.5 Pro makes 4 s for 7.
+        authState.credits = 15;
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByText(/Fitted to your 15 credits: Seedance 1\.5 Pro instead of Seedance 2\.5, at 4s instead of 5s\./)).toBeInTheDocument();
+        await waitFor(() => expect(costShown()).toBe('7 credits'));
+      });
+
+      it('waits for a model list that could not be priced, and fits the remix once it is', async () => {
+        authState.credits = 22;
+        let listPriced = false;
+        priceListStandIn.price = (request) => (listPriced ? pricedBy(videoPrice)(request) : { status: 'unavailable' });
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        expect(await screen.findByText(/Settings pre-filled from "intense"/)).toBeInTheDocument();
+        // Weighed on a list with no price in it: it waits on the original.
+        await act(async () => {});
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5');
+        expect(screen.queryByText(/Fitted to your/)).toBeNull();
+
+        // Asked again half a minute later (useQuotePrices), the list is priced this time.
+        listPriced = true;
+        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Two figures face off in a dim hall, slowly.' } });
+        expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
+      });
+
+      // Supabase renews the session token about hourly: the remix is not loaded again over the fit.
+      it('stays fitted when the session token is renewed', async () => {
+        authState.credits = 22;
+        stubRemix(remixOf({ duration: 5 }));
+        const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini/)).toBeInTheDocument();
+
+        authState.token = 'renewed-token';
+        view.rerender(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        await act(async () => {});
+
+        expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/remix-source'))).toHaveLength(1);
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini');
+        expect(screen.getByText(/Fitted to your 22 credits: Seedance 2 Mini/)).toBeInTheDocument();
+      });
+
+      it('waits for Seedance 2 Mini\'s price before fitting, though its details failed to load', async () => {
+        authState.credits = 22;
+        modelCatalogState.extraModels = [];
+        modelCatalogState.error = new Error('Could not load model details.');
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        expect(await screen.findByText(/Settings pre-filled from "intense"/)).toBeInTheDocument();
+        await act(async () => {});
+
+        // Fitted without it, the remix would have opened on Seedance 1.5 Pro at 4 s.
+        expect(screen.queryByText(/Fitted to your/)).toBeNull();
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5');
+      });
+
+      it('opens on its original while the balance covers it', async () => {
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByText(/Settings pre-filled from "intense"/)).toBeInTheDocument();
+        await waitFor(() => expect(costShown()).toBe('140 credits'));
+        expect(screen.queryByText(/Fitted to your/)).toBeNull();
+      });
+
+      it('shortens the cheapest model when nothing fits at the original\'s length', async () => {
+        authState.credits = 22;
+        stubRemix(remixOf({ duration: 10 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at 5s instead of 10s\./)).toBeInTheDocument();
+        await waitFor(() => expect(costShown()).toBe('19 credits'));
+      });
     });
   });
 });

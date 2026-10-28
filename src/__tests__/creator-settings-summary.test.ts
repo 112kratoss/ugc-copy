@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { motionSettingsSummary, videoSettingsSummary } from '../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
+import { motionSettingsSummary, videoRunShortSummary, videoSettingsSummary } from '../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 
 /**
  * The chip's words, which the web creators and the app's creator bar read from one module
@@ -22,6 +22,22 @@ describe('the video settings chip', () => {
   it('leaves the resolution out for a model that sets none', () => {
     expect(videoSettingsSummary({ modeLabel: 'Fast', resolution: '', aspectRatio: '1:1', durationSeconds: 6 }))
       .toBe('1:1 · 6s');
+  });
+
+  // The redesigned creator's chip (owner, 2026-10-28): "480P · 9:16 · 5s · Sound off".
+  it('says whether the run makes sound, on a model that can switch it', () => {
+    expect(videoSettingsSummary({ modeLabel: '', resolution: '480p', aspectRatio: '9:16', durationSeconds: 5, sound: false }))
+      .toBe('480P · 9:16 · 5s · Sound off');
+    expect(videoSettingsSummary({ modeLabel: '', resolution: '480p', aspectRatio: '9:16', durationSeconds: 5, sound: true }))
+      .toBe('480P · 9:16 · 5s · Sound on');
+    expect(videoSettingsSummary({ modeLabel: '', resolution: '720p', aspectRatio: '16:9', durationSeconds: 5, sound: null }))
+      .toBe('720P · 16:9 · 5s');
+  });
+
+  it('keeps the resolution and length alone for a narrow chip and a model row', () => {
+    expect(videoRunShortSummary({ modeLabel: '', resolution: '480p', durationSeconds: 5 })).toBe('480P · 5s');
+    expect(videoRunShortSummary({ modeLabel: 'Pro (1080p, High Quality)', resolution: '', durationSeconds: 10 })).toBe('1080P · 10s');
+    expect(videoRunShortSummary({ modeLabel: 'Fast', resolution: '', durationSeconds: 8 })).toBe('8s');
   });
 });
 

@@ -450,6 +450,27 @@ export async function quotePublishedGenerationModel(
 }
 
 /**
+ * Quotes many runs against the published catalog, as `quotePublishedGenerationModel`
+ * quotes each, with one projection of the release per schema version for the whole
+ * list: the creators price their model list and settings with it
+ * (`/api/generation-models/quotes`). A run the catalog refuses comes back as its
+ * error, beside the others.
+ */
+export async function quotePublishedGenerationModels(
+  inputs: readonly GenerationModelQuoteInput[],
+  options: { platform: CatalogPlatform },
+): Promise<Array<PromiseSettledResult<GenerationModelQuote>>> {
+  const snapshots = new Map<number, Promise<PublishedGenerationModelCatalogSnapshot>>();
+  const loadSnapshot = (schemaVersion: number) => {
+    const loaded = snapshots.get(schemaVersion)
+      ?? loadPublishedGenerationModelCatalog({ platform: options.platform, schemaVersion });
+    snapshots.set(schemaVersion, loaded);
+    return loaded;
+  };
+  return Promise.allSettled(inputs.map((input) => quoteWithSnapshotLoader(input, loadSnapshot)));
+}
+
+/**
  * Quotes against the exact catalog release named by `revision` instead of the
  * currently published one. This is the trusted-pin path for the run engines:
  * a template version freezes the revision that priced it, so its runs must

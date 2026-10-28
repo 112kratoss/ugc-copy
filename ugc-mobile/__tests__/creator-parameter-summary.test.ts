@@ -48,6 +48,14 @@ describe('the video bar summary', () => {
     expect(creatorParameterSummary(draft, { controls: [toggle] })).toBe('1080P · 9:16 · 5s');
   });
 
+  it('says whether the run makes sound where its model has sound to switch, as the web chip does', () => {
+    const sound = { key: 'sound', label: 'Sound', type: 'boolean' as const, presentation: 'toggle' as const, defaultValue: false };
+    const draft = { ...createDefaultCreationDraft('video'), resolution: '480p', sound: true };
+    expect(creatorParameterSummary(draft, { controls: [sound] })).toBe('480P · 9:16 · 5s · Sound on');
+    expect(creatorParameterSummary({ ...draft, sound: false }, { controls: [sound] })).toBe('480P · 9:16 · 5s · Sound off');
+    expect(creatorParameterSummary(draft, { controls: [] })).toBe('480P · 9:16 · 5s');
+  });
+
   it('gives a multi-shot run\'s length as its shots together, as the request sends them', () => {
     const draft = {
       ...createDefaultCreationDraft('video'),

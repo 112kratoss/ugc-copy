@@ -6,10 +6,8 @@ import { NextResponse } from 'next/server';
 import { createPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { getClientNetworkKey } from '@/lib/client-network-key';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
-import {
-  createGenerationModelQuote,
-  type GenerationModelQuoteServiceResult,
-} from '@/lib/generation-model-quote-service';
+import { createGenerationModelQuote } from '@/lib/generation-model-quote-service';
+import { createQuoteErrorResponse, getQuotePlatform } from '@/lib/generation-model-quote-route-shared';
 import { createServiceClient } from '@/lib/server-helpers';
 
 type GenerationModelQuoteRouteDependencies = {
@@ -28,38 +26,6 @@ function resolveDependencies(dependencies: GenerationModelQuoteRouteDependencies
 
 function getQuoteRateLimitKey(request: Request) {
   return getClientNetworkKey(request.headers);
-}
-
-function getQuotePlatform(request: Request) {
-  return request.headers.get('x-magicbooklet-client') === 'mobile' ? 'mobile' as const : 'web' as const;
-}
-
-function createQuoteErrorResponse(
-  request: Request,
-  result: GenerationModelQuoteServiceResult & { ok: false },
-) {
-  const headers = new Headers(createPrivateNoStoreApiResponseHeaders(request));
-  if (result.retryAfterSeconds !== undefined) {
-    headers.set('Retry-After', String(result.retryAfterSeconds));
-  }
-  if (result.limit !== undefined) {
-    headers.set('X-RateLimit-Limit', String(result.limit));
-  }
-  if (result.remaining !== undefined) {
-    headers.set('X-RateLimit-Remaining', String(result.remaining));
-  }
-  if (result.resetAt) {
-    headers.set('X-RateLimit-Reset', result.resetAt);
-  }
-
-  return NextResponse.json({
-    code: result.code,
-    error: result.error,
-    fieldErrors: result.fieldErrors,
-    ...(result.retryAfterSeconds !== undefined ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
-    ...(result.limit !== undefined ? { limit: result.limit } : {}),
-    ...(result.resetAt ? { resetAt: result.resetAt } : {}),
-  }, { status: result.status, headers });
 }
 
 function createInvalidQuoteRequestResponse(request: Request) {

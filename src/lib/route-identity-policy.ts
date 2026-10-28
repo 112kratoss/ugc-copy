@@ -45,6 +45,10 @@ const GUEST_ROUTES = [
   '/api/generate-video',
   '/api/enhance-prompt',
   '/api/generation-models/quote',
+  // Many runs priced at once (the creators' model list and settings). Like the
+  // single quote it reads no identity, and a signed-out visitor's request, which
+  // carries no token, reaches it.
+  '/api/generation-models/quotes',
   // Starting a run of a published template: the run is the caller's own and
   // its steps spend the caller's credits, like every run action after it.
   // Authoring, testing and publishing a template stay registered below.

@@ -479,6 +479,18 @@ describe('central route identity admission', () => {
     expect(createUserClient).not.toHaveBeenCalled();
   });
 
+  // The creators price their model list and settings in one request (PR 2 of the
+  // redesign), signed out as much as signed in.
+  it('lets a signed-out visitor’s price list through to the batch quote route, which a guest also reaches', async () => {
+    const createUserClient = vi.fn();
+    await expect(guardUserFacingRouteIdentity(
+      new NextRequest('https://magicbooklet.test/api/generation-models/quotes', { method: 'POST' }),
+      { createUserClient },
+    )).resolves.toBeNull();
+    expect(createUserClient).not.toHaveBeenCalled();
+    expect(routeIdentityPolicyForRequest('/api/generation-models/quotes', 'POST')).toBe('guest');
+  });
+
   it('keeps raw auth.getUser inside the one audited server authentication boundary', () => {
     const apiRoot = path.resolve(process.cwd(), 'src/app/api');
     const sourceRoot = path.resolve(process.cwd(), 'src');

@@ -469,6 +469,17 @@ export const GENERATION_MODEL_QUOTE_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * The creators' price lists (`/api/generation-models/quotes`): one request prices a
+ * model list or a settings panel, so it is counted apart from the single quote's 240,
+ * which the price on Generate keeps to itself.
+ */
+export const GENERATION_MODEL_QUOTE_BATCH_RATE_LIMIT = {
+  scope: 'generation-model:quote-batch',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const TEMPORARY_MEDIA_UPLOAD_SIGN_RATE_LIMIT = {
   scope: 'temporary-media-upload:sign',
   limit: 60,
