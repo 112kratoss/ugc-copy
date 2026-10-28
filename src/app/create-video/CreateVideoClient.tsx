@@ -19,6 +19,7 @@ import {
     CreatorCanvas,
     CreatorCanvasFrame,
     CreatorCanvasMedia,
+    parseAspectRatio,
     CreatorCanvasStage,
     CreatorColumnBar,
     CreatorColumnLayout,
@@ -31,7 +32,6 @@ import {
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorReferenceRow,
-    CreatorResultActions,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -47,7 +47,7 @@ import {
     CREATOR_BAR_PRIMARY_CLASS,
     CREATOR_NOTE_LINK_CLASS,
     creatorAddButtonClass,
-    creatorRunChip,
+    creatorCanvasChip,
     creditsWords,
     describeRunFailure,
     smallestCreditPackLabel,
@@ -103,8 +103,9 @@ import {
 } from '@/components/CreatorStudio';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
-import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
+import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreationPublishDetails, useRemixOriginal } from '@/components/CreatorPublish';
+import type { PublishedCreation } from '@/components/usePublishCreation';
+import { creatorCanvasPhase, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
@@ -126,7 +127,6 @@ import {
     type PendingWebStart,
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
-import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { catalogRunQuoteInput, catalogSettingsAtControlDefaults, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import {
     creatorPromptViolation,
@@ -145,7 +145,6 @@ import {
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
 } from '@/lib/remix-source-client';
-import { buildShowcaseDetailPath } from '@/lib/share';
 import {
     getPersistedFile,
     getPersistedImageElementRecords,
@@ -441,53 +440,6 @@ function savedVideoSettingsAtDefaults(draft: Partial<VideoCreatorDraft>, descrip
         ...savedVideoFormValues(draft),
     };
     return catalogSettingsAtControlDefaults(descriptor.controls, (control) => saved[control.key]);
-}
-
-function isPaywallPrefill(value: unknown): value is GenerationPaywallPrefill {
-    return Boolean(value) && typeof value === 'object' && Array.isArray((value as { resourceKinds?: unknown }).resourceKinds);
-}
-
-type CreationPublishDefaults = {
-    generationId: string;
-    title: string;
-    paywallPrefill: GenerationPaywallPrefill | null;
-    /** What the modal suggests a title from when the creation has none. */
-    creation: CreationTitleSource | null;
-};
-
-/**
- * The creation's own title and recipe, for the quick-publish modal: opened without
- * them it published the media alone, while the same creation from Studio offered its
- * recipe. Read from the owner's library entry, as Studio reads it.
- */
-async function loadCreationPublishDefaults(generationId: string, accessToken: string | null | undefined): Promise<CreationPublishDefaults> {
-    const fallback: CreationPublishDefaults = { generationId, title: '', paywallPrefill: null, creation: null };
-    if (!accessToken) return fallback;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    try {
-        const response = await fetch(`/api/generations?${new URLSearchParams({ id: generationId, includeArchived: 'true', limit: '1' })}`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-            cache: 'no-store',
-            signal: controller.signal,
-        });
-        if (!response.ok) return fallback;
-        const payload = await response.json() as { generations?: Array<{ id?: unknown; title?: unknown; paywallPrefill?: unknown }> };
-        const generation = Array.isArray(payload.generations)
-            ? payload.generations.find((item) => item?.id === generationId)
-            : undefined;
-        return {
-            generationId,
-            title: typeof generation?.title === 'string' ? generation.title : '',
-            paywallPrefill: isPaywallPrefill(generation?.paywallPrefill) ? generation.paywallPrefill : null,
-            creation: readCreationTitleSource(generation),
-        };
-    } catch {
-        // Without them the modal still publishes the media; nothing is lost but the prefill.
-        return fallback;
-    } finally {
-        clearTimeout(timeout);
-    }
 }
 
 /** Single shot or multi-shot, as the app's segmented control offers them. */
@@ -1156,6 +1108,8 @@ export default function CreateVideoClient({
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
+    // The post a remix came from, credited in the publish form with Follow (owner, 2026-10-28).
+    const remixOriginal = useRemixOriginal(remixPostId, session?.access_token, userId);
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const prefillAspectRatio = prefill.aspectRatio ?? null;
@@ -1210,11 +1164,10 @@ export default function CreateVideoClient({
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [resolvedOutputVideo, setResolvedOutputVideo] = useState<{ outputUrl: string; url: string } | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
-    const [latestIsPublic, setLatestIsPublic] = useState(false);
-    const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
-    const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
-    const [publishDefaults, setPublishDefaults] = useState<CreationPublishDefaults | null>(null);
-    const [isPreparingPublish, setIsPreparingPublish] = useState(false);
+    // What a publish from the canvas answered, for the creation it published: Posted is drawn from it.
+    const [published, setPublished] = useState<{ generationId: string; post: PublishedCreation } | null>(null);
+    // The creation's title and recipe, read once its run is done, for the publish form.
+    const publishDetails = useCreationPublishDetails(outputVideo ? latestGenerationId : null, session?.access_token);
     const [error, setError] = useState<string | null>(null);
     // Why files just picked were left out: their own line, so it never stands in for a
     // run's error or its background state.
@@ -3843,7 +3796,6 @@ export default function CreateVideoClient({
         quoteState.started(attempt.body as CatalogGenerationRequestPayload);
         try {
             setLatestGenerationId(started.generationId ?? null);
-            setLatestIsPublic(false);
             announceGenerationStarted();
             updateCredits(started.remainingCredits);
             if (reveal) setCanvasRevealKey((key) => key + 1);
@@ -4051,7 +4003,6 @@ export default function CreateVideoClient({
             setIsGenerating(true);
             setError(null);
             setLatestGenerationId(data.id ?? null);
-            setLatestIsPublic(false);
             setRunShape({
                 aspectRatio: null,
                 label: videoModelName(data.model),
@@ -4273,8 +4224,6 @@ export default function CreateVideoClient({
         setCreditRefusal(null);
         setOutputVideo(null);
         setLatestGenerationId(null);
-        setLatestIsPublic(false);
-        setPublishedMeta(null);
         setRunShape({
             aspectRatio: currentAspectRatio,
             label: `${videoModel.displayName} · ${settingsSummary}`,
@@ -4621,18 +4570,6 @@ export default function CreateVideoClient({
             : referenceAudios.map((reference) => ({ kind: 'audio' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void handleRemoveReferenceAudio(reference.id) }))),
     ];
 
-    const openPublishModal = async () => {
-        const generationId = latestGenerationId;
-        if (!generationId) return;
-        if (publishDefaults?.generationId !== generationId) {
-            // Read before the modal opens: it seeds its title from these as it opens.
-            setIsPreparingPublish(true);
-            setPublishDefaults(await loadCreationPublishDefaults(generationId, session?.access_token));
-            setIsPreparingPublish(false);
-        }
-        setIsPublishModalOpen(true);
-    };
-
     if (isLoadingUser) {
         return (
             <div className="ui-page min-h-screen text-[var(--ui-text-primary)] flex items-center justify-center">
@@ -4646,36 +4583,14 @@ export default function CreateVideoClient({
 
     // The run's own prompt, not the form's: the form may hold the next run's by now.
     const runPrompt = runShape?.prompt ?? null;
-    const primarySharePrompt = publishedMeta?.description
-        || runPrompt
-        || prompt.trim()
-        || multiPrompts.map((shot) => shot.prompt.trim()).find(Boolean)
-        || null;
-    const shareTitle = publishedMeta?.title
-        || runPrompt
-        || prompt.trim()
-        || multiPrompts.map((shot) => shot.prompt.trim()).find(Boolean)
-        || `${videoModel.displayName} video`;
-    const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
 
     // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
     // and its chip what the run is and holds.
-    const canvasTitle = outputVideo
-        ? 'Done'
-        : isGenerating
-            ? 'Making your video'
-            : isBackgroundProcessing || !runFailure
-                ? 'Your video'
-                : 'It didn’t finish';
-    const canvasChip = outputVideo
-        ? creatorRunChip(runShape?.label, runShape?.cost)
-        : isGenerating
-            ? creatorRunChip(runShape?.label, runShape?.cost)
-            : runFailure && !isBackgroundProcessing
-                ? creatorRunChip(runShape?.label, null)
-                : null;
-    const showsEmptyCanvas = !outputVideo && !isGenerating && !isBackgroundProcessing && !runFailure;
-    const showsRunFailure = runFailure !== null && !outputVideo && !isGenerating && !isBackgroundProcessing;
+    const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputVideo), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
+    const canvasTitle = creatorCanvasTitle(canvasPhase, { making: 'Making your video', waiting: 'Your video' });
+    const canvasChip = creatorCanvasChip(canvasPhase, runShape?.label, runShape?.cost);
+    const showsEmptyCanvas = canvasPhase === 'empty';
+    const showsRunFailure = canvasPhase === 'failed';
     // What the run needs, as the column's cards ask for it.
     const emptyCanvasHint = currentIsMultiShot
         ? 'Write each shot, then Generate.'
@@ -4952,30 +4867,35 @@ export default function CreateVideoClient({
         </div>
     );
 
-    const canvasFooter = outputVideo ? (
-        <div className="space-y-3">
-        {runPrompt ? <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-faint)]">{runPrompt}</p> : null}
-        <CreatorResultActions
+    // Done (the artboard Result): the clip, its download, and the publish form beside it; Posted once it went.
+    const videoDownload = outputVideo ? {
+        href: resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo,
+        fileName: 'generated-video.mp4',
+        label: 'Download video',
+        newTab: true,
+    } : null;
+    const postedHere = published && published.generationId === latestGenerationId ? published.post : null;
+    const nextRunCost = runShape?.cost ?? estimatedCost;
+    const publishPanel = outputVideo && videoDownload && latestGenerationId ? (
+        <CreatorPublishPanel
+            key={latestGenerationId}
             generationId={latestGenerationId}
-            isPublic={latestIsPublic}
-            share={{ title: shareTitle, description: primarySharePrompt, sourceSurface: 'create-video', accessToken: session?.access_token ?? null }}
-            publicPath={publicResultPath}
-            onPublish={() => void openPublishModal()}
-            preparingPublish={isPreparingPublish}
-            download={{
-                href: resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo,
-                fileName: 'generated-video.mp4',
-                label: 'Download video',
-                newTab: true,
-            }}
-            onStartAnother={() => {
-                setOutputVideo(null);
-                setLatestGenerationId(null);
-                setLatestIsPublic(false);
-                setPublishedMeta(null);
-            }}
+            accessToken={session?.access_token}
+            details={publishDetails}
+            original={remixOriginal}
+            sourceSurface="create-video"
+            published={postedHere}
+            onPublished={(post) => setPublished({ generationId: latestGenerationId, post })}
+            download={videoDownload}
+            next={userCredits !== null ? (
+                <CreatorPostedNext
+                    balance={userCredits}
+                    runCost={nextRunCost}
+                    imageHref={imageOffer && imageOffer.cost <= userCredits ? makeImageInsteadHref(imageOffer.modelId, runPrompt ?? prompt) : null}
+                    onMakeAnother={() => (promptTextareaRef.current ?? Object.values(multiShotTextareaRefs.current).find(Boolean))?.focus()}
+                />
+            ) : null}
         />
-        </div>
     ) : null;
 
     // The model list's rows: each model's price at this run's settings, what it is for, and
@@ -5011,6 +4931,7 @@ export default function CreateVideoClient({
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-4 text-[var(--ui-text-primary)] sm:py-6 font-[family-name:var(--font-geist-sans)]">
             <CreatorColumnLayout
+                resultFirst={canvasPhase === 'done'}
                 title="Create video"
                 column={
                     <>
@@ -5929,6 +5850,7 @@ export default function CreateVideoClient({
                         )}
 
                         <CreatorColumnBar
+                            holdsFootUnderColumn={!(publishPanel && !postedHere)}
                             settingsSummary={settingsSummary}
                             settingsSummaryShort={settingsSummaryShort}
                             settings={settingsPanel}
@@ -5952,14 +5874,26 @@ export default function CreateVideoClient({
                         revealKey={canvasRevealKey}
                         focusKey={runEndKey}
                         tall={Boolean(outputVideo)}
-                        flow={showsEmptyCanvas || (isGenerating && !outputVideo)}
+                        flow={canvasPhase !== 'failed' && canvasPhase !== 'background'}
                         showStudioLink={!isVisitor}
-                        footer={canvasFooter}
                     >
                         {outputVideo ? (
-                            <CreatorCanvasMedia key={outputVideo} aspectRatio={runShape?.aspectRatio ?? currentAspectRatio}>
-                                <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
-                            </CreatorCanvasMedia>
+                            <CreatorDoneLayout
+                                key={outputVideo}
+                                ratio={parseAspectRatio(runShape?.aspectRatio ?? currentAspectRatio)}
+                                media={(
+                                    <CreatorCanvasMedia aspectRatio={runShape?.aspectRatio ?? currentAspectRatio} fit="done">
+                                        <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
+                                    </CreatorCanvasMedia>
+                                )}
+                                mediaFoot={videoDownload ? (
+                                    <div className="space-y-3">
+                                        {runPrompt ? <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-faint)]">{runPrompt}</p> : null}
+                                        <CreatorDownloadButton {...videoDownload} />
+                                    </div>
+                                ) : null}
+                                panel={publishPanel}
+                            />
                         ) : isGenerating ? (
                             <>
                                 <CreatorCanvasStage>
@@ -6045,26 +5979,6 @@ export default function CreateVideoClient({
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Uploaded preview'}
                 title={uploadPreview?.title ?? 'Media Preview'}
-            />
-
-            <PublishToShowcaseModal
-                isOpen={isPublishModalOpen}
-                onClose={() => setIsPublishModalOpen(false)}
-                generationId={latestGenerationId}
-                accessToken={session?.access_token ?? null}
-                defaultTitle={publishDefaults?.generationId === latestGenerationId ? publishDefaults.title : ''}
-                creation={publishDefaults?.generationId === latestGenerationId ? publishDefaults.creation : null}
-                paywallPrefill={publishDefaults?.generationId === latestGenerationId ? publishDefaults.paywallPrefill : null}
-                shareAfterPublish={latestGenerationId ? {
-                    title: shareTitle,
-                    description: primarySharePrompt,
-                    sourceSurface: 'create-video',
-                } : undefined}
-                onPublished={(payload) => {
-                    setLatestIsPublic(true);
-                    setPublishedMeta(payload);
-                    setIsPublishModalOpen(false);
-                }}
             />
 
             <StudioMediaPreviewModal

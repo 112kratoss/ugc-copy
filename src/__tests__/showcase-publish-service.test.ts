@@ -20,7 +20,7 @@ import {
 } from '@/lib/showcase-publish-service';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
-import type { PostResourceBundleInput } from '@/lib/post-resource-bundles';
+import type { PostResourceBundleInput, PostResourceItem } from '@/lib/post-resource-bundles';
 
 /** The linked-identity lookup: the guest ids merged into the caller's account. */
 function linkedProfilesQuery(linkedGuestIds: string[]) {
@@ -1961,7 +1961,10 @@ describe('publishGenerationToShowcaseForRoute', () => {
 // from the prompt for the kind title when a recipe goes on; the server holds
 // the same rule for what an older app, or a composer opened with a recipe
 // already chosen, still sends.
-describe('a title cut from the prompt of a post with a recipe', () => {
+// A paid recipe sells the creation's prompt, so a title cut from it is stored as the recipe's kind
+// title; a free one hands its prompt to anyone with one tap, so it keeps it (owner, 2026-10-29).
+describe('a title cut from the prompt of a post with a paid recipe', () => {
+  const paidRecipe = (): PostResourceBundleInput => ({ ...cardRecipe(), accessMode: 'paid', priceUsdCents: 900 });
   const generation = {
     id: 'gen-title',
     user_id: 'user-1',
@@ -2015,7 +2018,7 @@ describe('a title cut from the prompt of a post with a recipe', () => {
   }
 
   it('stores it as the recipe’s kind title, on the post and on the creation', async () => {
-    const { result, published } = await publish({ title: fromPrompt, resourceBundle: cardRecipe() });
+    const { result, published } = await publish({ title: fromPrompt, resourceBundle: paidRecipe() });
 
     expect(result).toMatchObject({ ok: true });
     expect(published).toHaveBeenCalledWith(expect.objectContaining({
@@ -2025,7 +2028,7 @@ describe('a title cut from the prompt of a post with a recipe', () => {
   });
 
   it('knows it without its case or its spacing', async () => {
-    const { published } = await publish({ title: '  product STILL lit like a  window display ', resourceBundle: cardRecipe() });
+    const { published } = await publish({ title: '  product STILL lit like a  window display ', resourceBundle: paidRecipe() });
 
     expect(published).toHaveBeenCalledWith(expect.objectContaining({
       post: expect.objectContaining({ title: 'Image recipe' }),
@@ -2040,7 +2043,7 @@ describe('a title cut from the prompt of a post with a recipe', () => {
         prompt: null,
         body: null,
         category: 'image',
-        resourceBundle: cardRecipe(),
+        resourceBundle: paidRecipe(),
       })),
     });
 
@@ -2060,7 +2063,7 @@ describe('a title cut from the prompt of a post with a recipe', () => {
         prompt: null,
         body: null,
         category: 'image',
-        resourceBundle: cardRecipe(),
+        resourceBundle: paidRecipe(),
       })),
     }, { ...generation, title: fromPrompt });
 
@@ -2071,7 +2074,7 @@ describe('a title cut from the prompt of a post with a recipe', () => {
   });
 
   it('keeps a title the creator wrote, and the prompt’s title on a post without a recipe', async () => {
-    const typed = await publish({ title: 'Window still', resourceBundle: cardRecipe() });
+    const typed = await publish({ title: 'Window still', resourceBundle: paidRecipe() });
     expect(typed.published).toHaveBeenCalledWith(expect.objectContaining({
       post: expect.objectContaining({ title: 'Window still' }),
       generationUpdate: expect.objectContaining({ title: 'Window still' }),
@@ -2082,5 +2085,126 @@ describe('a title cut from the prompt of a post with a recipe', () => {
       post: expect.objectContaining({ title: fromPrompt }),
       generationUpdate: expect.objectContaining({ title: fromPrompt }),
     }));
+  });
+
+  it('keeps the prompt’s title on a post with a free recipe', async () => {
+    const { result, published } = await publish({ title: fromPrompt, resourceBundle: cardRecipe() });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(published).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ title: fromPrompt }),
+      generationUpdate: expect.objectContaining({ title: fromPrompt }),
+    }));
+  });
+});
+
+// The web creators' recipe, shared by default, leaves the creator's own uploads out (owner,
+// 2026-10-29): only the references a remix brought from its original go in as files, and a
+// remix hands every input of a recipe whose switch is on to whoever opens it, so with any of
+// the creator's own in the creation the switch goes off.
+describe('a recipe that leaves the creator’s own uploads out', () => {
+  const generation = {
+    id: 'gen-remix',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'seedance-2-mini',
+    category: 'video',
+    creation_mode: null,
+    output_url: 'generated_videos/user-1/remix.mp4',
+    showcase_asset_path: null,
+    title: null,
+    description: null,
+    prompt: 'Two cats spar in a dim dojo, rim light.',
+  };
+  const recipe = (allowRemix: boolean): PostResourceBundleInput => ({
+    accessMode: 'free',
+    summary: 'Prompt, files and remix from this creation',
+    previewText: 'Unlock the saved prompt, files and remix used to create this result.',
+    priceUsdCents: 0,
+    resources: { promptText: 'Two cats spar in a dim dojo, rim light.', notesMarkdown: null, workflowShareUrl: null, attachments: [], allowRemix },
+  });
+  const referenceItem = { id: 'reference-row-original', type: 'reference_image', storagePath: 'post_resource_files/user-1/gen-remix/a.png' } as PostResourceItem;
+
+  async function publish(body: Record<string, unknown>, origins: { byRowId: Map<string, 'own' | 'others'>; hasOwn: boolean }) {
+    const dependencies = {
+      ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+        outputUrl: mediaGeneration.outputUrl,
+        createdLocation: null,
+      })),
+      listSourceToolsCatalog: vi.fn(async () => [
+        { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+      ]),
+      validatePostResourceBundleInput: vi.fn(() => null),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      loadGenerationInputOrigins: vi.fn(async () => origins),
+      buildGenerationReferenceResourceItems: vi.fn(async () => [referenceItem]),
+      mergeGenerationReferenceItemsIntoBundle: vi.fn((bundle: PostResourceBundleInput) => bundle),
+      publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+        postId: 'post-remix',
+        visibility: 'public' as const,
+        bundleId: 'bundle-remix',
+        bundleStatus: 'published' as const,
+      })),
+      ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+      requestPostEmbedding: vi.fn(async () => undefined),
+    } satisfies Partial<ShowcasePublishServiceDependencies>;
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      body: { generationId: 'gen-remix', visibility: 'public', title: 'Dojo cats (remix)', ...body },
+      userId: 'user-1',
+      dependencies,
+    });
+    return { result, dependencies };
+  }
+
+  it('copies only the original’s references, and turns the hand-over off where the creator’s own are in', async () => {
+    const { result, dependencies } = await publish(
+      { includeGenerationReferences: true, leaveOutOwnGenerationReferences: true, resourceBundle: recipe(true) },
+      { byRowId: new Map([['row-original', 'others'], ['row-own', 'own']]), hasOwn: true },
+    );
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(dependencies.loadGenerationInputOrigins).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'user-1', generationId: 'gen-remix' }));
+    expect(dependencies.buildGenerationReferenceResourceItems).toHaveBeenCalledWith(expect.objectContaining({
+      onlyRowIds: new Set(['row-original']),
+    }));
+    expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: false }) }),
+    }));
+  });
+
+  it('keeps the hand-over where every input is the original’s', async () => {
+    const { dependencies } = await publish(
+      { includeGenerationReferences: true, leaveOutOwnGenerationReferences: true, resourceBundle: recipe(true) },
+      { byRowId: new Map([['row-original', 'others']]), hasOwn: false },
+    );
+
+    expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: true }) }),
+    }));
+  });
+
+  it('turns the hand-over off with none of the original’s references to copy', async () => {
+    const { dependencies } = await publish(
+      { leaveOutOwnGenerationReferences: true, resourceBundle: recipe(true) },
+      { byRowId: new Map([['row-own', 'own']]), hasOwn: true },
+    );
+
+    expect(dependencies.buildGenerationReferenceResourceItems).not.toHaveBeenCalled();
+    expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: false }) }),
+    }));
+  });
+
+  it('copies them all, as before, without the flag, and reads no origins for a post with no recipe', async () => {
+    const all = await publish({ includeGenerationReferences: true, resourceBundle: recipe(true) }, { byRowId: new Map(), hasOwn: true });
+    expect(all.dependencies.loadGenerationInputOrigins).not.toHaveBeenCalled();
+    expect(all.dependencies.buildGenerationReferenceResourceItems).toHaveBeenCalledWith(expect.not.objectContaining({ onlyRowIds: expect.anything() }));
+    expect(all.dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: true }) }),
+    }));
+
+    const none = await publish({ leaveOutOwnGenerationReferences: true, resourceBundle: { accessMode: 'none' } }, { byRowId: new Map(), hasOwn: true });
+    expect(none.dependencies.loadGenerationInputOrigins).not.toHaveBeenCalled();
   });
 });

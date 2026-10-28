@@ -59,7 +59,7 @@ import { type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { POST_VIDEO_DURATION_LIMIT_MESSAGE, POST_VIDEO_MAX_DURATION_SECONDS } from '@/lib/post-video-limits';
 import { isCreatorProfileCheckError, isCreatorProfileReadinessError } from '@/lib/marketplace-trust';
-import { titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
+import { recipeKeepsPromptPrivate, titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { isTemplateResultGeneration, type TemplateRunLink } from '@/lib/template-result';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
@@ -1419,16 +1419,17 @@ export async function updateOwnerPostForRoute({
         body: { error: `Descriptions are limited to ${DESCRIPTION_MAX_LENGTH} characters.`, field: 'description' },
       };
     }
-    // A recipe keeps the creation's prompt private, so a title cut from it is
-    // stored as the recipe's kind title, the swap both composers make. The
-    // recipe this save leaves on the post counts: the one it sends, else the
-    // stored one, which a visibility change republishes with the post. A post
-    // with no creation has no prompt of its own to cut a title from.
-    const hasRecipeAfterSave = hasResourceBundlePayload
-      ? Boolean(resourceBundle && resourceBundle.accessMode !== 'none')
-      : Boolean(liveBundle && liveBundle.access_mode !== 'none');
+    // A paid recipe keeps the creation's prompt private, so a title cut from it
+    // is stored as the recipe's kind title, the swap both composers make; a free
+    // one hands its prompt to anyone, so its title may be cut from it (owner,
+    // 2026-10-29). The recipe this save leaves on the post counts: the one it
+    // sends, else the stored one, which a visibility change republishes with the
+    // post. A post with no creation has no prompt of its own to cut a title from.
+    const promptPrivateAfterSave = recipeKeepsPromptPrivate(hasResourceBundlePayload
+      ? resourceBundle?.accessMode
+      : liveBundle?.access_mode);
     let nextTitle = titleAsGiven;
-    if (hasRecipeAfterSave && titleAsGiven && post.generation_id) {
+    if (promptPrivateAfterSave && titleAsGiven && post.generation_id) {
       let titleSource: CreationTitleSource | null = null;
       try {
         titleSource = await resolvedDependencies.loadGenerationTitleSource(adminSupabase, post.generation_id);
@@ -1439,7 +1440,7 @@ export async function updateOwnerPostForRoute({
       }
       nextTitle = titleForRecipePost({
         title: titleAsGiven,
-        hasRecipe: true,
+        promptPrivate: true,
         // The kind is named as the post is filed: a creation stored without a
         // category would otherwise read as an image.
         source: titleSource

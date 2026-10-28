@@ -926,6 +926,45 @@ describe('/api/generations route', () => {
     expect(data.generations[0].workflow_settings).toBeUndefined();
   });
 
+  // The web creators' recipe leaves the creator's own uploads out unless they add them (owner,
+  // 2026-10-29), so the prefill counts them apart from a remix's references from its original.
+  it('counts the creator’s own inputs apart from a remix’s references from its original', async () => {
+    const row = (id: string, sortOrder: number, sourceStoragePath: string) => ({
+      id,
+      generation_id: 'gen-1',
+      user_id: 'user-1',
+      media_type: 'image' as const,
+      role: 'reference_image',
+      label: id,
+      storage_path: `generation_inputs/user-1/gen-1/0${sortOrder}-reference-image.png`,
+      source_generation_id: null,
+      sort_order: sortOrder,
+      metadata: { sourceStoragePath },
+    });
+    inputMediaState = [
+      row('input-own', 0, 'uploads/user-1/draft/face.png'),
+      row('input-original', 1, 'generation_inputs/creator-9/gen-0/00-reference-image.png'),
+    ];
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
+    );
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.generations[0].paywallPrefill).toMatchObject({
+      referenceCount: 2,
+      ownReferenceCount: 1,
+      ownReferenceKindCounts: { image: 1 },
+    });
+  });
+
   it('returns active generations without provider sync side effects', async () => {
     const { GET } = await import('@/app/api/generations/route');
     const response = await GET(

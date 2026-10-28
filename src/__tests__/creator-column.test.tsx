@@ -16,7 +16,6 @@ import {
   CreatorColumnLayout,
   CreatorMentionPanel,
   CreatorReferenceRow,
-  CreatorResultActions,
   CreatorSettingChoices,
   CreatorSettingSwitch,
   CreatorTemplatesTile,
@@ -837,74 +836,3 @@ describe('an upload slot', () => {
   });
 });
 
-describe('the result\'s actions', () => {
-  const share = { title: 'Harbour', description: null, sourceSurface: 'create-video' as const, accessToken: null };
-
-  it('publishes a private result, downloads it and puts it away', () => {
-    const onPublish = vi.fn();
-    const onStartAnother = vi.fn();
-    const view = render(
-      <CreatorResultActions
-        generationId="gen-1"
-        isPublic={false}
-        share={share}
-        publicPath={null}
-        onPublish={onPublish}
-        download={{ href: 'https://cdn.example/clip.mp4', fileName: 'generated-video.mp4', label: 'Download video', newTab: true }}
-        onStartAnother={onStartAnother}
-      />
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Publish & share' }));
-    expect(onPublish).toHaveBeenCalledTimes(1);
-    const download = screen.getByRole('link', { name: 'Download video' });
-    expect(download).toHaveAttribute('download', 'generated-video.mp4');
-    expect(download).toHaveAttribute('target', '_blank');
-    fireEvent.click(screen.getByRole('button', { name: 'Start another run' }));
-    expect(onStartAnother).toHaveBeenCalledTimes(1);
-
-    view.rerender(
-      <CreatorResultActions
-        generationId="gen-1"
-        isPublic={false}
-        share={share}
-        publicPath={null}
-        onPublish={onPublish}
-        preparingPublish
-        download={{ href: 'blob:picture', fileName: 'generated-image.png', label: 'Download image' }}
-        onStartAnother={onStartAnother}
-      />
-    );
-    expect(screen.getByRole('button', { name: 'Publish & share' })).toBeDisabled();
-    expect(screen.getByRole('link', { name: 'Download image' })).not.toHaveAttribute('target');
-  });
-
-  it('shares a public result and links its page, and offers no publishing before the run is saved', () => {
-    const view = render(
-      <CreatorResultActions
-        generationId="gen-1"
-        isPublic
-        share={share}
-        publicPath="/p/harbour"
-        onPublish={() => {}}
-        download={{ href: 'blob:clip', fileName: 'clip.mp4', label: 'Download video' }}
-        onStartAnother={() => {}}
-      />
-    );
-    expect(screen.getByRole('button', { name: 'Share' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open public page' })).toHaveAttribute('href', '/p/harbour');
-
-    view.rerender(
-      <CreatorResultActions
-        generationId={null}
-        isPublic={false}
-        share={share}
-        publicPath={null}
-        onPublish={() => {}}
-        download={{ href: 'blob:clip', fileName: 'clip.mp4', label: 'Download video' }}
-        onStartAnother={() => {}}
-      />
-    );
-    expect(screen.queryByRole('button', { name: 'Publish & share' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
-  });
-});

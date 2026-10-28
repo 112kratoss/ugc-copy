@@ -24,10 +24,11 @@ import { formatUsdCents } from '@/lib/home-view-model';
 import { formatCreditAmount } from '@/lib/pricing';
 import {
   describeTitleSuggestion,
-  followTitleForRecipe,
+  followTitleForPromptPrivacy,
   getPublicPostQualityError,
   isPlaceholderText,
   PUBLIC_POST_PLACEHOLDER_TITLE_ERROR,
+  recipeKeepsPromptPrivate,
   suggestCreationPostTitle,
 } from '@/lib/post-publish-policy/post-publish-policy';
 
@@ -1897,7 +1898,7 @@ export function getCreationPostTitleSuggestion(
   if (ownTitle.trim()) {
     return { title: ownTitle, source: 'creation' };
   }
-  return suggestCreationPostTitle({ ...readCreationTitleSource(item), hasRecipe: accessMode !== 'none' });
+  return suggestCreationPostTitle({ ...readCreationTitleSource(item), promptPrivate: recipeKeepsPromptPrivate(accessMode) });
 }
 
 function readCreationTitleSource(item: GenerationListItem) {
@@ -1906,9 +1907,10 @@ function readCreationTitleSource(item: GenerationListItem) {
 
 /**
  * A title cut from the prompt follows the recipe, as on the web
- * (`followTitleForRecipe`): it becomes the recipe's kind title while a recipe
- * keeps the prompt private, and comes back when the recipe goes. Compared with
- * the prompt itself, so it holds in an edit too. Any other title stays.
+ * (`followTitleForPromptPrivacy`): it becomes the recipe's kind title while a
+ * paid recipe keeps the prompt private, and comes back when that goes. A free
+ * recipe leaves it (owner, 2026-10-29). Compared with the prompt itself, so it
+ * holds in an edit too. Any other title stays.
  */
 export function followCreationTitleSuggestion(
   previous: PostComposerDraft,
@@ -1916,11 +1918,11 @@ export function followCreationTitleSuggestion(
   generation: GenerationListItem | null | undefined,
 ): PostComposerDraft {
   if (!generation || next.mode !== 'creation' || next.title !== previous.title) return next;
-  const title = followTitleForRecipe(
+  const title = followTitleForPromptPrivacy(
     next.title,
     readCreationTitleSource(generation),
-    previous.resource.accessMode !== 'none',
-    next.resource.accessMode !== 'none',
+    recipeKeepsPromptPrivate(previous.resource.accessMode),
+    recipeKeepsPromptPrivate(next.resource.accessMode),
   );
   return title === next.title ? next : { ...next, title };
 }
@@ -1933,7 +1935,7 @@ export function getCreationTitleSuggestionHint(
   if (!generation || draft.mode !== 'creation') return null;
   const suggestion = getCreationPostTitleSuggestion(generation, draft.resource.accessMode);
   if (suggestion.source === 'creation' || draft.title !== suggestion.title) return null;
-  return describeTitleSuggestion(suggestion.source, draft.resource.accessMode !== 'none');
+  return describeTitleSuggestion(suggestion.source, recipeKeepsPromptPrivate(draft.resource.accessMode));
 }
 
 export function getPublishGenerationMediaKind(item: GenerationListItem): 'image' | 'video' | null {

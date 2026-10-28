@@ -256,6 +256,44 @@ describe('buildHomeShelfCreations', () => {
     expect(creations[0]).toMatchObject({ price: null, fitsWelcomeCredits: false });
   });
 
+  // A recipe whose remix switch is on hands the creation's inputs to whoever unlocks it
+  // (`loadGenerationRecipeRemixInputMediaByPostId`), and a free recipe is unlocked by the Remix
+  // tap itself: the editor opens with them and prices them, so the card shows none (PR 3b,
+  // where publishing from the creators shares the recipe by default).
+  it.each([
+    ['a free recipe', 'free'],
+    ['a paid recipe', 'paid'],
+  ] as const)('shows no price when %s hands the creation’s inputs to remixers', async (_case, accessMode) => {
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
+    quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 7 });
+    const asset = { id: 'bundle-boat', postId: 'boat', title: 'Recipe', accessMode, priceUsdCents: accessMode === 'paid' ? 900 : 0, previewText: '', allowRemix: true };
+
+    const creations = await buildHomeShelfCreations([{ postId: 'boat' }], {
+      getPosts: async () => [post('boat', { asset } as Partial<ShowcaseFeedItem>)],
+      loadGenerations: async () => [generation('boat')],
+      loadCatalogs: BOTH_CATALOGS,
+      loadWelcomeCredits: async () => 25,
+    });
+
+    expect(quotePublishedGenerationModelMock).not.toHaveBeenCalled();
+    expect(creations[0]).toMatchObject({ price: null, fitsWelcomeCredits: false });
+  });
+
+  it('still prices a post whose recipe keeps the creation’s inputs to itself', async () => {
+    const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
+    quotePublishedGenerationModelMock.mockResolvedValue({ costCredits: 7 });
+    const asset = { id: 'bundle-boat', postId: 'boat', title: 'Recipe', accessMode: 'free', priceUsdCents: 0, previewText: '', allowRemix: false };
+
+    const creations = await buildHomeShelfCreations([{ postId: 'boat' }], {
+      getPosts: async () => [post('boat', { asset } as Partial<ShowcaseFeedItem>)],
+      loadGenerations: async () => [generation('boat')],
+      loadCatalogs: BOTH_CATALOGS,
+      loadWelcomeCredits: async () => 25,
+    });
+
+    expect(creations[0]).toMatchObject({ price: { kind: 'credits', credits: 7 } });
+  });
+
   it('leaves out a post with no saved recipe, whose editor would open on its default model', async () => {
     const { buildHomeShelfCreations } = await import('@/lib/home-shelf-server');
 

@@ -84,7 +84,6 @@ const authState = vi.hoisted(() => ({
   updateCredits: vi.fn(),
 }));
 const getSessionMock = vi.hoisted(() => vi.fn());
-const publishModalProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 const restoredFile = new File(['image-bytes'], 'restored-element.png', { type: 'image/png' });
 
 const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
@@ -116,13 +115,6 @@ vi.mock('@/components/EnhancePromptButton', () => ({
 
 vi.mock('@/components/PublicShareButton', () => ({
   default: () => null,
-}));
-
-vi.mock('@/components/PublishToShowcaseModal', () => ({
-  default: (props: Record<string, unknown>) => {
-    publishModalProps.current = props;
-    return null;
-  },
 }));
 
 vi.mock('@/lib/persisted-media', () => ({
@@ -226,7 +218,6 @@ beforeEach(() => {
   getSessionMock.mockResolvedValue(SIGNED_IN_SESSION);
   modelCatalogState.models = null;
   modelCatalogState.catalogReady = true;
-  publishModalProps.current = null;
   window.sessionStorage.clear();
 });
 
@@ -1767,7 +1758,9 @@ describe('CreateImageClient generation pipeline', () => {
     window.history.replaceState({}, '', '/');
   });
 
-  it('opens quick publish with the creation’s title and recipe prefill', async () => {
+  // Publishing on the canvas (PR 3b, the artboard Result): the form starts from the creation's
+  // own title and its recipe, read once the run is done, as the Publish window did.
+  it('starts the canvas’s publish form from the creation’s title and recipe', async () => {
     const paywallPrefill = { resourceKinds: ['prompt'], promptText: 'A lighthouse at dawn', notesMarkdown: null, allowRemix: false };
     const fetchMock = installFetch({
       starts: [startedReply()],
@@ -1778,14 +1771,11 @@ describe('CreateImageClient generation pipeline', () => {
     pressGenerate();
     await findResult();
 
-    fireEvent.click(screen.getByRole('button', { name: /Publish & share/ }));
-
-    await waitFor(() => expect(publishModalProps.current).toMatchObject({
-      isOpen: true,
-      generationId: 'gen-new',
-      defaultTitle: 'Lighthouse study',
-      paywallPrefill,
-    }));
+    const form = await screen.findByRole('form', { name: 'Post it to the feed' });
+    await waitFor(() => expect(within(form).getByRole('textbox', { name: 'Title' })).toHaveValue('Lighthouse study'));
+    // On by default where the creation has a recipe to share (owner, 2026-10-28).
+    expect(within(form).getByRole('switch', { name: 'Share the recipe' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('button', { name: /Publish & share/ })).toBeNull();
     const creationRead = fetchMock.mock.calls.find(([url]) => String(url).startsWith('/api/generations?'));
     expect(String(creationRead?.[0])).toContain('id=gen-new');
     expect((creationRead?.[1] as RequestInit).headers).toEqual({ Authorization: 'Bearer test-token' });

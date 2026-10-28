@@ -41,6 +41,7 @@ import {
   followCreationTitleSuggestion,
   getCreationPostTitleSuggestion,
   getCreationTitleSuggestionHint,
+  recipeKeepsPromptPrivate,
 } from '@/lib/creation-post-title';
 import {
   claimPublicIdentity,
@@ -1098,7 +1099,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const trimmedBody = body.trim();
   const bodyCount = body.length;
   const titleCount = title.trim().length;
-  const hasRecipe = resourceAccessMode !== 'none';
+  // A paid recipe keeps the creation's prompt out of the title; a free one does not (owner, 2026-10-29).
+  const promptPrivate = recipeKeepsPromptPrivate(resourceAccessMode);
   const creationTitleSource = prefilledGeneration
     ? {
         prompt: prefilledGeneration.prompt,
@@ -1114,21 +1116,21 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       getCreationPostTitleSuggestion(
         prefilledGeneration?.title || prefilledGeneration?.templateTitle,
         creationTitleSource,
-        hasRecipe,
+        promptPrivate,
       ),
-      hasRecipe,
+      promptPrivate,
     )
     : null;
   // Every change of the recipe's mode goes through here, so a title cut from
   // the prompt follows it, in an edit too: the prompt may give the title only
-  // while the post has no recipe, which keeps the prompt private.
+  // while no paid recipe keeps the prompt private.
   const changeResourceAccessMode = (nextMode: PostResourceBundleAccessMode) => {
     if (creationTitleSource) {
       setTitle((current) => followCreationTitleSuggestion({
         title: current,
         source: creationTitleSource,
-        hadRecipe: hasRecipe,
-        hasRecipe: nextMode !== 'none',
+        wasPrivate: promptPrivate,
+        isPrivate: recipeKeepsPromptPrivate(nextMode),
       }));
     }
     setResourceAccessMode(nextMode);

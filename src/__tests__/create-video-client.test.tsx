@@ -54,13 +54,6 @@ const readDurationMock = vi.hoisted(() => vi.fn(async (source: File | string) =>
 )));
 // Whether a deploy newer than the page is known, and what the page asked the watcher.
 const deployState = vi.hoisted(() => ({ newBuildAvailable: false, enabled: [] as boolean[] }));
-const publishModalPropsMock = vi.hoisted(() => vi.fn((_props: {
-  isOpen: boolean;
-  defaultTitle?: string;
-  paywallPrefill?: unknown;
-}) => {
-  void _props;
-}));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
@@ -213,13 +206,6 @@ vi.mock('@/components/GenerationResultVideo', async (importOriginal) => {
 
 vi.mock('@/components/PublicShareButton', () => ({
   default: () => null,
-}));
-
-vi.mock('@/components/PublishToShowcaseModal', () => ({
-  default: (props: { isOpen: boolean; defaultTitle?: string; paywallPrefill?: unknown }) => {
-    publishModalPropsMock(props);
-    return null;
-  },
 }));
 
 vi.mock('@/lib/persisted-media', () => ({
@@ -502,7 +488,6 @@ describe('CreateVideoClient Kling video elements', () => {
     refreshTemporaryMediaUrlMock.mockReset();
     refreshTemporaryMediaUrlMock.mockImplementation(async (storagePath: string) => `https://signed.example.com/refreshed/${storagePath}`);
     readDurationMock.mockClear();
-    publishModalPropsMock.mockClear();
     mockPush.mockClear();
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
@@ -4912,7 +4897,9 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(screen.queryByText('Saved references are on standby')).toBeNull());
     });
 
-    it('opens Publish & share with the creation’s own title and recipe', async () => {
+    // Publishing on the canvas (PR 3b, the artboard Result): the form starts from the
+    // creation's own title and its recipe, read once the run is done.
+    it('starts the canvas’s publish form from the creation’s own title and recipe', async () => {
       const recipe: GenerationPaywallPrefill = {
         resourceKinds: ['prompt'],
         promptText: PROMPT,
@@ -4935,13 +4922,11 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
       fireEvent.click(generateButton());
 
-      fireEvent.click(await screen.findByRole('button', { name: /Publish & share/ }));
-
-      await waitFor(() => expect(publishModalPropsMock.mock.calls.at(-1)?.[0]).toMatchObject({
-        isOpen: true,
-        defaultTitle: 'Harbour at dusk',
-        paywallPrefill: recipe,
-      }));
+      const form = await screen.findByRole('form', { name: 'Post it to the feed' });
+      await waitFor(() => expect(within(form).getByRole('textbox', { name: 'Title' })).toHaveValue('Harbour at dusk'));
+      // On by default where the creation has a recipe to share (owner, 2026-10-28).
+      expect(within(form).getByRole('switch', { name: 'Share the recipe' })).toHaveAttribute('aria-checked', 'true');
+      expect(screen.queryByRole('button', { name: /Publish & share/ })).toBeNull();
     });
 
     // The video creator on the app's column (2026-10-26): the run's settings fold into

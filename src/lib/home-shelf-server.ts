@@ -50,7 +50,7 @@ export const HOME_SHELF_REVALIDATE_SECONDS = 300;
  * Part of the build's cache key. The Data Cache outlives a deploy, so bump this
  * whenever what a build holds or which posts it lets in changes.
  */
-const HOME_SHELF_BUILD_VERSION = 'home-shelf-creations-v3';
+const HOME_SHELF_BUILD_VERSION = 'home-shelf-creations-v4';
 
 /** The shelf could not be read, or not filtered for its viewer; the app's route answers an error. */
 export class HomeShelfUnavailableError extends Error {
@@ -180,8 +180,12 @@ async function describeShelfPost(
   if (kind === 'motion') return { modelName: descriptor.displayName, price: { kind: 'clip-length' } };
   // A creator who shared their inputs hands them to every remix, and the editor
   // prices them; the shelf does not count them, so it shows no price rather
-  // than a lower one (and never "Free to try" on it).
-  if (generation.share_input_media_for_remix === true) return { modelName: descriptor.displayName, price: null };
+  // than a lower one (and never "Free to try" on it). So does a recipe whose
+  // remix switch is on: it hands them to whoever unlocks it, and a free one is
+  // unlocked by the Remix tap (`loadGenerationRecipeRemixInputMediaByPostId`).
+  if (generation.share_input_media_for_remix === true || post.asset?.allowRemix === true) {
+    return { modelName: descriptor.displayName, price: null };
+  }
   const settings = remixQuoteSettings(descriptor, stored);
   if (!settings) return { modelName: descriptor.displayName, price: null };
 

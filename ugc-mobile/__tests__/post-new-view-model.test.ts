@@ -300,10 +300,11 @@ describe('post new view model', () => {
 
       const typed = creationDraft({ title: 'Dawn fox' });
       expect(followCreationTitleSuggestion(typed, withRecipe(typed), untitled).title).toBe('Dawn fox');
-      // Turning the exact-prompt card on also turns a recipe on.
+      // Turning the exact-prompt card on also turns a recipe on: a free one, which
+      // hands its prompt to anyone, so the prompt's title stays (owner, 2026-10-29).
       const withPromptCard = applyCreationPromptResource(suggested, untitled, true);
       expect(withPromptCard.resource.accessMode).toBe('free');
-      expect(followCreationTitleSuggestion(suggested, withPromptCard, untitled).title).toBe('Video recipe');
+      expect(followCreationTitleSuggestion(suggested, withPromptCard, untitled).title).toBe('Red fox running through fresh snow at dawn');
       // A creation's own title is the creator's, recipe or not.
       const titled = generation({ title: 'Fox study' });
       const own = creationDraft({ title: 'Fox study' });
@@ -318,7 +319,7 @@ describe('post new view model', () => {
     it('says the title is a suggestion until the creator changes it', () => {
       expect(getCreationTitleSuggestionHint(creationDraft(), untitled)).toBe('Suggested from your prompt. Edit it if you like.');
       expect(getCreationTitleSuggestionHint(withRecipe(creationDraft({ title: 'Video recipe' })), untitled))
-        .toBe('Suggested. A recipe keeps your prompt off the post.');
+        .toBe('Suggested. A paid recipe keeps your prompt off the post.');
       expect(getCreationTitleSuggestionHint(creationDraft({ title: 'Dawn fox' }), untitled)).toBeNull();
       expect(getCreationTitleSuggestionHint(creationDraft({ title: 'Fox study' }), generation({ title: 'Fox study' }))).toBeNull();
       expect(getCreationTitleSuggestionHint({ ...creationDraft(), mode: 'upload' }, untitled)).toBeNull();

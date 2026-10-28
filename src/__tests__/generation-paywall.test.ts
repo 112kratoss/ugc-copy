@@ -287,6 +287,38 @@ describe('generation paywall helpers', () => {
     });
   });
 
+  // The web creators' recipe leaves the creator's own uploads out unless they add them (owner,
+  // 2026-10-29), so the prefill counts them apart from a remix's references from its original.
+  it('counts the creator’s own references apart, where they were worked out', () => {
+    const input = (id: string, mediaType: 'image' | 'video') => ({
+      id,
+      generationId: 'gen-1',
+      mediaType,
+      role: mediaType === 'image' ? 'reference_image' as const : 'reference_video' as const,
+      label: id,
+      url: `/api/media/${id}`,
+      storagePath: `generation_inputs/user-1/gen-1/${id}`,
+      sourceGenerationId: null,
+      sortOrder: 0,
+      metadata: {},
+    });
+    const source = {
+      category: 'video',
+      model: 'seedance-2-mini',
+      prompt: 'Two cats spar in a dim dojo.',
+      workflowSettings: { model: 'seedance-2-mini' },
+      inputMedia: [input('original-1', 'image'), input('own-1', 'image'), input('own-2', 'video')],
+    };
+
+    expect(buildGenerationPaywallPrefill({ ...source, ownInputIds: new Set(['own-1', 'own-2']) })).toMatchObject({
+      referenceCount: 3,
+      ownReferenceCount: 2,
+      ownReferenceKindCounts: { image: 1, video: 1 },
+    });
+    // Not worked out: absent, and the creators then count every reference as the creator's own.
+    expect(buildGenerationPaywallPrefill(source)).not.toHaveProperty('ownReferenceCount');
+  });
+
   it('builds visible recipe items from prompt, saved references, and notes', () => {
     const items = buildGenerationRecipeResourceItems({
       promptText: 'Create the same portrait lighting.',

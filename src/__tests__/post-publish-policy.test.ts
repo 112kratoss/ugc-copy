@@ -1,19 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  followTitleForRecipe,
+  followTitleForPromptPrivacy,
   GENERIC_SUGGESTED_TITLES,
   isPlaceholderText,
   isTitleFromPrompt,
+  describeTitleSuggestion,
+  recipeKeepsPromptPrivate,
   suggestCreationPostTitle,
   suggestProfileHandle,
+  suggestRemixPostTitle,
 } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
 // Most creations have no title of their own (22 of 98 on production,
 // 2026-10-25), so both composers suggest one instead of asking for typing.
 describe('the title suggested for a post of a creation', () => {
   const suggest = (prompt: string | null, overrides: Partial<Parameters<typeof suggestCreationPostTitle>[0]> = {}) =>
-    suggestCreationPostTitle({ prompt, model: 'nano-banana-2', category: 'image', hasRecipe: false, ...overrides });
+    suggestCreationPostTitle({ prompt, model: 'nano-banana-2', category: 'image', promptPrivate: false, ...overrides });
 
   it('cuts the opening of the prompt at a word, to eight words', () => {
     expect(suggest('A young woman in a white jacket dancing in an empty parking lot at sunset, handheld camera, cinematic'))
@@ -51,11 +54,20 @@ describe('the title suggested for a post of a creation', () => {
     expect(suggest('एक लड़की समुद्र किनारे नाच रही है').title).toBe('एक लड़की समुद्र किनारे नाच रही है');
   });
 
-  it('never suggests the prompt while the post has a recipe, which keeps the prompt private', () => {
-    expect(suggest('Neon samurai walking through rain', { hasRecipe: true }))
+  it('never suggests the prompt while a paid recipe keeps it private', () => {
+    expect(suggest('Neon samurai walking through rain', { promptPrivate: true }))
       .toEqual({ title: 'Image recipe', source: 'kind' });
-    expect(suggest('Neon samurai walking through rain', { hasRecipe: true, category: 'video', model: 'seedance-2' }).title)
+    expect(suggest('Neon samurai walking through rain', { promptPrivate: true, category: 'video', model: 'seedance-2' }).title)
       .toBe('Video recipe');
+  });
+
+  // Owner, 2026-10-29: a free recipe hands its prompt to anyone with one tap, so its title
+  // may be cut from it; only a paid one, whose prompt is what is sold, keeps it private.
+  it('keeps the prompt private for a paid recipe only', () => {
+    expect(recipeKeepsPromptPrivate('paid')).toBe(true);
+    expect(recipeKeepsPromptPrivate('free')).toBe(false);
+    expect(recipeKeepsPromptPrivate('none')).toBe(false);
+    expect(recipeKeepsPromptPrivate(null)).toBe(false);
   });
 
   it('names what was made when the prompt gives no title', () => {
@@ -74,7 +86,7 @@ describe('the title suggested for a post of a creation', () => {
       .toEqual({ title: 'Motion transfer', source: 'kind' });
     expect(suggest(motionPrompt, { category: 'video', model: 'kling-3.0/video', creationMode: 'motion' }).title)
       .toBe('Motion transfer');
-    expect(suggest(motionPrompt, { category: 'motion', model: null, hasRecipe: true }).title).toBe('Motion transfer recipe');
+    expect(suggest(motionPrompt, { category: 'motion', model: null, promptPrivate: true }).title).toBe('Motion transfer recipe');
   });
 
   it('only suggests titles the public-post rule takes', () => {
@@ -96,9 +108,9 @@ describe('the title suggested for a post of a creation', () => {
   });
 });
 
-// A title cut from the prompt would publish part of a prompt a recipe keeps
-// private, so turning a recipe on swaps it, and turning it off brings it back.
-describe('the title once a recipe is turned on or off', () => {
+// A title cut from the prompt would publish part of a prompt a paid recipe keeps
+// private, so putting one on swaps it, and taking it off brings it back.
+describe('the title once a paid recipe is put on or taken off', () => {
   const creation = {
     prompt: 'A product still lit like a window display, soft morning light, 85mm',
     model: 'nano-banana-2',
@@ -107,19 +119,46 @@ describe('the title once a recipe is turned on or off', () => {
   const fromPrompt = 'Product still lit like a window display';
 
   it('swaps the prompt’s title for the kind title and back', () => {
-    expect(followTitleForRecipe(fromPrompt, creation, false, true)).toBe('Image recipe');
-    expect(followTitleForRecipe('Image recipe', creation, true, false)).toBe(fromPrompt);
+    expect(followTitleForPromptPrivacy(fromPrompt, creation, false, true)).toBe('Image recipe');
+    expect(followTitleForPromptPrivacy('Image recipe', creation, true, false)).toBe(fromPrompt);
   });
 
   it('keeps anything the creator typed, and changes nothing while the recipe stays as it was', () => {
-    expect(followTitleForRecipe('Window still', creation, false, true)).toBe('Window still');
-    expect(followTitleForRecipe('Window still', creation, true, false)).toBe('Window still');
-    expect(followTitleForRecipe(fromPrompt, creation, true, true)).toBe(fromPrompt);
-    expect(followTitleForRecipe('AI image', creation, false, true)).toBe('AI image');
+    expect(followTitleForPromptPrivacy('Window still', creation, false, true)).toBe('Window still');
+    expect(followTitleForPromptPrivacy('Window still', creation, true, false)).toBe('Window still');
+    expect(followTitleForPromptPrivacy(fromPrompt, creation, true, true)).toBe(fromPrompt);
+    expect(followTitleForPromptPrivacy('AI image', creation, false, true)).toBe('AI image');
   });
 
   it('turns a kind title into the plain one when a prompt gives no title', () => {
-    expect(followTitleForRecipe('Image recipe', { ...creation, prompt: null }, true, false)).toBe('AI image');
+    expect(followTitleForPromptPrivacy('Image recipe', { ...creation, prompt: null }, true, false)).toBe('AI image');
+  });
+});
+
+// A remix's post starts from its original's title, marked as a remix (the mock-up's Result:
+// "intense (remix)"), where the creation has no title of its own.
+describe('the title suggested for a remix', () => {
+  it('marks the original’s title as a remix', () => {
+    expect(suggestRemixPostTitle('intense')).toBe('intense (remix)');
+    expect(suggestRemixPostTitle('  Kung fu cats  ')).toBe('Kung fu cats (remix)');
+  });
+
+  it('cuts a long title at a word so the mark fits in sixty characters', () => {
+    const title = suggestRemixPostTitle('A paper boat drifting slowly across a sunlit pond in the early morning light');
+    expect(title).toBe('A paper boat drifting slowly across a sunlit pond (remix)');
+    expect(title.length).toBeLessThanOrEqual(60);
+  });
+
+  it('suggests none from a placeholder or an empty title, nor a second mark', () => {
+    expect(suggestRemixPostTitle('Untitled Creation')).toBe('');
+    expect(suggestRemixPostTitle('')).toBe('');
+    expect(suggestRemixPostTitle(null)).toBe('');
+    expect(suggestRemixPostTitle('intense (remix)')).toBe('intense (remix)');
+  });
+
+  it('says where it came from, in the words both composers use', () => {
+    expect(describeTitleSuggestion('remix', true)).toBe('Suggested from the original. Edit it if you like.');
+    expect(describeTitleSuggestion('remix', false)).toBe('Suggested from the original. Edit it if you like.');
   });
 });
 
