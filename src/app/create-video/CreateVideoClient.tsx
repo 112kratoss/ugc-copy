@@ -4,6 +4,7 @@ import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
 import { Sparkles, Loader2, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, Play, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -30,11 +31,12 @@ import {
     CreatorTopUpNotice,
     CreatorUploadSlot,
     CreatorVisitorNote,
-    CREATOR_VISITOR_CANVAS_HINT as VISITOR_CANVAS_HINT,
+    CREATOR_VISITOR_CANVAS_HINT,
     creatorAddButtonClass,
 } from '@/components/CreatorColumn';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
+import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses, IconButton } from '@/components/DesignSystem';
 import { videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
@@ -989,21 +991,25 @@ function standbyClipAndTrackNotice(modelName: string, clips: number, tracks: num
 export default function CreateVideoClient({
     prefill,
     welcome = null,
+    handoverNonce = null,
     visitorWelcomeCredits = null,
 }: {
     prefill: CreateVideoPrefill;
     /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
     welcome?: CreatorWelcome | null;
+    /** The sign-up sheet's `?handover=` nonce on the way back: the visitor's draft moves to the account by it. */
+    handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
 }) {
+    const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
     // Signed out, the page works up to Generate, which asks for an account (owner, 2026-10-28).
     const isVisitor = !session;
     // The visitor's draft until someone signs in, then the account's, which takes
     // the visitor's when sign-up was opened here.
-    const draftOwner = useCreatorDraftOwner('video', userId);
+    const { owner: draftOwner, carriedDraft } = useCreatorDraftOwner('video', userId, handoverNonce);
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
@@ -3758,10 +3764,11 @@ export default function CreateVideoClient({
 
         const { data: { session: activeSession } } = await supabase.auth.getSession();
         if (!activeSession) {
-            // The session lapsed since the page opened: sign in again from the same sheet,
-            // which comes back here on this page's own link with the draft saved.
+            // The session lapsed since the page opened: back here after signing in, on this
+            // page's own link, with the draft saved under the account it belongs to.
             activeGenerationRequestKeyRef.current = null;
-            await openSignUp('generate');
+            await saveTextDraftNow();
+            router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
             return;
         }
 
@@ -4392,7 +4399,7 @@ export default function CreateVideoClient({
                 column={
                     <>
                         <CreatorToolTabs currentToolId="video" />
-                        {welcome && !isVisitor ? <CreatorWelcomeCard welcome={welcome} /> : null}
+                        {welcome && !isVisitor ? <CreatorWelcomeCard welcome={welcome} carriedDraft={carriedDraft} /> : null}
 
                         <div className="flex items-start gap-2">
                             <div className="relative min-w-0 flex-1" ref={modelDropdownRef}>
@@ -5354,7 +5361,7 @@ export default function CreateVideoClient({
                                     <Video className="h-5 w-5 text-[var(--ui-text-muted)]" />
                                 </span>
                                 <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your video will appear here'}</p>
-                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">{isVisitor ? VISITOR_CANVAS_HINT : emptyCanvasHint}</p>
+                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">{isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint}</p>
                             </CreatorCanvasFrame>
                         )}
                     </CreatorCanvas>
@@ -5362,12 +5369,13 @@ export default function CreateVideoClient({
             />
 
             <CreatorSignUpSheet
-                open={signUpReason !== null}
-                reason={signUpReason ?? 'generate'}
+                reason={signUpReason}
+                handsOverDraft={draftOwner === VISITOR_DRAFT_OWNER}
                 tool="video"
                 welcomeCredits={visitorWelcomeCredits}
                 runCost={estimatedCost}
-                settingsLine={[videoModel.displayName, ...settingsSummary.split(' · ')].join(', ')}
+                modelName={videoModel.displayName}
+                settingsSummary={settingsSummary}
                 keepsPrompt={currentIsMultiShot ? multiPrompts.some((shot) => shot.prompt.trim()) : Boolean(prompt.trim())}
                 keepsImages={Boolean(startImageFile || endImageFile) || elements.length > 0 || klingSubjects.length > 0}
                 onClose={() => setSignUpReason(null)}

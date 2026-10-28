@@ -121,10 +121,16 @@ describe('creator auth return paths', () => {
     expect(state.clientProps.video).toMatchObject({ visitorWelcomeCredits: null });
   });
 
-  it('passes the post-auth welcome flag and a well-formed invite outcome to the creator', async () => {
+  it('passes the post-auth welcome flag, a well-formed invite outcome and the hand-over nonce to the creator', async () => {
     state.hasAuthHint = true;
-    render(await CreateVideoPage({ searchParams: Promise.resolve({ prompt: 'boat', welcome: '1', referral: 'applied' }) }));
-    expect(state.clientProps.video).toMatchObject({ welcome: { referral: 'applied' } });
+    render(await CreateVideoPage({
+      searchParams: Promise.resolve({ handover: 'nonce-1234-abcd', welcome: '1', referral: 'applied' }),
+    }));
+    expect(state.clientProps.video).toMatchObject({ welcome: { referral: 'applied' }, handoverNonce: 'nonce-1234-abcd' });
+    cleanup();
+
+    render(await CreateVideoPage({ searchParams: Promise.resolve({ handover: 'not a nonce!' }) }));
+    expect(state.clientProps.video).toMatchObject({ welcome: null, handoverNonce: null });
     cleanup();
 
     render(await CreateImagePage({ searchParams: Promise.resolve({ welcome: '1', referral: 'Not a status!' }) }));

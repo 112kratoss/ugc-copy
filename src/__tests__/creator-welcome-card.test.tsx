@@ -59,7 +59,7 @@ describe('the creator’s greeting for an account back from sign-up', () => {
       welcome: { status: 'not_eligible', amount: 25, credits: 0, identityComplete: false },
       claim: { status: 'claimed', amount: 25, credits: 25, identityComplete: true },
     });
-    render(<CreatorWelcomeCard welcome={{ referral: null }} />);
+    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
 
     expect(await screen.findByRole('heading', { name: 'Pick your name and handle' })).toBeInTheDocument();
     expect(screen.getByLabelText('Display name')).toHaveValue('Asha Rao');
@@ -85,22 +85,58 @@ describe('the creator’s greeting for an account back from sign-up', () => {
   // nothing at all (the E2E spec caught it, 2026-10-28).
   it('draws the card when its effect is run twice, as in development', async () => {
     const calls = installFetch({ welcome: { status: 'not_eligible', amount: 25, credits: 0, identityComplete: false } });
-    render(<StrictMode><CreatorWelcomeCard welcome={{ referral: null }} /></StrictMode>);
+    render(<StrictMode><CreatorWelcomeCard welcome={{ referral: null }} carriedDraft /></StrictMode>);
 
     expect(await screen.findByRole('heading', { name: 'Pick your name and handle' })).toBeInTheDocument();
     expect(calls.filter((call) => call.url === '/api/credits/welcome').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('keeps the address free of the flags that brought the account here', async () => {
+  it('keeps the address free of the flags that brought the account here, through Next’s own history handling', async () => {
+    window.history.replaceState({ __NA: true }, '', '/create-video?prompt=boat&handover=nonce-1234&welcome=1&referral=applied');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
     installFetch({ welcome: { status: 'already_claimed', amount: 25, credits: 3, identityComplete: true } });
-    render(<CreatorWelcomeCard welcome={{ referral: null }} />);
+    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
 
     await waitFor(() => expect(window.location.search).toBe('?prompt=boat'));
+    // A state of Next's own (`__NA`) would skip its router: the router keeps the old address.
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/create-video?prompt=boat');
+    replaceState.mockRestore();
+  });
+
+  it('says when the welcome credits could not be read, keeps the flags for a reload, and asks again', async () => {
+    let fail = true;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+      if (url === '/api/credits/welcome') {
+        return fail ? json({ error: 'Too many requests' }, 429) : json({ status: 'not_eligible', amount: 25, credits: 0, identityComplete: false });
+      }
+      if (url === '/api/profile') return json(NEW_PROFILE);
+      return json({ ok: true });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
+
+    expect(await screen.findByRole('heading', { name: 'Your welcome credits could not be read' })).toBeInTheDocument();
+    expect(window.location.search).toContain('welcome=1');
+
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('heading', { name: 'Pick your name and handle' })).toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).toBe('?prompt=boat'));
+  });
+
+  it('promises the form only when the visitor’s draft came back with the account', async () => {
+    installFetch({ welcome: { status: 'already_claimed', amount: 25, credits: 3, identityComplete: true } });
+    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft={false} />);
+
+    expect(await screen.findByText('Press Generate when you’re ready; nothing has been spent.')).toBeInTheDocument();
+    expect(screen.queryByText(/as you left them/)).not.toBeInTheDocument();
   });
 
   it('refuses a name or handle the rules refuse before asking the server', async () => {
     const calls = installFetch({ welcome: { status: 'not_eligible', amount: 25, credits: 0, identityComplete: false } });
-    render(<CreatorWelcomeCard welcome={{ referral: null }} />);
+    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
 
     fireEvent.change(await screen.findByLabelText('Display name'), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save and add 25 credits' }));
@@ -115,7 +151,7 @@ describe('the creator’s greeting for an account back from sign-up', () => {
       welcome: { status: 'eligible', amount: 25, credits: 0, identityComplete: true },
       claim: { status: 'claimed', amount: 25, credits: 25, identityComplete: true },
     });
-    render(<CreatorWelcomeCard welcome={{ referral: null }} />);
+    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Add 25 credits' }));
 
@@ -125,7 +161,7 @@ describe('the creator’s greeting for an account back from sign-up', () => {
 
   it('only says the form is back to an account with nothing to add, with how its invite went', async () => {
     installFetch({ welcome: { status: 'already_claimed', amount: 25, credits: 3, identityComplete: true } });
-    render(<CreatorWelcomeCard welcome={{ referral: 'applied' }} />);
+    render(<CreatorWelcomeCard welcome={{ referral: 'applied' }} carriedDraft />);
 
     expect(await screen.findByRole('heading', { name: 'You’re signed in' })).toBeInTheDocument();
     expect(screen.getByText(/Invite applied/)).toBeInTheDocument();
@@ -139,7 +175,7 @@ describe('the creator’s greeting for an account back from sign-up', () => {
       welcome: { status: 'not_eligible', amount: 25, credits: 0, identityComplete: false },
       claim: { status: 'identity_already_claimed', amount: 25, credits: 0, identityComplete: true },
     });
-    render(<CreatorWelcomeCard welcome={{ referral: null }} />);
+    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Save and add 25 credits' }));
 
@@ -149,7 +185,7 @@ describe('the creator’s greeting for an account back from sign-up', () => {
 
   it('can be put away for now', async () => {
     installFetch({ welcome: { status: 'not_eligible', amount: 25, credits: 0, identityComplete: false } });
-    render(<CreatorWelcomeCard welcome={{ referral: null }} />);
+    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Not now' }));
     expect(screen.queryByRole('heading', { name: 'Pick your name and handle' })).not.toBeInTheDocument();

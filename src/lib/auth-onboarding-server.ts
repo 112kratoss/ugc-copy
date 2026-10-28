@@ -7,7 +7,7 @@ import { cookies } from 'next/headers';
 
 import {
   getSafeAuthNextPath,
-  isCreatorPath,
+  isCreatorSignUpReturn,
   isPasswordRecoveryPath,
   resolvePostAuthPath,
 } from '@/lib/auth-onboarding';
@@ -52,9 +52,10 @@ export async function resolveServerPostAuthPath(
     return safeNext;
   }
 
-  // A creator asks for the name and handle in its own card, which also adds the
-  // welcome credits, so an account that skipped profile setup is still greeted there.
-  if (options.skipProfileOnboarding && !isCreatorPath(safeNext)) {
+  // A creator's sign-up sheet asks for the name and handle in its own card, which
+  // also adds the welcome credits, so an account that skipped profile setup is still
+  // greeted there.
+  if (options.skipProfileOnboarding && !isCreatorSignUpReturn(safeNext)) {
     return safeNext;
   }
 

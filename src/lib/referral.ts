@@ -3,6 +3,7 @@ import 'server-only';
 import { createHmac } from 'node:crypto';
 
 import { CREATOR_WELCOME_PARAM, isCreatorPath } from '@/lib/auth-onboarding';
+import { REFERRAL_CLAIM_REASON_PATTERN, REFERRAL_CLAIM_STATUS_PARAM } from '@/lib/referral-claim-copy';
 import { logBackendWarning } from '@/lib/backend-logger';
 import { getClientNetworkKey } from '@/lib/client-network-key';
 
@@ -117,13 +118,13 @@ export function readReferralVisitCookie(cookieHeader: string | null): string | n
   return null;
 }
 
-/** The query parameter that carries a sign-up's invite claim to the welcome-reward page. */
-export const REFERRAL_CLAIM_STATUS_PARAM = 'referral';
+// The query parameter and the shape of a claim status live with the copy that reads them on
+// the client (the welcome-reward page and the creators' welcome card).
+export { REFERRAL_CLAIM_STATUS_PARAM };
 
 const REFERRAL_PATH_BASE = 'https://magicbooklet.local';
 const WELCOME_REWARD_PATH = '/welcome-reward';
 const PROFILE_SETUP_PATH = '/profile';
-const REFERRAL_CLAIM_REASON_PATTERN = /^[a-z_]{1,64}$/;
 
 /**
  * What a post-auth redirect tells the new account about the invite it opened:

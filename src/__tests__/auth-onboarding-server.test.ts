@@ -91,7 +91,7 @@ describe('server-side auth profile routing', () => {
     expect(supabase.from).not.toHaveBeenCalled();
   });
 
-  it('still greets an account that skipped setup when it comes back to a creator', async () => {
+  it('still greets an account that skipped setup when it comes back from a creator’s sign-up sheet', async () => {
     const supabase = createSupabaseProfileClient({
       username: 'creator-a1b2c3d4',
       display_name: null,
@@ -103,9 +103,9 @@ describe('server-side auth profile routing', () => {
     await expect(resolveServerPostAuthPath(
       supabase.client as never,
       'user-1',
-      '/create-video?prompt=boat',
+      '/create-video?handover=nonce-1234',
       { skipProfileOnboarding: true }
-    )).resolves.toBe('/create-video?prompt=boat&welcome=1');
+    )).resolves.toBe('/create-video?handover=nonce-1234&welcome=1');
     expect(supabase.from).toHaveBeenCalledWith('profiles');
   });
 });

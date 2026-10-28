@@ -1,4 +1,4 @@
-import { moveCreatorToolData, type CreatorDraftTool } from '@/lib/persisted-media';
+import { CREATOR_DRAFT_TOOLS, moveCreatorToolData, type CreatorDraftTool } from '@/lib/persisted-media';
 
 /**
  * A creator used signed out. A visitor sets up a run (prompt, settings, the
@@ -6,47 +6,45 @@ import { moveCreatorToolData, type CreatorDraftTool } from '@/lib/persisted-medi
  * set up is what they sign in for, so it must be there when they come back.
  *
  * Their draft is saved like an account's, under an owner that is never an
- * account id (those are UUIDs). Opening sign-up from a creator marks that
- * creator's draft for hand-over; the first page of that creator opened signed in
- * within the hour moves it to the account, replacing the account's own draft for
- * that tool. Without the mark nothing moves, so the next person to sign in on a
- * shared browser never opens a visitor's pictures.
+ * account id (those are UUIDs). Leaving for sign-in from the creator's sign-up
+ * sheet stores a one-time nonce for that creator here and carries it on the way
+ * back (`?handover=`, `creatorSignUpReturnPath`). Only a page that comes back with
+ * the same nonce, within the hour, moves the draft to the account signed in,
+ * replacing the account's own draft for that tool. A sign-up abandoned on the
+ * way, or any other sign-in on the browser, carries no nonce and moves nothing,
+ * so nobody else's account ever opens a visitor's pictures.
  *
- * The mark is kept in localStorage, which answers at once: a page with no mark
+ * The mark is kept in localStorage, which answers at once: a page with no nonce
  * (nearly every signed-in page) reads its account's draft without waiting.
  */
 export const VISITOR_DRAFT_OWNER = 'visitor';
 
-/** How long after sign-up was opened the next sign-in takes the visitor's draft. */
+/** How long after sign-up was opened its return still takes the visitor's draft. */
 export const VISITOR_DRAFT_HANDOVER_MAX_AGE_MS = 60 * 60 * 1000;
 
 export const VISITOR_DRAFT_HANDOVER_STORAGE_KEY = 'magicbooklet:creator-draft-handover';
 
-type HandoverMark = { version: 1; tool: CreatorDraftTool; markedAt: number };
+type HandoverMark = { version: 2; tool: CreatorDraftTool; nonce: string; markedAt: number };
 
-function readHandoverMark(value: unknown): HandoverMark | null {
-  const mark = (value ?? {}) as Partial<HandoverMark>;
-  return mark.version === 1
-    && (mark.tool === 'image' || mark.tool === 'video' || mark.tool === 'motion')
-    && typeof mark.markedAt === 'number'
-    && Number.isFinite(mark.markedAt)
-    ? { version: 1, tool: mark.tool, markedAt: mark.markedAt }
-    : null;
+function isDraftTool(value: unknown): value is CreatorDraftTool {
+  return (CREATOR_DRAFT_TOOLS as readonly unknown[]).includes(value);
 }
 
-/** The stored mark, and whether anything was stored at all (an unreadable one is cleared). */
-function readStoredMark(): { mark: HandoverMark | null; stored: boolean } {
+/** The stored mark, or null when there is none or it cannot be read. */
+function readStoredMark(): HandoverMark | null {
   try {
-    const raw = window.localStorage.getItem(VISITOR_DRAFT_HANDOVER_STORAGE_KEY);
-    if (raw === null) return { mark: null, stored: false };
-    try {
-      return { mark: readHandoverMark(JSON.parse(raw)), stored: true };
-    } catch {
-      return { mark: null, stored: true };
-    }
+    const mark = JSON.parse(window.localStorage.getItem(VISITOR_DRAFT_HANDOVER_STORAGE_KEY) ?? 'null') as Partial<HandoverMark> | null;
+    return mark?.version === 2
+      && isDraftTool(mark.tool)
+      && typeof mark.nonce === 'string'
+      && mark.nonce.length > 0
+      && typeof mark.markedAt === 'number'
+      && Number.isFinite(mark.markedAt)
+      ? { version: 2, tool: mark.tool, nonce: mark.nonce, markedAt: mark.markedAt }
+      : null;
   } catch {
-    // Storage refused (a private window, say): there is no mark to follow.
-    return { mark: null, stored: false };
+    // Storage refused (a private window, say), or a value that is not JSON.
+    return null;
   }
 }
 
@@ -62,39 +60,49 @@ function isFresh(mark: HandoverMark, now: number) {
   return mark.markedAt <= now && now - mark.markedAt <= VISITOR_DRAFT_HANDOVER_MAX_AGE_MS;
 }
 
-/** Marks a creator's visitor draft for the account about to sign in. A later mark replaces an earlier one. */
-export function markVisitorDraftForHandover(tool: CreatorDraftTool, now = Date.now()): void {
-  try {
-    window.localStorage.setItem(
-      VISITOR_DRAFT_HANDOVER_STORAGE_KEY,
-      JSON.stringify({ version: 1, tool, markedAt: now } satisfies HandoverMark),
-    );
-  } catch {
-    // Storage refused: the account opens its own draft, as it did before.
-  }
-}
-
-/** Whether sign-up was opened from this creator within the hour, so its next signed-in page waits for the move. */
-export function hasVisitorDraftHandover(tool: CreatorDraftTool, now = Date.now()): boolean {
-  const { mark } = readStoredMark();
-  return Boolean(mark && mark.tool === tool && isFresh(mark, now));
+function createNonce() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 /**
- * Moves this creator's visitor draft to the account signed in, when sign-up was
- * opened from this creator within the hour. Says whether it moved one. A mark
- * for another creator stays for that creator; an old or unreadable one goes.
+ * Marks a creator's visitor draft for the sign-in about to start, and answers the
+ * nonce its way back carries; null when the browser keeps nothing, and then
+ * nothing is handed over. A later mark replaces an earlier one.
  */
-export async function adoptVisitorDraft(tool: CreatorDraftTool, userId: string, now = Date.now()): Promise<boolean> {
-  if (!userId || userId === VISITOR_DRAFT_OWNER) return false;
-  const { mark, stored } = readStoredMark();
-  if (!stored) return false;
-  if (!mark || !isFresh(mark, now)) {
-    clearStoredMark();
-    return false;
+export function markVisitorDraftForHandover(tool: CreatorDraftTool, now = Date.now()): string | null {
+  const nonce = createNonce();
+  try {
+    window.localStorage.setItem(
+      VISITOR_DRAFT_HANDOVER_STORAGE_KEY,
+      JSON.stringify({ version: 2, tool, nonce, markedAt: now } satisfies HandoverMark),
+    );
+    return nonce;
+  } catch {
+    return null;
   }
-  if (mark.tool !== tool) return false;
-  await moveCreatorToolData(tool, VISITOR_DRAFT_OWNER, userId);
+}
+
+/** Whether this page came back from this creator's sign-up with its nonce, within the hour. */
+export function hasVisitorDraftHandover(tool: CreatorDraftTool, nonce: string | null | undefined, now = Date.now()): boolean {
+  const mark = readStoredMark();
+  return Boolean(nonce && mark && mark.tool === tool && mark.nonce === nonce && isFresh(mark, now));
+}
+
+/**
+ * Moves this creator's visitor draft to the account signed in, when this page came
+ * back from the creator's sign-up with its nonce within the hour. Says whether it
+ * moved one. The mark is spent either way, so a reload of the same address moves
+ * nothing again.
+ */
+export async function adoptVisitorDraft(
+  tool: CreatorDraftTool,
+  userId: string,
+  nonce: string | null | undefined,
+  now = Date.now(),
+): Promise<boolean> {
+  if (!userId || userId === VISITOR_DRAFT_OWNER || !hasVisitorDraftHandover(tool, nonce, now)) return false;
   clearStoredMark();
+  await moveCreatorToolData(tool, VISITOR_DRAFT_OWNER, userId);
   return true;
 }

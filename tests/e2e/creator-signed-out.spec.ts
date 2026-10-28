@@ -82,10 +82,12 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   await expect(sheet.getByText('Your prompt stays')).toBeVisible();
 
   let authorizeUrl: URL | null = null;
-  const comeBack = new URL('/create-video?welcome=1', page.url()).toString();
   await page.route('https://example.supabase.co/auth/v1/authorize**', (route) => {
     authorizeUrl = new URL(route.request().url());
-    return route.fulfill({ status: 302, headers: { location: comeBack } });
+    // Where /auth/callback sends a new account that signed up from the sheet: its `next`
+    // (the creator with the hand-over nonce) with the welcome flag (resolvePostAuthPath).
+    const next = new URL(authorizeUrl.searchParams.get('redirect_to') ?? '').searchParams.get('next') ?? '/';
+    return route.fulfill({ status: 302, headers: { location: new URL(`${next}&welcome=1`, page.url()).toString() } });
   });
   // Signed in from here on: the bypass's account is a new one, as far as these routes say.
   await context.addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
@@ -98,7 +100,7 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   const redirectTo = new URL(authorizeUrl!.searchParams.get('redirect_to') ?? '');
   expect(authorizeUrl!.searchParams.get('provider')).toBe('google');
   expect(redirectTo.pathname).toBe('/auth/callback');
-  expect(redirectTo.searchParams.get('next')).toBe('/create-video');
+  expect(redirectTo.searchParams.get('next')).toMatch(/^\/create-video\?handover=[A-Za-z0-9-]{8,64}$/);
 
   // The visitor's prompt, taken over by the account, and the flag gone from the address.
   await expect(prompt).toHaveValue(PROMPT);

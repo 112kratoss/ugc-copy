@@ -6,39 +6,73 @@ import { adoptVisitorDraft, hasVisitorDraftHandover, VISITOR_DRAFT_OWNER } from 
 import type { CreatorDraftTool } from '@/lib/persisted-media';
 
 /** Past this the page goes on without a hand-over that never answered, as it does without a draft. */
-const HANDOVER_WAIT_MS = 3000;
+const HANDOVER_WAIT_MS = 10_000;
 
 /**
- * Whose saved draft a creator keeps: the account signed in, or the visitor while
- * nobody is. A page that opens signed in right after this creator's sign-up was
- * opened (the hand-over mark) gets null until the visitor's draft has been moved
- * to the account, so it reads its draft back only once the move is done. Every
- * other page has its owner at once.
+ * One move per return, whichever run of the effect asks: React runs a development
+ * effect twice, and the first run spends the mark, so a second run starting its
+ * own move would find nothing and let the page read the account's keys while the
+ * first move was still writing them.
  */
-export function useCreatorDraftOwner(tool: CreatorDraftTool, userId: string | null): string | null {
-  // Read once: a mark is left by this tab's own sign-up, just before it leaves the page.
-  const [awaitsHandover] = useState(() => typeof window !== 'undefined' && hasVisitorDraftHandover(tool));
-  const [movedFor, setMovedFor] = useState<string | null>(null);
+const moves = new Map<string, Promise<boolean>>();
+
+function moveOnce(tool: CreatorDraftTool, userId: string, nonce: string): Promise<boolean> {
+  const key = `${tool}\n${userId}\n${nonce}`;
+  let move = moves.get(key);
+  if (!move) {
+    move = adoptVisitorDraft(tool, userId, nonce).catch(() => false);
+    moves.set(key, move);
+  }
+  return move;
+}
+
+export type CreatorDraftOwner = {
+  /** Whose draft the page reads and saves; null while it waits for a hand-over, or once a signed-in page has lost its session. */
+  owner: string | null;
+  /** The visitor's draft was moved to this account on the way back from sign-up. */
+  carriedDraft: boolean;
+};
+
+/**
+ * Whose saved draft a creator keeps.
+ * - A page that opened signed out keeps the visitor's.
+ * - A signed-in page keeps the account's. When it came back from this creator's
+ *   sign-up with the hand-over nonce, it waits until the visitor's draft has
+ *   moved to the account, so it reads its draft back only once the move is done.
+ * - A page that opened signed in and then lost its session keeps nothing, so the
+ *   account's form never lands in the browser's visitor slot, where the next
+ *   person would open it.
+ */
+export function useCreatorDraftOwner(
+  tool: CreatorDraftTool,
+  userId: string | null,
+  handoverNonce: string | null,
+): CreatorDraftOwner {
+  const [openedSignedIn] = useState(() => userId !== null);
+  // Read once, as the page opens: the nonce is in this page's own address.
+  const [awaitsHandover] = useState(() => typeof window !== 'undefined' && hasVisitorDraftHandover(tool, handoverNonce));
+  const [moved, setMoved] = useState<{ userId: string; carried: boolean } | null>(null);
 
   useEffect(() => {
-    if (!userId || !awaitsHandover) return;
+    if (!userId || !awaitsHandover || !handoverNonce) return;
     let cancelled = false;
-    const done = () => {
-      if (!cancelled) setMovedFor(userId);
+    const done = (carried: boolean) => {
+      if (!cancelled) setMoved({ userId, carried });
     };
-    const giveUp = window.setTimeout(done, HANDOVER_WAIT_MS);
-    void adoptVisitorDraft(tool, userId)
-      .catch(() => false)
-      .finally(() => {
-        window.clearTimeout(giveUp);
-        done();
-      });
+    const giveUp = window.setTimeout(() => done(false), HANDOVER_WAIT_MS);
+    void moveOnce(tool, userId, handoverNonce).then((carried) => {
+      window.clearTimeout(giveUp);
+      done(carried);
+    });
     return () => {
       cancelled = true;
       window.clearTimeout(giveUp);
     };
-  }, [awaitsHandover, tool, userId]);
+  }, [awaitsHandover, handoverNonce, tool, userId]);
 
-  if (!userId) return VISITOR_DRAFT_OWNER;
-  return !awaitsHandover || movedFor === userId ? userId : null;
+  if (!userId) return { owner: openedSignedIn ? null : VISITOR_DRAFT_OWNER, carriedDraft: false };
+  if (!awaitsHandover) return { owner: userId, carriedDraft: false };
+  return moved?.userId === userId
+    ? { owner: userId, carriedDraft: moved.carried }
+    : { owner: null, carriedDraft: false };
 }

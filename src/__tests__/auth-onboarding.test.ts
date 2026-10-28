@@ -7,9 +7,12 @@ import {
   getPasswordRecoveryNextPath,
   getSafeAuthNextPath,
   hasSkippedProfileOnboarding,
+  creatorSignUpReturnPath,
   isCreatorPath,
+  isCreatorSignUpReturn,
   resolvePostAuthPath,
   withCreatorWelcome,
+  withoutCreatorReturnFlags,
 } from '@/lib/auth-onboarding';
 import {
   getPasswordRequirements,
@@ -65,38 +68,51 @@ describe('auth onboarding destinations', () => {
     }, '/create/motion?source=showcase')).toBe('/create/motion?source=showcase');
   });
 
-  // A visitor signs up at a creator's Generate (owner, 2026-10-28): the creator
-  // asks for the name and handle itself, in the card that adds the welcome credits.
-  it('sends a sign-up from a creator straight back to it, flagged for its welcome card', () => {
-    expect(resolvePostAuthPath(null, '/create-video?model=seedance-2-mini&prompt=boat')).toBe(
-      '/create-video?model=seedance-2-mini&prompt=boat&welcome=1'
+  // A visitor signs up at a creator's Generate (owner, 2026-10-28): the creator asks
+  // for the name and handle itself, in the card that adds the welcome credits. The
+  // sheet marks its own way back (`handover`), so only that sign-in skips onboarding.
+  it('sends a sign-up from a creator’s sheet straight back to it, flagged for its welcome card', () => {
+    expect(resolvePostAuthPath(null, '/create-video?handover=nonce-1234')).toBe(
+      '/create-video?handover=nonce-1234&welcome=1'
     );
     expect(resolvePostAuthPath({
       username: 'creator-a1b2c3d4',
       displayName: 'New creator',
-    }, '/create-image')).toBe('/create-image?welcome=1');
-    expect(resolvePostAuthPath(null, '/create-motion?remix=gen-1&remixPost=post-1')).toBe(
-      '/create-motion?remix=gen-1&remixPost=post-1&welcome=1'
-    );
+    }, '/create-image?handover=nonce-1234')).toBe('/create-image?handover=nonce-1234&welcome=1');
     // A ready account comes back as it went, with nothing to greet.
     expect(resolvePostAuthPath({
       username: 'athul-creates',
       displayName: 'Athul Creates',
-    }, '/create-video?prompt=boat')).toBe('/create-video?prompt=boat');
-    // The launchpad and the workflow builder keep profile setup first.
-    expect(resolvePostAuthPath(null, '/create-workflow')).toBe(
-      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate-workflow'
+    }, '/create-video?handover=nonce-1234')).toBe('/create-video?handover=nonce-1234');
+  });
+
+  it('keeps the usual onboarding for a sign-in that only returns to a creator', () => {
+    // A remix link's sign-in, or the top bar's Sign in on a creator.
+    expect(resolvePostAuthPath(null, '/create-motion?remix=gen-1&remixPost=post-1')).toBe(
+      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate-motion%253Fremix%253Dgen-1%2526remixPost%253Dpost-1'
+    );
+    expect(resolvePostAuthPath(null, '/create-workflow?handover=nonce-1234')).toBe(
+      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate-workflow%253Fhandover%253Dnonce-1234'
     );
   });
 
-  it('knows the three creators by their path alone', () => {
+  it('knows a sign-up return from a creator by its path and its hand-over mark', () => {
     expect(isCreatorPath('/create-image')).toBe(true);
     expect(isCreatorPath('/create-video?prompt=x')).toBe(true);
-    expect(isCreatorPath('/create-motion#top')).toBe(true);
     expect(isCreatorPath('/create')).toBe(false);
-    expect(isCreatorPath('/create-workflow')).toBe(false);
     expect(isCreatorPath('/create-video/extra')).toBe(false);
+    expect(isCreatorSignUpReturn('/create-video?handover=abc12345')).toBe(true);
+    expect(isCreatorSignUpReturn('/create-video')).toBe(false);
+    expect(isCreatorSignUpReturn('/create?handover=abc12345')).toBe(false);
     expect(withCreatorWelcome('/create-video?welcome=1&prompt=x')).toBe('/create-video?welcome=1&prompt=x');
+  });
+
+  it('builds the sheet’s way back: the visitor’s draft carries the link’s own settings', () => {
+    const here = '/create-video?prompt=boat&model=kling-3.0-video&aspectRatio=9%3A16&duration=5&welcome=1&referral=applied&handover=old';
+    expect(creatorSignUpReturnPath(here, 'nonce-1234')).toBe('/create-video?handover=nonce-1234');
+    // An account's own page keeps its link, without an earlier return's flags.
+    expect(creatorSignUpReturnPath(here, null)).toBe('/create-video?prompt=boat&model=kling-3.0-video&aspectRatio=9%3A16&duration=5');
+    expect(withoutCreatorReturnFlags('/create-image?remix=g&welcome=1&referral=applied&handover=x#top')).toBe('/create-image?remix=g#top');
   });
 
   it('does not let profile setup intercept password recovery', () => {

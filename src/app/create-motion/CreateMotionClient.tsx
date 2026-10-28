@@ -37,6 +37,7 @@ import {
 } from '@/components/CreatorColumn';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
+import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import { motionSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
@@ -229,6 +230,7 @@ export default function CreateMotionClient({
     prefill,
     returnTo = '/create-motion',
     welcome = null,
+    handoverNonce = null,
     visitorWelcomeCredits = null,
 }: {
     prefill: CreateMotionPrefill;
@@ -236,6 +238,8 @@ export default function CreateMotionClient({
     returnTo?: string;
     /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
     welcome?: CreatorWelcome | null;
+    /** The sign-up sheet's `?handover=` nonce on the way back: the visitor's draft moves to the account by it. */
+    handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
 }) {
@@ -246,7 +250,7 @@ export default function CreateMotionClient({
     const isVisitor = !session;
     // The visitor's draft until someone signs in, then the account's, which takes
     // the visitor's when sign-up was opened here.
-    const draftOwner = useCreatorDraftOwner('motion', userId);
+    const { owner: draftOwner, carriedDraft } = useCreatorDraftOwner('motion', userId, handoverNonce);
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
@@ -1495,7 +1499,7 @@ export default function CreateMotionClient({
                 column={
                     <>
                         <CreatorToolTabs currentToolId="motion" />
-                        {welcome && !isVisitor ? <CreatorWelcomeCard welcome={welcome} /> : null}
+                        {welcome && !isVisitor ? <CreatorWelcomeCard welcome={welcome} carriedDraft={carriedDraft} /> : null}
 
                         <div className="flex items-start gap-2">
                             <div className="relative min-w-0 flex-1" ref={dropdownRef}>
@@ -1793,12 +1797,13 @@ export default function CreateMotionClient({
             />
 
             <CreatorSignUpSheet
-                open={signUpReason !== null}
-                reason={signUpReason ?? 'generate'}
+                reason={signUpReason}
+                handsOverDraft={draftOwner === VISITOR_DRAFT_OWNER}
                 tool="motion"
                 welcomeCredits={visitorWelcomeCredits}
                 runCost={estimatedCost}
-                settingsLine={[model.displayName, ...settingsSummary.split(' · ')].join(', ')}
+                modelName={model.displayName}
+                settingsSummary={settingsSummary}
                 keepsPrompt={Boolean(prompt.trim())}
                 keepsImages={Boolean(characterImageFile || referenceVideoFile)}
                 onClose={() => setSignUpReason(null)}

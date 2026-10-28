@@ -1,14 +1,18 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, Loader2, X } from 'lucide-react';
+import clsx from 'clsx';
 
+import { getAccentClasses } from '@/components/DesignSystem';
+import GoogleSignInAgreement from '@/components/GoogleSignInAgreement';
+import { useInertPageBeneath } from '@/components/useInertPageBeneath';
+import { useModalQuestion } from '@/components/useModalQuestion';
 import { describeAuthError } from '@/lib/auth-error-copy';
 import { getAuthCallbackUrl } from '@/lib/auth-callback-url';
-import { CREATOR_WELCOME_PARAM } from '@/lib/auth-onboarding';
+import { creatorSignUpReturnPath } from '@/lib/auth-onboarding';
 import { markVisitorDraftForHandover } from '@/lib/creator-visitor-draft';
 import type { CreatorDraftTool } from '@/lib/persisted-media';
 import { supabase } from '@/lib/supabase';
@@ -37,125 +41,99 @@ export function creatorSignUpBody(welcomeCredits: number | null, runCost: number
   return `New here? You get ${welcomeCredits} free credits when you pick a name and handle${enough}. ${back}`;
 }
 
-/** This page's address to come back to, without the flags of an earlier return. */
-function returnPath() {
-  const url = new URL(window.location.href);
-  url.searchParams.delete(CREATOR_WELCOME_PARAM);
-  url.searchParams.delete('referral');
-  return `${url.pathname}${url.search}`;
-}
+const FOCUSABLE = 'a[href], button:not([disabled])';
 
-const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
+type CreatorSignUpSheetProps = {
+  /** What was pressed, or null while the sheet is closed. */
+  reason: CreatorSignUpReason | null;
+  tool: CreatorDraftTool;
+  /**
+   * The page's draft is the visitor's, so leaving marks it for the account. A page
+   * whose session ended keeps its account's draft under the account already.
+   */
+  handsOverDraft: boolean;
+  welcomeCredits: number | null;
+  runCost: number | null;
+  /** The run's model and its settings chip ("Seedance 2 Mini", "480P · 9:16 · 5s"), as the run's own label reads them. */
+  modelName: string;
+  settingsSummary: string;
+  keepsPrompt: boolean;
+  keepsImages: boolean;
+  onClose: () => void;
+};
 
 /**
  * The sign-up a signed-out visitor meets at Generate (owner, 2026-10-28): the
  * creator works without an account up to there. It says what stays (the
  * prompt, the settings, the pictures) and that nothing runs until Generate is
- * pressed again. Before leaving for Google it marks this creator's draft for
- * the account (`markVisitorDraftForHandover`), which takes it on the way back.
+ * pressed again. Leaving for sign-in marks this creator's draft for the account
+ * with a one-time nonce that the way back carries (`creator-visitor-draft.ts`).
  *
  * New accounts are made with Google only on the web (the login page says why);
  * the few password accounts sign in on the login page and come back the same
  * way. Apple on the web is a later task.
  */
-export default function CreatorSignUpSheet({
-  open,
+export default function CreatorSignUpSheet(props: CreatorSignUpSheetProps) {
+  if (props.reason === null || typeof document === 'undefined') return null;
+  return createPortal(<CreatorSignUpPanel {...props} reason={props.reason} />, document.body);
+}
+
+function CreatorSignUpPanel({
   reason,
   tool,
+  handsOverDraft,
   welcomeCredits,
   runCost,
-  settingsLine,
+  modelName,
+  settingsSummary,
   keepsPrompt,
   keepsImages,
   onClose,
-}: {
-  open: boolean;
-  reason: CreatorSignUpReason;
-  tool: CreatorDraftTool;
-  welcomeCredits: number | null;
-  runCost: number | null;
-  /** The run's model and settings, as the list says they stay: "Seedance 2 Mini, 480P, 9:16, 5s". */
-  settingsLine: string | null;
-  keepsPrompt: boolean;
-  keepsImages: boolean;
-  onClose: () => void;
-}) {
+}: CreatorSignUpSheetProps & { reason: CreatorSignUpReason }) {
   const router = useRouter();
+  const id = useId();
+  const titleId = `${id}-title`;
+  const bodyId = `${id}-body`;
+  const agreementId = `${id}-agreement`;
   const overlayRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const googleRef = useRef<HTMLButtonElement>(null);
   const [leaving, setLeaving] = useState<'google' | 'email' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Keys stay in the sheet while it is up: Escape closes it, Tab goes round it.
+  // First: the focus useModalQuestion gives back as the sheet goes does nothing
+  // while the page beneath is still inert, and effects are undone in order.
+  useInertPageBeneath(overlayRef);
+  useModalQuestion({
+    questionId: 1,
+    dialogRef: panelRef,
+    initialFocus: () => googleRef.current,
+    focusables: () => Array.from(panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []),
+    onCancel: () => {
+      if (!leaving) onClose();
+    },
+  });
+
+  // A page the browser restores after leaving for Google (Back from its account
+  // chooser) comes back with the sheet as it was left; it is usable again.
   useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        if (!leaving) onClose();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const panel = panelRef.current;
-      if (!panel) return;
-      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (event.shiftKey && (active === first || !panel.contains(active))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !panel.contains(active))) {
-        event.preventDefault();
-        first.focus();
-      }
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setLeaving(null);
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [leaving, onClose, open]);
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
 
-  // The page under it takes no press, no scroll and no reader's attention.
-  useEffect(() => {
-    const overlay = overlayRef.current;
-    if (!open || !overlay) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const siblings = Array.from(document.body.children)
-      .filter((element): element is HTMLElement => element instanceof HTMLElement && element !== overlay);
-    const previous = siblings.map((element) => ({ element, inert: element.inert, ariaHidden: element.getAttribute('aria-hidden') }));
-    siblings.forEach((element) => {
-      element.inert = true;
-      element.setAttribute('aria-hidden', 'true');
-    });
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      previous.forEach(({ element, inert, ariaHidden }) => {
-        element.inert = inert;
-        if (ariaHidden === null) {
-          element.removeAttribute('aria-hidden');
-        } else {
-          element.setAttribute('aria-hidden', ariaHidden);
-        }
-      });
-    };
-  }, [open]);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    googleRef.current?.focus();
-    return () => previouslyFocused?.focus?.();
-  }, [open]);
-
-  if (!open || typeof document === 'undefined') return null;
+  /** This page to come back to, marked for the hand-over when the draft is the visitor's. */
+  const returnPath = () => creatorSignUpReturnPath(
+    `${window.location.pathname}${window.location.search}`,
+    handsOverDraft ? markVisitorDraftForHandover(tool) : null,
+  );
 
   const continueWithGoogle = async () => {
     setLeaving('google');
     setError(null);
     try {
-      markVisitorDraftForHandover(tool);
       const { error: signInError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: { redirectTo: getAuthCallbackUrl(returnPath()) },
@@ -169,88 +147,83 @@ export default function CreatorSignUpSheet({
 
   const signInWithEmail = () => {
     setLeaving('email');
-    markVisitorDraftForHandover(tool);
     router.push(`/login?returnUrl=${encodeURIComponent(returnPath())}`);
   };
 
   const keeps = [
     keepsPrompt ? 'Your prompt stays' : null,
-    settingsLine ? `Your settings stay: ${settingsLine}` : null,
+    `Your settings stay: ${[modelName, settingsSummary].filter(Boolean).join(' · ')}`,
     keepsImages ? 'Images you added stay' : null,
   ].filter((line): line is string => line !== null);
 
-  return createPortal(
+  return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70 backdrop-blur-sm sm:items-center sm:p-4"
-      onClick={() => {
-        if (!leaving) onClose();
+      className="ui-confirm-backdrop"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !leaving) onClose();
       }}
     >
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="creator-sign-up-title"
-        aria-describedby="creator-sign-up-body"
-        onClick={(event) => event.stopPropagation()}
-        className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-ui-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-ui-panel sm:rounded-ui-2xl"
+        aria-labelledby={titleId}
+        aria-describedby={bodyId}
+        className="ui-confirm-dialog"
       >
         <div className="flex items-start justify-between gap-4">
-          <h2 id="creator-sign-up-title" className="pt-2 text-xl font-bold leading-7 text-[var(--ui-text-primary)]">
-            {TITLES[reason]}
-          </h2>
+          <h2 id={titleId} className="ui-confirm-title">{TITLES[reason]}</h2>
           <button
             type="button"
             onClick={onClose}
             disabled={leaving !== null}
             aria-label="Close"
-            className="ui-focus-ring -mr-2 inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] text-[var(--ui-text-secondary)] transition-colors hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] disabled:opacity-50"
+            title="Close"
+            className="ui-icon-button ui-focus-ring -mr-2 -mt-2 shrink-0 disabled:opacity-50"
           >
-            <X aria-hidden className="h-5 w-5" />
+            <X aria-hidden className="h-4 w-4" />
           </button>
         </div>
-        <p id="creator-sign-up-body" className="mt-3 text-sm leading-6 text-[var(--ui-text-secondary)]">
+        <p id={bodyId} className="ui-confirm-message">
           {creatorSignUpBody(welcomeCredits, runCost)}
         </p>
-        {keeps.length > 0 ? (
-          <ul className="mt-4 space-y-2">
-            {keeps.map((line) => (
-              <li key={line} className="flex items-start gap-2.5 text-sm leading-6 text-[var(--ui-text-primary)]">
-                <Check aria-hidden className="mt-1 h-4 w-4 shrink-0 text-emerald-300" />
-                {line}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {error ? <p role="alert" className="mt-4 text-sm text-[var(--ui-accent-danger)]">{error}</p> : null}
-        <button
-          ref={googleRef}
-          type="button"
-          onClick={() => void continueWithGoogle()}
-          disabled={leaving !== null}
-          className="ui-focus-ring mt-6 flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition-[background-color,transform] duration-150 hover:bg-[var(--ui-primary-strong)] active:scale-[0.98] disabled:cursor-wait disabled:opacity-70"
-        >
-          {leaving === 'google' ? <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> : null}
-          Continue with Google
-        </button>
-        <button
-          type="button"
-          onClick={signInWithEmail}
-          disabled={leaving !== null}
-          className="ui-focus-ring mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] px-4 text-sm font-bold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)] disabled:cursor-wait disabled:opacity-70"
-        >
-          {leaving === 'email' ? <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> : null}
-          Sign in with email and password
-        </button>
+        <ul className="mt-4 space-y-2">
+          {keeps.map((line) => (
+            <li key={line} className="flex items-start gap-2.5 text-sm leading-6 text-[var(--ui-text-primary)]">
+              <Check aria-hidden className={clsx('mt-1 h-4 w-4 shrink-0', getAccentClasses('workflow').mark)} />
+              {line}
+            </li>
+          ))}
+        </ul>
+        {error ? <p role="alert" className="mt-4 text-sm leading-6 text-[var(--ui-accent-danger)]">{error}</p> : null}
+        <div className="mt-6 flex flex-col gap-3">
+          <button
+            ref={googleRef}
+            type="button"
+            onClick={() => void continueWithGoogle()}
+            disabled={leaving !== null}
+            aria-describedby={agreementId}
+            className="ui-button ui-button-primary ui-focus-ring w-full"
+          >
+            {leaving === 'google' ? <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> : null}
+            Continue with Google
+          </button>
+          <button
+            type="button"
+            onClick={signInWithEmail}
+            disabled={leaving !== null}
+            className="ui-button ui-button-secondary ui-focus-ring w-full"
+          >
+            {leaving === 'email' ? <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> : null}
+            Sign in with email and password
+          </button>
+        </div>
         <p className="mt-4 text-xs leading-5 text-[var(--ui-text-muted)]">
-          Already have an account? Google signs you in too. By continuing you agree to the{' '}
-          <Link href="/terms" className="font-semibold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">Terms</Link>
-          {' '}and the{' '}
-          <Link href="/privacy" className="font-semibold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">Privacy Policy</Link>.
+          Already have an account? Google signs you in too.
         </p>
+        <GoogleSignInAgreement id={agreementId} className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]" />
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }

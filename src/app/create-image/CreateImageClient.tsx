@@ -45,6 +45,7 @@ import {
 } from '@/components/CreatorColumn';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
+import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
@@ -343,11 +344,14 @@ const CATALOG_HANDLED_KEYS = ['aspectRatio', 'resolution', 'qualityMode', 'googl
 export default function CreateImageClient({
     prefill,
     welcome = null,
+    handoverNonce = null,
     visitorWelcomeCredits = null,
 }: {
     prefill: CreateImagePrefill;
     /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
     welcome?: CreatorWelcome | null;
+    /** The sign-up sheet's `?handover=` nonce on the way back: the visitor's draft moves to the account by it. */
+    handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
 }) {
@@ -358,7 +362,7 @@ export default function CreateImageClient({
     const isVisitor = !session;
     // The visitor's draft until someone signs in, then the account's, which takes
     // the visitor's when sign-up was opened here.
-    const draftOwner = useCreatorDraftOwner('image', userId);
+    const { owner: draftOwner, carriedDraft } = useCreatorDraftOwner('image', userId, handoverNonce);
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
     const [prompt, setPrompt] = useState('');
@@ -1147,7 +1151,12 @@ export default function CreateImageClient({
     };
     /** Asks a visitor to sign up for what they pressed, with the form saved for the way back. */
     const openSignUp = async (reason: CreatorSignUpReason) => {
-        await saveDraftNow();
+        // The text only: the pictures were saved as each was added, and writing every
+        // one again held the sheet back on a phone.
+        if (!remixId && draftOwner && isDraftRestoreSettled) {
+            unsavedDraftRef.current = null;
+            await saveCreatorDraft('image', draftOwner, getDraftToSave()).catch(() => undefined);
+        }
         setSignUpReason(reason);
     };
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
@@ -1882,7 +1891,7 @@ export default function CreateImageClient({
                 column={
                     <>
                         <CreatorToolTabs currentToolId="image" />
-                        {welcome && !isVisitor ? <CreatorWelcomeCard welcome={welcome} /> : null}
+                        {welcome && !isVisitor ? <CreatorWelcomeCard welcome={welcome} carriedDraft={carriedDraft} /> : null}
 
                         <div className="flex items-start gap-2">
                         <div className="relative min-w-0 flex-1" ref={dropdownRef}>
@@ -2276,12 +2285,13 @@ export default function CreateImageClient({
             />
 
             <CreatorSignUpSheet
-                open={signUpReason !== null}
-                reason={signUpReason ?? 'generate'}
+                reason={signUpReason}
+                handsOverDraft={draftOwner === VISITOR_DRAFT_OWNER}
                 tool="image"
                 welcomeCredits={visitorWelcomeCredits}
                 runCost={currentCost}
-                settingsLine={[model.displayName, ...settingsSummary.split(' · ')].join(', ')}
+                modelName={model.displayName}
+                settingsSummary={settingsSummary}
                 keepsPrompt={Boolean(prompt.trim())}
                 keepsImages={elements.length > 0}
                 onClose={() => setSignUpReason(null)}

@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useId, useState, type FormEvent } from 'react';
 import { Check, Gift, X } from 'lucide-react';
+import clsx from 'clsx';
 
 import { useAuth } from '@/components/AuthProvider';
-import { Button, IconButton, Surface, Text } from '@/components/DesignSystem';
+import { Button, getAccentClasses, IconButton, Surface, Text } from '@/components/DesignSystem';
 import PublicIdentityFields from '@/components/PublicIdentityFields';
-import { CREATOR_WELCOME_PARAM } from '@/lib/auth-onboarding';
+import { withoutCreatorReturnFlags } from '@/lib/auth-onboarding';
+import type { WelcomeCreditStatus } from '@/lib/onboarding';
 import {
   claimPublicIdentity,
   getInitialPublicIdentity,
@@ -24,16 +26,6 @@ import type { ProfileApiResponse } from '@/lib/profile';
  */
 export type CreatorWelcome = { referral: string | null };
 
-type WelcomeCreditStatus =
-  | 'eligible'
-  | 'claimed'
-  | 'already_claimed'
-  | 'legacy_ineligible'
-  | 'identity_already_claimed'
-  | 'not_eligible'
-  | 'unavailable'
-  | 'requires_account';
-
 type WelcomeCredits = {
   status: WelcomeCreditStatus;
   amount: number;
@@ -49,12 +41,10 @@ type CardState =
   | { kind: 'added'; amount: number }
   /** Nothing to add: the account is back, and so is its form. */
   | { kind: 'back'; note: string | null }
+  /** The welcome credits could not be read: said, with a way to ask again. */
+  | { kind: 'unread' }
   | { kind: 'loading' }
   | { kind: 'closed' };
-
-const BACK_LINE = 'Your prompt and settings are as you left them. Press Generate when you’re ready; nothing has been spent.';
-
-const WELCOME_TITLE_CLASS = 'text-sm font-bold leading-5 text-[var(--ui-text-primary)]';
 
 async function welcomeRequest(path: string, accessToken: string, init?: RequestInit): Promise<WelcomeCredits> {
   const response = await fetch(path, {
@@ -66,13 +56,15 @@ async function welcomeRequest(path: string, accessToken: string, init?: RequestI
   return body;
 }
 
-/** The address without the flags that brought the account here, so a reload does not greet it again. */
+/**
+ * The address without the flags that brought the account here, so a reload does
+ * not greet it again. Passed to Next's own history handling (a null state), so
+ * the router and its back-forward entries keep the new address as well.
+ */
 function dropWelcomeFlags() {
-  const url = new URL(window.location.href);
-  if (!url.searchParams.has(CREATOR_WELCOME_PARAM) && !url.searchParams.has('referral')) return;
-  url.searchParams.delete(CREATOR_WELCOME_PARAM);
-  url.searchParams.delete('referral');
-  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const cleaned = withoutCreatorReturnFlags(here);
+  if (cleaned !== here) window.history.replaceState(null, '', cleaned);
 }
 
 /**
@@ -80,15 +72,23 @@ function dropWelcomeFlags() {
  * at Generate (owner, 2026-10-28). The welcome credits need a name and a handle
  * (`claim_credit_grant_program` refuses an account without them), so a new
  * account gets one card, filled in from the sign-in, whose one press saves both
- * and adds the credits. Nothing runs: the form the visitor set up is back, and
- * Generate is theirs to press.
+ * and adds the credits. Nothing runs: Generate is theirs to press.
  */
-export default function CreatorWelcomeCard({ welcome }: { welcome: CreatorWelcome }) {
+export default function CreatorWelcomeCard({
+  welcome,
+  carriedDraft,
+}: {
+  welcome: CreatorWelcome;
+  /** The visitor's draft came back with the account, so the form is as they left it. */
+  carriedDraft: boolean;
+}) {
   const auth = useAuth();
   const { session, updateCredits } = auth;
   const user = auth.user ?? session?.user ?? null;
   const accessToken = session?.access_token ?? null;
+  const titleId = useId();
   const [state, setState] = useState<CardState>({ kind: 'loading' });
+  const [attempt, setAttempt] = useState(0);
   const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
   const [identityEdits, setIdentityEdits] = useState<PublicIdentityDraft | null>(null);
   const [identityErrors, setIdentityErrors] = useState<PublicIdentityErrors>({});
@@ -97,15 +97,15 @@ export default function CreatorWelcomeCard({ welcome }: { welcome: CreatorWelcom
   const referralLine = describeReferralClaim(welcome.referral);
   const identity = identityEdits ?? getInitialPublicIdentity(profile, user);
   const userId = user?.id ?? null;
-
-  useEffect(() => {
-    dropWelcomeFlags();
-  }, []);
+  const backLine = carriedDraft
+    ? 'Your prompt and settings are as you left them. Press Generate when you’re ready; nothing has been spent.'
+    : 'Press Generate when you’re ready; nothing has been spent.';
 
   // Read on every run of the effect, and taken only while the card still waits: a
   // run cancelled under it (React runs a development effect twice) left the card
   // empty when a guard stopped the second run, and a token refreshed later must
-  // not take the card back from "added".
+  // not take the card back from "added". The flags leave the address once the
+  // status is known, so a reload after a failed read asks again.
   useEffect(() => {
     if (!accessToken || !userId) return;
     let active = true;
@@ -115,17 +115,20 @@ export default function CreatorWelcomeCard({ welcome }: { welcome: CreatorWelcom
     ]).then(([credits, ownProfile]) => {
       if (!active) return;
       setProfile((current) => current ?? ownProfile);
-      const next: CardState = credits?.status === 'not_eligible' && !credits.identityComplete
-        ? { kind: 'identity', amount: credits.amount }
-        : credits?.status === 'eligible'
-          ? { kind: 'claim', amount: credits.amount }
-          : { kind: 'back', note: null };
-      setState((current) => (current.kind === 'loading' ? next : current));
+      const next: CardState = !credits
+        ? { kind: 'unread' }
+        : credits.status === 'not_eligible' && !credits.identityComplete
+          ? { kind: 'identity', amount: credits.amount }
+          : credits.status === 'eligible'
+            ? { kind: 'claim', amount: credits.amount }
+            : { kind: 'back', note: null };
+      if (next.kind !== 'unread') dropWelcomeFlags();
+      setState((current) => (current.kind === 'loading' || current.kind === 'unread' ? next : current));
     });
     return () => {
       active = false;
     };
-  }, [accessToken, userId]);
+  }, [accessToken, attempt, userId]);
 
   const addCredits = async (token: string) => {
     const result = await welcomeRequest('/api/credits/welcome/claim', token, {
@@ -176,18 +179,31 @@ export default function CreatorWelcomeCard({ welcome }: { welcome: CreatorWelcom
 
   if (state.kind === 'loading' || state.kind === 'closed') return null;
 
+  if (state.kind === 'unread') {
+    return (
+      <Surface as="section" variant="panel" padding="none" ariaLive="polite" className="p-4">
+        <Text as="h2" variant="label">Your welcome credits could not be read</Text>
+        <Text variant="bodySm" className="mt-1">{backLine}</Text>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => setAttempt((count) => count + 1)}>Try again</Button>
+          <Button variant="ghost" onClick={() => setState({ kind: 'closed' })}>Not now</Button>
+        </div>
+      </Surface>
+    );
+  }
+
   if (state.kind === 'added' || state.kind === 'back') {
     return (
       <Surface as="section" variant="panel" padding="none" ariaLive="polite" className="p-4">
         <div className="flex items-start gap-3">
-          <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
+          <span aria-hidden className={clsx('flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', getAccentClasses('workflow').iconWrap)}>
             <Check className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className={WELCOME_TITLE_CLASS}>
+            <Text as="h2" variant="label">
               {state.kind === 'added' ? `You’re in: ${state.amount} free credits added` : 'You’re signed in'}
-            </h2>
-            <Text variant="bodySm" className="mt-1">{state.kind === 'back' && state.note ? `${state.note} ${BACK_LINE}` : BACK_LINE}</Text>
+            </Text>
+            <Text variant="bodySm" className="mt-1">{state.kind === 'back' && state.note ? `${state.note} ${backLine}` : backLine}</Text>
             {referralLine ? <Text variant="bodySm" className="mt-2">{referralLine}</Text> : null}
           </div>
           <IconButton label="Dismiss" icon={X} onClick={() => setState({ kind: 'closed' })} className="-mr-2 -mt-2 shrink-0" />
@@ -199,19 +215,19 @@ export default function CreatorWelcomeCard({ welcome }: { welcome: CreatorWelcom
   const asksIdentity = state.kind === 'identity';
   return (
     <Surface as="section" variant="panel" padding="none" className="p-4">
-      <form onSubmit={(event) => void onSubmit(event)} noValidate aria-labelledby="creator-welcome-title">
+      <form onSubmit={(event) => void onSubmit(event)} noValidate aria-labelledby={titleId}>
         <div className="flex items-start gap-3">
-          <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]">
+          <span aria-hidden className={clsx('flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', getAccentClasses('video').iconWrap)}>
             <Gift className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 id="creator-welcome-title" className={WELCOME_TITLE_CLASS}>
+            <Text as="h2" id={titleId} variant="label">
               {asksIdentity ? 'Pick your name and handle' : `${state.amount} free credits are waiting`}
-            </h2>
+            </Text>
             <Text variant="bodySm" className="mt-1">
               {asksIdentity
                 ? `They show on what you post, and they add your ${state.amount} free credits. You can change them later in your profile.`
-                : 'Add them, then press Generate when you’re ready. Your prompt and settings are as you left them.'}
+                : `Add them, then press Generate when you’re ready.${carriedDraft ? ' Your prompt and settings are as you left them.' : ''}`}
             </Text>
           </div>
         </div>

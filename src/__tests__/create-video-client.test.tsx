@@ -3493,7 +3493,7 @@ describe('CreateVideoClient Kling video elements', () => {
       }
     });
 
-    it('asks a lapsed session to sign in again from this page, with the draft saved', async () => {
+    it('sends a lapsed session to sign in on this page’s own link, with the draft saved under the account', async () => {
       window.history.replaceState({}, '', '/create-video?model=seedance-1.5-pro&prompt=harbour');
       try {
         render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
@@ -3503,9 +3503,12 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.change(promptBox(), { target: { value: PROMPT } });
         fireEvent.click(generateButton());
 
-        // The sign-up sheet, whose Google comes back to this page's own link.
-        expect(await screen.findByRole('dialog', { name: 'Continue to generate' })).toBeInTheDocument();
-        expect(mockPush).not.toHaveBeenCalled();
+        // Not the visitor's sheet: its hand-over would move the visitor slot over this
+        // account's draft.
+        await waitFor(() => expect(mockPush).toHaveBeenCalledWith(
+          `/login?returnUrl=${encodeURIComponent('/create-video?model=seedance-1.5-pro&prompt=harbour')}`,
+        ));
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
         expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1', expect.objectContaining({ prompt: PROMPT }));
         expect(postedStarts()).toEqual([]);
       } finally {
@@ -3531,6 +3534,29 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(postedStarts()).toEqual([]);
       expect(temporaryUploadMock).not.toHaveBeenCalled();
       expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    it('never saves an account’s form into the browser’s visitor slot once its session ends on the page', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+        // Signed out from the account menu, or in another tab: the page stays open.
+        authState.signedIn = false;
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        fireEvent.change(promptBox(), { target: { value: `${PROMPT} Edited after signing out.` } });
+        await act(async () => {
+          vi.advanceTimersByTime(2000);
+        });
+        view.unmount();
+
+        expect(saveCreatorDraftMock.mock.calls.some(([, owner]) => owner === 'visitor')).toBe(false);
+        expect(loadCreatorDraftMock).not.toHaveBeenCalledWith('video', 'visitor');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('checks a visitor’s form as Generate does before asking for an account', async () => {
