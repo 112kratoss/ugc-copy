@@ -1,5 +1,5 @@
 import { RequestHintedOptionalAuth, RequireAuth } from '@/components/RouteAuthBoundary';
-import { loadVisitorWelcomeCredits, readCreatorReturn } from '@/lib/creator-page-server';
+import { loadCreatorStartPostsForRequest, loadVisitorWelcomeCredits, readCreatorReturn } from '@/lib/creator-page-server';
 
 import CreateVideoClient, { type CreateVideoPrefill } from './CreateVideoClient';
 
@@ -34,12 +34,19 @@ export default async function CreateVideoPage({
     ? `/create-video?${returnParams.toString()}`
     : '/create-video';
   const { welcome, handoverNonce } = readCreatorReturn(resolvedSearchParams);
+  // The shelf's posts, for the empty canvas (owner, 2026-10-28): left unawaited, so the
+  // creator draws without waiting on them. A remix opens on its own post instead.
+  const startPosts = prefill.remixId ? null : loadCreatorStartPostsForRequest();
   const client = (visitorWelcomeCredits: number | null) => (
     <CreateVideoClient
+      // A Remix from this page lands on the same route, which keeps the client: a
+      // new remix starts a new one, so it loads as a remix opened anywhere else does.
+      key={`${prefill.remixId ?? ''}|${prefill.remixPostId ?? ''}`}
       prefill={prefill}
       welcome={welcome}
       handoverNonce={handoverNonce}
       visitorWelcomeCredits={visitorWelcomeCredits}
+      startPosts={startPosts}
     />
   );
 

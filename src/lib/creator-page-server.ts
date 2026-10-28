@@ -6,7 +6,10 @@ import type { CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { requestHasAuthHint } from '@/components/RouteAuthBoundary';
 import { CREATOR_HANDOVER_PARAM, CREATOR_WELCOME_PARAM } from '@/lib/auth-onboarding';
 import { logBackendError } from '@/lib/backend-logger';
+import type { CreatorStartPost } from '@/lib/creator-start-posts';
+import { loadCreatorStartPosts } from '@/lib/creator-start-posts-server';
 import { REFERRAL_CLAIM_REASON_PATTERN, REFERRAL_CLAIM_STATUS_PARAM } from '@/lib/referral-claim-copy';
+import { getServerAuthState } from '@/lib/supabase-server';
 import { loadWelcomeCreditAmount } from '@/lib/welcome-credit-program-server';
 
 type CreatorSearchParams = Record<string, string | string[] | undefined>;
@@ -54,5 +57,24 @@ export async function loadVisitorWelcomeCredits(): Promise<number | null> {
   } catch (error) {
     logBackendError('creator_visitor_welcome_credits_load_failed', { error });
     return null;
+  }
+}
+
+/**
+ * The posts a creator's empty canvas offers to start from (`loadCreatorStartPosts`), for
+ * this request's viewer: one with no sign-in cookie is a visitor. Handed to the page
+ * unawaited, so the creator draws at once and the posts stream in after. Never throws:
+ * the canvas draws without them.
+ */
+export async function loadCreatorStartPostsForRequest(): Promise<CreatorStartPost[]> {
+  try {
+    if (!(await requestHasAuthHint())) {
+      return await loadCreatorStartPosts({ viewerUserId: null, isAnonymous: false });
+    }
+    const user = (await getServerAuthState()).session?.user ?? null;
+    return await loadCreatorStartPosts({ viewerUserId: user?.id ?? null, isAnonymous: user?.is_anonymous === true });
+  } catch (error) {
+    logBackendError('creator_start_posts_load_failed', { error });
+    return [];
   }
 }

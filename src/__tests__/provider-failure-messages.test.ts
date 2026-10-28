@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   describeProviderFailure,
+  isRetryableProviderFailure,
   readProviderFailureReason,
   UNKNOWN_PROVIDER_FAILURE,
 } from '@/lib/provider-failure-messages';
@@ -96,5 +97,21 @@ describe('readProviderFailureReason', () => {
     // A code-200 Kie body carries `msg: "success"` at the top level. Only the
     // task object's own fields explain a failure.
     expect(readProviderFailureReason({ code: 200, msg: 'success' })).toBeNull();
+  });
+});
+
+describe('isRetryableProviderFailure', () => {
+  // A creator page shows Try again only where the same run can get past the failure.
+  it('knows the likeness refusal meets the same run again, in the provider\'s words or the stored rewrite', () => {
+    const rejection = "The request failed because the input image 'content[0]' may contain real person.";
+    expect(isRetryableProviderFailure(rejection)).toBe(false);
+    expect(isRetryableProviderFailure('InputImageSensitiveContentDetected.PolicyViolation')).toBe(false);
+    expect(isRetryableProviderFailure(describeProviderFailure(rejection))).toBe(false);
+  });
+
+  it('leaves every other failure open to a retry', () => {
+    for (const message of [UNKNOWN_PROVIDER_FAILURE, 'Upstream timeout', '', null, undefined]) {
+      expect(isRetryableProviderFailure(message)).toBe(true);
+    }
   });
 });

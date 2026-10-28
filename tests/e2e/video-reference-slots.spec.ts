@@ -16,6 +16,15 @@ const ONE_PIXEL_PNG = Buffer.from(
   'base64',
 );
 
+/**
+ * The page's own locked groups. Not the whole page: Playwright's CSS reaches into shadow roots,
+ * and Next's dev overlay keeps aria-disabled buttons in one whenever it lists an issue (as it
+ * does for a server log of a read the offline project fails, such as the creators' shelf).
+ */
+function lockedGroups(page: Page) {
+  return page.getByRole('main').locator('[aria-disabled="true"]');
+}
+
 async function attachStartFrame(page: Page) {
   await page.locator('#video-start-frame-input').setInputFiles({
     name: 'start.png',
@@ -59,8 +68,7 @@ test.describe('video reference slots', () => {
     // discoverable while unavailable.
     await expect(page.getByText(/cannot combine references with frames/i)).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Reference videos' })).toBeVisible();
-    const locked = page.locator('[aria-disabled="true"]');
-    await expect(locked.first()).toBeVisible();
+    await expect(lockedGroups(page).first()).toBeVisible();
   });
 
   test('Wan 2.7 keeps both groups live, because its r2v endpoint takes both', async ({ page }) => {
@@ -71,6 +79,6 @@ test.describe('video reference slots', () => {
 
     await attachStartFrame(page);
     // Still no lock: wan/2-7-r2v accepts first_frame alongside reference_image.
-    await expect(page.locator('[aria-disabled="true"]')).toHaveCount(0);
+    await expect(lockedGroups(page)).toHaveCount(0);
   });
 });
