@@ -10,6 +10,7 @@ import {
   type GenerationInputMediaItem,
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
+import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner } from '@/lib/generation-input-origin';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { getAudioGenerationKind, isAudioModel } from '@/lib/models';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus, type VisualMediaDescriptor } from '@/lib/media-descriptor';
@@ -673,6 +674,18 @@ export async function listOwnerGenerationsForRoute({
     }),
   ]);
 
+  // Whose each input is (`generationInputOrigin`): the recipe's prefill counts the creator's
+  // own, which the creators' recipe leaves out unless they add them. One read for the page's
+  // source generations whose owner decides it (none where the inputs' paths say); a legacy
+  // reading's own are asked for where it names others.
+  const ownerIdSet = new Set(ownerUserIds);
+  const pageSourceGenerationOwners = summaryOnly
+    ? new Map<string, string | null>()
+    : await loadSourceGenerationOwners(
+      adminSupabase,
+      [...inputMediaMap.values()].flat().filter(needsSourceGenerationOwner).map((item) => item.sourceGenerationId),
+    );
+
   const generationsWithUrls = await Promise.all(generations.map(async (generation) => {
     const template = templateMetadata.get(generation.id) ?? null;
     const workflowSettings = template ? null : getWorkflowSettings(generation.workflow_settings);
@@ -690,6 +703,16 @@ export async function listOwnerGenerationsForRoute({
           category: generation.category ?? null,
           workflowSettings: workflowSettings ?? {},
         });
+    const unreadSourceIds = inputMedia
+      .filter(needsSourceGenerationOwner)
+      .map((item) => item.sourceGenerationId)
+      .filter((id): id is string => Boolean(id) && !pageSourceGenerationOwners.has(id!));
+    const sourceGenerationOwners = unreadSourceIds.length > 0
+      ? new Map([...pageSourceGenerationOwners, ...await loadSourceGenerationOwners(adminSupabase, unreadSourceIds)])
+      : pageSourceGenerationOwners;
+    const ownInputIds = new Set(inputMedia
+      .filter((item) => generationInputOrigin(item, { ownerIds: ownerIdSet, sourceGenerationOwners }) === 'own')
+      .map((item) => item.id));
     const paywallPrefill = summaryOnly || template
       ? null
       : buildGenerationPaywallPrefill({
@@ -699,6 +722,7 @@ export async function listOwnerGenerationsForRoute({
         prompt: generation.prompt,
         workflowSettings,
         inputMedia,
+        ownInputIds,
       });
     const outputUrl = resolveGenerationOutputUrl(adminSupabase, generation, resolvedMediaUrls);
     const previewUrl = resolveGenerationPreviewUrl(generation, outputUrl, resolvedMediaUrls);

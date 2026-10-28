@@ -1328,6 +1328,33 @@ describe('NewPostClient', () => {
     });
   });
 
+  // A free recipe hands its prompt to anyone with one tap, so an untitled creation's post
+  // opened with one starts from the prompt's opening; only a paid one swaps it (owner, 2026-10-29).
+  it('starts an untitled creation’s post with a free recipe from the prompt’s title', async () => {
+    searchParamsState.value = new URLSearchParams('generationId=gen-free&resourceMode=free');
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [{
+          id: 'gen-free',
+          output_url: 'https://proxy.example.com/generated_images/user-1/gen-free.png',
+          category: 'image',
+          title: '',
+          description: '',
+          prompt: 'A product still lit like a window display, soft morning light, 85mm',
+          model: 'nano-banana-2',
+          paywallPrefill: null,
+        }],
+      }),
+    });
+
+    render(<NewPostClient />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Product still lit like a window display');
+    });
+  });
+
   // S1 (2026-10-27): a creation post's recipe includes its Remix, so there is
   // no switch for it. An edit sends back the value the recipe was loaded with.
   it('says Remix comes with a creation post’s recipe and sends back the remix value it was loaded with', async () => {
@@ -4835,8 +4862,9 @@ describe('NewPostClient', () => {
     }
 
     // Most creations have no title, and typing one was the step people
-    // stopped at. The prompt may suggest it only while the post has no recipe.
-    it('starts an untitled creation from a title its prompt suggests, and swaps it while a recipe keeps the prompt private', async () => {
+    // stopped at. The prompt may suggest it unless a paid recipe sells it; a
+    // free one hands it to anyone with one tap (owner, 2026-10-29).
+    it('starts an untitled creation from a title its prompt suggests, and swaps it while a paid recipe keeps the prompt private', async () => {
       searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
       enqueueCreation({ title: null });
 
@@ -4846,8 +4874,12 @@ describe('NewPostClient', () => {
       expect(screen.getByText('Suggested from your prompt. Edit it if you like.')).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+      expect(titleInput).toHaveValue('Product still lit like a window display');
+      expect(screen.getByText('Suggested from your prompt. Edit it if you like.')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
       expect(titleInput).toHaveValue('Image recipe');
-      expect(screen.getByText('Suggested. A recipe keeps your prompt off the post.')).toBeInTheDocument();
+      expect(screen.getByText('Suggested. A paid recipe keeps your prompt off the post.')).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
       expect(titleInput).toHaveValue('Product still lit like a window display');
@@ -4904,7 +4936,7 @@ describe('NewPostClient', () => {
 
     // A post saved with the prompt's opening as its title would otherwise carry
     // it into a recipe's public post when the recipe is added later.
-    it('swaps a title cut from the prompt for the recipe’s in an edit too, without calling it a suggestion', async () => {
+    it('swaps a title cut from the prompt for a paid recipe’s in an edit too, without calling it a suggestion', async () => {
       enqueueCreation({ title: null });
       render(<NewPostClient initialPost={{
         ...createGenerationRecipePost(),
@@ -4921,7 +4953,10 @@ describe('NewPostClient', () => {
       await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/generations'))).toBe(true));
       expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
 
+      // A free recipe leaves it; a paid one, which sells the prompt, swaps it.
       fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+      expect(titleInput).toHaveValue('Product still lit like a window display');
+      fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
       expect(titleInput).toHaveValue('Image recipe');
       expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
     });

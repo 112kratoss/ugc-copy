@@ -1,46 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { ArrowRight, BadgeDollarSign, BookOpen, Check, CircleAlert, Globe, Loader2, LockKeyhole, Share2, UserRound, X } from 'lucide-react';
 
-import { useAuth } from '@/components/AuthProvider';
 import PublicIdentityFields from '@/components/PublicIdentityFields';
-import { sharePublicGeneration } from '@/lib/share-client';
+import { usePublishCreation, type PublishedCreation } from '@/components/usePublishCreation';
 import type { GenerationShareSourceSurface } from '@/lib/share';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
-import {
-  followCreationTitleSuggestion,
-  getCreationPostTitleSuggestion,
-  getCreationTitleSuggestionHint,
-  type CreationTitleSource,
-} from '@/lib/creation-post-title';
-import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
-import {
-  getInitialPublicIdentity,
-  claimPublicIdentity,
-  validatePublicIdentity,
-  type PublicIdentityDraft,
-  type PublicIdentityErrors,
-} from '@/lib/public-identity';
+import type { CreationTitleSource } from '@/lib/creation-post-title';
 import {
   formatPostResourceCreditAmount,
   getPostResourceKindLabel,
   POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
   POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
-  type PersistedPostResourceBundleAccessMode,
   type PostResourceBundleAccessMode,
-  type PostResourceBundleInput,
-  type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import { formatRecipeMoneyLine } from '@/lib/recipe-money-line';
-
-/** A post is public or private (decision 12, 2026-10-17); the server answers no other. */
-type PostVisibility = 'public' | 'private';
-type ProfileLoadState = 'idle' | 'loading' | 'ready' | 'error';
-
-const RESOURCE_KIND_ORDER: PostResourceKind[] = ['prompt', 'workflow', 'files', 'notes', 'remix'];
 
 /**
  * The three access modes are shown side by side on purpose. Collapsing them
@@ -69,118 +46,8 @@ const RECIPE_ACCESS_OPTIONS: ReadonlyArray<{
   },
 ];
 
-function normalizeOptionalText(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-/**
- * The caption is the post's public description. It must not start out as the
- * recipe's generated setup notes: those travel with the bundle (see
- * `buildAutoResourceBundle`), and prefilling them here published "Saved
- * generation setup / Model: …" as the caption of every quick publish.
- */
-function getDefaultPublishDescription(defaultDescription: string): string {
-  return defaultDescription.trim();
-}
-
-/**
- * A creation's own title can be longer than a post's, and the field's
- * maxLength does not trim a value it is handed; the server would refuse the
- * publish. The composers trim a prefilled title the same way.
- */
-function getDefaultPublishTitle(defaultTitle: string): string {
-  return defaultTitle.slice(0, TITLE_MAX_LENGTH);
-}
-
-const DEFAULT_PRICE_TOKENS = 900;
-
-/**
- * Prices are credit counts. `price_usd_cents` stores the count directly -- at
- * the fixed 100 credits to $1 the two numbers are the same.
- */
-function parsePriceTokens(value: string): number | null {
-  const normalized = Number.parseInt(value.trim(), 10);
-  return Number.isFinite(normalized) ? normalized : null;
-}
-
-function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined): PostResourceKind[] {
-  if (!prefill) {
-    return [];
-  }
-
-  const kinds = new Set<PostResourceKind>(prefill.resourceKinds);
-  if ((prefill.referenceCount ?? 0) > 0) {
-    kinds.add('files');
-  }
-  if (prefill.promptText?.trim()) {
-    kinds.add('prompt');
-  }
-  if (prefill.notesMarkdown?.trim()) {
-    kinds.add('notes');
-  }
-  if (prefill.allowRemix) {
-    kinds.add('remix');
-  }
-
-  return RESOURCE_KIND_ORDER.filter((kind) => kinds.has(kind));
-}
-
 function formatReferenceCountLabel(count: number): string {
   return count === 1 ? '1 reference included' : `${count} references included`;
-}
-
-/** "prompt, files and notes": the kinds in words, the last joined with "and". */
-function listAutoUnlockKinds(kinds: PostResourceKind[]): string {
-  const labels = kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase());
-  return labels.length === 1
-    ? labels[0]
-    : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
-}
-
-// Buyers read this first, as a listing's line: it starts with a capital
-// (A-F8) where several kinds read "prompt, files and notes from…".
-function buildAutoUnlockSummary(kinds: PostResourceKind[]): string {
-  if (kinds.length === 0) {
-    return 'Saved creation setup';
-  }
-
-  const listed = listAutoUnlockKinds(kinds);
-  return `${listed.charAt(0).toUpperCase()}${listed.slice(1)} from this creation`;
-}
-
-function buildAutoUnlockPreview(kinds: PostResourceKind[]): string {
-  if (kinds.length === 0) {
-    return 'Unlock the saved system details behind this generated media.';
-  }
-
-  return `Unlock the saved ${listAutoUnlockKinds(kinds)} used to create this result.`;
-}
-
-function buildAutoResourceBundle({
-  prefill,
-  accessMode,
-  priceUsdCents,
-}: {
-  prefill: GenerationPaywallPrefill;
-  accessMode: PersistedPostResourceBundleAccessMode;
-  priceUsdCents: number;
-}): PostResourceBundleInput {
-  const kinds = getAutoUnlockKinds(prefill);
-
-  return {
-    accessMode,
-    summary: buildAutoUnlockSummary(kinds),
-    previewText: buildAutoUnlockPreview(kinds),
-    priceUsdCents,
-    resources: {
-      promptText: prefill.promptText?.trim() || null,
-      notesMarkdown: prefill.notesMarkdown?.trim() || null,
-      workflowShareUrl: null,
-      attachments: [],
-      allowRemix: prefill.allowRemix,
-    },
-  };
 }
 
 interface PublishToShowcaseModalProps {
@@ -203,16 +70,7 @@ interface PublishToShowcaseModalProps {
     description?: string | null;
     sourceSurface: GenerationShareSourceSurface;
   };
-  onPublished?: (payload: {
-    title: string;
-    description: string;
-    visibility?: PostVisibility;
-    resourceBundleStatus?: 'draft' | 'published' | null;
-    resourceBundlePath?: string | null;
-    postId?: string | null;
-    showcasePath?: string | null;
-    ownerPath?: string | null;
-  }) => void;
+  onPublished?: (payload: PublishedCreation) => void;
 }
 
 export default function PublishToShowcaseModal({
@@ -229,55 +87,58 @@ export default function PublishToShowcaseModal({
   shareAfterPublish,
   onPublished,
 }: PublishToShowcaseModalProps) {
-  const [isNsfw, setIsNsfw] = useState(false);
-  const [publishTitle, setPublishTitle] = useState(() => getDefaultPublishTitle(defaultTitle));
-  // Set once the creator types a title: a suggestion is never put over theirs.
-  const titleTouchedRef = useRef(false);
-  const [publishDescription, setPublishDescription] = useState(() =>
-    getDefaultPublishDescription(defaultDescription)
-  );
-  const [recipeAccess, setRecipeAccess] = useState<PostResourceBundleAccessMode>('none');
-  const [priceTokens, setPriceTokens] = useState(String(DEFAULT_PRICE_TOKENS));
-  const [publishingVisibility, setPublishingVisibility] = useState<PostVisibility | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [needsProfileRepair, setNeedsProfileRepair] = useState(false);
-  const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
-  const [profileLoadState, setProfileLoadState] = useState<ProfileLoadState>('idle');
-  const { user } = useAuth();
-  // The name and handle follow the profile and the sign-in until the creator
-  // types; a later answer never puts the starting values back over theirs.
-  const [identityEdits, setIdentityEdits] = useState<PublicIdentityDraft | null>(null);
-  const [identityErrors, setIdentityErrors] = useState<PublicIdentityErrors>({});
-  const identity = identityEdits ?? getInitialPublicIdentity(profile, user);
+  const draft = usePublishCreation({
+    active: isOpen,
+    generationId,
+    accessToken,
+    defaultTitle,
+    creation,
+    defaultDescription,
+    showPaidShortcut,
+    mediaOnly,
+    paywallPrefill,
+    shareAfterPublish,
+    onPublished,
+    onFinished: onClose,
+  });
+  const {
+    isNsfw,
+    setIsNsfw,
+    title: publishTitle,
+    setTitle,
+    titleSuggestionHint,
+    description: publishDescription,
+    setDescription: setPublishDescription,
+    recipeAccess,
+    setRecipeAccess,
+    priceTokens,
+    setPriceTokens,
+    parsedPriceTokens,
+    autoUnlockKinds,
+    hasAutoUnlock,
+    generationReferenceCount,
+    hasGenerationReferences,
+    identity,
+    identityErrors,
+    setIdentity,
+    needsPublicIdentity,
+    profile,
+    profileLoadState,
+    formError,
+    publishingVisibility,
+    isPublishing,
+    isPublishingRef,
+    publish,
+  } = draft;
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
-  const isPublishingRef = useRef(false);
-  const autoUnlockKinds = getAutoUnlockKinds(paywallPrefill);
-  const hasAutoUnlock = showPaidShortcut && Boolean(paywallPrefill) && autoUnlockKinds.length > 0;
-  const generationReferenceCount = Math.max(0, Math.round(paywallPrefill?.referenceCount ?? 0));
-  const hasGenerationReferences = generationReferenceCount > 0;
   const isPaidRecipe = recipeAccess === 'paid';
-  // A creation's details can arrive after the dialog opened (the motion page
-  // reads them in the background), so the suggestion is derived, not set once.
-  const titleSuggestion = getCreationPostTitleSuggestion(defaultTitle, creation, recipeAccess !== 'none');
-  const suggestedTitle = titleSuggestion && titleSuggestion.source !== 'creation' ? titleSuggestion.title : null;
-  const titleSuggestionHint = getCreationTitleSuggestionHint(publishTitle, titleSuggestion, recipeAccess !== 'none');
   const activeAccessIndex = Math.max(
     0,
     RECIPE_ACCESS_OPTIONS.findIndex((option) => option.value === recipeAccess)
   );
-  const parsedPriceTokens = parsePriceTokens(priceTokens);
-  const isPublishing = publishingVisibility !== null;
-  const profileReadiness = getCreatorProfileReadiness(profile);
-  // Publishing never requires a profile photo — free and paid recipes alike use
-  // the public gate (handle + display name). The avatar is only a
-  // profile-completeness nudge, never a blocker.
-  const isProfileReadyForPublish = profileReadiness.publicPublishReady;
-  // Asked beside the buttons when the profile cannot publish publicly yet, or
-  // when the server said so although the check had failed.
-  const needsPublicIdentity = needsProfileRepair || (profileLoadState === 'ready' && !isProfileReadyForPublish);
   const recipeAccessBadgeLabel = recipeAccess === 'none'
     ? 'No recipe'
     : recipeAccess === 'free'
@@ -289,82 +150,6 @@ export default function PublishToShowcaseModal({
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
-
-  useEffect(() => {
-    isPublishingRef.current = isPublishing;
-  }, [isPublishing]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    // Opening a generation starts a fresh publish draft from its supplied
-    // defaults; the suggestion below fills an untitled one.
-    setIsNsfw(false);
-    setPublishTitle(getDefaultPublishTitle(defaultTitle));
-    titleTouchedRef.current = false;
-    setPublishDescription(getDefaultPublishDescription(defaultDescription));
-    // A fresh publish starts with no recipe attached; the creator opts in.
-    setRecipeAccess('none');
-    setPriceTokens(String(DEFAULT_PRICE_TOKENS));
-    setPublishingVisibility(null);
-    setFormError(null);
-    setNeedsProfileRepair(false);
-    setIdentityErrors({});
-    setIdentityEdits(null);
-  }, [defaultDescription, defaultTitle, generationId, isOpen]);
-
-  // An untitled creation starts from the suggestion once its details are
-  // known. Only an empty, untyped title takes it: arriving late never wipes
-  // anything the creator did, and a recipe switch swaps it in its own handler.
-  useEffect(() => {
-    if (!isOpen || !suggestedTitle || titleTouchedRef.current) {
-      return;
-    }
-    setPublishTitle((current) => (current.trim() ? current : getDefaultPublishTitle(suggestedTitle)));
-  }, [isOpen, suggestedTitle]);
-
-  useEffect(() => {
-    if (!isOpen || !generationId) {
-      return;
-    }
-
-    const controller = new AbortController();
-    void Promise.resolve()
-      .then(async () => {
-        if (controller.signal.aborted) {
-          return null;
-        }
-
-        setProfileLoadState('loading');
-        setProfile(null);
-        const response = await fetch('/api/profile', {
-          cache: 'no-store',
-          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error('Profile could not be checked.');
-        }
-        return response.json() as Promise<ProfileApiResponse>;
-      })
-      .then((nextProfile) => {
-        if (!nextProfile) {
-          return;
-        }
-        setProfile(nextProfile);
-        setProfileLoadState('ready');
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          return;
-        }
-        setProfileLoadState('error');
-      });
-
-    return () => controller.abort();
-  }, [accessToken, generationId, isOpen]);
 
   useEffect(() => {
     if (!isOpen || !generationId) {
@@ -428,7 +213,7 @@ export default function PublishToShowcaseModal({
         }
       });
     };
-  }, [generationId, isOpen]);
+  }, [generationId, isOpen, isPublishingRef]);
 
   if (!isOpen || !generationId) {
     return null;
@@ -436,166 +221,7 @@ export default function PublishToShowcaseModal({
 
   const handleFormSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void handleQuickPublish('public');
-  };
-
-  const handleQuickPublish = async (nextVisibility: Extract<PostVisibility, 'public' | 'private'>) => {
-    if (isPublishing) {
-      return;
-    }
-
-    const savesIdentity = nextVisibility === 'public' && needsPublicIdentity;
-    if (savesIdentity) {
-      const localErrors = validatePublicIdentity(identity, profile?.username);
-      if (localErrors.displayName || localErrors.username) {
-        setIdentityErrors(localErrors);
-        setFormError('Add your name and handle to publish publicly.');
-        return;
-      }
-    }
-
-    let resourceBundle: PostResourceBundleInput | null = mediaOnly ? null : { accessMode: 'none' };
-    if (recipeAccess !== 'none') {
-      if (!paywallPrefill || autoUnlockKinds.length === 0) {
-        setFormError('This creation does not have enough saved setup to make a recipe from yet.');
-        return;
-      }
-
-      // Free recipes carry no price; only the paid mode has a floor to enforce.
-      let priceUsdCents = 0;
-      if (recipeAccess === 'paid') {
-        if (
-          parsedPriceTokens === null
-          || parsedPriceTokens < POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
-          || parsedPriceTokens % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
-        ) {
-          setFormError(
-            `Paid recipes start at ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} credits, in steps of ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}.`,
-          );
-          return;
-        }
-        priceUsdCents = parsedPriceTokens;
-      }
-
-      resourceBundle = buildAutoResourceBundle({
-        prefill: paywallPrefill,
-        accessMode: recipeAccess,
-        priceUsdCents,
-      });
-    }
-
-    setPublishingVisibility(nextVisibility);
-    setFormError(null);
-
-    if (savesIdentity) {
-      const saved = await claimPublicIdentity(identity, accessToken);
-      if (!saved.ok) {
-        setIdentityErrors(saved.errors);
-        setFormError(saved.message);
-        setPublishingVisibility(null);
-        return;
-      }
-      setProfile(saved.profile);
-      setIdentityErrors({});
-      setNeedsProfileRepair(false);
-    }
-
-    try {
-      const requestBody: {
-        generationId: string;
-        isNsfw?: boolean;
-        visibility: Extract<PostVisibility, 'public' | 'private'>;
-        title?: string;
-        description?: string;
-        shareInputMediaForRemix: boolean;
-        includeGenerationReferences?: boolean;
-        resourceBundle?: PostResourceBundleInput;
-      } = {
-        generationId,
-        ...(isNsfw ? { isNsfw: true } : {}),
-        visibility: nextVisibility,
-        title: normalizeOptionalText(publishTitle),
-        description: normalizeOptionalText(publishDescription),
-        shareInputMediaForRemix: false,
-      };
-
-      if (hasGenerationReferences && resourceBundle?.accessMode !== 'none') {
-        requestBody.includeGenerationReferences = true;
-      }
-
-      if (resourceBundle) {
-        requestBody.resourceBundle = resourceBundle;
-      }
-
-      const response = await fetch('/api/showcase/publish', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(accessToken
-            ? {
-                Authorization: `Bearer ${accessToken}`,
-              }
-            : {}),
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      const data = await response.json() as {
-        success?: boolean;
-        error?: string;
-        field?: string;
-        visibility?: PostVisibility;
-        resourceBundleStatus?: 'draft' | 'published' | null;
-        resourceBundlePath?: string | null;
-        postId?: string | null;
-        showcasePath?: string | null;
-        ownerPath?: string | null;
-      };
-      if (!response.ok || !data.success) {
-        if (data.field === 'profile') {
-          setNeedsProfileRepair(true);
-        }
-        throw new Error(data.error || 'Failed to publish');
-      }
-
-      const normalizedTitle = publishTitle.trim();
-      const normalizedDescription = publishDescription.trim();
-
-      onPublished?.({
-        title: normalizedTitle,
-        description: normalizedDescription,
-        visibility: data.visibility,
-        resourceBundleStatus: data.resourceBundleStatus ?? null,
-        resourceBundlePath: data.resourceBundlePath ?? null,
-        postId: data.postId ?? null,
-        showcasePath: data.showcasePath ?? null,
-        ownerPath: data.ownerPath ?? null,
-      });
-
-      if (shareAfterPublish && nextVisibility === 'public') {
-        try {
-          await sharePublicGeneration({
-            generationId,
-            title: normalizedTitle || shareAfterPublish.title,
-            description: normalizedDescription || shareAfterPublish.description || null,
-            sourceSurface: shareAfterPublish.sourceSurface,
-            accessToken,
-            viewerIsOwner: true,
-          });
-        } catch (shareError) {
-          // Publishing is already complete. A canceled or unavailable share
-          // action must never be reported as a failed publish.
-          console.error('Published generation, but sharing was unavailable:', shareError);
-        }
-      }
-
-      onClose();
-    } catch (error) {
-      console.error('Failed to publish generation:', error);
-      setFormError(error instanceof Error ? error.message : 'Failed to publish');
-    } finally {
-      setPublishingVisibility(null);
-    }
+    void publish('public');
   };
 
   return (
@@ -651,10 +277,7 @@ export default function PublishToShowcaseModal({
               id="publish-title-input"
               type="text"
               value={publishTitle}
-              onChange={(event) => {
-                titleTouchedRef.current = true;
-                setPublishTitle(event.target.value);
-              }}
+              onChange={(event) => setTitle(event.target.value)}
               placeholder="Give your creation a name"
               className="w-full rounded-2xl border border-white/10 bg-black px-4 py-3 text-white transition-colors placeholder:text-zinc-600 focus:border-emerald-400/50 focus:outline-none"
               maxLength={TITLE_MAX_LENGTH}
@@ -672,10 +295,7 @@ export default function PublishToShowcaseModal({
               disabled={isPublishing}
               accessToken={accessToken}
               savedUsername={profile?.username}
-              onChange={(next) => {
-                setIdentityEdits(next);
-                setIdentityErrors({});
-              }}
+              onChange={setIdentity}
             />
           ) : (
             <div
@@ -806,18 +426,7 @@ export default function PublishToShowcaseModal({
                                 name="publish-recipe-access"
                                 value={option.value}
                                 checked={isActive}
-                                onChange={() => {
-                                  // A suggested title nobody edited follows the
-                                  // recipe: a recipe keeps the prompt private.
-                                  setPublishTitle((current) => followCreationTitleSuggestion({
-                                    title: current,
-                                    source: creation,
-                                    hadRecipe: recipeAccess !== 'none',
-                                    hasRecipe: option.value !== 'none',
-                                  }));
-                                  setRecipeAccess(option.value);
-                                  setFormError(null);
-                                }}
+                                onChange={() => setRecipeAccess(option.value)}
                                 className="sr-only"
                               />
                               {option.label}
@@ -847,10 +456,7 @@ export default function PublishToShowcaseModal({
                               min={POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS}
                               step={POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}
                               value={priceTokens}
-                              onChange={(event) => {
-                                setPriceTokens(event.target.value);
-                                setFormError(null);
-                              }}
+                              onChange={(event) => setPriceTokens(event.target.value)}
                               aria-label="Recipe price in credits"
                               aria-describedby="publish-recipe-money-line"
                               className="w-full rounded-full border border-white/10 bg-white/[0.04] py-2 pl-4 pr-16 text-center text-sm font-semibold text-white outline-none transition-colors duration-150 focus:border-emerald-300/50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
@@ -893,7 +499,7 @@ export default function PublishToShowcaseModal({
             <button
               type="button"
               disabled={isPublishing}
-              onClick={() => void handleQuickPublish('private')}
+              onClick={() => void publish('private')}
               className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-zinc-100 transition-[background-color,border-color,transform] duration-150 ease-[var(--ui-ease-standard)] hover:border-white/20 hover:bg-white/[0.08] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-70"
             >
               {publishingVisibility === 'private' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LockKeyhole className="h-4 w-4" />}

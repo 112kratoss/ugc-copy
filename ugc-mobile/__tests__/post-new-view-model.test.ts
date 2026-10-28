@@ -300,10 +300,11 @@ describe('post new view model', () => {
 
       const typed = creationDraft({ title: 'Dawn fox' });
       expect(followCreationTitleSuggestion(typed, withRecipe(typed), untitled).title).toBe('Dawn fox');
-      // Turning the exact-prompt card on also turns a recipe on.
+      // Turning the exact-prompt card on also turns a recipe on: a free one, which
+      // hands its prompt to anyone, so the prompt's title stays (owner, 2026-10-29).
       const withPromptCard = applyCreationPromptResource(suggested, untitled, true);
       expect(withPromptCard.resource.accessMode).toBe('free');
-      expect(followCreationTitleSuggestion(suggested, withPromptCard, untitled).title).toBe('Video recipe');
+      expect(followCreationTitleSuggestion(suggested, withPromptCard, untitled).title).toBe('Red fox running through fresh snow at dawn');
       // A creation's own title is the creator's, recipe or not.
       const titled = generation({ title: 'Fox study' });
       const own = creationDraft({ title: 'Fox study' });
@@ -315,10 +316,22 @@ describe('post new view model', () => {
       expect(followCreationTitleSuggestion(kept, withRecipe(kept), titledFromPrompt).title).toBe('Video recipe');
     });
 
+    // The composer runs this on every change to the recipe, not only to its access: an edit to
+    // a free recipe's preview must not retitle a post titled before 2026-10-29 ("Video recipe").
+    // Taking the recipe off, or making it paid, still follows the rule.
+    it('leaves the title alone while the recipe keeps its access', () => {
+      const legacy = creationDraft({ title: 'Video recipe' });
+      const free: PostComposerDraft = { ...legacy, resource: { ...legacy.resource, accessMode: 'free' } };
+      const edited: PostComposerDraft = { ...free, resource: { ...free.resource, previewText: 'A fox, step by step.' } };
+      expect(followCreationTitleSuggestion(free, edited, untitled).title).toBe('Video recipe');
+      expect(followCreationTitleSuggestion(free, { ...free, resource: { ...free.resource, accessMode: 'none' } }, untitled).title)
+        .toBe('Red fox running through fresh snow at dawn');
+    });
+
     it('says the title is a suggestion until the creator changes it', () => {
       expect(getCreationTitleSuggestionHint(creationDraft(), untitled)).toBe('Suggested from your prompt. Edit it if you like.');
       expect(getCreationTitleSuggestionHint(withRecipe(creationDraft({ title: 'Video recipe' })), untitled))
-        .toBe('Suggested. A recipe keeps your prompt off the post.');
+        .toBe('Suggested. A paid recipe keeps your prompt off the post.');
       expect(getCreationTitleSuggestionHint(creationDraft({ title: 'Dawn fox' }), untitled)).toBeNull();
       expect(getCreationTitleSuggestionHint(creationDraft({ title: 'Fox study' }), generation({ title: 'Fox study' }))).toBeNull();
       expect(getCreationTitleSuggestionHint({ ...creationDraft(), mode: 'upload' }, untitled)).toBeNull();

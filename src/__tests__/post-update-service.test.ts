@@ -2980,7 +2980,11 @@ describe('getCanonicalPostMediaStoragePath', () => {
 // from the prompt for the kind title when a recipe goes on; an edit holds the
 // same rule for what an older app sends, and for a title stored before a
 // recipe was added.
-describe('a title cut from the prompt of a post with a recipe', () => {
+// A paid recipe sells the creation's prompt, so a title cut from it is stored as the recipe's kind
+// title; a free one hands its prompt to anyone with one tap, so it keeps it (owner, 2026-10-29).
+describe('a title cut from the prompt of a post with a paid recipe', () => {
+  const paidRecipe = () => ({ ...composerRecipe(), accessMode: 'paid' as const, priceUsdCents: 900 });
+  const storedPaidRecipe = () => ({ ...storedRecipeRow(composerRecipe()), access_mode: 'paid', price_usd_cents: 900 });
   const prompt = 'A product still lit like a window display, soft morning light, 85mm';
   const fromPrompt = 'Product still lit like a window display';
   const creationPost = (title: string) => ({
@@ -3050,7 +3054,7 @@ describe('a title cut from the prompt of a post with a recipe', () => {
     const { result, dependencies, generationUpdates } = await save('Window still', null, {
       title: fromPrompt,
       visibility: 'private',
-      resourceBundle: composerRecipe(),
+      resourceBundle: paidRecipe(),
     });
 
     expect(result).toMatchObject({ ok: true });
@@ -3061,7 +3065,7 @@ describe('a title cut from the prompt of a post with a recipe', () => {
   });
 
   it('stores a stored one as the kind title when the post goes public with its stored recipe', async () => {
-    const { result, dependencies, generationUpdates } = await save(fromPrompt, storedRecipeRow(composerRecipe()), { visibility: 'public' });
+    const { result, dependencies, generationUpdates } = await save(fromPrompt, storedPaidRecipe(), { visibility: 'public' });
 
     expect(result).toMatchObject({ ok: true });
     expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
@@ -3086,7 +3090,7 @@ describe('a title cut from the prompt of a post with a recipe', () => {
       adminSupabase: mock.client,
       ownerUserId: 'user-1',
       postId: 'post-1',
-      body: { title: fromPrompt, resourceBundle: composerRecipe() },
+      body: { title: fromPrompt, resourceBundle: paidRecipe() },
       dependencies,
     });
 
@@ -3097,14 +3101,26 @@ describe('a title cut from the prompt of a post with a recipe', () => {
   });
 
   it('keeps a title the creator wrote, and the prompt’s title once the recipe is off', async () => {
-    const typed = await save('Window still', null, { title: 'Window still', resourceBundle: composerRecipe() });
+    const typed = await save('Window still', null, { title: 'Window still', resourceBundle: paidRecipe() });
     expect(typed.dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       patch: expect.objectContaining({ title: 'Window still' }),
     }));
 
-    const off = await save('Window still', storedRecipeRow(composerRecipe()), { title: fromPrompt, resourceBundle: { accessMode: 'none' } });
+    const off = await save('Window still', storedPaidRecipe(), { title: fromPrompt, resourceBundle: { accessMode: 'none' } });
     expect(off.dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       patch: expect.objectContaining({ title: fromPrompt }),
+    }));
+  });
+
+  it('keeps the prompt’s title with a free recipe, sent or stored', async () => {
+    const sent = await save('Window still', null, { title: fromPrompt, visibility: 'private', resourceBundle: composerRecipe() });
+    expect(sent.dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ title: fromPrompt }),
+    }));
+
+    const stored = await save(fromPrompt, storedRecipeRow(composerRecipe()), { visibility: 'public' });
+    expect(stored.dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.not.objectContaining({ title: 'Image recipe' }),
     }));
   });
 });

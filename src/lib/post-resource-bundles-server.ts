@@ -83,7 +83,8 @@ import {
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
-import { resolveLinkedAccountIds } from '@/lib/account-identity';
+import { readLinkedAccountIds, resolveLinkedAccountIds } from '@/lib/account-identity';
+import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner, type GenerationInputOrigin } from '@/lib/generation-input-origin';
 import { loadPostMediaItemsMap, type PostMediaPersistInput } from '@/lib/post-media';
 import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
 import {
@@ -591,6 +592,82 @@ export function mergeGenerationReferenceItemsIntoBundle(
 }
 
 /**
+ * Whose each of a creation's saved inputs is (`generationInputOrigin`), by its row's id: the
+ * publisher's own, or another account's, as a remix's references from its original are. With
+ * no rows kept, the inputs its settings name are read the legacy way, so a creation from
+ * before rows were kept still counts its own. A read that fails counts nothing as the
+ * original's: the inputs stay with the creator.
+ */
+export type GenerationInputOrigins = {
+  /** Each stored input's origin, by its `generation_input_media` id. */
+  byRowId: Map<string, GenerationInputOrigin>;
+  /** Some input is the creator's own: a recipe that leaves them out hands none to a remix. */
+  hasOwn: boolean;
+};
+
+export async function loadGenerationInputOrigins(params: {
+  supabase: SupabaseClient;
+  ownerUserId: string;
+  generationId: string;
+}): Promise<GenerationInputOrigins> {
+  // Unknown, so every input is the creator's: none is shared, and none is handed to a remix.
+  const unknown: GenerationInputOrigins = { byRowId: new Map(), hasOwn: true };
+  // Read alongside the rows: it depends only on the creator. It never rejects.
+  const linkedAccountIdsRead = readLinkedAccountIds(params.supabase, params.ownerUserId);
+  const { data, error } = await params.supabase
+    .from('generation_input_media')
+    .select('id, metadata, storage_path, source_generation_id')
+    .eq('generation_id', params.generationId);
+  if (error) {
+    logBackendError('post_resource_generation_input_origins_load_failed', { error });
+    return unknown;
+  }
+  let inputs: Array<{ id: string; metadata: Record<string, unknown> | null; storagePath: string | null; sourceGenerationId: string | null }> =
+    ((data ?? []) as Array<Pick<GenerationInputMediaRow, 'id' | 'metadata' | 'storage_path' | 'source_generation_id'>>).map((row) => ({
+      id: row.id,
+      metadata: row.metadata,
+      storagePath: row.storage_path,
+      sourceGenerationId: row.source_generation_id,
+    }));
+  if (inputs.length === 0) {
+    const { data: generation, error: generationError } = await params.supabase
+      .from('generations')
+      .select('id, user_id, category, workflow_settings')
+      .eq('id', params.generationId)
+      .maybeSingle();
+    if (generationError) {
+      logBackendError('post_resource_generation_input_origins_load_failed', { error: generationError });
+      return unknown;
+    }
+    const row = generation as { id: string; user_id: string | null; category: string | null; workflow_settings: unknown } | null;
+    if (row) {
+      const legacy = await buildLegacyGenerationInputMedia({
+        supabase: params.supabase,
+        generationId: row.id,
+        ownerUserId: row.user_id ?? params.ownerUserId,
+        category: row.category,
+        workflowSettings: normalizeWorkflowSettings(row.workflow_settings) ?? {},
+        urlMode: 'none',
+      });
+      inputs = legacy.map((item) => ({ id: item.id, metadata: item.metadata, storagePath: item.storagePath, sourceGenerationId: item.sourceGenerationId }));
+    }
+  }
+  const [ownerIds, sourceGenerationOwners] = await Promise.all([
+    linkedAccountIdsRead,
+    loadSourceGenerationOwners(params.supabase, inputs.filter(needsSourceGenerationOwner).map((input) => input.sourceGenerationId)),
+  ]);
+  if (!ownerIds) {
+    // A guest's uploads sit in the guest's folder: unread, who is linked to the creator could
+    // make them read as another's, shared with the recipe.
+    logBackendError('post_resource_generation_input_origins_linked_accounts_failed');
+    return unknown;
+  }
+  const context = { ownerIds: new Set(ownerIds), sourceGenerationOwners };
+  const byRowId = new Map(inputs.map((input) => [input.id, generationInputOrigin(input, context)] as const));
+  return { byRowId, hasOwn: [...byRowId.values()].includes('own') };
+}
+
+/**
  * Copies a creation's saved references into the publisher's resource files.
  *
  * The copies are written under the publisher (`ownerUserId`); each reference is
@@ -598,11 +675,15 @@ export function mergeGenerationReferenceItemsIntoBundle(
  * to it. A creation made as a guest before registering is published as the
  * account (02-4), but its references keep the guest's id and sit in the guest's
  * folder, so read under the publisher alone it packaged none of them.
+ *
+ * `onlyRowIds` keeps the copies to those rows: a recipe that leaves the creator's
+ * own uploads out shares only the references a remix brought from its original.
  */
 export async function buildGenerationReferenceResourceItems(params: {
   supabase: SupabaseClient;
   ownerUserId: string;
   generationId: string;
+  onlyRowIds?: ReadonlySet<string>;
 }): Promise<PostResourceItem[]> {
   const { data, error } = await params.supabase
     .from('generation_input_media')
@@ -615,7 +696,8 @@ export async function buildGenerationReferenceResourceItems(params: {
     return [];
   }
 
-  const rows = (data ?? []) as GenerationInputMediaRow[];
+  const rows = ((data ?? []) as GenerationInputMediaRow[])
+    .filter((row) => !params.onlyRowIds || params.onlyRowIds.has(row.id));
   const items: PostResourceItem[] = [];
   // The linked guests are asked for only when a row is not the publisher's own.
   const sourceOwnerIds = rows.some((row) => row.user_id !== params.ownerUserId)

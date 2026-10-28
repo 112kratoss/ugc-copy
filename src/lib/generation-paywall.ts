@@ -26,6 +26,14 @@ export interface GenerationPaywallPrefill {
   allowRemix: boolean;
   referenceCount?: number;
   referenceKindCounts?: Partial<Record<GenerationInputMediaType, number>>;
+  /**
+   * Of those, the creator's own (`generationInputOrigin`): their uploads and creations, as
+   * against the references a remix brought from its original. The web creators' recipe leaves
+   * them out unless the creator adds them. Absent where it was not worked out: then every
+   * reference counts as the creator's own.
+   */
+  ownReferenceCount?: number;
+  ownReferenceKindCounts?: Partial<Record<GenerationInputMediaType, number>>;
 }
 
 export interface GenerationPaywallPrefillSource {
@@ -36,6 +44,8 @@ export interface GenerationPaywallPrefillSource {
   prompt: string | null | undefined;
   workflowSettings: Record<string, unknown> | null | undefined;
   inputMedia?: GenerationInputMediaItem[] | null;
+  /** The ids of `inputMedia` that are the creator's own (`generationInputOrigin`). */
+  ownInputIds?: ReadonlySet<string>;
 }
 
 function trimText(value: string | null | undefined): string | null {
@@ -472,6 +482,10 @@ export function buildGenerationPaywallPrefill(
     return null;
   }
 
+  const ownReferenceKindCounts = source.ownInputIds
+    ? getSavedReferenceKindCounts(source.inputMedia?.filter((item) => source.ownInputIds!.has(item.id)))
+    : null;
+
   return {
     resourceKinds: effectiveResourceKinds,
     promptText,
@@ -479,5 +493,8 @@ export function buildGenerationPaywallPrefill(
     allowRemix,
     referenceCount,
     referenceKindCounts,
+    ...(ownReferenceKindCounts
+      ? { ownReferenceCount: getSavedReferenceCount(ownReferenceKindCounts), ownReferenceKindCounts }
+      : {}),
   };
 }

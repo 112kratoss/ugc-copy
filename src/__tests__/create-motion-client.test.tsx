@@ -86,7 +86,6 @@ const statusMocks = vi.hoisted(() => ({
   waitForNextGenerationStatusPoll: vi.fn(async () => undefined),
 }));
 const deployState = vi.hoisted(() => ({ newBuildAvailable: false, enabled: [] as boolean[] }));
-const publishModalState = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 // What the result's player was last given.
 const resultVideoState = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 
@@ -126,13 +125,6 @@ vi.mock('@/components/PublicShareButton', () => ({
 vi.mock('@/components/GenerationResultVideo', () => ({
   default: (props: Record<string, unknown>) => {
     resultVideoState.props = props;
-    return null;
-  },
-}));
-
-vi.mock('@/components/PublishToShowcaseModal', () => ({
-  default: (props: Record<string, unknown>) => {
-    publishModalState.props = props;
     return null;
   },
 }));
@@ -354,7 +346,6 @@ beforeEach(() => {
   statusMocks.waitForNextGenerationStatusPoll.mockClear();
   deployState.newBuildAvailable = false;
   deployState.enabled = [];
-  publishModalState.props = null;
   resultVideoState.props = null;
   startAnswers = [];
   generationLookupBody = { generations: [] };
@@ -1071,7 +1062,9 @@ describe('CreateMotionClient start', () => {
     expect(savedDrafts.get('motion:user-1')).toMatchObject({ prompt: 'Dance like nobody watches' });
   });
 
-  it('hands the quick-publish modal the creation’s own title and recipe', async () => {
+  // Publishing on the canvas (PR 3b, the artboard Result): the form starts from the creation's
+  // own title and its recipe, read once the run is done.
+  it('starts the canvas’s publish form from the creation’s own title and recipe', async () => {
     const paywallPrefill = {
       resourceKinds: ['prompt'],
       promptText: 'Saved prompt',
@@ -1087,11 +1080,10 @@ describe('CreateMotionClient start', () => {
 
     await pressGenerate();
 
-    await waitFor(() => expect(publishModalState.props).toMatchObject({
-      generationId: 'generation-1',
-      defaultTitle: 'Rooftop dance',
-      paywallPrefill,
-    }));
+    const form = await screen.findByRole('form', { name: 'Post it to the feed' });
+    await waitFor(() => expect(within(form).getByRole('textbox', { name: 'Title' })).toHaveValue('Rooftop dance'));
+    expect(within(form).getByRole('switch', { name: 'Share the recipe' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Publish & share/ })).toBeNull();
     const lookup = fetchMock.mock.calls.find(([input]) => String(input).startsWith('/api/generations?'));
     expect(String(lookup?.[0])).toContain('id=generation-1');
   });

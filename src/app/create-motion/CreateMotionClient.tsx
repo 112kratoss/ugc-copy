@@ -30,7 +30,6 @@ import {
     CreatorModelChip,
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
-    CreatorResultActions,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -41,7 +40,7 @@ import {
     CreatorTopUpNotice,
     CreatorUploadSlot,
     CreatorVisitorNote,
-    creatorRunChip,
+    creatorCanvasChip,
     describeRunFailure,
 } from '@/components/CreatorColumn';
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
@@ -61,8 +60,8 @@ import { getAccentClasses } from '@/components/DesignSystem';
 import { motionSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
-import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
+import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
+import { creatorCanvasPhase, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
@@ -71,8 +70,6 @@ import {
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
 } from '@/lib/remix-source-client';
-import { buildShowcaseDetailPath } from '@/lib/share';
-import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import {
     getPersistedFile,
@@ -196,14 +193,6 @@ interface StagedMotionUpload {
     uploadedAt: number;
 }
 
-interface MotionPublishPrefill {
-    generationId: string;
-    title: string;
-    paywallPrefill: GenerationPaywallPrefill | null;
-    /** What the modal suggests a title from when the creation has none. */
-    creation: CreationTitleSource | null;
-}
-
 /** A run that reached a failed status. Its hold is always returned. */
 class MotionRunFailedError extends Error {}
 
@@ -229,21 +218,6 @@ function describeRefusedMotionPick(file: File, kind: 'image' | 'video'): string 
         return `"${name}" is over ${Math.round(maxBytes / (1024 * 1024))} MB. Please upload a smaller ${kind}.`;
     }
     return null;
-}
-
-function readPublishPrefill(generationId: string, payload: unknown): MotionPublishPrefill | null {
-    const generations = isRecord(payload) && Array.isArray(payload.generations) ? payload.generations : [];
-    const generation = generations.find((item): item is Record<string, unknown> => isRecord(item) && item.id === generationId);
-    if (!generation) return null;
-    const prefill = generation.paywallPrefill;
-    return {
-        generationId,
-        title: typeof generation.title === 'string' ? generation.title : '',
-        paywallPrefill: isRecord(prefill) && Array.isArray(prefill.resourceKinds) && typeof prefill.allowRemix === 'boolean'
-            ? prefill as unknown as GenerationPaywallPrefill
-            : null,
-        creation: readCreationTitleSource(generation),
-    };
 }
 
 export default function CreateMotionClient({
@@ -304,9 +278,6 @@ export default function CreateMotionClient({
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [resolvedOutputVideo, setResolvedOutputVideo] = useState<{ outputUrl: string; url: string } | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
-    const [latestIsPublic, setLatestIsPublic] = useState(false);
-    const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
-    const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
     const [duration, setDuration] = useState<number>(0);
     const [characterOrientation, setCharacterOrientation] = useState<'video' | 'image'>('video');
     const [mode, setMode] = useState<'720p' | '1080p'>('720p');
@@ -335,7 +306,6 @@ export default function CreateMotionClient({
     const [videoPickError, setVideoPickError] = useState<string | null>(null);
     const [unconfirmedStart, setUnconfirmedStart] = useState(false);
     const [creditRefusal, setCreditRefusal] = useState<{ message: string; balance: number | null; cost: number | null } | null>(null);
-    const [publishPrefill, setPublishPrefill] = useState<MotionPublishPrefill | null>(null);
     // The owner whose saved draft has been read. A remix page keeps no draft,
     // so nothing waits for one there.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
@@ -366,6 +336,15 @@ export default function CreateMotionClient({
     // Remix State
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
+    // Publishing on the canvas: the form's details, the remix's original (credited with Follow,
+    // owner 2026-10-28), Posted, and a publish in flight, which Generate waits for.
+    const canvasPublish = useCreatorPublish({
+        generationId: latestGenerationId,
+        done: Boolean(outputVideo),
+        accessToken: session?.access_token,
+        remixPostId,
+        viewerUserId: userId,
+    });
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
@@ -899,9 +878,6 @@ export default function CreateMotionClient({
         setCreditRefusal(null);
         setOutputVideo(null);
         setLatestGenerationId(null);
-        setLatestIsPublic(false);
-        setPublishedMeta(null);
-        setPublishPrefill(null);
         latestRunCostRef.current = null;
         setRunCost(null);
         setRunAnswered(false);
@@ -1015,7 +991,6 @@ export default function CreateMotionClient({
         setRunCost(started.cost);
         setRunAnswered(true);
         setLatestGenerationId(started.generationId ?? null);
-        setLatestIsPublic(false);
         announceGenerationStarted();
         updateCredits(started.remainingCredits);
         if (reveal) setCanvasRevealKey((key) => key + 1);
@@ -1191,6 +1166,8 @@ export default function CreateMotionClient({
 
     const handleGenerate = async () => {
         if (activeGenerationRequestKeyRef.current) return;
+        // A new run takes the publish form away: a publish in flight is let finish first.
+        if (canvasPublish.inFlight) return;
         // While a start is unconfirmed, a press checks it: a new key could pay for a second run.
         const pending = pendingStartRef.current ?? (userId ? loadPendingWebStart('motion', userId) : null);
         if (pending) {
@@ -1244,7 +1221,6 @@ export default function CreateMotionClient({
         setIsGenerating(true);
         setError(null);
         setLatestGenerationId(data.id ?? null);
-        setLatestIsPublic(false);
         setRunPrompt(typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null);
         setRunLabel(motionModelName(data.model));
         latestRunCostRef.current = typeof data.cost === 'number' ? data.cost : null;
@@ -1285,33 +1261,6 @@ export default function CreateMotionClient({
         // Recovery is intentionally a mount-only lookup; changing form settings must not restart it.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-
-    // The quick-publish modal starts from the creation's own title and recipe.
-    useEffect(() => {
-        if (!outputVideo || !latestGenerationId) return;
-        const generationId = latestGenerationId;
-        const controller = new AbortController();
-        void (async () => {
-            try {
-                const { data: { session: currentSession } } = await supabase.auth.getSession();
-                if (!currentSession?.access_token || controller.signal.aborted) return;
-                const response = await fetch(`/api/generations?${new URLSearchParams({
-                    id: generationId,
-                    includeArchived: 'true',
-                    limit: '1',
-                })}`, {
-                    headers: { Authorization: `Bearer ${currentSession.access_token}` },
-                    signal: controller.signal,
-                });
-                if (!response.ok) return;
-                const nextPrefill = readPublishPrefill(generationId, await response.json());
-                if (nextPrefill && !controller.signal.aborted) setPublishPrefill(nextPrefill);
-            } catch {
-                // Without it the modal publishes the media alone, as it did before.
-            }
-        })();
-        return () => controller.abort();
-    }, [latestGenerationId, outputVideo]);
 
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
     // One settings object for the price and the run. Whole seconds: the duration control is
@@ -1408,29 +1357,13 @@ export default function CreateMotionClient({
         referenceVideoDescriptor?.sourceGenerationId === remixSourceBundle.generation.id
     );
 
-    // The run's own prompt first: the form may hold the next run's by now.
-    const shareTitle = publishedMeta?.title || runPrompt || prompt.trim() || `${model.displayName} motion clip`;
-    const shareDescription = publishedMeta?.description || runPrompt || prompt.trim() || null;
-    const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
-
     // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
     // and its chip what the run is and holds.
-    const canvasTitle = outputVideo
-        ? 'Done'
-        : isGenerating
-            ? 'Animating your character'
-            : isBackgroundProcessing || !runFailure
-                ? 'Your motion clip'
-                : 'It didn’t finish';
-    const canvasChip = outputVideo
-        ? creatorRunChip(runLabel, runCost)
-        : isGenerating
-            ? creatorRunChip(runLabel, runCost)
-            : runFailure && !isBackgroundProcessing
-                ? creatorRunChip(runLabel, null)
-                : null;
-    const showsEmptyCanvas = !outputVideo && !isGenerating && !isBackgroundProcessing && !runFailure;
-    const showsRunFailure = runFailure !== null && !outputVideo && !isGenerating && !isBackgroundProcessing;
+    const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputVideo), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
+    const canvasTitle = creatorCanvasTitle(canvasPhase, { making: 'Animating your character', waiting: 'Your motion clip' });
+    const canvasChip = creatorCanvasChip(canvasPhase, runLabel, runCost);
+    const showsEmptyCanvas = canvasPhase === 'empty';
+    const showsRunFailure = canvasPhase === 'failed';
     const emptyCanvasHint = isVisitor
         ? 'Add a character image and a reference video first. When you sign up, your prompt, settings and files stay.'
         : 'Add a character image and a reference video, then Generate.';
@@ -1487,7 +1420,7 @@ export default function CreateMotionClient({
             showTopUp={showTopUp}
             isGenerating={isGenerating}
             // A visitor's press needs no price: it checks the form, then asks for an account.
-            disabled={!canGenerate || (!isVisitor && quotePending)}
+            disabled={!canGenerate || (!isVisitor && quotePending) || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
             hasPrice={estimatedCost !== null}
             onGenerate={() => void handleGenerate()}
@@ -1530,31 +1463,27 @@ export default function CreateMotionClient({
         </div>
     );
 
-    const canvasFooter = outputVideo ? (
-        <div className="space-y-3">
-        {runPrompt ? <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-faint)]">{runPrompt}</p> : null}
-        <CreatorResultActions
-            generationId={latestGenerationId}
-            isPublic={latestIsPublic}
-            share={{ title: shareTitle, description: shareDescription, sourceSurface: 'create-motion', accessToken: session?.access_token ?? null }}
-            publicPath={publicResultPath}
-            onPublish={() => setIsPublishModalOpen(true)}
-            download={{
-                href: resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo,
-                fileName: 'generated-video.mp4',
-                label: 'Download video',
-                newTab: true,
-            }}
-            onStartAnother={() => {
-                setOutputVideo(null);
-                setLatestGenerationId(null);
-                setLatestIsPublic(false);
-                setPublishedMeta(null);
-                setError(null);
-                setGenerationTiming(null);
-            }}
+    // Done (the artboard Result): the clip, its download, and the publish form beside it; Posted once it went.
+    const motionDownload = outputVideo ? {
+        href: resolvedOutputVideo?.outputUrl === outputVideo ? resolvedOutputVideo.url : outputVideo,
+        fileName: 'generated-video.mp4',
+        label: 'Download video',
+        newTab: true,
+    } : null;
+    const publishPanel = canvasPublish.panel && motionDownload ? (
+        <CreatorPublishPanel
+            key={canvasPublish.panel.generationId}
+            {...canvasPublish.panel}
+            sourceSurface="create-motion"
+            download={motionDownload}
+            next={userCredits !== null ? (
+                <CreatorPostedNext
+                    balance={userCredits}
+                    runCost={runCost ?? estimatedCost}
+                    onMakeAnother={() => promptInputRef.current?.focus()}
+                />
+            ) : null}
         />
-        </div>
     ) : null;
 
     const motionAccent = getAccentClasses('motion');
@@ -1562,6 +1491,7 @@ export default function CreateMotionClient({
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-4 text-[var(--ui-text-primary)] sm:py-6 font-[family-name:var(--font-geist-sans)]">
             <CreatorColumnLayout
+                resultFirst={canvasPhase === 'done'}
                 title="Create motion"
                 column={
                     <>
@@ -1814,6 +1744,7 @@ export default function CreateMotionClient({
                         />
 
                         <CreatorColumnBar
+                            holdsFootUnderColumn={!(publishPanel && !canvasPublish.posted)}
                             settingsSummary={settingsSummary}
                             settings={settingsPanel}
                             settingsFootNote={<CreatorSettingsFootNote cost={estimatedCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
@@ -1836,15 +1767,27 @@ export default function CreateMotionClient({
                         chip={canvasChip}
                         revealKey={canvasRevealKey}
                         focusKey={runEndKey}
-                        tall={Boolean(outputVideo)}
-                        flow={showsEmptyCanvas || (isGenerating && !outputVideo)}
+                        flow={canvasPhase !== 'failed' && canvasPhase !== 'background'}
                         showStudioLink={!isVisitor}
-                        footer={canvasFooter}
                     >
                         {outputVideo ? (
-                            <CreatorCanvasMedia key={outputVideo} aspectRatio="auto">
-                                <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
-                            </CreatorCanvasMedia>
+                            <CreatorDoneLayout
+                                key={outputVideo}
+                                // A motion clip takes its reference's shape, read from the clip once it loads.
+                                ratio={null}
+                                media={(
+                                    <CreatorCanvasMedia aspectRatio="auto">
+                                        <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
+                                    </CreatorCanvasMedia>
+                                )}
+                                mediaFoot={motionDownload ? (
+                                    <div className="space-y-3">
+                                        {runPrompt ? <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-faint)]">{runPrompt}</p> : null}
+                                        <CreatorDownloadButton {...motionDownload} />
+                                    </div>
+                                ) : null}
+                                panel={publishPanel}
+                            />
                         ) : isGenerating ? (
                             <>
                                 <CreatorCanvasStage>
@@ -1932,25 +1875,6 @@ export default function CreateMotionClient({
                 title={uploadPreview?.title ?? 'Media Preview'}
             />
 
-            <PublishToShowcaseModal
-                isOpen={isPublishModalOpen}
-                onClose={() => setIsPublishModalOpen(false)}
-                generationId={latestGenerationId}
-                accessToken={session?.access_token ?? null}
-                defaultTitle={publishPrefill?.generationId === latestGenerationId ? publishPrefill.title : ''}
-                creation={publishPrefill?.generationId === latestGenerationId ? publishPrefill.creation : null}
-                paywallPrefill={publishPrefill?.generationId === latestGenerationId ? publishPrefill.paywallPrefill : null}
-                shareAfterPublish={latestGenerationId ? {
-                    title: shareTitle,
-                    description: shareDescription,
-                    sourceSurface: 'create-motion',
-                } : undefined}
-                onPublished={(payload) => {
-                    setLatestIsPublic(true);
-                    setPublishedMeta(payload);
-                    setIsPublishModalOpen(false);
-                }}
-            />
         </div>
     );
 }

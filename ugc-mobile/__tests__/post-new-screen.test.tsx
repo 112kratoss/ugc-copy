@@ -1452,8 +1452,10 @@ describe('mobile external post composer', () => {
 
   describe('title prefill from a creation', () => {
     // Typing a title was the step people stopped at. The prompt may suggest it
-    // only while the post has no recipe: a recipe keeps the prompt private.
-    it('starts from a title suggested by the prompt, says so, and swaps it once a recipe keeps the prompt private', async () => {
+    // unless a paid recipe sells it; a free recipe hands it to anyone with one
+    // tap, so it keeps the prompt's title (owner, 2026-10-29). The view model's
+    // suite covers the swap a paid recipe makes.
+    it('starts from a title suggested by the prompt, says so, and keeps it with a free recipe', async () => {
       generationState.item = { ...generationItem, title: null };
       const tree = await renderScreen();
       expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Exact glossy product prompt');
@@ -1465,7 +1467,7 @@ describe('mobile external post composer', () => {
       renderer.act(() => {
         context = mutationState.options?.onMutate?.('public') as typeof context;
       });
-      expect((context as { submittedDraft?: PostComposerDraft } | undefined)?.submittedDraft?.title).toBe('Image recipe');
+      expect((context as { submittedDraft?: PostComposerDraft } | undefined)?.submittedDraft?.title).toBe('Exact glossy product prompt');
     });
 
     it('keeps a typed title when a recipe is turned on', async () => {

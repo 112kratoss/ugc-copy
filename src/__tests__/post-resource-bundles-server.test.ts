@@ -1556,6 +1556,30 @@ describe('generation references packaged for a publish', () => {
     expect(source.uploads).toEqual([]);
   });
 
+  // A recipe that leaves the creator's own uploads out (the web creators' default, owner
+  // 2026-10-29) copies only the references a remix brought from its original.
+  it('copies only the rows it is given', async () => {
+    const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [
+        reference('ref-own', 'user-1', 'generation_inputs/user-1/gen-1/face.png'),
+        reference('ref-original', 'user-1', 'generation_inputs/user-1/gen-1/dojo.png', 1),
+      ],
+      [],
+    );
+
+    const items = await buildGenerationReferenceResourceItems({
+      supabase: source.client,
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+      onlyRowIds: new Set(['ref-original']),
+    });
+
+    expect(source.downloads).toEqual(['generation_inputs/user-1/gen-1/dojo.png']);
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe('reference-ref-original');
+  });
+
   it('packages the account’s own references without asking who is linked to it', async () => {
     const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
     const source = referenceClient(
@@ -1574,3 +1598,118 @@ describe('generation references packaged for a publish', () => {
     expect(items).toHaveLength(1);
   });
 });
+describe('loadGenerationInputOrigins', () => {
+  function originsClient({
+    rows,
+    rowsError = null,
+    linkedGuestIds = [],
+    linkedError = null,
+    sourceOwners = [],
+    generationError = null,
+  }: {
+    rows: Array<{ id: string; metadata: Record<string, unknown> | null; storage_path: string; source_generation_id: string | null }>;
+    rowsError?: unknown;
+    linkedGuestIds?: string[];
+    linkedError?: unknown;
+    sourceOwners?: Array<{ id: string; user_id: string | null }>;
+    /** The legacy reading's read of the creation itself, made where no rows were kept. */
+    generationError?: unknown;
+  }) {
+    const client = {
+      from(table: string) {
+        if (table === 'generation_input_media') {
+          return { select: () => ({ eq: async () => ({ data: rowsError ? null : rows, error: rowsError }) }) };
+        }
+        if (table === 'profiles') {
+          return {
+            select: () => ({
+              eq: async (column: string, value: string) => ({
+                data: linkedError ? null : column === 'merged_into_user_id' && value === 'user-1' ? linkedGuestIds.map((id) => ({ id })) : [],
+                error: linkedError,
+              }),
+            }),
+          };
+        }
+        if (table === 'generations') {
+          return {
+            select: () => ({
+              in: async () => ({ data: sourceOwners, error: null }),
+              eq: () => ({ maybeSingle: async () => ({ data: null, error: generationError }) }),
+            }),
+          };
+        }
+        throw new Error(`Unexpected table access: ${table}`);
+      },
+    };
+    return client as never;
+  }
+
+  it('reads a remix’s references from its original as the original’s, and the creator’s uploads as their own', async () => {
+    const { loadGenerationInputOrigins } = await import('@/lib/post-resource-bundles-server');
+    const origins = await loadGenerationInputOrigins({
+      supabase: originsClient({
+        rows: [
+          { id: 'row-original', storage_path: 'generation_inputs/user-1/gen-1/00.png', source_generation_id: null, metadata: { sourceStoragePath: 'generation_inputs/creator-9/gen-0/00.png' } },
+          { id: 'row-own', storage_path: 'generation_inputs/user-1/gen-1/01.png', source_generation_id: null, metadata: { sourceStoragePath: 'uploads/user-1/draft/face.png' } },
+          { id: 'row-guest', storage_path: 'generation_inputs/user-1/gen-1/02.png', source_generation_id: null, metadata: { sourceStoragePath: 'uploads/guest-1/draft/hand.png' } },
+          { id: 'row-result', storage_path: 'generation_inputs/user-1/gen-1/03.png', source_generation_id: 'gen-0', metadata: {} },
+        ],
+        linkedGuestIds: ['guest-1'],
+        sourceOwners: [{ id: 'gen-0', user_id: 'creator-9' }],
+      }),
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
+    expect(Object.fromEntries(origins.byRowId)).toEqual({
+      'row-original': 'others',
+      'row-own': 'own',
+      'row-guest': 'own',
+      'row-result': 'others',
+    });
+    expect(origins.hasOwn).toBe(true);
+  });
+
+  it('counts every input as the creator’s own when the rows cannot be read', async () => {
+    const { loadGenerationInputOrigins } = await import('@/lib/post-resource-bundles-server');
+    const origins = await loadGenerationInputOrigins({
+      supabase: originsClient({ rows: [], rowsError: { message: 'timeout' } }),
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
+    expect(origins.byRowId.size).toBe(0);
+    expect(origins.hasOwn).toBe(true);
+  });
+
+  // A guest's uploads sit in the guest's folder: unread, the guest is not known to be the
+  // creator, and their uploads would count as the original's and go out with the recipe.
+  it('counts no input as another’s when who is linked to the creator cannot be read', async () => {
+    const { loadGenerationInputOrigins } = await import('@/lib/post-resource-bundles-server');
+    const origins = await loadGenerationInputOrigins({
+      supabase: originsClient({
+        rows: [
+          { id: 'row-guest', storage_path: 'generation_inputs/user-1/gen-1/02.png', source_generation_id: null, metadata: { sourceStoragePath: 'uploads/guest-1/draft/hand.png' } },
+        ],
+        linkedError: { message: 'timeout' },
+      }),
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
+    expect([...origins.byRowId.values()]).not.toContain('others');
+    expect(origins.hasOwn).toBe(true);
+  });
+
+  it('counts every input as the creator’s own when a creation without rows cannot be read', async () => {
+    const { loadGenerationInputOrigins } = await import('@/lib/post-resource-bundles-server');
+    const origins = await loadGenerationInputOrigins({
+      supabase: originsClient({ rows: [], generationError: { message: 'timeout' } }),
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
+    expect(origins.hasOwn).toBe(true);
+  });
+});
+

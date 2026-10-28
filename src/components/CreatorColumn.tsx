@@ -4,7 +4,7 @@ import Link from 'next/link';
 import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ChevronDown, CircleAlert, Download, Images, Info, LayoutTemplate, Loader2, Share2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import clsx from 'clsx';
 
@@ -16,7 +16,7 @@ import {
   type StudioMediaPreviewType,
 } from '@/components/CreatorStudio';
 import { getAccentClasses, IconButton, type UiAccent } from '@/components/DesignSystem';
-import PublicShareButton from '@/components/PublicShareButton';
+import type { CreatorCanvasPhase } from '@/lib/creator-canvas-phase';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
 import { PRICING_PLANS } from '@/lib/pricing';
 import type { OptionPrice } from '@/lib/use-quote-prices';
@@ -38,16 +38,27 @@ export function CreatorColumnLayout({
   title,
   column,
   canvas,
+  resultFirst = false,
 }: {
   /** The page's heading, for screen readers: the shell's top bar says "Create" and the tool tab names the creator. */
   title: string;
   column: ReactNode;
   canvas: ReactNode;
+  /**
+   * Under the column's width the result comes first while a run is done (the artboard
+   * Result at 390): what was made, and posting it, before the next prompt.
+   */
+  resultFirst?: boolean;
 }) {
   return (
     // Its own stacking context: the model picker's layer 50 stays under the
     // shell's top bar (also 50) when the page scrolls.
-    <div className="relative z-10 mx-auto grid w-full max-w-[680px] grid-cols-1 gap-4 px-[clamp(1rem,1.9vw,2.25rem)] min-[1120px]:max-w-[1860px] min-[1120px]:grid-cols-[minmax(340px,400px)_minmax(0,1fr)] min-[1120px]:items-start min-[1120px]:gap-5 min-[1440px]:grid-cols-[minmax(380px,440px)_minmax(0,1fr)]">
+    <div
+      className={clsx(
+        'relative z-10 mx-auto grid w-full max-w-[680px] grid-cols-1 gap-4 px-[clamp(1rem,1.9vw,2.25rem)] min-[1120px]:max-w-[1860px] min-[1120px]:grid-cols-[minmax(340px,400px)_minmax(0,1fr)] min-[1120px]:items-start min-[1120px]:gap-5 min-[1440px]:grid-cols-[minmax(380px,440px)_minmax(0,1fr)]',
+        resultFirst && 'max-[1119px]:[&>section]:order-first',
+      )}
+    >
       <h1 className="sr-only">{title}</h1>
       <div className="flex min-w-0 flex-col gap-3" onFocus={keepFocusClearOfBar}>{column}</div>
       {canvas}
@@ -367,6 +378,7 @@ export function CreatorColumnBar({
   action,
   note,
   stacked = false,
+  holdsFootUnderColumn = true,
 }: {
   settingsSummary: string;
   /** What the chip keeps of the summary where it is narrow ("480P · 5s"); the summary is its name either way. */
@@ -387,6 +399,12 @@ export function CreatorColumnBar({
   note?: ReactNode;
   /** The action's words need the bar's width ("Switch back to Seedance 2 Mini"): the chip goes above it at every width. */
   stacked?: boolean;
+  /**
+   * Under the column's width the bar keeps to the window's foot. Off while a done run's
+   * publish bar holds it there (the artboard Result at 390): the bar then waits at the
+   * column's end, so the two never stack.
+   */
+  holdsFootUnderColumn?: boolean;
 }) {
   const [ownOpen, setOwnOpen] = useState(false);
   const isOpen = settingsOpen ?? ownOpen;
@@ -452,7 +470,11 @@ export function CreatorColumnBar({
   };
 
   return (
-    <div ref={barRef} data-creator-bar className="sticky bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-30 mt-1">
+    <div
+      ref={barRef}
+      data-creator-bar
+      className={clsx('sticky bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-30 mt-1', !holdsFootUnderColumn && 'max-[1119px]:static')}
+    >
       {/* One surface for the line and the bar, so nothing scrolling under the
           bar shows between them, and opaque, so nothing needs blurring behind it. */}
       <div className={clsx(FLOATING_SURFACE_CLASS, 'overflow-hidden')}>
@@ -864,85 +886,6 @@ export function CreatorBackgroundRunLine({ title }: { title: string }) {
   );
 }
 
-const RESULT_ACTION_CLASS = 'ui-button ui-button-secondary ui-focus-ring';
-
-/**
- * Under a finished result: publish it (or share it once it is public), download
- * it, or put it away for another run.
- */
-export function CreatorResultActions({
-  generationId,
-  isPublic,
-  share,
-  publicPath,
-  onPublish,
-  preparingPublish = false,
-  download,
-  onStartAnother,
-}: {
-  generationId: string | null;
-  isPublic: boolean;
-  share: {
-    title: string;
-    description: string | null;
-    sourceSurface: 'create-image' | 'create-video' | 'create-motion';
-    accessToken: string | null;
-  };
-  publicPath: string | null;
-  onPublish: () => void;
-  /** The publish form's title and recipe are being read: the button waits. */
-  preparingPublish?: boolean;
-  download: { href: string; fileName: string; label: string; newTab?: boolean };
-  onStartAnother: () => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {generationId ? (
-        isPublic ? (
-          <>
-            <PublicShareButton
-              generationId={generationId}
-              viewerIsOwner
-              title={share.title}
-              description={share.description}
-              sourceSurface={share.sourceSurface}
-              accessToken={share.accessToken}
-              className={RESULT_ACTION_CLASS}
-            />
-            {publicPath ? (
-              <Link href={publicPath} className={RESULT_ACTION_CLASS}>
-                Open public page
-              </Link>
-            ) : null}
-          </>
-        ) : (
-          <button
-            type="button"
-            onClick={onPublish}
-            disabled={preparingPublish}
-            className="ui-button ui-button-primary ui-focus-ring disabled:cursor-wait disabled:opacity-70"
-          >
-            {preparingPublish ? <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> : <Share2 aria-hidden className="h-4 w-4" />}
-            Publish & share
-          </button>
-        )
-      ) : null}
-      <a
-        href={download.href}
-        download={download.fileName}
-        {...(download.newTab ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-        className={RESULT_ACTION_CLASS}
-      >
-        <Download aria-hidden className="h-4 w-4" />
-        {download.label}
-      </a>
-      <button type="button" onClick={onStartAnother} className="ui-button ui-button-ghost ui-focus-ring">
-        Start another run
-      </button>
-    </div>
-  );
-}
-
 export type CreatorMentionSuggestion = { id: string; displayName: string; handle: string };
 
 /**
@@ -1270,23 +1213,19 @@ export function CreatorCanvas({
   chip,
   revealKey = 0,
   focusKey = 0,
-  tall = false,
   flow = false,
   showStudioLink = true,
   children,
-  footer,
 }: {
   title: string;
   /** The run's line beside the title: "Seedance 2 Mini · 480P · 9:16 · 5s · 19 credits". */
   chip?: string | null;
   revealKey?: number;
   focusKey?: number;
-  tall?: boolean;
   flow?: boolean;
   /** Off for a signed-out visitor: Studio holds an account's creations. */
   showStudioLink?: boolean;
   children: ReactNode;
-  footer?: ReactNode;
 }) {
   const sectionRef = useRef<HTMLElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -1350,17 +1289,18 @@ export function CreatorCanvas({
       {/* Beside the column, a size container, so a frame can take the shape of the
           run's ratio and still fit whichever of its sides is shorter; a picture
           fits the stage there, and 70% of the window's height under the column. */}
+      {/* A flowing body's padding is a variable: the publish form's sticky Publish takes it back
+          to sit on the pane's edge (`CreatorPublishPanel`). */}
       <div
         className={clsx(
           flow
-            ? 'app-scrollbar relative flex flex-1 flex-col gap-5 p-4 sm:p-6 min-[1120px]:min-h-0 min-[1120px]:overflow-y-auto'
+            ? 'app-scrollbar relative flex flex-1 flex-col gap-5 p-[var(--creator-canvas-padding)] [--creator-canvas-padding:1rem] sm:[--creator-canvas-padding:1.5rem] min-[1120px]:min-h-0 min-[1120px]:overflow-y-auto'
             : CANVAS_STAGE_CLASS,
-          !flow && (tall ? 'min-h-[min(70svh,40rem)]' : 'min-h-64')
+          !flow && 'min-h-64'
         )}
       >
         {children}
       </div>
-      {footer ? <div className="border-t border-[var(--ui-border-subtle)] px-4 py-3 sm:px-6">{footer}</div> : null}
     </section>
   );
 }
@@ -1394,6 +1334,15 @@ export function CreatorCanvasStage({ children, className }: { children: ReactNod
 export function creatorRunChip(label: string | null | undefined, cost: number | null | undefined): string | null {
   const credits = typeof cost === 'number' && cost > 0 ? creditsWords(cost) : null;
   return [label || null, credits].filter(Boolean).join(' · ') || null;
+}
+
+/**
+ * The canvas's chip for where the run is (`creatorCanvasPhase`): the run's line while it works
+ * and once it is done, without credits once it failed (they came back), and none before a run.
+ */
+export function creatorCanvasChip(phase: CreatorCanvasPhase, label: string | null | undefined, cost: number | null | undefined): string | null {
+  if (phase === 'done' || phase === 'generating') return creatorRunChip(label, cost);
+  return phase === 'failed' ? creatorRunChip(label, null) : null;
 }
 
 /**
@@ -1522,18 +1471,32 @@ const CANVAS_FRAME_SIZE_CLASS =
   // it, the canvas's shorter side.
   'aspect-[var(--creator-frame-ratio)] w-[min(100%,calc(70svh*var(--creator-frame-ratio)))] min-[1120px]:w-[min(100cqw,calc(100cqh*var(--creator-frame-ratio)))]';
 
+/**
+ * A result beside or above the publish form: its column's width, short of 60% of a phone's
+ * smallest height (a 9:16 clip about 285px wide at 390 × 844, so the form starts on the first
+ * screen), and beside the column short of the pane's height less 26rem, so that stacked above the
+ * form the form's head and its Publish still show under it (a 9:16 clip about 235px wide in a
+ * 900px window; the mock-up's is 260).
+ */
+const DONE_FRAME_SIZE_CLASS =
+  'aspect-[var(--creator-frame-ratio)] w-[min(100%,calc(60svh*var(--creator-frame-ratio)))] min-[1120px]:w-[min(100%,calc((100dvh-var(--app-shell-topbar-height)-26rem)*var(--creator-frame-ratio)))]';
+
 function clampFrameRatio(ratio: number) {
   return Math.min(CANVAS_FRAME_RATIO_LIMITS.max, Math.max(CANVAS_FRAME_RATIO_LIMITS.min, ratio));
 }
 
 /**
- * A finished clip, as large as the canvas allows, on black: in the shape its
- * frame had (square for "auto", as the frame is) until the clip's own size is
- * known, then in that. A motion run takes its shape from its reference, which
- * the page does not measure, and a model can answer "auto" with any shape.
- * Give it the clip's address as its `key`, so a new clip is measured afresh.
+ * A finished clip on black, beside or above the publish form (`CreatorDoneLayout`), where its
+ * own column decides its width, short of what the window's height leaves for the form to start
+ * in view: in the shape its frame had (square for "auto", as the frame is) until the clip's own
+ * size is known, then in that. A motion run takes its shape from its reference, which the page
+ * does not measure, and a model can answer "auto" with any shape. Give it the clip's address as
+ * its `key`, so a new clip is measured afresh.
  */
-export function CreatorCanvasMedia({ aspectRatio, children }: { aspectRatio?: string | null; children: ReactNode }) {
+export function CreatorCanvasMedia({ aspectRatio, children }: {
+  aspectRatio?: string | null;
+  children: ReactNode;
+}) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [clipRatio, setClipRatio] = useState<number | null>(null);
 
@@ -1557,7 +1520,7 @@ export function CreatorCanvasMedia({ aspectRatio, children }: { aspectRatio?: st
       ref={boxRef}
       data-testid="creator-canvas-media"
       style={{ '--creator-frame-ratio': ratio } as CSSProperties}
-      className={clsx('relative overflow-hidden rounded-ui-xl bg-black', CANVAS_FRAME_SIZE_CLASS)}
+      className={clsx('relative overflow-hidden rounded-ui-xl bg-black', DONE_FRAME_SIZE_CLASS)}
     >
       {children}
     </div>

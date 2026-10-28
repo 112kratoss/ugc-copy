@@ -14,6 +14,7 @@ import { isAudioModel } from '@/lib/models';
 import {
   buildGenerationReferenceResourceItems,
   getMarketplaceQualityErrorForPostBundle,
+  loadGenerationInputOrigins,
   mergeGenerationReferenceItemsIntoBundle,
   publishGenerationPostWithResourceBundleAtomically,
 } from '@/lib/post-resource-bundles-server';
@@ -52,7 +53,7 @@ import {
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
-import { titleForRecipePost } from '@/lib/creation-post-title';
+import { recipeKeepsPromptPrivate, titleForRecipePost } from '@/lib/creation-post-title';
 import { requestPostEmbedding } from '@/lib/feed-embeddings';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { isTemplateResultGeneration } from '@/lib/template-result';
@@ -123,6 +124,12 @@ export type ShowcasePublishRequestBody = {
   exposePromptPublic?: boolean;
   shareInputMediaForRemix?: boolean;
   includeGenerationReferences?: boolean;
+  /**
+   * The recipe leaves the creator's own uploads out (the web creators' default, owner
+   * 2026-10-29): only the references a remix brought from its original go in as files, and
+   * where the creation holds any of their own, none is handed to a remix (`allowRemix` off).
+   */
+  leaveOutOwnGenerationReferences?: boolean;
   resourceBundle?: PostResourceBundleInput | null;
 };
 
@@ -131,6 +138,7 @@ export type ShowcasePublishServiceDependencies = {
   fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
   openAllowlistedRemoteMedia: typeof openAllowlistedRemoteMedia;
   buildGenerationReferenceResourceItems: typeof buildGenerationReferenceResourceItems;
+  loadGenerationInputOrigins: typeof loadGenerationInputOrigins;
   mergeGenerationReferenceItemsIntoBundle: typeof mergeGenerationReferenceItemsIntoBundle;
   validatePostResourceBundleInput: typeof validatePostResourceBundleInput;
   getMarketplaceQualityErrorForPostBundle: typeof getMarketplaceQualityErrorForPostBundle;
@@ -183,6 +191,7 @@ function resolveDependencies(
       dependencies?.openAllowlistedRemoteMedia ?? openAllowlistedRemoteMedia,
     buildGenerationReferenceResourceItems:
       dependencies?.buildGenerationReferenceResourceItems ?? buildGenerationReferenceResourceItems,
+    loadGenerationInputOrigins: dependencies?.loadGenerationInputOrigins ?? loadGenerationInputOrigins,
     mergeGenerationReferenceItemsIntoBundle:
       dependencies?.mergeGenerationReferenceItemsIntoBundle ?? mergeGenerationReferenceItemsIntoBundle,
     validatePostResourceBundleInput: dependencies?.validatePostResourceBundleInput ?? validatePostResourceBundleInput,
@@ -565,6 +574,22 @@ export async function publishGenerationToShowcaseForRoute({
   const shouldIncludeGenerationReferences = requestBody.includeGenerationReferences === true;
   let effectiveResourceBundle: PostResourceBundleInput | null = requestedResourceBundle;
   let effectiveHasResourceBundlePayload = hasRequestedResourceBundlePayload;
+  // Whose each input is, where the recipe leaves the creator's own out: a remix hands every
+  // input of a recipe whose switch is on to whoever opens it, so with any of their own among
+  // them the switch goes off, whatever the request said. It decides only what is copied and
+  // that switch, so a recipe with neither is not read for it.
+  const inputOrigins = requestBody.leaveOutOwnGenerationReferences === true
+    && requestedAccessMode !== 'none'
+    // By truth, as the switch is stored (`allow_remix: Boolean(...)`).
+    && (shouldIncludeGenerationReferences || Boolean(effectiveResourceBundle?.resources?.allowRemix))
+    ? await resolvedDependencies.loadGenerationInputOrigins({ supabase: adminSupabase, ownerUserId: userId, generationId })
+    : null;
+  if (inputOrigins?.hasOwn && effectiveResourceBundle?.resources?.allowRemix) {
+    effectiveResourceBundle = {
+      ...effectiveResourceBundle,
+      resources: { ...effectiveResourceBundle.resources, allowRemix: false },
+    };
+  }
 
   if (
     shouldIncludeGenerationReferences &&
@@ -574,6 +599,9 @@ export async function publishGenerationToShowcaseForRoute({
       supabase: adminSupabase,
       ownerUserId: userId,
       generationId,
+      ...(inputOrigins
+        ? { onlyRowIds: new Set([...inputOrigins.byRowId].flatMap(([rowId, origin]) => (origin === 'others' ? [rowId] : []))) }
+        : {}),
     });
 
     if (referenceItems.length > 0) {
@@ -693,17 +721,18 @@ export async function publishGenerationToShowcaseForRoute({
     ?? generation.title?.trim()
     ?? resolvedDependencies.deriveTitleFromBody(sanitizedPublicContent.body || null)
     ?? null;
-  // A recipe keeps the prompt private, so a title cut from it goes out as the
-  // recipe's kind title, the swap both composers make. A visibility change
-  // republishes the stored recipe with the post, so that one counts too. (A
-  // compose request is the whole post and every composer sends its recipe; one
-  // that omits it is not read against the stored post here.)
+  // A paid recipe keeps the prompt private, so a title cut from it goes out as
+  // the recipe's kind title, the swap both composers make; a free one hands its
+  // prompt to anyone, so its title may be cut from it (owner, 2026-10-29). A
+  // visibility change republishes the stored recipe with the post, so that one
+  // counts too. (A compose request is the whole post and every composer sends its
+  // recipe; one that omits it is not read against the stored post here.)
   const recipeForTitle = effectiveHasResourceBundlePayload
     ? effectiveResourceBundle
     : existingPost?.resourceBundle ?? frozenSoldBundleForRepublish;
   const resolvedTitle = titleForRecipePost({
     title: titleAsGiven,
-    hasRecipe: Boolean(recipeForTitle && recipeForTitle.accessMode !== 'none'),
+    promptPrivate: recipeKeepsPromptPrivate(recipeForTitle?.accessMode),
     source: {
       prompt: generation.prompt,
       model: generation.model,

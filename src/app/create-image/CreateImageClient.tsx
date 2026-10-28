@@ -28,6 +28,7 @@ import {
     CreatorBalanceNote,
     CreatorBarAction,
     CreatorCanvas,
+    parseAspectRatio,
     CreatorCanvasFrame,
     CreatorCanvasStage,
     CreatorColumnBar,
@@ -37,7 +38,6 @@ import {
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorReferenceRow,
-    CreatorResultActions,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -49,7 +49,7 @@ import {
     CreatorTopUpNotice,
     CreatorVisitorNote,
     CREATOR_VISITOR_CANVAS_HINT,
-    creatorRunChip,
+    creatorCanvasChip,
     describeRunFailure,
 } from '@/components/CreatorColumn';
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
@@ -78,8 +78,8 @@ import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
-import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
+import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
+import { creatorCanvasPhase, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
@@ -93,7 +93,6 @@ import {
     getRemixRestoreWarning,
     getRemixResultReferenceLabel,
 } from '@/lib/remix-source-client';
-import { buildShowcaseDetailPath } from '@/lib/share';
 import {
     getPersistedImageElementRecords,
     PERSISTED_MEDIA_KEYS,
@@ -159,7 +158,6 @@ import {
     type PendingWebStart,
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
-import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
@@ -237,17 +235,6 @@ type ImageCreatorDraft = {
 const CREATOR_DRAFT_SAVE_DELAY_MS = 500;
 
 const START_UNCONFIRMED_MESSAGE = 'We couldn’t confirm your generation started. Check again — that can’t start a second run.';
-
-type CreationPublishDetails = {
-    title: string;
-    paywallPrefill: GenerationPaywallPrefill | null;
-    /** What the modal suggests a title from when the creation has none. */
-    creation: CreationTitleSource | null;
-};
-
-const EMPTY_PUBLISH_DETAILS: CreationPublishDetails = { title: '', paywallPrefill: null, creation: null };
-/** How long the publish button waits for the creation's details before opening without them. */
-const PUBLISH_DETAILS_WAIT_MS = 3_000;
 
 const IMAGE_FILE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'heic', 'heif']);
 
@@ -327,30 +314,6 @@ function getImageFileExtension(imageUrl: string | null | undefined): string {
     return extension === 'jpeg' ? 'jpg' : extension;
 }
 
-/** The creation's title and recipe prefill as Studio reads them, for the quick-publish modal. */
-async function fetchCreationPublishDetails(generationId: string): Promise<CreationPublishDetails | null> {
-    const accessToken = await readAccessToken();
-    if (!accessToken) return null;
-    const params = new URLSearchParams({ id: generationId, includeArchived: 'true', limit: '1' });
-    const response = await fetch(`/api/generations?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!response.ok) return null;
-    const payload = await response.json() as { generations?: Array<Record<string, unknown> | null> };
-    const generation = Array.isArray(payload.generations)
-        ? payload.generations.find((item) => item?.id === generationId)
-        : null;
-    if (!generation) return null;
-    const prefill = generation.paywallPrefill;
-    return {
-        title: typeof generation.title === 'string' ? generation.title : '',
-        paywallPrefill: prefill && typeof prefill === 'object' && Array.isArray((prefill as { resourceKinds?: unknown }).resourceKinds)
-            ? prefill as GenerationPaywallPrefill
-            : null,
-        creation: readCreationTitleSource(generation),
-    };
-}
-
 export interface CreateImagePrefill {
     remixId?: string | null;
     remixPostId?: string | null;
@@ -414,9 +377,6 @@ export default function CreateImageClient({
     const [outputImage, setOutputImage] = useState<string | null>(null);
     const [outputImages, setOutputImages] = useState<string[]>([]);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
-    const [latestIsPublic, setLatestIsPublic] = useState(false);
-    const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
-    const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     // Watches for a newer deploy only while nothing is in flight; a press then
@@ -429,8 +389,6 @@ export default function CreateImageClient({
     const [pendingStartNotice, setPendingStartNotice] = useState<string | null>(null);
     const [creditRefusal, setCreditRefusal] = useState<{ message: string; credits: number | null; cost: number | null } | null>(null);
     const [elementPickNotice, setElementPickNotice] = useState<string | null>(null);
-    const [publishModalDefaults, setPublishModalDefaults] = useState<CreationPublishDetails>(EMPTY_PUBLISH_DETAILS);
-    const [isPreparingPublish, setIsPreparingPublish] = useState(false);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     // Open settings price each of their options; the bar says when they open and close.
@@ -466,6 +424,15 @@ export default function CreateImageClient({
     // Remix State
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
+    // Publishing on the canvas: the form's details, the remix's original (credited with Follow,
+    // owner 2026-10-28), Posted, and a publish in flight, which Generate waits for.
+    const canvasPublish = useCreatorPublish({
+        generationId: latestGenerationId,
+        done: Boolean(outputImage),
+        accessToken: session?.access_token,
+        remixPostId,
+        viewerUserId: userId,
+    });
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const prefillAspectRatio = prefill.aspectRatio ?? null;
@@ -489,7 +456,6 @@ export default function CreateImageClient({
     // Saved settings for a model whose controls have not loaded yet.
     const pendingDraftSettingsRef = useRef<{ modelId: string; values: Record<string, CatalogPrimitive> } | null>(null);
     const unsavedDraftRef = useRef<{ owner: string; draft: ImageCreatorDraft } | null>(null);
-    const publishDetailsRef = useRef<{ generationId: string; request: Promise<CreationPublishDetails | null> } | null>(null);
 
     useEffect(() => () => {
         generationPollAbortControllerRef.current?.abort();
@@ -1322,18 +1288,6 @@ export default function CreateImageClient({
         setPendingStartNotice(null);
     };
 
-    const loadPublishDetails = (generationId: string): Promise<CreationPublishDetails | null> => {
-        const cached = publishDetailsRef.current;
-        if (cached?.generationId === generationId) return cached.request;
-        const request = fetchCreationPublishDetails(generationId).catch(() => null);
-        publishDetailsRef.current = { generationId, request };
-        void request.then((details) => {
-            // A failed read is tried again at the next open.
-            if (!details && publishDetailsRef.current?.request === request) publishDetailsRef.current = null;
-        });
-        return request;
-    };
-
     const handleStartRefusal = (refusal: unknown, run: CatalogGenerationRequestPayload) => {
         if (refusal instanceof WebCatalogRequestError && refusal.status === 401) {
             // The session lapsed after the press: back through sign-in, with the draft kept.
@@ -1382,7 +1336,6 @@ export default function CreateImageClient({
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }
-            if (run.generationId) void loadPublishDetails(run.generationId);
         } catch (err) {
             if (isGenerationStatusAbortError(err)) return;
             if (err instanceof Error && err.message === BACKGROUND_PROCESSING_ERROR) {
@@ -1434,7 +1387,6 @@ export default function CreateImageClient({
         forgetPendingStart();
         quoteState.started(start.body as CatalogGenerationRequestPayload);
         setLatestGenerationId(started.generationId ?? null);
-        setLatestIsPublic(false);
         announceGenerationStarted();
         updateCredits(started.remainingCredits);
         // Only now, and only for a press: a refusal is said in the bar, which a
@@ -1514,7 +1466,6 @@ export default function CreateImageClient({
             setIsGenerating(true);
             setError(null);
             setLatestGenerationId(data.id ?? null);
-            setLatestIsPublic(false);
             setSubmittedPrompt(typeof data.prompt === 'string' ? data.prompt : '');
             setRunShape({ aspectRatio: null, label: imageModelName(data.model), cost: typeof data.cost === 'number' ? data.cost : null, answered: true });
             setGenerationTiming(createLocalGenerationTiming({
@@ -1620,6 +1571,8 @@ export default function CreateImageClient({
 
     const handleGenerate = async () => {
         if (activeGenerationRequestKeyRef.current) return;
+        // A new run takes the publish form away: a publish in flight is let finish first.
+        if (canvasPublish.inFlight) return;
         const submitted = prompt.trim();
         if (!submitted) { setError('Please enter a prompt'); return; }
         if (staleElementMentions.length > 0) {
@@ -1652,8 +1605,6 @@ export default function CreateImageClient({
         setResultPreviewImage(null);
         setIsResultPreviewOpen(false);
         setLatestGenerationId(null);
-        setLatestIsPublic(false);
-        setPublishedMeta(null);
         setSubmittedPrompt(submitted);
         setRunShape({ aspectRatio, label: `${model.displayName} · ${settingsSummary}`, cost: currentCost, answered: false });
         const startedAtMs = getCurrentTimestampMs();
@@ -1726,20 +1677,6 @@ export default function CreateImageClient({
         void handleGenerate();
     };
 
-    const handleOpenPublish = async () => {
-        if (!latestGenerationId || isPreparingPublish) return;
-        setIsPreparingPublish(true);
-        const details = await Promise.race([
-            loadPublishDetails(latestGenerationId),
-            new Promise<null>((resolve) => {
-                window.setTimeout(() => resolve(null), PUBLISH_DETAILS_WAIT_MS);
-            }),
-        ]);
-        setPublishModalDefaults(details ?? EMPTY_PUBLISH_DETAILS);
-        setIsPreparingPublish(false);
-        setIsPublishModalOpen(true);
-    };
-
     const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
@@ -1783,31 +1720,17 @@ export default function CreateImageClient({
         );
     }
 
-    const shareTitle = publishedMeta?.title || submittedPrompt || `${model.displayName} image`;
-    const shareDescription = publishedMeta?.description || submittedPrompt || null;
-    const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
     const displayedOutputImages = outputImages.length > 0
         ? outputImages
         : (outputImage ? [outputImage] : []);
 
     // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
     // and its chip what the run is and holds.
-    const canvasTitle = outputImage
-        ? 'Done'
-        : isGenerating
-            ? 'Making your image'
-            : isBackgroundProcessing || !runFailure
-                ? 'Your image'
-                : 'It didn’t finish';
-    const canvasChip = outputImage
-        ? creatorRunChip(runShape?.label, runShape?.cost)
-        : isGenerating
-            ? creatorRunChip(runShape?.label, runShape?.cost)
-            : runFailure && !isBackgroundProcessing
-                ? creatorRunChip(runShape?.label, null)
-                : null;
-    const showsEmptyCanvas = !outputImage && !isGenerating && !isBackgroundProcessing && !runFailure;
-    const showsRunFailure = runFailure !== null && !outputImage && !isGenerating && !isBackgroundProcessing;
+    const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputImage), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
+    const canvasTitle = creatorCanvasTitle(canvasPhase, { making: 'Making your image', waiting: 'Your image' });
+    const canvasChip = creatorCanvasChip(canvasPhase, runShape?.label, runShape?.cost);
+    const showsEmptyCanvas = canvasPhase === 'empty';
+    const showsRunFailure = canvasPhase === 'failed';
 
     // What the run needs, as the column's cards ask for it.
     const emptyCanvasHint = model.maxImages > 0
@@ -1880,7 +1803,7 @@ export default function CreateImageClient({
             }}
             showTopUp={showTopUp}
             isGenerating={isGenerating}
-            disabled={generateBlocked}
+            disabled={generateBlocked || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
             hasPrice={currentCost !== null}
             onGenerate={handleGenerate}
@@ -1967,40 +1890,32 @@ export default function CreateImageClient({
         </div>
     );
 
-    const canvasFooter = outputImage ? (
-        <div className="space-y-3">
-        {submittedPrompt ? <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-faint)]">{submittedPrompt}</p> : null}
-        {displayedOutputImages.length > 1 ? (
-            <p className="text-xs text-[var(--ui-text-faint)]">{displayedOutputImages.length} options. The first is the one you publish.</p>
-        ) : null}
-        <CreatorResultActions
-            generationId={latestGenerationId}
-            isPublic={latestIsPublic}
-            share={{ title: shareTitle, description: shareDescription, sourceSurface: 'create-image', accessToken: session?.access_token ?? null }}
-            publicPath={publicResultPath}
-            onPublish={() => void handleOpenPublish()}
-            preparingPublish={isPreparingPublish}
-            download={{
-                href: outputImageDownloadUrl ?? outputImage,
-                fileName: `generated-image.${getImageFileExtension(outputImage)}`,
-                label: 'Download image',
-            }}
-            onStartAnother={() => {
-                setOutputImage(null);
-                setOutputImages([]);
-                setResultPreviewImage(null);
-                setIsResultPreviewOpen(false);
-                setLatestGenerationId(null);
-                setLatestIsPublic(false);
-                setPublishedMeta(null);
-            }}
+    // Done (the artboard Result): the picture, its download, and the publish form beside it; Posted once it went.
+    const imageDownload = outputImage ? {
+        href: outputImageDownloadUrl ?? outputImage,
+        fileName: `generated-image.${getImageFileExtension(outputImage)}`,
+        label: 'Download image',
+    } : null;
+    const publishPanel = canvasPublish.panel && imageDownload ? (
+        <CreatorPublishPanel
+            key={canvasPublish.panel.generationId}
+            {...canvasPublish.panel}
+            sourceSurface="create-image"
+            download={imageDownload}
+            next={userCredits !== null ? (
+                <CreatorPostedNext
+                    balance={userCredits}
+                    runCost={runShape?.cost ?? currentCost}
+                    onMakeAnother={() => promptTextareaRef.current?.focus()}
+                />
+            ) : null}
         />
-        </div>
     ) : null;
 
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-4 text-[var(--ui-text-primary)] sm:py-6 font-[family-name:var(--font-geist-sans)]">
             <CreatorColumnLayout
+                resultFirst={canvasPhase === 'done'}
                 title="Create image"
                 column={
                     <>
@@ -2289,6 +2204,7 @@ export default function CreateImageClient({
                         )}
 
                         <CreatorColumnBar
+                            holdsFootUnderColumn={!(publishPanel && !canvasPublish.posted)}
                             settingsSummary={settingsSummary}
                             settings={settingsPanel}
                             settingsFootNote={<CreatorSettingsFootNote cost={currentCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
@@ -2311,44 +2227,58 @@ export default function CreateImageClient({
                         chip={canvasChip}
                         revealKey={canvasRevealKey}
                         focusKey={runEndKey}
-                        tall={Boolean(outputImage)}
-                        flow={showsEmptyCanvas || (isGenerating && !outputImage)}
+                        flow={canvasPhase !== 'failed' && canvasPhase !== 'background'}
                         showStudioLink={!isVisitor}
-                        footer={canvasFooter}
                     >
                         {outputImage ? (
-                            <div className={displayedOutputImages.length > 1 ? 'grid h-full w-full auto-rows-fr grid-cols-2 gap-3' : 'flex h-full w-full'}>
-                                {displayedOutputImages.map((imageUrl, index) => (
-                                    <div key={`${imageUrl}-${index}`} className="relative flex h-full min-h-0 w-full items-center justify-center">
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setResultPreviewImage(imageUrl);
-                                                setIsResultPreviewOpen(true);
-                                            }}
-                                            className="ui-focus-ring flex h-full w-full items-center justify-center rounded-ui-xl"
-                                            aria-label={`Preview generated image ${index + 1}`}
-                                        >
-                                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                                            <img
-                                                src={imageUrl}
-                                                alt={`Generated image ${index + 1}`}
-                                                className="max-w-full rounded-ui-xl object-contain"
-                                            />
-                                        </button>
-                                        {displayedOutputImages.length > 1 ? (
-                                            <a
-                                                href={getOutputImageDownloadUrl(imageUrl, index) ?? imageUrl}
-                                                download={`generated-image-${index + 1}.${getImageFileExtension(imageUrl)}`}
-                                                aria-label={`Download result ${index + 1}`}
-                                                className="ui-focus-ring absolute bottom-2 right-2 inline-flex h-12 w-12 items-center justify-center rounded-full bg-black/65 text-white transition-colors hover:bg-black/85"
-                                            >
-                                                <Download className="h-4 w-4" />
-                                            </a>
-                                        ) : null}
+                            <CreatorDoneLayout
+                                key={outputImage}
+                                ratio={parseAspectRatio(runShape?.aspectRatio ?? aspectRatio)}
+                                media={(
+                                    <div className={displayedOutputImages.length > 1 ? 'grid w-full grid-cols-2 gap-3' : 'flex w-full justify-center'}>
+                                        {displayedOutputImages.map((imageUrl, index) => (
+                                            <div key={`${imageUrl}-${index}`} className="relative flex min-w-0 items-center justify-center">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setResultPreviewImage(imageUrl);
+                                                        setIsResultPreviewOpen(true);
+                                                    }}
+                                                    className="ui-focus-ring flex w-full items-center justify-center rounded-ui-xl"
+                                                    aria-label={`Preview generated image ${index + 1}`}
+                                                >
+                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                    <img
+                                                        src={imageUrl}
+                                                        alt={`Generated image ${index + 1}`}
+                                                        className="max-h-[60svh] w-auto max-w-full rounded-ui-xl object-contain min-[1120px]:max-h-[calc(100dvh-var(--app-shell-topbar-height)-17rem)]"
+                                                    />
+                                                </button>
+                                                {displayedOutputImages.length > 1 ? (
+                                                    <a
+                                                        href={getOutputImageDownloadUrl(imageUrl, index) ?? imageUrl}
+                                                        download={`generated-image-${index + 1}.${getImageFileExtension(imageUrl)}`}
+                                                        aria-label={`Download result ${index + 1}`}
+                                                        className="ui-focus-ring absolute bottom-2 right-2 inline-flex h-12 w-12 items-center justify-center rounded-full bg-black/65 text-white transition-colors hover:bg-black/85"
+                                                    >
+                                                        <Download className="h-4 w-4" />
+                                                    </a>
+                                                ) : null}
+                                            </div>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
+                                )}
+                                mediaFoot={imageDownload ? (
+                                    <div className="space-y-2">
+                                        {submittedPrompt ? <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-faint)]">{submittedPrompt}</p> : null}
+                                        {displayedOutputImages.length > 1 ? (
+                                            <p className="text-center text-xs text-[var(--ui-text-faint)]">{displayedOutputImages.length} options. The first is the one you publish.</p>
+                                        ) : null}
+                                        <CreatorDownloadButton {...imageDownload} />
+                                    </div>
+                                ) : null}
+                                panel={publishPanel}
+                            />
                         ) : isGenerating ? (
                             <>
                                 <CreatorCanvasStage>
@@ -2451,26 +2381,6 @@ export default function CreateImageClient({
                         </p>
                     </div>
                 }
-            />
-
-            <PublishToShowcaseModal
-                isOpen={isPublishModalOpen}
-                onClose={() => setIsPublishModalOpen(false)}
-                generationId={latestGenerationId}
-                accessToken={session?.access_token ?? null}
-                defaultTitle={publishModalDefaults.title}
-                creation={publishModalDefaults.creation}
-                paywallPrefill={publishModalDefaults.paywallPrefill}
-                shareAfterPublish={latestGenerationId ? {
-                    title: shareTitle,
-                    description: shareDescription,
-                    sourceSurface: 'create-image',
-                } : undefined}
-                onPublished={(payload) => {
-                    setLatestIsPublic(true);
-                    setPublishedMeta(payload);
-                    setIsPublishModalOpen(false);
-                }}
             />
 
             <StudioMediaPreviewModal

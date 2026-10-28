@@ -178,17 +178,28 @@ export function getPublicPostQualityError(input: {
 
 export type CreationTitleSuggestionInput = {
   /**
-   * The creation's prompt. It is read only while the post has no recipe: a
-   * recipe keeps the prompt off the public post (`sanitizePublicPostContent`),
-   * so a title cut from it would publish the opening of what is being sold.
+   * The creation's prompt. It is read only while the post's recipe leaves it
+   * open (`promptPrivate`): a paid recipe sells it, so a title cut from it would
+   * publish the opening of what is being sold.
    */
   prompt?: string | null;
   model?: string | null;
   category?: string | null;
   /** `'motion'` for a motion transfer, whose stored category is 'video' and model 'kling-2.6'/'kling-3.0'. */
   creationMode?: string | null;
-  hasRecipe: boolean;
+  /** The post's recipe keeps its prompt private (`recipeKeepsPromptPrivate`): a paid one. */
+  promptPrivate: boolean;
 };
+
+/**
+ * Whether a post's recipe keeps its prompt out of the post's title: a paid one,
+ * whose prompt is what is sold. A free recipe hands its prompt to anyone with
+ * one tap, so a title cut from it gives nothing away (owner, 2026-10-29: most
+ * posts share a free recipe now, and each was titled "Video recipe").
+ */
+export function recipeKeepsPromptPrivate(accessMode: string | null | undefined): boolean {
+  return accessMode === 'paid';
+}
 
 export type CreationTitleSuggestion = {
   title: string;
@@ -304,60 +315,67 @@ function titleFromPrompt(prompt: string | null | undefined): string {
     keptWordCount += clauseWords.length;
   }
 
-  const words = kept.join(', ').split(' ').filter(Boolean);
-  while (words.length > 1 && words.join(' ').length > SUGGESTED_TITLE_MAX_LENGTH) {
-    words.pop();
-  }
-  while (words.length > 1 && TRAILING_JOINER_WORDS.has(words[words.length - 1].toLowerCase().replace(/,$/, ''))) {
-    words.pop();
-  }
-
-  const cut = trimPhraseEdges(words.join(' ').slice(0, SUGGESTED_TITLE_MAX_LENGTH));
+  const cut = cutAtWord(kept.join(', ').split(' ').filter(Boolean), SUGGESTED_TITLE_MAX_LENGTH);
   const title = cut.charAt(0).toUpperCase() + cut.slice(1);
   return title.length >= 3 && !isPlaceholderText(title) ? title : '';
 }
 
 /**
+ * Words cut at a word to fit `maxLength`, never ending on a joining word ("…lanterns and"), a
+ * comma after it included, with the marks a cut leaves at its edges trimmed.
+ */
+function cutAtWord(words: readonly string[], maxLength: number): string {
+  const kept = [...words];
+  while (kept.length > 1 && kept.join(' ').length > maxLength) {
+    kept.pop();
+  }
+  while (kept.length > 1 && TRAILING_JOINER_WORDS.has(kept[kept.length - 1].toLowerCase().replace(/,$/, ''))) {
+    kept.pop();
+  }
+  return trimPhraseEdges(kept.join(' ').slice(0, maxLength));
+}
+
+/**
  * The title a post of a creation starts with when the creation has none of
- * its own: the opening of its prompt while the post has no recipe, else words
- * that name what was made ("AI video", "Image recipe"). Every suggestion
- * passes the placeholder rule, and the creator can edit it like any title.
+ * its own: the opening of its prompt unless a paid recipe keeps the prompt
+ * private, else words that name what was made ("AI video", "Image recipe").
+ * Every suggestion passes the placeholder rule, and the creator can edit it
+ * like any title.
  */
 export function suggestCreationPostTitle(input: CreationTitleSuggestionInput): CreationTitleSuggestion {
   const kind = readCreationKind(input.model, input.category, input.creationMode);
   // A motion prompt tells the model how to move ("No distortion, the
   // character's movements are consistent with the video."), not what is shown.
-  if (!input.hasRecipe && kind !== 'motion') {
+  if (!input.promptPrivate && kind !== 'motion') {
     const fromPrompt = titleFromPrompt(input.prompt);
     if (fromPrompt) {
       return { title: fromPrompt, source: 'prompt' };
     }
   }
 
-  return { title: input.hasRecipe ? RECIPE_TITLE_BY_KIND[kind] : TITLE_BY_KIND[kind], source: 'kind' };
+  return { title: input.promptPrivate ? RECIPE_TITLE_BY_KIND[kind] : TITLE_BY_KIND[kind], source: 'kind' };
 }
 
 /**
- * The title once a recipe is turned on or off. A title cut from the prompt is
- * swapped for the recipe's kind title while a recipe is on (a recipe keeps the
- * prompt private) and back when the recipe goes; any other title stays. It is
- * compared with the prompt itself, not with what a composer prefilled, so the
- * rule holds in an editor too, and for a title an earlier save copied onto the
- * creation as its own.
+ * The title once the post's recipe changes. A title cut from the prompt is
+ * swapped for the recipe's kind title when a paid recipe goes on
+ * (`recipeKeepsPromptPrivate`), and the kind title gives way to the prompt's
+ * whenever the prompt is not private after the change: as a paid recipe goes,
+ * and for a free recipe titled before 2026-10-29, when any recipe kept the
+ * prompt private. Any other title stays. It is compared with the prompt itself,
+ * not with what a composer prefilled, so the rule holds in an editor too, and
+ * for a title an earlier save copied onto the creation as its own.
  */
-export function followTitleForRecipe(
+export function followTitleForPromptPrivacy(
   title: string,
-  creation: Omit<CreationTitleSuggestionInput, 'hasRecipe'>,
-  hadRecipe: boolean,
-  hasRecipe: boolean,
+  creation: Omit<CreationTitleSuggestionInput, 'promptPrivate'>,
+  wasPrivate: boolean,
+  isPrivate: boolean,
 ): string {
-  if (hadRecipe === hasRecipe) {
-    return title;
-  }
-  const fromPrompt = suggestCreationPostTitle({ ...creation, hasRecipe: false });
-  const forRecipe = suggestCreationPostTitle({ ...creation, hasRecipe: true });
-  if (hasRecipe) {
-    return fromPrompt.source === 'prompt' && title === fromPrompt.title ? forRecipe.title : title;
+  const fromPrompt = suggestCreationPostTitle({ ...creation, promptPrivate: false });
+  const forRecipe = suggestCreationPostTitle({ ...creation, promptPrivate: true });
+  if (isPrivate) {
+    return !wasPrivate && fromPrompt.source === 'prompt' && title === fromPrompt.title ? forRecipe.title : title;
   }
   return title === forRecipe.title ? fromPrompt.title : title;
 }
@@ -375,9 +393,9 @@ function normalizeTitleForComparison(value: string): string {
  * Whether a title is the opening of a prompt, as a suggestion cuts it
  * (`titleFromPrompt`), compared without case, extra spaces or the marks at
  * its edges. A title shorter or longer than the cut does not count, so one
- * the creator chose stays. A recipe keeps its prompt private, so a post with
- * one must not carry such a title; the server swaps it for the kind title,
- * as the composers do when a recipe goes on.
+ * the creator chose stays. A paid recipe keeps its prompt private, so a post
+ * with one must not carry such a title; the server swaps it for the kind
+ * title, as the composers do when a paid recipe goes on.
  */
 export function isTitleFromPrompt(title: string | null | undefined, prompt: string | null | undefined): boolean {
   const fromPrompt = titleFromPrompt(prompt);
@@ -388,11 +406,37 @@ export function isTitleFromPrompt(title: string | null | undefined, prompt: stri
 }
 
 /** The line under a title that is still the composer's suggestion, in the same words on the web and in the app. */
-export function describeTitleSuggestion(source: CreationTitleSuggestion['source'], hasRecipe: boolean): string {
+export function describeTitleSuggestion(source: CreationTitleSuggestion['source'] | 'remix', promptPrivate: boolean): string {
   if (source === 'prompt') {
     return 'Suggested from your prompt. Edit it if you like.';
   }
-  return hasRecipe ? 'Suggested. A recipe keeps your prompt off the post.' : 'Suggested. Edit it if you like.';
+  if (source === 'remix') {
+    return 'Suggested from the original. Edit it if you like.';
+  }
+  return promptPrivate ? 'Suggested. A paid recipe keeps your prompt off the post.' : 'Suggested. Edit it if you like.';
+}
+
+const REMIX_TITLE_MARK = ' (remix)';
+
+/**
+ * The title a remix's post starts with when the creation has none of its own: the original's,
+ * marked as a remix ("intense (remix)", the web creators' publish form), its title cut at a
+ * word so the whole stays within a suggestion's sixty characters. Empty where the original's
+ * title is a placeholder or missing; a title already marked is kept as it is.
+ */
+export function suggestRemixPostTitle(originalTitle: string | null | undefined): string {
+  const title = (originalTitle ?? '').replace(/\s+/g, ' ').trim();
+  if (!title || isPlaceholderText(title)) {
+    return '';
+  }
+  if (title.toLowerCase().endsWith(REMIX_TITLE_MARK.trim())) {
+    return title.slice(0, SUGGESTED_TITLE_MAX_LENGTH);
+  }
+  const room = SUGGESTED_TITLE_MAX_LENGTH - REMIX_TITLE_MARK.length;
+  if (title.length <= room) {
+    return `${title}${REMIX_TITLE_MARK}`;
+  }
+  return `${cutAtWord(title.split(' '), room)}${REMIX_TITLE_MARK}`;
 }
 
 const SUGGESTED_HANDLE_PATTERN = /^[a-z0-9-]{3,24}$/;
