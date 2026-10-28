@@ -109,6 +109,27 @@ describe('useQuotePrices', () => {
     expect(result.current(run(5))).toMatchObject({ status: 'ready', costCredits: 20 });
   });
 
+  // A catalog that could not be read answers 200 with each run refused for now
+  // (CATALOG_UNAVAILABLE), as a cache behind a new release refuses with CATALOG_CHANGED: those
+  // runs are asked again, not kept as refused for the page's life.
+  it.each(['CATALOG_UNAVAILABLE', 'CATALOG_CHANGED'])('asks again half a minute later for runs refused %s', async (code) => {
+    fetchMock.mockImplementationOnce(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ quotes: [{ ok: false, status: code === 'CATALOG_CHANGED' ? 409 : 503, code, error: 'Not now.', fieldErrors: {} }] }),
+    }) as Response);
+    const { result } = renderHook(() => useQuotePrices([run(5)]));
+    await settle();
+    expect(result.current(run(5))).toEqual({ status: 'unavailable' });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current(run(5))).toMatchObject({ status: 'ready', costCredits: 20 });
+  });
+
   it('prices a list under development\'s double mount', async () => {
     const { result } = renderHook(() => useQuotePrices([run(5)]), {
       wrapper: ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>,

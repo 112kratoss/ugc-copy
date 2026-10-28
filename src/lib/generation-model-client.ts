@@ -883,7 +883,7 @@ export async function requestWebGenerationQuote(
 /** One run's answer in a price list: its quote, or why the catalog refused that run. */
 export type WebGenerationQuoteBatchEntry =
   | { ok: true; quote: GenerationModelQuote }
-  | { ok: false; code: string; error: string; fieldErrors: Record<string, string> };
+  | { ok: false; status?: number; code: string; error: string; fieldErrors: Record<string, string> };
 
 /**
  * Prices many runs in one request (`POST /api/generation-models/quotes`), at most

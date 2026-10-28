@@ -1,73 +1,34 @@
-import {
-  BackendRateLimitError,
-  GENERATION_MODEL_QUOTE_BATCH_RATE_LIMIT,
-  enforceBackendRateLimit,
-} from '@/lib/backend-rate-limit';
+import { GENERATION_MODEL_QUOTE_BATCH_RATE_LIMIT } from '@/lib/backend-rate-limit';
 import {
   CatalogError,
   type CatalogPlatform,
-  type GenerationModelKind,
   type GenerationModelQuote,
-  type GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
 import { quotePublishedGenerationModels } from '@/lib/generation-model-catalog-store';
 import { logBackendError } from '@/lib/backend-logger';
-import type { GenerationModelQuoteRateLimitClient } from '@/lib/generation-model-quote-service';
+import {
+  INVALID_QUOTE_RUN,
+  isQuotableRun,
+  quoteInputOf,
+  quoteRefusal,
+  refuseQuoteOverLimit,
+  type GenerationModelQuoteRateLimitClient,
+  type GenerationModelQuoteRefusal,
+} from '@/lib/generation-model-quote-service';
 import { GENERATION_MODEL_QUOTE_BATCH_MAX } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 // The most runs one request prices (a whole settings panel, or the whole video model
 // list), shared with the clients that split a longer list.
 export { GENERATION_MODEL_QUOTE_BATCH_MAX };
 
-/** One run's answer, in the place its request had: its quote, or why the catalog refused it. */
+/** One run's answer, in the place its request had: its quote, or why it was not priced, as the single quote says it. */
 export type GenerationModelQuoteBatchEntry =
   | { ok: true; quote: GenerationModelQuote }
-  | { ok: false; status: number; code: string; error: string; fieldErrors: Record<string, string> };
+  | GenerationModelQuoteRefusal;
 
 export type GenerationModelQuoteBatchServiceResult =
   | { ok: true; quotes: GenerationModelQuoteBatchEntry[] }
-  | {
-    ok: false;
-    status: number;
-    code: string;
-    error: string;
-    fieldErrors: Record<string, string>;
-    retryAfterSeconds?: number;
-    limit?: number;
-    remaining?: number;
-    resetAt?: string;
-  };
-
-function isGenerationModelKind(value: unknown): value is GenerationModelKind {
-  return value === 'image' || value === 'video' || value === 'motion';
-}
-
-function isQuotableRun(value: unknown): value is GenerationModelQuoteInput {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const run = value as Partial<GenerationModelQuoteInput>;
-  return isGenerationModelKind(run.kind) && typeof run.modelId === 'string' && run.modelId.length > 0;
-}
-
-const INVALID_RUN: GenerationModelQuoteBatchEntry = {
-  ok: false,
-  status: 422,
-  code: 'INVALID_MODEL_SETTINGS',
-  error: 'A valid kind and modelId are required.',
-  fieldErrors: {},
-};
-
-function refusal(error: unknown): GenerationModelQuoteBatchEntry {
-  if (error instanceof CatalogError) {
-    return { ok: false, status: error.status, code: error.code, error: error.message, fieldErrors: error.fieldErrors };
-  }
-  return {
-    ok: false,
-    status: 503,
-    code: 'CATALOG_UNAVAILABLE',
-    error: 'Generation pricing is temporarily unavailable. Refresh the model catalog and try again.',
-    fieldErrors: {},
-  };
-}
+  | GenerationModelQuoteRefusal;
 
 /**
  * Prices many runs in one request (`POST /api/generation-models/quotes`), each as the
@@ -102,45 +63,12 @@ export async function createGenerationModelQuoteBatch({
     };
   }
 
-  try {
-    await enforceBackendRateLimit(rateLimitClient, {
-      ...GENERATION_MODEL_QUOTE_BATCH_RATE_LIMIT,
-      key: rateLimitKey,
-    });
-  } catch (error) {
-    if (error instanceof BackendRateLimitError) {
-      return {
-        ok: false,
-        status: error.status,
-        code: 'RATE_LIMITED',
-        error: error.message,
-        fieldErrors: {},
-        retryAfterSeconds: error.retryAfterSeconds,
-        limit: error.state.limit,
-        remaining: error.state.remaining,
-        resetAt: error.state.resetAt,
-      };
-    }
-    return {
-      ok: false,
-      status: 500,
-      code: 'RATE_LIMIT_CHECK_FAILED',
-      error: 'Failed to check quote limits.',
-      fieldErrors: {},
-    };
-  }
+  const overLimit = await refuseQuoteOverLimit(rateLimitClient, GENERATION_MODEL_QUOTE_BATCH_RATE_LIMIT, rateLimitKey);
+  if (overLimit) return overLimit;
 
   const quotable = runs.flatMap((run, index) => (isQuotableRun(run) ? [{ index, run }] : []));
-  const settled = await quotePublishedGenerationModels(quotable.map(({ run }) => ({
-    kind: run.kind,
-    modelId: run.modelId,
-    schemaVersion: run.schemaVersion,
-    settings: run.settings,
-    inputCounts: run.inputCounts,
-    inputMetadata: run.inputMetadata,
-    catalogRevision: run.catalogRevision,
-  })), { platform });
-  const quotes: GenerationModelQuoteBatchEntry[] = runs.map(() => INVALID_RUN);
+  const settled = await quotePublishedGenerationModels(quotable.map(({ run }) => quoteInputOf(run)), { platform });
+  const quotes: GenerationModelQuoteBatchEntry[] = runs.map(() => INVALID_QUOTE_RUN);
   let unavailable: unknown = null;
   settled.forEach((result, position) => {
     const { index } = quotable[position];
@@ -149,7 +77,7 @@ export async function createGenerationModelQuoteBatch({
       return;
     }
     if (!(result.reason instanceof CatalogError)) unavailable ??= result.reason;
-    quotes[index] = refusal(result.reason);
+    quotes[index] = quoteRefusal(result.reason);
   });
   // One line for a catalog that failed every run, not one per run.
   if (unavailable) logBackendError('authoritative_generation_model_catalog_quote_batch_failed', { error: unavailable });

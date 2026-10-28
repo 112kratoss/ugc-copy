@@ -5,10 +5,8 @@ import { NextResponse } from 'next/server';
 
 import { createPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { getClientNetworkKey } from '@/lib/client-network-key';
-import {
-  createGenerationModelQuoteBatch,
-  type GenerationModelQuoteBatchServiceResult,
-} from '@/lib/generation-model-quote-batch-service';
+import { createGenerationModelQuoteBatch } from '@/lib/generation-model-quote-batch-service';
+import { createQuoteErrorResponse, getQuotePlatform } from '@/lib/generation-model-quote-route-shared';
 import { createServiceClient } from '@/lib/server-helpers';
 
 /**
@@ -22,30 +20,6 @@ type GenerationModelQuoteBatchRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   logError?: typeof logBackendRouteError;
 };
-
-function getQuotePlatform(request: Request) {
-  return request.headers.get('x-magicbooklet-client') === 'mobile' ? 'mobile' as const : 'web' as const;
-}
-
-function createBatchErrorResponse(
-  request: Request,
-  result: GenerationModelQuoteBatchServiceResult & { ok: false },
-) {
-  const headers = new Headers(createPrivateNoStoreApiResponseHeaders(request));
-  if (result.retryAfterSeconds !== undefined) headers.set('Retry-After', String(result.retryAfterSeconds));
-  if (result.limit !== undefined) headers.set('X-RateLimit-Limit', String(result.limit));
-  if (result.remaining !== undefined) headers.set('X-RateLimit-Remaining', String(result.remaining));
-  if (result.resetAt) headers.set('X-RateLimit-Reset', result.resetAt);
-
-  return NextResponse.json({
-    code: result.code,
-    error: result.error,
-    fieldErrors: result.fieldErrors,
-    ...(result.retryAfterSeconds !== undefined ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
-    ...(result.limit !== undefined ? { limit: result.limit } : {}),
-    ...(result.resetAt ? { resetAt: result.resetAt } : {}),
-  }, { status: result.status, headers });
-}
 
 function createInvalidBatchResponse(request: Request, status = 422) {
   return NextResponse.json(
@@ -79,7 +53,7 @@ export async function postGenerationModelQuoteBatchRouteResponse({
       platform: getQuotePlatform(request),
     });
 
-    if (!result.ok) return createBatchErrorResponse(request, result);
+    if (!result.ok) return createQuoteErrorResponse(request, result);
     return NextResponse.json({ quotes: result.quotes }, { headers: createPrivateNoStoreApiResponseHeaders(request) });
   } catch (error) {
     // A body that is not JSON is the caller's; anything else is logged.
