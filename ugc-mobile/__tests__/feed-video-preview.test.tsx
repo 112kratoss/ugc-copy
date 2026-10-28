@@ -42,6 +42,7 @@ const appState = vi.hoisted(() => ({
   currentState: 'active' as string,
   listeners: [] as Array<(state: string) => void>,
 }));
+const platform = vi.hoisted(() => ({ OS: 'ios' as string }));
 vi.mock('@react-navigation/native', () => ({ useIsFocused: () => focusState.focused }));
 
 vi.mock('@/components/recoverable-video-preview', () => ({
@@ -77,7 +78,7 @@ vi.mock('lucide-react-native', () => ({
 }));
 
 vi.mock('react-native', () => ({
-  Platform: { OS: 'ios' },
+  Platform: platform,
   AppState: {
     get currentState() {
       return appState.currentState;
@@ -137,6 +138,7 @@ describe('FeedVideoPreview', () => {
     imageState.mounts = 0;
     appState.currentState = 'active';
     appState.listeners = [];
+    platform.OS = 'ios';
   });
   // A loan left by a failed assertion would make every later unmount skip its release.
   afterEach(() => {
@@ -166,6 +168,25 @@ describe('FeedVideoPreview', () => {
     accent: '#d946ef',
     videoBackdrop: 'none' as const,
   };
+
+  /** A tile inside a zoom source, offering its playing player to the reel it opens. */
+  function mountLendingTile(): { tree: renderer.ReactTestRenderer; offer: MediaZoomVideoOffer } {
+    let offer: MediaZoomVideoOffer | null = null;
+    const offerVideo = (next: MediaZoomVideoOffer) => {
+      offer = next;
+      return () => undefined;
+    };
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <MediaZoomVideoOfferContext.Provider value={offerVideo}>
+          <FeedVideoPreview {...posterProps} lendableStreamUrl={posterProps.streamUrl} active />
+        </MediaZoomVideoOfferContext.Provider>,
+      );
+    });
+    expect(offer).not.toBeNull();
+    return { tree, offer: offer! };
+  }
 
   function posterOpacity(tree: renderer.ReactTestRenderer) {
     const [poster] = tree.root.findAll((node) => String(node.type) === 'image');
@@ -595,27 +616,55 @@ describe('FeedVideoPreview', () => {
     const plays = videoState.player.play.mock.calls.length;
     videoState.player.playing = true;
     setAppState('inactive');
+    expect(videoState.player.pause).not.toHaveBeenCalled();
     setAppState('active');
     expect(videoState.player.play).toHaveBeenCalledTimes(plays);
     renderer.act(() => tree.unmount());
   });
 
-  it('leaves a player out on loan to the reel, and plays it once the loan ends with the tile still holding the slot', () => {
-    let offer: MediaZoomVideoOffer | null = null;
-    const offerVideo = (next: MediaZoomVideoOffer) => {
-      offer = next;
-      return () => undefined;
-    };
+  // Android pauses the player of every view as the activity pauses (expo-video's
+  // PictureInPictureManager.onAppBackgrounded), but JS hears that only once its
+  // thread is free. Home pressed while Home was still electing the shelf tile:
+  // the election's play() reached the player after that pause, and the clip ran
+  // muted behind the launcher once its data came (Pixel 9a emulator, 2026-10-27).
+  it('takes back on Android a start sent as the app was leaving, and plays again when it comes back', () => {
+    platform.OS = 'android';
     let tree!: renderer.ReactTestRenderer;
     renderer.act(() => {
-      tree = renderer.create(
-        <MediaZoomVideoOfferContext.Provider value={offerVideo}>
-          <FeedVideoPreview {...posterProps} lendableStreamUrl={posterProps.streamUrl} active />
-        </MediaZoomVideoOfferContext.Provider>,
-      );
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
     });
-    expect(offer).not.toBeNull();
-    const lent = offer!;
+    // The election's play(), sent before JS heard the app go: the clip plays behind the launcher.
+    expect(videoState.player.play).toHaveBeenCalledTimes(1);
+    expect(videoState.player.pause).not.toHaveBeenCalled();
+    videoState.player.playing = true;
+
+    setAppState('background');
+    expect(videoState.player.pause).toHaveBeenCalledTimes(1);
+    // The leave's own pause, not a new player's teardown.
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(1);
+
+    // Back before that pause has reached the player, which still says it plays.
+    setAppState('active');
+    expect(videoState.player.play).toHaveBeenCalledTimes(2);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('leaves a player out on loan to the reel alone as the app leaves, on Android', () => {
+    platform.OS = 'android';
+    const { tree, offer } = mountLendingTile();
+    // Its own, the tile pauses it on the way out.
+    setAppState('background');
+    setAppState('active');
+    expect(videoState.player.pause).toHaveBeenCalledTimes(1);
+
+    lendVideoPlayer(offer.player, offer.reattach);
+    setAppState('background');
+    expect(videoState.player.pause).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('leaves a player out on loan to the reel, and plays it once the loan ends with the tile still holding the slot', () => {
+    const { tree, offer: lent } = mountLendingTile();
     lendVideoPlayer(lent.player, lent.reattach);
     const plays = videoState.player.play.mock.calls.length;
     // The reader leaves mid-flight and comes back: the reel decides while it has the player.
