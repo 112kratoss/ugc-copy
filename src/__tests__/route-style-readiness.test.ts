@@ -61,7 +61,8 @@ const PUBLIC_ROUTE_DIRECTORIES = new Set([
 ]);
 // Every other route folder: the signed-in surfaces, each with a layout that
 // links the supplement. Search also draws for a signed-out visitor (its
-// results) and keeps it. A folder in neither list fails: one left out used to
+// results) and keeps it, and so do the image, video and motion creators, which
+// a visitor uses up to Generate (2026-10-28). A folder in neither list fails: one left out used to
 // count as signed-in, so a new public page built on a signed-in layout passed
 // and inlined both sheets.
 const SIGNED_IN_ROUTE_DIRECTORIES = new Set([

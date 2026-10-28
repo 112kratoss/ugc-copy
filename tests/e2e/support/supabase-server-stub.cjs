@@ -153,6 +153,17 @@ const READS = [
     filters: { post_id: `eq.${ownPost.post.id}` },
     answer: () => json([], { 'content-range': '*/0' }),
   },
+  {
+    // loadWelcomeCreditAmount: the welcome grant, which the creators tell a signed-out
+    // visitor (creator-signed-out.spec.ts) and Home's shelf marks "Free to try" by.
+    methods: ['GET'],
+    path: '/rest/v1/credit_grant_programs',
+    filters: { program_key: 'eq.welcome_credits_v1' },
+    answer: ({ wantsObject }) => {
+      const program = { amount: 25, enabled: true };
+      return json(wantsObject ? program : [program], { 'content-range': '0-0/1' });
+    },
+  },
 ];
 
 // A JSON body as supabase-js sends it (a string in init), or null for one this cannot read

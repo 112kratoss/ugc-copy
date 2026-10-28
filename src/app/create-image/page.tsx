@@ -1,4 +1,5 @@
-import { RequireAuth } from '@/components/RouteAuthBoundary';
+import { RequestHintedOptionalAuth, RequireAuth } from '@/components/RouteAuthBoundary';
+import { loadVisitorWelcomeCredits, readCreatorWelcome } from '@/lib/creator-page-server';
 
 import CreateImageClient, { type CreateImagePrefill } from './CreateImageClient';
 
@@ -30,10 +31,22 @@ export default async function CreateImagePage({
   const returnTo = returnParams.size > 0
     ? `/create-image?${returnParams.toString()}`
     : '/create-image';
+  const welcome = readCreatorWelcome(resolvedSearchParams);
 
+  // Remixing someone's post takes an account (the remix source answers no one
+  // else), so a signed-out remix signs in first and comes back to it.
+  if (prefill.remixId) {
+    return (
+      <RequireAuth returnTo={returnTo}>
+        <CreateImageClient prefill={prefill} welcome={welcome} visitorWelcomeCredits={null} />
+      </RequireAuth>
+    );
+  }
+
+  // Signed out, the creator works up to Generate, which asks for an account.
   return (
-    <RequireAuth returnTo={returnTo}>
-      <CreateImageClient prefill={prefill} />
-    </RequireAuth>
+    <RequestHintedOptionalAuth>
+      <CreateImageClient prefill={prefill} welcome={welcome} visitorWelcomeCredits={await loadVisitorWelcomeCredits()} />
+    </RequestHintedOptionalAuth>
   );
 }

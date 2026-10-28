@@ -26,6 +26,8 @@ interface PublicIdentityFieldsProps {
    * that says that in its own title draws the two fields alone.
    */
   framed?: boolean;
+  /** One field under the other at every width, for a column too narrow for two (the creators'). */
+  stacked?: boolean;
 }
 
 const FIELD_FRAME = 'rounded-xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] transition-colors focus-within:border-[var(--ui-accent-commerce)]';
@@ -47,6 +49,7 @@ export default function PublicIdentityFields({
   accessToken,
   savedUsername,
   framed = true,
+  stacked = false,
 }: PublicIdentityFieldsProps) {
   const nameId = `${idPrefix}-display-name`;
   const handleId = `${idPrefix}-handle`;
@@ -70,7 +73,7 @@ export default function PublicIdentityFields({
       : 'text-[var(--ui-text-faint)]';
 
   const fields = (
-    <div className={`${framed ? 'mt-3 ' : ''}grid gap-3 sm:grid-cols-2`}>
+    <div className={`${framed ? 'mt-3 ' : ''}grid gap-3${stacked ? '' : ' sm:grid-cols-2'}`}>
       <div>
         <label htmlFor={nameId} className="mb-1.5 block">
           <Text as="span" variant="label">Display name</Text>

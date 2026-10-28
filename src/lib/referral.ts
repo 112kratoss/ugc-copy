@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHmac } from 'node:crypto';
 
+import { CREATOR_WELCOME_PARAM, isCreatorPath } from '@/lib/auth-onboarding';
 import { logBackendWarning } from '@/lib/backend-logger';
 import { getClientNetworkKey } from '@/lib/client-network-key';
 
@@ -145,11 +146,11 @@ export function referralClaimStatus(outcome: {
 }
 
 /**
- * Puts the claim status on the welcome-reward page a post-auth destination
- * leads to, the one page that greets a new account. A new account sets up its
- * profile first, so that page is usually the `next` of `/profile`; any other
- * destination drops the status rather than carry it somewhere that cannot
- * show it.
+ * Puts the claim status on the page a post-auth destination leads to that
+ * greets a new account: the welcome-reward page, usually the `next` of
+ * `/profile` since a new account sets up its profile first, or a creator a
+ * sign-up came back to (its welcome card). Any other destination drops the
+ * status rather than carry it somewhere that cannot show it.
  */
 export function withReferralClaimStatus(destination: string, status: string | null): string {
   if (!status) return destination;
@@ -157,7 +158,10 @@ export function withReferralClaimStatus(destination: string, status: string | nu
   try {
     const url = new URL(destination, REFERRAL_PATH_BASE);
     if (url.origin !== REFERRAL_PATH_BASE) return destination;
-    if (url.pathname === WELCOME_REWARD_PATH) {
+    if (
+      url.pathname === WELCOME_REWARD_PATH
+      || (isCreatorPath(url.pathname) && url.searchParams.get(CREATOR_WELCOME_PARAM) === '1')
+    ) {
       url.searchParams.set(REFERRAL_CLAIM_STATUS_PARAM, status);
       return `${url.pathname}${url.search}${url.hash}`;
     }

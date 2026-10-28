@@ -468,6 +468,17 @@ describe('central route identity admission', () => {
     expect(createUserClient).not.toHaveBeenCalled();
   });
 
+  // A signed-out visitor prices runs on the creators (owner, 2026-10-28): the quote is a
+  // guest route that reads no identity, so a request without a token must reach it.
+  it('lets a signed-out visitor’s price request through to the quote route', async () => {
+    const createUserClient = vi.fn();
+    await expect(guardUserFacingRouteIdentity(
+      new NextRequest('https://magicbooklet.test/api/generation-models/quote', { method: 'POST' }),
+      { createUserClient },
+    )).resolves.toBeNull();
+    expect(createUserClient).not.toHaveBeenCalled();
+  });
+
   it('keeps raw auth.getUser inside the one audited server authentication boundary', () => {
     const apiRoot = path.resolve(process.cwd(), 'src/app/api');
     const sourceRoot = path.resolve(process.cwd(), 'src');

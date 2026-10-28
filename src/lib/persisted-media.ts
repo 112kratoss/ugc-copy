@@ -158,6 +158,34 @@ export async function clearPersistedCreatorData(userId: string): Promise<void> {
   ]);
 }
 
+/** The media keys one creator saves under, by the tool's own prefix ("create-video:…"). */
+export function creatorToolMediaKeys(tool: CreatorDraftTool): string[] {
+  return Object.values(PERSISTED_MEDIA_KEYS).filter((key) => key.startsWith(`create-${tool}:`));
+}
+
+/**
+ * Moves what one creator saved for one owner to another: its text draft and its
+ * staged media, as they are stored. A visitor's form goes to the account they
+ * sign in to as a whole, so a key the visitor left empty empties the account's
+ * too: a mix of the two would be a form neither of them saw. The source keys go
+ * last, so a move cut short is done again from the start.
+ */
+export async function moveCreatorToolData(tool: CreatorDraftTool, fromOwner: string, toOwner: string): Promise<void> {
+  const pairs = [
+    [creatorDraftStorageKey(tool, fromOwner), creatorDraftStorageKey(tool, toOwner)],
+    ...creatorToolMediaKeys(tool).map((key) => [scopedPersistedMediaKey(key, fromOwner), scopedPersistedMediaKey(key, toOwner)]),
+  ];
+  for (const [from, to] of pairs) {
+    const value = await persistedMediaStore.getItem<unknown>(from);
+    if (value === null) {
+      await persistedMediaStore.removeItem(to);
+    } else {
+      await persistedMediaStore.setItem(to, value);
+    }
+  }
+  await Promise.all(pairs.map(([from]) => persistedMediaStore.removeItem(from)));
+}
+
 function getFallbackExtension(type: string | undefined): string {
   const rawExtension = type?.split('/')[1]?.split(';')[0];
   return rawExtension && rawExtension.length > 0 ? rawExtension : 'bin';

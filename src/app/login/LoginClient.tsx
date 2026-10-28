@@ -8,34 +8,7 @@ import { siteConfig } from '@/lib/seo';
 import { supabase } from '@/lib/supabase';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, Info, WandSparkles } from 'lucide-react';
 import { buildAuthContinuePath } from '@/lib/auth-onboarding';
-
-function getConfiguredAuthOrigin() {
-    const configuredOrigin =
-        process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN ||
-        process.env.NEXT_PUBLIC_SITE_URL;
-
-    if (configuredOrigin) {
-        try {
-            const parsed = new URL(configuredOrigin);
-            const isSecure = parsed.protocol === 'https:';
-            const isLocal =
-                parsed.protocol === 'http:' &&
-                (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1');
-
-            if (isSecure || isLocal) {
-                return parsed.origin;
-            }
-        } catch {
-            // Fall through to the active browser origin.
-        }
-    }
-
-    return window.location.origin;
-}
-
-function getAuthCallbackUrl(nextPath: string) {
-    return `${getConfiguredAuthOrigin()}/auth/callback?next=${encodeURIComponent(nextPath)}`;
-}
+import { getAuthCallbackUrl } from '@/lib/auth-callback-url';
 
 const SUPPORT_MAILTO = `mailto:${siteConfig.supportEmail}`;
 

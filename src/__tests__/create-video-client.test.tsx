@@ -151,14 +151,19 @@ vi.mock('@/lib/use-deployment-refresh', async (importOriginal) => ({
   },
 }));
 
+// Signed in as user-1, unless a test signs out to use the page as a visitor.
+const authState = vi.hoisted(() => ({ signedIn: true }));
+
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
-    credits: 10_000,
+    credits: authState.signedIn ? 10_000 : null,
     isLoading: false,
-    session: {
-      access_token: 'test-token',
-      user: { id: 'user-1' },
-    },
+    session: authState.signedIn
+      ? {
+        access_token: 'test-token',
+        user: { id: 'user-1' },
+      }
+      : null,
     updateCredits: mockUpdateCredits,
   }),
 }));
@@ -420,6 +425,7 @@ describe('CreateVideoClient Kling video elements', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    authState.signedIn = true;
     // A start kept from another test would be replayed when the page opens.
     window.sessionStorage.clear();
     deployState.newBuildAvailable = false;
@@ -3487,7 +3493,7 @@ describe('CreateVideoClient Kling video elements', () => {
       }
     });
 
-    it('sends a lapsed session to sign in on this page’s own link, with the draft saved', async () => {
+    it('asks a lapsed session to sign in again from this page, with the draft saved', async () => {
       window.history.replaceState({}, '', '/create-video?model=seedance-1.5-pro&prompt=harbour');
       try {
         render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
@@ -3497,14 +3503,66 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.change(promptBox(), { target: { value: PROMPT } });
         fireEvent.click(generateButton());
 
-        await waitFor(() => expect(mockPush).toHaveBeenCalledWith(
-          `/login?returnUrl=${encodeURIComponent('/create-video?model=seedance-1.5-pro&prompt=harbour')}`,
-        ));
+        // The sign-up sheet, whose Google comes back to this page's own link.
+        expect(await screen.findByRole('dialog', { name: 'Continue to generate' })).toBeInTheDocument();
+        expect(mockPush).not.toHaveBeenCalled();
         expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1', expect.objectContaining({ prompt: PROMPT }));
         expect(postedStarts()).toEqual([]);
       } finally {
         window.history.replaceState({}, '', '/');
       }
+    });
+
+    it('lets a signed-out visitor set up a run, and asks for an account at Generate with the draft kept for them', async () => {
+      authState.signedIn = false;
+      const view = render(<CreateVideoClient prefill={{}} visitorWelcomeCredits={25} />);
+      // The visitor's own draft is read back, as an account's is.
+      await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'visitor'));
+
+      expect(screen.getByText('Try it before you sign up')).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /Studio/ })).not.toBeInTheDocument();
+      expect(view.container.querySelector('[data-creator-bar-note]')).toHaveTextContent('New accounts get 25 free credits');
+
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(screen.getByRole('button', { name: 'Sign up to generate' }));
+
+      expect(await screen.findByRole('dialog', { name: 'Continue to generate' })).toBeInTheDocument();
+      expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'visitor', expect.objectContaining({ prompt: PROMPT }));
+      expect(postedStarts()).toEqual([]);
+      expect(temporaryUploadMock).not.toHaveBeenCalled();
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    it('checks a visitor’s form as Generate does before asking for an account', async () => {
+      authState.signedIn = false;
+      render(<CreateVideoClient prefill={{}} visitorWelcomeCredits={25} />);
+      await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'visitor'));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Sign up to generate' }));
+
+      expect(await screen.findByText('Please enter a prompt')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('asks a visitor for an account at Enhance, which spends credits', async () => {
+      authState.signedIn = false;
+      render(<CreateVideoClient prefill={{}} visitorWelcomeCredits={25} />);
+      await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'visitor'));
+
+      const props = enhanceButtonPropsMock.mock.calls.at(-1)?.[0] as { onRequireAccount?: () => void };
+      expect(props.onRequireAccount).toBeInstanceOf(Function);
+      act(() => props.onRequireAccount?.());
+
+      expect(await screen.findByRole('dialog', { name: 'Continue to enhance your prompt' })).toBeInTheDocument();
+    });
+
+    it('greets an account back from the sign-up it opened here', async () => {
+      render(<CreateVideoClient prefill={{}} welcome={{ referral: null }} />);
+      // The card asks the welcome credits route for this account's status.
+      await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/credits/welcome')).toBe(true));
+      // A signed-in Generate keeps its own face and price.
+      expect(screen.queryByRole('button', { name: 'Sign up to generate' })).not.toBeInTheDocument();
+      expect(enhanceButtonPropsMock.mock.calls.at(-1)?.[0]).toMatchObject({ onRequireAccount: undefined });
     });
 
     it('saves the prompt and settings for the account, and brings them back before the catalog picks a model', async () => {

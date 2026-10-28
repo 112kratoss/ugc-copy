@@ -33,7 +33,11 @@ import {
     CreatorToolTabs,
     CreatorTopUpNotice,
     CreatorUploadSlot,
+    CreatorVisitorNote,
 } from '@/components/CreatorColumn';
+import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
+import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
+import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import { motionSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import StudioModelPicker from '@/components/StudioModelPicker';
@@ -224,14 +228,26 @@ function withSentenceEnd(message: string) {
 export default function CreateMotionClient({
     prefill,
     returnTo = '/create-motion',
+    welcome = null,
+    visitorWelcomeCredits = null,
 }: {
     prefill: CreateMotionPrefill;
     /** This page with its params, for the sign-in round trip. */
     returnTo?: string;
+    /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
+    welcome?: CreatorWelcome | null;
+    /** What a new account starts with, told to a signed-out visitor. */
+    visitorWelcomeCredits?: number | null;
 }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
+    // Signed out, the page works up to Generate, which asks for an account (owner, 2026-10-28).
+    const isVisitor = !session;
+    // The visitor's draft until someone signs in, then the account's, which takes
+    // the visitor's when sign-up was opened here.
+    const draftOwner = useCreatorDraftOwner('motion', userId);
+    const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const modelCatalog = useWebGenerationModelCatalog({ kind: 'motion', selectedIds: [selectedModel], pickerOpen: isModelDropdownOpen });
@@ -281,10 +297,10 @@ export default function CreateMotionClient({
     const [unconfirmedStart, setUnconfirmedStart] = useState(false);
     const [creditRefusal, setCreditRefusal] = useState<{ message: string; balance: number | null; cost: number | null } | null>(null);
     const [publishPrefill, setPublishPrefill] = useState<MotionPublishPrefill | null>(null);
-    // The account whose saved draft has been read. A remix page keeps no draft,
+    // The owner whose saved draft has been read. A remix page keeps no draft,
     // so nothing waits for one there.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
-    const isDraftReady = Boolean(prefill.remixId) || !userId || draftRestoredFor === userId;
+    const isDraftReady = Boolean(prefill.remixId) || (draftOwner !== null && draftRestoredFor === draftOwner);
     // The start sent without an answer. Also in sessionStorage, which a browser
     // can refuse, so a retry from this page still reuses its key.
     const pendingStartRef = useRef<PendingWebStart | null>(null);
@@ -297,7 +313,7 @@ export default function CreateMotionClient({
     // clip keeps what the server measured for it.
     const measuredClipFloorRef = useRef<{ url: string; seconds: number } | null>(null);
     const latestRunCostRef = useRef<number | null>(null);
-    const pendingDraftSaveRef = useRef<{ userId: string; draft: MotionTextDraft } | null>(null);
+    const pendingDraftSaveRef = useRef<{ owner: string; draft: MotionTextDraft } | null>(null);
 
     // Mirrors the live prompt so the remix restore below can tell whether the
     // creator typed while /api/remix-source was still in flight.
@@ -404,7 +420,7 @@ export default function CreateMotionClient({
 
     // Per account, and never on a remix page: a remix restores its own inputs,
     // and saving them under the ordinary keys replaced the creator's own draft.
-    const getPersistedMediaKey = (key: string) => (userId && !remixId ? scopedPersistedMediaKey(key, userId) : null);
+    const getPersistedMediaKey = (key: string) => (draftOwner && !remixId ? scopedPersistedMediaKey(key, draftOwner) : null);
 
     const processImageFile = async (file: File) => {
         const refusal = describeRefusedMotionPick(file, 'image');
@@ -639,13 +655,13 @@ export default function CreateMotionClient({
 
     // The saved draft and its two files, read before the catalog picks a model.
     useEffect(() => {
-        if (remixId || !userId) return;
+        if (remixId || !draftOwner) return;
         let cancelled = false;
         void (async () => {
             const [draft, savedImageFile, savedVideoFile] = await Promise.all([
-                loadCreatorDraft<MotionTextDraft>('motion', userId).catch(() => null),
-                getPersistedFile(scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionCharacterImage, userId)).catch(() => null),
-                getPersistedFile(scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo, userId)).catch(() => null),
+                loadCreatorDraft<MotionTextDraft>('motion', draftOwner).catch(() => null),
+                getPersistedFile(scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionCharacterImage, draftOwner)).catch(() => null),
+                getPersistedFile(scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo, draftOwner)).catch(() => null),
             ]);
             if (cancelled) return;
             if (draft) applySavedDraft(draft);
@@ -661,22 +677,22 @@ export default function CreateMotionClient({
                 setReferenceVideoFile(savedVideoFile);
                 setReferenceVideo(url);
             }
-            setDraftRestoredFor(userId);
+            setDraftRestoredFor(draftOwner);
         })();
         return () => {
             cancelled = true;
         };
-        // Once per account: applySavedDraft reads this page's prefill, which does not change.
+        // Once per owner: applySavedDraft reads this page's prefill, which does not change.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remixId, userId]);
+    }, [remixId, draftOwner]);
 
-    // Prompt, model and settings per account, a moment after each edit. A remix
+    // Prompt, model and settings per owner, a moment after each edit. A remix
     // page saves none: it restores from its source.
     useEffect(() => {
-        if (remixId || !userId || !isDraftReady) return;
+        if (remixId || !draftOwner || !isDraftReady) return;
         const modelIsChosen = hasResolvedInitialCatalogModel.current || restoredDraftModelRef.current || Boolean(prefillModel);
         const pendingSave = {
-            userId,
+            owner: draftOwner,
             draft: {
                 prompt,
                 ...(modelIsChosen ? { modelId: selectedModel } : {}),
@@ -689,10 +705,10 @@ export default function CreateMotionClient({
         pendingDraftSaveRef.current = pendingSave;
         const timer = window.setTimeout(() => {
             if (pendingDraftSaveRef.current === pendingSave) pendingDraftSaveRef.current = null;
-            void saveCreatorDraft('motion', pendingSave.userId, pendingSave.draft).catch(() => undefined);
+            void saveCreatorDraft('motion', pendingSave.owner, pendingSave.draft).catch(() => undefined);
         }, MOTION_DRAFT_SAVE_DELAY_MS);
         return () => window.clearTimeout(timer);
-    }, [characterOrientation, duration, isDraftReady, mode, prefillModel, prefillPrompt, prompt, remixId, selectedModel, userId]);
+    }, [characterOrientation, duration, isDraftReady, mode, prefillModel, prefillPrompt, prompt, remixId, selectedModel, draftOwner]);
 
     /** Writes the draft at once, for a page about to go away. */
     const flushDraftSave = async () => {
@@ -700,7 +716,7 @@ export default function CreateMotionClient({
         if (!pendingSave) return;
         pendingDraftSaveRef.current = null;
         try {
-            await saveCreatorDraft('motion', pendingSave.userId, pendingSave.draft);
+            await saveCreatorDraft('motion', pendingSave.owner, pendingSave.draft);
         } catch {
             // Storage refused: the files are saved already, and the page goes on.
         }
@@ -709,6 +725,12 @@ export default function CreateMotionClient({
     const redirectToSignIn = async () => {
         await flushDraftSave();
         router.push(`/login?returnUrl=${encodeURIComponent(returnTo)}`);
+    };
+
+    /** Asks a visitor to sign up for what they pressed, with the form saved for the way back. */
+    const openSignUp = async (reason: CreatorSignUpReason) => {
+        await flushDraftSave();
+        setSignUpReason(reason);
     };
 
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
@@ -1137,6 +1159,12 @@ export default function CreateMotionClient({
             await reloadPage();
             return;
         }
+        if (isVisitor) {
+            // Signed out: the sign-up comes back here, on this page's own link, with the
+            // draft saved, and nothing runs until Generate is pressed again.
+            await openSignUp('generate');
+            return;
+        }
         await startFreshRun();
     };
 
@@ -1387,10 +1415,12 @@ export default function CreateMotionClient({
             onCheckAgain={() => void handleGenerate()}
             showTopUp={showTopUp}
             isGenerating={isGenerating}
-            disabled={!canGenerate || quotePending}
+            // A visitor's press needs no price: it checks the form, then asks for an account.
+            disabled={!canGenerate || (!isVisitor && quotePending)}
             costLabel={quoteUi.costLabel}
             hasPrice={estimatedCost !== null}
             onGenerate={() => void handleGenerate()}
+            signUp={isVisitor}
         />
     );
 
@@ -1465,6 +1495,7 @@ export default function CreateMotionClient({
                 column={
                     <>
                         <CreatorToolTabs currentToolId="motion" />
+                        {welcome && !isVisitor ? <CreatorWelcomeCard welcome={welcome} /> : null}
 
                         <div className="flex items-start gap-2">
                             <div className="relative min-w-0 flex-1" ref={dropdownRef}>
@@ -1706,6 +1737,7 @@ export default function CreateMotionClient({
                                 hasReferenceVideo: Boolean(referenceVideoFile || referenceVideo),
                             }}
                             disabled={isGenerating}
+                            onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
                         />
 
                         <CreatorColumnBar
@@ -1713,6 +1745,7 @@ export default function CreateMotionClient({
                             settings={settingsPanel}
                             status={barStatus}
                             action={barAction}
+                            note={isVisitor ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={estimatedCost} /> : undefined}
                         />
                     </>
                 }
@@ -1722,6 +1755,7 @@ export default function CreateMotionClient({
                         subtitle={canvasSubtitle}
                         revealKey={canvasRevealKey}
                         tall={Boolean(outputVideo)}
+                        showStudioLink={!isVisitor}
                         footer={canvasFooter}
                     >
                         {outputVideo ? (
@@ -1746,12 +1780,28 @@ export default function CreateMotionClient({
                                 <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
                                     <Play className="h-5 w-5 text-[var(--ui-text-muted)]" />
                                 </span>
-                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">Your motion clip will appear here</p>
-                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">Add a character image and a reference video, then Generate.</p>
+                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your motion clip will appear here'}</p>
+                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
+                                    {isVisitor
+                                        ? 'Add a character image and a reference video first. When you sign up, your prompt, settings and files stay.'
+                                        : 'Add a character image and a reference video, then Generate.'}
+                                </p>
                             </CreatorCanvasFrame>
                         )}
                     </CreatorCanvas>
                 }
+            />
+
+            <CreatorSignUpSheet
+                open={signUpReason !== null}
+                reason={signUpReason ?? 'generate'}
+                tool="motion"
+                welcomeCredits={visitorWelcomeCredits}
+                runCost={estimatedCost}
+                settingsLine={[model.displayName, ...settingsSummary.split(' · ')].join(', ')}
+                keepsPrompt={Boolean(prompt.trim())}
+                keepsImages={Boolean(characterImageFile || referenceVideoFile)}
+                onClose={() => setSignUpReason(null)}
             />
 
             <StudioMediaPreviewModal

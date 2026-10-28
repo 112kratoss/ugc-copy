@@ -47,6 +47,11 @@ interface EnhancePromptButtonProps {
     variant?: 'inline' | 'toolbar';
     /** A tile drawn before Enhance in the toolbar's row: the creators' Templates. */
     leading?: ReactNode;
+    /**
+     * Signed out: Enhance spends credits, so a press asks for an account
+     * through this instead of sending the prompt.
+     */
+    onRequireAccount?: () => void;
 }
 
 export default function EnhancePromptButton({
@@ -65,6 +70,7 @@ export default function EnhancePromptButton({
     showLevelToggle = true,
     variant = 'inline',
     leading,
+    onRequireAccount,
 }: EnhancePromptButtonProps) {
     const [isEnhancing, setIsEnhancing] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -79,6 +85,10 @@ export default function EnhancePromptButton({
 
     const handleEnhance = async () => {
         if (!canEnhance) return;
+        if (onRequireAccount) {
+            onRequireAccount();
+            return;
+        }
 
         setIsEnhancing(true);
         setError(null);

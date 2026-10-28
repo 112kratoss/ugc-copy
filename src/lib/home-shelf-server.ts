@@ -25,7 +25,6 @@ import {
   type HomeShelfPrice,
 } from '@/lib/home-shelf';
 import { HOME_SHELF_EARN_CARD_ENABLED, HOME_SHELF_PINS } from '@/lib/home-shelf-lineup';
-import { WELCOME_CREDIT_PROGRAM_KEY } from '@/lib/onboarding';
 import { POST_RESOURCE_CREATOR_SHARE_PERCENT } from '@/lib/post-resource-commerce';
 import { loadReferralProgramTerms } from '@/lib/referral-route-service';
 import { createServiceClient } from '@/lib/server-helpers';
@@ -33,6 +32,7 @@ import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import { loadViewerRelations } from '@/lib/showcase-feed-personalization';
+import { loadWelcomeCreditAmount } from '@/lib/welcome-credit-program-server';
 
 /**
  * Server side of the "Make this" shelf (`home-shelf.ts`): reads the pinned
@@ -124,17 +124,7 @@ const defaultCreationDependencies: HomeShelfCreationDependencies = {
     return { web, mobile };
   },
   quote: quotePublishedGenerationModel,
-  async loadWelcomeCredits() {
-    const { data, error } = await createServiceClient()
-      .from('credit_grant_programs')
-      .select('amount, enabled')
-      .eq('program_key', WELCOME_CREDIT_PROGRAM_KEY)
-      .maybeSingle();
-    if (error) throw error;
-    const program = data as { amount?: unknown; enabled?: unknown } | null;
-    const amount = Number(program?.amount);
-    return program?.enabled === true && Number.isFinite(amount) && amount > 0 ? amount : null;
-  },
+  loadWelcomeCredits: loadWelcomeCreditAmount,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

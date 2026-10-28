@@ -7,7 +7,9 @@ import {
   getPasswordRecoveryNextPath,
   getSafeAuthNextPath,
   hasSkippedProfileOnboarding,
+  isCreatorPath,
   resolvePostAuthPath,
+  withCreatorWelcome,
 } from '@/lib/auth-onboarding';
 import {
   getPasswordRequirements,
@@ -61,6 +63,40 @@ describe('auth onboarding destinations', () => {
       username: 'athul-creates',
       displayName: 'Athul Creates',
     }, '/create/motion?source=showcase')).toBe('/create/motion?source=showcase');
+  });
+
+  // A visitor signs up at a creator's Generate (owner, 2026-10-28): the creator
+  // asks for the name and handle itself, in the card that adds the welcome credits.
+  it('sends a sign-up from a creator straight back to it, flagged for its welcome card', () => {
+    expect(resolvePostAuthPath(null, '/create-video?model=seedance-2-mini&prompt=boat')).toBe(
+      '/create-video?model=seedance-2-mini&prompt=boat&welcome=1'
+    );
+    expect(resolvePostAuthPath({
+      username: 'creator-a1b2c3d4',
+      displayName: 'New creator',
+    }, '/create-image')).toBe('/create-image?welcome=1');
+    expect(resolvePostAuthPath(null, '/create-motion?remix=gen-1&remixPost=post-1')).toBe(
+      '/create-motion?remix=gen-1&remixPost=post-1&welcome=1'
+    );
+    // A ready account comes back as it went, with nothing to greet.
+    expect(resolvePostAuthPath({
+      username: 'athul-creates',
+      displayName: 'Athul Creates',
+    }, '/create-video?prompt=boat')).toBe('/create-video?prompt=boat');
+    // The launchpad and the workflow builder keep profile setup first.
+    expect(resolvePostAuthPath(null, '/create-workflow')).toBe(
+      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate-workflow'
+    );
+  });
+
+  it('knows the three creators by their path alone', () => {
+    expect(isCreatorPath('/create-image')).toBe(true);
+    expect(isCreatorPath('/create-video?prompt=x')).toBe(true);
+    expect(isCreatorPath('/create-motion#top')).toBe(true);
+    expect(isCreatorPath('/create')).toBe(false);
+    expect(isCreatorPath('/create-workflow')).toBe(false);
+    expect(isCreatorPath('/create-video/extra')).toBe(false);
+    expect(withCreatorWelcome('/create-video?welcome=1&prompt=x')).toBe('/create-video?welcome=1&prompt=x');
   });
 
   it('does not let profile setup intercept password recovery', () => {

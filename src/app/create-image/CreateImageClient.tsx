@@ -40,7 +40,12 @@ import {
     CreatorTemplatesTile,
     CreatorToolTabs,
     CreatorTopUpNotice,
+    CreatorVisitorNote,
+    CREATOR_VISITOR_CANVAS_HINT,
 } from '@/components/CreatorColumn';
+import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
+import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
+import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
@@ -335,10 +340,26 @@ export interface CreateImagePrefill {
 
 const CATALOG_HANDLED_KEYS = ['aspectRatio', 'resolution', 'qualityMode', 'googleSearch'] as const;
 
-export default function CreateImageClient({ prefill }: { prefill: CreateImagePrefill }) {
+export default function CreateImageClient({
+    prefill,
+    welcome = null,
+    visitorWelcomeCredits = null,
+}: {
+    prefill: CreateImagePrefill;
+    /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
+    welcome?: CreatorWelcome | null;
+    /** What a new account starts with, told to a signed-out visitor. */
+    visitorWelcomeCredits?: number | null;
+}) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
+    // Signed out, the page works up to Generate, which asks for an account (owner, 2026-10-28).
+    const isVisitor = !session;
+    // The visitor's draft until someone signs in, then the account's, which takes
+    // the visitor's when sign-up was opened here.
+    const draftOwner = useCreatorDraftOwner('image', userId);
+    const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
     const [prompt, setPrompt] = useState('');
 
@@ -420,11 +441,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const nowMs = useTicker(isGenerating) ?? undefined;
     // The text draft is read before the catalog settles the model, so a saved model
     // is not swapped for the catalog's default. A remix keeps no draft.
-    const [isDraftRestoreSettled, setIsDraftRestoreSettled] = useState(Boolean(remixId));
+    // The owner whose saved draft has been read back; a remix keeps none.
+    const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
+    const isDraftRestoreSettled = Boolean(remixId) || (draftOwner !== null && draftRestoredFor === draftOwner);
     const restoredDraftModelRef = useRef(false);
     // Saved settings for a model whose controls have not loaded yet.
     const pendingDraftSettingsRef = useRef<{ modelId: string; values: Record<string, CatalogPrimitive> } | null>(null);
-    const unsavedDraftRef = useRef<{ userId: string; draft: ImageCreatorDraft } | null>(null);
+    const unsavedDraftRef = useRef<{ owner: string; draft: ImageCreatorDraft } | null>(null);
     const publishDetailsRef = useRef<{ generationId: string; request: Promise<CreationPublishDetails | null> } | null>(null);
 
     useEffect(() => () => {
@@ -464,7 +487,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         : imageModelOptions;
 
     useEffect(() => {
-        if (!modelCatalog.catalog || (userId && !isDraftRestoreSettled)) return;
+        if (!modelCatalog.catalog || !isDraftRestoreSettled) return;
         const preferDefault = !hasResolvedInitialCatalogModel.current
             && !remixId
             && !prefillModel
@@ -479,15 +502,15 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 setCatalogNotice(`Your previous image model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
             }
         }
-    }, [isDraftRestoreSettled, modelCatalog.catalog, selectedModel, prefillModel, remixId, userId]);
+    }, [isDraftRestoreSettled, modelCatalog.catalog, selectedModel, prefillModel, remixId]);
 
     // A route's own prompt, model or frame wins over the saved one, and a model's
     // settings come back only with that model.
     useEffect(() => {
-        if (remixId || !userId) return;
+        if (remixId || !draftOwner) return;
         let cancelled = false;
         const promptWhenRestoreStarted = promptRef.current;
-        void loadCreatorDraft<Partial<ImageCreatorDraft>>('image', userId)
+        void loadCreatorDraft<Partial<ImageCreatorDraft>>('image', draftOwner)
             .then((draft) => {
                 if (cancelled || !draft) return;
                 if (
@@ -519,12 +542,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 // An unreadable draft leaves the form as it opened.
             })
             .finally(() => {
-                if (!cancelled) setIsDraftRestoreSettled(true);
+                if (!cancelled) setDraftRestoredFor(draftOwner);
             });
         return () => {
             cancelled = true;
         };
-    }, [prefillAspectRatio, prefillModel, prefillPrompt, remixId, userId]);
+    }, [prefillAspectRatio, prefillModel, prefillPrompt, remixId, draftOwner]);
 
     useEffect(() => {
         // What the creators saved before media was kept per account belonged to no one in particular.
@@ -532,7 +555,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }, []);
 
     const persistUploadedImageElements = useCallback(async (nextElements: ImageElementDraft[]) => {
-        if (remixId || !userId) {
+        if (remixId || !draftOwner) {
             return;
         }
 
@@ -547,10 +570,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             }));
 
         await setPersistedImageElementRecords(
-            scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createImageElements, userId),
+            scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createImageElements, draftOwner),
             persistableElements
         );
-    }, [remixId, userId]);
+    }, [remixId, draftOwner]);
 
     const commitElements = useCallback((nextElements: ImageElementDraft[]) => {
         elementRefs.current = nextElements;
@@ -710,13 +733,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }, []);
 
     const loadPersistedElements = useCallback(async () => {
-        if (remixId || !userId) {
+        if (remixId || !draftOwner) {
             return;
         }
 
         try {
             const savedElementRecords = await getPersistedImageElementRecords(
-                scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createImageElements, userId)
+                scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createImageElements, draftOwner)
             );
             if (savedElementRecords.length === 0) return;
 
@@ -734,14 +757,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         } catch (err) {
             console.error('Error loading persisted image elements:', err);
         }
-    }, [commitElements, remixId, userId]);
+    }, [commitElements, remixId, draftOwner]);
 
     useEffect(() => {
-        if (!userId || restoredPersistedMediaForUserRef.current === userId) return;
-        restoredPersistedMediaForUserRef.current = userId;
+        if (!draftOwner || restoredPersistedMediaForUserRef.current === draftOwner) return;
+        restoredPersistedMediaForUserRef.current = draftOwner;
 
         void loadPersistedElements();
-    }, [loadPersistedElements, userId]);
+    }, [loadPersistedElements, draftOwner]);
 
     useEffect(() => {
         if (remixId) return;
@@ -1097,30 +1120,35 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             : imageCreatorDraft;
     }, [imageCreatorDraft]);
     useEffect(() => {
-        if (remixId || !userId || !isDraftRestoreSettled) {
+        if (remixId || !draftOwner || !isDraftRestoreSettled) {
             unsavedDraftRef.current = null;
             return;
         }
-        const entry = { userId, draft: getDraftToSave() };
+        const entry = { owner: draftOwner, draft: getDraftToSave() };
         unsavedDraftRef.current = entry;
         const timer = window.setTimeout(() => {
             if (unsavedDraftRef.current === entry) unsavedDraftRef.current = null;
-            void saveCreatorDraft('image', entry.userId, entry.draft).catch(() => undefined);
+            void saveCreatorDraft('image', entry.owner, entry.draft).catch(() => undefined);
         }, CREATOR_DRAFT_SAVE_DELAY_MS);
         return () => window.clearTimeout(timer);
-    }, [getDraftToSave, isDraftRestoreSettled, remixId, userId]);
+    }, [getDraftToSave, isDraftRestoreSettled, remixId, draftOwner]);
     useEffect(() => () => {
         // Leaving inside the wait, through the Top Up link say, still keeps the last edit.
         const entry = unsavedDraftRef.current;
-        if (entry) void saveCreatorDraft('image', entry.userId, entry.draft).catch(() => undefined);
+        if (entry) void saveCreatorDraft('image', entry.owner, entry.draft).catch(() => undefined);
     }, []);
     const saveDraftNow = async () => {
-        if (remixId || !userId) return;
+        if (remixId || !draftOwner) return;
         unsavedDraftRef.current = null;
         await Promise.allSettled([
-            isDraftRestoreSettled ? saveCreatorDraft('image', userId, getDraftToSave()) : Promise.resolve(),
+            isDraftRestoreSettled ? saveCreatorDraft('image', draftOwner, getDraftToSave()) : Promise.resolve(),
             persistUploadedImageElements(elementRefs.current),
         ]);
+    };
+    /** Asks a visitor to sign up for what they pressed, with the form saved for the way back. */
+    const openSignUp = async (reason: CreatorSignUpReason) => {
+        await saveDraftNow();
+        setSignUpReason(reason);
     };
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
     const reloadPage = async () => {
@@ -1518,6 +1546,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             await reloadPage();
             return;
         }
+        if (isVisitor) {
+            // Signed out: the sign-up comes back here, on this page's own link, with the
+            // draft saved, and nothing runs until Generate is pressed again.
+            await openSignUp('generate');
+            return;
+        }
 
         const idempotencyKey = createGenerationIdempotencyKey('image');
         activeGenerationRequestKeyRef.current = idempotencyKey;
@@ -1686,8 +1720,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
     const canAddReferences = elements.length < model.maxImages;
     const imageAccent = getAccentClasses('image');
+    // A visitor's press needs no price: it checks the form, then asks for an account.
     const generateBlocked = !prompt.trim()
-        || quotePending
+        || (!isVisitor && quotePending)
         || staleElementMentions.length > 0
         || Boolean(referenceLimitMessage)
         || Boolean(promptLimitMessage);
@@ -1754,6 +1789,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             costLabel={quoteUi.costLabel}
             hasPrice={currentCost !== null}
             onGenerate={handleGenerate}
+            signUp={isVisitor}
         />
     );
 
@@ -1846,6 +1882,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 column={
                     <>
                         <CreatorToolTabs currentToolId="image" />
+                        {welcome && !isVisitor ? <CreatorWelcomeCard welcome={welcome} /> : null}
 
                         <div className="flex items-start gap-2">
                         <div className="relative min-w-0 flex-1" ref={dropdownRef}>
@@ -2033,6 +2070,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             prompt={prompt}
                             onEnhanced={(text) => setPrompt(text)}
                             onCreditsUpdate={updateCredits}
+                            onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
                             medium="image"
                             selectedModel={selectedModel}
                             label={isElementEnhancementLocked ? 'Polish' : 'Enhance'}
@@ -2159,6 +2197,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             settings={settingsPanel}
                             status={barStatus}
                             action={barAction}
+                            note={isVisitor ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={currentCost} /> : undefined}
                         />
                     </>
                 }
@@ -2168,6 +2207,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         subtitle={canvasSubtitle}
                         revealKey={canvasRevealKey}
                         tall={Boolean(outputImage)}
+                        showStudioLink={!isVisitor}
                         footer={canvasFooter}
                     >
                         {outputImage ? (
@@ -2221,16 +2261,30 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
                                     <ImageIcon className="h-5 w-5 text-[var(--ui-text-muted)]" />
                                 </span>
-                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">Your image will appear here</p>
+                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your image will appear here'}</p>
                                 <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
-                                    {model.maxImages > 0
-                                        ? 'Write a prompt, add reference images if you like, then Generate.'
-                                        : 'Write a prompt, then Generate.'}
+                                    {isVisitor
+                                        ? CREATOR_VISITOR_CANVAS_HINT
+                                        : model.maxImages > 0
+                                            ? 'Write a prompt, add reference images if you like, then Generate.'
+                                            : 'Write a prompt, then Generate.'}
                                 </p>
                             </CreatorCanvasFrame>
                         )}
                     </CreatorCanvas>
                 }
+            />
+
+            <CreatorSignUpSheet
+                open={signUpReason !== null}
+                reason={signUpReason ?? 'generate'}
+                tool="image"
+                welcomeCredits={visitorWelcomeCredits}
+                runCost={currentCost}
+                settingsLine={[model.displayName, ...settingsSummary.split(' · ')].join(', ')}
+                keepsPrompt={Boolean(prompt.trim())}
+                keepsImages={elements.length > 0}
+                onClose={() => setSignUpReason(null)}
             />
 
             <StudioMediaPreviewModal
