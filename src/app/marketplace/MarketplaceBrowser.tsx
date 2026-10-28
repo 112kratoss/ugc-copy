@@ -9,31 +9,28 @@ import {
   Layers3,
   Loader2,
   Search,
-  ShoppingBag,
   SlidersHorizontal,
   X,
 } from 'lucide-react';
 
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
-import { useAuth } from '@/components/AuthProvider';
-import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import {
-  describePostResourceKinds,
-  formatPostResourceBundleCountSummary,
-  formatUnlockCountLabel,
+  MARKETPLACE_RECIPE_GRID_CLASS,
+  MarketplaceRecipeTile,
+  type MarketplaceRecipeClip,
+} from '@/app/marketplace/MarketplaceRecipeTile';
+import { useAuth } from '@/components/AuthProvider';
+import {
   getPostResourceKindLabel,
   type MarketplaceResourceFilter,
   type MarketplaceResourceKindFilter,
   type MarketplaceResourceSort,
-  type PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import { getMarketplaceCardAccess, type MarketplaceViewerState } from '@/app/marketplace/marketplace-card-access';
 import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { SourceToolFilterOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 import { HoverVideo } from '@/components/HoverVideo';
-import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { MARKETPLACE_COMPACT_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 
@@ -342,13 +339,19 @@ export default function MarketplaceBrowser({
         )
       ) : (
         <>
-          <div className="mt-10 columns-1 gap-6 space-y-6 md:columns-2 xl:columns-3">
+          <div className={MARKETPLACE_RECIPE_GRID_CLASS}>
             {items.map((asset) => (
-              <MarketplaceCard
+              <MarketplaceRecipeTile
                 key={asset.id}
                 asset={asset}
                 viewer={viewer}
-                marketplaceReturnPath={marketplaceReturnPath}
+                href={buildShowcaseDetailPath(asset.postId, {
+                  from: 'unlocks',
+                  returnTo: marketplaceReturnPath,
+                  section: 'resources',
+                })}
+                linkComponent={Link}
+                renderClip={renderHoverClip}
               />
             ))}
           </div>
@@ -443,148 +446,9 @@ function FilterGroup({
   );
 }
 
-function MarketplaceCard({
-  asset,
-  viewer,
-  marketplaceReturnPath,
-}: {
-  asset: MarketplaceResourceListItem;
-  viewer: MarketplaceViewerState;
-  marketplaceReturnPath: string;
-}) {
-  // The image badge prices it in credits, as every other chip does (audit
-  // B-F13), or says "Unlocked" / "Your recipe" once the viewer's state is read;
-  // the cash figure stays on the pill and the button below, which name every
-  // way to pay, as the post's panel does: the bare quote priced a credits-only
-  // recipe in a currency no checkout takes.
-  const { accessLabel, priceLabel, unlockLabel: unlockCtaLabel } = getMarketplaceCardAccess(asset, viewer);
-  const updatedLabel = formatMarketplaceDate(asset.updatedAt);
-  const bundleCountSummary = formatPostResourceBundleCountSummary(asset.lockedPreview);
-  const buyerPreviewText = bundleCountSummary
-    ? `Includes ${bundleCountSummary}.`
-    : asset.summary || asset.previewText || describePostResourceKinds(asset.resourceKinds);
-  const detailHref = buildShowcaseDetailPath(asset.postId, {
-    from: 'unlocks',
-    returnTo: marketplaceReturnPath,
-    section: 'resources',
-  });
-  const postTitle = asset.post?.title?.trim() || asset.title;
-  const showRecipeTitle = asset.title.trim().toLocaleLowerCase() !== postTitle.trim().toLocaleLowerCase();
-
-  return (
-    <Link
-      href={detailHref}
-      aria-label={`${unlockCtaLabel}: ${postTitle}`}
-      className="group mb-6 block break-inside-avoid overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,14,0.98))] shadow-[0_24px_70px_rgba(0,0,0,0.35)] transition hover:border-white/14 hover:shadow-[0_28px_90px_rgba(0,0,0,0.45)]"
-    >
-      <div className={`relative overflow-hidden border-b border-white/8 bg-black/60 ${
-        asset.post?.mediaUrl && asset.post.mediaKind === 'image' ? 'h-64' : ''
-      }`}>
-        {asset.post?.mediaUrl ? (
-          asset.post.mediaKind === 'image' ? (
-            <OptimizedPreviewImage
-              previewSrc={asset.post.mediaPreviewUrl ?? asset.post.mediaUrl}
-              fallbackSrc={asset.post.mediaUrl}
-              alt={asset.post.title}
-              sizes="(min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
-              className="object-cover transition duration-500 group-hover:scale-[1.02]"
-            />
-          ) : (
-            <HoverVideo
-              src={asset.post.mediaRenditionUrl ?? asset.post.mediaUrl}
-              poster={asset.post.mediaPreviewUrl}
-              className="h-64 w-full object-cover transition duration-500 group-hover:scale-[1.02]"
-            />
-          )
-        ) : asset.post?.postFormat === 'text' ? (
-          <TextPostPreviewCard
-            title={asset.post.title}
-            summary={asset.post.body || buyerPreviewText}
-            sourceLabel={asset.post.sourceTool || asset.post.sourceKind}
-            dateLabel={updatedLabel}
-            unlockLabel={accessLabel}
-            resourceKinds={asset.resourceKinds}
-            className="rounded-none border-0 shadow-none"
-          />
-        ) : (
-          // A missing preview is not a workflow; the emerald wash here was
-          // decoration reading as a content-type signal.
-          <div className="flex h-64 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_45%),linear-gradient(180deg,rgba(24,24,30,1),rgba(10,10,12,1))] text-zinc-500">
-            <ShoppingBag className="h-9 w-9" />
-          </div>
-        )}
-
-        {asset.post?.postFormat !== 'text' ? (
-          <div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-full border border-black/20 bg-black/55 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white backdrop-blur-sm">
-            {accessLabel}
-          </div>
-        ) : null}
-
-        {asset.post?.postFormat !== 'text' && asset.post?.sourceTool ? (
-          <div className="absolute right-4 top-4 rounded-full border border-black/20 bg-black/55 px-3 py-1 text-[11px] font-medium text-zinc-100 backdrop-blur-sm">
-            Made with {asset.post.sourceTool}
-          </div>
-        ) : null}
-      </div>
-
-      <div className="p-5">
-        <div className="flex items-start justify-between gap-4">
-          {/* `min-w-0` and `truncate`, as on the bootstrap card: the price pill
-              names both ways to pay now, and a long handle beside it pushed the
-              pill out of the card. */}
-          <div className="min-w-0">
-            <div className="truncate text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
-              {asset.seller.username ? `@${asset.seller.username}` : asset.seller.name}
-            </div>
-            <h2 className="mt-2 text-xl font-semibold text-white">{postTitle}</h2>
-            {showRecipeTitle ? (
-              <div className="mt-1 line-clamp-1 text-xs font-medium text-zinc-500">Recipe: {asset.title}</div>
-            ) : null}
-          </div>
-          {/* Amber is the design system's Commerce accent. This is the one
-              genuinely commercial element on the card, so it is the one thing
-              that has earned an accent — everything around it stays neutral so
-              the price is what the eye lands on. */}
-          {priceLabel ? (
-            <div className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
-              {priceLabel}
-            </div>
-          ) : null}
-        </div>
-
-        <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">
-          {buyerPreviewText}
-        </p>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {(asset.resourceKinds ?? []).map((kind: PostResourceKind) => (
-            <div
-              key={`${asset.id}-${kind}`}
-              className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200"
-            >
-              {getPostResourceKindLabel(kind)}
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-5 grid grid-cols-3 gap-2 text-xs text-zinc-500">
-          {/* "N opened" counts free unlocks, "N sold" paid ones (decision 6, 2026-10-17). */}
-          <span>
-            {formatUnlockCountLabel(asset.accessMode, asset.accessMode === 'free' ? asset.freeUnlockCount : asset.salesCount)}
-          </span>
-          <span className="text-center">Updated {updatedLabel}</span>
-          <span className="text-right font-semibold text-zinc-200">{unlockCtaLabel}</span>
-        </div>
-      </div>
-    </Link>
-  );
-}
-
-function formatMarketplaceDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-  }).format(new Date(value));
+/** The interactive list plays a video post's clip under the pointer. */
+function renderHoverClip({ src, poster }: MarketplaceRecipeClip) {
+  return <HoverVideo src={src} poster={poster} className="h-full w-full object-cover" />;
 }
 
 function buildMarketplacePath(filters: MarketplaceBrowserProps['initialFilters']): string {

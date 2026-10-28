@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
 import MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
@@ -53,25 +54,24 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     vi.unstubAllGlobals();
   });
 
-  it('serializes all three production bootstrap cards and exposes pagination', () => {
+  it('serializes all four production bootstrap cards and exposes pagination', () => {
     const markup = renderToStaticMarkup(
       <MarketplaceBrowser
-        initialPage={createPage(3, true, 0, 3)}
+        initialPage={createPage(4, true, 0, 4)}
         initialFilters={INITIAL_FILTERS}
         sourceToolOptions={[]}
       />
     );
 
     expect(markup).toContain('Unlock 1');
-    expect(markup).toContain('Unlock 3');
-    expect(markup).not.toContain('Unlock 4');
+    expect(markup).toContain('Unlock 4');
+    expect(markup).not.toContain('Unlock 5');
     expect(markup).toContain('Load more recipes');
     expect(markup).not.toContain('data-marketplace-bootstrap-sentinel');
   });
 
-  // Same words as the bootstrap card it replaces: one figure on the badge,
-  // every way to pay on the pill and the button, credits alone below the
-  // cash minimum.
+  // Same words as the bootstrap tile it replaces: credits on the chip, every way
+  // to pay on the unlock action, credits alone below the cash minimum.
   it('prices each card the way its post does, a credits-only one in credits alone', () => {
     const page = createPage(3, false);
     page.items[0] = {
@@ -90,20 +90,20 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     renderMarketplace(page);
 
     const cashCard = screen.getByRole('link', { name: 'Unlock for ₹750 · 900 credits: Unlock 1' });
-    // The image badge prices it in credits, as every other chip does (audit
-    // B-F13): the cash figure is for the pill and the button that take cash.
+    // The chip prices it in credits, as every other chip does (audit B-F13);
+    // the cash figure is the unlock action's, which names every way to pay.
     expect(within(cashCard).getByText('900 credits')).toBeInTheDocument();
     expect(within(cashCard).queryByText('₹750')).not.toBeInTheDocument();
-    expect(within(cashCard).getByText('₹750 · 900 credits')).toBeInTheDocument();
     expect(within(cashCard).getByText('Unlock for ₹750 · 900 credits')).toBeInTheDocument();
 
     const creditsCard = screen.getByRole('link', { name: 'Unlock for 50 credits: Unlock 2' });
-    expect(within(creditsCard).getAllByText('50 credits')).toHaveLength(2);
+    expect(within(creditsCard).getByText('50 credits')).toBeInTheDocument();
+    expect(within(creditsCard).getByText('Unlock for 50 credits')).toBeInTheDocument();
     expect(creditsCard).not.toHaveTextContent('$0.50');
 
     const freeCard = screen.getByRole('link', { name: 'View free recipe: Unlock 3' });
     expect(within(freeCard).getByText('Free recipe')).toBeInTheDocument();
-    expect(within(freeCard).getByText('Free')).toBeInTheDocument();
+    expect(within(freeCard).getByText('View free recipe')).toBeInTheDocument();
     expect(freeCard).not.toHaveTextContent('$0.00');
   });
 
@@ -168,36 +168,36 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     ).toBeInTheDocument();
   });
 
-  it('continues a three-item bootstrap at offset three with the compact API page size', async () => {
+  it('continues a four-item bootstrap at offset four with the compact API page size', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
       items: [
-        createMarketplaceItem(3),
         createMarketplaceItem(4),
-        createMarketplaceItem(4),
+        createMarketplaceItem(5),
+        createMarketplaceItem(5),
       ],
       pageInfo: {
         hasMore: false,
         nextOffset: null,
-        offset: 3,
+        offset: 4,
         limit: 12,
       },
     })));
-    renderMarketplace(createPage(3, true, 0, 3));
+    renderMarketplace(createPage(4, true, 0, 4));
 
     fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Unlock 4')).toBeInTheDocument();
+      expect(screen.getByText('Unlock 5')).toBeInTheDocument();
     });
     expect(fetch).toHaveBeenCalledWith(
-      '/api/marketplace/resources?offset=3&limit=12',
+      '/api/marketplace/resources?offset=4&limit=12',
       expect.objectContaining({
         headers: { Accept: 'application/json' },
         signal: expect.any(AbortSignal),
       })
     );
-    expect(screen.getAllByText('Unlock 3')).toHaveLength(1);
     expect(screen.getAllByText('Unlock 4')).toHaveLength(1);
+    expect(screen.getAllByText('Unlock 5')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /load more recipes/i })).not.toBeInTheDocument();
   });
 
@@ -372,7 +372,68 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     expect(screen.queryByText('Unlock 1')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more recipes/i })).not.toBeInTheDocument();
   });
+
+  // The shell draws the first page until this list takes it over (Load more,
+  // or a scroll down to it). Both draw `MarketplaceRecipeTile`, so the hand-off
+  // moves nothing on screen; only the address a tile opens differs.
+  it('draws the same tiles as the first-paint shell it replaces', () => {
+    const page = createPage(2, false);
+    page.items[1] = {
+      ...page.items[1],
+      accessMode: 'paid',
+      priceUsdCents: 900,
+      priceQuote: { currency: 'INR', amountSubunits: 75000, formatted: '₹750', note: null },
+      post: createImagePost('post-2'),
+    };
+
+    const shell = render(
+      <MarketplaceBootstrap
+        initialPage={page}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+      />
+    );
+    const shellTiles = tilesWithoutAddress(shell.container);
+    shell.unmount();
+
+    const list = renderMarketplace(page);
+    expect(shellTiles).toHaveLength(2);
+    expect(tilesWithoutAddress(list.container)).toEqual(shellTiles);
+  });
 });
+
+function tilesWithoutAddress(container: HTMLElement) {
+  return Array.from(container.querySelectorAll('a[aria-label^="View free recipe"], a[aria-label^="Unlock for"]'), (tile) => {
+    const copy = tile.cloneNode(true) as HTMLElement;
+    copy.removeAttribute('href');
+    return copy.outerHTML;
+  });
+}
+
+function createImagePost(id: string): NonNullable<MarketplaceResourceListItem['post']> {
+  return {
+    id,
+    generationId: null,
+    title: 'Image post',
+    category: 'image',
+    body: '',
+    postFormat: 'media',
+    visibility: 'public',
+    archivedAt: null,
+    tombstoned: false,
+    reviewStatus: 'visible',
+    sourceKind: 'magicbooklet',
+    sourceTool: 'Kling 3.0',
+    sourceToolSlug: 'kling',
+    mediaUrl: 'https://example.com/image.jpg',
+    mediaPreviewUrl: null,
+    mediaRenditionUrl: null,
+    mediaKind: 'image',
+    saveCount: 0,
+    remixCount: 0,
+    shareVisitCount: 0,
+  };
+}
 
 function renderMarketplace(initialPage: ReturnType<typeof createPage>) {
   return render(

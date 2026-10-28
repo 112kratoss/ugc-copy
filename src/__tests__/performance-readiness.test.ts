@@ -116,7 +116,7 @@ describe('production performance readiness', () => {
     expect(nextConfig).toContain('value: `<${supabaseUrl.origin}>; rel=preconnect`');
     expect(nextConfig).toContain('["/", "/home", "/showcase", "/marketplace"]');
     expect(nextConfig).toContain('headers: publicMediaPreconnectHeaders');
-    expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 3');
+    expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 4');
     expect(marketplacePolicy).toContain('MARKETPLACE_COMPACT_PAGE_SIZE = 12');
     expect(marketplacePolicy).toContain('MARKETPLACE_DEFAULT_PAGE_SIZE = 24');
     expect(marketplaceClient).toContain('limit: MARKETPLACE_COMPACT_PAGE_SIZE');
