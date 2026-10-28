@@ -233,6 +233,31 @@ export function modeGatedSettingValues(
   }
   return values;
 }
+/**
+ * Whether the settings a saved draft holds are its model's published defaults, as both creators read a
+ * draft with nothing in it: each control at its default, or no value saved for it. A value the model does
+ * not take is the creator's (a later release may have dropped it), not the default; a number saved for a
+ * choice (a length) is the option it names. The reference shape is read off what is attached, never chosen,
+ * so it is not compared.
+ *
+ * Such a draft was never the creator's choice: it settled on the default of its day, or on a creator's
+ * stand-in model, and both creators give it the default of this one.
+ */
+export function catalogSettingsAtControlDefaults<Control extends {
+  key: string;
+  type: string;
+  defaultValue: CatalogConditionPrimitive;
+}>(
+  controls: readonly Control[],
+  savedValue: (control: Control) => unknown,
+): boolean {
+  return controls.every((control) => {
+    if (control.key === 'referenceMode') return true;
+    const saved = savedValue(control);
+    if (saved === undefined || saved === null || saved === '') return true;
+    return (control.type === 'choice' && typeof saved === 'number' ? String(saved) : saved) === control.defaultValue;
+  });
+}
 /** Where a motion run's inputs can go: the input modes its model's descriptor publishes. */
 export type CatalogMotionInputsDescriptor = {
   inputModes?: readonly {

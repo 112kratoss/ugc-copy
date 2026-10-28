@@ -2,7 +2,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import contractFixture from '../../contracts/generation-model-catalog-v1.json';
-import { catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogRunQuoteInput, catalogSettingsAtControlDefaults } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import { parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import {
@@ -122,6 +122,29 @@ describe('web generation model catalog client', () => {
     });
 
     expect(resolveCatalogModelId(catalog, 'image', 'bundled-active-image', { preferDefault: true })).toBe('fixture-image');
+  });
+
+  it('tells settings a draft saved at its model\'s published defaults from settings the creator chose', () => {
+    // The check both creators make of a saved draft with nothing in it (ugc-mobile/lib/model-catalog/protocol.ts).
+    const controls = [
+      { key: 'aspectRatio', type: 'choice', defaultValue: '1:1', options: [{ value: '1:1' }, { value: '16:9' }] },
+      // A length published as a choice of strings, which the video form keeps as a number.
+      { key: 'duration', type: 'choice', defaultValue: '4', options: [{ value: '4' }, { value: '8' }] },
+      { key: 'sound', type: 'boolean', defaultValue: false },
+      { key: 'steps', type: 'integer', defaultValue: 5, min: 1, max: 10, step: 1 },
+      { key: 'referenceMode', type: 'choice', defaultValue: 'frames', options: [{ value: 'frames' }, { value: 'elements' }] },
+    ];
+    const atDefaults: Record<string, unknown> = { aspectRatio: '1:1', duration: 4, sound: false, steps: 5 };
+    const check = (saved: Record<string, unknown>) => catalogSettingsAtControlDefaults(controls, (control) => saved[control.key]);
+
+    expect(check(atDefaults)).toBe(true);
+    // A setting the draft never saved is the default the form puts in its place; the reference shape follows
+    // what is attached.
+    expect(check({ ...atDefaults, aspectRatio: undefined, sound: undefined, referenceMode: 'elements' })).toBe(true);
+    // A value the model no longer takes was the creator's choice when the model took it.
+    for (const chosen of [{ aspectRatio: '16:9' }, { duration: 8 }, { duration: '8' }, { sound: true }, { steps: 6 }, { steps: 12 }, { aspectRatio: '4:3' }]) {
+      expect(check({ ...atDefaults, ...chosen }), JSON.stringify(chosen)).toBe(false);
+    }
   });
 
   it('requires explicit replacement of a retired model instead of silently changing the draft', () => {
