@@ -97,6 +97,24 @@ describe('whose draft a creator keeps', () => {
     await waitFor(() => expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false }));
   });
 
+  it('keeps the first answer when a slow move lands after the give-up', async () => {
+    vi.useFakeTimers();
+    const useCreatorDraftOwner = await loadHook();
+    mocks.hasVisitorDraftHandover.mockReturnValue(true);
+    let finish: (moved: boolean) => void = () => undefined;
+    mocks.adoptVisitorDraft.mockImplementation(() => new Promise((resolve) => {
+      finish = resolve;
+    }));
+    const { result } = renderHook(() => useCreatorDraftOwner('video', 'user-1', 'nonce-slow'));
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false });
+    await act(async () => finish(true));
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false });
+  });
+
   it('goes on without a hand-over that never answers', async () => {
     vi.useFakeTimers();
     const useCreatorDraftOwner = await loadHook();

@@ -56,8 +56,13 @@ export function useCreatorDraftOwner(
   useEffect(() => {
     if (!userId || !awaitsHandover || !handoverNonce) return;
     let cancelled = false;
+    // The first answer stands: a move that lands after the give-up has already let
+    // the page read its draft, so it cannot be told the draft came back.
+    let answered = false;
     const done = (carried: boolean) => {
-      if (!cancelled) setMoved({ userId, carried });
+      if (cancelled || answered) return;
+      answered = true;
+      setMoved({ userId, carried });
     };
     const giveUp = window.setTimeout(() => done(false), HANDOVER_WAIT_MS);
     void moveOnce(tool, userId, handoverNonce).then((carried) => {

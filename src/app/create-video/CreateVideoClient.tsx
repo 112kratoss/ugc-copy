@@ -1021,11 +1021,13 @@ export default function CreateVideoClient({
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
-    // Signed out, the page works up to Generate, which asks for an account (owner, 2026-10-28).
-    const isVisitor = !session;
     // The visitor's draft until someone signs in, then the account's, which takes
     // the visitor's when sign-up was opened here.
     const { owner: draftOwner, carriedDraft } = useCreatorDraftOwner('video', userId, handoverNonce);
+    // A page that opened signed out works up to Generate, which asks for an account
+    // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
+    // signed-in face, and its Generate signs in again on the login page.
+    const isVisitor = draftOwner === VISITOR_DRAFT_OWNER;
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;

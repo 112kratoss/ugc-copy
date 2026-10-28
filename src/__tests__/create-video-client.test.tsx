@@ -3777,6 +3777,8 @@ describe('CreateVideoClient Kling video elements', () => {
         // Signed out from the account menu, or in another tab: the page stays open.
         authState.signedIn = false;
         view.rerender(<CreateVideoClient prefill={{}} />);
+        // Not a visitor's page: no sheet that would promise a form nothing saves any more.
+        expect(screen.queryByRole('button', { name: 'Sign up to generate' })).not.toBeInTheDocument();
         fireEvent.change(promptBox(), { target: { value: `${PROMPT} Edited after signing out.` } });
         await act(async () => {
           vi.advanceTimersByTime(2000);

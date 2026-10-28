@@ -183,6 +183,14 @@ describe('the creator’s greeting for an account back from sign-up', () => {
     expect(mocks.updateCredits).not.toHaveBeenCalled();
   });
 
+  it('says why on the first read when this sign-in already had its welcome credits', async () => {
+    installFetch({ welcome: { status: 'identity_already_claimed', amount: 25, credits: 0, identityComplete: false } });
+    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
+
+    expect(await screen.findByText(/already had its welcome credits on another account/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /credits/ })).not.toBeInTheDocument();
+  });
+
   it('can be put away for now', async () => {
     installFetch({ welcome: { status: 'not_eligible', amount: 25, credits: 0, identityComplete: false } });
     render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);

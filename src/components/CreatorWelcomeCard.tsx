@@ -46,6 +46,9 @@ type CardState =
   | { kind: 'loading' }
   | { kind: 'closed' };
 
+/** Why a sign-in that already had its welcome credits (on an account since deleted) gets none here. */
+const ALREADY_CLAIMED_NOTE = 'This sign-in already had its welcome credits on another account.';
+
 async function welcomeRequest(path: string, accessToken: string, init?: RequestInit): Promise<WelcomeCredits> {
   const response = await fetch(path, {
     ...init,
@@ -121,7 +124,7 @@ export default function CreatorWelcomeCard({
           ? { kind: 'identity', amount: credits.amount }
           : credits.status === 'eligible'
             ? { kind: 'claim', amount: credits.amount }
-            : { kind: 'back', note: null };
+            : { kind: 'back', note: credits.status === 'identity_already_claimed' ? ALREADY_CLAIMED_NOTE : null };
       if (next.kind !== 'unread') dropWelcomeFlags();
       setState((current) => (current.kind === 'loading' || current.kind === 'unread' ? next : current));
     });
@@ -139,7 +142,7 @@ export default function CreatorWelcomeCard({
       updateCredits(result.credits);
       setState({ kind: 'added', amount: result.amount });
     } else if (result.status === 'identity_already_claimed') {
-      setState({ kind: 'back', note: 'This sign-in already had its welcome credits on another account.' });
+      setState({ kind: 'back', note: ALREADY_CLAIMED_NOTE });
     } else {
       // Added before (another tab), or not on offer: the shell reads the balance again.
       window.dispatchEvent(new Event('credits_updated'));
