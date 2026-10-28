@@ -364,6 +364,7 @@ export function CreatorColumnBar({
   status,
   action,
   note,
+  stacked = false,
 }: {
   settingsSummary: string;
   /** What the chip keeps of the summary where it is narrow ("480P · 5s"); the summary is its name either way. */
@@ -378,6 +379,8 @@ export function CreatorColumnBar({
   action: ReactNode;
   /** A quiet line under the buttons: the balance and what the run leaves of it, or what signing up gives a visitor. */
   note?: ReactNode;
+  /** The action's words need the bar's width ("Switch back to Seedance 2 Mini"): the chip goes above it at every width. */
+  stacked?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
@@ -455,7 +458,7 @@ export function CreatorColumnBar({
         {/* Beside the result (two panes) the chip has a row of its own, so the whole
             summary fits; in one column it shares the row with Generate, and on a
             phone it keeps the resolution and length. */}
-        <div className="flex items-stretch gap-2 p-2 min-[1120px]:flex-col">
+        <div className={clsx('flex items-stretch gap-2 p-2', stacked ? 'flex-col' : 'min-[1120px]:flex-col')}>
           {settings !== null ? (
             <button
               ref={chipRef}
@@ -466,7 +469,8 @@ export function CreatorColumnBar({
               aria-controls={showsSettings ? panelId : undefined}
               aria-label={`Generation settings: ${settingsSummary}`}
               className={clsx(
-                'ui-focus-ring flex min-h-12 min-w-0 flex-[0.9] items-center justify-center gap-2 rounded-full px-3 text-xs font-extrabold text-[var(--ui-text-primary)] transition-[background-color,transform] duration-150 hover:bg-[var(--ui-surface-3)] active:scale-[0.98] min-[1120px]:flex-none',
+                'ui-focus-ring flex min-h-12 min-w-0 flex-[0.9] items-center justify-center gap-2 rounded-full px-3 text-xs font-extrabold text-[var(--ui-text-primary)] transition-[background-color,transform] duration-150 hover:bg-[var(--ui-surface-3)] active:scale-[0.98]',
+                stacked ? 'flex-none' : 'min-[1120px]:flex-none',
                 showsSettings ? 'bg-[var(--ui-surface-3)]' : 'bg-[var(--ui-surface-2)]',
               )}
             >
@@ -486,7 +490,7 @@ export function CreatorColumnBar({
               />
             </button>
           ) : null}
-          <div className="flex min-w-0 flex-[1.2] min-[1120px]:flex-none">{action}</div>
+          <div className={clsx('flex min-w-0 flex-[1.2]', stacked ? 'flex-none' : 'min-[1120px]:flex-none')}>{action}</div>
         </div>
         {note ? (
           <div data-creator-bar-note className="px-4 pb-3 text-xs leading-5 text-[var(--ui-text-muted)]">
@@ -530,7 +534,8 @@ export function CreatorColumnBar({
             </div>
             {settings}
             {settingsFootNote !== undefined ? (
-              <div className="mt-4 flex items-center justify-between gap-3 border-t border-[var(--ui-border-subtle)] pt-3 text-sm text-[var(--ui-text-secondary)]">
+              // Held at the foot of the panel while its options scroll, as the artboard has it.
+              <div className="sticky -bottom-4 -mx-4 -mb-4 mt-4 flex items-center justify-between gap-3 border-t border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-4 py-3 text-sm text-[var(--ui-text-secondary)]">
                 <div aria-live="polite" className="min-w-0">{settingsFootNote}</div>
                 <button
                   type="button"
@@ -679,6 +684,10 @@ export function smallestCreditPackLabel(): string {
 
 const NOTE_STRONG_CLASS = 'font-bold text-[var(--ui-text-secondary)]';
 
+/** A link in the line under the bar: the words' size, its press area the 44px of a control. */
+export const CREATOR_NOTE_LINK_CLASS =
+  "ui-focus-ring relative rounded-sm font-semibold text-[var(--ui-text-secondary)] underline underline-offset-4 after:absolute after:inset-x-0 after:-inset-y-3 after:content-[''] hover:text-[var(--ui-text-primary)]";
+
 /** Under a signed-in creator's bar: the balance, and what this run leaves of it ("Balance 22 · leaves 3"). */
 export function CreatorBalanceNote({ balance, cost }: { balance: number; cost: number | null }) {
   return (
@@ -708,7 +717,7 @@ export function CreatorLowBalanceNote({ balance, videosFrom }: { balance: number
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
       <span>Balance <strong className={NOTE_STRONG_CLASS}>{balance}</strong> · videos from {videosFrom}</span>
-      <Link href="/pricing" className="ui-focus-ring rounded-sm font-semibold text-[var(--ui-text-secondary)] underline underline-offset-4 hover:text-[var(--ui-text-primary)]">
+      <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>
         Top up: {smallestCreditPackLabel().replace(' credits', '')}
       </Link>
     </div>

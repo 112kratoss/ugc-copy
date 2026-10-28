@@ -39,6 +39,7 @@ import {
     CreatorVisitorNote,
     CREATOR_VISITOR_CANVAS_HINT,
     CREATOR_BAR_PRIMARY_CLASS,
+    CREATOR_NOTE_LINK_CLASS,
     creatorAddButtonClass,
     smallestCreditPackLabel,
 } from '@/components/CreatorColumn';
@@ -4634,19 +4635,18 @@ export default function CreateVideoClient({
             signUp={isVisitor}
         />
     );
-    const noteLinkClass = 'ui-focus-ring rounded-sm font-semibold text-[var(--ui-text-secondary)] underline underline-offset-4 hover:text-[var(--ui-text-primary)]';
     const barNote = isVisitor ? (
         <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={estimatedCost} />
     ) : offersFittedRemix ? (
         <div className="flex flex-wrap justify-between gap-x-4 gap-y-1">
-            <Link href="/pricing" className={noteLinkClass}>Top up · {smallestCreditPackLabel()}</Link>
+            <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>Top up · {smallestCreditPackLabel()}</Link>
             <button
                 type="button"
                 onClick={() => {
                     setIsModelDropdownOpen(true);
                     modelDropdownRef.current?.scrollIntoView({ block: 'nearest' });
                 }}
-                className={noteLinkClass}
+                className={CREATOR_NOTE_LINK_CLASS}
             >
                 Other models
             </button>
@@ -5792,6 +5792,7 @@ export default function CreateVideoClient({
                             status={barStatus}
                             action={barAction}
                             note={barNote}
+                            stacked={offersFittedRemix || shortOfEveryVideoShown}
                         />
                     </>
                 }

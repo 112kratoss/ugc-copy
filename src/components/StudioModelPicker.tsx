@@ -55,9 +55,10 @@ export default function StudioModelPicker({
                     transition={{ duration: 0.15 }}
                     // Below 640px a sheet along the bottom edge, above the app shell's
                     // bottom navigation (z-60 below 768px), which was drawn over its last
-                    // models at `bottom-4`.
+                    // models at `bottom-4`, and below the top bar, which hid its search
+                    // once the rows carried prices and the list grew taller than the window.
                     className={clsx(
-                        'fixed inset-x-4 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+1rem)] z-50 flex max-h-[calc(100dvh-var(--app-shell-bottom-nav-space,0px)-2rem)] w-auto flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)] sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:right-0 sm:mt-2 sm:max-h-[min(70vh,34rem)] sm:w-auto'
+                        'fixed inset-x-4 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+1rem)] z-50 flex max-h-[calc(100dvh-var(--app-shell-bottom-nav-space,0px)-var(--app-shell-topbar-height,4rem)-2rem)] w-auto flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)] sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:right-0 sm:mt-2 sm:max-h-[min(70vh,34rem)] sm:w-auto'
                     )}
                     style={{ transformOrigin: 'top' }}
                     data-testid="studio-model-picker"
