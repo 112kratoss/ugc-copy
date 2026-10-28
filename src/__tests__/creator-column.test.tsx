@@ -23,6 +23,10 @@ import {
   CreatorToolTabs,
   CreatorTopUpNotice,
   CreatorUploadSlot,
+  CreatorRunFailed,
+  CreatorRunWaitLines,
+  creatorRunChip,
+  describeRunFailure,
   parseAspectRatio,
 } from '@/components/CreatorColumn';
 
@@ -407,6 +411,95 @@ describe('the result canvas', () => {
     view.rerender(<CreatorCanvas title="Result" revealKey={1}>Empty</CreatorCanvas>);
 
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  // The build notes (owner-approved mock-up): focus moves to "Done" when a run ends.
+  it('gives its heading the focus when a run ends, and not on mount', () => {
+    const view = render(<><button type="button">Generate</button><CreatorCanvas title="Making your video" focusKey={0}>Busy</CreatorCanvas></>);
+    screen.getByRole('button', { name: 'Generate' }).focus();
+    expect(screen.getByRole('button', { name: 'Generate' })).toHaveFocus();
+
+    view.rerender(<><button type="button">Generate</button><CreatorCanvas title="Done" focusKey={1}>Clip</CreatorCanvas></>);
+
+    expect(screen.getByRole('heading', { name: 'Done' })).toHaveFocus();
+  });
+
+  it('leaves the focus with a creator typing the next prompt when a run ends', () => {
+    const view = render(<><textarea aria-label="Prompt" /><CreatorCanvas title="Making your video" focusKey={0}>Busy</CreatorCanvas></>);
+    screen.getByRole('textbox', { name: 'Prompt' }).focus();
+
+    view.rerender(<><textarea aria-label="Prompt" /><CreatorCanvas title="Done" focusKey={1}>Clip</CreatorCanvas></>);
+
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveFocus();
+  });
+
+  it('leaves the focus in a dialog the creator opened while the run worked', () => {
+    const view = render(<><div role="dialog" aria-label="Generation settings"><button type="button">720p</button></div><CreatorCanvas title="Making your video" focusKey={0}>Busy</CreatorCanvas></>);
+    screen.getByRole('button', { name: '720p' }).focus();
+
+    view.rerender(<><div role="dialog" aria-label="Generation settings"><button type="button">720p</button></div><CreatorCanvas title="Done" focusKey={1}>Clip</CreatorCanvas></>);
+
+    expect(screen.getByRole('button', { name: '720p' })).toHaveFocus();
+  });
+
+  it('comes into view as it takes the focus when it is out of view (under the column on a phone)', () => {
+    placeCanvas(1500);
+    const view = render(<CreatorCanvas title="Making your video" focusKey={0}>Busy</CreatorCanvas>);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    view.rerender(<CreatorCanvas title="Done" focusKey={1}>Clip</CreatorCanvas>);
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('heading', { name: 'Done' })).toHaveFocus();
+  });
+
+  it('says what the run is and holds beside its title', () => {
+    render(<CreatorCanvas title="Done" chip="Seedance 2 Mini · 480P · 9:16 · 5s · 19 credits">Clip</CreatorCanvas>);
+    expect(screen.getByTestId('creator-canvas-chip')).toHaveTextContent('Seedance 2 Mini · 480P · 9:16 · 5s · 19 credits');
+  });
+});
+
+describe('the run\'s line and its failure', () => {
+  it('names the run and what it holds, and no credits where it holds none', () => {
+    expect(creatorRunChip('Seedance 2 Mini · 480P · 9:16 · 5s · Sound off', 19)).toBe('Seedance 2 Mini · 480P · 9:16 · 5s · Sound off · 19 credits');
+    expect(creatorRunChip('Seedance 2 Mini · 480P · 5s', 1)).toBe('Seedance 2 Mini · 480P · 5s · 1 credit');
+    expect(creatorRunChip('Seedance 2 Mini · 480P · 5s', null)).toBe('Seedance 2 Mini · 480P · 5s');
+    expect(creatorRunChip(null, 19)).toBe('19 credits');
+    expect(creatorRunChip(null, null)).toBeNull();
+  });
+
+  it('names the reason a run failed, or that the model\'s service stopped where it gave none', () => {
+    expect(describeRunFailure('This model would not accept the reference image because it looks like a photo of a real person.', 'video'))
+      .toBe('This model would not accept the reference image because it looks like a photo of a real person.');
+    for (const generic of ['Unknown error', 'Video generation failed', 'Generation failed.', '', null]) {
+      expect(describeRunFailure(generic, 'video')).toBe('The model’s service stopped before your video was done.');
+    }
+  });
+
+  it('says its credits are back, and offers the run again or the prompt', () => {
+    const onRetry = vi.fn();
+    const onChangePrompt = vi.fn();
+    render(
+      <CreatorRunFailed
+        cause="The model’s service stopped before your video was done."
+        returnedCredits={19}
+        retryLabel="Try again · 19 credits"
+        retryDisabled={false}
+        onRetry={onRetry}
+        onChangePrompt={onChangePrompt}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('The model’s service stopped before your video was done.Your 19 credits are back.');
+    fireEvent.click(screen.getByRole('button', { name: 'Try again · 19 credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change the prompt' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onChangePrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('promises the alert a finished run sends, and says what the run holds', () => {
+    render(<CreatorRunWaitLines noun="video" heldCredits={19} />);
+    expect(screen.getByText(/you’ll get an alert when it’s ready/)).toBeInTheDocument();
+    expect(screen.getByText('19 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
   });
 });
 

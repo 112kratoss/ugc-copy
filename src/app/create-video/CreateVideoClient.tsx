@@ -19,6 +19,7 @@ import {
     CreatorCanvas,
     CreatorCanvasFrame,
     CreatorCanvasMedia,
+    CreatorCanvasStage,
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorFitNotice,
@@ -31,6 +32,8 @@ import {
     CreatorPendingStartNotice,
     CreatorReferenceRow,
     CreatorResultActions,
+    CreatorRunFailed,
+    CreatorRunWaitLines,
     CreatorSettingChoices,
     CreatorSettingsFootNote,
     CreatorSettingSwitch,
@@ -43,9 +46,12 @@ import {
     CREATOR_BAR_PRIMARY_CLASS,
     CREATOR_NOTE_LINK_CLASS,
     creatorAddButtonClass,
+    creatorRunChip,
     creditsWords,
+    describeRunFailure,
     smallestCreditPackLabel,
 } from '@/components/CreatorColumn';
+import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
@@ -332,12 +338,6 @@ function measurableRemixLink(value: string, asset: SeedanceAssetMetadata | undef
 /** A run the provider ended as failed. Every failed settlement returns the run's credits. */
 class VideoRunFailedError extends Error {}
 
-function creditsReturnedSentence(cost: number | null | undefined): string {
-    return typeof cost === 'number' && cost > 0
-        ? ` Your ${cost} credit${cost === 1 ? ' was' : 's were'} returned.`
-        : '';
-}
-
 /** The measured lengths a REFERENCE_DURATION_CHANGED refusal carries, by the place of each input in the request. */
 function readMeasuredInputDurations(details: Readonly<Record<string, unknown>>): Array<{ index: number; durationSeconds: number }> {
     const inputs = details.inputs;
@@ -465,8 +465,11 @@ async function loadCreationPublishDefaults(generationId: string, accessToken: st
 /** Single shot or multi-shot, as the app's segmented control offers them. */
 const SHOT_MODES = ['single', 'multi'] as const;
 
-/** The run in flight, as it was started: its frame's shape, its settings' line and its prompt. */
-type VideoRunShape = { aspectRatio: string | null; label: string | null; prompt: string | null };
+/**
+ * The run in flight, as it was started: its frame's shape, its settings' line, its prompt,
+ * and the credits it holds (the price sent with it, then the start's own answer).
+ */
+type VideoRunShape = { aspectRatio: string | null; label: string | null; prompt: string | null; cost: number | null };
 
 /** A multi-shot run's prompt as one caption: its shots' prompts in order. */
 function shotsPrompt(shots: ReadonlyArray<{ prompt: string }>) {
@@ -483,6 +486,7 @@ function runShapeOfStart(body: Record<string, unknown>): VideoRunShape {
         aspectRatio: typeof settings.aspectRatio === 'string' ? settings.aspectRatio : null,
         label: null,
         prompt: shots.length > 0 ? shotsPrompt(shots) : (typeof body.prompt === 'string' && body.prompt.trim() ? body.prompt.trim() : null),
+        cost: typeof body.expectedCostCredits === 'number' ? body.expectedCostCredits : null,
     };
 }
 
@@ -1092,6 +1096,7 @@ export default function CreateVideoClient({
     welcome = null,
     handoverNonce = null,
     visitorWelcomeCredits = null,
+    startPosts = null,
 }: {
     prefill: CreateVideoPrefill;
     /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
@@ -1100,6 +1105,8 @@ export default function CreateVideoClient({
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
+    /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
+    startPosts?: StartPostsSource;
 }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
@@ -1247,6 +1254,10 @@ export default function CreateVideoClient({
     // The run in flight's shape, settings and prompt, which its frame and caption keep while
     // the form changes for the next run.
     const [runShape, setRunShape] = useState<VideoRunShape | null>(null);
+    // A run the provider failed, said on the canvas with its cause (the artboard Failed).
+    const [runFailure, setRunFailure] = useState<{ message: string; cost: number | null } | null>(null);
+    // Bumped when a run this page followed ends, done or failed: the canvas takes the focus.
+    const [runEndKey, setRunEndKey] = useState(0);
     const nowMs = useTicker(isGenerating) ?? undefined;
 
     useEffect(() => () => {
@@ -3628,7 +3639,8 @@ export default function CreateVideoClient({
         if (runError instanceof VideoRunFailedError) {
             // A failed run is refunded, and the balance on screen is still the debited one.
             window.dispatchEvent(new Event('credits_updated'));
-            setError(`${runError.message}${creditsReturnedSentence(cost)}`);
+            setRunFailure({ message: runError.message, cost });
+            setRunEndKey((key) => key + 1);
             setGenerationTiming(null);
             return;
         }
@@ -3755,9 +3767,14 @@ export default function CreateVideoClient({
             announceGenerationStarted();
             updateCredits(started.remainingCredits);
             if (reveal) setCanvasRevealKey((key) => key + 1);
+            if (typeof started.cost === 'number') {
+                const held = started.cost;
+                setRunShape((current) => (current ? { ...current, cost: held } : current));
+            }
 
             const result = await pollPrediction(started.predictionId, startedAtMs, estimatedTotalMs);
             setOutputVideo(result.output);
+            setRunEndKey((key) => key + 1);
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }
@@ -3774,6 +3791,7 @@ export default function CreateVideoClient({
         const startedAtMs = getCurrentTimestampMs();
         setIsGenerating(true);
         setError(null);
+        setRunFailure(null);
         setCreditRefusal(null);
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'video',
@@ -3956,7 +3974,12 @@ export default function CreateVideoClient({
             setError(null);
             setLatestGenerationId(data.id ?? null);
             setLatestIsPublic(false);
-            setRunShape({ aspectRatio: null, label: null, prompt: typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null });
+            setRunShape({
+                aspectRatio: null,
+                label: null,
+                prompt: typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null,
+                cost: typeof data.cost === 'number' ? data.cost : null,
+            });
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'video',
                 phaseLabel: 'Resuming active run',
@@ -3967,6 +3990,7 @@ export default function CreateVideoClient({
             try {
                 const result = await pollPrediction(data.prediction_id, startedAtMs, null);
                 setOutputVideo(result.output);
+                setRunEndKey((key) => key + 1);
                 if (result.timing) {
                     setGenerationTiming(result.timing);
                 }
@@ -4167,6 +4191,7 @@ export default function CreateVideoClient({
 
         setIsGenerating(true);
         setError(null);
+        setRunFailure(null);
         setCreditRefusal(null);
         setOutputVideo(null);
         setLatestGenerationId(null);
@@ -4176,6 +4201,7 @@ export default function CreateVideoClient({
             aspectRatio: currentAspectRatio,
             label: `${videoModel.displayName} · ${settingsSummary}`,
             prompt: currentIsMultiShot ? shotsPrompt(multiPrompts) : prompt.trim() || null,
+            cost: estimatedCost,
         });
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimatedGenerationTotalMs;
@@ -4553,20 +4579,23 @@ export default function CreateVideoClient({
         || `${videoModel.displayName} video`;
     const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
 
+    // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
+    // and its chip what the run is and holds.
     const canvasTitle = outputVideo
-        ? 'Your video'
+        ? 'Done'
         : isGenerating
-            ? 'Creating your video'
-            : isBackgroundProcessing
+            ? 'Making your video'
+            : isBackgroundProcessing || !runFailure
                 ? 'Your video'
-                : 'Result';
-    const canvasSubtitle = outputVideo
-        ? runPrompt
+                : 'It didn’t finish';
+    const canvasChip = outputVideo
+        ? creatorRunChip(runShape?.label, runShape?.cost)
         : isGenerating
-            ? runShape?.label ?? `${videoModel.displayName} · ${settingsSummary}`
-            : isBackgroundProcessing
-                ? null
-                : `${videoModel.displayName} · ${settingsSummary}`;
+            ? creatorRunChip(runShape?.label ?? `${videoModel.displayName} · ${settingsSummary}`, runShape?.cost)
+            : runFailure && !isBackgroundProcessing
+                ? creatorRunChip(runShape?.label, null)
+                : null;
+    const showsEmptyCanvas = !outputVideo && !isGenerating && !isBackgroundProcessing && !runFailure;
     // What the run needs, as the column's cards ask for it.
     const emptyCanvasHint = currentIsMultiShot
         ? 'Write each shot, then Generate.'
@@ -4844,6 +4873,8 @@ export default function CreateVideoClient({
     );
 
     const canvasFooter = outputVideo ? (
+        <div className="space-y-3">
+        {runPrompt ? <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-faint)]">{runPrompt}</p> : null}
         <CreatorResultActions
             generationId={latestGenerationId}
             isPublic={latestIsPublic}
@@ -4864,12 +4895,7 @@ export default function CreateVideoClient({
                 setPublishedMeta(null);
             }}
         />
-    ) : isGenerating && generationTiming ? (
-        <StudioGenerationStatus
-            accent="rose"
-            timing={generationTiming}
-            nowMs={nowMs}
-        />
+        </div>
     ) : null;
 
     // The model list's rows: each model's price at this run's settings, what it is for, and
@@ -4951,6 +4977,7 @@ export default function CreateVideoClient({
                                 </StudioModelPicker>
                             </div>
                         </div>
+                        {showsEmptyCanvas ? <CreatorStartPostsStrip source={startPosts} tool="video" balance={listBalance} /> : null}
 
                         <AnimatePresence>
                             {remixId && isRemixLoading && (
@@ -5837,9 +5864,11 @@ export default function CreateVideoClient({
                 canvas={
                     <CreatorCanvas
                         title={canvasTitle}
-                        subtitle={canvasSubtitle}
+                        chip={canvasChip}
                         revealKey={canvasRevealKey}
+                        focusKey={runEndKey}
                         tall={Boolean(outputVideo)}
+                        flow={showsEmptyCanvas || (isGenerating && !outputVideo)}
                         showStudioLink={!isVisitor}
                         footer={canvasFooter}
                     >
@@ -5848,9 +5877,22 @@ export default function CreateVideoClient({
                                 <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
                             </CreatorCanvasMedia>
                         ) : isGenerating ? (
-                            <CreatorCanvasFrame aspectRatio={runShape?.aspectRatio ?? currentAspectRatio} accent="video" busy>
-                                <p className="text-sm font-semibold text-[var(--ui-text-primary)]">Rendering your video</p>
-                            </CreatorCanvasFrame>
+                            <>
+                                <CreatorCanvasStage>
+                                    <CreatorCanvasFrame aspectRatio={runShape?.aspectRatio ?? currentAspectRatio} accent="video" busy>
+                                        <Video aria-hidden className="h-6 w-6 text-[var(--ui-primary)]" />
+                                        {generationTiming ? (
+                                            <div className="w-72 max-w-full">
+                                                <StudioGenerationStatus accent="rose" timing={generationTiming} nowMs={nowMs} />
+                                            </div>
+                                        ) : (
+                                            <p role="status" className="text-sm font-semibold text-[var(--ui-text-primary)]">Rendering your video</p>
+                                        )}
+                                    </CreatorCanvasFrame>
+                                </CreatorCanvasStage>
+                                <CreatorRunWaitLines noun="video" heldCredits={runShape?.cost ?? null} />
+                                <CreatorWhileYouWait source={startPosts} tool="video" />
+                            </>
                         ) : isBackgroundProcessing ? (
                             <div className="w-full max-w-md">
                                 <StudioBackgroundProcessingNotice
@@ -5860,14 +5902,38 @@ export default function CreateVideoClient({
                                     timingLabel={backgroundTimingLabel}
                                 />
                             </div>
+                        ) : runFailure ? (
+                            <CreatorRunFailed
+                                cause={describeRunFailure(runFailure.message, 'video')}
+                                returnedCredits={runFailure.cost}
+                                retryLabel={estimatedCost !== null ? `Try again · ${quoteUi.costLabel}` : 'Try again'}
+                                retryDisabled={quotePending || Boolean(promptLimitMessage)}
+                                onRetry={() => void handleGenerate()}
+                                onChangePrompt={() => {
+                                    setRunFailure(null);
+                                    (promptTextareaRef.current ?? Object.values(multiShotTextareaRefs.current).find(Boolean))?.focus();
+                                }}
+                            />
                         ) : (
-                            <CreatorCanvasFrame aspectRatio={currentAspectRatio} accent="video">
-                                <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
-                                    <Video className="h-5 w-5 text-[var(--ui-text-muted)]" />
-                                </span>
-                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your video will appear here'}</p>
-                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">{isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint}</p>
-                            </CreatorCanvasFrame>
+                            <CreatorEmptyCanvas
+                                source={startPosts}
+                                tool="video"
+                                balance={listBalance}
+                                icon={Video}
+                                title={isVisitor ? 'Try it before you sign up' : 'Your video will appear here'}
+                                hint={`${isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint} Or remix a post below.`}
+                                frame={(
+                                    <CreatorCanvasStage>
+                                        <CreatorCanvasFrame aspectRatio={currentAspectRatio} accent="video">
+                                            <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
+                                                <Video className="h-5 w-5 text-[var(--ui-text-muted)]" />
+                                            </span>
+                                            <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your video will appear here'}</p>
+                                            <p className="text-xs leading-5 text-[var(--ui-text-faint)]">{isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint}</p>
+                                        </CreatorCanvasFrame>
+                                    </CreatorCanvasStage>
+                                )}
+                            />
                         )}
                     </CreatorCanvas>
                 }

@@ -395,6 +395,23 @@ describe('loadHomeShelf', () => {
     expect(loadViewerRelationsMock).toHaveBeenCalledWith(expect.objectContaining({ viewerUserId: 'guest-1' }));
   });
 
+  // The creators' "Start from a post" (owner, 2026-10-28): the creations a member's shelf holds,
+  // filtered for them as Home's is, with none of the offers, which the canvas never draws.
+  it('gives the creators a member\'s creations with their posts, and reads no offers for them', async () => {
+    const { loadHomeShelfCreationsWithPosts } = await import('@/lib/home-shelf-server');
+    loadViewerRelationsMock.mockResolvedValue(relations({ hiddenPostIds: ['b'] }));
+    pinsMock.pins = [{ postId: 'a' }, { postId: 'b' }, { postId: 'c' }, { postId: 'd' }];
+    getShowcaseFeedItemsByPostIdsMock.mockResolvedValue([post('a'), post('b'), post('c'), post('d')]);
+    tableResults.set('generations', { data: [generation('a'), generation('b'), generation('c'), generation('d')], error: null });
+
+    const creations = await loadHomeShelfCreationsWithPosts({ viewerUserId: 'user-2', isAnonymous: false });
+
+    expect(creations.map((creation) => creation.id)).toEqual(['a', 'c', 'd']);
+    expect(creations.every((creation) => creation.kind === 'creation' && creation.post.id === creation.id)).toBe(true);
+    expect(loadReferralProgramTermsMock).not.toHaveBeenCalled();
+    expect(tableReads).not.toContain('posts');
+  });
+
   it('asks a member with no public post to post, then to invite', async () => {
     const { loadHomeShelf } = await import('@/lib/home-shelf-server');
     tableResults.set('posts', { data: [], error: null });

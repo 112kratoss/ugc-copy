@@ -4,6 +4,11 @@ import { createContext, useCallback, useEffect, useMemo, useState } from 'react'
 import { ModelCatalogSession, type CatalogSessionState } from '../../ugc-mobile/lib/model-catalog/session';
 import { catalogRunWithShownCost, type ModelCatalogKind, type ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog/protocol';
 
+import {
+  catalogChoiceValues as choiceValues,
+  catalogIntegerControl as integerControl,
+  catalogVideoEntryFields,
+} from '@/lib/catalog-video-entry';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type {
   CatalogGenerationInputAsset,
@@ -212,18 +217,6 @@ export function parseClientGenerationModelCatalog(value: unknown): GenerationMod
   return catalog;
 }
 
-function choiceControl(model: GenerationModelDescriptor, key: string) {
-  return model.controls.find((control): control is Extract<CatalogControl, { type: 'choice' }> => control.key === key && control.type === 'choice');
-}
-
-function integerControl(model: GenerationModelDescriptor, key: string) {
-  return model.controls.find((control): control is Extract<CatalogControl, { type: 'integer' }> => control.key === key && control.type === 'integer');
-}
-
-function choiceValues(model: GenerationModelDescriptor, key: string) {
-  return choiceControl(model, key)?.options.map((option) => option.value) ?? [];
-}
-
 function activeIds(catalog: GenerationModelCatalog, kind: GenerationModelDescriptor['kind']) {
   return new Set(catalog.models.filter((model) => model.kind === kind).map((model) => model.id));
 }
@@ -276,33 +269,7 @@ export function applyGenerationModelCatalogToRegistries(
     }
 
     if (model.kind === 'video') {
-      const existing = registries.video[model.id] ?? {};
-      const durationChoice = choiceControl(model, 'duration');
-      const durationInteger = integerControl(model, 'duration');
-      const durations = durationChoice
-        ? durationChoice.options.map((option) => Number(option.value)).filter(Number.isFinite)
-        : durationInteger ? [durationInteger.defaultValue] : [5];
-      const modeControl = choiceControl(model, 'mode');
-      registries.video[model.id] = {
-        ...existing,
-        id: model.id,
-        displayName: model.displayName,
-        description: model.description,
-        supportsMultiShot: model.capabilities.multiShot,
-        supportsSound: model.capabilities.sound,
-        supportsFixedLens: model.capabilities.fixedLens,
-        aspectRatios: choiceValues(model, 'aspectRatio'),
-        durations,
-        ...(durationInteger ? { singleShotDurationRange: { min: durationInteger.min, max: durationInteger.max, default: durationInteger.defaultValue } } : {}),
-        resolutions: choiceValues(model, 'resolution'),
-        modeOptions: modeControl?.options ?? [],
-        catalogManaged: true,
-        catalogActive: true,
-        catalogInputs: model.inputs,
-        catalogDescriptor: model,
-        catalogSortOrder: model.sortOrder,
-        catalogRecommended: model.recommended,
-      };
+      registries.video[model.id] = { ...(registries.video[model.id] ?? {}), ...catalogVideoEntryFields(model) };
       continue;
     }
 

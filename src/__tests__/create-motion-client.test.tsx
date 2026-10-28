@@ -1012,7 +1012,8 @@ describe('CreateMotionClient start', () => {
     expect(shown).toBe(startQuote(1));
   });
 
-  it('says the credits of a failed run were returned and refreshes the balance', async () => {
+  // The artboard Failed (owner, 2026-10-28): the canvas names the cause and says the credits are back.
+  it('says on the canvas why the run failed and that its credits came back, and refreshes the balance', async () => {
     const creditsUpdated = vi.fn();
     window.addEventListener('credits_updated', creditsUpdated);
     statusMocks.fetchGenerationStatusWithRetry.mockResolvedValue({ status: 'failed', error: 'The provider could not render this clip' });
@@ -1021,7 +1022,12 @@ describe('CreateMotionClient start', () => {
 
     await pressGenerate();
 
-    expect(await screen.findByText('The provider could not render this clip. Your 20 credits were returned.')).toBeInTheDocument();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('The provider could not render this clip');
+    expect(alert).toHaveTextContent('Your 20 credits are back.');
+    const canvas = screen.getByRole('region', { name: 'Result' });
+    expect(within(canvas).getByRole('heading', { name: 'It didn’t finish' })).toBeInTheDocument();
+    expect(within(canvas).getByRole('button', { name: /^Try again/ })).toBeInTheDocument();
     expect(creditsUpdated).toHaveBeenCalled();
     window.removeEventListener('credits_updated', creditsUpdated);
   });
@@ -1297,6 +1303,18 @@ describe('CreateMotionClient on the column', () => {
     const canvas = screen.getByRole('region', { name: 'Result' });
     expect(within(canvas).getByText('Keep the arms loose and the steps light.')).toBeInTheDocument();
     expect(within(canvas).queryByText('A slow spin on the spot.')).toBeNull();
+  });
+
+  // The artboard Result and the build notes: Done, with the run's line, takes the focus.
+  it('says Done with the run\'s line and gives the result the focus when the run ends', async () => {
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await pressGenerate();
+
+    const canvas = screen.getByRole('region', { name: 'Result' });
+    const heading = await within(canvas).findByRole('heading', { name: 'Done' });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 20 credits$/);
   });
 
   it('plays the finished clip once: beside the column it never leaves the window to be paused', async () => {

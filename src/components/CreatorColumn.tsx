@@ -4,7 +4,7 @@ import Link from 'next/link';
 import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ChevronDown, Download, Images, LayoutTemplate, Loader2, Share2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ChevronDown, CircleAlert, Download, Images, Info, LayoutTemplate, Loader2, Share2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import clsx from 'clsx';
 
@@ -15,7 +15,7 @@ import {
   StudioUploadedMediaPreview,
   type StudioMediaPreviewType,
 } from '@/components/CreatorStudio';
-import { getAccentClasses, IconButton, Text, type UiAccent } from '@/components/DesignSystem';
+import { getAccentClasses, IconButton, type UiAccent } from '@/components/DesignSystem';
 import PublicShareButton from '@/components/PublicShareButton';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
 import { PRICING_PLANS } from '@/lib/pricing';
@@ -1225,6 +1225,26 @@ export function CreatorUploadSlot({
 }
 
 /**
+ * Where the focus stays when a run ends: a field the creator is typing in, or a dialog they
+ * opened meanwhile (the settings, the model list), which would close if it lost the focus.
+ */
+function keepsFocusAtRunEnd(element: Element | null) {
+  if (!(element instanceof HTMLElement)) return false;
+  if (element.closest('[role="dialog"]')) return true;
+  if (element.isContentEditable || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) return true;
+  return element instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'file'].includes(element.type);
+}
+
+/** Brings the canvas into view where its top is out of it: under the column, below the bar. */
+function revealCanvas(section: HTMLElement) {
+  const { top } = section.getBoundingClientRect();
+  if (top >= 0 && top <= window.innerHeight * 0.4) return;
+  const reduceMotion = typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  section.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+}
+
+/**
  * The result pane. On a wide window it stays in view beside the column for the
  * whole page, so a run's progress and its picture land where the creator is
  * already looking. Under the column it is as tall as what it shows, and taller
@@ -1233,38 +1253,53 @@ export function CreatorUploadSlot({
  * `revealKey` brings it into view when it changes, if it is out of view: the
  * page bumps it once a run the creator started is under way, so a refusal,
  * which the bar says, never scrolls the bar away.
+ *
+ * `focusKey` moves the focus to its heading when it changes (the build notes:
+ * focus moves to "Done" when a run ends), so a keyboard or screen reader lands
+ * on the result or the failure; a creator typing the next prompt keeps the field.
+ *
+ * `flow` stacks the body instead of fitting one thing to it (the empty canvas's
+ * posts, a run at work and the posts under it): beside the column it scrolls
+ * within the pane, and the frame takes a `CreatorCanvasStage` of its own.
  */
 export function CreatorCanvas({
   title,
-  subtitle,
+  chip,
   revealKey = 0,
+  focusKey = 0,
   tall = false,
+  flow = false,
   showStudioLink = true,
   children,
   footer,
 }: {
   title: string;
-  subtitle?: ReactNode;
+  /** The run's line beside the title: "Seedance 2 Mini · 480P · 9:16 · 5s · 19 credits". */
+  chip?: string | null;
   revealKey?: number;
+  focusKey?: number;
   tall?: boolean;
+  flow?: boolean;
   /** Off for a signed-out visitor: Studio holds an account's creations. */
   showStudioLink?: boolean;
   children: ReactNode;
   footer?: ReactNode;
 }) {
   const sectionRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
-    if (!revealKey) return;
-    const section = sectionRef.current;
-    if (!section) return;
-    // Beside the column its top is near the window's; under it, below the bar.
-    const { top } = section.getBoundingClientRect();
-    if (top >= 0 && top <= window.innerHeight * 0.4) return;
-    const reduceMotion = typeof window.matchMedia === 'function'
-      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    section.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    if (!revealKey || !sectionRef.current) return;
+    revealCanvas(sectionRef.current);
   }, [revealKey]);
+
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!focusKey || !section || keepsFocusAtRunEnd(document.activeElement)) return;
+    // The canvas's own scroll, smooth unless motion is reduced; the focus adds none.
+    revealCanvas(section);
+    headingRef.current?.focus({ preventScroll: true });
+  }, [focusKey]);
 
   return (
     <section
@@ -1274,19 +1309,33 @@ export function CreatorCanvas({
       // padding (1.5rem from 640px) above and below, so a short page never scrolls.
       className="flex min-w-0 scroll-mt-[calc(var(--app-shell-topbar-height)+1rem)] flex-col overflow-hidden rounded-ui-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] min-[1120px]:sticky min-[1120px]:top-[calc(var(--app-shell-topbar-height)+1.5rem)] min-[1120px]:h-[calc(100dvh-var(--app-shell-topbar-height)-3rem)]"
     >
-      <header className="flex items-start justify-between gap-4 px-5 pt-4 sm:px-6">
-        <div className="min-w-0">
-          <Text as="h2" variant="label">{title}</Text>
-          {subtitle ? <Text variant="caption" className="mt-0.5 line-clamp-1">{subtitle}</Text> : null}
-        </div>
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 pt-4 sm:px-6">
+        <h2
+          ref={headingRef}
+          tabIndex={-1}
+          className="ui-focus-ring rounded-sm text-base font-bold leading-6 text-[var(--ui-text-primary)] outline-none sm:text-lg"
+        >
+          {title}
+        </h2>
         {showStudioLink ? (
           <Link
             href="/creations"
-            className="ui-focus-ring inline-flex min-h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--ui-border-subtle)] px-3 text-xs font-semibold text-[var(--ui-text-secondary)] transition-colors duration-150 hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]"
+            className="ui-focus-ring order-2 ml-auto inline-flex min-h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--ui-border-subtle)] px-3 text-xs font-semibold text-[var(--ui-text-secondary)] transition-colors duration-150 hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)] sm:order-3"
           >
             Studio
             <Images aria-hidden className="h-3.5 w-3.5" />
           </Link>
+        ) : null}
+        {chip ? (
+          // Beside the title where it fits; under it, on a row of its own, on a phone.
+          <span className="order-3 max-sm:basis-full sm:order-2 sm:min-w-0">
+            <span
+              data-testid="creator-canvas-chip"
+              className="inline-block max-w-full rounded-full border border-[var(--ui-border-default)] px-3 py-1 text-xs font-semibold text-[var(--ui-text-secondary)] [overflow-wrap:anywhere]"
+            >
+              {chip}
+            </span>
+          </span>
         ) : null}
       </header>
       {/* Beside the column, a size container, so a frame can take the shape of the
@@ -1294,14 +1343,118 @@ export function CreatorCanvas({
           fits the stage there, and 70% of the window's height under the column. */}
       <div
         className={clsx(
-          'relative flex flex-1 items-center justify-center p-4 sm:p-6 [&_img]:max-h-[70svh] min-[1120px]:min-h-0 min-[1120px]:[container-type:size] min-[1120px]:[&_img]:max-h-full',
-          tall ? 'min-h-[min(70svh,40rem)]' : 'min-h-64'
+          flow
+            ? 'app-scrollbar relative flex flex-1 flex-col gap-5 p-4 sm:p-6 min-[1120px]:min-h-0 min-[1120px]:overflow-y-auto'
+            : CANVAS_STAGE_CLASS,
+          !flow && (tall ? 'min-h-[min(70svh,40rem)]' : 'min-h-64')
         )}
       >
         {children}
       </div>
       {footer ? <div className="border-t border-[var(--ui-border-subtle)] px-4 py-3 sm:px-6">{footer}</div> : null}
     </section>
+  );
+}
+
+const CANVAS_STAGE_CLASS =
+  'relative flex flex-1 items-center justify-center p-4 sm:p-6 [&_img]:max-h-[70svh] min-[1120px]:min-h-0 min-[1120px]:[container-type:size] min-[1120px]:[&_img]:max-h-full';
+
+/**
+ * In a `flow` canvas, the place a frame is fitted to, as the canvas's own body is in
+ * the other: beside the column a size container that takes what the rest leaves it,
+ * never less than `minHeight`; under the column the frame's width decides.
+ */
+export function CreatorCanvasStage({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div
+      className={clsx(
+        'relative flex min-h-64 flex-1 items-center justify-center [&_img]:max-h-[70svh] min-[1120px]:min-h-[18rem] min-[1120px]:[container-type:size] min-[1120px]:[&_img]:max-h-full',
+        className
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The run's line, as the canvas's chip says it: the run's model and settings, and what
+ * it holds of the balance ("Seedance 2 Mini · 480P · 9:16 · 5s · 19 credits"). A run
+ * that failed gave its credits back, so its line names none.
+ */
+export function creatorRunChip(label: string | null | undefined, cost: number | null | undefined): string | null {
+  const credits = typeof cost === 'number' && cost > 0 ? creditsWords(cost) : null;
+  return [label || null, credits].filter(Boolean).join(' · ') || null;
+}
+
+/**
+ * Under a run at work (the artboard Generating): that the page can be left, where the
+ * result will land and that an alert says when (the Alerts tab's row, `notifyGenerationStatus`,
+ * and the toast on an open page), and what the run holds of the balance.
+ */
+export function CreatorRunWaitLines({ noun, heldCredits }: { noun: string; heldCredits: number | null }) {
+  return (
+    <div className="mx-auto max-w-md space-y-2 text-center text-sm leading-6 text-[var(--ui-text-muted)]">
+      <p>You can leave this page: your {noun} keeps going, lands in your Studio, and you’ll get an alert when it’s ready.</p>
+      {heldCredits !== null && heldCredits > 0 ? (
+        <p className="flex items-start justify-center gap-2 text-[var(--ui-text-secondary)]">
+          <Info aria-hidden className="mt-1 h-4 w-4 shrink-0" />
+          <span>{creditsWords(heldCredits)} {heldCredits === 1 ? 'is' : 'are'} held for this run. If it fails, {heldCredits === 1 ? 'it comes' : 'they come'} back.</span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** What a run's failure says when the model's service gave no reason, or only a generic one. */
+const GENERIC_RUN_FAILURES = new Set(['', 'unknown error', 'generation failed', 'video generation failed', 'image generation failed', 'motion generation failed']);
+
+/**
+ * The cause a failed run's canvas names (the artboard Failed): the reason the server
+ * recorded (`provider-failure-messages.ts` rewrites the ones it knows for creators),
+ * or, where it gave none, that the model's service stopped first.
+ */
+export function describeRunFailure(message: string | null | undefined, noun: string): string {
+  const reason = (message ?? '').trim();
+  return GENERIC_RUN_FAILURES.has(reason.toLowerCase().replace(/[.!]+$/, ''))
+    ? `The model’s service stopped before your ${noun} was done.`
+    : reason;
+}
+
+/**
+ * A run that failed (the artboard Failed): its cause, that its credits are back, and the
+ * same run again, priced, or the prompt to change it first.
+ */
+export function CreatorRunFailed({ cause, returnedCredits, retryLabel, retryDisabled, onRetry, onChangePrompt }: {
+  cause: string;
+  /** What the run held, returned with its failure; null where it is not known. */
+  returnedCredits: number | null;
+  /** "Try again · 19 credits". */
+  retryLabel: string;
+  retryDisabled: boolean;
+  onRetry: () => void;
+  onChangePrompt: () => void;
+}) {
+  return (
+    <div className="w-full max-w-sm rounded-ui-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 text-center">
+      <CircleAlert aria-hidden className="mx-auto h-6 w-6 text-amber-300" />
+      <div role="alert" className="mt-3 space-y-2">
+        <p className="text-base font-bold leading-6 text-[var(--ui-text-primary)] [overflow-wrap:anywhere]">{cause}</p>
+        <p className="text-sm leading-6 text-[var(--ui-text-muted)]">
+          {returnedCredits !== null && returnedCredits > 0
+            ? `Your ${creditsWords(returnedCredits)} ${returnedCredits === 1 ? 'is' : 'are'} back.`
+            : 'Your credits are back.'}
+        </p>
+      </div>
+      <div className="mt-5 grid gap-2">
+        <button type="button" onClick={onRetry} disabled={retryDisabled} className={CREATOR_BAR_PRIMARY_CLASS}>
+          <span className="truncate">{retryLabel}</span>
+        </button>
+        <button type="button" onClick={onChangePrompt} className="ui-button ui-button-secondary ui-focus-ring min-h-12 w-full">
+          Change the prompt
+        </button>
+      </div>
+    </div>
   );
 }
 

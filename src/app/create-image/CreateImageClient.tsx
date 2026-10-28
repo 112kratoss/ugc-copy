@@ -29,6 +29,7 @@ import {
     CreatorBarAction,
     CreatorCanvas,
     CreatorCanvasFrame,
+    CreatorCanvasStage,
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorMentionPanel,
@@ -37,6 +38,8 @@ import {
     CreatorPendingStartNotice,
     CreatorReferenceRow,
     CreatorResultActions,
+    CreatorRunFailed,
+    CreatorRunWaitLines,
     CreatorSettingChoices,
     CreatorSettingsFootNote,
     CreatorSettingSwitch,
@@ -45,7 +48,10 @@ import {
     CreatorTopUpNotice,
     CreatorVisitorNote,
     CREATOR_VISITOR_CANVAS_HINT,
+    creatorRunChip,
+    describeRunFailure,
 } from '@/components/CreatorColumn';
+import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
 import { referenceKeepWords, samePriceForEach } from '../../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import {
@@ -302,14 +308,6 @@ function readDraftSettings(value: unknown): Record<string, CatalogPrimitive> | n
     ))) as Record<string, CatalogPrimitive>;
 }
 
-/** A failed run is refunded in the step that marks it failed. */
-function withCreditsReturned(message: string, cost: number | null): string {
-    if (!cost || cost <= 0) return message;
-    const trimmed = message.trim();
-    const sentence = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
-    return `${sentence} Your ${cost} credit${cost === 1 ? ' was' : 's were'} returned.`;
-}
-
 /** The output's own extension, for its download name: a PNG run is not a .jpg. */
 function getImageFileExtension(imageUrl: string | null | undefined): string {
     if (!imageUrl) return 'jpg';
@@ -366,6 +364,7 @@ export default function CreateImageClient({
     welcome = null,
     handoverNonce = null,
     visitorWelcomeCredits = null,
+    startPosts = null,
 }: {
     prefill: CreateImagePrefill;
     /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
@@ -374,6 +373,8 @@ export default function CreateImageClient({
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
+    /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
+    startPosts?: StartPostsSource;
 }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
@@ -443,7 +444,12 @@ export default function CreateImageClient({
     const [canvasRevealKey, setCanvasRevealKey] = useState(0);
     // The shape and settings of the run in flight, so its frame and caption do not
     // follow the form while it runs.
-    const [runShape, setRunShape] = useState<{ aspectRatio: string; label: string } | null>(null);
+    // The run in flight: its frame's shape, its settings' line, and the credits it holds.
+    const [runShape, setRunShape] = useState<{ aspectRatio: string; label: string; cost: number | null } | null>(null);
+    // A run the provider failed, said on the canvas with its cause (the artboard Failed).
+    const [runFailure, setRunFailure] = useState<{ message: string; cost: number | null } | null>(null);
+    // Bumped when a run this page followed ends, done or failed: the canvas takes the focus.
+    const [runEndKey, setRunEndKey] = useState(0);
     const [activeMentionQuery, setActiveMentionQuery] = useState<{
         query: string;
         replaceStart: number;
@@ -1358,10 +1364,15 @@ export default function CreateImageClient({
         predictionId: string,
         run: { startedAtMs: number; estimatedTotalMs: number | null; cost: number | null; generationId: string | null },
     ) => {
+        if (run.cost !== null) {
+            const held = run.cost;
+            setRunShape((current) => (current ? { ...current, cost: held } : current));
+        }
         try {
             const result = await pollPrediction(predictionId, run.startedAtMs, run.estimatedTotalMs);
             setOutputImage(result.output);
             setOutputImages(result.outputs);
+            setRunEndKey((key) => key + 1);
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }
@@ -1375,7 +1386,8 @@ export default function CreateImageClient({
             if (err instanceof ImageRunFailedError) {
                 // The failure returned the credits; the balance on screen still has them spent.
                 window.dispatchEvent(new Event('credits_updated'));
-                setError(withCreditsReturned(err.message, run.cost));
+                setRunFailure({ message: err.message, cost: run.cost });
+                setRunEndKey((key) => key + 1);
             } else {
                 setError(err instanceof Error ? err.message : 'Something went wrong');
             }
@@ -1437,6 +1449,7 @@ export default function CreateImageClient({
         const startedAtMs = Number.isNaN(createdAtMs) ? Date.now() : createdAtMs;
         setIsGenerating(true);
         setError(null);
+        setRunFailure(null);
         setCreditRefusal(null);
         setSubmittedPrompt(typeof start.body.prompt === 'string' ? start.body.prompt : '');
         setGenerationTiming(createLocalGenerationTiming({
@@ -1617,6 +1630,7 @@ export default function CreateImageClient({
         activeGenerationRequestKeyRef.current = idempotencyKey;
         setIsGenerating(true);
         setError(null);
+        setRunFailure(null);
         setCreditRefusal(null);
         setOutputImage(null);
         setOutputImages([]);
@@ -1626,7 +1640,7 @@ export default function CreateImageClient({
         setLatestIsPublic(false);
         setPublishedMeta(null);
         setSubmittedPrompt(submitted);
-        setRunShape({ aspectRatio, label: `${model.displayName} · ${settingsSummary}` });
+        setRunShape({ aspectRatio, label: `${model.displayName} · ${settingsSummary}`, cost: currentCost });
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimateGenerationDurationMs({
             kind: 'image',
@@ -1761,23 +1775,28 @@ export default function CreateImageClient({
         ? outputImages
         : (outputImage ? [outputImage] : []);
 
+    // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
+    // and its chip what the run is and holds.
     const canvasTitle = outputImage
-        ? displayedOutputImages.length > 1 ? 'Your images' : 'Your image'
+        ? 'Done'
         : isGenerating
-            ? 'Creating your image'
-            : isBackgroundProcessing
+            ? 'Making your image'
+            : isBackgroundProcessing || !runFailure
                 ? 'Your image'
-                : 'Result';
-    const canvasSubtitle = outputImage
-        ? displayedOutputImages.length > 1
-            ? `${displayedOutputImages.length} options. The first is the one you publish.`
-            : submittedPrompt || null
+                : 'It didn’t finish';
+    const canvasChip = outputImage
+        ? creatorRunChip(runShape?.label, runShape?.cost)
         : isGenerating
-            ? runShape?.label ?? `${model.displayName} · ${settingsSummary}`
-            : isBackgroundProcessing
-                ? null
-                : `${model.displayName} · ${settingsSummary}`;
+            ? creatorRunChip(runShape?.label ?? `${model.displayName} · ${settingsSummary}`, runShape?.cost)
+            : runFailure && !isBackgroundProcessing
+                ? creatorRunChip(runShape?.label, null)
+                : null;
+    const showsEmptyCanvas = !outputImage && !isGenerating && !isBackgroundProcessing && !runFailure;
 
+    // What the run needs, as the column's cards ask for it.
+    const emptyCanvasHint = model.maxImages > 0
+        ? 'Write a prompt, add reference images if you like, then Generate.'
+        : 'Write a prompt, then Generate.';
     const canAddReferences = elements.length < model.maxImages;
     const imageAccent = getAccentClasses('image');
     // A visitor's press needs no price: it checks the form, then asks for an account.
@@ -1933,6 +1952,11 @@ export default function CreateImageClient({
     );
 
     const canvasFooter = outputImage ? (
+        <div className="space-y-3">
+        {submittedPrompt ? <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-faint)]">{submittedPrompt}</p> : null}
+        {displayedOutputImages.length > 1 ? (
+            <p className="text-xs text-[var(--ui-text-faint)]">{displayedOutputImages.length} options. The first is the one you publish.</p>
+        ) : null}
         <CreatorResultActions
             generationId={latestGenerationId}
             isPublic={latestIsPublic}
@@ -1955,12 +1979,7 @@ export default function CreateImageClient({
                 setPublishedMeta(null);
             }}
         />
-    ) : isGenerating && generationTiming ? (
-        <StudioGenerationStatus
-            accent={model.accentColor}
-            timing={generationTiming}
-            nowMs={nowMs}
-        />
+        </div>
     ) : null;
 
     return (
@@ -2020,6 +2039,7 @@ export default function CreateImageClient({
                             </StudioModelPicker>
                         </div>
                         </div>
+                        {showsEmptyCanvas ? <CreatorStartPostsStrip source={startPosts} tool="image" balance={listBalance} /> : null}
 
                         <AnimatePresence>
                             {modelNotice ? (
@@ -2268,9 +2288,11 @@ export default function CreateImageClient({
                 canvas={
                     <CreatorCanvas
                         title={canvasTitle}
-                        subtitle={canvasSubtitle}
+                        chip={canvasChip}
                         revealKey={canvasRevealKey}
+                        focusKey={runEndKey}
                         tall={Boolean(outputImage)}
+                        flow={showsEmptyCanvas || (isGenerating && !outputImage)}
                         showStudioLink={!isVisitor}
                         footer={canvasFooter}
                     >
@@ -2308,9 +2330,22 @@ export default function CreateImageClient({
                                 ))}
                             </div>
                         ) : isGenerating ? (
-                            <CreatorCanvasFrame aspectRatio={runShape?.aspectRatio ?? aspectRatio} busy>
-                                <p className="text-sm font-semibold text-[var(--ui-text-primary)]">Building your image</p>
-                            </CreatorCanvasFrame>
+                            <>
+                                <CreatorCanvasStage>
+                                    <CreatorCanvasFrame aspectRatio={runShape?.aspectRatio ?? aspectRatio} busy>
+                                        <ImageIcon aria-hidden className="h-6 w-6 text-[var(--ui-primary)]" />
+                                        {generationTiming ? (
+                                            <div className="w-72 max-w-full">
+                                                <StudioGenerationStatus accent={model.accentColor} timing={generationTiming} nowMs={nowMs} />
+                                            </div>
+                                        ) : (
+                                            <p role="status" className="text-sm font-semibold text-[var(--ui-text-primary)]">Building your image</p>
+                                        )}
+                                    </CreatorCanvasFrame>
+                                </CreatorCanvasStage>
+                                <CreatorRunWaitLines noun="image" heldCredits={runShape?.cost ?? null} />
+                                <CreatorWhileYouWait source={startPosts} tool="image" />
+                            </>
                         ) : isBackgroundProcessing ? (
                             <div className="w-full max-w-md">
                                 <StudioBackgroundProcessingNotice
@@ -2320,20 +2355,38 @@ export default function CreateImageClient({
                                     timingLabel={backgroundTimingLabel}
                                 />
                             </div>
+                        ) : runFailure ? (
+                            <CreatorRunFailed
+                                cause={describeRunFailure(runFailure.message, 'image')}
+                                returnedCredits={runFailure.cost}
+                                retryLabel={currentCost !== null ? `Try again · ${quoteUi.costLabel}` : 'Try again'}
+                                retryDisabled={generateBlocked}
+                                onRetry={() => void handleGenerate()}
+                                onChangePrompt={() => {
+                                    setRunFailure(null);
+                                    promptTextareaRef.current?.focus();
+                                }}
+                            />
                         ) : (
-                            <CreatorCanvasFrame aspectRatio={aspectRatio}>
-                                <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
-                                    <ImageIcon className="h-5 w-5 text-[var(--ui-text-muted)]" />
-                                </span>
-                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your image will appear here'}</p>
-                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
-                                    {isVisitor
-                                        ? CREATOR_VISITOR_CANVAS_HINT
-                                        : model.maxImages > 0
-                                            ? 'Write a prompt, add reference images if you like, then Generate.'
-                                            : 'Write a prompt, then Generate.'}
-                                </p>
-                            </CreatorCanvasFrame>
+                            <CreatorEmptyCanvas
+                                source={startPosts}
+                                tool="image"
+                                balance={listBalance}
+                                icon={ImageIcon}
+                                title={isVisitor ? 'Try it before you sign up' : 'Your image will appear here'}
+                                hint={`${isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint} Or remix a post below.`}
+                                frame={(
+                                    <CreatorCanvasStage>
+                                        <CreatorCanvasFrame aspectRatio={aspectRatio}>
+                                            <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
+                                                <ImageIcon className="h-5 w-5 text-[var(--ui-text-muted)]" />
+                                            </span>
+                                            <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your image will appear here'}</p>
+                                            <p className="text-xs leading-5 text-[var(--ui-text-faint)]">{isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint}</p>
+                                        </CreatorCanvasFrame>
+                                    </CreatorCanvasStage>
+                                )}
+                            />
                         )}
                     </CreatorCanvas>
                 }

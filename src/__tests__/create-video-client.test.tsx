@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
+import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import { buildGenerationModelCatalog, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
@@ -139,6 +140,11 @@ const queryBuilder = {
   limit: vi.fn(() => queryBuilder),
   maybeSingle: maybeSingleMock,
 };
+
+// next/image needs the Next runtime; a start post's poster is not under test here.
+vi.mock('@/components/OptimizedPreviewImage', () => ({
+  OptimizedPreviewImage: ({ previewSrc }: { previewSrc: string }) => <span data-testid="poster" data-src={previewSrc} />,
+}));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
@@ -403,6 +409,32 @@ async function unknownMentionLine() {
 }
 
 /** What the server answers a start it accepted. */
+/** A shelf post as the page is handed it: a 42-credit Kling 3.0 run that Seedance 2 Mini makes for 19. */
+function startPost(id: string): CreatorStartPost {
+  return {
+    kind: 'creation',
+    id,
+    title: 'Kung fu cats',
+    tool: 'video',
+    posterUrl: `https://cdn.example/${id}.webp`,
+    posterThumbhash: null,
+    clipUrl: null,
+    modelName: 'Kling 3.0 Cinematic',
+    price: { kind: 'credits', credits: 42 },
+    fitsWelcomeCredits: false,
+    badge: null,
+    creator: { id: 'creator-1', username: 'fluffy', name: 'Fluffy' },
+    makeHref: `/create-video?remix=gen-${id}&remixPost=${id}`,
+    remix: {
+      original: { modelId: 'kling-3.0-video', cost: 42, durationSeconds: 5 },
+      candidates: [{ modelId: 'seedance-2-mini', cost: 19, durationSeconds: 5, takesInputs: true }],
+      shorter: null,
+      preferredModelId: 'seedance-2-mini',
+      modelNames: { 'seedance-2-mini': 'Seedance 2 Mini' },
+    },
+  };
+}
+
 function startedRunBody(overrides: Record<string, unknown> = {}) {
   return {
     success: true,
@@ -3665,7 +3697,9 @@ describe('CreateVideoClient Kling video elements', () => {
       }
     });
 
-    it('says a failed run returned its credits, and reads the balance again', async () => {
+    // The artboard Failed (owner, 2026-10-28): the canvas names the cause, says the credits
+    // are back, offers the same run again, and takes the focus as the run ends.
+    it('says on the canvas why a run failed and that its credits came back, and reads the balance again', async () => {
       const balance = watchBalanceRereads();
       fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
         String(input).includes('/api/generate-video?id=')
@@ -3677,11 +3711,108 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.change(promptBox(), { target: { value: PROMPT } });
         fireEvent.click(generateButton());
 
-        expect(await screen.findByText('The provider could not render this prompt. Your 12 credits were returned.')).toBeInTheDocument();
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent('The provider could not render this prompt.');
+        expect(alert).toHaveTextContent('Your 12 credits are back.');
+        const canvas = screen.getByRole('region', { name: 'Result' });
+        const heading = within(canvas).getByRole('heading', { name: 'It didn’t finish' });
+        expect(heading).toHaveFocus();
+        // The run's line names no credits: they came back.
+        expect(within(canvas).getByTestId('creator-canvas-chip').textContent).not.toMatch(/credit/);
+        expect(within(canvas).getByRole('button', { name: /^Try again · / })).toBeEnabled();
+        // Said once, on the canvas: not again over the bar.
+        expect(screen.getAllByText(/could not render this prompt/)).toHaveLength(1);
         expect(balance.rereads.length).toBeGreaterThan(0);
       } finally {
         balance.stop();
       }
+    });
+
+    it('runs the same form again from the failed canvas, and puts the prompt in reach to change it', async () => {
+      let starts = 0;
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('/api/generate-video?id=')) {
+          return { ok: true, status: 200, json: async () => ({ status: 'failed', error: 'Unknown error' }) } as Response;
+        }
+        if (String(input).includes('/api/generations') && init?.method === 'POST') starts += 1;
+        return defaultResponse(input, init);
+      });
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(await within(canvas).findByRole('alert')).toHaveTextContent('The model’s service stopped before your video was done.');
+      const startsBefore = starts;
+      fireEvent.click(within(canvas).getByRole('button', { name: /^Try again/ }));
+      await waitFor(() => expect(starts).toBeGreaterThan(startsBefore));
+      expect(await within(canvas).findByRole('alert')).toBeInTheDocument();
+
+      fireEvent.click(within(canvas).getByRole('button', { name: 'Change the prompt' }));
+      expect(within(canvas).queryByRole('alert')).not.toBeInTheDocument();
+      expect(promptBox()).toHaveFocus();
+    });
+
+    // The artboard Generating (owner, 2026-10-28): the run's line with what it holds, that
+    // the page can be left and an alert says when it is done, and posts to watch meanwhile.
+    it('says what a run at work holds and that an alert comes when it is done, with posts to watch', async () => {
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/generate-video?id=')
+          ? new Promise<Response>(() => {})
+          : defaultResponse(input, init)
+      ));
+      // In act, so the posts the page was handed are read before the run starts.
+      await act(async () => {
+        render(<CreateVideoClient prefill={{}} startPosts={Promise.resolve([startPost('cats')])} />);
+      });
+      // The canvas's posts, and the column's strip of them (each drawn at its own widths).
+      await waitFor(() => expect(screen.getAllByRole('link', { name: /^Remix “Kung fu cats”/ })).toHaveLength(2));
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(await within(canvas).findByRole('heading', { name: 'Making your video' })).toBeInTheDocument();
+      await waitFor(() => expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 12 credits$/));
+      expect(within(canvas).getByText('12 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+      expect(within(canvas).getByText(/you’ll get an alert when it’s ready/)).toBeInTheDocument();
+      expect(within(canvas).getByRole('region', { name: 'While you wait' })).toBeInTheDocument();
+      // The column's strip is for an empty canvas.
+      expect(screen.queryByRole('region', { name: 'Start from a post' })).not.toBeInTheDocument();
+    });
+
+    // The build notes: focus moves to "Done" when a run ends.
+    it('says Done with the run\'s line and gives the result the focus when the run ends', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      const heading = await within(canvas).findByRole('heading', { name: 'Done' });
+      await waitFor(() => expect(heading).toHaveFocus());
+      expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 12 credits$/);
+      // The prompt the run was sent with stays with its clip.
+      expect(within(canvas).getByText(PROMPT)).toBeInTheDocument();
+    });
+
+    it('leaves the focus with a creator already typing the next prompt when the run ends', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+      promptBox().focus();
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      await within(canvas).findByRole('heading', { name: 'Done' });
+      expect(promptBox()).toHaveFocus();
+    });
+
+    it('prices the start posts as remixes fitted to the balance, Seedance 2 Mini first', async () => {
+      authState.credits = 25;
+      await act(async () => {
+        render(<CreateVideoClient prefill={{}} startPosts={Promise.resolve([startPost('cats')])} />);
+      });
+      const remixes = await screen.findAllByRole('link', { name: 'Remix “Kung fu cats” by @fluffy on Seedance 2 Mini, 19 credits' });
+      expect(remixes).toHaveLength(2);
+      for (const remix of remixes) expect(remix).toHaveTextContent('Remix · 19');
     });
 
     it('offers a top-up when the server says the credits are short, and reads the balance again', async () => {

@@ -1,5 +1,5 @@
 import { RequestHintedOptionalAuth, RequireAuth } from '@/components/RouteAuthBoundary';
-import { loadVisitorWelcomeCredits, readCreatorReturn } from '@/lib/creator-page-server';
+import { loadCreatorStartPostsForRequest, loadVisitorWelcomeCredits, readCreatorReturn } from '@/lib/creator-page-server';
 
 import CreateImageClient, { type CreateImagePrefill } from './CreateImageClient';
 
@@ -32,12 +32,16 @@ export default async function CreateImagePage({
     ? `/create-image?${returnParams.toString()}`
     : '/create-image';
   const { welcome, handoverNonce } = readCreatorReturn(resolvedSearchParams);
+  // The shelf's posts, for the empty canvas (owner, 2026-10-28): left unawaited, so the
+  // creator draws without waiting on them. A remix opens on its own post instead.
+  const startPosts = prefill.remixId ? null : loadCreatorStartPostsForRequest();
   const client = (visitorWelcomeCredits: number | null) => (
     <CreateImageClient
       prefill={prefill}
       welcome={welcome}
       handoverNonce={handoverNonce}
       visitorWelcomeCredits={visitorWelcomeCredits}
+      startPosts={startPosts}
     />
   );
 

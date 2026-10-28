@@ -152,6 +152,32 @@ export type RemixFit =
     otherwise: { modelId: string; sameLength: boolean } | null;
   };
 
+/** The candidates a remix may move to: they take every input the original sends, and are priced. */
+function eligibleRemixCandidates(originalModelId: string, candidates: readonly RemixCandidate[]) {
+  return candidates.filter((candidate): candidate is RemixCandidate & { cost: number } => (
+    candidate.takesInputs && candidate.cost !== null && candidate.modelId !== originalModelId
+  ));
+}
+
+/**
+ * The cheapest candidate the remix may move to, at the original's length while any model
+ * can make it, whatever the balance: the model whose shorter lengths are priced when even
+ * it is past the balance (`fitRemixToBalance`'s `shorten`). Null when none may.
+ */
+export function cheapestRemixCandidate(
+  original: { modelId: string; durationSeconds: number },
+  candidates: readonly RemixCandidate[],
+): (RemixCandidate & { cost: number }) | null {
+  const eligible = eligibleRemixCandidates(original.modelId, candidates);
+  const atLength = eligible.filter((candidate) => candidate.durationSeconds === original.durationSeconds);
+  const pool = atLength.length > 0 ? atLength : eligible;
+  // The first of the cheapest, so the list's order settles a tie.
+  return pool.reduce<(typeof pool)[number] | null>(
+    (best, candidate) => (!best || candidate.cost < best.cost ? candidate : best),
+    null,
+  );
+}
+
 /**
  * Which model a remix opens on (owner, 2026-10-28): the original while the balance
  * covers it; otherwise the preferred model, the catalog's default video (Seedance 2 Mini),
@@ -174,20 +200,12 @@ export function fitRemixToBalance({
   preferredModelId: string | null;
 }): RemixFit {
   if (balance === null || original.cost === null || original.cost <= balance) return { kind: 'original' };
-  const eligible = candidates.filter((candidate): candidate is RemixCandidate & { cost: number } => (
-    candidate.takesInputs && candidate.cost !== null && candidate.modelId !== original.modelId
-  ));
+  const eligible = eligibleRemixCandidates(original.modelId, candidates);
   const preferred = eligible.find((candidate) => candidate.modelId === preferredModelId);
   if (preferred && preferred.cost <= balance) {
     return { kind: 'fitted', modelId: preferred.modelId, sameLength: preferred.durationSeconds === original.durationSeconds };
   }
-  const atLength = eligible.filter((candidate) => candidate.durationSeconds === original.durationSeconds);
-  const pool = atLength.length > 0 ? atLength : eligible;
-  // The first of the cheapest, so the list's order settles a tie.
-  const cheapest = pool.reduce<(typeof pool)[number] | null>(
-    (best, candidate) => (!best || candidate.cost < best.cost ? candidate : best),
-    null,
-  );
+  const cheapest = cheapestRemixCandidate(original, candidates);
   if (!cheapest) return { kind: 'original' };
   if (cheapest.cost <= balance) {
     return { kind: 'fitted', modelId: cheapest.modelId, sameLength: cheapest.durationSeconds === original.durationSeconds };

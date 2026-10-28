@@ -4,7 +4,7 @@ import {
 } from '../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import { videoRunShortSummary } from '../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import { catalogRunQuoteInput, catalogRunInputFacts, SUBJECT_IMAGES_SLOT_KEY } from '../../ugc-mobile/lib/model-catalog/protocol';
-import { getDefaultVideoDuration, getVideoDurationRange, VIDEO_MODELS, type VideoModelId } from '@/lib/client-generation-models';
+import { VIDEO_MODELS, type VideoModelId } from '@/lib/client-generation-models';
 import { planVideoRunInputs, type VideoRunInput, type VideoRunMedia, type VideoRunSubject } from '@/lib/creator-run-inputs';
 import { getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor, GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
@@ -19,7 +19,14 @@ import type { GenerationModelDescriptor, GenerationModelQuoteInput } from '@/lib
  * the creator is on it.
  */
 
-type VideoRegistryEntry = (typeof VIDEO_MODELS)[VideoModelId] & { catalogDescriptor?: GenerationModelDescriptor };
+export type VideoRegistryEntry = (typeof VIDEO_MODELS)[VideoModelId] & { catalogDescriptor?: GenerationModelDescriptor };
+
+/**
+ * Where a run reads its models: the page's registry, or on the server entries built from
+ * the published catalog (`catalogVideoEntryFields`), which price a shelf post's remix on
+ * each model as the page will once it opens.
+ */
+export type VideoModelLookup = (modelId: string) => VideoRegistryEntry | undefined;
 
 /** The settings the video form sets, as the page holds them. */
 export type VideoFormSettings = {
@@ -51,13 +58,20 @@ export type VideoFormHeld<M extends VideoRunMedia> = {
 
 const REFERENCE_SLOTS = new Set(['imageReferences', 'videoReferences', 'audioReferences', 'videoElements', SUBJECT_IMAGES_SLOT_KEY]);
 
-function entryOf(modelId: string): VideoRegistryEntry | undefined {
-  return (VIDEO_MODELS as unknown as Record<string, VideoRegistryEntry | undefined>)[modelId];
+const pageModels: VideoModelLookup = (modelId) => (VIDEO_MODELS as unknown as Record<string, VideoRegistryEntry | undefined>)[modelId];
+
+// As `getVideoDurationRange` and `getDefaultVideoDuration` read the page's registry.
+function durationRangeOf(entry: VideoRegistryEntry | undefined): { min: number; max: number; default: number } | null {
+  return entry && 'singleShotDurationRange' in entry ? entry.singleShotDurationRange : null;
+}
+
+function defaultDurationOf(entry: VideoRegistryEntry | undefined): number {
+  return durationRangeOf(entry)?.default ?? (entry?.durations[0] ?? 5);
 }
 
 /** A model's settings as the fitting rule reads them: its descriptor's, or before that its options as the page draws them. */
-export function videoFitControls(modelId: string): FitControl[] {
-  const entry = entryOf(modelId);
+export function videoFitControls(modelId: string, models: VideoModelLookup = pageModels): FitControl[] {
+  const entry = models(modelId);
   if (!entry) return [];
   if (entry.catalogDescriptor) {
     return entry.catalogDescriptor.controls.map((control): FitControl => (
@@ -73,14 +87,14 @@ export function videoFitControls(modelId: string): FitControl[] {
   const choice = (key: string, values: readonly (string | number)[], defaultValue = String(values[0])): FitControl[] => (
     values.length > 0 ? [{ key, type: 'choice', defaultValue, options: values.map((value) => ({ value: String(value) })) }] : []
   );
-  const range = getVideoDurationRange(modelId as VideoModelId);
+  const range = durationRangeOf(entry);
   return [
     ...choice('mode', entry.modeOptions.map((option) => option.value)),
     ...choice('aspectRatio', entry.aspectRatios),
     ...choice('resolution', entry.resolutions),
     ...(range
       ? [{ key: 'duration', type: 'integer', defaultValue: range.default, min: range.min, max: range.max, step: 1 } as const]
-      : choice('duration', entry.durations, String(getDefaultVideoDuration(modelId as VideoModelId)))),
+      : choice('duration', entry.durations, String(defaultDurationOf(entry)))),
     ...(entry.supportsSound ? [{ key: 'sound', type: 'boolean', defaultValue: false } as const] : []),
     ...(entry.supportsFixedLens ? [{ key: 'fixedLens', type: 'boolean', defaultValue: false } as const] : []),
     ...(entry.supportsMultiShot ? [{ key: 'isMultiShot', type: 'boolean', defaultValue: false } as const] : []),
@@ -88,15 +102,15 @@ export function videoFitControls(modelId: string): FitControl[] {
 }
 
 /** The form's settings moved to a model (`fitSettingsToControls`), in the shape the page holds them. */
-export function fitVideoFormToModel(modelId: string, form: VideoFormSettings): VideoFormSettings {
-  const entry = entryOf(modelId);
-  const fitted = fitSettingsToControls(videoFitControls(modelId), form);
+export function fitVideoFormToModel(modelId: string, form: VideoFormSettings, models: VideoModelLookup = pageModels): VideoFormSettings {
+  const entry = models(modelId);
+  const fitted = fitSettingsToControls(videoFitControls(modelId, models), form);
   const duration = Number(fitted.duration);
   return {
     mode: typeof fitted.mode === 'string' ? fitted.mode : '',
     aspectRatio: typeof fitted.aspectRatio === 'string' ? fitted.aspectRatio : String(entry?.aspectRatios[0] ?? form.aspectRatio),
     resolution: typeof fitted.resolution === 'string' ? fitted.resolution : '',
-    duration: Number.isFinite(duration) ? duration : getDefaultVideoDuration(modelId as VideoModelId),
+    duration: Number.isFinite(duration) ? duration : defaultDurationOf(entry),
     sound: fitted.sound === true,
     fixedLens: fitted.fixedLens === true,
     isMultiShot: fitted.isMultiShot === true,
@@ -139,13 +153,15 @@ export function videoRunOnModel<M extends VideoRunMedia>({
   catalogRevision,
   settings,
   held,
+  models = pageModels,
 }: {
   modelId: string;
   catalogRevision: string;
   settings: VideoFormSettings;
   held: VideoFormHeld<M>;
+  models?: VideoModelLookup;
 }): VideoRunOnModel<M> | null {
-  const entry = entryOf(modelId);
+  const entry = models(modelId);
   if (!entry) return null;
   const { isMultiShot } = settings;
   const affordances = getVideoRunAffordances(

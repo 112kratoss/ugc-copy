@@ -1604,7 +1604,9 @@ describe('CreateImageClient generation pipeline', () => {
       expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
     });
 
-    it('says the credits came back when the run fails, and re-reads the balance', async () => {
+    // The artboard Failed (owner, 2026-10-28): the canvas names the cause, says the
+    // credits are back, and offers the run again or the prompt to change.
+    it('says on the canvas why the run failed and that its credits came back, and re-reads the balance', async () => {
       const creditsUpdated = vi.fn();
       window.addEventListener('credits_updated', creditsUpdated);
       fetchGenerationStatusWithRetryMock.mockResolvedValue({ status: 'failed', error: 'The provider could not render this' });
@@ -1613,9 +1615,49 @@ describe('CreateImageClient generation pipeline', () => {
       typePrompt('A lighthouse at dawn');
       pressGenerate();
 
-      expect(await screen.findByText('The provider could not render this. Your 8 credits were returned.')).toBeInTheDocument();
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('The provider could not render this');
+      expect(alert).toHaveTextContent('Your 8 credits are back.');
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(within(canvas).getByRole('heading', { name: 'It didn’t finish' })).toBeInTheDocument();
+      expect(within(canvas).getByRole('button', { name: /^Try again/ })).toBeInTheDocument();
       expect(creditsUpdated).toHaveBeenCalled();
       window.removeEventListener('credits_updated', creditsUpdated);
+
+      fireEvent.click(within(canvas).getByRole('button', { name: 'Change the prompt' }));
+      expect(within(canvas).queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveFocus();
+    });
+
+    it('says the model’s service stopped when a failed run gives no reason', async () => {
+      fetchGenerationStatusWithRetryMock.mockResolvedValue({ status: 'failed', error: 'Unknown error' });
+      installFetch({ starts: [startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('The model’s service stopped before your image was done.');
+    });
+
+    // The artboards Generating and Result (owner, 2026-10-28), and the build notes' focus on "Done".
+    it('says what a run at work holds, then Done with the run\'s line and the focus', async () => {
+      let finish: (value: unknown) => void = () => {};
+      fetchGenerationStatusWithRetryMock.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+      installFetch({ starts: [startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(await within(canvas).findByRole('heading', { name: 'Making your image' })).toBeInTheDocument();
+      expect(await within(canvas).findByText('8 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+
+      await act(async () => {
+        finish({ status: 'succeeded', output: 'https://cdn.example/lighthouse.png', outputs: ['https://cdn.example/lighthouse.png'] });
+      });
+      const heading = await within(canvas).findByRole('heading', { name: 'Done' });
+      await waitFor(() => expect(heading).toHaveFocus());
+      expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 8 credits$/);
     });
   });
 

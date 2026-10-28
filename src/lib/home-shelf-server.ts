@@ -139,7 +139,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * the web's would send on as text. Either way the card goes without a price
  * rather than show one an editor would not.
  */
-function remixQuoteSettings(
+export function remixQuoteSettings(
   descriptor: GenerationModelDescriptor,
   stored: Record<string, unknown>,
 ): Record<string, unknown> | null {
@@ -331,6 +331,7 @@ async function loadMemberActions(viewerUserId: string): Promise<HomeShelfAction[
 async function loadHomeShelfForViewer(
   identity: HomeShelfIdentity,
   failure: FailureMode,
+  { withOffers = true }: { withOffers?: boolean } = {},
 ): Promise<Array<HomeShelfCreationWithPost | HomeShelfAction>> {
   const creations = await loadHomeShelfCreations(failure);
   if (creations.length < HOME_SHELF_MIN_CREATIONS || !identity.viewerUserId) {
@@ -346,7 +347,7 @@ async function loadHomeShelfForViewer(
       serviceClient: createServiceClient(),
       viewerUserId,
     }),
-    identity.isAnonymous
+    identity.isAnonymous || !withOffers
       ? Promise.resolve([])
       : loadMemberActions(viewerUserId).catch((error) => {
           // The offers wait for the next visit; the creations still render.
@@ -372,6 +373,16 @@ function withoutPost({ post, ...creation }: HomeShelfCreationWithPost): HomeShel
 export async function loadHomeShelf(identity: HomeShelfIdentity = SIGNED_OUT): Promise<HomeShelfItem[]> {
   const items = await loadHomeShelfForViewer(identity, 'empty');
   return items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item));
+}
+
+/**
+ * The shelf's creations for one viewer, each with its post and without the
+ * offers: the creators' "Start from a post" (`creator-start-posts-server.ts`).
+ * Empty where the web pages' shelf would draw nothing.
+ */
+export async function loadHomeShelfCreationsWithPosts(identity: HomeShelfIdentity): Promise<HomeShelfCreationWithPost[]> {
+  const items = await loadHomeShelfForViewer(identity, 'empty', { withOffers: false });
+  return items.filter((item): item is HomeShelfCreationWithPost => item.kind === 'creation');
 }
 
 /**

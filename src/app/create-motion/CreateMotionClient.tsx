@@ -24,12 +24,15 @@ import {
     CreatorCanvas,
     CreatorCanvasFrame,
     CreatorCanvasMedia,
+    CreatorCanvasStage,
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorModelChip,
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorResultActions,
+    CreatorRunFailed,
+    CreatorRunWaitLines,
     CreatorSettingChoices,
     CreatorSettingsFootNote,
     CreatorTemplatesTile,
@@ -37,7 +40,10 @@ import {
     CreatorTopUpNotice,
     CreatorUploadSlot,
     CreatorVisitorNote,
+    creatorRunChip,
+    describeRunFailure,
 } from '@/components/CreatorColumn';
+import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import {
     NO_SETTINGS_VARIANTS,
     optionPricesOf,
@@ -233,16 +239,13 @@ function readPublishPrefill(generationId: string, payload: unknown): MotionPubli
     };
 }
 
-function withSentenceEnd(message: string) {
-    return /[.!?]$/.test(message.trim()) ? message.trim() : `${message.trim()}.`;
-}
-
 export default function CreateMotionClient({
     prefill,
     returnTo = '/create-motion',
     welcome = null,
     handoverNonce = null,
     visitorWelcomeCredits = null,
+    startPosts = null,
 }: {
     prefill: CreateMotionPrefill;
     /** This page with its params, for the sign-in round trip. */
@@ -253,6 +256,8 @@ export default function CreateMotionClient({
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
+    /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
+    startPosts?: StartPostsSource;
 }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
@@ -302,6 +307,12 @@ export default function CreateMotionClient({
     const [canvasRevealKey, setCanvasRevealKey] = useState(0);
     // The run in flight's model and settings, which the canvas names while the form changes.
     const [runLabel, setRunLabel] = useState<string | null>(null);
+    // What the run in flight holds of the balance, for its canvas.
+    const [runCost, setRunCost] = useState<number | null>(null);
+    // A run the provider failed, said on the canvas with its cause (the artboard Failed).
+    const [runFailure, setRunFailure] = useState<{ message: string; cost: number | null } | null>(null);
+    // Bumped when a run this page followed ends, done or failed: the canvas takes the focus.
+    const [runEndKey, setRunEndKey] = useState(0);
     // The prompt the run was sent with: the caption under its clip, whatever the form holds by then.
     const [runPrompt, setRunPrompt] = useState<string | null>(null);
     // The settings chip, read as the app's ("720P · 8s", or "Add motion" until a clip is attached:
@@ -862,10 +873,8 @@ export default function CreateMotionClient({
         if (runError instanceof MotionRunFailedError) {
             // A failed run's hold is always returned: show the balance that is true now.
             window.dispatchEvent(new Event('credits_updated'));
-            const cost = latestRunCostRef.current;
-            setError(cost !== null && cost > 0
-                ? `${withSentenceEnd(message)} Your ${cost} ${cost === 1 ? 'credit was' : 'credits were'} returned.`
-                : message);
+            setRunFailure({ message, cost: latestRunCostRef.current });
+            setRunEndKey((key) => key + 1);
             return;
         }
         setError(message);
@@ -874,6 +883,7 @@ export default function CreateMotionClient({
     const beginRunView = (startedAtMs: number, estimatedTotalMs: number | null, phaseLabel: string) => {
         setIsGenerating(true);
         setError(null);
+        setRunFailure(null);
         setCreditRefusal(null);
         setOutputVideo(null);
         setLatestGenerationId(null);
@@ -881,6 +891,7 @@ export default function CreateMotionClient({
         setPublishedMeta(null);
         setPublishPrefill(null);
         latestRunCostRef.current = null;
+        setRunCost(null);
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'motion',
             phaseLabel,
@@ -988,6 +999,7 @@ export default function CreateMotionClient({
         forgetPendingStart();
         quoteState.started(start.body as CatalogGenerationRequestPayload);
         latestRunCostRef.current = started.cost;
+        setRunCost(started.cost);
         setLatestGenerationId(started.generationId ?? null);
         setLatestIsPublic(false);
         announceGenerationStarted();
@@ -996,6 +1008,7 @@ export default function CreateMotionClient({
 
         const result = await pollPrediction(started.predictionId, startedAtMs, estimatedTotalMs);
         setOutputVideo(result.output);
+        setRunEndKey((key) => key + 1);
         if (result.timing) {
             setGenerationTiming(result.timing);
         }
@@ -1232,6 +1245,7 @@ export default function CreateMotionClient({
         try {
             const result = await pollPrediction(data.prediction_id, startedAtMs, null);
             setOutputVideo(result.output);
+            setRunEndKey((key) => key + 1);
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }
@@ -1382,20 +1396,26 @@ export default function CreateMotionClient({
     const shareDescription = publishedMeta?.description || runPrompt || prompt.trim() || null;
     const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
 
+    // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
+    // and its chip what the run is and holds.
     const canvasTitle = outputVideo
-        ? 'Your motion clip'
+        ? 'Done'
         : isGenerating
             ? 'Animating your character'
-            : isBackgroundProcessing
+            : isBackgroundProcessing || !runFailure
                 ? 'Your motion clip'
-                : 'Result';
-    const canvasSubtitle = outputVideo
-        ? runPrompt
+                : 'It didn’t finish';
+    const canvasChip = outputVideo
+        ? creatorRunChip(runLabel, runCost)
         : isGenerating
-            ? runLabel ?? `${model.displayName} · ${settingsSummary}`
-            : isBackgroundProcessing
-                ? null
-                : `${model.displayName} · ${settingsSummary}`;
+            ? creatorRunChip(runLabel ?? `${model.displayName} · ${settingsSummary}`, runCost)
+            : runFailure && !isBackgroundProcessing
+                ? creatorRunChip(runLabel, null)
+                : null;
+    const showsEmptyCanvas = !outputVideo && !isGenerating && !isBackgroundProcessing && !runFailure;
+    const emptyCanvasHint = isVisitor
+        ? 'Add a character image and a reference video first. When you sign up, your prompt, settings and files stay.'
+        : 'Add a character image and a reference video, then Generate.';
 
     const isAwaitingStartCheck = unconfirmedStart && !isGenerating;
     // What stops or explains a run, said just above the bar. Progress is drawn on the
@@ -1493,6 +1513,8 @@ export default function CreateMotionClient({
     );
 
     const canvasFooter = outputVideo ? (
+        <div className="space-y-3">
+        {runPrompt ? <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-faint)]">{runPrompt}</p> : null}
         <CreatorResultActions
             generationId={latestGenerationId}
             isPublic={latestIsPublic}
@@ -1514,12 +1536,7 @@ export default function CreateMotionClient({
                 setGenerationTiming(null);
             }}
         />
-    ) : isGenerating && generationTiming ? (
-        <StudioGenerationStatus
-            accent="violet"
-            timing={generationTiming}
-            nowMs={nowMs}
-        />
+        </div>
     ) : null;
 
     const motionAccent = getAccentClasses('motion');
@@ -1607,6 +1624,7 @@ export default function CreateMotionClient({
                                 </StudioModelPicker>
                             </div>
                         </div>
+                        {showsEmptyCanvas ? <CreatorStartPostsStrip source={startPosts} tool="motion" balance={listBalance} /> : null}
 
                         <AnimatePresence>
                             {modelNotice ? (
@@ -1793,9 +1811,11 @@ export default function CreateMotionClient({
                 canvas={
                     <CreatorCanvas
                         title={canvasTitle}
-                        subtitle={canvasSubtitle}
+                        chip={canvasChip}
                         revealKey={canvasRevealKey}
+                        focusKey={runEndKey}
                         tall={Boolean(outputVideo)}
+                        flow={showsEmptyCanvas || (isGenerating && !outputVideo)}
                         showStudioLink={!isVisitor}
                         footer={canvasFooter}
                     >
@@ -1804,9 +1824,22 @@ export default function CreateMotionClient({
                                 <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
                             </CreatorCanvasMedia>
                         ) : isGenerating ? (
-                            <CreatorCanvasFrame aspectRatio="auto" accent="motion" busy>
-                                <p className="text-sm font-semibold text-[var(--ui-text-primary)]">Transferring the motion</p>
-                            </CreatorCanvasFrame>
+                            <>
+                                <CreatorCanvasStage>
+                                    <CreatorCanvasFrame aspectRatio="auto" accent="motion" busy>
+                                        <Play aria-hidden className="h-6 w-6 text-[var(--ui-primary)]" />
+                                        {generationTiming ? (
+                                            <div className="w-72 max-w-full">
+                                                <StudioGenerationStatus accent="violet" timing={generationTiming} nowMs={nowMs} />
+                                            </div>
+                                        ) : (
+                                            <p role="status" className="text-sm font-semibold text-[var(--ui-text-primary)]">Transferring the motion</p>
+                                        )}
+                                    </CreatorCanvasFrame>
+                                </CreatorCanvasStage>
+                                <CreatorRunWaitLines noun="motion clip" heldCredits={runCost} />
+                                <CreatorWhileYouWait source={startPosts} tool="motion" />
+                            </>
                         ) : isBackgroundProcessing ? (
                             <div className="w-full max-w-md">
                                 <StudioBackgroundProcessingNotice
@@ -1816,18 +1849,38 @@ export default function CreateMotionClient({
                                     timingLabel={backgroundTimingLabel}
                                 />
                             </div>
+                        ) : runFailure ? (
+                            <CreatorRunFailed
+                                cause={describeRunFailure(runFailure.message, 'motion clip')}
+                                returnedCredits={runFailure.cost}
+                                retryLabel={estimatedCost !== null ? `Try again · ${quoteUi.costLabel}` : 'Try again'}
+                                retryDisabled={!canGenerate || quotePending}
+                                onRetry={() => void handleGenerate()}
+                                onChangePrompt={() => {
+                                    setRunFailure(null);
+                                    promptInputRef.current?.focus();
+                                }}
+                            />
                         ) : (
-                            <CreatorCanvasFrame aspectRatio="auto" accent="motion">
-                                <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
-                                    <Play className="h-5 w-5 text-[var(--ui-text-muted)]" />
-                                </span>
-                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your motion clip will appear here'}</p>
-                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
-                                    {isVisitor
-                                        ? 'Add a character image and a reference video first. When you sign up, your prompt, settings and files stay.'
-                                        : 'Add a character image and a reference video, then Generate.'}
-                                </p>
-                            </CreatorCanvasFrame>
+                            <CreatorEmptyCanvas
+                                source={startPosts}
+                                tool="motion"
+                                balance={listBalance}
+                                icon={Play}
+                                title={isVisitor ? 'Try it before you sign up' : 'Your motion clip will appear here'}
+                                hint={`${emptyCanvasHint} Or remix a post below.`}
+                                frame={(
+                                    <CreatorCanvasStage>
+                                        <CreatorCanvasFrame aspectRatio="auto" accent="motion">
+                                            <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
+                                                <Play className="h-5 w-5 text-[var(--ui-text-muted)]" />
+                                            </span>
+                                            <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your motion clip will appear here'}</p>
+                                            <p className="text-xs leading-5 text-[var(--ui-text-faint)]">{emptyCanvasHint}</p>
+                                        </CreatorCanvasFrame>
+                                    </CreatorCanvasStage>
+                                )}
+                            />
                         )}
                     </CreatorCanvas>
                 }
