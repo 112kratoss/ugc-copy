@@ -19,6 +19,7 @@ import {
 } from '@/components/CreatorStudio';
 import {
     CreatorBackgroundRunLine,
+    CreatorBalanceNote,
     CreatorBarAction,
     CreatorCanvas,
     CreatorCanvasFrame,
@@ -35,6 +36,8 @@ import {
     CreatorUploadSlot,
     CreatorVisitorNote,
 } from '@/components/CreatorColumn';
+import { optionPriceLabel } from '../../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
+import { useQuotePrices } from '@/lib/use-quote-prices';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
@@ -256,6 +259,8 @@ export default function CreateMotionClient({
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+    // Open settings price each of their options; the bar says when they open and close.
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const modelCatalog = useWebGenerationModelCatalog({ kind: 'motion', selectedIds: [selectedModel], pickerOpen: isModelDropdownOpen });
     const catalogDescriptor = modelCatalog.catalog?.models.find(item => item.id === selectedModel);
     const refetchModelCatalog = modelCatalog.refetch;
@@ -1321,6 +1326,37 @@ export default function CreateMotionClient({
     const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
     const quoteRetry = quoteState.status === 'error' ? <StudioQuoteRetry message={quoteUi.message} onRetry={quoteState.retry} /> : null;
     const insufficientCredits = userCredits !== null && estimatedCost !== null && estimatedCost > 0 && userCredits < estimatedCost;
+    // Every option of the open settings priced (owner, 2026-10-28), once the run can be:
+    // a motion run's price waits for its clip.
+    const listBalance = isVisitor ? visitorWelcomeCredits : userCredits;
+    const settingsVariants = useMemo(() => {
+        const variants = new Map<string, NonNullable<typeof quoteRequest>>();
+        if (!settingsOpen || !quoteRequest) return variants;
+        const vary = (key: string, values: readonly string[]) => {
+            for (const value of values) variants.set(`${key}=${value}`, { ...quoteRequest, settings: { ...quoteRequest.settings, [key]: value } });
+        };
+        vary('resolution', model.resolutions);
+        vary('characterOrientation', model.characterOrientations);
+        return variants;
+    }, [settingsOpen, quoteRequest, model.resolutions, model.characterOrientations]);
+    const priceOf = useQuotePrices([...settingsVariants.values()]);
+    const optionPrice = (key: string, value: string) => {
+        const request = settingsVariants.get(`${key}=${value}`);
+        const price = request ? priceOf(request) : null;
+        return price?.status === 'ready' ? { cost: price.costCredits, ...optionPriceLabel(price.costCredits, listBalance) } : null;
+    };
+    const settingsFootNote = estimatedCost !== null ? (
+        <span>
+            This run <strong className="text-[var(--ui-text-primary)]">{estimatedCost} {estimatedCost === 1 ? 'credit' : 'credits'}</strong>
+            {listBalance !== null
+                ? estimatedCost <= listBalance
+                    ? ` · leaves ${listBalance - estimatedCost}`
+                    : ` · ${estimatedCost - listBalance} more than ${isVisitor ? 'the free credits' : 'your balance'}`
+                : null}
+        </span>
+    ) : (
+        <span>{quoteUi.costLabel}</span>
+    );
     // The server's refusal holds until the balance or the price on screen moves.
     const creditRefusalMessage = creditRefusal && creditRefusal.balance === userCredits && creditRefusal.cost === estimatedCost
         ? creditRefusal.message
@@ -1441,6 +1477,7 @@ export default function CreateMotionClient({
                 onChange={setCharacterOrientation}
                 columns={2}
                 accent="motion"
+                optionPrice={(option) => optionPrice('characterOrientation', option)}
             />
             <CreatorSettingChoices
                 label="Quality mode"
@@ -1450,6 +1487,7 @@ export default function CreateMotionClient({
                 onChange={setMode}
                 columns={2}
                 accent="motion"
+                optionPrice={(quality) => optionPrice('resolution', quality)}
             />
             <CatalogAdditionalControls
                 appearance="panel"
@@ -1749,9 +1787,13 @@ export default function CreateMotionClient({
                         <CreatorColumnBar
                             settingsSummary={settingsSummary}
                             settings={settingsPanel}
+                            settingsFootNote={settingsFootNote}
+                            onSettingsOpenChange={setSettingsOpen}
                             status={barStatus}
                             action={barAction}
-                            note={isVisitor ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={estimatedCost} /> : undefined}
+                            note={isVisitor
+                                ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={estimatedCost} />
+                                : userCredits !== null ? <CreatorBalanceNote balance={userCredits} cost={estimatedCost} /> : undefined}
                         />
                     </>
                 }

@@ -27,7 +27,10 @@ export default function StudioModelPicker({
     loading,
     error,
     onRetry,
+    footer,
 }: {
+    /** Under the list, outside its options: what the rows' prices are for. */
+    footer?: ReactNode;
     loading?: boolean;
     error?: string;
     onRetry?: () => void;
@@ -108,6 +111,7 @@ export default function StudioModelPicker({
                             </div>
                         )}
                     </div>
+                    {resultCount > 0 ? footer : null}
                 </motion.div>
             ) : null}
         </AnimatePresence>

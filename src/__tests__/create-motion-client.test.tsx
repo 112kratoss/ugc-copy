@@ -9,6 +9,7 @@ import type { CatalogInputMode } from '@/lib/generation-model-catalog';
 import { MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
+import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting, costShown } from './fixtures/creator-column-bar';
 
 const modelCatalogState = vi.hoisted(() => ({
@@ -102,6 +103,12 @@ const queryBuilder = {
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
 }));
+
+// The creators' price lists answer from the stand-in: nothing is priced unless a test says so.
+vi.mock('@/lib/use-quote-prices', async () => {
+  const { quotePricesHookStandIn } = await import('./fixtures/quote-prices-stand-in');
+  return { useQuotePrices: quotePricesHookStandIn };
+});
 
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => authState,
@@ -323,6 +330,7 @@ beforeEach(() => {
   modelCatalogState.error = null;
   modelCatalogState.summaries = [];
   quoteStandIn.reset(20);
+  priceListStandIn.reset();
   for (const model of motionCatalog.models) delete (model as { inputModes?: unknown }).inputModes;
   generationCatalogRefetchMock.mockClear();
   maybeSingleMock.mockClear();
@@ -463,6 +471,26 @@ describe('CreateMotionClient quote', () => {
     });
     expect(screen.queryByText('Add a character image and a motion clip to see the cost.')).not.toBeInTheDocument();
     expect(costShown()).toBe('20 credits');
+  });
+});
+
+// PR 2 of the creator redesign (owner, 2026-10-28): each option of the settings priced once
+// the run can be, and the balance read under the bar.
+describe('CreateMotionClient prices', () => {
+  it('prices each quality once both inputs are in, and reads the balance under the bar', async () => {
+    authState.credits = 30;
+    priceListStandIn.price = pricedBy((request) => (request.settings?.resolution === '1080p' ? 34 : 20));
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await waitFor(() => expect(costShown()).toBe('20 credits'));
+    expect(view.container.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 30');
+    expect(view.container.querySelector('[data-creator-bar-note]')).toHaveTextContent('Leaves 10');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generation settings/ }));
+
+    const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+    expect(within(settings).getByRole('radio', { name: 'Pro 1080p, 34 credits, 4 more than your balance' })).toHaveTextContent('34 · +4');
+    expect(settings).toHaveTextContent('This run 20 credits · leaves 10');
   });
 });
 

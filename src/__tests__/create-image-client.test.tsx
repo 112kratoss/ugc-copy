@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateImageClient from '@/app/create-image/CreateImageClient';
@@ -9,6 +9,7 @@ import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 // What the server quotes when it starts a run: for "the price of the run the page sends".
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
+import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings } from './fixtures/creator-column-bar';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
@@ -137,6 +138,12 @@ vi.mock('@/lib/persisted-media', () => ({
   setPersistedImageElementRecords: setPersistedImageElementRecordsMock,
 }));
 
+// The creators' price lists answer from the stand-in: nothing is priced unless a test says so.
+vi.mock('@/lib/use-quote-prices', async () => {
+  const { quotePricesHookStandIn } = await import('./fixtures/quote-prices-stand-in');
+  return { useQuotePrices: quotePricesHookStandIn };
+});
+
 vi.mock('@/lib/persisted-creator-draft', () => ({
   loadCreatorDraft: loadCreatorDraftMock,
   saveCreatorDraft: saveCreatorDraftMock,
@@ -201,6 +208,7 @@ const SIGNED_IN_SESSION = { data: { session: { access_token: 'test-token', user:
 beforeEach(() => {
   creatorDraftStore.clear();
   quoteStandIn.reset(8);
+  priceListStandIn.reset();
   loadCreatorDraftMock.mockClear();
   saveCreatorDraftMock.mockClear();
   purgeLegacyPersistedMediaMock.mockClear();
@@ -1873,5 +1881,53 @@ describe('CreateImageClient prompt limits', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('This page is out of date');
     expect(generateButton()).toBeDisabled();
     expect(startCalls(fetchMock)).toHaveLength(1);
+  });
+});
+
+// PR 2 of the creator redesign (owner, 2026-10-28): the model list and the settings priced,
+// and the balance read under the bar. Prices come from the price lists' stand-in.
+describe('CreateImageClient prices', () => {
+  beforeEach(() => {
+    getPersistedImageElementRecordsMock.mockReset();
+    getPersistedImageElementRecordsMock.mockResolvedValue([]);
+    modelCatalogState.missingIds = [];
+    modelCatalogState.error = null;
+    modelCatalogState.summaries = imageModelSummaries;
+    modelCatalogState.models = [testDescriptors.nanoBanana, { ...testDescriptors.nanoBanana, id: 'imagen-4', displayName: 'Imagen 4' }];
+    authState.credits = 6;
+    priceListStandIn.price = pricedBy((request) => (request.modelId === 'imagen-4' ? 4 : request.settings?.resolution === '4K' ? 18 : 8));
+    window.scrollTo = vi.fn();
+  });
+
+  afterEach(() => {
+    modelCatalogState.models = null;
+    authState.credits = 10_000;
+  });
+
+  it('prices each model at this run\'s settings and splits the list by the balance', async () => {
+    const view = render(<CreateImageClient prefill={{}} />);
+    // 8 credits is past the 6: Top up stands in Generate's place.
+    expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')!);
+
+    expect(within(screen.getByRole('group', { name: 'Fits your 6 credits' })).getByRole('option', { name: /Imagen 4/ }))
+      .toHaveTextContent('4 credits');
+    expect(within(screen.getByRole('group', { name: 'Needs more credits' })).getByRole('option', { name: /Nano Banana 2\.0/ }))
+      .toHaveTextContent('8 credits');
+  });
+
+  it('prices every option of the settings, and reads the balance under the bar', async () => {
+    authState.credits = 10;
+    render(<CreateImageClient prefill={{}} />);
+    await waitFor(() => expect(costShown()).toBe('8 credits'));
+    expect(document.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 10');
+    expect(document.querySelector('[data-creator-bar-note]')).toHaveTextContent('Leaves 2');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generation settings/ }));
+
+    const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+    expect(within(settings).getByRole('radio', { name: '4K, 18 credits, 8 more than your balance' })).toHaveTextContent('4K18 · +8');
+    expect(settings).toHaveTextContent('This run 8 credits · leaves 2');
   });
 });

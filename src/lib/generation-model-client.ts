@@ -472,6 +472,7 @@ export function useWebGenerationModelCatalog(options: {
     const unsubscribe = session.subscribe(update); void session.initialize(); return unsubscribe;
   }, [session]);
   useEffect(() => { if (options.pickerOpen) void session.refresh(); }, [options.pickerOpen, session]);
+
   useEffect(() => {
     if (!current) return;
     const ids = selectedKey ? selectedKey.split(',') : [];
@@ -486,6 +487,9 @@ export function useWebGenerationModelCatalog(options: {
   const refetch = useCallback(() => { void session.retry().then(() => setRetryVersion(v => v + 1)); }, [session]);
   // For a caller about to store the revision, such as a workflow run. What this hook returns is as old as the page load or the last picker open.
   const ensureCurrent = useCallback(() => session.ensureCurrent(selectedKey ? selectedKey.split(',') : []), [session, selectedKey]);
+  // Details beyond the selected models', unpinned: a creator pricing its whole model list
+  // reads each model's settings and inputs off its descriptor.
+  const ensureDetails = useCallback((ids: readonly string[]) => { void session.ensureDetails([...ids]); }, [session]);
   const selectedIds = selectedKey ? selectedKey.split(',') : [];
   const detailsReady = Boolean(current && selectedIds.every(id => details.some(m => m.id === id)));
   const catalog = useMemo(() => current ? { schemaVersion: 3, revision: current.revision, defaults: current.defaults, models: details } : null, [current, details]);
@@ -493,7 +497,7 @@ export function useWebGenerationModelCatalog(options: {
     detailsReady, isLoadingModels: Boolean(options.pickerOpen && nextCursors[options.kind ?? 'all'] !== null && !error), error: error, isLoading: !current, isLoadingDetails: state.loadingDetails,
     // While the network is asked for the current revision; a catalog read back from the browser stands in meanwhile.
     isCheckingRevision: state.loading,
-    revision: current?.revision ?? null, refetch, ensureCurrent };
+    revision: current?.revision ?? null, refetch, ensureCurrent, ensureDetails };
 }
 
 export class WebCatalogRequestError extends Error {
@@ -874,6 +878,34 @@ export async function requestWebGenerationQuote(
     );
   }
   return body;
+}
+
+/** One run's answer in a price list: its quote, or why the catalog refused that run. */
+export type WebGenerationQuoteBatchEntry =
+  | { ok: true; quote: GenerationModelQuote }
+  | { ok: false; code: string; error: string; fieldErrors: Record<string, string> };
+
+/**
+ * Prices many runs in one request (`POST /api/generation-models/quotes`), at most
+ * `GENERATION_MODEL_QUOTE_BATCH_MAX`, each answered in its run's place. It sends no
+ * token: the route reads no identity, and a visitor has none to send.
+ */
+export async function requestWebGenerationQuoteBatch(
+  inputs: readonly GenerationModelQuoteInput[],
+  signal?: AbortSignal,
+  fetcher: typeof fetch = fetch,
+): Promise<WebGenerationQuoteBatchEntry[]> {
+  const response = await fetcher('/api/generation-models/quotes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quotes: inputs }),
+    signal,
+  });
+  const body = await response.json() as { quotes?: unknown; error?: string; code?: string };
+  if (!response.ok || !Array.isArray(body.quotes) || body.quotes.length !== inputs.length) {
+    throw new WebCatalogRequestError(body.error ?? 'Could not price these settings.', response.status, body.code);
+  }
+  return body.quotes as WebGenerationQuoteBatchEntry[];
 }
 
 export function useWebGenerationModelQuote(

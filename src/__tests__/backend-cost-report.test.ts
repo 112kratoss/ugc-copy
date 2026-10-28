@@ -159,6 +159,13 @@ describe('collectBackendCostReport', () => {
             updated_at: '2026-06-22T09:45:00.000Z',
           },
           {
+            // A creator's price list, counted with the quotes.
+            scope: 'generation-model:quote-batch',
+            request_count: 10,
+            window_start: '2026-06-22T09:40:00.000Z',
+            updated_at: '2026-06-22T09:45:00.000Z',
+          },
+          {
             scope: 'media-read:sign',
             request_count: 450,
             window_start: '2026-06-22T09:30:00.000Z',
@@ -227,12 +234,13 @@ describe('collectBackendCostReport', () => {
       byService: { 'KIE task status': 1, 'KIE media download': 1 },
     });
     expect(report.rateLimitPressure).toMatchObject({
-      totalRequests: 665,
-      quoteRequests: 190,
+      totalRequests: 675,
+      quoteRequests: 200,
       mediaReadRequests: 475,
       maxWindowRequestCount: 450,
       byScope: {
         'generation-model:quote': 190,
+        'generation-model:quote-batch': 10,
         'media-read:sign': 450,
         'workflow-asset-upload:read-url': 25,
       },

@@ -241,6 +241,9 @@ const GENERATED_STORAGE_BUCKETS = [
   'generated_audio',
   'generation_inputs',
 ];
+// A price list (`/api/generation-models/quotes`) is a quote request too, of many runs at once.
+const QUOTE_RATE_LIMIT_SCOPES = new Set(['generation-model:quote', 'generation-model:quote-batch']);
+
 const MEDIA_READ_RATE_LIMIT_SCOPES = new Set([
   'media-read:sign',
   'post-resource-file:read-url',
@@ -585,7 +588,7 @@ function buildRateLimitPressure(rows: RateLimitCostRow[]) {
     totalRequests += requestCount;
     maxWindowRequestCount = Math.max(maxWindowRequestCount, requestCount);
     byScope[scope] = (byScope[scope] ?? 0) + requestCount;
-    if (scope === 'generation-model:quote') {
+    if (QUOTE_RATE_LIMIT_SCOPES.has(scope)) {
       quoteRequests += requestCount;
     }
     if (MEDIA_READ_RATE_LIMIT_SCOPES.has(scope)) {
@@ -699,7 +702,7 @@ function buildRateLimitPressureFromAggregates(
   let mediaReadRequests = 0;
 
   for (const [scope, requestCount] of Object.entries(rateLimits.byScope)) {
-    if (scope === 'generation-model:quote') {
+    if (QUOTE_RATE_LIMIT_SCOPES.has(scope)) {
       quoteRequests += requestCount;
     }
     if (MEDIA_READ_RATE_LIMIT_SCOPES.has(scope)) {
