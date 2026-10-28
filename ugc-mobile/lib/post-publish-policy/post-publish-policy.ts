@@ -315,17 +315,24 @@ function titleFromPrompt(prompt: string | null | undefined): string {
     keptWordCount += clauseWords.length;
   }
 
-  const words = kept.join(', ').split(' ').filter(Boolean);
-  while (words.length > 1 && words.join(' ').length > SUGGESTED_TITLE_MAX_LENGTH) {
-    words.pop();
-  }
-  while (words.length > 1 && TRAILING_JOINER_WORDS.has(words[words.length - 1].toLowerCase().replace(/,$/, ''))) {
-    words.pop();
-  }
-
-  const cut = trimPhraseEdges(words.join(' ').slice(0, SUGGESTED_TITLE_MAX_LENGTH));
+  const cut = cutAtWord(kept.join(', ').split(' ').filter(Boolean), SUGGESTED_TITLE_MAX_LENGTH);
   const title = cut.charAt(0).toUpperCase() + cut.slice(1);
   return title.length >= 3 && !isPlaceholderText(title) ? title : '';
+}
+
+/**
+ * Words cut at a word to fit `maxLength`, never ending on a joining word ("…lanterns and"), a
+ * comma after it included, with the marks a cut leaves at its edges trimmed.
+ */
+function cutAtWord(words: readonly string[], maxLength: number): string {
+  const kept = [...words];
+  while (kept.length > 1 && kept.join(' ').length > maxLength) {
+    kept.pop();
+  }
+  while (kept.length > 1 && TRAILING_JOINER_WORDS.has(kept[kept.length - 1].toLowerCase().replace(/,$/, ''))) {
+    kept.pop();
+  }
+  return trimPhraseEdges(kept.join(' ').slice(0, maxLength));
 }
 
 /**
@@ -350,12 +357,14 @@ export function suggestCreationPostTitle(input: CreationTitleSuggestionInput): C
 }
 
 /**
- * The title once the recipe's keeping of the prompt changes (a paid recipe put
- * on or taken off, `recipeKeepsPromptPrivate`). A title cut from the prompt is
- * swapped for the recipe's kind title while the prompt is private and back when
- * it is not; any other title stays. It is compared with the prompt itself, not
- * with what a composer prefilled, so the rule holds in an editor too, and for a
- * title an earlier save copied onto the creation as its own.
+ * The title once the post's recipe changes. A title cut from the prompt is
+ * swapped for the recipe's kind title when a paid recipe goes on
+ * (`recipeKeepsPromptPrivate`), and the kind title gives way to the prompt's
+ * whenever the prompt is not private after the change: as a paid recipe goes,
+ * and for a free recipe titled before 2026-10-29, when any recipe kept the
+ * prompt private. Any other title stays. It is compared with the prompt itself,
+ * not with what a composer prefilled, so the rule holds in an editor too, and
+ * for a title an earlier save copied onto the creation as its own.
  */
 export function followTitleForPromptPrivacy(
   title: string,
@@ -363,13 +372,10 @@ export function followTitleForPromptPrivacy(
   wasPrivate: boolean,
   isPrivate: boolean,
 ): string {
-  if (wasPrivate === isPrivate) {
-    return title;
-  }
   const fromPrompt = suggestCreationPostTitle({ ...creation, promptPrivate: false });
   const forRecipe = suggestCreationPostTitle({ ...creation, promptPrivate: true });
   if (isPrivate) {
-    return fromPrompt.source === 'prompt' && title === fromPrompt.title ? forRecipe.title : title;
+    return !wasPrivate && fromPrompt.source === 'prompt' && title === fromPrompt.title ? forRecipe.title : title;
   }
   return title === forRecipe.title ? fromPrompt.title : title;
 }
@@ -430,14 +436,7 @@ export function suggestRemixPostTitle(originalTitle: string | null | undefined):
   if (title.length <= room) {
     return `${title}${REMIX_TITLE_MARK}`;
   }
-  const words = title.split(' ');
-  while (words.length > 1 && words.join(' ').length > room) {
-    words.pop();
-  }
-  while (words.length > 1 && TRAILING_JOINER_WORDS.has(words[words.length - 1].toLowerCase())) {
-    words.pop();
-  }
-  return `${trimPhraseEdges(words.join(' ').slice(0, room))}${REMIX_TITLE_MARK}`;
+  return `${cutAtWord(title.split(' '), room)}${REMIX_TITLE_MARK}`;
 }
 
 const SUGGESTED_HANDLE_PATTERN = /^[a-z0-9-]{3,24}$/;

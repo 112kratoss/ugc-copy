@@ -2207,4 +2207,15 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
     const none = await publish({ leaveOutOwnGenerationReferences: true, resourceBundle: { accessMode: 'none' } }, { byRowId: new Map(), hasOwn: true });
     expect(none.dependencies.loadGenerationInputOrigins).not.toHaveBeenCalled();
   });
+
+  // Whose an input is decides only what is copied and whether the hand-over stays on.
+  it('reads no origins for a recipe that copies no references and hands nothing over', async () => {
+    const { result, dependencies } = await publish(
+      { leaveOutOwnGenerationReferences: true, resourceBundle: recipe(false) },
+      { byRowId: new Map(), hasOwn: true },
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    expect(dependencies.loadGenerationInputOrigins).not.toHaveBeenCalled();
+  });
 });

@@ -60,8 +60,7 @@ import { getAccentClasses } from '@/components/DesignSystem';
 import { motionSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreationPublishDetails, useRemixOriginal } from '@/components/CreatorPublish';
-import type { PublishedCreation } from '@/components/usePublishCreation';
+import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
 import { creatorCanvasPhase, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { useAuth } from '@/components/AuthProvider';
@@ -279,10 +278,6 @@ export default function CreateMotionClient({
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [resolvedOutputVideo, setResolvedOutputVideo] = useState<{ outputUrl: string; url: string } | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
-    // What a publish from the canvas answered, for the creation it published: Posted is drawn from it.
-    const [published, setPublished] = useState<{ generationId: string; post: PublishedCreation } | null>(null);
-    // The creation's title and recipe, read once its run is done, for the publish form.
-    const publishDetails = useCreationPublishDetails(outputVideo ? latestGenerationId : null, session?.access_token);
     const [duration, setDuration] = useState<number>(0);
     const [characterOrientation, setCharacterOrientation] = useState<'video' | 'image'>('video');
     const [mode, setMode] = useState<'720p' | '1080p'>('720p');
@@ -341,8 +336,15 @@ export default function CreateMotionClient({
     // Remix State
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
-    // The post a remix came from, credited in the publish form with Follow (owner, 2026-10-28).
-    const remixOriginal = useRemixOriginal(remixPostId, session?.access_token, userId);
+    // Publishing on the canvas: the form's details, the remix's original (credited with Follow,
+    // owner 2026-10-28), Posted, and a publish in flight, which Generate waits for.
+    const canvasPublish = useCreatorPublish({
+        generationId: latestGenerationId,
+        done: Boolean(outputVideo),
+        accessToken: session?.access_token,
+        remixPostId,
+        viewerUserId: userId,
+    });
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
@@ -1164,6 +1166,8 @@ export default function CreateMotionClient({
 
     const handleGenerate = async () => {
         if (activeGenerationRequestKeyRef.current) return;
+        // A new run takes the publish form away: a publish in flight is let finish first.
+        if (canvasPublish.inFlight) return;
         // While a start is unconfirmed, a press checks it: a new key could pay for a second run.
         const pending = pendingStartRef.current ?? (userId ? loadPendingWebStart('motion', userId) : null);
         if (pending) {
@@ -1353,8 +1357,6 @@ export default function CreateMotionClient({
         referenceVideoDescriptor?.sourceGenerationId === remixSourceBundle.generation.id
     );
 
-    // The run's own prompt first: the form may hold the next run's by now.
-
     // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
     // and its chip what the run is and holds.
     const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputVideo), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
@@ -1418,7 +1420,7 @@ export default function CreateMotionClient({
             showTopUp={showTopUp}
             isGenerating={isGenerating}
             // A visitor's press needs no price: it checks the form, then asks for an account.
-            disabled={!canGenerate || (!isVisitor && quotePending)}
+            disabled={!canGenerate || (!isVisitor && quotePending) || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
             hasPrice={estimatedCost !== null}
             onGenerate={() => void handleGenerate()}
@@ -1468,17 +1470,11 @@ export default function CreateMotionClient({
         label: 'Download video',
         newTab: true,
     } : null;
-    const postedHere = published && published.generationId === latestGenerationId ? published.post : null;
-    const publishPanel = outputVideo && motionDownload && latestGenerationId ? (
+    const publishPanel = canvasPublish.panel && motionDownload ? (
         <CreatorPublishPanel
-            key={latestGenerationId}
-            generationId={latestGenerationId}
-            accessToken={session?.access_token}
-            details={publishDetails}
-            original={remixOriginal}
+            key={canvasPublish.panel.generationId}
+            {...canvasPublish.panel}
             sourceSurface="create-motion"
-            published={postedHere}
-            onPublished={(post) => setPublished({ generationId: latestGenerationId, post })}
             download={motionDownload}
             next={userCredits !== null ? (
                 <CreatorPostedNext
@@ -1748,7 +1744,7 @@ export default function CreateMotionClient({
                         />
 
                         <CreatorColumnBar
-                            holdsFootUnderColumn={!(publishPanel && !postedHere)}
+                            holdsFootUnderColumn={!(publishPanel && !canvasPublish.posted)}
                             settingsSummary={settingsSummary}
                             settings={settingsPanel}
                             settingsFootNote={<CreatorSettingsFootNote cost={estimatedCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
@@ -1771,7 +1767,6 @@ export default function CreateMotionClient({
                         chip={canvasChip}
                         revealKey={canvasRevealKey}
                         focusKey={runEndKey}
-                        tall={Boolean(outputVideo)}
                         flow={canvasPhase !== 'failed' && canvasPhase !== 'background'}
                         showStudioLink={!isVisitor}
                     >
@@ -1781,7 +1776,7 @@ export default function CreateMotionClient({
                                 // A motion clip takes its reference's shape, read from the clip once it loads.
                                 ratio={null}
                                 media={(
-                                    <CreatorCanvasMedia aspectRatio="auto" fit="done">
+                                    <CreatorCanvasMedia aspectRatio="auto">
                                         <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
                                     </CreatorCanvasMedia>
                                 )}

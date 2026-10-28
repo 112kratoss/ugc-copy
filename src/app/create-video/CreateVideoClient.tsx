@@ -103,8 +103,7 @@ import {
 } from '@/components/CreatorStudio';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreationPublishDetails, useRemixOriginal } from '@/components/CreatorPublish';
-import type { PublishedCreation } from '@/components/usePublishCreation';
+import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
 import { creatorCanvasPhase, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
@@ -1108,8 +1107,6 @@ export default function CreateVideoClient({
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
-    // The post a remix came from, credited in the publish form with Follow (owner, 2026-10-28).
-    const remixOriginal = useRemixOriginal(remixPostId, session?.access_token, userId);
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const prefillAspectRatio = prefill.aspectRatio ?? null;
@@ -1164,10 +1161,15 @@ export default function CreateVideoClient({
     const [outputVideo, setOutputVideo] = useState<string | null>(null);
     const [resolvedOutputVideo, setResolvedOutputVideo] = useState<{ outputUrl: string; url: string } | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
-    // What a publish from the canvas answered, for the creation it published: Posted is drawn from it.
-    const [published, setPublished] = useState<{ generationId: string; post: PublishedCreation } | null>(null);
-    // The creation's title and recipe, read once its run is done, for the publish form.
-    const publishDetails = useCreationPublishDetails(outputVideo ? latestGenerationId : null, session?.access_token);
+    // Publishing on the canvas: the form's details, the remix's original (credited with Follow,
+    // owner 2026-10-28), Posted, and a publish in flight, which Generate waits for.
+    const canvasPublish = useCreatorPublish({
+        generationId: latestGenerationId,
+        done: Boolean(outputVideo),
+        accessToken: session?.access_token,
+        remixPostId,
+        viewerUserId: userId,
+    });
     const [error, setError] = useState<string | null>(null);
     // Why files just picked were left out: their own line, so it never stands in for a
     // run's error or its background state.
@@ -4042,6 +4044,8 @@ export default function CreateVideoClient({
 
     const handleGenerate = async ({ replacingUnconfirmed = false }: { replacingUnconfirmed?: boolean } = {}) => {
         if (activeGenerationRequestKeyRef.current) return;
+        // A new run takes the publish form away: a publish in flight is let finish first.
+        if (canvasPublish.inFlight) return;
         // An unanswered start is checked again under its own key before anything new is sent.
         if (unconfirmedStart && !replacingUnconfirmed) {
             await replayPendingStart(unconfirmedStart, { reveal: true });
@@ -4698,7 +4702,7 @@ export default function CreateVideoClient({
             onCheckAgain={() => void handleGenerate()}
             showTopUp={showTopUp}
             isGenerating={isGenerating}
-            disabled={(!isVisitor && quotePending) || Boolean(promptLimitMessage)}
+            disabled={(!isVisitor && quotePending) || Boolean(promptLimitMessage) || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
             hasPrice={estimatedCost !== null}
             onGenerate={() => void handleGenerate()}
@@ -4874,18 +4878,12 @@ export default function CreateVideoClient({
         label: 'Download video',
         newTab: true,
     } : null;
-    const postedHere = published && published.generationId === latestGenerationId ? published.post : null;
     const nextRunCost = runShape?.cost ?? estimatedCost;
-    const publishPanel = outputVideo && videoDownload && latestGenerationId ? (
+    const publishPanel = canvasPublish.panel && videoDownload ? (
         <CreatorPublishPanel
-            key={latestGenerationId}
-            generationId={latestGenerationId}
-            accessToken={session?.access_token}
-            details={publishDetails}
-            original={remixOriginal}
+            key={canvasPublish.panel.generationId}
+            {...canvasPublish.panel}
             sourceSurface="create-video"
-            published={postedHere}
-            onPublished={(post) => setPublished({ generationId: latestGenerationId, post })}
             download={videoDownload}
             next={userCredits !== null ? (
                 <CreatorPostedNext
@@ -5850,7 +5848,7 @@ export default function CreateVideoClient({
                         )}
 
                         <CreatorColumnBar
-                            holdsFootUnderColumn={!(publishPanel && !postedHere)}
+                            holdsFootUnderColumn={!(publishPanel && !canvasPublish.posted)}
                             settingsSummary={settingsSummary}
                             settingsSummaryShort={settingsSummaryShort}
                             settings={settingsPanel}
@@ -5873,7 +5871,6 @@ export default function CreateVideoClient({
                         chip={canvasChip}
                         revealKey={canvasRevealKey}
                         focusKey={runEndKey}
-                        tall={Boolean(outputVideo)}
                         flow={canvasPhase !== 'failed' && canvasPhase !== 'background'}
                         showStudioLink={!isVisitor}
                     >
@@ -5882,7 +5879,7 @@ export default function CreateVideoClient({
                                 key={outputVideo}
                                 ratio={parseAspectRatio(runShape?.aspectRatio ?? currentAspectRatio)}
                                 media={(
-                                    <CreatorCanvasMedia aspectRatio={runShape?.aspectRatio ?? currentAspectRatio} fit="done">
+                                    <CreatorCanvasMedia aspectRatio={runShape?.aspectRatio ?? currentAspectRatio}>
                                         <GenerationResultVideo generationId={latestGenerationId} outputUrl={outputVideo} accessToken={session?.access_token} onOriginalResolved={setResolvedOutputVideo} loop={false} />
                                     </CreatorCanvasMedia>
                                 )}

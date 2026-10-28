@@ -1213,23 +1213,19 @@ export function CreatorCanvas({
   chip,
   revealKey = 0,
   focusKey = 0,
-  tall = false,
   flow = false,
   showStudioLink = true,
   children,
-  footer,
 }: {
   title: string;
   /** The run's line beside the title: "Seedance 2 Mini · 480P · 9:16 · 5s · 19 credits". */
   chip?: string | null;
   revealKey?: number;
   focusKey?: number;
-  tall?: boolean;
   flow?: boolean;
   /** Off for a signed-out visitor: Studio holds an account's creations. */
   showStudioLink?: boolean;
   children: ReactNode;
-  footer?: ReactNode;
 }) {
   const sectionRef = useRef<HTMLElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -1293,17 +1289,18 @@ export function CreatorCanvas({
       {/* Beside the column, a size container, so a frame can take the shape of the
           run's ratio and still fit whichever of its sides is shorter; a picture
           fits the stage there, and 70% of the window's height under the column. */}
+      {/* A flowing body's padding is a variable: the publish form's sticky Publish takes it back
+          to sit on the pane's edge (`CreatorPublishPanel`). */}
       <div
         className={clsx(
           flow
-            ? 'app-scrollbar relative flex flex-1 flex-col gap-5 p-4 sm:p-6 min-[1120px]:min-h-0 min-[1120px]:overflow-y-auto'
+            ? 'app-scrollbar relative flex flex-1 flex-col gap-5 p-[var(--creator-canvas-padding)] [--creator-canvas-padding:1rem] sm:[--creator-canvas-padding:1.5rem] min-[1120px]:min-h-0 min-[1120px]:overflow-y-auto'
             : CANVAS_STAGE_CLASS,
-          !flow && (tall ? 'min-h-[min(70svh,40rem)]' : 'min-h-64')
+          !flow && 'min-h-64'
         )}
       >
         {children}
       </div>
-      {footer ? <div className="border-t border-[var(--ui-border-subtle)] px-4 py-3 sm:px-6">{footer}</div> : null}
     </section>
   );
 }
@@ -1489,20 +1486,15 @@ function clampFrameRatio(ratio: number) {
 }
 
 /**
- * A finished clip, as large as the canvas allows, on black: in the shape its
- * frame had (square for "auto", as the frame is) until the clip's own size is
- * known, then in that. A motion run takes its shape from its reference, which
- * the page does not measure, and a model can answer "auto" with any shape.
- * Give it the clip's address as its `key`, so a new clip is measured afresh.
+ * A finished clip on black, beside or above the publish form (`CreatorDoneLayout`), where its
+ * own column decides its width, short of what the window's height leaves for the form to start
+ * in view: in the shape its frame had (square for "auto", as the frame is) until the clip's own
+ * size is known, then in that. A motion run takes its shape from its reference, which the page
+ * does not measure, and a model can answer "auto" with any shape. Give it the clip's address as
+ * its `key`, so a new clip is measured afresh.
  */
-export function CreatorCanvasMedia({ aspectRatio, fit = 'stage', children }: {
+export function CreatorCanvasMedia({ aspectRatio, children }: {
   aspectRatio?: string | null;
-  /**
-   * `stage`: as large as the canvas's stage allows. `done`: beside or above the publish form
-   * (`CreatorDoneLayout`), where its own column decides, short of what the window's height
-   * leaves for the form to start in view.
-   */
-  fit?: 'stage' | 'done';
   children: ReactNode;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
@@ -1528,7 +1520,7 @@ export function CreatorCanvasMedia({ aspectRatio, fit = 'stage', children }: {
       ref={boxRef}
       data-testid="creator-canvas-media"
       style={{ '--creator-frame-ratio': ratio } as CSSProperties}
-      className={clsx('relative overflow-hidden rounded-ui-xl bg-black', fit === 'done' ? DONE_FRAME_SIZE_CLASS : CANVAS_FRAME_SIZE_CLASS)}
+      className={clsx('relative overflow-hidden rounded-ui-xl bg-black', DONE_FRAME_SIZE_CLASS)}
     >
       {children}
     </div>

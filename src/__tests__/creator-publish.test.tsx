@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -8,8 +9,11 @@ import {
   describePublishSummary,
   describeSharedRecipe,
   ownUploadsWords,
+  useCreationPublishDetails,
+  useRemixOriginal,
   type CreatorPublishPanelProps,
   type RemixOriginal,
+  type RemixOriginalRead,
 } from '@/components/CreatorPublish';
 import type { CreationPublishDetails } from '@/lib/creation-publish-details';
 
@@ -31,7 +35,6 @@ vi.mock('next/link', () => ({
 
 const PROMPT = 'A harbour at dusk, lanterns on the water, slow push-in.';
 const DETAILS: CreationPublishDetails = {
-  generationId: 'gen-1',
   title: 'Harbour at dusk',
   paywallPrefill: { resourceKinds: ['prompt'], promptText: PROMPT, notesMarkdown: null, allowRemix: false },
   creation: { prompt: PROMPT, model: 'seedance-2-mini', category: 'video' },
@@ -40,8 +43,11 @@ const ORIGINAL: RemixOriginal = {
   postId: 'post-cats',
   title: 'Kung fu cats',
   creator: { id: 'creator-fluffy', username: 'fluffy', name: 'Fluffy', avatar: null },
-  recipe: 'free',
 };
+/** Not a remix of a post: nothing to credit, and the recipe may start shared. */
+const NO_REMIX: RemixOriginalRead = { original: null, recipeStartsShared: true };
+/** A remix of someone else's post whose recipe is free. */
+const FREE_REMIX: RemixOriginalRead = { original: ORIGINAL, recipeStartsShared: true };
 /** A remix with the original's reference and two photos of the creator's own. */
 const WITH_UPLOADS: CreationPublishDetails = {
   ...DETAILS,
@@ -75,13 +81,18 @@ class FakeIntersectionObserver {
   takeRecords() { return []; }
 }
 
-function setSubmitInView(inView: boolean) {
-  const live = observers.filter((observer) => observer.target);
+/** Says whether an observed element is in view: the form's Publish by default. */
+function setInView(inView: boolean, matches: (target: Element) => boolean = (target) => !target.hasAttribute('data-creator-bar')) {
+  const live = observers.filter((observer) => observer.target && matches(observer.target));
   act(() => {
     for (const observer of live) {
       observer.callback([{ isIntersecting: inView, target: observer.target } as IntersectionObserverEntry], {} as IntersectionObserver);
     }
   });
+}
+
+function setSubmitInView(inView: boolean) {
+  setInView(inView);
 }
 
 function json(body: unknown, status = 200) {
@@ -116,22 +127,30 @@ function publishBody(fetchMock: ReturnType<typeof installFetch>) {
   return call ? JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown> : null;
 }
 
-function renderPanel(props: Partial<CreatorPublishPanelProps> = {}) {
-  const onPublished = vi.fn();
-  const view = render(
+function panel(props: Partial<CreatorPublishPanelProps> & { onPublished: CreatorPublishPanelProps['onPublished'] }) {
+  return (
     <CreatorPublishPanel
       generationId="gen-1"
       accessToken="token-1"
+      viewerUserId="user-1"
       details={DETAILS}
-      original={null}
+      remix={NO_REMIX}
       sourceSurface="create-video"
       published={null}
-      onPublished={onPublished}
       download={{ href: 'https://cdn.example.test/clip.mp4', fileName: 'generated-video.mp4', label: 'Download video' }}
       {...props}
-    />,
+    />
   );
-  return { ...view, onPublished };
+}
+
+function renderPanel(props: Partial<CreatorPublishPanelProps> = {}) {
+  const onPublished = vi.fn();
+  const view = render(panel({ onPublished, ...props }));
+  return {
+    ...view,
+    onPublished,
+    rerenderPanel: (next: Partial<CreatorPublishPanelProps>) => view.rerender(panel({ onPublished, ...props, ...next })),
+  };
 }
 
 function form() {
@@ -162,22 +181,29 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
     // A press before the details would publish the media alone.
     expect(publish).toBeDisabled();
 
-    view.rerender(
-      <CreatorPublishPanel
-        generationId="gen-1"
-        accessToken="token-1"
-        details={DETAILS}
-        original={null}
-        sourceSurface="create-video"
-        published={null}
-        onPublished={view.onPublished}
-        download={{ href: 'https://cdn.example.test/clip.mp4', fileName: 'generated-video.mp4', label: 'Download video' }}
-      />,
-    );
+    view.rerenderPanel({ details: DETAILS });
     expect(within(form()).getByRole('textbox', { name: 'Title' })).toHaveValue('Harbour at dusk');
     // On by default where the creation has a recipe to share (owner, 2026-10-28).
     expect(within(form()).getByRole('switch', { name: 'Share the recipe' })).toHaveAttribute('aria-checked', 'true');
     expect(publish).toBeEnabled();
+  });
+
+  // Copied into state by an effect, the recipe was off for the frame in which the details had
+  // arrived and Publish was live: a press then sent the post without it.
+  it('draws the starting recipe and title in the render the details arrive in, before any effect', () => {
+    const markup = renderToStaticMarkup(panel({ onPublished: vi.fn(), details: { ...DETAILS, title: '' } }));
+    expect(markup).toMatch(/role="switch" aria-checked="true"/);
+    expect(markup).toContain('value="Harbour at dusk, lanterns on the water"');
+  });
+
+  // Chrome's implicit submission presses Publish for Enter on a checkbox: a keyboard user
+  // ticking "Mark as mature" would post it unmarked (the composer's guard, #565).
+  it('never publishes on Enter in one of its checkboxes', () => {
+    installFetch();
+    renderPanel();
+    const mature = within(form()).getByRole('checkbox', { name: 'Mark as mature (NSFW)' });
+    expect(fireEvent.keyDown(mature, { key: 'Enter' })).toBe(false);
+    expect(fireEvent.keyDown(within(form()).getByRole('textbox', { name: 'Title' }), { key: 'Enter' })).toBe(true);
   });
 
   it('suggests a title from the prompt for an untitled creation, a free recipe or none', async () => {
@@ -193,7 +219,7 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
 
   it('starts an untitled remix from its original’s title, as the artboard has it', async () => {
     installFetch();
-    renderPanel({ details: { ...DETAILS, title: '' }, original: ORIGINAL });
+    renderPanel({ details: { ...DETAILS, title: '' }, remix: FREE_REMIX });
     expect(within(form()).getByRole('textbox', { name: 'Title' })).toHaveValue('Kung fu cats (remix)');
     expect(within(form()).getByText('Suggested from the original. Edit it if you like.')).toBeInTheDocument();
     // Not cut from the prompt, so the recipe does not swap it.
@@ -264,7 +290,7 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
 
   it('credits the original with Follow, and never promises an alert at publish', async () => {
     const fetchMock = installFetch();
-    renderPanel({ original: ORIGINAL });
+    renderPanel({ remix: FREE_REMIX });
     expect(within(form()).getByText(/Remix of “Kung fu cats” by/)).toBeInTheDocument();
     // Its creator was told when the remix finished (`notifyCompletedRemix`), not now.
     expect(within(form()).getByText('@fluffy was told when your remix finished.')).toBeInTheDocument();
@@ -352,7 +378,7 @@ describe('CreatorPublishPanel: a remix of a paid recipe', () => {
   // The creator bought it to remix it: sharing it free is their call (owner, 2026-10-29).
   it('starts with the recipe off, and lets the creator share it', async () => {
     installFetch();
-    renderPanel({ original: { ...ORIGINAL, recipe: 'paid' } });
+    renderPanel({ remix: { original: ORIGINAL, recipeStartsShared: false } });
     const recipe = within(form()).getByRole('switch', { name: 'Share the recipe' });
     expect(recipe).toHaveAttribute('aria-checked', 'false');
     fireEvent.click(recipe);
@@ -361,8 +387,99 @@ describe('CreatorPublishPanel: a remix of a paid recipe', () => {
 
   it('starts with it on for a free original', () => {
     installFetch();
-    renderPanel({ original: ORIGINAL });
+    renderPanel({ remix: FREE_REMIX });
     expect(within(form()).getByRole('switch', { name: 'Share the recipe' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  // Unread, the original could be a recipe someone sells: a press would publish it free.
+  it('waits with Publish while the original is read, the recipe off', () => {
+    installFetch();
+    const view = renderPanel({ remix: { original: null, recipeStartsShared: undefined } });
+    expect(within(form()).getByRole('switch', { name: 'Share the recipe' })).toHaveAttribute('aria-checked', 'false');
+    expect(within(form()).getByRole('button', { name: 'Publish to the feed' })).toBeDisabled();
+
+    view.rerenderPanel({ remix: FREE_REMIX });
+    expect(within(form()).getByRole('switch', { name: 'Share the recipe' })).toHaveAttribute('aria-checked', 'true');
+    expect(within(form()).getByRole('button', { name: 'Publish to the feed' })).toBeEnabled();
+  });
+});
+
+describe('useRemixOriginal', () => {
+  function postAnswer(item: Record<string, unknown>) {
+    return json({ item: { id: 'post-cats', title: 'Kung fu cats', creator: { id: 'creator-fluffy', username: 'fluffy', name: 'Fluffy', avatar: null }, ...item } });
+  }
+
+  it('lets a creation that is no remix of a post start shared, reading nothing', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useRemixOriginal(null, 'token-1', 'user-1'));
+    expect(result.current).toEqual({ original: null, recipeStartsShared: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('credits someone else’s free original and lets the recipe start shared', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => postAnswer({ asset: { accessMode: 'free' } })));
+    const { result } = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
+    expect(result.current.recipeStartsShared).toBeUndefined();
+    await waitFor(() => expect(result.current).toEqual({ original: ORIGINAL, recipeStartsShared: true }));
+  });
+
+  it('starts off for a recipe someone sells, one’s own included', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => postAnswer({ asset: { accessMode: 'paid' } })));
+    const bought = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
+    await waitFor(() => expect(bought.result.current).toEqual({ original: ORIGINAL, recipeStartsShared: false }));
+
+    const own = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'creator-fluffy'));
+    await waitFor(() => expect(own.result.current).toEqual({ original: null, recipeStartsShared: false }));
+  });
+
+  it('starts off where the original cannot be read', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'Not found' }, 404)));
+    const { result } = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
+    await waitFor(() => expect(result.current).toEqual({ original: null, recipeStartsShared: false }));
+  });
+
+  // Publish waits for this read: one that never answers must not hold it for good.
+  it('starts off where the original does not answer in time', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      })));
+      const { result } = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
+      expect(result.current.recipeStartsShared).toBeUndefined();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+      expect(result.current).toEqual({ original: null, recipeStartsShared: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('useCreationPublishDetails', () => {
+  const generationsAnswer = { generations: [{ id: 'gen-1', title: 'Harbour at dusk', paywallPrefill: DETAILS.paywallPrefill, prompt: PROMPT, model: 'seedance-2-mini', category: 'video' }] };
+
+  // Read once, a failed answer published the creation as the media alone until the token changed.
+  it('reads them again once when the first read fails, waiting meanwhile', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(json({ error: 'Busy' }, 503))
+        .mockResolvedValueOnce(json(generationsAnswer));
+      vi.stubGlobal('fetch', fetchMock);
+      const { result } = renderHook(() => useCreationPublishDetails('gen-1', 'token-1'));
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(result.current).toBeUndefined();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.current).toMatchObject({ title: 'Harbour at dusk' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -392,7 +509,7 @@ describe('CreatorPublishPanel: the phone’s Publish bar', () => {
     expect(screen.queryByTestId('creator-publish-bar')).toBeNull();
   });
 
-  it('brings the form into view when its press is refused', async () => {
+  it('brings the form into view when its press is refused, with the focus on its Publish', async () => {
     publishReply = { status: 400, body: { error: 'Something is off with this post.' } };
     installFetch();
     renderPanel();
@@ -402,14 +519,46 @@ describe('CreatorPublishPanel: the phone’s Publish bar', () => {
 
     expect(await within(form()).findByRole('alert')).toHaveTextContent('Something is off with this post.');
     expect(form().scrollIntoView).toHaveBeenCalled();
+    // The bar goes once the form's Publish is in view, and the focus with it unless it moves.
+    await waitFor(() => expect(within(form()).getByRole('button', { name: 'Publish to the feed' })).toHaveFocus());
+  });
+
+  // The column's own bar, with Generate, waits at the page's end until the creation is posted:
+  // there the Publish bar would sit over it.
+  it('gives way to the column’s bar at the page’s end', () => {
+    installFetch();
+    const columnBar = document.createElement('div');
+    columnBar.setAttribute('data-creator-bar', '');
+    document.body.appendChild(columnBar);
+    try {
+      renderPanel();
+      setSubmitInView(false);
+      expect(screen.getByTestId('creator-publish-bar')).toBeInTheDocument();
+
+      setInView(true, (target) => target === columnBar);
+      expect(screen.queryByTestId('creator-publish-bar')).toBeNull();
+      setInView(false, (target) => target === columnBar);
+      expect(screen.getByTestId('creator-publish-bar')).toBeInTheDocument();
+    } finally {
+      columnBar.remove();
+    }
   });
 });
 
 describe('CreatorPublishPanel: Posted', () => {
+  it('leads a private post to the owner’s page of it', () => {
+    installFetch();
+    renderPanel({
+      published: { title: 'Harbour at dusk', description: '', visibility: 'private', postId: 'post-new', showcasePath: null, ownerPath: '/post/post-new/edit', resourceBundleStatus: null },
+    });
+    expect(screen.getByRole('heading', { name: 'Saved as a private post' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View your post' })).toHaveAttribute('href', '/post/post-new/edit');
+  });
+
   it('says the post is live and where, with the way to it and to share it', () => {
     installFetch();
     renderPanel({
-      original: ORIGINAL,
+      remix: FREE_REMIX,
       published: { title: 'Harbour at dusk', description: '', visibility: 'public', postId: 'post-new', showcasePath: '/showcase/gen-1', resourceBundleStatus: 'published' },
       next: <span>6 credits left</span>,
     });

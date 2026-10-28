@@ -576,8 +576,11 @@ export async function publishGenerationToShowcaseForRoute({
   let effectiveHasResourceBundlePayload = hasRequestedResourceBundlePayload;
   // Whose each input is, where the recipe leaves the creator's own out: a remix hands every
   // input of a recipe whose switch is on to whoever opens it, so with any of their own among
-  // them the switch goes off, whatever the request said.
-  const inputOrigins = requestBody.leaveOutOwnGenerationReferences === true && requestedAccessMode !== 'none'
+  // them the switch goes off, whatever the request said. It decides only what is copied and
+  // that switch, so a recipe with neither is not read for it.
+  const inputOrigins = requestBody.leaveOutOwnGenerationReferences === true
+    && requestedAccessMode !== 'none'
+    && (shouldIncludeGenerationReferences || effectiveResourceBundle?.resources?.allowRemix === true)
     ? await resolvedDependencies.loadGenerationInputOrigins({ supabase: adminSupabase, ownerUserId: userId, generationId })
     : null;
   if (inputOrigins?.hasOwn && effectiveResourceBundle?.resources?.allowRemix) {

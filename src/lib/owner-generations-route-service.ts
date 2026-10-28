@@ -10,7 +10,7 @@ import {
   type GenerationInputMediaItem,
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { generationInputOrigin, loadSourceGenerationOwners } from '@/lib/generation-input-origin';
+import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner } from '@/lib/generation-input-origin';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { getAudioGenerationKind, isAudioModel } from '@/lib/models';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus, type VisualMediaDescriptor } from '@/lib/media-descriptor';
@@ -676,11 +676,15 @@ export async function listOwnerGenerationsForRoute({
 
   // Whose each input is (`generationInputOrigin`): the recipe's prefill counts the creator's
   // own, which the creators' recipe leaves out unless they add them. One read for the page's
-  // source generations; a legacy reading's own are asked for where it names others.
+  // source generations whose owner decides it (none where the inputs' paths say); a legacy
+  // reading's own are asked for where it names others.
   const ownerIdSet = new Set(ownerUserIds);
   const pageSourceGenerationOwners = summaryOnly
     ? new Map<string, string | null>()
-    : await loadSourceGenerationOwners(adminSupabase, [...inputMediaMap.values()].flat().map((item) => item.sourceGenerationId));
+    : await loadSourceGenerationOwners(
+      adminSupabase,
+      [...inputMediaMap.values()].flat().filter(needsSourceGenerationOwner).map((item) => item.sourceGenerationId),
+    );
 
   const generationsWithUrls = await Promise.all(generations.map(async (generation) => {
     const template = templateMetadata.get(generation.id) ?? null;
@@ -700,6 +704,7 @@ export async function listOwnerGenerationsForRoute({
           workflowSettings: workflowSettings ?? {},
         });
     const unreadSourceIds = inputMedia
+      .filter(needsSourceGenerationOwner)
       .map((item) => item.sourceGenerationId)
       .filter((id): id is string => Boolean(id) && !pageSourceGenerationOwners.has(id!));
     const sourceGenerationOwners = unreadSourceIds.length > 0

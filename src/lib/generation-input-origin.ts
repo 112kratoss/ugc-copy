@@ -42,16 +42,24 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+/** Where an input says it came from: a stored row's own path is always the creator's copy, so its source; a legacy reading's path. */
+function sourcePaths(input: GenerationInputOriginSource): Array<string | null> {
+  const metadata = input.metadata ?? {};
+  return metadata.legacy === true
+    ? [text(input.storagePath)]
+    : [text(metadata.sourceStoragePath), text(metadata.sourceUrl)];
+}
+
+/** Whose an input is rests on its source generation's owner: it names one, and no source path names an owner. */
+export function needsSourceGenerationOwner(input: GenerationInputOriginSource): boolean {
+  return Boolean(input.sourceGenerationId) && sourcePaths(input).every((path) => !storedMediaOwnerId(path));
+}
+
 export function generationInputOrigin(
   input: GenerationInputOriginSource,
   context: GenerationInputOriginContext,
 ): GenerationInputOrigin {
-  const metadata = input.metadata ?? {};
-  // A stored row's own path is always the creator's copy; its source says where it came from.
-  const sourcePaths = metadata.legacy === true
-    ? [text(input.storagePath)]
-    : [text(metadata.sourceStoragePath), text(metadata.sourceUrl)];
-  for (const path of sourcePaths) {
+  for (const path of sourcePaths(input)) {
     const owner = storedMediaOwnerId(path);
     if (owner) return context.ownerIds.has(owner) ? 'own' : 'others';
   }

@@ -133,6 +133,13 @@ describe('the title once a paid recipe is put on or taken off', () => {
   it('turns a kind title into the plain one when a prompt gives no title', () => {
     expect(followTitleForPromptPrivacy('Image recipe', { ...creation, prompt: null }, true, false)).toBe('AI image');
   });
+
+  // Free recipes were titled "Image recipe" before 2026-10-29, when any recipe kept the prompt
+  // private: taking such a recipe off, or changing it, gives the prompt's title back as before.
+  it('gives a free recipe’s kind title back to the prompt when the recipe changes', () => {
+    expect(followTitleForPromptPrivacy('Image recipe', creation, false, false)).toBe(fromPrompt);
+    expect(followTitleForPromptPrivacy('Image recipe', creation, true, true)).toBe('Image recipe');
+  });
 });
 
 // A remix's post starts from its original's title, marked as a remix (the mock-up's Result:
@@ -147,6 +154,11 @@ describe('the title suggested for a remix', () => {
     const title = suggestRemixPostTitle('A paper boat drifting slowly across a sunlit pond in the early morning light');
     expect(title).toBe('A paper boat drifting slowly across a sunlit pond (remix)');
     expect(title.length).toBeLessThanOrEqual(60);
+  });
+
+  it('never ends the cut on a joining word, a comma after it included', () => {
+    expect(suggestRemixPostTitle('Cats in a dojo at night with lanterns and, of course, a giant gong'))
+      .toBe('Cats in a dojo at night with lanterns (remix)');
   });
 
   it('suggests none from a placeholder or an empty title, nor a second mark', () => {

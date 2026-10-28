@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { generationInputOrigin, loadSourceGenerationOwners, storedMediaOwnerId } from '@/lib/generation-input-origin';
+import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner, storedMediaOwnerId } from '@/lib/generation-input-origin';
 
 const CREATOR = '11111111-1111-4111-8111-111111111111';
 const GUEST = '22222222-2222-4222-8222-222222222222';
@@ -17,6 +17,16 @@ const context = {
 // The creators' recipe, shared by default, leaves the creator's own uploads out (owner,
 // 2026-10-29), so each input is read for whose it is.
 describe('generationInputOrigin', () => {
+  // A source generation's owner is read only where nothing else says whose an input is.
+  it('needs the source generation’s owner only where no source path names one', () => {
+    expect(needsSourceGenerationOwner({
+      sourceGenerationId: 'gen-original',
+      metadata: { sourceStoragePath: `generation_inputs/${ORIGINAL}/gen-original/00.png` },
+    })).toBe(false);
+    expect(needsSourceGenerationOwner({ sourceGenerationId: 'gen-original', metadata: {} })).toBe(true);
+    expect(needsSourceGenerationOwner({ metadata: {} })).toBe(false);
+  });
+
   it('reads a remix’s reference as the original’s by the original’s storage it was kept from', () => {
     expect(generationInputOrigin({
       storagePath: `generation_inputs/${CREATOR}/gen-remix/00-reference_image.png`,

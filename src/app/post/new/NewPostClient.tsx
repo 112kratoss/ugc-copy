@@ -30,6 +30,7 @@ import PublicIdentityFields from '@/components/PublicIdentityFields';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import { useConfirmation } from '@/components/useConfirmation';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
+import { isGenerationPaywallPrefill } from '@/lib/creation-publish-details';
 import {
   assessMarketplaceListingQuality,
   getPublicPostQualityError,
@@ -71,7 +72,6 @@ import {
   type PostResourceAttachment,
   type PostResourceBundleInput,
   type PostResourceBundleAccessMode,
-  type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import {
   POST_RESOURCE_WEB_CASH_MIN_TOKENS,
@@ -438,18 +438,6 @@ const MEDIA_CARD_STEP = 124;
 const MEDIA_DRAG_HOLD_MS = 300;
 const MEDIA_DRAG_SLOP = 8;
 
-const RESOURCE_KIND_OPTIONS: Array<{
-  value: PostResourceKind;
-  label: string;
-  description: string;
-}> = [
-  { value: 'prompt', label: 'Prompt', description: 'The exact prompt or prompt pack.' },
-  { value: 'workflow', label: 'Workflow / setup', description: 'A workflow link, file link, or build path.' },
-  { value: 'files', label: 'Files / links', description: 'Reference files, docs, presets, or source links.' },
-  { value: 'notes', label: 'Notes', description: 'Usage notes, steps, or instructions.' },
-  { value: 'remix', label: 'Remix access', description: 'Require recipe access before someone can remix.' },
-];
-
 /**
  * A bundle written before structured items existed carries its content only in
  * the flat `promptText` / `notesMarkdown` / `workflowShareUrl` / `attachments`
@@ -659,28 +647,6 @@ function getInitialProofMode(initialPost: EditablePostDraft | null | undefined):
   }
 
   return initialPost.postFormat === 'text' && !initialPost.mediaUrl ? 'text' : 'media';
-}
-
-function isGenerationPaywallPrefill(value: unknown): value is GenerationPaywallPrefill {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-
-  const typedValue = value as Partial<GenerationPaywallPrefill>;
-  if (!Array.isArray(typedValue.resourceKinds)) {
-    return false;
-  }
-
-  const validKinds = new Set<PostResourceKind>(RESOURCE_KIND_OPTIONS.map((option) => option.value));
-  if (!typedValue.resourceKinds.every((kind) => validKinds.has(kind))) {
-    return false;
-  }
-
-  return (
-    (typeof typedValue.promptText === 'string' || typedValue.promptText === null || typedValue.promptText === undefined) &&
-    (typeof typedValue.notesMarkdown === 'string' || typedValue.notesMarkdown === null || typedValue.notesMarkdown === undefined) &&
-    typeof typedValue.allowRemix === 'boolean'
-  );
 }
 
 function hasUsableGenerationPaywallPrefill(prefill: GenerationPaywallPrefill | null | undefined): boolean {
@@ -1421,7 +1387,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
               category: nextGeneration.category,
               creationMode: nextGeneration.creationMode,
             },
-            resourceAccessModeRef.current !== 'none',
+            // A paid recipe keeps the prompt out of the title; a free one does not (owner, 2026-10-29).
+            recipeKeepsPromptPrivate(resourceAccessModeRef.current),
           )?.title ?? '';
         setTitle((current) => current || prefillTitle);
         setSavedSnapshot((saved) => ({

@@ -7,7 +7,8 @@ import { expect, test, type BrowserContext, type Page, type Request } from '@pla
  *   and its recipe, shared by default; a first post saves the name and handle it shows, and Posted
  *   takes the form's place;
  * - on a phone a bar holds Publish at the window's foot while the form's own is out of view,
- *   and sends the same post;
+ *   and sends the same post, and gives way to the column's bar, Generate's, at the page's end;
+ * - Generate waits while a publish is sent: a new run would take the form away mid-request;
  * - a remix credits its original with Follow, and never promises an alert at publish.
  *
  * Offline the quotes, the start, the run's status, the creation's details, the profile, the
@@ -93,6 +94,8 @@ type Answers = {
   /** A first post: the profile still has the signup handle and no name. */
   firstPost?: boolean;
   creationTitle?: string;
+  /** The balance the run leaves: 6 by default, short of another 19-credit run. */
+  balanceAfterRun?: number;
   publishes: Request[];
   profileSaves: Request[];
 };
@@ -121,7 +124,7 @@ async function answerApi(page: Page, answers: Answers) {
         predictionId: 'pred-e2e',
         generationId: 'gen-e2e',
         status: 'processing',
-        remainingCredits: 6,
+        remainingCredits: answers.balanceAfterRun ?? 6,
         cost: 19,
         catalogRevision: 'e2e',
         modelId: 'seedance-2-mini',
@@ -145,9 +148,10 @@ async function answerApi(page: Page, answers: Answers) {
     await route.fulfill({ json: { status: 'succeeded', output: 'https://cdn.example.test/boat.mp4', timing: null } });
   });
   await page.route('https://cdn.example.test/**', (route) => route.fulfill({ status: 404, body: '' }));
+  const credits = answers.balanceAfterRun ?? 6;
   let profile = answers.firstPost
-    ? { id: 'workflow-user', username: 'creator-a1b2c3d4', displayName: null, avatarUrl: null, credits: 6 }
-    : { id: 'workflow-user', username: 'paper-maker', displayName: 'Paper Maker', avatarUrl: null, credits: 6 };
+    ? { id: 'workflow-user', username: 'creator-a1b2c3d4', displayName: null, avatarUrl: null, credits }
+    : { id: 'workflow-user', username: 'paper-maker', displayName: 'Paper Maker', avatarUrl: null, credits };
   await page.route('**/api/profile', async (route) => {
     if (route.request().method() === 'PATCH') {
       answers.profileSaves.push(route.request());
@@ -250,6 +254,57 @@ test('on a phone a bar holds Publish while the form’s own is out of view, and 
   await expect(bar).toHaveCount(0);
   expect(answers.publishes).toHaveLength(1);
   expect(answers.publishes[0].postDataJSON()).toMatchObject({ title: 'Paper boat at dawn', resourceBundle: { accessMode: 'free' } });
+});
+
+// The column's own bar, with Generate, waits at the page's end until the creation is posted
+// (the artboard Result at 390): the Publish bar, fixed at the window's foot, would sit over it.
+test('on a phone the bar gives way to the column’s bar at the page’s end, leaving it uncovered', async ({ page, context }) => {
+  await page.setViewportSize(PHONE);
+  await signIn(context);
+  const answers: Answers = { publishes: [], profileSaves: [] };
+  await answerApi(page, answers);
+  await runToDone(page);
+
+  const bar = page.getByTestId('creator-publish-bar');
+  await expect(bar).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const columnBar = page.locator('[data-creator-bar]');
+  await expect(columnBar).toBeInViewport({ ratio: 1 });
+  await expect(bar).toHaveCount(0);
+  // Nothing lies over the column's bar: the point at its middle is its own.
+  const uncovered = await columnBar.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return element.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+  });
+  expect(uncovered).toBe(true);
+});
+
+test('Generate waits while a publish is sent, and is back once it is posted', async ({ page, context }) => {
+  await signIn(context);
+  const answers: Answers = { balanceAfterRun: 25, publishes: [], profileSaves: [] };
+  await answerApi(page, answers);
+  let answerPublish = () => {};
+  const publishHeld = new Promise<void>((resolve) => {
+    answerPublish = resolve;
+  });
+  await page.route('**/api/showcase/publish', async (route) => {
+    answers.publishes.push(route.request());
+    await publishHeld;
+    await route.fulfill({
+      json: { success: true, visibility: 'public', postId: 'post-new', showcasePath: '/showcase/gen-e2e', resourceBundleStatus: 'published' },
+    });
+  });
+  await runToDone(page);
+
+  const generate = page.getByRole('button', { name: 'Generate · 19 credits' });
+  await expect(generate).toBeEnabled();
+  await publishForm(page).getByRole('button', { name: 'Publish to the feed' }).click();
+  await expect.poll(() => answers.publishes.length).toBe(1);
+  await expect(generate).toBeDisabled();
+
+  answerPublish();
+  await expect(canvas(page).getByRole('heading', { name: 'Posted to the feed' })).toBeVisible();
+  await expect(generate).toBeEnabled();
 });
 
 test('a remix credits its original with Follow, and says the alert went when the remix finished', async ({ page, context }) => {

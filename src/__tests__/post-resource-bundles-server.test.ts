@@ -1603,12 +1603,17 @@ describe('loadGenerationInputOrigins', () => {
     rows,
     rowsError = null,
     linkedGuestIds = [],
+    linkedError = null,
     sourceOwners = [],
+    generationError = null,
   }: {
     rows: Array<{ id: string; metadata: Record<string, unknown> | null; storage_path: string; source_generation_id: string | null }>;
     rowsError?: unknown;
     linkedGuestIds?: string[];
+    linkedError?: unknown;
     sourceOwners?: Array<{ id: string; user_id: string | null }>;
+    /** The legacy reading's read of the creation itself, made where no rows were kept. */
+    generationError?: unknown;
   }) {
     const client = {
       from(table: string) {
@@ -1619,14 +1624,19 @@ describe('loadGenerationInputOrigins', () => {
           return {
             select: () => ({
               eq: async (column: string, value: string) => ({
-                data: column === 'merged_into_user_id' && value === 'user-1' ? linkedGuestIds.map((id) => ({ id })) : [],
-                error: null,
+                data: linkedError ? null : column === 'merged_into_user_id' && value === 'user-1' ? linkedGuestIds.map((id) => ({ id })) : [],
+                error: linkedError,
               }),
             }),
           };
         }
         if (table === 'generations') {
-          return { select: () => ({ in: async () => ({ data: sourceOwners, error: null }) }) };
+          return {
+            select: () => ({
+              in: async () => ({ data: sourceOwners, error: null }),
+              eq: () => ({ maybeSingle: async () => ({ data: null, error: generationError }) }),
+            }),
+          };
         }
         throw new Error(`Unexpected table access: ${table}`);
       },
@@ -1669,6 +1679,36 @@ describe('loadGenerationInputOrigins', () => {
     });
 
     expect(origins.byRowId.size).toBe(0);
+    expect(origins.hasOwn).toBe(true);
+  });
+
+  // A guest's uploads sit in the guest's folder: unread, the guest is not known to be the
+  // creator, and their uploads would count as the original's and go out with the recipe.
+  it('counts no input as another’s when who is linked to the creator cannot be read', async () => {
+    const { loadGenerationInputOrigins } = await import('@/lib/post-resource-bundles-server');
+    const origins = await loadGenerationInputOrigins({
+      supabase: originsClient({
+        rows: [
+          { id: 'row-guest', storage_path: 'generation_inputs/user-1/gen-1/02.png', source_generation_id: null, metadata: { sourceStoragePath: 'uploads/guest-1/draft/hand.png' } },
+        ],
+        linkedError: { message: 'timeout' },
+      }),
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
+    expect([...origins.byRowId.values()]).not.toContain('others');
+    expect(origins.hasOwn).toBe(true);
+  });
+
+  it('counts every input as the creator’s own when a creation without rows cannot be read', async () => {
+    const { loadGenerationInputOrigins } = await import('@/lib/post-resource-bundles-server');
+    const origins = await loadGenerationInputOrigins({
+      supabase: originsClient({ rows: [], generationError: { message: 'timeout' } }),
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
     expect(origins.hasOwn).toBe(true);
   });
 });

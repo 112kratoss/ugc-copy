@@ -83,8 +83,8 @@ import {
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
-import { resolveLinkedAccountIds } from '@/lib/account-identity';
-import { generationInputOrigin, loadSourceGenerationOwners, type GenerationInputOrigin } from '@/lib/generation-input-origin';
+import { readLinkedAccountIds, resolveLinkedAccountIds } from '@/lib/account-identity';
+import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner, type GenerationInputOrigin } from '@/lib/generation-input-origin';
 import { loadPostMediaItemsMap, type PostMediaPersistInput } from '@/lib/post-media';
 import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
 import {
@@ -610,14 +610,17 @@ export async function loadGenerationInputOrigins(params: {
   ownerUserId: string;
   generationId: string;
 }): Promise<GenerationInputOrigins> {
+  // Unknown, so every input is the creator's: none is shared, and none is handed to a remix.
+  const unknown: GenerationInputOrigins = { byRowId: new Map(), hasOwn: true };
+  // Read alongside the rows: it depends only on the creator. It never rejects.
+  const linkedAccountIdsRead = readLinkedAccountIds(params.supabase, params.ownerUserId);
   const { data, error } = await params.supabase
     .from('generation_input_media')
     .select('id, metadata, storage_path, source_generation_id')
     .eq('generation_id', params.generationId);
   if (error) {
     logBackendError('post_resource_generation_input_origins_load_failed', { error });
-    // Unknown, so every input is the creator's: none is shared, and none is handed to a remix.
-    return { byRowId: new Map(), hasOwn: true };
+    return unknown;
   }
   let inputs: Array<{ id: string; metadata: Record<string, unknown> | null; storagePath: string | null; sourceGenerationId: string | null }> =
     ((data ?? []) as Array<Pick<GenerationInputMediaRow, 'id' | 'metadata' | 'storage_path' | 'source_generation_id'>>).map((row) => ({
@@ -627,11 +630,15 @@ export async function loadGenerationInputOrigins(params: {
       sourceGenerationId: row.source_generation_id,
     }));
   if (inputs.length === 0) {
-    const { data: generation } = await params.supabase
+    const { data: generation, error: generationError } = await params.supabase
       .from('generations')
       .select('id, user_id, category, workflow_settings')
       .eq('id', params.generationId)
       .maybeSingle();
+    if (generationError) {
+      logBackendError('post_resource_generation_input_origins_load_failed', { error: generationError });
+      return unknown;
+    }
     const row = generation as { id: string; user_id: string | null; category: string | null; workflow_settings: unknown } | null;
     if (row) {
       const legacy = await buildLegacyGenerationInputMedia({
@@ -646,9 +653,15 @@ export async function loadGenerationInputOrigins(params: {
     }
   }
   const [ownerIds, sourceGenerationOwners] = await Promise.all([
-    resolveLinkedAccountIds(params.supabase, params.ownerUserId),
-    loadSourceGenerationOwners(params.supabase, inputs.map((input) => input.sourceGenerationId)),
+    linkedAccountIdsRead,
+    loadSourceGenerationOwners(params.supabase, inputs.filter(needsSourceGenerationOwner).map((input) => input.sourceGenerationId)),
   ]);
+  if (!ownerIds) {
+    // A guest's uploads sit in the guest's folder: unread, who is linked to the creator could
+    // make them read as another's, shared with the recipe.
+    logBackendError('post_resource_generation_input_origins_linked_accounts_failed');
+    return unknown;
+  }
   const context = { ownerIds: new Set(ownerIds), sourceGenerationOwners };
   const byRowId = new Map(inputs.map((input) => [input.id, generationInputOrigin(input, context)] as const));
   return { byRowId, hasOwn: [...byRowId.values()].includes('own') };

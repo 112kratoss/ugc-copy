@@ -78,8 +78,7 @@ import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
-import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreationPublishDetails, useRemixOriginal } from '@/components/CreatorPublish';
-import type { PublishedCreation } from '@/components/usePublishCreation';
+import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
 import { creatorCanvasPhase, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
@@ -378,10 +377,6 @@ export default function CreateImageClient({
     const [outputImage, setOutputImage] = useState<string | null>(null);
     const [outputImages, setOutputImages] = useState<string[]>([]);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
-    // What a publish from the canvas answered, for the creation it published: Posted is drawn from it.
-    const [published, setPublished] = useState<{ generationId: string; post: PublishedCreation } | null>(null);
-    // The creation's title and recipe, read once its run is done, for the publish form.
-    const publishDetails = useCreationPublishDetails(outputImage ? latestGenerationId : null, session?.access_token);
     const [error, setError] = useState<string | null>(null);
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     // Watches for a newer deploy only while nothing is in flight; a press then
@@ -429,8 +424,15 @@ export default function CreateImageClient({
     // Remix State
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
-    // The post a remix came from, credited in the publish form with Follow (owner, 2026-10-28).
-    const remixOriginal = useRemixOriginal(remixPostId, session?.access_token, userId);
+    // Publishing on the canvas: the form's details, the remix's original (credited with Follow,
+    // owner 2026-10-28), Posted, and a publish in flight, which Generate waits for.
+    const canvasPublish = useCreatorPublish({
+        generationId: latestGenerationId,
+        done: Boolean(outputImage),
+        accessToken: session?.access_token,
+        remixPostId,
+        viewerUserId: userId,
+    });
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const prefillAspectRatio = prefill.aspectRatio ?? null;
@@ -1569,6 +1571,8 @@ export default function CreateImageClient({
 
     const handleGenerate = async () => {
         if (activeGenerationRequestKeyRef.current) return;
+        // A new run takes the publish form away: a publish in flight is let finish first.
+        if (canvasPublish.inFlight) return;
         const submitted = prompt.trim();
         if (!submitted) { setError('Please enter a prompt'); return; }
         if (staleElementMentions.length > 0) {
@@ -1799,7 +1803,7 @@ export default function CreateImageClient({
             }}
             showTopUp={showTopUp}
             isGenerating={isGenerating}
-            disabled={generateBlocked}
+            disabled={generateBlocked || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
             hasPrice={currentCost !== null}
             onGenerate={handleGenerate}
@@ -1892,17 +1896,11 @@ export default function CreateImageClient({
         fileName: `generated-image.${getImageFileExtension(outputImage)}`,
         label: 'Download image',
     } : null;
-    const postedHere = published && published.generationId === latestGenerationId ? published.post : null;
-    const publishPanel = outputImage && imageDownload && latestGenerationId ? (
+    const publishPanel = canvasPublish.panel && imageDownload ? (
         <CreatorPublishPanel
-            key={latestGenerationId}
-            generationId={latestGenerationId}
-            accessToken={session?.access_token}
-            details={publishDetails}
-            original={remixOriginal}
+            key={canvasPublish.panel.generationId}
+            {...canvasPublish.panel}
             sourceSurface="create-image"
-            published={postedHere}
-            onPublished={(post) => setPublished({ generationId: latestGenerationId, post })}
             download={imageDownload}
             next={userCredits !== null ? (
                 <CreatorPostedNext
@@ -2206,7 +2204,7 @@ export default function CreateImageClient({
                         )}
 
                         <CreatorColumnBar
-                            holdsFootUnderColumn={!(publishPanel && !postedHere)}
+                            holdsFootUnderColumn={!(publishPanel && !canvasPublish.posted)}
                             settingsSummary={settingsSummary}
                             settings={settingsPanel}
                             settingsFootNote={<CreatorSettingsFootNote cost={currentCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
@@ -2229,7 +2227,6 @@ export default function CreateImageClient({
                         chip={canvasChip}
                         revealKey={canvasRevealKey}
                         focusKey={runEndKey}
-                        tall={Boolean(outputImage)}
                         flow={canvasPhase !== 'failed' && canvasPhase !== 'background'}
                         showStudioLink={!isVisitor}
                     >

@@ -227,13 +227,30 @@ export async function resolveLinkedAccountIds(
   admin: SupabaseClient,
   userId: string,
 ): Promise<string[]> {
+  // Degrades, rather than propagating, on purpose. This sits inside read paths
+  // that already work — the library list, status polling, archive, delete — so
+  // a failure here must degrade to the pre-guest behaviour rather than take
+  // those endpoints down with it. Hiding linked history is recoverable on the
+  // next request; a 500 on someone's library is not.
+  return (await readLinkedAccountIds(admin, userId)) ?? [userId];
+}
+
+/**
+ * The same set, or null when it could not be read: for a caller to whom "only
+ * the account's own id" is not the safe direction, as where a row outside it
+ * counts as someone else's and is shared (`loadGenerationInputOrigins`).
+ */
+export async function readLinkedAccountIds(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<string[] | null> {
   try {
     const { data, error } = await admin
       .from('profiles')
       .select('id')
       .eq('merged_into_user_id', userId);
 
-    if (error || !Array.isArray(data)) return [userId];
+    if (error || !Array.isArray(data)) return null;
 
     const linked = (data as Array<{ id: string }>)
       .map((row) => row?.id)
@@ -241,12 +258,7 @@ export async function resolveLinkedAccountIds(
 
     return [userId, ...linked];
   } catch {
-    // Catches, rather than propagating, on purpose. This sits inside read paths
-    // that already work — the library list, status polling, archive, delete — so
-    // a failure here must degrade to the pre-guest behaviour rather than take
-    // those endpoints down with it. Hiding linked history is recoverable on the
-    // next request; a 500 on someone's library is not.
-    return [userId];
+    return null;
   }
 }
 

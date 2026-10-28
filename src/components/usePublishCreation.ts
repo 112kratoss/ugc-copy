@@ -6,7 +6,6 @@ import { useAuth } from '@/components/AuthProvider';
 import { sharePublicGeneration } from '@/lib/share-client';
 import type { GenerationShareSourceSurface } from '@/lib/share';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 import {
   followCreationTitleSuggestion,
   getCreationPostTitleSuggestion,
@@ -58,7 +57,7 @@ export type PublishedCreation = {
 
 const RESOURCE_KIND_ORDER: PostResourceKind[] = ['prompt', 'workflow', 'files', 'notes', 'remix'];
 
-export const DEFAULT_RECIPE_PRICE_TOKENS = 900;
+const DEFAULT_RECIPE_PRICE_TOKENS = 900;
 
 function normalizeOptionalText(value: string): string | undefined {
   const trimmed = value.trim();
@@ -76,15 +75,6 @@ function getDefaultPublishDescription(defaultDescription: string): string {
 }
 
 /**
- * A creation's own title can be longer than a post's, and the field's
- * maxLength does not trim a value it is handed; the server would refuse the
- * publish. The composers trim a prefilled title the same way.
- */
-function getDefaultPublishTitle(defaultTitle: string): string {
-  return defaultTitle.slice(0, TITLE_MAX_LENGTH);
-}
-
-/**
  * Prices are credit counts. `price_usd_cents` stores the count directly -- at
  * the fixed 100 credits to $1 the two numbers are the same.
  */
@@ -93,7 +83,7 @@ function parsePriceTokens(value: string): number | null {
   return Number.isFinite(normalized) ? normalized : null;
 }
 
-export function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined): PostResourceKind[] {
+function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined): PostResourceKind[] {
   if (!prefill) {
     return [];
   }
@@ -241,15 +231,13 @@ export function usePublishCreation({
   onFinished,
 }: UsePublishCreationOptions) {
   const [isNsfw, setIsNsfw] = useState(false);
-  const [publishTitle, setPublishTitle] = useState(() => getDefaultPublishTitle(defaultTitle));
-  // Set once the creator types a title: a suggestion is never put over theirs.
-  const titleTouchedRef = useRef(false);
+  // What the creator typed; null until they do, while the title is the starting one below.
+  const [titleEdit, setTitleEdit] = useState<string | null>(null);
   const [publishDescription, setPublishDescription] = useState(() =>
     getDefaultPublishDescription(defaultDescription)
   );
-  const [recipeAccess, setRecipeAccessState] = useState<PostResourceBundleAccessMode>('none');
-  // Set once the creator picks a recipe themselves: a late prefill never moves theirs.
-  const recipeTouchedRef = useRef(false);
+  // The recipe the creator picked; null until they do, while it is the starting one below.
+  const [recipeChoice, setRecipeChoice] = useState<PostResourceBundleAccessMode | null>(null);
   const [priceTokens, setPriceTokensState] = useState(String(DEFAULT_RECIPE_PRICE_TOKENS));
   const [publishingVisibility, setPublishingVisibility] = useState<PostVisibility | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -262,6 +250,7 @@ export function usePublishCreation({
   const [identityEdits, setIdentityEdits] = useState<PublicIdentityDraft | null>(null);
   const [identityErrors, setIdentityErrors] = useState<PublicIdentityErrors>({});
   const identity = identityEdits ?? getInitialPublicIdentity(profile, user);
+  // Set by `publish` alone, for as long as its request runs: a second press is refused.
   const isPublishingRef = useRef(false);
   const [addsOwnUploads, setAddsOwnUploadsState] = useState(false);
   const allReferenceCount = Math.max(0, Math.round(paywallPrefill?.referenceCount ?? 0));
@@ -270,31 +259,37 @@ export function usePublishCreation({
     ? Math.min(allReferenceCount, Math.max(0, Math.round(paywallPrefill?.ownReferenceCount ?? allReferenceCount)))
     : 0;
   const sharesOwnUploads = !leavesOwnUploadsOut || addsOwnUploads;
-  // What the recipe holds as it stands: without the creator's own uploads, and then, with any
-  // of them in the creation, without the remix's hand-over, which would give them all away.
-  const sharedPrefill = paywallPrefill && !sharesOwnUploads ? withoutOwnUploads(paywallPrefill, ownUploadCount) : paywallPrefill;
+  // The recipe without the creator's own uploads, and then, with any of them in the creation,
+  // without the remix's hand-over, which would give them all away.
+  const prefillWithoutOwn = paywallPrefill && leavesOwnUploadsOut ? withoutOwnUploads(paywallPrefill, ownUploadCount) : paywallPrefill;
+  // What the recipe holds as it stands.
+  const sharedPrefill = sharesOwnUploads ? paywallPrefill : prefillWithoutOwn;
   const autoUnlockKinds = getAutoUnlockKinds(sharedPrefill);
   // The switch is offered where anything could go, the creator's own uploads included.
   const hasAutoUnlock = showPaidShortcut && Boolean(paywallPrefill) && getAutoUnlockKinds(paywallPrefill).length > 0;
   const generationReferenceCount = Math.max(0, Math.round(sharedPrefill?.referenceCount ?? 0));
   const hasGenerationReferences = generationReferenceCount > 0;
   const otherReferenceCount = allReferenceCount - ownUploadCount;
+  // A recipe starts on only where it holds something without the creator's own uploads.
+  const startingRecipeAccess: PostResourceBundleAccessMode = hasAutoUnlock && getAutoUnlockKinds(prefillWithoutOwn).length > 0
+    ? startingRecipe
+    : 'none';
+  // The creation's details and the original's answer can arrive after the draft started (the
+  // creators read them once a run is done), so the recipe and the title are derived, not copied
+  // into state: the switch, the title and a press agree in every render.
+  const recipeAccess = recipeChoice ?? startingRecipeAccess;
   // A paid recipe keeps the prompt out of the title; a free one does not (owner, 2026-10-29).
   const promptPrivate = recipeKeepsPromptPrivate(recipeAccess);
-  // A creation's details can arrive after the draft started (the creators read them once a
-  // run is done), so the suggestion is derived, not set once.
   const titleSuggestion = getCreationPostTitleSuggestion(defaultTitle, creation, promptPrivate, remixOfTitle);
-  const suggestedTitle = titleSuggestion && titleSuggestion.source !== 'creation' ? titleSuggestion.title : null;
+  // What an untouched title shows: the creation's own, a title cut from its prompt swapped as
+  // the recipe asks, else the suggestion.
+  const startingTitle = !titleSuggestion
+    ? ''
+    : titleSuggestion.source === 'creation'
+      ? followCreationTitleSuggestion({ title: titleSuggestion.title, source: creation, wasPrivate: false, isPrivate: promptPrivate })
+      : titleSuggestion.title;
+  const publishTitle = titleEdit ?? startingTitle;
   const titleSuggestionHint = getCreationTitleSuggestionHint(publishTitle, titleSuggestion, promptPrivate);
-  // What an untouched title shows: the creation's own (as a paid recipe allows it), else the suggestion.
-  const ownTitle = getDefaultPublishTitle(defaultTitle);
-  const startingTitle = ownTitle.trim()
-    ? promptPrivate
-      ? followCreationTitleSuggestion({ title: ownTitle, source: creation, wasPrivate: false, isPrivate: true })
-      : ownTitle
-    : suggestedTitle
-      ? getDefaultPublishTitle(suggestedTitle)
-      : '';
   const parsedPriceTokens = parsePriceTokens(priceTokens);
   const isPublishing = publishingVisibility !== null;
   const profileReadiness = getCreatorProfileReadiness(profile);
@@ -305,16 +300,6 @@ export function usePublishCreation({
   // Asked beside the buttons when the profile cannot publish publicly yet, or
   // when the server said so although the check had failed.
   const needsPublicIdentity = needsProfileRepair || (profileLoadState === 'ready' && !isProfileReadyForPublish);
-  // A recipe starts on only where it holds something without the creator's own uploads.
-  const startingRecipeAccess: PostResourceBundleAccessMode = hasAutoUnlock && getAutoUnlockKinds(
-    leavesOwnUploadsOut && paywallPrefill ? withoutOwnUploads(paywallPrefill, ownUploadCount) : paywallPrefill,
-  ).length > 0
-    ? startingRecipe
-    : 'none';
-
-  useEffect(() => {
-    isPublishingRef.current = isPublishing;
-  }, [isPublishing]);
 
   useEffect(() => {
     if (!active) {
@@ -322,13 +307,11 @@ export function usePublishCreation({
     }
 
     // Opening a generation starts a fresh publish draft from its supplied
-    // defaults; the effects below fill an untitled one and set its recipe.
+    // defaults: the title and the recipe go back to the starting ones.
     setIsNsfw(false);
-    setPublishTitle(getDefaultPublishTitle(defaultTitle));
-    titleTouchedRef.current = false;
+    setTitleEdit(null);
     setPublishDescription(getDefaultPublishDescription(defaultDescription));
-    setRecipeAccessState(startingRecipeAccess);
-    recipeTouchedRef.current = false;
+    setRecipeChoice(null);
     setPriceTokensState(String(DEFAULT_RECIPE_PRICE_TOKENS));
     setPublishingVisibility(null);
     setFormError(null);
@@ -336,38 +319,16 @@ export function usePublishCreation({
     setIdentityErrors({});
     setIdentityEdits(null);
     setAddsOwnUploadsState(false);
-    // The creation's details join the draft through the effects below, so their arrival
-    // starts nothing over: only another creation, or opening again, does.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultDescription, generationId, active]);
 
-  // The recipe a fresh draft starts with, once the creation is known to have one to offer.
-  // A suggested title nobody edited follows it, as it follows the creator's own switch.
+  // The profile is the account's: read when the draft opens and for another account, not
+  // again for each renewed token, which would put "Checking your profile…" back every hour.
+  const accessTokenRef = useRef(accessToken);
   useEffect(() => {
-    if (!active || recipeTouchedRef.current || recipeAccess === startingRecipeAccess) {
-      return;
-    }
-    setPublishTitle((title) => (titleTouchedRef.current ? title : followCreationTitleSuggestion({
-      title,
-      source: creation,
-      wasPrivate: recipeKeepsPromptPrivate(recipeAccess),
-      isPrivate: recipeKeepsPromptPrivate(startingRecipeAccess),
-    })));
-    setRecipeAccessState(startingRecipeAccess);
-    // Only its own inputs move it: the creator's switch and the creation's title are read as they are.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, generationId, startingRecipeAccess]);
-
-  // An untitled creation starts from the suggestion once its details are
-  // known, and a creation's own title arriving late takes its place. Only a
-  // title nobody typed in moves: arriving late never wipes anything the
-  // creator did, and a recipe switch swaps it in its own handler.
-  useEffect(() => {
-    if (!active || titleTouchedRef.current) {
-      return;
-    }
-    setPublishTitle(startingTitle);
-  }, [active, generationId, startingTitle]);
+    accessTokenRef.current = accessToken;
+  });
+  const hasAccessToken = Boolean(accessToken);
+  const userId = user?.id ?? null;
 
   useEffect(() => {
     if (!active || !generationId) {
@@ -383,9 +344,10 @@ export function usePublishCreation({
 
         setProfileLoadState('loading');
         setProfile(null);
+        const token = accessTokenRef.current;
         const response = await fetch('/api/profile', {
           cache: 'no-store',
-          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
           signal: controller.signal,
         });
         if (!response.ok) {
@@ -408,23 +370,24 @@ export function usePublishCreation({
       });
 
     return () => controller.abort();
-  }, [accessToken, generationId, active]);
+  }, [userId, hasAccessToken, generationId, active]);
 
   const setTitle = (value: string) => {
-    titleTouchedRef.current = true;
-    setPublishTitle(value);
+    setTitleEdit(value);
   };
 
   const setRecipeAccess = (next: PostResourceBundleAccessMode) => {
-    recipeTouchedRef.current = true;
-    // A suggested title nobody edited follows the recipe: a paid one keeps the prompt private.
-    setPublishTitle((current) => followCreationTitleSuggestion({
-      title: current,
-      source: creation,
-      wasPrivate: recipeKeepsPromptPrivate(recipeAccess),
-      isPrivate: recipeKeepsPromptPrivate(next),
-    }));
-    setRecipeAccessState(next);
+    // An untouched title follows the recipe by itself (`startingTitle`); a typed one is swapped
+    // only where it is the prompt's opening or a kind title (a paid recipe keeps the prompt private).
+    if (titleEdit !== null) {
+      setTitleEdit(followCreationTitleSuggestion({
+        title: titleEdit,
+        source: creation,
+        wasPrivate: promptPrivate,
+        isPrivate: recipeKeepsPromptPrivate(next),
+      }));
+    }
+    setRecipeChoice(next);
     setFormError(null);
   };
 
