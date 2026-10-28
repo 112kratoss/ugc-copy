@@ -843,8 +843,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     it('starts on the starter and quotes it inside the welcome credits, never the default first', async () => {
       vi.useFakeTimers();
-      catalogState.catalog = createTestGenerationModelCatalog([seedance15ProModel]);
-      quoteEchoingSettings(14);
+      catalogState.catalog = createTestGenerationModelCatalog([seedance2MiniModel]);
+      quoteEchoingSettings(19);
       let tree: renderer.ReactTestRenderer | undefined;
       renderer.act(() => {
         tree = renderer.create(<MediaCreationScreen initialTool="video" insideTab guided />);
@@ -853,18 +853,18 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await vi.advanceTimersByTimeAsync(200);
       });
 
-      expect(quotedModels()).toEqual(['seedance-1.5-pro']);
+      expect(quotedModels()).toEqual(['seedance-2-mini']);
       expect(authState.api.quoteGenerationModel.mock.calls[0][0]).toMatchObject({
-        settings: { resolution: '720p', duration: '4', sound: false },
+        settings: { resolution: '480p', duration: 5, sound: false },
       });
-      expect(collectText(tree!.root)).toContain('Seedance 1.5 Pro');
-      expect(collectText(tree!.root).some((item) => item.includes('14 credits'))).toBe(true);
+      expect(collectText(tree!.root)).toContain('Seedance 2 Mini');
+      expect(collectText(tree!.root).some((item) => item.includes('19 credits'))).toBe(true);
       vi.useRealTimers();
     });
 
     it('is the only creator that starts there: an ordinary one keeps the catalog default', async () => {
       vi.useFakeTimers();
-      catalogState.catalog = createTestGenerationModelCatalog([seedance15ProModel]);
+      catalogState.catalog = createTestGenerationModelCatalog([seedance2MiniModel]);
       quoteEchoingSettings(70);
       renderer.act(() => {
         renderer.create(<MediaCreationScreen initialTool="video" insideTab />);
@@ -876,10 +876,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(quotedModels()).toEqual(['kling-3.0-video']);
     });
 
-    it('waits for the starter details, and moves to Seedance 2 Mini once the catalog says Seedance 1.5 Pro is gone', async () => {
+    it('waits for the starter details, then starts on them', async () => {
       vi.useFakeTimers();
       catalogState.catalog = createTestGenerationModelCatalog();
-      quoteEchoingSettings(16);
+      quoteEchoingSettings(19);
       let tree: renderer.ReactTestRenderer | undefined;
       renderer.act(() => {
         tree = renderer.create(<MediaCreationScreen initialTool="video" insideTab guided />);
@@ -890,7 +890,6 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(quotedModels()).toEqual([]);
 
       catalogState.catalog = createTestGenerationModelCatalog([seedance2MiniModel]);
-      EMPTY_MISSING_IDS.push(seedance15ProModel.id);
       renderer.act(() => {
         tree!.update(<MediaCreationScreen initialTool="video" insideTab guided />);
       });
@@ -900,9 +899,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
       expect(quotedModels()).toEqual(['seedance-2-mini']);
       expect(authState.api.quoteGenerationModel.mock.calls[0][0]).toMatchObject({
-        settings: { resolution: '480p', duration: 4, sound: false },
+        settings: { resolution: '480p', duration: 5, sound: false },
       });
-      expect(collectText(tree!.root).some((item) => item.includes('16 credits'))).toBe(true);
+      expect(collectText(tree!.root).some((item) => item.includes('19 credits'))).toBe(true);
       expect(collectText(tree!.root)).not.toContain('This model is no longer available. Your draft is saved; choose another model.');
     });
 
@@ -920,7 +919,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(quotedModels()).toEqual([]);
 
       catalogState.catalog = createTestGenerationModelCatalog();
-      EMPTY_MISSING_IDS.push(seedance15ProModel.id, seedance2MiniModel.id);
+      EMPTY_MISSING_IDS.push(seedance2MiniModel.id);
       renderer.act(() => {
         tree!.update(<MediaCreationScreen initialTool="video" insideTab guided />);
       });
@@ -935,7 +934,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     it('keeps the starter when a prompt is typed before its details arrive, with no settings notice', async () => {
       vi.useFakeTimers();
       catalogState.catalog = createTestGenerationModelCatalog();
-      quoteEchoingSettings(14);
+      quoteEchoingSettings(19);
       let tree: renderer.ReactTestRenderer | undefined;
       renderer.act(() => {
         tree = renderer.create(<MediaCreationScreen initialTool="video" insideTab guided />);
@@ -944,7 +943,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('A lighthouse in a storm');
       });
 
-      catalogState.catalog = createTestGenerationModelCatalog([seedance15ProModel]);
+      catalogState.catalog = createTestGenerationModelCatalog([seedance2MiniModel]);
       renderer.act(() => {
         tree!.update(<MediaCreationScreen initialTool="video" insideTab guided />);
       });
@@ -952,9 +951,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await vi.advanceTimersByTimeAsync(200);
       });
 
-      expect(quotedModels()).toEqual(['seedance-1.5-pro']);
+      expect(quotedModels()).toEqual(['seedance-2-mini']);
       expect(authState.api.quoteGenerationModel.mock.calls[0][0]).toMatchObject({
-        settings: { resolution: '720p', duration: '4', sound: false },
+        settings: { resolution: '480p', duration: 5, sound: false },
       });
       expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('A lighthouse in a storm');
       expect(collectText(tree!.root).some((item) => item.includes('no longer supported'))).toBe(false);
@@ -966,24 +965,22 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       renderer.act(() => {
         tree = renderer.create(<MediaCreationScreen initialTool="video" insideTab guided />);
       });
-      expect(catalogHookCalls.selectedIds).toContain('seedance-1.5-pro');
       expect(catalogHookCalls.selectedIds).toContain('seedance-2-mini');
 
       // Every starter gone from the catalog: the draft settles on the default and lets them go,
       // which would otherwise keep the creator "unavailable" through any later catalog error.
       catalogState.catalog = createTestGenerationModelCatalog();
-      EMPTY_MISSING_IDS.push(seedance15ProModel.id, seedance2MiniModel.id);
+      EMPTY_MISSING_IDS.push(seedance2MiniModel.id);
       renderer.act(() => {
         tree!.update(<MediaCreationScreen initialTool="video" insideTab guided />);
       });
       expect(catalogHookCalls.selectedIds).toContain('kling-3.0-video');
-      expect(catalogHookCalls.selectedIds).not.toContain('seedance-1.5-pro');
       expect(catalogHookCalls.selectedIds).not.toContain('seedance-2-mini');
     });
 
     it('leaves the video draft on the catalog default in a guided image session', async () => {
       vi.useFakeTimers();
-      catalogState.catalog = createTestGenerationModelCatalog([seedance15ProModel]);
+      catalogState.catalog = createTestGenerationModelCatalog([seedance2MiniModel]);
       quoteEchoingSettings(8);
       let tree: renderer.ReactTestRenderer | undefined;
       renderer.act(() => {
@@ -1000,7 +997,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       });
 
       expect(quotedModels()).toContain('kling-3.0-video');
-      expect(quotedModels()).not.toContain('seedance-1.5-pro');
+      expect(quotedModels()).not.toContain('seedance-2-mini');
     });
   });
 

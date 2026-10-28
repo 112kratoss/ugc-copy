@@ -18,17 +18,11 @@ const WELCOME_CREDITS = 25;
 // cannot import a mobile file on CI, so each starter's line is matched in that file's text instead.
 const STARTERS = [
   {
-    line: "{ modelId: 'seedance-1.5-pro', settings: { resolution: '720p', duration: '4', sound: false } }",
-    modelId: 'seedance-1.5-pro',
-    settings: { resolution: '720p', duration: 4, sound: false },
-    credits: 14,
-  },
-  {
-    // Kie's 3.8 credits a second at 480p without video (kie.ai/pricing, 2026-10-20): 4 s is 15.2, so 16.
-    line: "{ modelId: 'seedance-2-mini', settings: { resolution: '480p', duration: 4, sound: false } }",
+    // Kie's 3.8 credits a second at 480p without video (kie.ai/pricing, 2026-10-20): 5 s is 19.
+    line: "{ modelId: 'seedance-2-mini', settings: { resolution: '480p', duration: 5, sound: false } }",
     modelId: 'seedance-2-mini',
-    settings: { resolution: '480p', duration: 4, sound: false },
-    credits: 16,
+    settings: { resolution: '480p', duration: 5, sound: false },
+    credits: 19,
   },
 ];
 
