@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
+import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 const browserModuleLoaded = vi.hoisted(() => vi.fn());
@@ -55,10 +56,11 @@ describe('MarketplaceBootstrap', () => {
     vi.unstubAllGlobals();
   });
 
-  it('server-renders only the compact filter surface and first three cards', () => {
+  // Four: one full row of the grid at its widest.
+  it('server-renders only the compact filter surface and first four cards', () => {
     const markup = renderToStaticMarkup(
       <MarketplaceBootstrap
-        initialPage={createPage(4, true)}
+        initialPage={createPage(5, true)}
         initialFilters={INITIAL_FILTERS}
         sourceToolOptions={[]}
       />
@@ -66,16 +68,16 @@ describe('MarketplaceBootstrap', () => {
 
     expect(markup).toContain('data-marketplace-bootstrap-shell');
     expect(markup).toContain('Unlock 1');
-    expect(markup).toContain('Unlock 3');
-    expect(markup).not.toContain('Unlock 4');
+    expect(markup).toContain('Unlock 4');
+    expect(markup).not.toContain('Unlock 5');
     expect(markup).toContain('Load more recipes');
     expect(markup).not.toContain('Interactive marketplace browser');
     expect(browserModuleLoaded).not.toHaveBeenCalled();
   });
 
   // The cards printed the bare quote: "$0.50 recipe" and "Unlock for $0.50" for
-  // a recipe only credits buy, "$0.00" on a free one. The badge names one
-  // figure; the pill and the button every way to pay, as the post's panel does.
+  // a recipe only credits buy, "$0.00" on a free one. The tile's chip prices it
+  // in credits; its unlock action names every way to pay, as the post's panel does.
   it('prices each card the way its post does, a credits-only one in credits alone', () => {
     const page = createPage(3, false);
     page.items[0] = {
@@ -100,21 +102,51 @@ describe('MarketplaceBootstrap', () => {
     );
 
     const cashCard = screen.getByRole('link', { name: 'Unlock for ₹750 · 900 credits: Unlock 1' });
-    // The image badge prices it in credits, as every other chip does (audit
-    // B-F13): the cash figure is for the pill and the button that take cash.
+    // The chip prices it in credits, as every other chip does (audit B-F13);
+    // the cash figure is the unlock action's, which names every way to pay.
     expect(within(cashCard).getByText('900 credits')).toBeInTheDocument();
     expect(within(cashCard).queryByText('₹750')).not.toBeInTheDocument();
-    expect(within(cashCard).getByText('₹750 · 900 credits')).toBeInTheDocument();
     expect(within(cashCard).getByText('Unlock for ₹750 · 900 credits')).toBeInTheDocument();
 
     const creditsCard = screen.getByRole('link', { name: 'Unlock for 50 credits: Unlock 2' });
-    expect(within(creditsCard).getAllByText('50 credits')).toHaveLength(2);
+    expect(within(creditsCard).getByText('50 credits')).toBeInTheDocument();
+    expect(within(creditsCard).getByText('Unlock for 50 credits')).toBeInTheDocument();
     expect(creditsCard).not.toHaveTextContent('$0.50');
 
     const freeCard = screen.getByRole('link', { name: 'View free recipe: Unlock 3' });
     expect(within(freeCard).getByText('Free recipe')).toBeInTheDocument();
-    expect(within(freeCard).getByText('Free')).toBeInTheDocument();
+    expect(within(freeCard).getByText('View free recipe')).toBeInTheDocument();
     expect(freeCard).not.toHaveTextContent('$0.00');
+  });
+
+  // The owner preferred Explore's tiles to the old storefront cards
+  // (2026-10-27): the cover in a 4:5 frame, then the title and date, the
+  // creator, and the recipe's price and kinds, in Explore's own grid.
+  it('draws each recipe as Explore draws a post', () => {
+    const page = createPage(1, false);
+    // Edited since: Recent sorts by when a recipe went up, so that is its date.
+    page.items[0] = { ...page.items[0], freeUnlockCount: 5, updatedAt: '2026-10-27T10:00:00.000Z' };
+
+    render(
+      <MarketplaceBootstrap
+        initialPage={page}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+      />
+    );
+
+    const tile = screen.getByRole('link', { name: 'View free recipe: Unlock 1' });
+    expect(tile.parentElement).toHaveClass(...SHOWCASE_FEED_GRID_CLASS.split(' '));
+    expect(tile.firstElementChild).toHaveClass('aspect-[4/5]');
+    expect(within(tile).getByRole('heading', { name: 'Unlock 1' })).toBeInTheDocument();
+    expect(within(tile).getByText('Apr 25')).toHaveAttribute('datetime', '2026-04-25T10:00:00.000Z');
+    expect(tile).not.toHaveTextContent('Oct 27');
+    expect(within(tile).getByText('Creator 1')).toBeInTheDocument();
+    expect(within(tile).getByText('@creator-1')).toBeInTheDocument();
+    // The tile is the one link: the creator row inside it has none of its own.
+    expect(within(tile).queryByRole('link')).not.toBeInTheDocument();
+    expect(within(tile).getByText('5 opened')).toBeInTheDocument();
+    expect(within(tile).getByText('Prompt')).toBeInTheDocument();
   });
 
   // A search or filter that matched nothing said "No recipes yet" and offered
@@ -371,7 +403,7 @@ function createPage(count: number, hasMore: boolean) {
       hasMore,
       nextOffset: hasMore ? count : null,
       offset: 0,
-      limit: 3,
+      limit: 4,
     },
   };
 }

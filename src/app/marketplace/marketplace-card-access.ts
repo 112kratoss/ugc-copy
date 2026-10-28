@@ -17,11 +17,11 @@ export interface MarketplaceViewerState {
 export const NO_VIEWER_STATE: MarketplaceViewerState = { viewerUserId: null, unlockedBundleIds: new Set() };
 
 /**
- * A card's words for one recipe and this viewer: the badge prices it in
+ * A tile's words for one recipe and this viewer: the chip prices it in
  * credits, or says "Unlocked" for one they have and "Your recipe" for their
- * own, as every other card does (audit B-F2). The price pill names the ways to
- * pay, and is not drawn once there is nothing to pay (the glossary: never the
- * price on a recipe the viewer has); the card's action then reads "View recipe".
+ * own, as every other card does (audit B-F2). The unlock action names the ways
+ * to pay, and no price once there is nothing to pay (the glossary: never the
+ * price on a recipe the viewer has): it then reads "View recipe".
  */
 export function getMarketplaceCardAccess(
   asset: Pick<MarketplaceResourceListItem, 'id' | 'accessMode' | 'priceUsdCents' | 'seller'> & {
@@ -32,15 +32,12 @@ export function getMarketplaceCardAccess(
   const isOwner = Boolean(viewer.viewerUserId) && asset.seller.id === viewer.viewerUserId;
   const viewerHasUnlocked = viewer.unlockedBundleIds.has(asset.id);
   const isFree = asset.accessMode === 'free' || asset.priceUsdCents === 0;
-  const priceLabel = isFree ? 'Free' : formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote.formatted);
-
   const hasIt = isOwner || viewerHasUnlocked;
 
   return {
     isFree,
     isOwner,
     viewerHasUnlocked,
-    priceLabel: hasIt ? null : priceLabel,
     accessLabel: getAssetAccessLabel(
       { accessMode: asset.accessMode, priceUsdCents: asset.priceUsdCents, viewerHasUnlocked },
       { isOwner },
@@ -49,6 +46,6 @@ export function getMarketplaceCardAccess(
       ? 'View recipe'
       : isFree
         ? 'View free recipe'
-        : `Unlock for ${priceLabel}`,
+        : `Unlock for ${formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote.formatted)}`,
   };
 }

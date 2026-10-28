@@ -35,6 +35,27 @@ describe('CreatorIdentity', () => {
     expect(screen.getByText('Anonymous')).toBeInTheDocument();
   });
 
+  // A marketplace tile is one link already; a creator link inside it nested an
+  // anchor in an anchor.
+  it('drops its link, keeping name and handle, when it sits inside another link', () => {
+    render(
+      <CreatorIdentity
+        creator={{
+          id: 'user-1',
+          username: 'creator-name',
+          name: 'Creator Name',
+          avatar: null,
+        }}
+        compact
+        linked={false}
+      />
+    );
+
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByText('Creator Name')).toBeInTheDocument();
+    expect(screen.getByText('@creator-name')).toBeInTheDocument();
+  });
+
   it('requests a bounded optimized rendition for a storage avatar', () => {
     render(
       <CreatorIdentity

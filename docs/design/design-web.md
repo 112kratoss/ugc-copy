@@ -254,7 +254,7 @@ Failed and processing states say what happens next.
 
 ### Other signed-in pages
 
-- **Marketplace** (`/marketplace`): the recipes creators sell; badges price them in credits, as every other chip does.
+- **Marketplace** (`/marketplace`): the recipes creators sell, drawn as Explore's tiles in Explore's grid (`MarketplaceRecipeTile`, the owner's choice on 2026-10-27): the post's cover in a 4:5 frame, then the title and the date the recipe went up (what Recent sorts by), the creator (`CreatorIdentity` without its link), the opened or sold count, Explore's recipe chip and the recipe's kinds. Badges price recipes in credits, as every other chip does; the unlock action names every way to pay and shows on the cover as Explore's tile actions do (`.showcase-card-actions`: always on a touch screen, under the pointer with a mouse). The whole tile is one link to the post's recipe, and neither list prefetches it. The first-paint shell and the interactive list draw the same tile, and the first page holds four, one row at the grid's widest.
 - **Search** (`/search`): one unified search, in tabs for Top, Creators, Posts and Recipes.
 - **Alerts** (`/notifications`): every alert links to its target (`resolveWebNotificationPath`).
 - **Profile** (`/profile`): the owner's card and media hub. The reel over Saved carries the ⋯ menu's safety rows; the reel over your own posts has no ⋯.
