@@ -3698,7 +3698,8 @@ export default function CreateVideoClient({
         throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
 
-    const handleRunFailure = (runError: unknown, startedAtMs: number, cost: number | null) => {
+    // `followed`: the creator started this run here, so its end moves the focus; a run picked up on load leaves the page be.
+    const handleRunFailure = (runError: unknown, startedAtMs: number, cost: number | null, followed: boolean) => {
         // The page went away under the poll; the run is not this page's to report.
         if (isGenerationStatusAbortError(runError)) return;
         if (runError instanceof Error && runError.message === BACKGROUND_PROCESSING_ERROR) {
@@ -3709,7 +3710,7 @@ export default function CreateVideoClient({
             // A failed run is refunded, and the balance on screen is still the debited one.
             window.dispatchEvent(new Event('credits_updated'));
             setRunFailure({ message: runError.message, cost });
-            setRunEndKey((key) => key + 1);
+            if (followed) setRunEndKey((key) => key + 1);
             setGenerationTiming(null);
             return;
         }
@@ -3843,12 +3844,12 @@ export default function CreateVideoClient({
 
             const result = await pollPrediction(started.predictionId, startedAtMs, estimatedTotalMs);
             setOutputVideo(result.output);
-            setRunEndKey((key) => key + 1);
+            if (reveal) setRunEndKey((key) => key + 1);
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }
         } catch (runError) {
-            handleRunFailure(runError, startedAtMs, started.cost);
+            handleRunFailure(runError, startedAtMs, started.cost, reveal);
         }
     };
 
@@ -4059,12 +4060,11 @@ export default function CreateVideoClient({
             try {
                 const result = await pollPrediction(data.prediction_id, startedAtMs, null);
                 setOutputVideo(result.output);
-                setRunEndKey((key) => key + 1);
                 if (result.timing) {
                     setGenerationTiming(result.timing);
                 }
             } catch (generationError) {
-                handleRunFailure(generationError, startedAtMs, typeof data.cost === 'number' ? data.cost : null);
+                handleRunFailure(generationError, startedAtMs, typeof data.cost === 'number' ? data.cost : null, false);
             } finally {
                 setIsGenerating(false);
             }

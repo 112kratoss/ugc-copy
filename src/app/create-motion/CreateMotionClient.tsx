@@ -862,8 +862,11 @@ export default function CreateMotionClient({
         throw new Error(BACKGROUND_PROCESSING_ERROR);
     }
 
-    /** How a started or resumed run that did not succeed ends on this page. */
-    function settleRunError(runError: unknown, startedAtMs: number) {
+    /**
+     * How a started or resumed run that did not succeed ends on this page. `followed`: the
+     * creator started it here, so its end moves the focus; a run picked up on load leaves the page be.
+     */
+    function settleRunError(runError: unknown, startedAtMs: number, followed = false) {
         const message = runError instanceof Error ? runError.message : 'Something went wrong';
         if (message === BACKGROUND_PROCESSING_ERROR) {
             handoffToBackgroundProcessing(startedAtMs);
@@ -874,7 +877,7 @@ export default function CreateMotionClient({
             // A failed run's hold is always returned: show the balance that is true now.
             window.dispatchEvent(new Event('credits_updated'));
             setRunFailure({ message, cost: latestRunCostRef.current });
-            setRunEndKey((key) => key + 1);
+            if (followed) setRunEndKey((key) => key + 1);
             return;
         }
         setError(message);
@@ -1008,7 +1011,7 @@ export default function CreateMotionClient({
 
         const result = await pollPrediction(started.predictionId, startedAtMs, estimatedTotalMs);
         setOutputVideo(result.output);
-        setRunEndKey((key) => key + 1);
+        if (reveal) setRunEndKey((key) => key + 1);
         if (result.timing) {
             setGenerationTiming(result.timing);
         }
@@ -1032,7 +1035,7 @@ export default function CreateMotionClient({
         try {
             await sendStart(start, startedAtMs, estimatedTotalMs, { reveal });
         } catch (runError) {
-            settleRunError(runError, startedAtMs);
+            settleRunError(runError, startedAtMs, reveal);
         } finally {
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
@@ -1167,7 +1170,7 @@ export default function CreateMotionClient({
             savePendingWebStart(start);
             await sendStart(start, startedAtMs, estimatedTotalMs, { reveal: true });
         } catch (runError) {
-            settleRunError(runError, startedAtMs);
+            settleRunError(runError, startedAtMs, true);
         } finally {
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
@@ -1245,7 +1248,6 @@ export default function CreateMotionClient({
         try {
             const result = await pollPrediction(data.prediction_id, startedAtMs, null);
             setOutputVideo(result.output);
-            setRunEndKey((key) => key + 1);
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }

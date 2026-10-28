@@ -4976,6 +4976,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
         expect(scrollIntoView).not.toHaveBeenCalled();
+        // Nor does its end take the focus: the creator did not start it from this page.
+        expect(screen.getByRole('heading', { name: 'Done' })).not.toHaveFocus();
       });
     });
 

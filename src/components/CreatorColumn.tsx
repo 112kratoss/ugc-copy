@@ -1226,23 +1226,18 @@ export function CreatorUploadSlot({
 
 /**
  * Where the focus stays when a run ends: a field the creator is typing in, or a dialog they
- * opened meanwhile (the settings, the model list), which would close if it lost the focus.
+ * opened meanwhile (the settings), which would close if it lost the focus. An icon's `<svg>`
+ * is an Element, not an HTMLElement, so `closest()` is asked first.
  */
 function keepsFocusAtRunEnd(element: Element | null) {
-  if (!(element instanceof HTMLElement)) return false;
+  if (!element) return false;
   if (element.closest('[role="dialog"]')) return true;
+  if (!(element instanceof HTMLElement)) return false;
   if (element.isContentEditable || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) return true;
   return element instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'file'].includes(element.type);
 }
 
-/** Brings the canvas into view where its top is out of it: under the column, below the bar. */
-function revealCanvas(section: HTMLElement) {
-  const { top } = section.getBoundingClientRect();
-  if (top >= 0 && top <= window.innerHeight * 0.4) return;
-  const reduceMotion = typeof window.matchMedia === 'function'
-    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  section.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
-}
+
 
 /**
  * The result pane. On a wide window it stays in view beside the column for the
@@ -1255,8 +1250,10 @@ function revealCanvas(section: HTMLElement) {
  * which the bar says, never scrolls the bar away.
  *
  * `focusKey` moves the focus to its heading when it changes (the build notes:
- * focus moves to "Done" when a run ends), so a keyboard or screen reader lands
- * on the result or the failure; a creator typing the next prompt keeps the field.
+ * focus moves to "Done" when a run ends): the page bumps it when a run the
+ * creator started here ends, done or failed, never for a run picked up on load,
+ * which leaves the page where it is. A creator typing the next prompt keeps the
+ * field, and one in a dialog keeps it.
  *
  * `flow` stacks the body instead of fitting one thing to it (the empty canvas's
  * posts, a run at work and the posts under it): beside the column it scrolls
@@ -1289,16 +1286,22 @@ export function CreatorCanvas({
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
-    if (!revealKey || !sectionRef.current) return;
-    revealCanvas(sectionRef.current);
+    if (!revealKey) return;
+    const section = sectionRef.current;
+    if (!section) return;
+    // Beside the column its top is near the window's; under it, below the bar.
+    const { top } = section.getBoundingClientRect();
+    if (top >= 0 && top <= window.innerHeight * 0.4) return;
+    const reduceMotion = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    section.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
   }, [revealKey]);
 
   useEffect(() => {
-    const section = sectionRef.current;
-    if (!focusKey || !section || keepsFocusAtRunEnd(document.activeElement)) return;
-    // The canvas's own scroll, smooth unless motion is reduced; the focus adds none.
-    revealCanvas(section);
-    headingRef.current?.focus({ preventScroll: true });
+    if (!focusKey || keepsFocusAtRunEnd(document.activeElement)) return;
+    // The browser brings the heading into view as it focuses it where it is out of view
+    // (under the column on a phone), and beside the column it is in view already.
+    headingRef.current?.focus();
   }, [focusKey]);
 
   return (

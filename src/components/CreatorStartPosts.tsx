@@ -103,6 +103,8 @@ function StartPostCard({ post, balance, compact = false, watchOnly = false, clas
       <Link
         href={postPath(post)}
         prefetch={false}
+        // The post's own words, not its picture's badge too.
+        aria-label={creator ? `${post.title}, by ${creator}` : post.title}
         onFocus={() => setHovered(true)}
         onBlur={() => setHovered(false)}
         className="ui-focus-ring group flex min-w-0 flex-col gap-1.5 rounded-ui-xl"

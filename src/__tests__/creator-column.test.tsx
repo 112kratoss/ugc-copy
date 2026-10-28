@@ -442,15 +442,18 @@ describe('the result canvas', () => {
     expect(screen.getByRole('button', { name: '720p' })).toHaveFocus();
   });
 
-  it('comes into view as it takes the focus when it is out of view (under the column on a phone)', () => {
+  // Under the column on a phone the canvas can be out of view when the run ends: the browser
+  // brings a focused element into view, so the focus keeps that scroll, and adds none of its own.
+  it('lets the focus bring the heading into view where it is out of it', () => {
     placeCanvas(1500);
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
     const view = render(<CreatorCanvas title="Making your video" focusKey={0}>Busy</CreatorCanvas>);
-    expect(scrollIntoView).not.toHaveBeenCalled();
 
     view.rerender(<CreatorCanvas title="Done" focusKey={1}>Clip</CreatorCanvas>);
 
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('heading', { name: 'Done' })).toHaveFocus();
+    expect(focus.mock.calls.at(-1)?.[0]).toBeUndefined();
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it('says what the run is and holds beside its title', () => {

@@ -1362,7 +1362,8 @@ export default function CreateImageClient({
 
     const followRun = async (
         predictionId: string,
-        run: { startedAtMs: number; estimatedTotalMs: number | null; cost: number | null; generationId: string | null },
+        // `followed`: the creator started this run here, so its end moves the focus; a run picked up on load leaves the page be.
+        run: { startedAtMs: number; estimatedTotalMs: number | null; cost: number | null; generationId: string | null; followed: boolean },
     ) => {
         if (run.cost !== null) {
             const held = run.cost;
@@ -1372,7 +1373,7 @@ export default function CreateImageClient({
             const result = await pollPrediction(predictionId, run.startedAtMs, run.estimatedTotalMs);
             setOutputImage(result.output);
             setOutputImages(result.outputs);
-            setRunEndKey((key) => key + 1);
+            if (run.followed) setRunEndKey((key) => key + 1);
             if (result.timing) {
                 setGenerationTiming(result.timing);
             }
@@ -1387,7 +1388,7 @@ export default function CreateImageClient({
                 // The failure returned the credits; the balance on screen still has them spent.
                 window.dispatchEvent(new Event('credits_updated'));
                 setRunFailure({ message: err.message, cost: run.cost });
-                setRunEndKey((key) => key + 1);
+                if (run.followed) setRunEndKey((key) => key + 1);
             } else {
                 setError(err instanceof Error ? err.message : 'Something went wrong');
             }
@@ -1439,6 +1440,7 @@ export default function CreateImageClient({
             ...timing,
             cost: started.cost,
             generationId: started.generationId ?? null,
+            followed: reveal,
         });
     };
 
@@ -1516,6 +1518,7 @@ export default function CreateImageClient({
                     estimatedTotalMs: null,
                     cost: typeof data.cost === 'number' ? data.cost : null,
                     generationId: data.id ?? null,
+                    followed: false,
                 });
             } finally {
                 setIsGenerating(false);
