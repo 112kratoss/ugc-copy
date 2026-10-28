@@ -23,7 +23,9 @@ export function useGenerationModelCatalog(api: GenerationCatalogApi, options: { 
   useEffect(() => {
     if (!current) return;
     const ids = selectedKey ? selectedKey.split(',') : [];
-    const defaults = options.kind ? [current.defaults[options.kind]] : Object.values(current.defaults);
+    // Every tool's default, whichever tool is open: the screen keeps a draft for each, and an
+    // untouched one waits for its default's details (normalizeCreationDraftForCatalog).
+    const defaults = Object.values(current.defaults);
     session.pin(ids); void session.ensureDetails([...ids, ...defaults.filter((id): id is string => Boolean(id))]);
   }, [session, current, selectedKey, options.kind, retryVersion]);
   useEffect(() => {

@@ -52,6 +52,40 @@ describe('normalizeCreationDraftForCatalog', () => {
     expect(result.draft).toBe(draft);
   });
 
+  it('keeps an untouched draft off its stand-in model until the default model\'s details arrive', () => {
+    // The Create tab opens on Image, and the catalog has the video draft's stand-in (Kling 3.0)
+    // before the video default's details. Reconciling against the stand-in stamped a revision,
+    // and the draft then kept Kling 3.0 at 70 credits once Seedance 2 Mini's details came
+    // (2026-10-28, when Mini became the default).
+    const miniAtItsRelease = {
+      ...seedance2MiniModel,
+      controls: seedance2MiniModel.controls.map((control) => (
+        control.key === 'duration' && control.type === 'integer' ? { ...control, defaultValue: 5 } : control
+      )),
+    };
+    const loading: GenerationModelCatalog = {
+      ...catalog,
+      defaults: { ...catalog.defaults, video: 'seedance-2-mini' },
+    };
+    const draft = createDefaultCreationDraft('video');
+
+    const waiting = normalizeCreationDraftForCatalog(draft, loading, { modelSelectionTouched: false });
+    expect(waiting).toEqual({ draft, warning: null, missingModel: false });
+
+    const loaded: GenerationModelCatalog = { ...loading, models: [...loading.models, miniAtItsRelease] };
+    const settled = normalizeCreationDraftForCatalog(waiting.draft, loaded, { modelSelectionTouched: false });
+    expect(settled.draft).toMatchObject({
+      model: 'seedance-2-mini',
+      catalogRevision: loaded.revision,
+      catalogSettings: { aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false },
+    });
+
+    // A default the catalog says it dropped is not waited for: the draft keeps its own model.
+    const dropped = normalizeCreationDraftForCatalog(draft, loading, { modelSelectionTouched: false, missingIds: ['seedance-2-mini'] });
+    expect(dropped.draft.model).toBe('kling-3.0-video');
+    expect(dropped.draft.catalogRevision).toBe(loading.revision);
+  });
+
   it('changes nothing when a draft is normalized a second time', () => {
     const defaults = [createDefaultCreationDraft('image'), createDefaultCreationDraft('video'), createDefaultCreationDraft('motion')];
     for (const draft of defaults) {
@@ -65,18 +99,20 @@ describe('normalizeCreationDraftForCatalog', () => {
 });
 
 describe('normalizeCreationDraftForCatalog with a guided starter', () => {
-  const [starter, fallbackStarter] = GUIDED_CREATION_STARTERS.video!;
+  // The starter mechanism on two starters, the list the app shipped until 2026-10-28: Seedance 1.5 Pro, then
+  // Seedance 2 Mini. The list the app ships now is pinned at the end of this block.
+  const STARTERS = [
+    { modelId: 'seedance-1.5-pro', settings: { resolution: '720p', duration: '4', sound: false } },
+    { modelId: 'seedance-2-mini', settings: { resolution: '480p', duration: 4, sound: false } },
+  ];
+  const [starter, fallbackStarter] = STARTERS;
   const withSeedance = (): GenerationModelCatalog => {
     const catalog = createRemixRestoreCatalog();
     return { ...catalog, models: [...catalog.models, seedance15ProModel] };
   };
   const guidedVideoDraft = () => ({ ...createDefaultCreationDraft('video'), model: starter.modelId });
 
-  it('starts a guided first video inside the 25 welcome credits, not on the 70-credit default', () => {
-    // Production prices (pixverse-mobile-20261008): Kling 3.0 std, no sound, 14 a second; Seedance 1.5 Pro
-    // 480p/720p/1080p for 4 s without sound, 7/14/30.
-    expect(starter).toEqual({ modelId: 'seedance-1.5-pro', settings: { resolution: '720p', duration: '4', sound: false } });
-
+  it('starts a guided draft on its starter\'s model and pinned settings, not on the catalog default', () => {
     const result = normalizeCreationDraftForCatalog(guidedVideoDraft(), withSeedance(), { modelSelectionTouched: false, starter });
 
     expect(result).toMatchObject({ warning: null, missingModel: false });
@@ -154,27 +190,26 @@ describe('normalizeCreationDraftForCatalog with a guided starter', () => {
     expect(normalizeCreationDraftForCatalog(started, noDetails, gone)).toEqual({ draft: started, warning: null, missingModel: false });
   });
 
-  it('lists Seedance 2 Mini behind Seedance 1.5 Pro, inside the welcome credits at Kie\'s 2026-10-20 price', () => {
-    // Kie took Seedance 1.5 Pro off its site (2026-10-20) while its API still runs it. Seedance 2 Mini at 480p
-    // for 4 s without sound is 3.8 a second: 16 credits (src/__tests__/guided-first-video-starter-price.test.ts).
+  it('starts the guided first video where the default video opens, inside the welcome credits', () => {
+    // The owner's default video (2026-10-28): Seedance 2 Mini at 480p for 5 s without sound, 3.8 a second, so
+    // 19 credits (src/__tests__/guided-first-video-starter-price.test.ts). Seedance 1.5 Pro, which Kie has taken
+    // off its site, is no longer listed.
     expect(GUIDED_CREATION_STARTERS.video).toEqual([
-      { modelId: 'seedance-1.5-pro', settings: { resolution: '720p', duration: '4', sound: false } },
-      { modelId: 'seedance-2-mini', settings: { resolution: '480p', duration: 4, sound: false } },
+      { modelId: 'seedance-2-mini', settings: { resolution: '480p', duration: 5, sound: false } },
     ]);
   });
 
   it('picks the first starter the catalog still carries, and only on the guided tool', () => {
     const screen = { guided: true, initialTool: 'video' as const };
-    expect(guidedCreationStarter('video', screen)?.modelId).toBe('seedance-1.5-pro');
-    expect(guidedCreationStarter('video', screen, ['seedance-1.5-pro'])?.modelId).toBe('seedance-2-mini');
+    expect(guidedCreationStarter('video', screen)?.modelId).toBe('seedance-2-mini');
     // Every starter dropped: the last, which the reconcile reads as gone and replaces with the default.
-    expect(guidedCreationStarter('video', screen, ['seedance-1.5-pro', 'seedance-2-mini'])?.modelId).toBe('seedance-2-mini');
+    expect(guidedCreationStarter('video', screen, ['seedance-2-mini'])?.modelId).toBe('seedance-2-mini');
     expect(guidedCreationStarter('video', { guided: false, initialTool: 'video' })).toBeNull();
     expect(guidedCreationStarter('image', screen)).toBeNull();
   });
 
   it('moves a draft seeded with a dropped starter to the next one, keeping its words', () => {
-    const seededIds = GUIDED_CREATION_STARTERS.video!.map((candidate) => candidate.modelId);
+    const seededIds = STARTERS.map((candidate) => candidate.modelId);
     const started = { ...guidedVideoDraft(), prompt: 'A lighthouse in a storm' };
     const catalog: GenerationModelCatalog = { ...createRemixRestoreCatalog(), models: [...createRemixRestoreCatalog().models, seedance2MiniModel] };
     const options = { modelSelectionTouched: false, starter: fallbackStarter, missingIds: ['seedance-1.5-pro'], seededModelIds: seededIds };
@@ -200,7 +235,7 @@ describe('normalizeCreationDraftForCatalog with a guided starter', () => {
   });
 
   it('gives a seeded draft the catalog default once the catalog has dropped every starter', () => {
-    const seededIds = GUIDED_CREATION_STARTERS.video!.map((candidate) => candidate.modelId);
+    const seededIds = STARTERS.map((candidate) => candidate.modelId);
     const started = { ...guidedVideoDraft(), prompt: 'A lighthouse in a storm' };
     const result = normalizeCreationDraftForCatalog(started, createRemixRestoreCatalog(), {
       modelSelectionTouched: false,

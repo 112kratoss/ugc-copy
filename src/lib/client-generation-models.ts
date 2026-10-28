@@ -423,7 +423,7 @@ export const VIDEO_MODELS = {
     supportsFixedLens: false,
     aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'] as const,
     durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
-    singleShotDurationRange: { min: 4, max: 15, default: 10 } as const,
+    singleShotDurationRange: { min: 4, max: 15, default: 5 } as const,
     modeOptions: [] as const,
     resolutions: ['480p', '720p'] as const,
   },

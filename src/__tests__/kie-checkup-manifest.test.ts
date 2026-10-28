@@ -17,6 +17,8 @@ import {
   type CatalogRunInputFact,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
 
+import { descriptorBeforeMiniDefault } from './fixtures/mini-default-video-2026-10-28';
+
 /**
  * Release 2026-10-20-kie-checkup: the Kie check-up of 2026-10-20
  * (archive/model-checkup-2026-10-20/README.md, pinned in kie-checkup-2026-10-20.test.ts).
@@ -147,7 +149,7 @@ describe('kie-checkup release', () => {
     const operation = operations.find((candidate) => candidate.modelId === modelId)!;
     const { schemaVersion, ...publicDescriptor } = released.publicDescriptor;
     expect(schemaVersion).toBe(2);
-    expect(publicDescriptor).toEqual(catalog.models.find((model) => model.id === modelId));
+    expect(publicDescriptor).toEqual(descriptorBeforeMiniDefault(catalog.models.find((model) => model.id === modelId)!));
     expect(released.webEnabled).toBe(true);
     expect(released.mobileEnabled).toBe(true);
     expect(released.adapterKey).toBe(operation.adapterKey);

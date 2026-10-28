@@ -12,6 +12,7 @@ import {
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
 import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+import { descriptorBeforeMiniDefault } from './fixtures/mini-default-video-2026-10-28';
 
 /**
  * Release 2026-09-04-reference-audit: the fixes from
@@ -117,7 +118,7 @@ describe('reference-audit release', () => {
       const entry = manifest.entries.find((candidate) => candidate.modelId === modelId)!;
       const { schemaVersion, ...publicDescriptor } = entry.publicDescriptor;
       expect(schemaVersion).toBe(2);
-      expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptor(modelId)));
+      expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptorBeforeMiniDefault(descriptor(modelId))));
       const operation = operationBeforeKieCheckup(operations.get(modelId)!);
       expect(entry.pricingStrategy).toBe(operation.pricingStrategy);
       expect(entry.pricingConfig).toEqual(operation.pricingConfig);
