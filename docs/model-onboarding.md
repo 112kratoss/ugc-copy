@@ -246,7 +246,10 @@ same piece of work (an app OTA).
 The catalog's default model is also the one each creator opens on when nothing else chose one: both creators
 draw a stand-in until the catalog arrives and then take the default with its published control defaults
 (`CreateVideoClient.tsx`'s first pick; `normalizeCreationDraftForCatalog` in the app, which waits for the
-default's details). A saved draft keeps its model, so a changed default reaches new drafts only.
+default's details). A saved draft that holds nothing and is still at its model's published defaults follows a
+changed default too, the first time it is opened after the change (the app for every tool, the web video
+creator; the web image and motion creators keep a saved draft's model). A draft with words, files or a changed
+setting keeps its model. So a changed default reaches existing accounts' untouched drafts, at its own price.
 
 ## Background
 

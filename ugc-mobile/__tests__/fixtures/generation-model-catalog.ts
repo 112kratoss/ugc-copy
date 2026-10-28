@@ -160,6 +160,14 @@ export const seedance2MiniModel = model('seedance-2-mini', 'video', 'Seedance 2 
   inputs: { imageReferences: { max: 5, supportsNaming: true }, videoReferences: { max: 3 }, audioReferences: { max: 3 }, startFrame: true, endFrame: true },
 });
 
+/** Seedance 2 Mini as the release that made it the default video published it (mini-default-video-20261028): 5 s by default. */
+export const seedance2MiniAtRelease: GenerationModelDescriptor = {
+  ...seedance2MiniModel,
+  controls: seedance2MiniModel.controls.map((control) => (
+    control.key === 'duration' && control.type === 'integer' ? { ...control, defaultValue: 5 } : control
+  )),
+};
+
 /**
  * The production mobile descriptors a Recreate meets (revision gpt-image-2-5-20260911): their
  * controls, defaults, capabilities and input limits. Every tool's catalog default disagrees with

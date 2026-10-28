@@ -38,6 +38,7 @@ import {
   catalogMotionInputSlots,
   catalogRunQuoteInput,
   catalogRunWithShownCost,
+  catalogSettingsAtControlDefaults,
   modeGatedSettingValues,
   MOTION_INPUTS_FALLBACK_SLOTS,
   SUBJECT_IMAGES_PER_NAME,
@@ -1295,17 +1296,31 @@ export function reconcileCreationDraftWithCatalog(
 /** Whether the creator has put anything into a draft yet: a prompt, a shot prompt or an input. */
 export function hasStartedCreationDraft(draft: CreationDraft) {
   if (draft.prompt.trim()) return true;
+  if (Object.values(draft.catalogInputSlots ?? {}).some((assets) => assets.length > 0)) return true;
   if (draft.tool === 'image') return draft.references.length > 0;
   if (draft.tool === 'video') {
     return draft.references.length > 0
       || draft.referenceVideos.length > 0
       || draft.referenceAudios.length > 0
       || videoSubjects(draft).length > 0
+      || preparedAudioIds(draft).length > 0
+      || characterIds(draft).length > 0
       || Boolean(draft.startFrame)
       || Boolean(draft.endFrame)
       || draft.multiPrompts.some((shot) => shot.prompt.trim());
   }
   return Boolean(draft.characterImage) || Boolean(draft.referenceVideo);
+}
+
+/**
+ * Whether a draft that settled on a model is still as that model's published defaults leave it:
+ * nothing put in, not a remix, and every setting at its default (catalogSettingsAtControlDefaults).
+ * Such a draft was never the creator's: it settled on the default of its day (or the stand-in), and
+ * it follows the default of this one as a new draft does. `started` says whether it holds anything.
+ */
+function isUntouchedSettledDraft(draft: CreationDraft, model: GenerationModelDescriptor, started: boolean) {
+  if (!draft.catalogRevision || draft.sourceGenerationId || started) return false;
+  return catalogSettingsAtControlDefaults(model.controls, (control) => currentControlValue(draft, control));
 }
 
 export interface CatalogDraftNormalization {
@@ -1331,14 +1346,18 @@ export interface CreationStarter {
  *
  * An untouched draft takes the catalog's default model and that model's published defaults,
  * or the starter's model and settings when one is given; any other draft is reconciled
- * against its own model. A remix restore compares the live draft with baselines passed
- * through this same step, so the screen's own normalization, which lands while the source is
- * still loading, never reads as an edit the creator made.
+ * against its own model. Untouched is a new draft with nothing put in, or one saved on a model
+ * other than the default and still at that model's published defaults (isUntouchedSettledDraft),
+ * as long as the creator has not picked a model in this screen. A remix restore compares the
+ * live draft with baselines passed through this same step, so the screen's own normalization,
+ * which lands while the source is still loading, never reads as an edit the creator made. A
+ * draft that has to wait for details comes back as the same object.
  *
  * `missingIds` are the models the catalog says it does not carry: a starter among them gives
  * way to the default. `seededModelIds` are every starter the screen may have named in the
  * draft (`guidedCreationStarters`), so a draft seeded with one the catalog has since dropped
- * still moves to the next.
+ * still moves to the next. `seededPrompt` is the prompt the screen's entry link put in the
+ * draft: those words are not the creator's, so they keep no model.
  */
 export function normalizeCreationDraftForCatalog(
   draft: CreationDraft,
@@ -1348,6 +1367,7 @@ export function normalizeCreationDraftForCatalog(
     starter?: CreationStarter | null;
     missingIds?: readonly string[];
     seededModelIds?: readonly string[];
+    seededPrompt?: string | null;
   },
 ): CatalogDraftNormalization {
   const fresh = !draft.catalogRevision && !options.modelSelectionTouched;
@@ -1357,12 +1377,24 @@ export function normalizeCreationDraftForCatalog(
   // starter is gone, still applies, and keeps them.
   const seeded = fresh && starter !== null
     && (draft.model === starter.modelId || (options.seededModelIds?.includes(draft.model) ?? false));
-  const untouched = seeded || (fresh && !hasStartedCreationDraft(draft));
+  const linkWords = options.seededPrompt?.trim();
+  const started = hasStartedCreationDraft(linkWords && draft.prompt.trim() === linkWords ? { ...draft, prompt: '' } : draft);
+  const defaultId = catalog.defaults[draft.tool];
+  // Saved before, by an earlier visit or build, on a default since replaced or on the stand-in, and
+  // never touched: it moves too (the video default was Kling 3.0, 70 credits, until 2026-10-28).
+  const ownModel = getCatalogModel(catalog, draft.model);
+  const settledUntouched = !options.modelSelectionTouched
+    && draft.model !== defaultId
+    && isUsableCatalogModel(ownModel, draft.tool, catalog)
+    && isUntouchedSettledDraft(draft, ownModel, started);
+  const untouched = seeded || (fresh && !started) || settledUntouched;
   if (untouched && starter) {
     const starterModel = getCatalogModel(catalog, starter.modelId);
     const starterGone = options.missingIds?.includes(starter.modelId) ?? false;
-    // Its details are still loading. The default would stick (the draft gets a revision), so wait.
-    if (!starterModel && !starterGone) return { draft, warning: null, missingModel: false };
+    // Its details are still loading. The default would stick (the draft gets a revision), so wait. A draft
+    // that settled before does not: the screen stops asking for a starter's details once its draft has a
+    // revision, so it takes the default.
+    if (!starterModel && !starterGone && !settledUntouched) return { draft, warning: null, missingModel: false };
     if (isUsableCatalogModel(starterModel, draft.tool, catalog)) {
       return {
         draft: applyCatalogModelInitialDefaults(draft, starterModel, catalog.revision, starter.settings),
@@ -1371,7 +1403,6 @@ export function normalizeCreationDraftForCatalog(
       };
     }
   }
-  const defaultId = catalog.defaults[draft.tool];
   const fallback = defaultId ? getCatalogModel(catalog, defaultId) : null;
   if (fallback?.kind === draft.tool && untouched) {
     return {
@@ -1380,8 +1411,8 @@ export function normalizeCreationDraftForCatalog(
       missingModel: false,
     };
   }
-  // Until the default's details arrive an untouched draft's model is only the bundled stand-in;
-  // reconciled against it, the draft would get a revision and keep the stand-in. So it waits.
+  // Until the default's details arrive an untouched draft's model is only the bundled stand-in or a
+  // default since replaced; reconciled against it, a new draft would get a revision and keep it. So it waits.
   if (untouched && defaultId && !fallback && !options.missingIds?.includes(defaultId)) {
     return { draft, warning: null, missingModel: false };
   }
