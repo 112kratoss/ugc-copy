@@ -8,7 +8,7 @@ import type { CatalogControl, GenerationModelDescriptor } from '@/lib/generation
  * client module so the server can read it.
  */
 
-export function catalogChoiceControl(model: GenerationModelDescriptor, key: string) {
+function catalogChoiceControl(model: GenerationModelDescriptor, key: string) {
   return model.controls.find((control): control is Extract<CatalogControl, { type: 'choice' }> => control.key === key && control.type === 'choice');
 }
 

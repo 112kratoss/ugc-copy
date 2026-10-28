@@ -24,6 +24,7 @@ import {
   CreatorTopUpNotice,
   CreatorUploadSlot,
   CreatorRunFailed,
+  CreatorRunFailedLine,
   CreatorRunWaitLines,
   creatorRunChip,
   describeRunFailure,
@@ -415,13 +416,55 @@ describe('the result canvas', () => {
 
   // The build notes (owner-approved mock-up): focus moves to "Done" when a run ends.
   it('gives its heading the focus when a run ends, and not on mount', () => {
-    const view = render(<><button type="button">Generate</button><CreatorCanvas title="Making your video" focusKey={0}>Busy</CreatorCanvas></>);
+    const page = (title: string, focusKey: number) => (
+      <><div data-creator-bar><button type="button">Generate</button></div><CreatorCanvas title={title} focusKey={focusKey}>Busy</CreatorCanvas></>
+    );
+    const view = render(page('Making your video', 0));
     screen.getByRole('button', { name: 'Generate' }).focus();
     expect(screen.getByRole('button', { name: 'Generate' })).toHaveFocus();
 
-    view.rerender(<><button type="button">Generate</button><CreatorCanvas title="Done" focusKey={1}>Clip</CreatorCanvas></>);
+    view.rerender(page('Done', 1));
 
     expect(screen.getByRole('heading', { name: 'Done' })).toHaveFocus();
+  });
+
+  it('takes the focus from the page itself and from the canvas, where a run is tried again', () => {
+    const view = render(<CreatorCanvas title="Making your video" focusKey={0}><button type="button">Try again</button></CreatorCanvas>);
+    expect(document.body).toHaveFocus();
+    view.rerender(<CreatorCanvas title="It didn’t finish" focusKey={1}><button type="button">Try again</button></CreatorCanvas>);
+    expect(screen.getByRole('heading', { name: 'It didn’t finish' })).toHaveFocus();
+
+    screen.getByRole('button', { name: 'Try again' }).focus();
+    view.rerender(<CreatorCanvas title="Done" focusKey={2}><button type="button">Try again</button></CreatorCanvas>);
+    expect(screen.getByRole('heading', { name: 'Done' })).toHaveFocus();
+  });
+
+  it('leaves the focus with a creator at work in the column, a model picked or a row pressed', () => {
+    const page = (title: string, focusKey: number) => (
+      <><div role="listbox" aria-label="Video models"><button type="button">Seedance 2 Mini</button></div><CreatorCanvas title={title} focusKey={focusKey}>Busy</CreatorCanvas></>
+    );
+    const view = render(page('Making your video', 0));
+    screen.getByRole('button', { name: 'Seedance 2 Mini' }).focus();
+
+    view.rerender(page('Done', 1));
+
+    expect(screen.getByRole('button', { name: 'Seedance 2 Mini' })).toHaveFocus();
+  });
+
+  it('leaves the focus where it is while a preview holds the page', () => {
+    const page = (title: string, focusKey: number) => (
+      <>
+        <div data-creator-bar><button type="button">Generate</button></div>
+        <div role="dialog" aria-modal="true" aria-label="Preview" />
+        <CreatorCanvas title={title} focusKey={focusKey}>Busy</CreatorCanvas>
+      </>
+    );
+    const view = render(page('Making your video', 0));
+    screen.getByRole('button', { name: 'Generate' }).focus();
+
+    view.rerender(page('Done', 1));
+
+    expect(screen.getByRole('button', { name: 'Generate' })).toHaveFocus();
   });
 
   it('leaves the focus with a creator typing the next prompt when a run ends', () => {
@@ -497,6 +540,45 @@ describe('the run\'s line and its failure', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Change the prompt' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(onChangePrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers another model where the same run cannot get past its cause', () => {
+    const onRetry = vi.fn();
+    const onPickModel = vi.fn();
+    render(
+      <CreatorRunFailed
+        cause="This model would not accept the reference image because it looks like a photo of a real person."
+        returnedCredits={null}
+        retryLabel="Try again · 19 credits"
+        retryDisabled={false}
+        onRetry={onRetry}
+        retryable={false}
+        onPickModel={onPickModel}
+        onChangePrompt={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Your credits are back.');
+    expect(screen.queryByRole('button', { name: /Try again/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pick another model' }));
+    expect(onPickModel).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  // Under the column on a phone the canvas can be out of view: the bar says a run failed.
+  it('says in the bar, under the column only, that a run failed and its credits are back', () => {
+    const onSeeWhy = vi.fn();
+    render(
+      <CreatorColumnBar
+        settingsSummary="480P · 5s"
+        settings={null}
+        narrowStatus={<CreatorRunFailedLine returnedCredits={19} onSeeWhy={onSeeWhy} />}
+        action={<button type="button">Generate</button>}
+      />,
+    );
+    const line = screen.getByText(/Your run didn’t finish\. Your 19 credits are back\./);
+    expect(line.closest('[data-creator-bar-narrow-status]')).toHaveClass('min-[1120px]:hidden');
+    fireEvent.click(screen.getByRole('button', { name: 'See why' }));
+    expect(onSeeWhy).toHaveBeenCalledTimes(1);
   });
 
   it('promises the alert a finished run sends, and says what the run holds', () => {

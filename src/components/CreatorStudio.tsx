@@ -5,7 +5,6 @@ import { Fragment } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ArrowRight, CheckCircle2, Clock3, Expand, Loader2, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import clsx from 'clsx';
-import { createPortal } from 'react-dom';
 
 import {
   getAccentClasses,
@@ -370,7 +369,9 @@ export function StudioGenerationStatus({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3 text-sm text-zinc-300">
+      {/* The countdown goes under the phase where the box is narrow (a 9:16 run's frame
+          beside "While you wait" is about 160px), instead of past its edge. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm text-zinc-300">
         <span className="flex items-center gap-2 text-zinc-100">
           {isComplete ? (
             <CheckCircle2 className="h-4 w-4 text-emerald-300" />
@@ -669,59 +670,5 @@ export function StudioUploadedMediaPreview({
   );
 }
 
-export function StudioMediaPreviewModal({
-  isOpen,
-  onClose,
-  mediaType,
-  src,
-  alt,
-  title,
-  footer,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  mediaType: StudioMediaPreviewType;
-  src: string | null;
-  alt: string;
-  title: string;
-  footer?: ReactNode;
-}) {
-  if (!isOpen || !src || typeof document === 'undefined') return null;
-
-  return createPortal(
-    <div
-      className="preview-modal-overlay fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/80 p-3 backdrop-blur-sm sm:items-center sm:p-4"
-      onClick={onClose}
-    >
-      <div
-        onClick={(event) => event.stopPropagation()}
-        className="preview-modal-panel relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col gap-4 overflow-y-auto overscroll-contain rounded-[28px] border border-white/10 bg-zinc-900 p-4 shadow-2xl sm:max-h-[90dvh] sm:gap-6 sm:rounded-[30px] sm:p-6"
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-zinc-400 transition hover:bg-zinc-800 hover:text-white sm:h-10 sm:w-10"
-          aria-label="Close preview"
-        >
-          <X className="h-5 w-5" />
-        </button>
-
-        <h2 className="pr-10 text-lg font-bold tracking-tight text-white sm:pr-12 sm:text-xl">{title}</h2>
-
-        <div className="preview-modal-media flex min-h-[220px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] border border-white/5 bg-black/50 sm:min-h-[320px] sm:flex-1 sm:rounded-[24px]">
-          {mediaType === 'image' ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={src} alt={alt} className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
-          ) : (
-            <InlineMediaVideo src={src} controls autoPlay loop className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
-          )}
-        </div>
-
-        {footer ? (
-          <div className="rounded-[20px] border border-white/5 bg-black/40 p-4 sm:rounded-[22px]">{footer}</div>
-        ) : null}
-      </div>
-    </div>,
-    document.body
-  );
-}
+// A client module of its own: it holds the focus while open, and `/create` (a server page) imports this file.
+export { StudioMediaPreviewModal } from '@/components/StudioMediaPreviewModal';

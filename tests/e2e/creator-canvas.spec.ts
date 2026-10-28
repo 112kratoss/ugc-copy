@@ -193,3 +193,33 @@ test('a failed run names its cause on the canvas, says the credits are back and 
   await expect(canvas(page).getByRole('alert')).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeFocused();
 });
+
+// Under the column the canvas can be out of view: a creator at the next prompt hears of the failure from the bar.
+test('a failed run is said in the bar on a phone, and See why brings the canvas into view with the focus', async ({ page, context }) => {
+  await page.setViewportSize(PHONE);
+  await signIn(context);
+  let release: (() => void) | null = null;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await answerApi(page, async (route) => {
+    await held;
+    await route.fulfill({ json: { status: 'failed', error: 'Unknown error' } });
+  });
+
+  await startRun(page);
+  await expect(canvas(page).getByRole('heading', { name: 'Making your video' })).toBeVisible();
+  // Back at the prompt, typing the next run, while this one works.
+  const prompt = page.getByRole('textbox', { name: 'Prompt' });
+  await prompt.focus();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  release!();
+
+  const line = page.getByText('Your run didn’t finish. Your 19 credits are back.', { exact: false });
+  await expect(line).toBeVisible();
+  await expect(prompt).toBeFocused();
+  await expect(canvas(page).getByRole('heading', { name: 'It didn’t finish' })).not.toBeInViewport();
+
+  await page.getByRole('button', { name: 'See why' }).click();
+  const heading = canvas(page).getByRole('heading', { name: 'It didn’t finish' });
+  await expect(heading).toBeFocused();
+  await expect(heading).toBeInViewport();
+});

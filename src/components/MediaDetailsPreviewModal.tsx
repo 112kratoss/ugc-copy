@@ -8,6 +8,7 @@ import { AlertCircle, AlertTriangle, Check, ChevronDown, Copy, Film, Image as Im
 import { createPortal } from 'react-dom';
 
 import CreatorIdentity from '@/components/CreatorIdentity';
+import { getFocusableElements } from '@/lib/focusable-elements';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import type { ShowcaseCreator } from '@/lib/showcase';
 
@@ -99,19 +100,6 @@ export default function MediaDetailsPreviewModal({
       statusNote={statusNote}
     />
   );
-}
-
-const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, audio[controls], video[controls], [tabindex]:not([tabindex="-1"])';
-
-// Only the controls the browser draws: a folded <details> shows its summary alone, and Tab
-// skips the rest, so counting them let the focus out past the summary and sent Shift+Tab to
-// a control that cannot take it.
-function getFocusableElements(container: HTMLElement | null): HTMLElement[] {
-  if (!container) return [];
-  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-    .filter((element) => element.getAttribute('aria-hidden') !== 'true'
-      && !element.closest('details:not([open]) > :not(summary)')
-      && (typeof element.checkVisibility !== 'function' || element.checkVisibility()));
 }
 
 const STATUS_NOTE_TONE_CLASS: Record<NonNullable<MediaDetailsStatusNote['tone']>, string> = {

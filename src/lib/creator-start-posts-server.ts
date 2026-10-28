@@ -5,12 +5,14 @@ import { unstable_cache } from 'next/cache';
 import { cheapestRemixCandidate, type RemixCandidate } from '../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import { logBackendError } from '@/lib/backend-logger';
 import { catalogVideoEntryFields } from '@/lib/catalog-video-entry';
-import { VIDEO_MODELS, videoLengthOptions } from '@/lib/client-generation-models';
+import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { VideoRunMedia } from '@/lib/creator-run-inputs';
 import type { CreatorStartPost, StartPostRemixForecast } from '@/lib/creator-start-posts';
 import {
   fitVideoFormToModel,
+  makesVideoLength,
   takesSameVideoInputs,
+  videoLengthsBelow,
   videoRunOnModel,
   type VideoFormHeld,
   type VideoFormSettings,
@@ -19,15 +21,23 @@ import {
   type VideoRunOnModel,
 } from '@/lib/creator-video-candidates';
 import {
+  CatalogError,
   GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
   type GenerationModelCatalog,
   type GenerationModelQuote,
   type GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
 import { loadPublishedGenerationModelCatalog, quotePublishedGenerationModels } from '@/lib/generation-model-catalog-store';
-import { loadHomeShelfCreationsWithPosts, remixQuoteSettings, type HomeShelfIdentity } from '@/lib/home-shelf-server';
+import {
+  HOME_SHELF_REVALIDATE_SECONDS,
+  loadHomeShelfCreationsWithPosts,
+  loadSharedHomeShelfCreations,
+  remixQuoteSettings,
+  withoutPost,
+  type HomeShelfIdentity,
+  type ShelfGenerationRow,
+} from '@/lib/home-shelf-server';
 import { createServiceClient } from '@/lib/server-helpers';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 
 /**
  * Server side of the creators' "Start from a post" (`creator-start-posts.ts`): the Home
@@ -35,26 +45,27 @@ import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
  * model the web offers. The runs are the page's own (`videoRunOnModel` over entries built
  * from the published catalog as the browser builds them), so a card's fitted price is the
  * one the page shows once the remix opens. What they cost does not depend on who asks, so
- * one build serves every viewer between rebuilds; the balance is read on the page.
+ * one build per catalog release serves every viewer; the balance is read on the page.
  */
 
-/** How long a build of the forecasts is reused, as the shelf's own. */
-const START_POST_REMIX_REVALIDATE_SECONDS = 300;
-
 /** Part of the cache key: bump it whenever what a build holds changes. */
-const START_POST_REMIX_BUILD_VERSION = 'creator-start-post-remixes-v1';
+const START_POST_REMIX_BUILD_VERSION = 'creator-start-post-remixes-v2';
 
-interface StoredGeneration {
-  id: string;
-  workflow_settings: Record<string, unknown> | null;
-  share_input_media_for_remix: boolean | null;
-}
+type StoredGeneration = Pick<ShelfGenerationRow, 'id' | 'workflow_settings' | 'share_input_media_for_remix'>;
 
 export interface StartPostRemixDependencies {
   loadGenerations: (generationIds: string[]) => Promise<StoredGeneration[]>;
   /** The published web catalog, with full descriptors (the stored schema, inputs included). */
   loadCatalog: () => Promise<GenerationModelCatalog>;
   quote: (inputs: readonly GenerationModelQuoteInput[]) => Promise<Array<PromiseSettledResult<GenerationModelQuote>>>;
+}
+
+async function loadPublishedWebCatalog() {
+  const snapshot = await loadPublishedGenerationModelCatalog({
+    platform: 'web',
+    schemaVersion: GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
+  });
+  return snapshot.catalog;
 }
 
 const defaultDependencies: StartPostRemixDependencies = {
@@ -66,17 +77,15 @@ const defaultDependencies: StartPostRemixDependencies = {
     if (error) throw error;
     return (data ?? []) as StoredGeneration[];
   },
-  async loadCatalog() {
-    const snapshot = await loadPublishedGenerationModelCatalog({
-      platform: 'web',
-      schemaVersion: GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
-    });
-    return snapshot.catalog;
-  },
+  loadCatalog: loadPublishedWebCatalog,
   quote: (inputs) => quotePublishedGenerationModels(inputs, { platform: 'web' }),
 };
 
-/** A shelf post's remix opens without its creator's media (the shelf prices only those), so its run holds nothing. */
+/**
+ * A shelf post's remix opens without its creator's media for anyone but its creator (the
+ * shelf prices only those), so the run the forecast prices holds none. Its creator gets
+ * their media back, so their own cards keep the shelf's price (`loadCreatorStartPosts`).
+ */
 const HOLDS_NOTHING: VideoFormHeld<VideoRunMedia> = {
   imageReferences: [],
   videoReferences: [],
@@ -95,41 +104,63 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The form a remix of the post opens with, as the page restores it (`fetchRemixData`):
- * each setting the run kept, the model's first mode where it kept none; the rest is left
- * to the model's defaults by the fitting that follows.
+ * What the run holds once the remix opens: none of its creator's media, and Gemini Omni's
+ * prepared voices and characters, which every remix keeps (`sanitizeWorkflowSettingsForRemix`
+ * leaves them), at most three of each, as the page restores them.
+ */
+function heldOnRemix(stored: Record<string, unknown>): VideoFormHeld<VideoRunMedia> {
+  const ids = (value: unknown) => (Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 3)
+    : []);
+  return { ...HOLDS_NOTHING, preparedVoiceIds: ids(stored.preparedAudioIds), characterIds: ids(stored.characterIds) };
+}
+
+/**
+ * The form a remix of the post opens with, as the page sets it: each setting the run kept
+ * (`fetchRemixData`), the model's first mode where it kept none, and a value the model no
+ * longer offers left out, so the fitting that follows gives it the model's default, as the
+ * page's own check of its settings against the model does.
  */
 function restoredForm(settings: Record<string, unknown>, entry: VideoRegistryEntry): VideoFormSettings {
   const text = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
+  const offered = (value: string | undefined, options: readonly string[]) => (value !== undefined && options.includes(value) ? value : undefined);
+  const duration = typeof settings.duration === 'number' && makesVideoLength(entry, settings.duration) ? settings.duration : undefined;
+  // Left undefined, a setting takes the model's default in `fitVideoFormToModel`.
   return {
     mode: text(settings.mode) ?? entry.modeOptions[0]?.value ?? '',
-    aspectRatio: text(settings.aspectRatio),
-    resolution: text(settings.resolution),
-    duration: typeof settings.duration === 'number' && settings.duration > 0 ? settings.duration : undefined,
+    aspectRatio: offered(text(settings.aspectRatio), entry.aspectRatios as readonly string[]),
+    resolution: offered(text(settings.resolution), entry.resolutions as readonly string[]),
+    duration,
     sound: typeof settings.sound === 'boolean' ? settings.sound : undefined,
     fixedLens: typeof settings.fixedLens === 'boolean' ? settings.fixedLens : undefined,
     isMultiShot: false,
   } as unknown as VideoFormSettings;
 }
 
-function durationRangeOf(entry: VideoRegistryEntry | undefined) {
-  return entry && 'singleShotDurationRange' in entry ? entry.singleShotDurationRange : null;
-}
+type Run = VideoRunOnModel<VideoRunMedia>;
+type PlannedPost = { postId: string; held: VideoFormHeld<VideoRunMedia>; original: Run; candidates: Array<{ run: Run; takesInputs: boolean }> };
 
-type PlannedPost = {
-  postId: string;
-  form: VideoFormSettings;
-  original: VideoRunOnModel<VideoRunMedia>;
-  candidates: Array<{ run: VideoRunOnModel<VideoRunMedia>; takesInputs: boolean }>;
-};
-
-async function costsOf(
-  runs: readonly VideoRunOnModel<VideoRunMedia>[],
-  quote: StartPostRemixDependencies['quote'],
-): Promise<Array<number | null>> {
-  if (runs.length === 0) return [];
+/**
+ * Each run's price, by run. A run the catalog refuses (the model cannot take it) has none;
+ * any other failure (the catalog unreadable or changed under the build, a price it cannot
+ * work out) fails the build, so nothing half-priced is kept and the cards fall back to the
+ * shelf's own prices, where the page would wait and ask again.
+ */
+async function pricesOf(runs: readonly Run[], quote: StartPostRemixDependencies['quote']): Promise<Map<Run, number | null>> {
+  const prices = new Map<Run, number | null>();
+  if (runs.length === 0) return prices;
   const answers = await quote(runs.map((run) => run.quoteInput));
-  return answers.map((answer) => (answer.status === 'fulfilled' ? answer.value.costCredits : null));
+  answers.forEach((answer, index) => {
+    if (answer.status === 'fulfilled') {
+      prices.set(runs[index], answer.value.costCredits);
+      return;
+    }
+    const refused = answer.reason instanceof CatalogError
+      && (answer.reason.code === 'INVALID_MODEL_SETTINGS' || answer.reason.code === 'MODEL_UNAVAILABLE');
+    if (!refused) throw answer.reason;
+    prices.set(runs[index], null);
+  });
+  return prices;
 }
 
 /**
@@ -155,6 +186,13 @@ export async function buildStartPostRemixForecasts(
   } as unknown as VideoRegistryEntry]));
   const models: VideoModelLookup = (modelId) => entries.get(modelId);
   const generationById = new Map(generations.map((generation) => [generation.id, generation]));
+  const runOn = (modelId: string, settings: VideoFormSettings, held: VideoFormHeld<VideoRunMedia>) => videoRunOnModel({
+    modelId,
+    catalogRevision: catalog.revision,
+    settings,
+    held,
+    models,
+  });
 
   const planned = posts.flatMap((post): PlannedPost[] => {
     const generation = generationById.get(post.generationId);
@@ -166,109 +204,99 @@ export async function buildStartPostRemixForecasts(
     const visible = remixQuoteSettings(descriptor, stored);
     if (!visible || visible.isMultiShot === true) return [];
 
+    const held = heldOnRemix(stored);
     const form = fitVideoFormToModel(modelId, restoredForm(visible, entry), models);
-    const original = videoRunOnModel({ modelId, catalogRevision: catalog.revision, settings: form, held: HOLDS_NOTHING, models });
+    const original = runOn(modelId, form, held);
     if (!original) return [];
     const candidates = videoModels.filter((model) => model.id !== modelId).flatMap((model) => {
-      const run = videoRunOnModel({
-        modelId: model.id,
-        catalogRevision: catalog.revision,
-        settings: fitVideoFormToModel(model.id, form, models),
-        held: HOLDS_NOTHING,
-        models,
-      });
+      const run = runOn(model.id, fitVideoFormToModel(model.id, form, models), held);
       return run ? [{ run, takesInputs: takesSameVideoInputs({ inputs: original.inputs, settings: form }, run) }] : [];
     });
-    return [{ postId: post.postId, form, original, candidates }];
+    return [{ postId: post.postId, held, original, candidates }];
   });
 
   // Every post's runs in one request; then the shorter lengths of each one's cheapest model.
-  const firstRuns = planned.flatMap((post) => [post.original, ...post.candidates.map((candidate) => candidate.run)]);
-  const firstCosts = await costsOf(firstRuns, resolved.quote);
-  let offset = 0;
+  const firstPrices = await pricesOf(planned.flatMap((post) => [post.original, ...post.candidates.map((candidate) => candidate.run)]), resolved.quote);
   const priced = planned.map((post) => {
-    const originalCost = firstCosts[offset] ?? null;
-    const candidates: RemixCandidate[] = post.candidates.map((candidate, index) => ({
-      modelId: candidate.run.modelId,
-      cost: firstCosts[offset + 1 + index] ?? null,
-      durationSeconds: candidate.run.durationSeconds,
-      takesInputs: candidate.takesInputs,
-    }));
-    offset += 1 + post.candidates.length;
-    const cheapest = cheapestRemixCandidate(
-      { modelId: post.original.modelId, durationSeconds: post.original.durationSeconds },
-      candidates,
-    );
-    const cheapestRun = cheapest ? post.candidates.find((candidate) => candidate.run.modelId === cheapest.modelId)?.run : undefined;
-    const entry = cheapest ? entries.get(cheapest.modelId) : undefined;
-    const shorterRuns = cheapestRun && entry
-      ? videoLengthOptions(durationRangeOf(entry), entry.durations)
-        .filter((length) => length < cheapestRun.durationSeconds)
-        .flatMap((duration) => {
-          const run = videoRunOnModel({
-            modelId: cheapestRun.modelId,
-            catalogRevision: catalog.revision,
-            settings: { ...cheapestRun.settings, duration },
-            held: HOLDS_NOTHING,
-            models,
-          });
-          return run ? [run] : [];
-        })
+    // Only a model the run may move to can be picked (`fitRemixToBalance`), so only those are sent.
+    const candidates: RemixCandidate[] = post.candidates
+      .map(({ run, takesInputs }) => ({ modelId: run.modelId, cost: firstPrices.get(run) ?? null, durationSeconds: run.durationSeconds, takesInputs }))
+      .filter((candidate) => candidate.takesInputs && candidate.cost !== null);
+    const cheapest = cheapestRemixCandidate({ modelId: post.original.modelId, durationSeconds: post.original.durationSeconds }, candidates);
+    const cheapestRun = cheapest ? post.candidates.find(({ run }) => run.modelId === cheapest.modelId)?.run : undefined;
+    // The lengths the page prices, the cheapest model's under the original's.
+    const shorterRuns = cheapestRun
+      ? videoLengthsBelow(cheapestRun.modelId, cheapestRun.durationSeconds, models).flatMap((duration) => {
+        const run = runOn(cheapestRun.modelId, { ...cheapestRun.settings, duration }, post.held);
+        return run ? [run] : [];
+      })
       : [];
-    return { post, originalCost, candidates, cheapestModelId: cheapest?.modelId ?? null, shorterRuns };
+    return { post, candidates, cheapestModelId: cheapest?.modelId ?? null, shorterRuns };
   });
+  const shorterPrices = await pricesOf(priced.flatMap((post) => post.shorterRuns), resolved.quote);
 
-  const secondCosts = await costsOf(priced.flatMap((post) => post.shorterRuns), resolved.quote);
-  offset = 0;
+  const displayName = new Map(videoModels.map((model) => [model.id, model.displayName]));
   const forecasts: Record<string, StartPostRemixForecast> = {};
-  for (const { post, originalCost, candidates, cheapestModelId, shorterRuns } of priced) {
-    const shorterPrices = shorterRuns.map((run, index) => ({ durationSeconds: run.durationSeconds, cost: secondCosts[offset + index] ?? null }));
-    offset += shorterRuns.length;
+  for (const { post, candidates, cheapestModelId, shorterRuns } of priced) {
+    const originalCost = firstPrices.get(post.original) ?? null;
     if (originalCost === null) continue;
     forecasts[post.postId] = {
       original: { modelId: post.original.modelId, cost: originalCost, durationSeconds: post.original.durationSeconds },
       candidates,
-      shorter: cheapestModelId ? { modelId: cheapestModelId, prices: shorterPrices } : null,
+      shorter: cheapestModelId
+        ? { modelId: cheapestModelId, prices: shorterRuns.map((run) => ({ durationSeconds: run.durationSeconds, cost: shorterPrices.get(run) ?? null })) }
+        : null,
       preferredModelId: catalog.defaults.video ?? null,
-      modelNames: Object.fromEntries(videoModels.map((model) => [model.id, model.displayName])),
+      modelNames: Object.fromEntries(candidates.map(({ modelId }) => [modelId, displayName.get(modelId) ?? modelId])),
     };
   }
   return forecasts;
 }
 
 /**
- * Shared by every viewer: the forecasts depend only on the posts and the catalog. The
- * posts are the key, and the build carries the feed's tag, so a post taken down leaves
- * with the shelf's own build. A build that throws is not kept.
+ * Shared by every viewer: the forecasts depend only on the posts and the catalog release,
+ * and both are the key (the release's revision, read from the store's short-lived copy), so
+ * a release is priced on its own and a post taken off the shelf drops out of the key. A
+ * build that throws is not kept.
  */
 const loadCachedStartPostRemixForecasts = unstable_cache(
-  async (postsKey: string) => buildStartPostRemixForecasts(JSON.parse(postsKey) as Array<{ postId: string; generationId: string }>),
+  async (postsKey: string, catalogRevision: string) => {
+    void catalogRevision;
+    return buildStartPostRemixForecasts(JSON.parse(postsKey) as Array<{ postId: string; generationId: string }>);
+  },
   [START_POST_REMIX_BUILD_VERSION],
-  { revalidate: START_POST_REMIX_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
+  { revalidate: HOME_SHELF_REVALIDATE_SECONDS },
 );
+
+/** The forecasts for the shelf's shared build of video posts: none where it has none, or they cannot be built. */
+async function loadStartPostRemixForecasts(): Promise<Record<string, StartPostRemixForecast>> {
+  try {
+    const [shelf, catalog] = await Promise.all([loadSharedHomeShelfCreations(), loadPublishedWebCatalog()]);
+    const videoPosts = shelf.flatMap((creation) => (
+      creation.tool === 'video' && creation.price?.kind === 'credits' && creation.post.generationId
+        ? [{ postId: creation.id, generationId: creation.post.generationId }]
+        : []
+    ));
+    return videoPosts.length > 0 ? await loadCachedStartPostRemixForecasts(JSON.stringify(videoPosts), catalog.revision) : {};
+  } catch (error) {
+    logBackendError('creator_start_post_remix_forecasts_failed', { error });
+    return {};
+  }
+}
 
 /**
  * The creators' "Start from a post" for one viewer: the shelf's creations (none where the
- * Home shelf would draw none), each video post with its remix forecast. A forecast that
- * cannot be built leaves the cards on the shelf's own prices.
+ * Home shelf would draw none), each video post with its remix forecast, read alongside. A
+ * viewer's own post keeps the shelf's price: its remix brings their media back, which the
+ * forecast does not hold. A forecast that cannot be built leaves the shelf's prices.
  */
 export async function loadCreatorStartPosts(identity: HomeShelfIdentity): Promise<CreatorStartPost[]> {
-  const creations = await loadHomeShelfCreationsWithPosts(identity);
-  const videoPosts = creations.flatMap((creation) => (
-    creation.tool === 'video' && creation.price?.kind === 'credits' && creation.post.generationId
-      ? [{ postId: creation.id, generationId: creation.post.generationId }]
-      : []
-  ));
-  let forecasts: Record<string, StartPostRemixForecast> = {};
-  if (videoPosts.length > 0) {
-    try {
-      forecasts = await loadCachedStartPostRemixForecasts(JSON.stringify(videoPosts));
-    } catch (error) {
-      logBackendError('creator_start_post_remix_forecasts_failed', { error });
-    }
-  }
-  return creations.map(({ post, ...creation }) => {
-    void post;
-    return { ...creation, remix: forecasts[creation.id] ?? null };
-  });
+  const [creations, forecasts] = await Promise.all([
+    loadHomeShelfCreationsWithPosts(identity),
+    loadStartPostRemixForecasts(),
+  ]);
+  return creations.map((creation) => ({
+    ...withoutPost(creation),
+    remix: creation.creator.id !== null && creation.creator.id === identity.viewerUserId ? null : forecasts[creation.id] ?? null,
+  }));
 }

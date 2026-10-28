@@ -32,6 +32,7 @@ import {
     CreatorPendingStartNotice,
     CreatorResultActions,
     CreatorRunFailed,
+    CreatorRunFailedLine,
     CreatorRunWaitLines,
     CreatorSettingChoices,
     CreatorSettingsFootNote,
@@ -54,6 +55,7 @@ import {
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
+import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
 import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import { motionSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
@@ -205,6 +207,11 @@ interface MotionPublishPrefill {
 /** A run that reached a failed status. Its hold is always returned. */
 class MotionRunFailedError extends Error {}
 
+/** A run's model as its chip names it, where all the page knows of the run is its model: a start sent before, a run picked up on load. */
+function motionModelName(modelId: unknown): string | null {
+    return typeof modelId === 'string' ? (MOTION_MODELS as Record<string, { displayName: string } | undefined>)[modelId]?.displayName ?? null : null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -309,6 +316,8 @@ export default function CreateMotionClient({
     const [runLabel, setRunLabel] = useState<string | null>(null);
     // What the run in flight holds of the balance, for its canvas.
     const [runCost, setRunCost] = useState<number | null>(null);
+    // Whether the run's start answered: the run is the server's, so the page may be left.
+    const [runAnswered, setRunAnswered] = useState(false);
     // A run the provider failed, said on the canvas with its cause (the artboard Failed).
     const [runFailure, setRunFailure] = useState<{ message: string; cost: number | null } | null>(null);
     // Bumped when a run this page followed ends, done or failed: the canvas takes the focus.
@@ -895,6 +904,7 @@ export default function CreateMotionClient({
         setPublishPrefill(null);
         latestRunCostRef.current = null;
         setRunCost(null);
+        setRunAnswered(false);
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'motion',
             phaseLabel,
@@ -1003,6 +1013,7 @@ export default function CreateMotionClient({
         quoteState.started(start.body as CatalogGenerationRequestPayload);
         latestRunCostRef.current = started.cost;
         setRunCost(started.cost);
+        setRunAnswered(true);
         setLatestGenerationId(started.generationId ?? null);
         setLatestIsPublic(false);
         announceGenerationStarted();
@@ -1031,6 +1042,7 @@ export default function CreateMotionClient({
             typeof sentSettings.resolution === 'string' ? sentSettings.resolution : mode,
         );
         beginRunView(startedAtMs, estimatedTotalMs, 'Checking your last motion run');
+        setRunLabel((current) => current ?? motionModelName(start.body.modelId));
         setUnconfirmedStart(false);
         try {
             await sendStart(start, startedAtMs, estimatedTotalMs, { reveal });
@@ -1217,7 +1229,7 @@ export default function CreateMotionClient({
         if (!currentSession) return;
         const { data } = await supabase
             .from('generations')
-            .select('id, prediction_id, status, created_at, duration, prompt')
+            .select('id, prediction_id, status, created_at, duration, prompt, cost, model')
             .eq('user_id', currentSession.user.id)
             .eq('category', 'video')
             .eq('creation_mode', 'motion')
@@ -1234,7 +1246,10 @@ export default function CreateMotionClient({
         setLatestGenerationId(data.id ?? null);
         setLatestIsPublic(false);
         setRunPrompt(typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null);
-        latestRunCostRef.current = null;
+        setRunLabel(motionModelName(data.model));
+        latestRunCostRef.current = typeof data.cost === 'number' ? data.cost : null;
+        setRunCost(latestRunCostRef.current);
+        setRunAnswered(true);
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'motion',
             phaseLabel: 'Resuming active run',
@@ -1410,11 +1425,12 @@ export default function CreateMotionClient({
     const canvasChip = outputVideo
         ? creatorRunChip(runLabel, runCost)
         : isGenerating
-            ? creatorRunChip(runLabel ?? `${model.displayName} · ${settingsSummary}`, runCost)
+            ? creatorRunChip(runLabel, runCost)
             : runFailure && !isBackgroundProcessing
                 ? creatorRunChip(runLabel, null)
                 : null;
     const showsEmptyCanvas = !outputVideo && !isGenerating && !isBackgroundProcessing && !runFailure;
+    const showsRunFailure = runFailure !== null && !outputVideo && !isGenerating && !isBackgroundProcessing;
     const emptyCanvasHint = isVisitor
         ? 'Add a character image and a reference video first. When you sign up, your prompt, settings and files stay.'
         : 'Add a character image and a reference video, then Generate.';
@@ -1626,7 +1642,8 @@ export default function CreateMotionClient({
                                 </StudioModelPicker>
                             </div>
                         </div>
-                        {showsEmptyCanvas ? <CreatorStartPostsStrip source={startPosts} tool="motion" balance={listBalance} /> : null}
+                        {/* Until the first run this visit: back over the prompt after one, it pushed the field the creator went to. */}
+                        {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="motion" balance={listBalance} /> : null}
 
                         <AnimatePresence>
                             {modelNotice ? (
@@ -1803,6 +1820,9 @@ export default function CreateMotionClient({
                             settingsOpen={settingsOpen}
                             onSettingsOpenChange={setSettingsOpen}
                             status={barStatus}
+                            narrowStatus={showsRunFailure ? (
+                                <CreatorRunFailedLine returnedCredits={runFailure?.cost ?? null} onSeeWhy={() => setRunEndKey((key) => key + 1)} />
+                            ) : null}
                             action={barAction}
                             note={isVisitor
                                 ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={estimatedCost} />
@@ -1831,7 +1851,7 @@ export default function CreateMotionClient({
                                     <CreatorCanvasFrame aspectRatio="auto" accent="motion" busy>
                                         <Play aria-hidden className="h-6 w-6 text-[var(--ui-primary)]" />
                                         {generationTiming ? (
-                                            <div className="w-72 max-w-full">
+                                            <div className="w-full max-w-72">
                                                 <StudioGenerationStatus accent="violet" timing={generationTiming} nowMs={nowMs} />
                                             </div>
                                         ) : (
@@ -1839,7 +1859,7 @@ export default function CreateMotionClient({
                                         )}
                                     </CreatorCanvasFrame>
                                 </CreatorCanvasStage>
-                                <CreatorRunWaitLines noun="motion clip" heldCredits={runCost} />
+                                {runAnswered ? <CreatorRunWaitLines noun="motion clip" heldCredits={runCost} /> : null}
                                 <CreatorWhileYouWait source={startPosts} tool="motion" />
                             </>
                         ) : isBackgroundProcessing ? (
@@ -1856,8 +1876,10 @@ export default function CreateMotionClient({
                                 cause={describeRunFailure(runFailure.message, 'motion clip')}
                                 returnedCredits={runFailure.cost}
                                 retryLabel={estimatedCost !== null ? `Try again · ${quoteUi.costLabel}` : 'Try again'}
-                                retryDisabled={!canGenerate || quotePending}
+                                retryDisabled={!canGenerate || quotePending || showTopUp}
                                 onRetry={() => void handleGenerate()}
+                                retryable={isRetryableProviderFailure(runFailure.message)}
+                                onPickModel={() => setIsModelDropdownOpen(true)}
                                 onChangePrompt={() => {
                                     setRunFailure(null);
                                     promptInputRef.current?.focus();

@@ -19,7 +19,7 @@ import type { RemixTool } from '@/lib/remix-tools';
 export interface StartPostRemixForecast {
   /** The run on the post's own model, as its remix opens before any fitting. */
   original: { modelId: string; cost: number; durationSeconds: number };
-  /** The same run moved to each other model (`fitVideoFormToModel`), and whether it takes all of it. */
+  /** The same run moved to each other model that takes all of it (`fitVideoFormToModel`), at the price the catalog gives it. */
   candidates: RemixCandidate[];
   /**
    * The lengths under the original's of the cheapest model that takes the run

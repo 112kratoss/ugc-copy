@@ -4,7 +4,7 @@ import {
 } from '../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import { videoRunShortSummary } from '../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import { catalogRunQuoteInput, catalogRunInputFacts, SUBJECT_IMAGES_SLOT_KEY } from '../../ugc-mobile/lib/model-catalog/protocol';
-import { VIDEO_MODELS, type VideoModelId } from '@/lib/client-generation-models';
+import { VIDEO_MODELS, videoLengthOptions, type VideoModelId } from '@/lib/client-generation-models';
 import { planVideoRunInputs, type VideoRunInput, type VideoRunMedia, type VideoRunSubject } from '@/lib/creator-run-inputs';
 import { getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor, GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
@@ -60,13 +60,27 @@ const REFERENCE_SLOTS = new Set(['imageReferences', 'videoReferences', 'audioRef
 
 const pageModels: VideoModelLookup = (modelId) => (VIDEO_MODELS as unknown as Record<string, VideoRegistryEntry | undefined>)[modelId];
 
-// As `getVideoDurationRange` and `getDefaultVideoDuration` read the page's registry.
-function durationRangeOf(entry: VideoRegistryEntry | undefined): { min: number; max: number; default: number } | null {
+// As `getVideoDurationRange`, `getDefaultVideoDuration` and `isValidVideoDuration` read the page's registry.
+export function durationRangeOf(entry: VideoRegistryEntry | undefined): { min: number; max: number; default: number } | null {
   return entry && 'singleShotDurationRange' in entry ? entry.singleShotDurationRange : null;
 }
 
 function defaultDurationOf(entry: VideoRegistryEntry | undefined): number {
   return durationRangeOf(entry)?.default ?? (entry?.durations[0] ?? 5);
+}
+
+/** Whether a model makes a single shot of this length: in its range, or among the lengths it lists. */
+export function makesVideoLength(entry: VideoRegistryEntry, durationSeconds: number): boolean {
+  const range = durationRangeOf(entry);
+  return range
+    ? durationSeconds >= range.min && durationSeconds <= range.max
+    : (entry.durations as readonly number[]).includes(durationSeconds);
+}
+
+/** A model's single-shot lengths below `belowSeconds`, as its settings offer them: what a remix the balance is short of is shortened to. */
+export function videoLengthsBelow(modelId: string, belowSeconds: number, models: VideoModelLookup = pageModels): number[] {
+  const entry = models(modelId);
+  return entry ? videoLengthOptions(durationRangeOf(entry), entry.durations).filter((length) => length < belowSeconds) : [];
 }
 
 /** A model's settings as the fitting rule reads them: its descriptor's, or before that its options as the page draws them. */

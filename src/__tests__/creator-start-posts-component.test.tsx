@@ -1,6 +1,6 @@
 import type { ComponentPropsWithoutRef } from 'react';
-import { act, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Video } from 'lucide-react';
 
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait } from '@/components/CreatorStartPosts';
@@ -10,6 +10,11 @@ vi.mock('next/link', () => ({
   default: ({ prefetch, ...props }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean }) => (
     <a {...props} data-prefetch={prefetch === undefined ? undefined : String(prefetch)} />
   ),
+}));
+
+// The clip player's own playback is not under test: whether one is mounted is.
+vi.mock('@/components/HoverVideo', () => ({
+  HoverVideo: ({ src }: { src: string }) => <video data-testid="clip" data-src={src} />,
 }));
 
 // next/image needs the Next runtime; the poster's own markup is not under test.
@@ -111,7 +116,64 @@ describe('the empty canvas\'s start posts', () => {
   });
 });
 
+describe('the posts the page could not get', () => {
+  // A stream cut off on the way rejects the posts: each place draws what it draws without them.
+  it('leaves the empty canvas its frame, and the strip and the posts to watch nothing', async () => {
+    const lost = () => Promise.reject(new Error('Connection closed.'));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await renderSettled(
+        <>
+          <CreatorEmptyCanvas source={lost()} tool="video" balance={25} icon={Video} title="t" hint="h" frame={FRAME} />
+          <CreatorStartPostsStrip source={lost()} tool="video" balance={25} />
+          <CreatorWhileYouWait source={lost()} tool="video" />
+        </>,
+      );
+    } finally {
+      errors.mockRestore();
+    }
+    expect(screen.getByTestId('empty-frame')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Start from a post' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'While you wait' })).not.toBeInTheDocument();
+  });
+});
+
+describe('a post\'s clip', () => {
+  const reducedMotion = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = reducedMotion;
+  });
+
+  const clipPost = post('cats', { clipUrl: 'https://cdn.example/cats.mp4' });
+  const card = () => screen.getByRole('link', { name: 'Post cats, by @fluffy' }).closest('li')!;
+
+  it('plays under a pointer, and is never fetched for a finger on its way to a link', async () => {
+    await renderSettled(<CreatorWhileYouWait source={Promise.resolve([clipPost])} tool="video" />);
+    fireEvent.pointerEnter(card(), { pointerType: 'touch' });
+    expect(screen.queryByTestId('clip')).not.toBeInTheDocument();
+    fireEvent.pointerEnter(card(), { pointerType: 'mouse' });
+    expect(screen.getByTestId('clip')).toHaveAttribute('data-src', 'https://cdn.example/cats.mp4');
+    fireEvent.pointerLeave(card(), { pointerType: 'mouse' });
+    expect(screen.queryByTestId('clip')).not.toBeInTheDocument();
+  });
+
+  it('stays still for a viewer who asked for less motion, its play mark kept', async () => {
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as typeof window.matchMedia;
+    await renderSettled(<CreatorWhileYouWait source={Promise.resolve([clipPost])} tool="video" />);
+    fireEvent.pointerEnter(card(), { pointerType: 'mouse' });
+    expect(screen.queryByTestId('clip')).not.toBeInTheDocument();
+    expect(card().querySelector('svg.lucide-play')).not.toBeNull();
+  });
+});
+
 describe('the column\'s strip of start posts', () => {
+  it('holds the posts\' places while they come, so the prompt under it does not move', async () => {
+    await renderSettled(<CreatorStartPostsStrip source={new Promise(() => {})} tool="video" balance={25} />);
+    const strip = screen.getByRole('region', { name: 'Start from a post' });
+    expect(strip.querySelector('ul[aria-hidden]')).not.toBeNull();
+    expect(within(strip).queryByRole('link', { name: /^Remix/ })).not.toBeInTheDocument();
+  });
+
   it('shows the posts with the price alone on each Remix, and nothing where there are none', async () => {
     const view = await renderSettled(<CreatorStartPostsStrip source={Promise.resolve([post('cats')])} tool="video" balance={25} />);
     const strip = screen.getByRole('region', { name: 'Start from a post' });

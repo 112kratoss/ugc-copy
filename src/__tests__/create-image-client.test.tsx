@@ -1639,6 +1639,20 @@ describe('CreateImageClient generation pipeline', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent('The model’s service stopped before your image was done.');
     });
 
+    it('names a run picked up on load and what it holds, as its failure does', async () => {
+      maybeSingleMock.mockResolvedValueOnce({
+        data: { id: 'gen-old', prediction_id: 'pred-old', status: 'processing', created_at: new Date().toISOString(), prompt: 'An earlier run', cost: 8, model: 'nano-banana-2' },
+        error: null,
+      } as never);
+      fetchGenerationStatusWithRetryMock.mockImplementation(() => new Promise(() => undefined));
+      installFetch();
+      render(<CreateImageClient prefill={{}} />);
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(await within(canvas).findByText('8 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+      expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 8 credits$/);
+    });
+
     // The artboards Generating and Result (owner, 2026-10-28), and the build notes' focus on "Done".
     it('says what a run at work holds, then Done with the run\'s line and the focus', async () => {
       let finish: (value: unknown) => void = () => {};

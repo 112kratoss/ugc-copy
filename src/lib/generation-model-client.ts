@@ -5,8 +5,8 @@ import { ModelCatalogSession, type CatalogSessionState } from '../../ugc-mobile/
 import { catalogRunWithShownCost, type ModelCatalogKind, type ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 import {
-  catalogChoiceValues as choiceValues,
-  catalogIntegerControl as integerControl,
+  catalogChoiceValues,
+  catalogIntegerControl,
   catalogVideoEntryFields,
 } from '@/lib/catalog-video-entry';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
@@ -243,7 +243,7 @@ export function applyGenerationModelCatalogToRegistries(
   for (const model of catalog.models) {
     if (model.kind === 'image') {
       const existing = registries.image[model.id] ?? {};
-      const resolutions = choiceValues(model, 'resolution');
+      const resolutions = catalogChoiceValues(model, 'resolution');
       registries.image[model.id] = {
         ...existing,
         id: model.id,
@@ -255,9 +255,9 @@ export function applyGenerationModelCatalogToRegistries(
         maxImages: model.inputs.imageReferences?.max ?? 0,
         supportsGoogleSearch: model.capabilities.googleSearch,
         supportsOutputFormat: model.capabilities.outputFormat,
-        aspectRatios: choiceValues(model, 'aspectRatio'),
+        aspectRatios: catalogChoiceValues(model, 'aspectRatio'),
         resolutions,
-        outputFormats: choiceValues(model, 'outputFormat').length > 0 ? choiceValues(model, 'outputFormat') : ['jpg'],
+        outputFormats: catalogChoiceValues(model, 'outputFormat').length > 0 ? catalogChoiceValues(model, 'outputFormat') : ['jpg'],
         catalogManaged: true,
         catalogActive: true,
         catalogInputs: model.inputs,
@@ -274,8 +274,8 @@ export function applyGenerationModelCatalogToRegistries(
     }
 
     const existing = registries.motion[model.id] ?? {};
-    const duration = integerControl(model, 'duration');
-    const resolutions = choiceValues(model, 'resolution');
+    const duration = catalogIntegerControl(model, 'duration');
+    const resolutions = catalogChoiceValues(model, 'resolution');
     registries.motion[model.id] = {
       ...existing,
       id: model.id,
@@ -285,7 +285,7 @@ export function applyGenerationModelCatalogToRegistries(
       badgeColor: existing.badgeColor ?? 'from-[#ff7a59] to-orange-500',
       maxDuration: duration?.max ?? 30,
       maxVideoDuration: duration?.max ?? 30,
-      characterOrientations: choiceValues(model, 'characterOrientation'),
+      characterOrientations: catalogChoiceValues(model, 'characterOrientation'),
       resolutions,
       catalogManaged: true,
       catalogActive: true,

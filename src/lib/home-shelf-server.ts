@@ -44,7 +44,7 @@ import { loadWelcomeCreditAmount } from '@/lib/welcome-credit-program-server';
  */
 
 /** How long a built shelf is reused between rebuilds. */
-const HOME_SHELF_REVALIDATE_SECONDS = 300;
+export const HOME_SHELF_REVALIDATE_SECONDS = 300;
 
 /**
  * Part of the build's cache key. The Data Cache outlives a deploy, so bump this
@@ -79,7 +79,7 @@ export type HomeShelfCreationWithPost = HomeShelfCreation & { post: ShowcaseFeed
 /** What `/api/home/shelf` sends per item: creations carry their post for the app. */
 export type HomeShelfApiItem = HomeShelfCreationWithPost | HomeShelfAction;
 
-interface ShelfGenerationRow {
+export interface ShelfGenerationRow {
   id: string;
   model: string | null;
   workflow_settings: Record<string, unknown> | null;
@@ -364,7 +364,7 @@ async function loadHomeShelfForViewer(
   return arrangeHomeShelf(visible, actions);
 }
 
-function withoutPost({ post, ...creation }: HomeShelfCreationWithPost): HomeShelfCreation {
+export function withoutPost({ post, ...creation }: HomeShelfCreationWithPost): HomeShelfCreation {
   void post;
   return creation;
 }
@@ -373,6 +373,15 @@ function withoutPost({ post, ...creation }: HomeShelfCreationWithPost): HomeShel
 export async function loadHomeShelf(identity: HomeShelfIdentity = SIGNED_OUT): Promise<HomeShelfItem[]> {
   const items = await loadHomeShelfForViewer(identity, 'empty');
   return items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item));
+}
+
+/**
+ * The shelf's shared build, for every viewer alike (none where there are too few
+ * pins or it cannot be read): what the creators' remix forecasts are keyed by,
+ * so a viewer's hides and blocks never make a build of their own.
+ */
+export async function loadSharedHomeShelfCreations(): Promise<HomeShelfCreationWithPost[]> {
+  return loadHomeShelfCreations('empty');
 }
 
 /**

@@ -35,6 +35,9 @@ export default async function CreateMotionPage({
   const startPosts = prefill.remixId ? null : loadCreatorStartPostsForRequest();
   const client = (visitorWelcomeCredits: number | null) => (
     <CreateMotionClient
+      // A Remix from this page lands on the same route, which keeps the client: a
+      // new remix starts a new one, so it loads as a remix opened anywhere else does.
+      key={`${prefill.remixId ?? ''}|${prefill.remixPostId ?? ''}`}
       prefill={prefill}
       returnTo={returnTo}
       welcome={welcome}

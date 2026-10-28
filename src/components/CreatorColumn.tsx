@@ -363,6 +363,7 @@ export function CreatorColumnBar({
   settingsOpen,
   onSettingsOpenChange,
   status,
+  narrowStatus,
   action,
   note,
   stacked = false,
@@ -379,6 +380,8 @@ export function CreatorColumnBar({
   /** Told when the settings open and close. */
   onSettingsOpenChange?: (open: boolean) => void;
   status?: ReactNode;
+  /** Over the buttons under the column only, where the canvas may be out of view (`CreatorRunFailedLine`). */
+  narrowStatus?: ReactNode;
   action: ReactNode;
   /** A quiet line under the buttons: the balance and what the run leaves of it, or what signing up gives a visitor. */
   note?: ReactNode;
@@ -456,6 +459,11 @@ export function CreatorColumnBar({
         {status ? (
           <div data-creator-bar-status className="border-b border-[var(--ui-border-subtle)] px-4 py-3 text-sm">
             {status}
+          </div>
+        ) : null}
+        {narrowStatus ? (
+          <div data-creator-bar-narrow-status className="border-b border-[var(--ui-border-subtle)] px-4 py-3 text-sm min-[1120px]:hidden">
+            {narrowStatus}
           </div>
         ) : null}
 
@@ -1225,19 +1233,17 @@ export function CreatorUploadSlot({
 }
 
 /**
- * Where the focus stays when a run ends: a field the creator is typing in, or a dialog they
- * opened meanwhile (the settings), which would close if it lost the focus. An icon's `<svg>`
- * is an Element, not an HTMLElement, so `closest()` is asked first.
+ * Whether a run's end may take the focus to the canvas's heading: from the page itself, the
+ * canvas or the bar, where a run is started and tried again. A creator at work in the column
+ * meanwhile (typing the next prompt, picking a model) keeps it, as does one in a dialog (the
+ * settings, which would close without it) or under one that holds the page (a preview).
  */
-function keepsFocusAtRunEnd(element: Element | null) {
-  if (!element) return false;
-  if (element.closest('[role="dialog"]')) return true;
-  if (!(element instanceof HTMLElement)) return false;
-  if (element.isContentEditable || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) return true;
-  return element instanceof HTMLInputElement && !['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'file'].includes(element.type);
+function movesFocusAtRunEnd(active: Element | null, canvas: Element | null): boolean {
+  if (document.querySelector('[aria-modal="true"]')) return false;
+  if (!active || active === document.body) return true;
+  if (active.closest('[role="dialog"]')) return false;
+  return Boolean(canvas?.contains(active) || active.closest('[data-creator-bar]'));
 }
-
-
 
 /**
  * The result pane. On a wide window it stays in view beside the column for the
@@ -1252,8 +1258,8 @@ function keepsFocusAtRunEnd(element: Element | null) {
  * `focusKey` moves the focus to its heading when it changes (the build notes:
  * focus moves to "Done" when a run ends): the page bumps it when a run the
  * creator started here ends, done or failed, never for a run picked up on load,
- * which leaves the page where it is. A creator typing the next prompt keeps the
- * field, and one in a dialog keeps it.
+ * which leaves the page where it is, and for the bar's "See why". A creator at
+ * work in the column or a dialog keeps the focus (`movesFocusAtRunEnd`).
  *
  * `flow` stacks the body instead of fitting one thing to it (the empty canvas's
  * posts, a run at work and the posts under it): beside the column it scrolls
@@ -1298,7 +1304,7 @@ export function CreatorCanvas({
   }, [revealKey]);
 
   useEffect(() => {
-    if (!focusKey || keepsFocusAtRunEnd(document.activeElement)) return;
+    if (!focusKey || !movesFocusAtRunEnd(document.activeElement, sectionRef.current)) return;
     // The browser brings the heading into view as it focuses it where it is out of view
     // (under the column on a phone), and beside the column it is in view already.
     headingRef.current?.focus();
@@ -1365,7 +1371,7 @@ const CANVAS_STAGE_CLASS =
 /**
  * In a `flow` canvas, the place a frame is fitted to, as the canvas's own body is in
  * the other: beside the column a size container that takes what the rest leaves it,
- * never less than `minHeight`; under the column the frame's width decides.
+ * never less than 18rem; under the column the frame's width decides.
  */
 export function CreatorCanvasStage({ children, className }: { children: ReactNode; className?: string }) {
   return (
@@ -1410,7 +1416,7 @@ export function CreatorRunWaitLines({ noun, heldCredits }: { noun: string; heldC
 }
 
 /** What a run's failure says when the model's service gave no reason, or only a generic one. */
-const GENERIC_RUN_FAILURES = new Set(['', 'unknown error', 'generation failed', 'video generation failed', 'image generation failed', 'motion generation failed']);
+const GENERIC_RUN_FAILURES = new Set(['', 'unknown error', 'generation failed', 'video generation failed', 'image generation failed']);
 
 /**
  * The cause a failed run's canvas names (the artboard Failed): the reason the server
@@ -1424,18 +1430,30 @@ export function describeRunFailure(message: string | null | undefined, noun: str
     : reason;
 }
 
+/** "Your 19 credits are back.": a failed run's hold, always returned; the amount where it is known. */
+function creditsBackSentence(returnedCredits: number | null): string {
+  return returnedCredits !== null && returnedCredits > 0
+    ? `Your ${creditsWords(returnedCredits)} ${returnedCredits === 1 ? 'is' : 'are'} back.`
+    : 'Your credits are back.';
+}
+
 /**
  * A run that failed (the artboard Failed): its cause, that its credits are back, and the
- * same run again, priced, or the prompt to change it first.
+ * same run again, priced, or the prompt to change it first. Where the same run cannot get
+ * past the cause (`isRetryableProviderFailure`), another model stands in for Try again.
  */
-export function CreatorRunFailed({ cause, returnedCredits, retryLabel, retryDisabled, onRetry, onChangePrompt }: {
+export function CreatorRunFailed({ cause, returnedCredits, retryLabel, retryDisabled, onRetry, retryable = true, onPickModel, onChangePrompt }: {
   cause: string;
   /** What the run held, returned with its failure; null where it is not known. */
   returnedCredits: number | null;
   /** "Try again · 19 credits". */
   retryLabel: string;
+  /** Where the bar offers something else than Generate (a top-up, the fitted remix), Try again waits too. */
   retryDisabled: boolean;
   onRetry: () => void;
+  retryable?: boolean;
+  /** Opens the model picker, in place of a retry that cannot succeed. */
+  onPickModel?: () => void;
   onChangePrompt: () => void;
 }) {
   return (
@@ -1443,21 +1461,37 @@ export function CreatorRunFailed({ cause, returnedCredits, retryLabel, retryDisa
       <CircleAlert aria-hidden className="mx-auto h-6 w-6 text-amber-300" />
       <div role="alert" className="mt-3 space-y-2">
         <p className="text-base font-bold leading-6 text-[var(--ui-text-primary)] [overflow-wrap:anywhere]">{cause}</p>
-        <p className="text-sm leading-6 text-[var(--ui-text-muted)]">
-          {returnedCredits !== null && returnedCredits > 0
-            ? `Your ${creditsWords(returnedCredits)} ${returnedCredits === 1 ? 'is' : 'are'} back.`
-            : 'Your credits are back.'}
-        </p>
+        <p className="text-sm leading-6 text-[var(--ui-text-muted)]">{creditsBackSentence(returnedCredits)}</p>
       </div>
       <div className="mt-5 grid gap-2">
-        <button type="button" onClick={onRetry} disabled={retryDisabled} className={CREATOR_BAR_PRIMARY_CLASS}>
-          <span className="truncate">{retryLabel}</span>
-        </button>
+        {retryable || !onPickModel ? (
+          <button type="button" onClick={onRetry} disabled={retryDisabled} className={CREATOR_BAR_PRIMARY_CLASS}>
+            <span className="truncate">{retryLabel}</span>
+          </button>
+        ) : (
+          <button type="button" onClick={onPickModel} className={CREATOR_BAR_PRIMARY_CLASS}>
+            <span className="truncate">Pick another model</span>
+          </button>
+        )}
         <button type="button" onClick={onChangePrompt} className="ui-button ui-button-secondary ui-focus-ring min-h-12 w-full">
           Change the prompt
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The bar's word on a failed run under the column, where the canvas may be out of view (a
+ * creator at the next prompt on a phone): that it failed, that its credits are back, and
+ * the way to the canvas, which says why. Beside the column the canvas is in view: none.
+ */
+export function CreatorRunFailedLine({ returnedCredits, onSeeWhy }: { returnedCredits: number | null; onSeeWhy: () => void }) {
+  return (
+    <p className="text-amber-200">
+      Your run didn’t finish. {creditsBackSentence(returnedCredits)}{' '}
+      <button type="button" onClick={onSeeWhy} className={CREATOR_NOTE_LINK_CLASS}>See why</button>
+    </p>
   );
 }
 
@@ -1559,7 +1593,7 @@ export function CreatorCanvasFrame({
       {busy ? (
         <div aria-hidden className={clsx('absolute inset-0 animate-pulse bg-gradient-to-b motion-reduce:animate-none', getAccentClasses(accent).surface)} />
       ) : null}
-      <div className="relative flex max-w-xs flex-col items-center gap-3 px-6 text-center">{children}</div>
+      <div className="relative flex w-full min-w-0 max-w-xs flex-col items-center gap-3 px-6 text-center">{children}</div>
     </div>
   );
 }

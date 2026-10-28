@@ -39,6 +39,9 @@ export default async function CreateVideoPage({
   const startPosts = prefill.remixId ? null : loadCreatorStartPostsForRequest();
   const client = (visitorWelcomeCredits: number | null) => (
     <CreateVideoClient
+      // A Remix from this page lands on the same route, which keeps the client: a
+      // new remix starts a new one, so it loads as a remix opened anywhere else does.
+      key={`${prefill.remixId ?? ''}|${prefill.remixPostId ?? ''}`}
       prefill={prefill}
       welcome={welcome}
       handoverNonce={handoverNonce}

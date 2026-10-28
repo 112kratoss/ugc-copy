@@ -9,6 +9,7 @@ import NewPostPage from '@/app/post/new/page';
 const state = vi.hoisted(() => ({
   hasAuthHint: false,
   clientProps: {} as Record<string, Record<string, unknown>>,
+  mounts: {} as Record<string, number>,
 }));
 
 vi.mock('@/components/RouteAuthBoundary', () => ({
@@ -25,26 +26,44 @@ vi.mock('@/lib/welcome-credit-program-server', () => ({
   loadWelcomeCreditAmount: async () => 25,
 }));
 
-vi.mock('@/app/create-image/CreateImageClient', () => ({
-  default: (props: Record<string, unknown>) => {
-    state.clientProps.image = props;
-    return <div>Image creator</div>;
-  },
-}));
+vi.mock('@/app/create-image/CreateImageClient', async () => {
+  const { useEffect } = await import('react');
+  return {
+    default: function CreateImageMock(props: Record<string, unknown>) {
+      state.clientProps.image = props;
+      useEffect(() => {
+        state.mounts.image = (state.mounts.image ?? 0) + 1;
+      }, []);
+      return <div>Image creator</div>;
+    },
+  };
+});
 
-vi.mock('@/app/create-video/CreateVideoClient', () => ({
-  default: (props: Record<string, unknown>) => {
-    state.clientProps.video = props;
-    return <div>Video creator</div>;
-  },
-}));
+vi.mock('@/app/create-video/CreateVideoClient', async () => {
+  const { useEffect } = await import('react');
+  return {
+    default: function CreateVideoMock(props: Record<string, unknown>) {
+      state.clientProps.video = props;
+      useEffect(() => {
+        state.mounts.video = (state.mounts.video ?? 0) + 1;
+      }, []);
+      return <div>Video creator</div>;
+    },
+  };
+});
 
-vi.mock('@/app/create-motion/CreateMotionClient', () => ({
-  default: (props: Record<string, unknown>) => {
-    state.clientProps.motion = props;
-    return <div>Motion creator</div>;
-  },
-}));
+vi.mock('@/app/create-motion/CreateMotionClient', async () => {
+  const { useEffect } = await import('react');
+  return {
+    default: function CreateMotionMock(props: Record<string, unknown>) {
+      state.clientProps.motion = props;
+      useEffect(() => {
+        state.mounts.motion = (state.mounts.motion ?? 0) + 1;
+      }, []);
+      return <div>Motion creator</div>;
+    },
+  };
+});
 
 vi.mock('@/app/post/new/NewPostClient', () => ({
   default: () => <div>Post composer</div>,
@@ -59,6 +78,7 @@ describe('creator auth return paths', () => {
   beforeEach(() => {
     state.hasAuthHint = false;
     state.clientProps = {};
+    state.mounts = {};
   });
 
   it('carries the remix pair through sign-in on every media tool', async () => {
@@ -83,6 +103,19 @@ describe('creator auth return paths', () => {
       'data-return-to',
       '/create-motion?remix=gen-1&remixPost=post-1'
     );
+  });
+
+  // A Remix on a creator's own start posts stays on its route, where the router keeps the client.
+  it('starts each creator afresh for a new remix, and keeps it for the same one', async () => {
+    const remix = (id: string) => Promise.resolve({ remix: `gen-${id}`, remixPost: `post-${id}` });
+    for (const [kind, Page] of [['image', CreateImagePage], ['video', CreateVideoPage], ['motion', CreateMotionPage]] as const) {
+      const view = render(await Page({ searchParams: remix('1') }));
+      view.rerender(await Page({ searchParams: remix('1') }));
+      expect(state.mounts[kind]).toBe(1);
+      view.rerender(await Page({ searchParams: remix('2') }));
+      expect(state.mounts[kind]).toBe(2);
+      cleanup();
+    }
   });
 
   it('lets a signed-out visitor use every creator, told what signing up gives', async () => {

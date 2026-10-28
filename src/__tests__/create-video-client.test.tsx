@@ -15,6 +15,7 @@ import type { EnhancerContext } from '@/lib/prompt-enhancer';
 import type { RemixResolvedSubject, RemixSourceBundle } from '@/lib/remix-source';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { inspectPromptQuality } from '@/lib/prompt-quality';
+import { describeProviderFailure } from '@/lib/provider-failure-messages';
 import { supabase } from '@/lib/supabase';
 import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 // What the server quotes when it starts a run: for "the price of the run the page sends".
@@ -410,7 +411,6 @@ async function unknownMentionLine() {
   return (await screen.findByText(/^Unknown element mention/)).textContent;
 }
 
-/** What the server answers a start it accepted. */
 /** A shelf post as the page is handed it: a 42-credit Kling 3.0 run that Seedance 2 Mini makes for 19. */
 function startPost(id: string): CreatorStartPost {
   return {
@@ -437,6 +437,7 @@ function startPost(id: string): CreatorStartPost {
   };
 }
 
+/** What the server answers a start it accepted. */
 function startedRunBody(overrides: Record<string, unknown> = {}) {
   return {
     success: true,
@@ -3904,6 +3905,113 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.click(within(canvas).getByRole('button', { name: 'Change the prompt' }));
       expect(within(canvas).queryByRole('alert')).not.toBeInTheDocument();
       expect(promptBox()).toHaveFocus();
+    });
+
+    // Under the column on a phone the canvas can be out of view: the bar says the run failed.
+    it('says in the bar that a run failed, and See why takes a creator at the next prompt to the canvas', async () => {
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/generate-video?id=')
+          ? { ok: true, status: 200, json: async () => ({ status: 'failed', error: 'The provider could not render this prompt.' }) } as Response
+          : defaultResponse(input, init)
+      ));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+      promptBox().focus();
+
+      const line = await screen.findByText(/^Your run didn’t finish\. Your 12 credits are back\./);
+      expect(promptBox()).toHaveFocus();
+      const seeWhy = within(line).getByRole('button', { name: 'See why' });
+      // A press focuses the button first, as a browser does.
+      seeWhy.focus();
+      fireEvent.click(seeWhy);
+      expect(within(screen.getByRole('region', { name: 'Result' })).getByRole('heading', { name: 'It didn’t finish' })).toHaveFocus();
+    });
+
+    // Back over the prompt after a run, the strip pushed the field the creator went to.
+    it('keeps the strip of posts off the column once a run was made this visit', async () => {
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/generate-video?id=')
+          ? { ok: true, status: 200, json: async () => ({ status: 'failed', error: 'Unknown error' }) } as Response
+          : defaultResponse(input, init)
+      ));
+      await act(async () => {
+        render(<CreateVideoClient prefill={{}} startPosts={Promise.resolve([startPost('cats')])} />);
+      });
+      // The canvas's posts, and the column's strip of them.
+      await waitFor(() => expect(screen.getAllByRole('link', { name: /^Remix “Kung fu cats”/ })).toHaveLength(2));
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      await within(canvas).findByRole('alert');
+      fireEvent.click(within(canvas).getByRole('button', { name: 'Change the prompt' }));
+
+      // Empty again: its posts beside the column, none over the prompt.
+      expect(within(canvas).getAllByRole('link', { name: /^Remix “Kung fu cats”/ })).toHaveLength(1);
+      expect(screen.getAllByRole('link', { name: /^Remix “Kung fu cats”/ })).toHaveLength(1);
+    });
+
+    // A likeness refusal meets the same run again: another model is the way on.
+    it('offers another model where the same run cannot get past its failure', async () => {
+      const refusal = describeProviderFailure('InputImageSensitiveContentDetected.PolicyViolation');
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/generate-video?id=')
+          ? { ok: true, status: 200, json: async () => ({ status: 'failed', error: refusal }) } as Response
+          : defaultResponse(input, init)
+      ));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(await within(canvas).findByRole('alert')).toHaveTextContent('looks like a photo of a real person');
+      expect(within(canvas).queryByRole('button', { name: /^Try again/ })).not.toBeInTheDocument();
+      fireEvent.click(within(canvas).getByRole('button', { name: 'Pick another model' }));
+      expect(await screen.findByLabelText('Search video models')).toBeInTheDocument();
+    });
+
+    // Before its start answers, a run is still the page's: leaving would lose it, and it holds nothing yet.
+    it('says the page can be left, and what the run holds, only once its start answered', async () => {
+      let answerStart: ((response: Response) => void) | null = null;
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('/api/generations') && init?.method === 'POST') {
+          return new Promise<Response>((resolve) => { answerStart = resolve; });
+        }
+        if (String(input).includes('/api/generate-video?id=')) return new Promise<Response>(() => {});
+        return defaultResponse(input, init);
+      });
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(await within(canvas).findByRole('heading', { name: 'Making your video' })).toBeInTheDocument();
+      await waitFor(() => expect(answerStart).not.toBeNull());
+      expect(within(canvas).queryByText(/You can leave this page/)).not.toBeInTheDocument();
+      expect(within(canvas).queryByText(/held for this run/)).not.toBeInTheDocument();
+
+      await act(async () => {
+        answerStart!({ ok: true, status: 200, json: async () => startedRunBody() } as Response);
+      });
+      expect(await within(canvas).findByText(/You can leave this page/)).toBeInTheDocument();
+      expect(within(canvas).getByText('12 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+    });
+
+    it('names a run picked up on load by its own model, with what it holds', async () => {
+      maybeSingleMock.mockResolvedValueOnce({
+        data: { id: 'gen-old', prediction_id: 'pred-old', status: 'processing', created_at: new Date().toISOString(), cost: 19, prompt: 'An earlier run', model: 'kling-3.0-video' },
+        error: null,
+      } as never);
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/generate-video?id=') ? new Promise<Response>(() => {}) : defaultResponse(input, init)
+      ));
+      render(<CreateVideoClient prefill={{}} />);
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      await waitFor(() => expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(`${VIDEO_MODELS['kling-3.0-video'].displayName} · 19 credits`));
+      expect(within(canvas).getByTestId('creator-canvas-chip').textContent).toBe(`${VIDEO_MODELS['kling-3.0-video'].displayName} · 19 credits`);
+      expect(within(canvas).getByText('19 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
     });
 
     // The artboard Generating (owner, 2026-10-28): the run's line with what it holds, that

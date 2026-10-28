@@ -39,6 +39,7 @@ import {
     CreatorReferenceRow,
     CreatorResultActions,
     CreatorRunFailed,
+    CreatorRunFailedLine,
     CreatorRunWaitLines,
     CreatorSettingChoices,
     CreatorSettingsFootNote,
@@ -72,6 +73,7 @@ import {
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
+import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
 import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
@@ -359,6 +361,11 @@ export interface CreateImagePrefill {
 
 const CATALOG_HANDLED_KEYS = ['aspectRatio', 'resolution', 'qualityMode', 'googleSearch'] as const;
 
+/** A run's model as its chip names it, where all the page knows of the run is its model: a start sent before, a run picked up on load. */
+function imageModelName(modelId: unknown): string | null {
+    return typeof modelId === 'string' ? (IMAGE_MODELS as Record<string, { displayName: string } | undefined>)[modelId]?.displayName ?? null : null;
+}
+
 export default function CreateImageClient({
     prefill,
     welcome = null,
@@ -442,10 +449,10 @@ export default function CreateImageClient({
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
     // Bumped once a run the creator started is under way: the canvas then comes into view.
     const [canvasRevealKey, setCanvasRevealKey] = useState(0);
-    // The shape and settings of the run in flight, so its frame and caption do not
-    // follow the form while it runs.
-    // The run in flight: its frame's shape, its settings' line, and the credits it holds.
-    const [runShape, setRunShape] = useState<{ aspectRatio: string; label: string; cost: number | null } | null>(null);
+    // The run in flight, which the canvas names while the form changes: its frame's shape, its
+    // settings' line, the credits it holds, and whether its start answered (the run is the
+    // server's, so the page may be left).
+    const [runShape, setRunShape] = useState<{ aspectRatio: string | null; label: string | null; cost: number | null; answered: boolean } | null>(null);
     // A run the provider failed, said on the canvas with its cause (the artboard Failed).
     const [runFailure, setRunFailure] = useState<{ message: string; cost: number | null } | null>(null);
     // Bumped when a run this page followed ends, done or failed: the canvas takes the focus.
@@ -1365,10 +1372,8 @@ export default function CreateImageClient({
         // `followed`: the creator started this run here, so its end moves the focus; a run picked up on load leaves the page be.
         run: { startedAtMs: number; estimatedTotalMs: number | null; cost: number | null; generationId: string | null; followed: boolean },
     ) => {
-        if (run.cost !== null) {
-            const held = run.cost;
-            setRunShape((current) => (current ? { ...current, cost: held } : current));
-        }
+        const held = run.cost;
+        setRunShape((current) => (current ? { ...current, cost: held ?? current.cost, answered: true } : current));
         try {
             const result = await pollPrediction(predictionId, run.startedAtMs, run.estimatedTotalMs);
             setOutputImage(result.output);
@@ -1454,6 +1459,12 @@ export default function CreateImageClient({
         setRunFailure(null);
         setCreditRefusal(null);
         setSubmittedPrompt(typeof start.body.prompt === 'string' ? start.body.prompt : '');
+        setRunShape((current) => current ?? {
+            aspectRatio: null,
+            label: imageModelName(start.body.modelId),
+            cost: typeof start.body.expectedCostCredits === 'number' ? start.body.expectedCostCredits : null,
+            answered: false,
+        });
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'image',
             phaseLabel: 'Checking your last run',
@@ -1486,7 +1497,7 @@ export default function CreateImageClient({
 
             const { data, error: pendingError } = await supabase
                 .from('generations')
-                .select('id, prediction_id, status, created_at, prompt, cost')
+                .select('id, prediction_id, status, created_at, prompt, cost, model')
                 .eq('user_id', session.user.id)
                 .eq('category', 'image')
                 .in('status', ['processing', 'waiting'])
@@ -1505,6 +1516,7 @@ export default function CreateImageClient({
             setLatestGenerationId(data.id ?? null);
             setLatestIsPublic(false);
             setSubmittedPrompt(typeof data.prompt === 'string' ? data.prompt : '');
+            setRunShape({ aspectRatio: null, label: imageModelName(data.model), cost: typeof data.cost === 'number' ? data.cost : null, answered: true });
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'image',
                 phaseLabel: 'Resuming active run',
@@ -1643,7 +1655,7 @@ export default function CreateImageClient({
         setLatestIsPublic(false);
         setPublishedMeta(null);
         setSubmittedPrompt(submitted);
-        setRunShape({ aspectRatio, label: `${model.displayName} · ${settingsSummary}`, cost: currentCost });
+        setRunShape({ aspectRatio, label: `${model.displayName} · ${settingsSummary}`, cost: currentCost, answered: false });
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimateGenerationDurationMs({
             kind: 'image',
@@ -1790,11 +1802,12 @@ export default function CreateImageClient({
     const canvasChip = outputImage
         ? creatorRunChip(runShape?.label, runShape?.cost)
         : isGenerating
-            ? creatorRunChip(runShape?.label ?? `${model.displayName} · ${settingsSummary}`, runShape?.cost)
+            ? creatorRunChip(runShape?.label, runShape?.cost)
             : runFailure && !isBackgroundProcessing
                 ? creatorRunChip(runShape?.label, null)
                 : null;
     const showsEmptyCanvas = !outputImage && !isGenerating && !isBackgroundProcessing && !runFailure;
+    const showsRunFailure = runFailure !== null && !outputImage && !isGenerating && !isBackgroundProcessing;
 
     // What the run needs, as the column's cards ask for it.
     const emptyCanvasHint = model.maxImages > 0
@@ -2042,7 +2055,8 @@ export default function CreateImageClient({
                             </StudioModelPicker>
                         </div>
                         </div>
-                        {showsEmptyCanvas ? <CreatorStartPostsStrip source={startPosts} tool="image" balance={listBalance} /> : null}
+                        {/* Until the first run this visit: back over the prompt after one, it pushed the field the creator went to. */}
+                        {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="image" balance={listBalance} /> : null}
 
                         <AnimatePresence>
                             {modelNotice ? (
@@ -2281,6 +2295,9 @@ export default function CreateImageClient({
                             settingsOpen={settingsOpen}
                             onSettingsOpenChange={setSettingsOpen}
                             status={barStatus}
+                            narrowStatus={showsRunFailure ? (
+                                <CreatorRunFailedLine returnedCredits={runFailure?.cost ?? null} onSeeWhy={() => setRunEndKey((key) => key + 1)} />
+                            ) : null}
                             action={barAction}
                             note={isVisitor
                                 ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={currentCost} />
@@ -2338,7 +2355,7 @@ export default function CreateImageClient({
                                     <CreatorCanvasFrame aspectRatio={runShape?.aspectRatio ?? aspectRatio} busy>
                                         <ImageIcon aria-hidden className="h-6 w-6 text-[var(--ui-primary)]" />
                                         {generationTiming ? (
-                                            <div className="w-72 max-w-full">
+                                            <div className="w-full max-w-72">
                                                 <StudioGenerationStatus accent={model.accentColor} timing={generationTiming} nowMs={nowMs} />
                                             </div>
                                         ) : (
@@ -2346,7 +2363,7 @@ export default function CreateImageClient({
                                         )}
                                     </CreatorCanvasFrame>
                                 </CreatorCanvasStage>
-                                <CreatorRunWaitLines noun="image" heldCredits={runShape?.cost ?? null} />
+                                {runShape?.answered ? <CreatorRunWaitLines noun="image" heldCredits={runShape.cost} /> : null}
                                 <CreatorWhileYouWait source={startPosts} tool="image" />
                             </>
                         ) : isBackgroundProcessing ? (
@@ -2363,8 +2380,10 @@ export default function CreateImageClient({
                                 cause={describeRunFailure(runFailure.message, 'image')}
                                 returnedCredits={runFailure.cost}
                                 retryLabel={currentCost !== null ? `Try again · ${quoteUi.costLabel}` : 'Try again'}
-                                retryDisabled={generateBlocked}
+                                retryDisabled={generateBlocked || showTopUp}
                                 onRetry={() => void handleGenerate()}
+                                retryable={isRetryableProviderFailure(runFailure.message)}
+                                onPickModel={() => setIsModelDropdownOpen(true)}
                                 onChangePrompt={() => {
                                     setRunFailure(null);
                                     promptTextareaRef.current?.focus();

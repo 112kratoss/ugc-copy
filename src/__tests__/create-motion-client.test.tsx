@@ -1032,6 +1032,17 @@ describe('CreateMotionClient start', () => {
     window.removeEventListener('credits_updated', creditsUpdated);
   });
 
+  it('says what a run picked up on load gave back when it fails', async () => {
+    maybeSingleMock.mockResolvedValueOnce({
+      data: { id: 'gen-motion-1', prediction_id: 'pred-motion-1', status: 'processing', created_at: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: 30, model: 'kling-3.0' },
+      error: null,
+    } as never);
+    statusMocks.fetchGenerationStatusWithRetry.mockResolvedValue({ status: 'failed', error: 'The provider could not render this clip' });
+    render(<CreateMotionClient prefill={{}} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your 30 credits are back.');
+  });
+
   it('hands a run whose status cannot be read to the background, with a fresh token per read', async () => {
     statusMocks.fetchGenerationStatusWithRetry.mockRejectedValue(new GenerationStatusRequestError('Failed to fetch generation status', 500));
     const view = render(<CreateMotionClient prefill={{}} />);

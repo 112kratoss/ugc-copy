@@ -23,6 +23,8 @@ export const UNKNOWN_PROVIDER_FAILURE = 'Unknown error';
 type ProviderFailureRule = {
   readonly patterns: readonly RegExp[];
   readonly message: string;
+  /** False where the same run, sent again, meets the same refusal. */
+  readonly retryable: boolean;
 };
 
 const PROVIDER_FAILURE_RULES: readonly ProviderFailureRule[] = [
@@ -37,6 +39,7 @@ const PROVIDER_FAILURE_RULES: readonly ProviderFailureRule[] = [
     ],
     message:
       'This model would not accept the reference image because it looks like a photo of a real person. Try a reference image without a recognisable face, or generate this with a different video model.',
+    retryable: false,
   },
 ];
 
@@ -57,6 +60,17 @@ export function describeProviderFailure(raw: string | null | undefined): string 
   );
 
   return rule ? rule.message : trimmed;
+}
+
+/**
+ * Whether the same run, sent again, can get past its failure: not where a rule knows it
+ * cannot. Read off the provider's words or the rewrite stored for them, which is what a
+ * creator page is told.
+ */
+export function isRetryableProviderFailure(message: string | null | undefined): boolean {
+  const trimmed = typeof message === 'string' ? message.trim() : '';
+  return !PROVIDER_FAILURE_RULES.some((rule) => !rule.retryable
+    && (rule.message === trimmed || rule.patterns.some((pattern) => pattern.test(trimmed))));
 }
 
 /**

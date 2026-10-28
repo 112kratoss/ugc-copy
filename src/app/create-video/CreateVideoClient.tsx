@@ -33,6 +33,7 @@ import {
     CreatorReferenceRow,
     CreatorResultActions,
     CreatorRunFailed,
+    CreatorRunFailedLine,
     CreatorRunWaitLines,
     CreatorSettingChoices,
     CreatorSettingsFootNote,
@@ -56,6 +57,7 @@ import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } f
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
+import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
 import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses, IconButton } from '@/components/DesignSystem';
 import { videoRunShortSummary, videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
@@ -70,6 +72,7 @@ import {
     fitVideoFormToModel,
     sameVideoFormSettings,
     takesSameVideoInputs,
+    videoLengthsBelow,
     videoRunInputTally,
     videoRunOnModel,
     type VideoFormHeld,
@@ -494,11 +497,23 @@ const SHOT_MODES = ['single', 'multi'] as const;
  * The run in flight, as it was started: its frame's shape, its settings' line, its prompt,
  * and the credits it holds (the price sent with it, then the start's own answer).
  */
-type VideoRunShape = { aspectRatio: string | null; label: string | null; prompt: string | null; cost: number | null };
+type VideoRunShape = {
+    aspectRatio: string | null;
+    label: string | null;
+    prompt: string | null;
+    cost: number | null;
+    /** The start answered: the run is the server's, and holds its credits, so the page may be left. */
+    answered: boolean;
+};
 
 /** A multi-shot run's prompt as one caption: its shots' prompts in order. */
 function shotsPrompt(shots: ReadonlyArray<{ prompt: string }>) {
     return shots.map((shot) => shot.prompt.trim()).filter(Boolean).join(' · ') || null;
+}
+
+/** A run's model as its chip names it, where all the page knows of the run is its model: a start sent before, a run picked up on load. */
+function videoModelName(modelId: unknown): string | null {
+    return typeof modelId === 'string' ? (VIDEO_MODELS as Record<string, { displayName: string } | undefined>)[modelId]?.displayName ?? null : null;
 }
 
 /** The shape and prompt of a start that was sent, read off its saved body. */
@@ -509,9 +524,10 @@ function runShapeOfStart(body: Record<string, unknown>): VideoRunShape {
         : [];
     return {
         aspectRatio: typeof settings.aspectRatio === 'string' ? settings.aspectRatio : null,
-        label: null,
+        label: videoModelName(body.modelId),
         prompt: shots.length > 0 ? shotsPrompt(shots) : (typeof body.prompt === 'string' && body.prompt.trim() ? body.prompt.trim() : null),
         cost: typeof body.expectedCostCredits === 'number' ? body.expectedCostCredits : null,
+        answered: false,
     };
 }
 
@@ -557,12 +573,6 @@ type RemixFit = { original: { modelId: VideoModelId; settings: VideoFormSettings
     }
     | { stage: 'settled'; fitted: RemixFitted | null }
 );
-
-/** A model's lengths below `belowSeconds`, as its settings offer them. */
-function lengthsBelow(modelId: VideoModelId, belowSeconds: number): number[] {
-    return videoLengthOptions(getVideoDurationRange(modelId), VIDEO_MODELS[modelId]?.durations ?? [])
-        .filter((length) => length < belowSeconds);
-}
 
 function PromptQualityWarnings({ warnings }: { warnings: PromptEnhancementWarning[] }) {
     if (warnings.length === 0) {
@@ -1862,7 +1872,7 @@ export default function CreateVideoClient({
         const revision = modelCatalog.catalog?.revision;
         if (remixFit?.stage !== 'shortening' || !revision) return [];
         const { modelId, settings, belowSeconds } = remixFit.shortenOn;
-        return lengthsBelow(modelId, belowSeconds).flatMap((duration) => {
+        return videoLengthsBelow(modelId, belowSeconds).flatMap((duration) => {
             const run = videoRunOnModel({ modelId, catalogRevision: revision, settings: { ...settings, duration }, held: formHeld });
             return run ? [run] : [];
         });
@@ -3837,10 +3847,8 @@ export default function CreateVideoClient({
             announceGenerationStarted();
             updateCredits(started.remainingCredits);
             if (reveal) setCanvasRevealKey((key) => key + 1);
-            if (typeof started.cost === 'number') {
-                const held = started.cost;
-                setRunShape((current) => (current ? { ...current, cost: held } : current));
-            }
+            const held = typeof started.cost === 'number' ? started.cost : null;
+            setRunShape((current) => (current ? { ...current, cost: held ?? current.cost, answered: true } : current));
 
             const result = await pollPrediction(started.predictionId, startedAtMs, estimatedTotalMs);
             setOutputVideo(result.output);
@@ -4025,7 +4033,7 @@ export default function CreateVideoClient({
 
             const { data, error: pendingError } = await supabase
                 .from('generations')
-                .select('id, prediction_id, status, created_at, cost, prompt')
+                .select('id, prediction_id, status, created_at, cost, prompt, model')
                 .eq('user_id', session.user.id)
                 .eq('category', 'video')
                 .is('creation_mode', null)
@@ -4046,9 +4054,10 @@ export default function CreateVideoClient({
             setLatestIsPublic(false);
             setRunShape({
                 aspectRatio: null,
-                label: null,
+                label: videoModelName(data.model),
                 prompt: typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null,
                 cost: typeof data.cost === 'number' ? data.cost : null,
+                answered: true,
             });
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'video',
@@ -4271,6 +4280,7 @@ export default function CreateVideoClient({
             label: `${videoModel.displayName} · ${settingsSummary}`,
             prompt: currentIsMultiShot ? shotsPrompt(multiPrompts) : prompt.trim() || null,
             cost: estimatedCost,
+            answered: false,
         });
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimatedGenerationTotalMs;
@@ -4660,11 +4670,12 @@ export default function CreateVideoClient({
     const canvasChip = outputVideo
         ? creatorRunChip(runShape?.label, runShape?.cost)
         : isGenerating
-            ? creatorRunChip(runShape?.label ?? `${videoModel.displayName} · ${settingsSummary}`, runShape?.cost)
+            ? creatorRunChip(runShape?.label, runShape?.cost)
             : runFailure && !isBackgroundProcessing
                 ? creatorRunChip(runShape?.label, null)
                 : null;
     const showsEmptyCanvas = !outputVideo && !isGenerating && !isBackgroundProcessing && !runFailure;
+    const showsRunFailure = runFailure !== null && !outputVideo && !isGenerating && !isBackgroundProcessing;
     // What the run needs, as the column's cards ask for it.
     const emptyCanvasHint = currentIsMultiShot
         ? 'Write each shot, then Generate.'
@@ -5046,7 +5057,8 @@ export default function CreateVideoClient({
                                 </StudioModelPicker>
                             </div>
                         </div>
-                        {showsEmptyCanvas ? <CreatorStartPostsStrip source={startPosts} tool="video" balance={listBalance} /> : null}
+                        {/* Until the first run this visit: back over the prompt after one, it pushed the field the creator went to. */}
+                        {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="video" balance={listBalance} /> : null}
 
                         <AnimatePresence>
                             {remixId && isRemixLoading && (
@@ -5924,6 +5936,9 @@ export default function CreateVideoClient({
                             settingsOpen={settingsOpen}
                             onSettingsOpenChange={setSettingsOpen}
                             status={barStatus}
+                            narrowStatus={showsRunFailure ? (
+                                <CreatorRunFailedLine returnedCredits={runFailure?.cost ?? null} onSeeWhy={() => setRunEndKey((key) => key + 1)} />
+                            ) : null}
                             action={barAction}
                             note={barNote}
                             stacked={offersFittedRemix || shortOfEveryVideoShown}
@@ -5951,7 +5966,7 @@ export default function CreateVideoClient({
                                     <CreatorCanvasFrame aspectRatio={runShape?.aspectRatio ?? currentAspectRatio} accent="video" busy>
                                         <Video aria-hidden className="h-6 w-6 text-[var(--ui-primary)]" />
                                         {generationTiming ? (
-                                            <div className="w-72 max-w-full">
+                                            <div className="w-full max-w-72">
                                                 <StudioGenerationStatus accent="rose" timing={generationTiming} nowMs={nowMs} />
                                             </div>
                                         ) : (
@@ -5959,7 +5974,7 @@ export default function CreateVideoClient({
                                         )}
                                     </CreatorCanvasFrame>
                                 </CreatorCanvasStage>
-                                <CreatorRunWaitLines noun="video" heldCredits={runShape?.cost ?? null} />
+                                {runShape?.answered ? <CreatorRunWaitLines noun="video" heldCredits={runShape.cost} /> : null}
                                 <CreatorWhileYouWait source={startPosts} tool="video" />
                             </>
                         ) : isBackgroundProcessing ? (
@@ -5976,8 +5991,10 @@ export default function CreateVideoClient({
                                 cause={describeRunFailure(runFailure.message, 'video')}
                                 returnedCredits={runFailure.cost}
                                 retryLabel={estimatedCost !== null ? `Try again · ${quoteUi.costLabel}` : 'Try again'}
-                                retryDisabled={quotePending || Boolean(promptLimitMessage)}
+                                retryDisabled={quotePending || Boolean(promptLimitMessage) || showTopUp || offersFittedRemix || shortOfEveryVideoShown}
                                 onRetry={() => void handleGenerate()}
+                                retryable={isRetryableProviderFailure(runFailure.message)}
+                                onPickModel={() => setIsModelDropdownOpen(true)}
                                 onChangePrompt={() => {
                                     setRunFailure(null);
                                     (promptTextareaRef.current ?? Object.values(multiShotTextareaRefs.current).find(Boolean))?.focus();
