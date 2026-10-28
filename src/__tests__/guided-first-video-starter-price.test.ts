@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import {
   buildCodeGenerationModelOperations,
   calculateGenerationModelRuntimeCost,
@@ -55,5 +56,19 @@ describe('guided first video starters', () => {
   it('lists exactly these starters, in this order', () => {
     const lines = source.split('\n').filter((text) => text.includes('{ modelId: '));
     expect(lines.map((text) => text.trim().replace(/,$/, ''))).toEqual(STARTERS.map((starter) => starter.line));
+  });
+});
+
+describe('the default video', () => {
+  it('opens within the welcome credits at the code catalog price', () => {
+    // Every creator with no draft opens on it (owner, 2026-10-28: Seedance 2 Mini at 480p for 5 s, 19).
+    const catalog = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 2 });
+    const model = catalog.models.find((candidate) => candidate.id === catalog.defaults.video)!;
+    const settings = Object.fromEntries(model.controls.map((control) => [control.key, control.defaultValue]));
+    const config = buildCodeGenerationModelOperations().find((entry) => entry.modelId === model.id)!;
+
+    const cost = calculateGenerationModelRuntimeCost(config, settings, noInputs);
+    expect({ modelId: model.id, cost }).toEqual({ modelId: 'seedance-2-mini', cost: 19 });
+    expect(cost).toBeLessThanOrEqual(WELCOME_CREDITS);
   });
 });

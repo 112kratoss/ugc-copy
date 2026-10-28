@@ -491,6 +491,8 @@ export function useWebGenerationModelCatalog(options: {
   const catalog = useMemo(() => current ? { schemaVersion: 3, revision: current.revision, defaults: current.defaults, models: details } : null, [current, details]);
   return { catalog, current: current, summaries: state.summaries, missingIds: state.missingIds,
     detailsReady, isLoadingModels: Boolean(options.pickerOpen && nextCursors[options.kind ?? 'all'] !== null && !error), error: error, isLoading: !current, isLoadingDetails: state.loadingDetails,
+    // While the network is asked for the current revision; a catalog read back from the browser stands in meanwhile.
+    isCheckingRevision: state.loading,
     revision: current?.revision ?? null, refetch, ensureCurrent };
 }
 

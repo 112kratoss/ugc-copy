@@ -52,6 +52,40 @@ describe('normalizeCreationDraftForCatalog', () => {
     expect(result.draft).toBe(draft);
   });
 
+  it('keeps an untouched draft off its stand-in model until the default model\'s details arrive', () => {
+    // The Create tab opens on Image, and the catalog has the video draft's stand-in (Kling 3.0)
+    // before the video default's details. Reconciling against the stand-in stamped a revision,
+    // and the draft then kept Kling 3.0 at 70 credits once Seedance 2 Mini's details came
+    // (2026-10-28, when Mini became the default).
+    const miniAtItsRelease = {
+      ...seedance2MiniModel,
+      controls: seedance2MiniModel.controls.map((control) => (
+        control.key === 'duration' && control.type === 'integer' ? { ...control, defaultValue: 5 } : control
+      )),
+    };
+    const loading: GenerationModelCatalog = {
+      ...catalog,
+      defaults: { ...catalog.defaults, video: 'seedance-2-mini' },
+    };
+    const draft = createDefaultCreationDraft('video');
+
+    const waiting = normalizeCreationDraftForCatalog(draft, loading, { modelSelectionTouched: false });
+    expect(waiting).toEqual({ draft, warning: null, missingModel: false });
+
+    const loaded: GenerationModelCatalog = { ...loading, models: [...loading.models, miniAtItsRelease] };
+    const settled = normalizeCreationDraftForCatalog(waiting.draft, loaded, { modelSelectionTouched: false });
+    expect(settled.draft).toMatchObject({
+      model: 'seedance-2-mini',
+      catalogRevision: loaded.revision,
+      catalogSettings: { aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false },
+    });
+
+    // A default the catalog says it dropped is not waited for: the draft keeps its own model.
+    const dropped = normalizeCreationDraftForCatalog(draft, loading, { modelSelectionTouched: false, missingIds: ['seedance-2-mini'] });
+    expect(dropped.draft.model).toBe('kling-3.0-video');
+    expect(dropped.draft.catalogRevision).toBe(loading.revision);
+  });
+
   it('changes nothing when a draft is normalized a second time', () => {
     const defaults = [createDefaultCreationDraft('image'), createDefaultCreationDraft('video'), createDefaultCreationDraft('motion')];
     for (const draft of defaults) {

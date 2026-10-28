@@ -17,6 +17,8 @@ import {
   type CatalogRunInputFact,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
 
+import { descriptorBeforeMiniDefault } from './fixtures/mini-default-video-2026-10-28';
+
 /**
  * Release 2026-10-28-mini-default-video: Seedance 2 Mini becomes the default video model on
  * web and mobile, and its duration opens on 5 s instead of 10. A creator with no draft opens
@@ -154,17 +156,13 @@ describe('mini-default-video release', () => {
   });
 
   it('moves the recommended mark and Mini\'s duration default, and nothing else', () => {
-    const asBefore = (modelId: (typeof CHANGED)[number]) => {
-      const released = structuredClone(entry(modelId));
-      const descriptor = released.publicDescriptor as unknown as GenerationModelDescriptor & { controls: Array<{ key: string; defaultValue: unknown }> };
-      descriptor.recommended = modelId === 'kling-3.0-video';
-      if (modelId === 'seedance-2-mini') {
-        descriptor.controls.find((control) => control.key === 'duration')!.defaultValue = 10;
-      }
-      return released;
-    };
+    // The fixture the earlier release tests read today's build through, against production's entries.
     for (const modelId of CHANGED) {
-      expect(asBefore(modelId)).toEqual(previous[modelId]);
+      const released = entry(modelId);
+      expect({
+        ...released,
+        publicDescriptor: descriptorBeforeMiniDefault(released.publicDescriptor as unknown as GenerationModelDescriptor),
+      }).toEqual(previous[modelId]);
     }
     expect(entry('seedance-2-mini').publicDescriptor.recommended).toBe(true);
     expect(entry('kling-3.0-video').publicDescriptor.recommended).toBe(false);
