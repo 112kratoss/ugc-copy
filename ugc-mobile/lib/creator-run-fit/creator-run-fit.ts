@@ -146,24 +146,33 @@ export type RemixFit =
 
 /**
  * Which model a remix opens on (owner, 2026-10-28): the original while the balance
- * covers it; otherwise the cheapest model that takes the same inputs, at the same length
- * when that fits. A model that cannot make the original's length is weighed only when
- * none that can is left; when even the cheapest is short of the balance, its shorter
- * lengths are priced next. A creator without a known balance gets the original.
+ * covers it; otherwise the preferred model, the catalog's default video (Seedance 2 Mini),
+ * whenever it takes the same inputs and its run fits the balance ("Seedance 2 Mini first");
+ * otherwise the cheapest model that takes the same inputs, at the same length when that
+ * fits. A model that cannot make the original's length is weighed only when none that can
+ * is left; when even the cheapest is short of the balance, its shorter lengths are priced
+ * next. A creator without a known balance gets the original.
  */
 export function fitRemixToBalance({
   original,
   candidates,
   balance,
+  preferredModelId,
 }: {
   original: { modelId: string; cost: number | null; durationSeconds: number };
   candidates: readonly RemixCandidate[];
   balance: number | null;
+  /** The model weighed before the cheapest: the catalog's default video; null for none. */
+  preferredModelId: string | null;
 }): RemixFit {
   if (balance === null || original.cost === null || original.cost <= balance) return { kind: 'original' };
   const eligible = candidates.filter((candidate): candidate is RemixCandidate & { cost: number } => (
     candidate.takesInputs && candidate.cost !== null && candidate.modelId !== original.modelId
   ));
+  const preferred = eligible.find((candidate) => candidate.modelId === preferredModelId);
+  if (preferred && preferred.cost <= balance) {
+    return { kind: 'fitted', modelId: preferred.modelId, sameLength: preferred.durationSeconds === original.durationSeconds };
+  }
   const atLength = eligible.filter((candidate) => candidate.durationSeconds === original.durationSeconds);
   const pool = atLength.length > 0 ? atLength : eligible;
   // The first of the cheapest, so the list's order settles a tie.

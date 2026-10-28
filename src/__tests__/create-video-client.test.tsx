@@ -4842,7 +4842,7 @@ describe('CreateVideoClient Kling video elements', () => {
         } as unknown as RemixSourceBundle;
       }
 
-      it('opens on the cheapest model that takes its inputs at the same length when the balance is short of the original', async () => {
+      it('opens on Seedance 2 Mini at the same length when the balance is short of the original', async () => {
         authState.credits = 22;
         stubRemix(remixOf({ duration: 5 }));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
@@ -4860,6 +4860,33 @@ describe('CreateVideoClient Kling video elements', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'Switch back to Seedance 2 Mini' }));
         await waitFor(() => expect(costShown()).toBe('19 credits'));
+      });
+
+      // Owner, 2026-10-28: "Seedance 2 Mini first", then the cheapest model that takes the inputs and fits.
+      describe('beside a model cheaper than Seedance 2 Mini', () => {
+        const klingCheaper = (request: GenerationModelQuoteInput) => (request.modelId === 'kling-3.0-video' ? 12 : videoPrice(request));
+        beforeEach(() => {
+          quoteStandIn.priceFor = klingCheaper;
+          priceListStandIn.price = pricedBy(klingCheaper);
+        });
+
+        it('opens on Seedance 2 Mini, the catalog default, while it fits the balance', async () => {
+          authState.credits = 22;
+          stubRemix(remixOf({ duration: 5 }));
+          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+          expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
+          await waitFor(() => expect(costShown()).toBe('19 credits'));
+        });
+
+        it('opens on the cheapest model that fits when Seedance 2 Mini does not', async () => {
+          authState.credits = 15;
+          stubRemix(remixOf({ duration: 5 }));
+          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+          expect(await screen.findByText(/Fitted to your 15 credits: Kling 3\.0 Cinematic instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
+          await waitFor(() => expect(costShown()).toBe('12 credits'));
+        });
       });
 
       it('opens on its original while the balance covers it', async () => {

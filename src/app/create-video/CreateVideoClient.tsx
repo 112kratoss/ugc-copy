@@ -3808,8 +3808,9 @@ export default function CreateVideoClient({
     };
 
     // A remix opens fitted to the balance (owner, 2026-10-28), decided once, when the original's
-    // price first comes in: the original while the balance covers it, else the cheapest model
-    // that takes the same inputs, at the same length when that fits (`fitRemixToBalance`).
+    // price first comes in: the original while the balance covers it, else the catalog's default
+    // video when it takes the same inputs and fits, else the cheapest model that does, at the
+    // same length when that fits (`fitRemixToBalance`).
     const remixReadyToWeigh = Boolean(remixId) && !isRemixLoading && !isVisitor && userCredits !== null
         && modelSettled && remixFit === null && quoteState.status === 'ready' && estimatedCost !== null;
     useEffect(() => {
@@ -3831,6 +3832,7 @@ export default function CreateVideoClient({
         const decision = fitRemixToBalance({
             original: remixFit.original,
             balance: userCredits,
+            preferredModelId: modelCatalog.catalog?.defaults.video ?? null,
             candidates: [...modelRuns.values()].map((run) => ({
                 modelId: run.modelId,
                 cost: readyCost(priceOf(run.quoteInput)),
