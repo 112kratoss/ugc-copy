@@ -160,6 +160,7 @@ import {
 } from '@/lib/generation-model-client';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
+import { openingCost, type CreatorOpening } from '@/lib/creator-opening';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
@@ -334,6 +335,7 @@ export default function CreateImageClient({
     welcome = null,
     handoverNonce = null,
     visitorWelcomeCredits = null,
+    opening = null,
     startPosts = null,
 }: {
     prefill: CreateImagePrefill;
@@ -343,6 +345,11 @@ export default function CreateImageClient({
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
+    /**
+     * The run the server read the page opens on: its model and price are drawn from the first
+     * paint, until the first pick and the page's own price. The page's settings are its own.
+     */
+    opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
 }) {
@@ -357,7 +364,7 @@ export default function CreateImageClient({
     // signed-in face, and its Generate signs in again on the login page.
     const isVisitor = draftOwner === VISITOR_DRAFT_OWNER;
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
-    const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
+    const [selectedModel, setSelectedModel] = useState<ModelId>((opening?.modelId ?? 'nano-banana-2') as ModelId);
     const [prompt, setPrompt] = useState('');
 
     // Mirrors the live prompt so the remix restore below can tell whether the
@@ -1170,6 +1177,12 @@ export default function CreateImageClient({
         quoteErrorMessage: quoteState.error?.message,
     });
     const currentCost = quoteUi.costCredits;
+    // The price under the bar: the page's own, or until it is in, the server's for the run the page opened on.
+    const notedCost = currentCost ?? openingCost(opening, {
+        run: { modelId: selectedModel, settings: generationSettings, inputs: runInputs },
+        quoteStatus: quoteState.status,
+        confirmedRevision: modelCatalog.catalog && !modelCatalog.isCheckingRevision ? modelCatalog.catalog.revision : null,
+    });
     const availableResolutions = getImageResolutionOptions(selectedModel, aspectRatio);
     // Descriptor-derived where the catalog is available: a resolution control offering a
     // single value is a fixed setting, not a choice worth rendering. Falls back to the
@@ -1266,8 +1279,10 @@ export default function CreateImageClient({
         })
         : [];
 
-    // The run's settings read back as the app's bar reads them: "1K · AUTO · JPG".
-    const outputFormat = additionalSettings.settings.outputFormat;
+    // The run's settings read back as the app's bar reads them: "1K · AUTO · JPG". The format is the
+    // model's descriptor's; until that is in, the opening's for the model the page opened on.
+    const outputFormat = additionalSettings.settings.outputFormat
+        ?? (selectedModel === opening?.modelId ? opening.settings.outputFormat : undefined);
     const settingsSummary = [
         showResolutionControl
             ? resolution
@@ -2216,8 +2231,8 @@ export default function CreateImageClient({
                             ) : null}
                             action={barAction}
                             note={isVisitor
-                                ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={currentCost} />
-                                : userCredits !== null ? <CreatorBalanceNote balance={userCredits} cost={currentCost} /> : undefined}
+                                ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={notedCost} />
+                                : userCredits !== null ? <CreatorBalanceNote balance={userCredits} cost={notedCost} /> : undefined}
                         />
                     </>
                 }

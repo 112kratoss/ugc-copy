@@ -148,6 +148,31 @@ describe('creator auth return paths', () => {
     });
   });
 
+  // The code catalog's defaults and prices, which are production's.
+  it('hands each creator the run it opens on, a link\'s model at its own price, and a remix none', async () => {
+    render(await CreateVideoPage({ searchParams: Promise.resolve({}) }));
+    expect(state.clientProps.video).toMatchObject({ opening: { modelId: 'seedance-2-mini', costCredits: 19 } });
+    cleanup();
+
+    render(await CreateVideoPage({ searchParams: Promise.resolve({ model: 'kling-3.0-video', aspectRatio: '9:16' }) }));
+    expect(state.clientProps.video).toMatchObject({
+      opening: { modelId: 'kling-3.0-video', settings: { aspectRatio: '9:16' }, costCredits: 70 },
+    });
+    cleanup();
+
+    render(await CreateImagePage({ searchParams: Promise.resolve({}) }));
+    expect(state.clientProps.image).toMatchObject({ opening: { modelId: 'nano-banana-2', costCredits: 8 } });
+    cleanup();
+
+    render(await CreateMotionPage({ searchParams: Promise.resolve({}) }));
+    expect(state.clientProps.motion).toMatchObject({ opening: { modelId: 'kling-2.6', costCredits: null } });
+    cleanup();
+
+    // A remix opens on its own run, once the page has read it.
+    render(await CreateVideoPage({ searchParams: Promise.resolve({ remix: 'gen-1', remixPost: 'post-1' }) }));
+    expect(state.clientProps.video).toMatchObject({ opening: null });
+  });
+
   it('reads the welcome amount only for a request without a sign-in cookie', async () => {
     state.hasAuthHint = true;
     render(await CreateVideoPage({ searchParams: Promise.resolve({}) }));

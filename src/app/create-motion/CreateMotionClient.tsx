@@ -100,6 +100,7 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
+import type { CreatorOpening } from '@/lib/creator-opening';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { planMotionRunInputs } from '@/lib/creator-run-inputs';
 import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
@@ -226,6 +227,7 @@ export default function CreateMotionClient({
     welcome = null,
     handoverNonce = null,
     visitorWelcomeCredits = null,
+    opening = null,
     startPosts = null,
 }: {
     prefill: CreateMotionPrefill;
@@ -237,6 +239,12 @@ export default function CreateMotionClient({
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
+    /**
+     * The run the server read the page opens on: its model is drawn from the first paint, in place of
+     * Kling 3.0, until the first pick. The settings the page opens on are its own (720p, the clip's
+     * orientation), as they always were.
+     */
+    opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
 }) {
@@ -251,7 +259,7 @@ export default function CreateMotionClient({
     // signed-in face, and its Generate signs in again on the login page.
     const isVisitor = draftOwner === VISITOR_DRAFT_OWNER;
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
-    const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
+    const [selectedModel, setSelectedModel] = useState<ModelId>((opening?.modelId ?? 'kling-3.0') as ModelId);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     // Open settings price each of their options; the bar says when they open and close.
     const [settingsOpen, setSettingsOpen] = useState(false);

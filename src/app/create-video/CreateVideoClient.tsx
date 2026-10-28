@@ -200,6 +200,7 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
+import { openingCost, type CreatorOpening } from '@/lib/creator-opening';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
@@ -238,8 +239,9 @@ const MULTI_SHOT_MAX_SHOTS: Readonly<Partial<Record<string, number>>> = {
 };
 
 /**
- * The form the page draws until a model is picked: Kling 3.0's, the catalog default until 2026-10-28.
- * At the first pick a setting still at its stand-in value takes the picked model's published default.
+ * The form the page draws until a model is picked when its server could hand it no opening (a
+ * remix, or a catalog it could not read): Kling 3.0's, the catalog default until 2026-10-28. At
+ * the first pick a setting still at its drawn value takes the picked model's published default.
  */
 const STAND_IN_FORM = {
     modelId: 'kling-3.0-video',
@@ -251,6 +253,44 @@ const STAND_IN_FORM = {
     isMultiShot: false,
     duration: 5,
 } as const;
+
+type DrawnVideoForm = {
+    modelId: VideoModelId;
+    mode: string;
+    aspectRatio: string;
+    sound: boolean;
+    resolution: string;
+    fixedLens: boolean;
+    isMultiShot: boolean;
+    duration: number;
+};
+
+/**
+ * The form the page draws until its first pick: the server's opening (`CreatorOpening`) as that
+ * pick would set it on the stand-in, so on the revision the server read nothing changes.
+ */
+function drawnVideoForm(opening: CreatorOpening | null): DrawnVideoForm {
+    const settings = opening?.settings ?? {};
+    const text = (key: string, fallback: string) => {
+        const value = settings[key];
+        return typeof value === 'string' ? value : fallback;
+    };
+    const flag = (key: string, fallback: boolean) => {
+        const value = settings[key];
+        return typeof value === 'boolean' ? value : fallback;
+    };
+    const duration = Number(settings.duration);
+    return {
+        modelId: (opening?.modelId ?? STAND_IN_FORM.modelId) as VideoModelId,
+        mode: text('mode', STAND_IN_FORM.mode),
+        aspectRatio: text('aspectRatio', STAND_IN_FORM.aspectRatio),
+        sound: flag('sound', STAND_IN_FORM.sound),
+        resolution: text('resolution', STAND_IN_FORM.resolution),
+        fixedLens: flag('fixedLens', STAND_IN_FORM.fixedLens),
+        isMultiShot: flag('isMultiShot', STAND_IN_FORM.isMultiShot),
+        duration: settings.duration !== undefined && Number.isFinite(duration) ? duration : STAND_IN_FORM.duration,
+    };
+}
 
 /** A multi-shot run's length, as the server derives it from the shots: each one whole and at least a second. */
 function multiShotTotalDuration(shots: readonly { duration: number }[]): number {
@@ -1082,6 +1122,7 @@ export default function CreateVideoClient({
     welcome = null,
     handoverNonce = null,
     visitorWelcomeCredits = null,
+    opening = null,
     startPosts = null,
 }: {
     prefill: CreateVideoPrefill;
@@ -1091,6 +1132,8 @@ export default function CreateVideoClient({
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
+    /** The run the server read the page opens on, drawn from the first paint; read once, as the page opens. */
+    opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
 }) {
@@ -1112,8 +1155,10 @@ export default function CreateVideoClient({
     const prefillAspectRatio = prefill.aspectRatio ?? null;
     const prefillDuration = prefill.duration ?? null;
 
-    const [selectedModel, setSelectedModel] = useState<VideoModelId>(STAND_IN_FORM.modelId);
-    const [isMultiShot, setIsMultiShot] = useState<boolean>(STAND_IN_FORM.isMultiShot);
+    // What the page draws until its first pick, and the opening it was drawn from.
+    const [opened] = useState(() => ({ opening, form: drawnVideoForm(opening) }));
+    const [selectedModel, setSelectedModel] = useState<VideoModelId>(opened.form.modelId);
+    const [isMultiShot, setIsMultiShot] = useState<boolean>(opened.form.isMultiShot);
     const [prompt, setPrompt] = useState('');
 
     // Mirrors the live prompt so the remix restore below can tell whether the
@@ -1122,7 +1167,7 @@ export default function CreateVideoClient({
     useEffect(() => {
         promptRef.current = prompt;
     }, [prompt]);
-    const [singleDuration, setSingleDuration] = useState<number>(STAND_IN_FORM.duration);
+    const [singleDuration, setSingleDuration] = useState<number>(opened.form.duration);
     const [multiPrompts, setMultiPrompts] = useState<MultiShot[]>([
         { id: '1', prompt: '', duration: 5 },
     ]);
@@ -1148,11 +1193,11 @@ export default function CreateVideoClient({
     // frame replaced since does not match, and is uploaded.
     const [startFrameStaged, setStartFrameStaged] = useState<{ file: File; staged: StagedUpload } | null>(null);
     const [endFrameStaged, setEndFrameStaged] = useState<{ file: File; staged: StagedUpload } | null>(null);
-    const [mode, setMode] = useState<string>(STAND_IN_FORM.mode);
-    const [aspectRatio, setAspectRatio] = useState<string>(STAND_IN_FORM.aspectRatio);
-    const [sound, setSound] = useState<boolean>(STAND_IN_FORM.sound);
-    const [resolution, setResolution] = useState<string>(STAND_IN_FORM.resolution);
-    const [fixedLens, setFixedLens] = useState<boolean>(STAND_IN_FORM.fixedLens);
+    const [mode, setMode] = useState<string>(opened.form.mode);
+    const [aspectRatio, setAspectRatio] = useState<string>(opened.form.aspectRatio);
+    const [sound, setSound] = useState<boolean>(opened.form.sound);
+    const [resolution, setResolution] = useState<string>(opened.form.resolution);
+    const [fixedLens, setFixedLens] = useState<boolean>(opened.form.fixedLens);
 
     const [isDraggingStart, setIsDraggingStart] = useState(false);
     const [isDraggingEnd, setIsDraggingEnd] = useState(false);
@@ -1322,7 +1367,7 @@ export default function CreateVideoClient({
         const emptySavedModel = emptySaved && catalog.models.find((model) => model.id === emptySaved.modelId && model.kind === 'video');
         if (emptySaved && !emptySavedModel && !modelCatalog.missingIds.includes(emptySaved.modelId ?? '')) return;
         if (emptySaved && mediaRestoredFor?.owner !== draftOwner) return;
-        const drawn = emptySaved ? { ...STAND_IN_FORM, ...savedVideoFormValues(emptySaved) } : STAND_IN_FORM;
+        const drawn = emptySaved ? { ...opened.form, ...savedVideoFormValues(emptySaved) } : opened.form;
         // The drawn model's own settings check empties a choice it does not offer.
         const asDrawn = (value: string, drawnValue: string) => value === drawnValue || value === '';
         const formAsDrawn = asDrawn(mode, drawn.mode) && asDrawn(resolution, drawn.resolution) && sound === drawn.sound
@@ -1370,7 +1415,7 @@ export default function CreateVideoClient({
     }, [
         modelCatalog.catalog, modelCatalog.isCheckingRevision, selectedModel, videoModel, prefillModel, prefillAspectRatio, prefillDuration,
         remixId, draftReady, mode, resolution, sound, fixedLens, isMultiShot, aspectRatio, singleDuration, modelCatalog.missingIds,
-        formHoldsWork, mediaRestoredFor, draftOwner,
+        formHoldsWork, mediaRestoredFor, draftOwner, opened.form,
     ]);
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
     const isKlingVideoModel = selectedModel === 'kling-3.0-video';
@@ -1713,6 +1758,12 @@ export default function CreateVideoClient({
         quoteErrorMessage: quoteState.error?.message,
     });
     const estimatedCost = quoteUi.costCredits;
+    // The price under the bar: the page's own, or until it is in, the server's for the run the page opened on.
+    const notedCost = estimatedCost ?? openingCost(opened.opening, {
+        run: { modelId: selectedModel, settings: runSettings, inputs: runInputs },
+        quoteStatus: quoteState.status,
+        confirmedRevision: modelCatalog.catalog && !modelCatalog.isCheckingRevision ? modelCatalog.catalog.revision : null,
+    });
     // A page the start keeps refusing at its own price waits for a reload, not another press.
     const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
     const quoteRetry = quoteState.status === 'error' ? <StudioQuoteRetry message={quoteUi.message} onRetry={quoteState.retry} /> : null;
@@ -4715,7 +4766,7 @@ export default function CreateVideoClient({
         />
     );
     const barNote = isVisitor ? (
-        <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={estimatedCost} />
+        <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={notedCost} />
     ) : offersFittedRemix ? (
         <div className="flex flex-wrap justify-between gap-x-4 gap-y-1">
             <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>Top up · {smallestCreditPackLabel()}</Link>
@@ -4733,7 +4784,7 @@ export default function CreateVideoClient({
     ) : shortOfEveryVideoShown && userCredits !== null && videosFrom !== null ? (
         <CreatorLowBalanceNote balance={userCredits} videosFrom={videosFrom} />
     ) : userCredits !== null ? (
-        <CreatorBalanceNote balance={userCredits} cost={estimatedCost} />
+        <CreatorBalanceNote balance={userCredits} cost={notedCost} />
     ) : undefined;
 
     // The settings, each option priced (owner, 2026-10-28): the run with that one option.
