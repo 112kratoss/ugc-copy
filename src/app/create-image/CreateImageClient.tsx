@@ -1885,7 +1885,9 @@ export default function CreateImageClient({
             id: option.id,
             name: option.displayName,
             description: option.description,
-            price: isSelected ? selectedPrice : run ? priceOf(run.quoteInput) : { status: 'pending' },
+            price: isSelected
+                ? selectedPrice
+                : run ? priceOf(run.quoteInput) : { status: modelCatalog.error ? 'unavailable' : 'pending' },
             summary: isSelected ? [resolution.toUpperCase(), aspectRatio].filter(Boolean).join(' · ') : run?.summary ?? null,
             keeps: kept === null ? null : referenceKeepWords(runInputs.length, kept),
         };

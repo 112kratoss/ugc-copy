@@ -1800,11 +1800,12 @@ export default function CreateVideoClient({
         ...shortenRuns.map((run) => run.quoteInput),
     ]);
     const readyCost = (price: ListedPrice) => (price.status === 'ready' ? price.costCredits : null);
-    // Every model's price is in: each model with details has its answer, and the rest are missing.
+    // Every model's price is in: each model with details has its answer, and the rest are
+    // missing, or will not load (a model whose details failed counts as unpriced).
     const modelListSettled = pricesModelList && Boolean(modelCatalog.catalog) && videoModelIdsKey.split(',').every((id) => (
         id === selectedModel
             || modelCatalog.missingIds.includes(id)
-            || (modelRuns.has(id) && priceOf(modelRuns.get(id)!.quoteInput).status !== 'pending')
+            || (modelRuns.has(id) ? priceOf(modelRuns.get(id)!.quoteInput).status !== 'pending' : Boolean(modelCatalog.error))
     ));
     const videoCosts = [estimatedCost, ...[...modelRuns.values()].map((run) => readyCost(priceOf(run.quoteInput)))];
     const videosFrom = cheapestCost(videoCosts);
@@ -4855,7 +4856,9 @@ export default function CreateVideoClient({
             id: modelOption.id,
             name: modelOption.displayName,
             description: modelOption.description,
-            price: isSelected ? listedFromQuote(quoteState) : run ? priceOf(run.quoteInput) : { status: 'pending' },
+            price: isSelected
+                ? listedFromQuote(quoteState)
+                : run ? priceOf(run.quoteInput) : { status: modelCatalog.error ? 'unavailable' : 'pending' },
             summary: isSelected ? settingsSummaryShort : run?.summary ?? null,
             keeps,
         };
