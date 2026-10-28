@@ -3,10 +3,10 @@ import { expect, test, type Page } from '@playwright/test';
 // The app shell's top bar must fit its row at every width that shows the side
 // navigation. Its controls on the right keep their size and the search field
 // gives way: below 1024px the field folds into its search button and
-// "New creation" into its icon. Before, the controls gave way instead. On a
+// Create into its icon. Before, the controls gave way instead. On a
 // signed-out visit to /showcase at 1024px the alerts button shrank to 20px,
-// "New creation" and "Sign in" each broke onto two lines, and "Sign in" ran 33px
-// past the window, so the page scrolled sideways.
+// "New creation" (Create's label then) and "Sign in" each broke onto two lines,
+// and "Sign in" ran 33px past the window, so the page scrolled sideways.
 //
 // Headless Chromium hides scrollbars. Keeping them leaves the row 15px less than
 // the width the media queries see: the tighter case, and what a visitor on
@@ -58,7 +58,7 @@ function readTopBar(page: Page): Promise<TopBar> {
 test.describe('app shell top bar', () => {
   // /showcase is styled by globals.css alone. /search also loads
   // non-public-utilities.css, whose own .hidden comes later in the cascade and
-  // once hid "New creation" there at every width.
+  // once hid Create ("New creation" then) there at every width.
   for (const route of ['/showcase', '/search']) {
     test(`fits a signed-out visitor's window on ${route}`, async ({ page }) => {
       await page.setViewportSize({ width: WIDTHS[0], height: 800 });
@@ -70,7 +70,7 @@ test.describe('app shell top bar', () => {
 
       for (const width of WIDTHS) {
         await page.setViewportSize({ width, height: 800 });
-        await expect(header.getByRole('link', { name: 'New creation' })).toBeVisible();
+        await expect(header.getByRole('button', { name: 'Create' })).toBeVisible();
         const bar = await readTopBar(page);
         expect(bar.scrollWidth, `the page scrolls sideways at ${width}px`).toBeLessThanOrEqual(bar.clientWidth);
         for (const control of bar.controls) {

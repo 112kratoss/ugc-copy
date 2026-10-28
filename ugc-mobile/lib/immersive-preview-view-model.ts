@@ -12,7 +12,7 @@ import {
 } from './generation-media';
 import { UNKNOWN_CREATOR_LABEL } from './hide-creator-label';
 import { formatCompactCount } from './home-view-model';
-import { formatReturnedCredits } from './post-details-view-model';
+import { formatReturnedCredits, type PostDetailsSection } from './post-details-view-model';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
@@ -213,9 +213,9 @@ export function immersiveViewerHref({
   mediaOnly?: boolean;
   source: PreviewViewerSource;
   initialId: string;
-  /** Read more opens the previewed text on the existing Details page. */
+  /** Read more opens the previewed text on the existing Details page; a recipe chip, the recipe. */
   initialPage?: 'details';
-  initialSection?: 'story' | 'prompt';
+  initialSection?: PostDetailsSection;
   /** The zoom the tapped tile hands the push on iOS 18 (lib/apple-zoom.ts). */
   zoom?: AppleZoomOpen | null;
 }) {
@@ -238,6 +238,8 @@ export function immersiveViewerHref({
 export function textPostViewerHref({
   comments = false,
   deliveryId,
+  initialPage,
+  initialSection,
   postId,
   source,
 }: {
@@ -247,6 +249,13 @@ export function textPostViewerHref({
    * its screen to be credited to (Home's text cards). Opaque to the screen.
    */
   deliveryId?: string | null;
+  /**
+   * The post's Details page, and the part of it to lead with: a recipe chip
+   * opens the recipe (audit B-F6), as it does over the reel. A section without
+   * the page asks for nothing.
+   */
+  initialPage?: 'details';
+  initialSection?: PostDetailsSection;
   postId: string;
   source?: 'profile-posts' | 'profile-saved';
 }) {
@@ -255,6 +264,8 @@ export function textPostViewerHref({
     ...(source ? [['source', source]] : []),
     ...(comments ? [['comments', postId]] : []),
     ...(deliveryId ? [['deliveryId', deliveryId]] : []),
+    ...(initialPage ? [['page', initialPage]] : []),
+    ...(initialPage && initialSection ? [['section', initialSection]] : []),
   ];
   return params.length
     ? `${pathname}?${params
@@ -265,7 +276,7 @@ export function textPostViewerHref({
 
 export function immersivePreviewOpenHref(
   item: ImmersivePreviewItem,
-  options: { comments?: boolean; initialPage?: 'details'; initialSection?: 'story' | 'prompt'; zoom?: AppleZoomOpen | null } = {}
+  options: { comments?: boolean; initialPage?: 'details'; initialSection?: PostDetailsSection; zoom?: AppleZoomOpen | null } = {}
 ) {
   if (item.previewKind === 'text' && item.sourceType !== 'generation') {
     return textPostViewerHref({
@@ -517,6 +528,24 @@ export function getImmersiveStatusSlide(item: ImmersivePreviewItem): { title: st
   };
 }
 
+/**
+ * The reel rail's Remix where a paid unlock stands in front of it: the price
+ * where "Remix" would be, with the lock, as the Home card's pill draws it
+ * (`remixLabel` in lib/home-feed-view-model.ts), so the sheet the tap opens is
+ * no surprise (audit B-F15). Null for a Remix that opens.
+ */
+export function getLockedRemixRailLabel(
+  item: Pick<ImmersivePreviewItem, 'title' | 'details' | 'availableActions'>
+): { label: string; accessibilityLabel: string } | null {
+  if (!item.availableActions.includes('unlock-remix')) return null;
+  const unlock = item.details?.unlock;
+  const price = unlock?.accessMode === 'paid' ? unlock.priceLabel.trim() : '';
+  return {
+    label: price || 'Remix',
+    accessibilityLabel: `Unlock ${item.title} to remix it${price ? `, ${price}` : ''}`,
+  };
+}
+
 export function hasImmersiveDetailsPage(item: ImmersivePreviewItem) {
   // Generations were excluded while they rendered in the separate card screen, which
   // showed their model/cost metadata inline. Now that every source opens the reel,
@@ -621,7 +650,7 @@ function showcaseToImmersiveItem(
     creatorId: item.creator.id,
     creatorUsername: item.creator.username?.trim() || null,
     createdAt: item.createdAt ?? null,
-    badge: showcaseBadge(item),
+    badge: showcaseBadge(item, viewerUserId),
     // Verb until there is real social proof — a young post reads "Save", not "0".
     saveLabel: item.saveCount > 0 ? formatCompactCount(item.saveCount) : 'Save',
     saveCount: item.saveCount,
@@ -1033,7 +1062,11 @@ function creatorHandle(username: string | null, name: string) {
   return name.trim() || UNKNOWN_CREATOR_LABEL;
 }
 
-function showcaseBadge(item: ShowcaseFeedItem) {
+function showcaseBadge(item: ShowcaseFeedItem, viewerUserId: string | null) {
+  // A recipe the viewer has is no longer for sale to them (audit B-F2): the
+  // feed chip's words, "Your recipe" for the creator, "Unlocked" for a buyer.
+  if (item.asset && viewerUserId && item.creator.id === viewerUserId) return 'Your recipe';
+  if (item.asset?.viewerHasUnlocked) return 'Unlocked';
   if (item.asset?.accessMode === 'free') return FREE_RECIPE_LABEL;
   if (item.asset) return formatUnlockCreditPrice(item.asset.priceUsdCents);
   if (getShowcaseRemixAccess(item) === 'open') return 'Remix';

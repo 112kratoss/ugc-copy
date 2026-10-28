@@ -337,6 +337,118 @@ describe('credit unlock route adapter service', () => {
     });
   });
 
+  // Recipe audit H4 (2026-10-27): the clients send the price the buyer
+  // confirmed, and a changed price is refused with the new one. An app build
+  // from before the check sends no body at all and is answered as before.
+  describe('the confirmed price', () => {
+    function postRequest(body?: string) {
+      return new Request('http://localhost/api/posts/post-1/resource-bundle/unlock-with-credits', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer private-token',
+          'content-type': 'application/json',
+        },
+        ...(body === undefined ? {} : { body }),
+      });
+    }
+
+    function dependenciesWith(unlockPostResourceBundleWithCredits: ReturnType<typeof vi.fn>) {
+      return {
+        createServiceClient: vi.fn(() => ({ service: 'admin' }) as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('buyer-1'),
+        enforceBackendRateLimit: allowedRateLimit,
+        isPostResourceBundleBuyWithheld: vi.fn(async () => false),
+        runAfterResponse: vi.fn(),
+        unlockPostResourceBundleWithCredits,
+      } as never;
+    }
+
+    const settled = async () => ({
+      success: true as const,
+      entitlement: 'post_resource_unlock' as const,
+      postId: 'post-1',
+      credits: 100,
+      alreadyProcessed: false,
+    });
+
+    it('passes the confirmed price to the spend', async () => {
+      const unlock = vi.fn(settled);
+
+      const response = await postResourceBundleCreditUnlockRouteResponse({
+        request: postRequest(JSON.stringify({ expectedPriceCredits: 900 })),
+        context: createPostContext(),
+        dependencies: dependenciesWith(unlock),
+      });
+
+      expect(response.status).toBe(200);
+      expect(unlock).toHaveBeenCalledWith(expect.objectContaining({ postId: 'post-1', expectedPriceCredits: 900 }));
+    });
+
+    it.each([
+      ['no body', undefined],
+      ['an empty body', ''],
+      ['an object without a price', '{}'],
+      ['a null price', '{"expectedPriceCredits":null}'],
+    ])('spends at the current price for %s', async (_label, body) => {
+      const unlock = vi.fn(settled);
+
+      const response = await postResourceBundleCreditUnlockRouteResponse({
+        request: postRequest(body),
+        context: createPostContext(),
+        dependencies: dependenciesWith(unlock),
+      });
+
+      expect(response.status).toBe(200);
+      expect(unlock).toHaveBeenCalledWith(expect.not.objectContaining({ expectedPriceCredits: expect.anything() }));
+    });
+
+    it.each([
+      ['a body that is not JSON', 'price=900'],
+      ['a price that is not a whole number of credits', '{"expectedPriceCredits":9.5}'],
+      ['a negative price', '{"expectedPriceCredits":-10}'],
+      ['a price sent as text', '{"expectedPriceCredits":"900"}'],
+    ])('refuses %s and spends nothing', async (_label, body) => {
+      const unlock = vi.fn(settled);
+
+      const response = await postResourceBundleCreditUnlockRouteResponse({
+        request: postRequest(body),
+        context: createPostContext(),
+        dependencies: dependenciesWith(unlock),
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: 'expectedPriceCredits must be a whole number of credits.',
+      });
+      expect(unlock).not.toHaveBeenCalled();
+    });
+
+    it('answers a changed price with 409 and the new price', async () => {
+      const unlock = vi.fn(async () => {
+        throw new MobileCommerceError('The price changed to 1,500 credits.', 409, 'price_changed', {
+          success: false,
+          code: 'RESOURCE_PRICE_CHANGED',
+          priceCredits: 1500,
+        });
+      });
+
+      const response = await postResourceBundleCreditUnlockRouteResponse({
+        request: postRequest(JSON.stringify({ expectedPriceCredits: 100 })),
+        context: createPostContext(),
+        dependencies: dependenciesWith(unlock),
+      });
+
+      expect(response.status).toBe(409);
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+      await expect(response.json()).resolves.toEqual({
+        success: false,
+        code: 'RESOURCE_PRICE_CHANGED',
+        error: 'The price changed to 1,500 credits.',
+        priceCredits: 1500,
+      });
+    });
+  });
+
   it('spends nothing when the gate cannot be checked', async () => {
     const logError = vi.fn();
     const unlockPostResourceBundleWithCredits = vi.fn();

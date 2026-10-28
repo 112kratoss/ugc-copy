@@ -67,86 +67,111 @@ export function SectionHeading({
 interface CreatorToolCardProps {
   tool: CreatorToolDefinition;
   preview?: ReactNode;
+  /** A ready-made setup to start the tool from, offered under its launch link. */
+  starter?: { title: string; href: string };
 }
 
 export function CreatorToolCard({
   tool,
   preview,
+  starter,
 }: CreatorToolCardProps) {
   const theme = getAccentClasses(tool.accent);
   const Icon = tool.icon;
+  const prefetch = tool.id === 'workflow' || tool.id === 'video' ? false : undefined;
 
+  // One link opens the tool from anywhere on the card, title, summary and call
+  // to action in it; a ready-made setup is a second link in the card's foot,
+  // beside that one rather than inside it. The card draws the launch link's
+  // focus ring (`.creator-tool-card` in globals.css): the link fills it, and
+  // the card's overflow would clip a ring the link drew itself.
   return (
-    <Link
-      href={tool.href}
-      prefetch={tool.id === 'workflow' || tool.id === 'video' ? false : undefined}
+    <div
       className={clsx(
-        'ui-card ui-card-interactive ui-focus-ring group relative block h-full min-h-[318px] cursor-pointer overflow-hidden rounded-3xl bg-[var(--ui-surface-1)] p-4 sm:p-5',
-        theme.border,
-        theme.focusRing
+        'creator-tool-card ui-card ui-card-interactive group relative flex h-full min-h-[318px] flex-col overflow-hidden rounded-3xl bg-[var(--ui-surface-1)]',
+        theme.border
       )}
     >
       <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-      <article className="flex h-full flex-col">
-        <MediaFrame className="relative rounded-3xl">
-          {preview ? (
-            <div className="h-44 w-full bg-black sm:h-48">
-              {preview}
-            </div>
-          ) : (
+      <Link
+        href={tool.href}
+        prefetch={prefetch}
+        className="group flex flex-1 cursor-pointer flex-col rounded-3xl p-4 outline-none sm:p-5"
+      >
+        <article className="flex h-full flex-col">
+          <MediaFrame className="relative rounded-3xl">
+            {preview ? (
+              <div className="h-44 w-full bg-black sm:h-48">
+                {preview}
+              </div>
+            ) : (
+              <div
+                className={clsx(
+                  'relative h-44 w-full bg-gradient-to-br sm:h-48',
+                  theme.surface
+                )}
+              >
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.12),transparent_35%)]" />
+                <div className="absolute inset-0 bg-[linear-gradient(145deg,transparent_0%,rgba(255,255,255,0.04)_52%,transparent_100%)] opacity-70" />
+              </div>
+            )}
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
             <div
               className={clsx(
-                'relative h-44 w-full bg-gradient-to-br sm:h-48',
-                theme.surface
+                'pointer-events-none absolute left-4 top-4 flex h-12 w-12 items-center justify-center rounded-2xl border backdrop-blur-sm',
+                theme.iconWrap
               )}
             >
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.12),transparent_35%)]" />
-              <div className="absolute inset-0 bg-[linear-gradient(145deg,transparent_0%,rgba(255,255,255,0.04)_52%,transparent_100%)] opacity-70" />
+              <Icon className="h-5 w-5" />
             </div>
-          )}
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
-          <div
-            className={clsx(
-              'pointer-events-none absolute left-4 top-4 flex h-12 w-12 items-center justify-center rounded-2xl border backdrop-blur-sm',
-              theme.iconWrap
-            )}
-          >
-            <Icon className="h-5 w-5" />
-          </div>
-          <Kicker className="pointer-events-none absolute bottom-4 left-4 text-white/85">
-            {tool.shortLabel}
-          </Kicker>
-        </MediaFrame>
+            <Kicker className="pointer-events-none absolute bottom-4 left-4 text-white/85">
+              {tool.shortLabel}
+            </Kicker>
+          </MediaFrame>
 
-        <div className="mt-4 flex items-start justify-between gap-3">
-          <div>
-            <Kicker className="text-zinc-500">{tool.eyebrow}</Kicker>
-            <Text
-              as="h3"
-              variant="cardTitle"
-              className="mt-2 text-2xl leading-8"
+          <div className="mt-4 flex items-start justify-between gap-3">
+            <div>
+              <Kicker className="text-zinc-500">{tool.eyebrow}</Kicker>
+              <Text
+                as="h3"
+                variant="cardTitle"
+                className="mt-2 text-2xl leading-8"
+              >
+                {tool.label}
+              </Text>
+            </div>
+            <Pill accent={tool.accent} className="shrink-0">{tool.badge}</Pill>
+          </div>
+
+          <Text variant="bodySm" className="mt-3 max-w-[28ch] text-zinc-300">{tool.summary}</Text>
+
+          <div className="mt-auto pt-4">
+            <div
+              className={clsx(
+                'ui-button w-full justify-between',
+                theme.button
+              )}
             >
-              {tool.label}
-            </Text>
+              {tool.launchLabel}
+              <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5" />
+            </div>
           </div>
-          <Pill accent={tool.accent} className="shrink-0">{tool.badge}</Pill>
-        </div>
-
-        <Text variant="bodySm" className="mt-3 max-w-[28ch] text-zinc-300">{tool.summary}</Text>
-
-        <div className="mt-auto pt-4">
-          <div
-            className={clsx(
-              'ui-button w-full justify-between',
-              theme.button
-            )}
+        </article>
+      </Link>
+      {starter ? (
+        <div className="border-t border-[var(--ui-border-subtle)] px-4 py-1 sm:px-5">
+          <Link
+            href={starter.href}
+            prefetch={prefetch}
+            className="ui-focus-ring inline-flex min-h-11 items-center gap-1.5 rounded-full text-sm font-semibold text-zinc-400 transition hover:text-white"
           >
-            {tool.launchLabel}
-            <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5" />
-          </div>
+            <span className="text-zinc-500">Try:</span>{' '}
+            {starter.title}
+            <ArrowRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          </Link>
         </div>
-      </article>
-    </Link>
+      ) : null}
+    </div>
   );
 }
 

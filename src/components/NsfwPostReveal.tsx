@@ -4,6 +4,8 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import Link from 'next/link';
 import { EyeOff } from 'lucide-react';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
+import PostResourceBundlePanel from '@/app/showcase/[id]/PostResourceBundlePanel';
+import { buildRecipePanelProps, getRecipeRemixOffer } from '@/app/showcase/[id]/recipe-panel-props';
 import type { PublicPostDetail } from '@/lib/public-posts';
 
 const NsfwRevealContext = createContext<boolean | null>(null);
@@ -22,8 +24,33 @@ export function useNsfwPostRevealed(): boolean | null {
  * the page, so the byline, Report and Block, save and share stay reachable.
  * `children` (the page's own actions) stay under it in both states;
  * `afterReveal` (the conversation) is hidden with the post and shown under
- * them once it is revealed.
+ * them once it is revealed. The post's recipe comes with the reveal and sits
+ * between the two, where the post page puts it (D4, 2026-10-27: a recipe on
+ * an NSFW post showed nowhere, revealed or not).
  */
+function RevealedRecipe({ detail }: { detail: PublicPostDetail }) {
+  const bundle = detail.resourceBundle;
+  if (!bundle) return null;
+  const { remixIncluded } = getRecipeRemixOffer({
+    canRemix: detail.canRemix,
+    remixCapability: detail.remixCapability,
+    remixTarget: detail.remixTarget,
+    bundle,
+  });
+
+  return (
+    <div data-testid="nsfw-revealed-recipe" className="mt-8 w-full min-w-0 max-w-4xl border-t border-white/8 pt-8">
+      <PostResourceBundlePanel
+        {...buildRecipePanelProps(bundle, {
+          postId: detail.id,
+          mediaItems: detail.mediaItems ?? [],
+          remixIncluded,
+        })}
+      />
+    </div>
+  );
+}
+
 export default function NsfwPostReveal({
   postId,
   children,
@@ -104,6 +131,7 @@ export default function NsfwPostReveal({
     </section>
     <NsfwRevealContext.Provider value={detail !== null}>
       {children}
+      {detail ? <RevealedRecipe detail={detail} /> : null}
       {detail ? afterReveal : null}
     </NsfwRevealContext.Provider>
   </>;

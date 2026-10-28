@@ -294,9 +294,9 @@ const RESOURCE_ITEM_LABELS: Record<PostResourceItemType, { singular: string; plu
   reference_image: { singular: 'reference image', plural: 'reference images' },
   reference_video: { singular: 'reference video', plural: 'reference videos' },
   reference_audio: { singular: 'reference audio', plural: 'reference audio files' },
-  source_file: { singular: 'source file', plural: 'source files' },
+  source_file: { singular: 'file', plural: 'files' },
   preset: { singular: 'preset', plural: 'presets' },
-  settings: { singular: 'settings note', plural: 'settings notes' },
+  settings: { singular: 'settings', plural: 'settings' },
   note: { singular: 'note', plural: 'notes' },
   external_link: { singular: 'link', plural: 'links' },
   remix_link: { singular: 'remix link', plural: 'remix links' },
@@ -946,7 +946,10 @@ export function getPostResourceKinds(
   }, []);
 
   if (itemKinds.length > 0) {
-    return POST_RESOURCE_KIND_ORDER.filter((kind) => itemKinds.includes(kind));
+    // A recipe whose Remix comes with it holds Remix whether or not an item
+    // says so (every published creation recipe since 2026-10-27).
+    const kinds = resources.allowRemix ? [...itemKinds, 'remix' as const] : itemKinds;
+    return POST_RESOURCE_KIND_ORDER.filter((kind) => kinds.includes(kind));
   }
 
   const kinds: PostResourceKind[] = [];
@@ -1169,7 +1172,7 @@ export function validatePostResourceBundleInput(
       || priceUsdCents % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
     )
   ) {
-    return 'Paid recipes must cost at least 10 tokens and use 10-token increments.';
+    return 'Paid recipes must cost at least 10 credits and use 10-credit increments.';
   }
 
   const resources = typedBundle?.resources ?? {};
@@ -1506,31 +1509,30 @@ export function getPostResourceItemTypeLabel(type: PostResourceItemType, count =
   return count === 1 ? labels.singular : labels.plural;
 }
 
+// Settings read as one thing however many items hold them: "settings", never
+// "2 settings".
+const UNCOUNTED_RESOURCE_ITEM_TYPES = new Set<PostResourceItemType>(['settings']);
+
 export function formatPostResourceItemCountSummary(counts: PostResourceItemCounts | null | undefined): string {
   const parts = RESOURCE_ITEM_COUNT_ORDER.flatMap((type) => {
     const count = counts?.[type] ?? 0;
-    return count > 0 ? [`${count} ${getPostResourceItemTypeLabel(type, count)}`] : [];
+    if (count <= 0) return [];
+    const label = getPostResourceItemTypeLabel(type, count);
+    return [UNCOUNTED_RESOURCE_ITEM_TYPES.has(type) ? label : `${count} ${label}`];
   });
 
   return parts.join(', ');
 }
 
+/**
+ * What a recipe holds, in buyer words: "1 prompt, 2 files, settings, 1 link".
+ * Cards ("sections") are how the creator arranged it, not something a buyer
+ * gets, so they are not counted (recipe audit B-F16).
+ */
 export function formatPostResourceBundleCountSummary(
-  preview: Pick<PostResourceBundleLockedPreview, 'itemCounts' | 'sectionCount'> | null | undefined
+  preview: Pick<PostResourceBundleLockedPreview, 'itemCounts'> | null | undefined
 ): string {
-  const parts: string[] = [];
-  const sectionCount = preview?.sectionCount ?? 0;
-
-  if (sectionCount > 0) {
-    parts.push(`${sectionCount} ${sectionCount === 1 ? 'section' : 'sections'}`);
-  }
-
-  const itemSummary = formatPostResourceItemCountSummary(preview?.itemCounts);
-  if (itemSummary) {
-    parts.push(itemSummary);
-  }
-
-  return parts.join(', ');
+  return formatPostResourceItemCountSummary(preview?.itemCounts);
 }
 
 export function describePostResourceKinds(kinds: PostResourceKind[]): string {
@@ -1606,6 +1608,31 @@ function resolveResourceRemixDescriptorTarget(items: PostResourceRemixDescriptor
   return null;
 }
 
+/**
+ * Whether a recipe includes its post's Remix, as every read reports it.
+ *
+ * A published recipe on a post made from a creation (not a template's result)
+ * includes it, whatever the stored `allow_remix` says: the composers' "Allow
+ * direct remix" switch is gone, and `resolvePostRemixCapability` gates such a
+ * post's Remix at the unlock. Read-time only; nothing stored changes, and a
+ * stored `true` stays true.
+ */
+export function resolveRecipeAllowRemix(input: {
+  storedAllowRemix: boolean | null | undefined;
+  status: string | null | undefined;
+  generationId: string | null | undefined;
+  templateResult?: boolean;
+}): boolean {
+  if (input.storedAllowRemix === true) {
+    return true;
+  }
+
+  return input.status === 'published'
+    && typeof input.generationId === 'string'
+    && input.generationId.length > 0
+    && input.templateResult !== true;
+}
+
 export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
   capability: PostRemixCapability;
   target: PostRemixTarget;
@@ -1640,9 +1667,14 @@ export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
     };
   }
 
+  // A creation post's recipe includes its Remix (2026-10-27): whoever has not
+  // unlocked it unlocks it to remix, whatever its stored remix switch says, so
+  // the creation's prompt and settings never go to someone who has not unlocked
+  // a recipe that sells them. Callers pass a published recipe, or one this
+  // viewer may open.
   if (hasGeneration) {
     return {
-      capability: resourceBundle?.allowRemix && bundleRequiresUnlock ? 'unlock_required' : 'public',
+      capability: bundleRequiresUnlock ? 'unlock_required' : 'public',
       target: targetForMediaCategory(input.category, input.creationMode),
     };
   }

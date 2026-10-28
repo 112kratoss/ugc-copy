@@ -1,4 +1,4 @@
-import { Lock, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react-native';
+import { CheckCircle2, Lock, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react-native';
 import { memo, useCallback, useContext } from 'react';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
@@ -173,13 +173,16 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             onPress={onShare}
           />
           {/* The recipe behind the post, last in the row and only where it adds
-              something: a price, or a free recipe on a card with no Remix
+              something: a price, a free recipe on a card with no Remix, one the
+              viewer has ("Unlocked", with a check) or their own
               (`homeRecipeChip`). Last, so that on a narrow phone it is the one
               control that wraps. */}
           {card.recipeChip ? (
             <FeedCardAction
               accessibilityLabel={card.recipeChip.accessibilityLabel}
-              icon={(
+              icon={card.recipeChip.kind === 'unlocked' ? (
+                <CheckCircle2 size={appTheme.icon.compact} color={theme.colors.success} />
+              ) : (
                 <ShoppingBag
                   size={appTheme.icon.compact}
                   color={card.recipeChip.tone === 'paid' ? theme.colors.commerce : theme.colors.faint}

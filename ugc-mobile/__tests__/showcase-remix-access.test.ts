@@ -125,3 +125,51 @@ describe('getShowcaseRemixAccess', () => {
     }))).toBeNull();
   });
 });
+
+/**
+ * S1 (recipe audit 2026-10-27): on a post made from a creation, any published
+ * recipe, free or paid, comes with Remix. The owner and anyone who unlocked it
+ * remix as before; everyone else is sent through the unlock, and every read
+ * says `allowRemix: true` for such a recipe whatever is stored.
+ */
+describe('getShowcaseRemixAccess once every creation recipe includes Remix', () => {
+  const locked = { canRemix: false, remixCapability: 'unlock_required' as const, remixTarget: 'image' as const };
+
+  it('sends a viewer without the recipe through its unlock, free or paid', () => {
+    expect(getShowcaseRemixAccess(item({ ...locked, asset: asset({ accessMode: 'free' }) }))).toBe('free-unlock');
+    expect(getShowcaseRemixAccess(item({ ...locked, asset: asset({ accessMode: 'paid', priceUsdCents: 900 }) }))).toBe('paid-unlock');
+  });
+
+  it('opens Remix for the owner and for anyone who unlocked it', () => {
+    // The server answers `public` and `canRemix` for them.
+    expect(getShowcaseRemixAccess(item({
+      canRemix: true,
+      remixCapability: 'public',
+      remixTarget: 'image',
+      asset: asset({ accessMode: 'paid', priceUsdCents: 900 }),
+    }))).toBe('open');
+  });
+
+  it('leaves a creation without a recipe open, and an upload with nothing to remix', () => {
+    expect(getShowcaseRemixAccess(item({ canRemix: true, remixCapability: 'public', remixTarget: 'image', asset: null }))).toBe('open');
+    expect(getShowcaseRemixAccess(item({ generationId: null, canRemix: false, remixCapability: 'unsupported', asset: asset() }))).toBeNull();
+  });
+
+  it("believes the server's unlock over a recipe summary a read path has not normalised yet", () => {
+    // The remix endpoint refuses this viewer until the recipe is unlocked, so
+    // the recipe is the way in whatever its stored flag says.
+    expect(getShowcaseRemixAccess(item({
+      ...locked,
+      asset: asset({ allowRemix: false, accessMode: 'paid', priceUsdCents: 900 }),
+    }))).toBe('paid-unlock');
+    expect(getShowcaseRemixAccess(item({
+      ...locked,
+      asset: asset({ allowRemix: false, accessMode: 'free' }),
+    }))).toBe('free-unlock');
+  });
+
+  it('still offers nothing when the server says an unlock is needed but sends no recipe to unlock', () => {
+    expect(getShowcaseRemixAccess(item({ ...locked, asset: null }))).toBeNull();
+  });
+});
+

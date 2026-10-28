@@ -1,11 +1,11 @@
 import { Image } from 'expo-image';
-import { FileText, Globe, Heart, Images, LockKeyhole, MessageCircle, MoreHorizontal, Repeat2, Wand2 } from 'lucide-react-native';
+import { FileText, Globe, Heart, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Repeat2, Wand2 } from 'lucide-react-native';
 import { cloneElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ActivityIndicator, Animated, Easing, Pressable, Text, View } from 'react-native';
 
 import { verticalHitSlop } from '@/lib/hit-target';
 import { formatCompactCount } from '@/lib/home-view-model';
-import { hasImmersiveDetailsPage, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { getLockedRemixRailLabel, hasImmersiveDetailsPage, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { buildReelCaption, getRailCountLabel } from '@/lib/reel-overlay-view-model';
@@ -242,12 +242,18 @@ export function ReelSlideChrome({
             ) : null;
           }
           if (slot.id === 'create') {
+            // Behind a paid recipe the lock and the price, as the Home card's
+            // pill draws them (B-F15): the tap opens the unlock, not the editor.
+            const locked = slot.action === 'unlock-remix' ? getLockedRemixRailLabel(item) : null;
+            const CreateIcon = locked ? Lock : Repeat2;
             return (
               <RailActionButton
                 key={slot.id}
                 primary
-                icon={<Repeat2 size={26} color="#050505" />}
-                label={slot.label}
+                // Never back to undefined: Android keeps a label that is (hig-accessibility-label-states).
+                accessibilityLabel={locked?.accessibilityLabel ?? slot.label}
+                icon={<CreateIcon size={26} color="#050505" />}
+                label={locked?.label ?? slot.label}
                 loading={slot.action === 'unlock-remix' ? false : remixLoading}
                 onPress={slot.action === 'unlock-remix' ? () => onUnlockRemix(item) : () => void onRecreate(item)}
               />

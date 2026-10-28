@@ -33,7 +33,6 @@ import {
     CreatorMentionPanel,
     CreatorModelChip,
     CreatorPendingStartNotice,
-    CreatorPhoneBalance,
     CreatorReferenceRow,
     CreatorResultActions,
     CreatorSettingChoices,
@@ -1924,7 +1923,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         })}
                             </StudioModelPicker>
                         </div>
-                        <CreatorPhoneBalance credits={userCredits} />
                         </div>
 
                         <AnimatePresence>

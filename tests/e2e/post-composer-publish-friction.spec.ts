@@ -155,7 +155,7 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
     await paid.focus();
     await page.keyboard.press('Enter');
     await expect(paid).toBeChecked();
-    await expect(page.getByLabel(/price in tokens/i)).toBeVisible();
+    await expect(page.getByLabel(/price in credits/i)).toBeVisible();
 
     // The arrow keys move the choice, as one radio group.
     await page.keyboard.press('ArrowRight');

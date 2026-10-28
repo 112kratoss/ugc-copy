@@ -538,8 +538,8 @@ describe('post new view model', () => {
       textContent: '',
     });
     expect(getPostComposerResourceCardErrors(card)).toEqual({
-      title: 'Add a resource title.',
-      content: 'Add the protected content, link, or file for this resource.',
+      title: 'Add an item title.',
+      content: 'Add the content, link, or file for this item.',
     });
     expect(isPostComposerResourceCardReady(card)).toBe(false);
     expect(isPostComposerResourceCardReady({ ...card, title: 'Reusable prompt', textContent: 'Exact prompt' })).toBe(true);
@@ -1160,7 +1160,7 @@ describe('post new view model', () => {
 
     expect(validatePostComposerDraft(draft)).toEqual({
       valid: false,
-      message: 'Add a buyer preview for the recipe.',
+      message: 'Add a recipe preview.',
     });
   });
 
@@ -1182,17 +1182,17 @@ describe('post new view model', () => {
     expect(validatePostComposerDraft({
       ...baseDraft,
       resource: { ...baseDraft.resource, priceTokens: '5' },
-    })).toMatchObject({ valid: false, message: 'Paid recipes must cost at least 10 tokens.' });
+    })).toMatchObject({ valid: false, message: 'Paid recipes start at 10 credits, in steps of 10.' });
     expect(validatePostComposerDraft({
       ...baseDraft,
       resource: { ...baseDraft.resource, priceTokens: '15' },
-    })).toMatchObject({ valid: false, message: 'Recipe prices must use increments of 10 tokens.' });
+    })).toMatchObject({ valid: false, message: 'Paid recipes start at 10 credits, in steps of 10.' });
     expect(getPostComposerPackageStatus({
       ...baseDraft,
       resource: { ...baseDraft.resource, priceTokens: '15' },
     })).toMatchObject({
       label: 'Set a valid price',
-      body: 'Recipe prices must use increments of 10 tokens.',
+      body: 'Paid recipes start at 10 credits, in steps of 10.',
       state: 'warning',
     });
     expect(validatePostComposerDraft({
@@ -1435,14 +1435,15 @@ describe('post new view model', () => {
     expect(hasCreationPromptCard(draft.resource.cards, item)).toBe(true);
     expect(draft.resource.accessMode).toBe('free');
     expect(draft.resource.promptText).toBe('Exact cinematic product prompt');
-    expect(draft.resource.previewText).toBe('Includes the exact reusable prompt.');
+    // Suggested from the items, as the Recipe preview is for any item (recipe audit S7).
+    expect(draft.resource.previewText).toBe('Includes the prompt.');
     expect(buildPublishGenerationPostPayload(item, draft).resourceBundle).toMatchObject({
       accessMode: 'free',
       // With no author-written summary, the author's preview stands in for it.
       // The marketplace quality gate reads whichever is non-empty first, so a
       // short derived summary would otherwise shadow the real preview.
-      summary: 'Includes the exact reusable prompt.',
-      previewText: 'Includes the exact reusable prompt.',
+      summary: 'Includes the prompt.',
+      previewText: 'Includes the prompt.',
       priceUsdCents: 0,
       resources: {
         promptText: null,
@@ -1668,7 +1669,9 @@ describe('post new view model', () => {
       });
     });
 
-    it('omits the resource bundle when an existing sold package must be preserved', () => {
+    // A recipe people have bought is edited like any other (recipe audit S2):
+    // there is no sold recipe left out of the save any more.
+    it('sends the recipe choice with every edit, No recipe included', () => {
       const draft = {
         ...getDefaultPostComposerDraft(),
         visibility: 'private' as const,
@@ -1678,13 +1681,14 @@ describe('post new view model', () => {
         },
       };
 
-      expect(buildUpdatePostPayload(true, draft, { preserveSoldResourceBundle: true })).toEqual({
+      expect(buildUpdatePostPayload(true, draft)).toEqual({
         isNsfw: false,
         title: '',
         body: '',
         visibility: 'private',
+        resourceBundle: { accessMode: 'none' },
       });
-      expect(buildUpdatePostPayload(false, draft, { preserveSoldResourceBundle: true })).not.toHaveProperty('resourceBundle');
+      expect(buildUpdatePostPayload(false, draft)).toHaveProperty('resourceBundle', { accessMode: 'none' });
     });
 
     it('submits text post edits without duplicating the caption into the body', () => {
@@ -1989,7 +1993,7 @@ describe('recipe words on step 2', () => {
     });
     expect(getPostComposerPackageStatus(withRecipe('free', { cards: [] }))).toMatchObject({
       label: 'Finish the recipe',
-      body: 'Add a buyer preview and at least one prompt, workflow, file, note, or remix link.',
+      body: 'Add at least one item.',
       state: 'warning',
     });
   });
@@ -1998,7 +2002,7 @@ describe('recipe words on step 2', () => {
     expect(validatePostComposerDraft(withRecipe('free', { cards: [] })))
       .toEqual({ valid: false, message: 'Add at least one item to the recipe.' });
     expect(validatePostComposerDraft(withRecipe('paid', { priceTokens: '5' })))
-      .toEqual({ valid: false, message: 'Paid recipes must cost at least 10 tokens.' });
+      .toEqual({ valid: false, message: 'Paid recipes start at 10 credits, in steps of 10.' });
   });
 });
 

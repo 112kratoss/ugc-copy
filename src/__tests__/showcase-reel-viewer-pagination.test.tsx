@@ -1180,7 +1180,7 @@ describe('ShowcaseReelViewer pagination', () => {
     const unlockButtons = screen.getAllByRole('button', { name: /unlock for \$9\.00/i });
     fireEvent.click(unlockButtons[0]);
 
-    expect(screen.getByRole('button', { name: /pay with cash/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^pay [$₹]/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use [\d,]+ credits/i })).toBeInTheDocument();
     expect(screen.queryByText(/buyer trust/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/included after unlock/i)).not.toBeInTheDocument();
@@ -1227,42 +1227,55 @@ describe('ShowcaseReelViewer pagination', () => {
         method: 'POST',
       }));
     });
-    expect(screen.queryByRole('button', { name: /pay with cash/i })).not.toBeInTheDocument();
-    expect(await screen.findByText(/added to your recipes/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^pay [$₹]/i })).not.toBeInTheDocument();
+    // The post page's panel opens in place, saying so and where it is kept (B-F9).
+    expect(await screen.findByText('Recipe unlocked')).toBeInTheDocument();
+    expect(screen.getByText('free revealed prompt')).toBeInTheDocument();
   });
 
-  // A recipe the reader has unlocked opens in the reel: its prompt (once), its
-  // notes, its references, and a reference image larger on a tap.
-  it("shows an unlocked recipe's prompt, notes and references, and opens a reference image larger", async () => {
+  // A recipe the reader has unlocked opens in the reel as the post page draws
+  // it: its prompt (once), its notes and its references, each where the
+  // creator put it.
+  it("shows an unlocked recipe's prompt, notes and references", async () => {
     authState.session = { access_token: 'token-1' };
+    const item = (fields: Record<string, unknown>) => ({
+      role: 'supporting',
+      sectionId: null,
+      description: null,
+      textContent: null,
+      externalUrl: null,
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      isPrimary: false,
+      remixUse: 'none',
+      ...fields,
+    });
     stubRequests({
       '/api/posts/post-1/resource-bundle': () => new Response(JSON.stringify({
         bundle: {
           viewerCanAccess: true,
           viewerIsOwner: false,
           resources: {
-            promptText: 'unlocked recipe prompt',
-            notesMarkdown: 'unlocked recipe notes',
+            promptText: null,
+            notesMarkdown: null,
             workflowShareUrl: null,
             attachments: [],
-            allowRemix: true,
+            allowRemix: false,
             items: [
-              {
+              item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'unlocked recipe prompt', sortOrder: 0 }),
+              item({ id: 'note-1', type: 'note', title: 'Notes', textContent: 'unlocked recipe notes', sortOrder: 1 }),
+              item({
+                id: 'reference-1',
                 type: 'reference_image',
                 role: 'style_reference',
-                sectionId: null,
                 title: '@alisa',
-                description: null,
-                textContent: null,
-                externalUrl: null,
                 storagePath: 'generated_images/user-1/reference.png',
                 contentType: 'image/png',
-                sizeBytes: null,
-                workflowSnapshot: null,
-                sortOrder: 1,
-                isPrimary: false,
+                sortOrder: 2,
                 remixUse: 'reference_only',
-              },
+              }),
             ],
           },
         },
@@ -1280,16 +1293,12 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(await screen.findByText('unlocked recipe prompt')).toBeInTheDocument();
     expect(screen.getAllByText('unlocked recipe prompt')).toHaveLength(1);
     expect(screen.getByText('unlocked recipe notes')).toBeInTheDocument();
-    expect(screen.getByText(/remix access is included/i)).toBeInTheDocument();
     expect(screen.getByText('@alisa')).toBeInTheDocument();
-
-    const referencePreviewButton = await screen.findByRole('button', { name: /open preview for @alisa/i });
-    expect(referencePreviewButton.closest('div.w-\\[112px\\]')).not.toBeNull();
-
-    fireEvent.click(referencePreviewButton);
-
-    expect(screen.getByRole('dialog', { name: /reference image preview/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /close reference preview/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.querySelector('img[src="https://signed.example.com/reference.png"]')).not.toBeNull();
+    });
+    expect(screen.getByRole('button', { name: /open file/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument();
   });
 
   // As the post page's panel does: the previews one render draws leave as one
@@ -1331,22 +1340,25 @@ describe('ShowcaseReelViewer pagination', () => {
         },
       })),
       '/api/posts/post-1/resource-bundle/file-url': (init) => {
-        const { storagePaths } = JSON.parse(String(init?.body)) as { storagePaths: string[] };
+        const body = JSON.parse(String(init?.body)) as { storagePaths?: string[]; storagePath?: string };
+        if (body.storagePath) {
+          return new Response(JSON.stringify({ signedUrl: `https://signed.example.com/${body.storagePath}` }));
+        }
         return new Response(JSON.stringify({
-          files: storagePaths.map((storagePath) => ({ storagePath, url: `https://signed.example.com/${storagePath}` })),
+          files: (body.storagePaths ?? []).map((storagePath) => ({ storagePath, url: `https://signed.example.com/${storagePath}` })),
         }));
       },
     });
     const fileUrlBodies = () => fetchMock.mock.calls
       .filter(([input]) => String(input) === '/api/posts/post-1/resource-bundle/file-url')
       .map(([, init]) => JSON.parse(String(init?.body)));
-    const tab = { opener: {}, closed: false, close: vi.fn(), location: { replace: vi.fn() } };
-    const open = vi.spyOn(window, 'open').mockImplementation(() => tab as unknown as Window);
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
 
     try {
       renderPaidReel();
 
-      expect(await screen.findByText('unlocked recipe prompt')).toBeInTheDocument();
+      // Items present, the post page draws them alone; the reel draws the same.
+      expect(await screen.findByText('frame.png')).toBeInTheDocument();
       await waitFor(() => {
         expect(document.querySelector('img[src="https://signed.example.com/generated_images/user-1/frame.png"]')).not.toBeNull();
       });
@@ -1356,11 +1368,12 @@ describe('ShowcaseReelViewer pagination', () => {
         disposition: 'inline',
       }]);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Open Guide' }));
+      // Open asks for the one file, to be shown, and opens it.
+      fireEvent.click(screen.getAllByRole('button', { name: /open file/i })[0]);
       await waitFor(() => {
-        expect(tab.location.replace).toHaveBeenCalledWith('https://signed.example.com/user-1/resources/guide.pdf');
+        expect(open).toHaveBeenCalledWith('https://signed.example.com/generated_images/user-1/frame.png', '_blank', 'noopener,noreferrer');
       });
-      expect(fileUrlBodies()[1]).toEqual({ storagePaths: ['user-1/resources/guide.pdf'], disposition: 'inline' });
+      expect(fileUrlBodies().at(-1)).toEqual({ storagePath: 'generated_images/user-1/frame.png', disposition: 'inline' });
     } finally {
       open.mockRestore();
     }
@@ -1416,7 +1429,7 @@ describe('ShowcaseReelViewer pagination', () => {
 
     renderPaidReel();
     fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
-    fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^pay [$₹]/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/order', expect.objectContaining({
@@ -1425,20 +1438,22 @@ describe('ShowcaseReelViewer pagination', () => {
     });
   });
 
-  it('unlocks with credits once the reader says yes, and shows a compact success state', async () => {
+  it('unlocks with credits once the reader says yes, and shows the recipe in place', async () => {
     authState.session = { access_token: 'token-1' };
     authState.credits = 1200;
+    let unlocked = false;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = input.toString();
 
       if (url.endsWith('/unlock-with-credits')) {
+        unlocked = true;
         return new Response(JSON.stringify({ success: true, credits: 300 }));
       }
 
       if (url.endsWith('/resource-bundle')) {
         return new Response(JSON.stringify({
           bundle: {
-            viewerCanAccess: true,
+            viewerCanAccess: unlocked,
             viewerIsOwner: false,
             resources: {
               promptText: 'revealed prompt',
@@ -1462,9 +1477,9 @@ describe('ShowcaseReelViewer pagination', () => {
 
     // The spend cannot be undone, so it is asked first, as the post page asks.
     const question = await screen.findByRole('alertdialog', { name: 'Unlock this recipe?' });
-    expect(question).toHaveTextContent('900 credits will come off your balance right away.');
+    expect(question).toHaveTextContent('900 credits will come off your balance.');
     expect(fetchMock).not.toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-with-credits', expect.anything());
-    fireEvent.click(within(question).getByRole('button', { name: 'Use 900 credits' }));
+    fireEvent.click(within(question).getByRole('button', { name: 'Unlock for 900 credits' }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-with-credits', expect.objectContaining({
@@ -1472,10 +1487,196 @@ describe('ShowcaseReelViewer pagination', () => {
       }));
     });
     expect(mockUpdateCredits).toHaveBeenCalledWith(300);
-    expect(await screen.findByText('Unlocked')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /view recipe details/i }));
+    // The whole recipe at once, as the post page draws it: no second button
+    // to press (it opened a partial card, B-F1).
+    expect(await screen.findByText('Recipe unlocked')).toBeInTheDocument();
     expect(screen.getByText(/revealed prompt/i)).toBeInTheDocument();
     expect(screen.getByText(/revealed notes/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /view recipe details/i })).toBeNull();
+  });
+
+  // B-F1 (audit H5, 2026-10-27): after paying in the reel, "View recipe
+  // details" held the first prompt and note alone; settings never showed, and
+  // files and links were grey titles with nothing to press. The reel draws the
+  // post page's own panel now.
+  describe('the recipe in the reel once it is unlocked', () => {
+    function unlockedBundle(items: unknown[], fields: Record<string, unknown> = {}) {
+      return {
+        id: 'bundle-1',
+        postId: 'post-1',
+        title: 'Prompt pack',
+        summary: 'The setup behind this frame.',
+        previewText: '',
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        priceQuote: { currency: 'USD', amountSubunits: 900, formatted: '$9.00', note: null },
+        resourceKinds: ['prompt'],
+        lockedPreview: null,
+        salesCount: 4,
+        freeUnlockCount: 0,
+        allowRemix: false,
+        status: 'published',
+        viewerCanAccess: true,
+        viewerIsOwner: false,
+        purchasedRevision: null,
+        resources: {
+          promptText: null,
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: false,
+          sections: [],
+          items,
+        },
+        ...fields,
+      };
+    }
+
+    function item(fields: Record<string, unknown>) {
+      return {
+        role: 'supporting',
+        sectionId: null,
+        description: null,
+        textContent: null,
+        externalUrl: null,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
+        sortOrder: 0,
+        isPrimary: false,
+        remixUse: 'none',
+        ...fields,
+      };
+    }
+
+    it('shows a recipe of settings alone', async () => {
+      authState.session = { access_token: 'token-1' };
+      stubRequests({
+        '/api/posts/post-1/resource-bundle': () => new Response(JSON.stringify({
+          bundle: unlockedBundle([
+            item({ id: 'settings-1', type: 'settings', title: 'Model settings', textContent: 'Saved generation setup\nModel: Kling 2.5\nAspect ratio: 9:16' }),
+          ]),
+        })),
+      });
+
+      renderPaidReel();
+
+      expect(await screen.findByText('Generation setup')).toBeInTheDocument();
+      expect(screen.getByText('Aspect ratio')).toBeInTheDocument();
+      expect(screen.getByText('9:16')).toBeInTheDocument();
+      expect(screen.queryByText(/Prompt, references, notes, and remix access available here/)).toBeNull();
+    });
+
+    it('lets a file be opened and saved, and a link be followed', async () => {
+      authState.session = { access_token: 'token-1' };
+      stubRequests({
+        '/api/posts/post-1/resource-bundle': () => new Response(JSON.stringify({
+          bundle: unlockedBundle([
+            item({ id: 'file-1', type: 'source_file', title: 'Project files', storagePath: 'user-1/resources/project.zip', contentType: 'application/zip', sizeBytes: 2048 }),
+            item({ id: 'link-1', type: 'external_link', title: 'Moodboard', externalUrl: 'https://example.com/board', sortOrder: 1 }),
+          ]),
+        })),
+      });
+
+      renderPaidReel();
+
+      expect(await screen.findByText('Project files')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /open file/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Open link' })).toHaveAttribute('href', 'https://example.com/board');
+    });
+
+    it('says the recipe is unlocked and where it is kept, after an unlock made here', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      let unlocked = false;
+      stubRequests({
+        '/api/posts/post-1/resource-bundle/unlock-with-credits': () => {
+          unlocked = true;
+          return new Response(JSON.stringify({ success: true, credits: 300 }));
+        },
+        '/api/posts/post-1/resource-bundle': () => new Response(JSON.stringify({
+          bundle: unlocked
+            ? unlockedBundle([item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'revealed prompt' })])
+            : { viewerCanAccess: false, viewerIsOwner: false, resources: null },
+        })),
+      });
+
+      render(<FeedbackViewport />);
+      renderPaidReel();
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+      fireEvent.click(screen.getByRole('button', { name: /use 900 credits/i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Unlock for 900 credits' }));
+
+      expect(await screen.findByText('Recipe unlocked')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Unlocked recipes' })).toHaveAttribute('href', '/creations?view=unlocks');
+      expect(screen.getByText('revealed prompt')).toBeInTheDocument();
+    });
+
+    // B-F14: "Unlock for $9.00 · 900 credits" in a 64px rail button.
+    it('labels its rail button Recipe, with the full price for a screen reader', () => {
+      renderPaidReel();
+
+      // The rail's button and the details card's both offer the unlock; the
+      // rail's holds one word.
+      const offers = screen.getAllByRole('button', { name: 'Unlock for $9.00 · 900 credits' });
+      expect(offers.some((button) => button.textContent === 'Recipe')).toBe(true);
+      expect(screen.queryByText('Unlock for $9.00 · 900 credits', { selector: 'aside span' })).toBeNull();
+    });
+
+    it('names the card payment by its amount, and no payment provider', () => {
+      authState.session = { access_token: 'token-1' };
+      renderPaidReel();
+
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+
+      expect(screen.getByRole('button', { name: 'Pay $9.00' })).toBeInTheDocument();
+      expect(screen.queryByText(/with cash|razorpay/i)).toBeNull();
+    });
+
+    it('sends a buyer short of credits to Pricing with the way back to this post', () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 100;
+      authState.marketplaceSpendableCredits = 100;
+      renderPaidReel();
+
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+
+      expect(screen.getByRole('link', { name: 'Buy credits' }))
+        .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
+    });
+
+    // S3: the credits unlock charged whatever the price was at the tap.
+    it('unlocks at the price the reader confirmed, and asks again when it has moved', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      let attempts = 0;
+      const fetchMock = stubRequests({
+        '/api/posts/post-1/resource-bundle/unlock-with-credits': () => {
+          attempts += 1;
+          return attempts === 1
+            ? new Response(JSON.stringify({ success: false, code: 'RESOURCE_PRICE_CHANGED', error: 'The price changed to 1,000 credits.', priceCredits: 1000 }), { status: 409 })
+            : new Response(JSON.stringify({ success: true, credits: 200 }));
+        },
+      });
+
+      render(<FeedbackViewport />);
+      renderPaidReel();
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+      fireEvent.click(screen.getByRole('button', { name: /use 900 credits/i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Unlock for 900 credits' }));
+
+      expect(await screen.findByText('The price changed to 1,000 credits.')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /use 1,000 credits/i }));
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Unlock for 1,000 credits' }));
+
+      await waitFor(() => expect(attempts).toBe(2));
+      expect(fetchMock.mock.calls
+        .filter(([input]) => String(input).endsWith('/unlock-with-credits'))
+        .map(([, init]) => (init as RequestInit).body))
+        .toEqual([JSON.stringify({ expectedPriceCredits: 900 }), JSON.stringify({ expectedPriceCredits: 1000 })]);
+    });
   });
 
   describe('comments in the reel', () => {
@@ -1703,7 +1904,7 @@ describe('ShowcaseReelViewer pagination', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Remix: unlock the recipe for Campaign Frame first' }));
 
       expect(onRemix).not.toHaveBeenCalled();
-      expect(screen.getByRole('button', { name: /pay with cash/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^pay [$₹]/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeInTheDocument();
     });
 
@@ -1724,7 +1925,7 @@ describe('ShowcaseReelViewer pagination', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /remix: unlock the recipe/i }));
 
-      expect(await screen.findByText(/added to your recipes/i)).toBeInTheDocument();
+      expect(await screen.findByText('Recipe unlocked')).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-free', expect.objectContaining({
         method: 'POST',
       }));
@@ -1802,7 +2003,7 @@ describe('ShowcaseReelViewer pagination', () => {
       expect(screen.queryByRole('button', { name: /\$0\.90/ })).not.toBeInTheDocument();
       fireEvent.click(screen.getAllByRole('button', { name: /unlock for 90 credits/i })[0]);
 
-      expect(screen.queryByRole('button', { name: /pay with cash/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^pay [$₹]/i })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Use 90 credits' })).toBeInTheDocument();
       expect(screen.queryByTestId('showcase-reel-razorpay-checkout')).not.toBeInTheDocument();
     });
@@ -1843,7 +2044,7 @@ describe('ShowcaseReelViewer pagination', () => {
           expect(funnel.heard.map(({ eventName }) => eventName)).toEqual(['recipe_unlock_started', 'recipe_unlock_succeeded']);
         });
         expect(funnel.heard[1].parameters).toEqual({ method: 'credits', post_id: 'post-1' });
-        expect(confirm).toHaveBeenCalledWith(expect.stringContaining('900 credits will come off your balance right away.'));
+        expect(confirm).toHaveBeenCalledWith(expect.stringContaining('900 credits will come off your balance.'));
       } finally {
         funnel.stop();
         confirm.mockRestore();
@@ -1883,7 +2084,7 @@ describe('ShowcaseReelViewer pagination', () => {
       expect(screen.getByText('0 credits available')).toBeInTheDocument();
       expect(screen.getByText("Welcome and referral credits can't be spent on recipes.")).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
-      expect(screen.getByRole('link', { name: 'Buy credits' })).toHaveAttribute('href', '/pricing');
+      expect(screen.getByRole('link', { name: 'Buy credits' })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
     });
 
     it('prints the spendable balance alone when all of it can buy recipes', () => {
@@ -1935,7 +2136,7 @@ describe('ShowcaseReelViewer pagination', () => {
 
         expect(await screen.findByText('Insufficient credits. This unlock costs 900 credits.')).toBeInTheDocument();
         expect(mockUpdateCredits).toHaveBeenCalledWith(1200, { marketplaceSpendableCredits: 0 });
-        expect(screen.getByRole('link', { name: 'Buy credits' })).toHaveAttribute('href', '/pricing');
+        expect(screen.getByRole('link', { name: 'Buy credits' })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
       } finally {
         confirm.mockRestore();
       }
@@ -2025,7 +2226,7 @@ describe('ShowcaseReelViewer pagination', () => {
       function payWithCash() {
         renderPaidReel();
         fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
-        fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+        fireEvent.click(screen.getByRole('button', { name: /^pay [$₹]/i }));
       }
 
       it('verifies with the session as it is after the sheet, and reads the settled recipe with it too', async () => {
@@ -2068,7 +2269,7 @@ describe('ShowcaseReelViewer pagination', () => {
           expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
           expect(intentKeyDuringVerify).toEqual(expect.any(String));
           expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
-          expect(screen.getByRole('button', { name: /pay with cash/i })).toBeDisabled();
+          expect(screen.getByRole('button', { name: /^pay [$₹]/i })).toBeDisabled();
           expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
           await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', {
@@ -2103,7 +2304,7 @@ describe('ShowcaseReelViewer pagination', () => {
           expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
           expect(screen.queryByText(/try again/i)).not.toBeInTheDocument();
           expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
-          expect(screen.getByRole('button', { name: /pay with cash/i })).toBeDisabled();
+          expect(screen.getByRole('button', { name: /^pay [$₹]/i })).toBeDisabled();
           expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
           await waitFor(() => {
             expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', {
@@ -2155,7 +2356,7 @@ describe('ShowcaseReelViewer pagination', () => {
         try {
           const { rerender } = render(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-1' })} />);
           fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
-          fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+          fireEvent.click(screen.getByRole('button', { name: /^pay [$₹]/i }));
           expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
 
           rerender(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-2' })} />);
@@ -2197,13 +2398,13 @@ describe('ShowcaseReelViewer pagination', () => {
 
         const { rerender } = render(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-1' })} />);
         fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
-        fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+        fireEvent.click(screen.getByRole('button', { name: /^pay [$₹]/i }));
         expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
 
         // Another recipe is another purchase.
         rerender(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-2' })} />);
         fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
-        expect(screen.getByRole('button', { name: /pay with cash/i })).toBeEnabled();
+        expect(screen.getByRole('button', { name: /^pay [$₹]/i })).toBeEnabled();
         expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeEnabled();
         expect(screen.queryByText(PAYMENT_RECEIVED)).not.toBeInTheDocument();
 
@@ -2211,7 +2412,7 @@ describe('ShowcaseReelViewer pagination', () => {
         rerender(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-1' })} />);
         fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
         expect(screen.getByText(PAYMENT_RECEIVED)).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /pay with cash/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /^pay [$₹]/i })).toBeDisabled();
         expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
       });
 
@@ -2227,7 +2428,7 @@ describe('ShowcaseReelViewer pagination', () => {
 
         const { unmount } = renderPaidReel();
         fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
-        fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+        fireEvent.click(screen.getByRole('button', { name: /^pay [$₹]/i }));
         await waitFor(() => expect(mockVerifyCheckout).toHaveBeenCalledTimes(1));
         unmount();
         failVerify(new Error('Failed to fetch'));
@@ -2250,7 +2451,7 @@ describe('ShowcaseReelViewer pagination', () => {
       try {
         renderPaidReel();
         fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
-        fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+        fireEvent.click(screen.getByRole('button', { name: /^pay [$₹]/i }));
 
         await waitFor(() => {
           expect(funnel.heard.map(({ eventName }) => eventName)).toEqual(['recipe_checkout_started', 'recipe_checkout_failed']);

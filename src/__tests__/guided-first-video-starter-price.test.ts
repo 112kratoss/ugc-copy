@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import {
   buildCodeGenerationModelOperations,
   calculateGenerationModelRuntimeCost,
@@ -17,17 +18,11 @@ const WELCOME_CREDITS = 25;
 // cannot import a mobile file on CI, so each starter's line is matched in that file's text instead.
 const STARTERS = [
   {
-    line: "{ modelId: 'seedance-1.5-pro', settings: { resolution: '720p', duration: '4', sound: false } }",
-    modelId: 'seedance-1.5-pro',
-    settings: { resolution: '720p', duration: 4, sound: false },
-    credits: 14,
-  },
-  {
-    // Kie's 3.8 credits a second at 480p without video (kie.ai/pricing, 2026-10-20): 4 s is 15.2, so 16.
-    line: "{ modelId: 'seedance-2-mini', settings: { resolution: '480p', duration: 4, sound: false } }",
+    // Kie's 3.8 credits a second at 480p without video (kie.ai/pricing, 2026-10-20): 5 s is 19.
+    line: "{ modelId: 'seedance-2-mini', settings: { resolution: '480p', duration: 5, sound: false } }",
     modelId: 'seedance-2-mini',
-    settings: { resolution: '480p', duration: 4, sound: false },
-    credits: 16,
+    settings: { resolution: '480p', duration: 5, sound: false },
+    credits: 19,
   },
 ];
 
@@ -55,5 +50,19 @@ describe('guided first video starters', () => {
   it('lists exactly these starters, in this order', () => {
     const lines = source.split('\n').filter((text) => text.includes('{ modelId: '));
     expect(lines.map((text) => text.trim().replace(/,$/, ''))).toEqual(STARTERS.map((starter) => starter.line));
+  });
+});
+
+describe('the default video', () => {
+  it('opens within the welcome credits at the code catalog price', () => {
+    // Every creator with no draft opens on it (owner, 2026-10-28: Seedance 2 Mini at 480p for 5 s, 19).
+    const catalog = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 2 });
+    const model = catalog.models.find((candidate) => candidate.id === catalog.defaults.video)!;
+    const settings = Object.fromEntries(model.controls.map((control) => [control.key, control.defaultValue]));
+    const config = buildCodeGenerationModelOperations().find((entry) => entry.modelId === model.id)!;
+
+    const cost = calculateGenerationModelRuntimeCost(config, settings, noInputs);
+    expect({ modelId: model.id, cost }).toEqual({ modelId: 'seedance-2-mini', cost: 19 });
+    expect(cost).toBeLessThanOrEqual(WELCOME_CREDITS);
   });
 });

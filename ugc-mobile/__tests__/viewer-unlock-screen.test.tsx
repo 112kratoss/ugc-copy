@@ -34,6 +34,7 @@ vi.mock('lucide-react-native', () => ({
 
 vi.mock('expo-router', () => ({
   router: { push: routerPush },
+  Stack: { Screen: (props: Record<string, unknown>) => React.createElement('stack-screen', props) },
   useLocalSearchParams: () => ({ unlockId: 'unlock-1' }),
 }));
 
@@ -562,3 +563,56 @@ describe('when the unlock does not load (03-5)', () => {
     expect(textValues(tree)).toContain('Kept title');
   });
 });
+
+// Recipe audit B-F10 (2026-10-27): one thing, one word. The receipt spoke of
+// "resources", "retained resources" and "this listing".
+describe('the receipt in recipe words', () => {
+  it('titles the page Recipe, as the recipe screen is titled', () => {
+    const tree = renderScreen();
+    expect(byType(tree, 'stack-screen')[0]?.props.options).toMatchObject({ title: 'Recipe' });
+  });
+
+  it('tells a signed-out reader who can open it', () => {
+    authUser.current = null;
+    const tree = renderScreen();
+    expect(textValues(tree)).toContain('Only the account that unlocked it can open it.');
+  });
+
+  it('says what became of a recipe the creator stopped selling, removed, or left with', () => {
+    unlockDetail.current = { ...unlockDetail.current!, retired: true };
+    expect(textValues(renderScreen())).toContain('This recipe is no longer sold. Yours stays here.');
+
+    unlockDetail.current = { ...unlockDetail.current!, retired: false, tombstoned: true };
+    expect(textValues(renderScreen())).toContain('The creator removed this post. Your recipe stays here.');
+
+    unlockDetail.current = { ...unlockDetail.current!, tombstoned: false, detached: true };
+    expect(textValues(renderScreen())).toContain('The creator deleted their account. You keep the version you unlocked and its files.');
+  });
+
+  it('falls back to recipe words when the creator wrote nothing', () => {
+    unlockDetail.current = {
+      ...unlockDetail.current!,
+      summary: '',
+      previewText: '',
+      purchasedRevision: { ...(unlockDetail.current!.purchasedRevision as Record<string, unknown>), summary: '', previewText: '' },
+    };
+    const values = textValues(renderScreen());
+    expect(values).toContain('The prompt, files and notes behind this post.');
+    expect(values.some((value) => /resource/i.test(value))).toBe(false);
+  });
+
+  it('names a file that will not open a file', async () => {
+    unlockApi.resolveViewerUnlockFileUrl.mockReset();
+    unlockApi.resolveViewerUnlockFileUrl.mockRejectedValue(new Error('Signed link expired.'));
+    const tree = renderScreen();
+
+    const props = contentProps.mock.calls.at(-1)?.[0] as {
+      onOpenFile: (file: { storagePath: string; title: string; contentType: string | null }) => Promise<void>;
+    };
+    await renderer.act(async () => {
+      await props.onOpenFile({ storagePath: 'retained/guide.pdf', title: 'Guide', contentType: 'application/pdf' });
+    });
+    expect(statusBlocks(tree)).toContainEqual({ title: 'File unavailable', body: 'Signed link expired.' });
+  });
+});
+

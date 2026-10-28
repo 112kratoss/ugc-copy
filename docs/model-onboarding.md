@@ -236,11 +236,17 @@ publish.
 The app's guided first video starts on a pinned model and the settings that set its price, sized to fit
 the welcome credits (`ugc-mobile/lib/guided-creation-starter.ts`). The file lists starters in order and
 the first the catalog still carries is used, so dropping a model from the catalog moves new accounts to the
-next one with no app release (Seedance 1.5 Pro, delisted on Kie's site, then Seedance 2 Mini at 480p). A
-release that reprices a listed starter, renames or retypes a control one pins, or takes one off mobile
-changes what a new account's first video costs: keep each within the `welcome_credits_v1` grant
-(`src/__tests__/guided-first-video-starter-price.test.ts` prices them with the code catalog) or change the
-starters in the same piece of work (an app OTA).
+next one, or to the catalog default, with no app release (since 2026-10-28 one starter: Seedance 2 Mini at
+480p for 5 s, where the default video opens too). A release that reprices a listed starter, renames or
+retypes a control one pins, or takes one off mobile changes what a new account's first video costs: keep each
+within the `welcome_credits_v1` grant (`src/__tests__/guided-first-video-starter-price.test.ts` prices them
+with the code catalog, and the catalog's default video at its own defaults) or change the starters in the
+same piece of work (an app OTA).
+
+The catalog's default model is also the one each creator opens on when nothing else chose one: both creators
+draw a stand-in until the catalog arrives and then take the default with its published control defaults
+(`CreateVideoClient.tsx`'s first pick; `normalizeCreationDraftForCatalog` in the app, which waits for the
+default's details). A saved draft keeps its model, so a changed default reaches new drafts only.
 
 ## Background
 

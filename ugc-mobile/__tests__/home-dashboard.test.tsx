@@ -689,14 +689,30 @@ describe('Home screen', () => {
 
     renderer.act(() => cardAt(tree, 0).onAssetPress());
     expect(sentEvents()).toEqual([{ eventType: 'resource_open', deliveryId: 'delivery-chip-a' }]);
-    // It still opens the reel on the post's Details, where the recipe is.
+    // It opens the reel on the post's Details, leading with the recipe (B-F6).
     expect(routerState.push).toHaveBeenCalledWith(expect.objectContaining({
       pathname: '/viewer',
-      params: expect.objectContaining({ initialId: 'a', initialPage: 'details' }),
+      params: expect.objectContaining({ initialId: 'a', initialPage: 'details', initialSection: 'resources' }),
     }));
 
     renderer.act(() => cardAt(tree, 0).onOpen(null));
     expect(sentEvents().map((event) => event.eventType)).toEqual(['resource_open', 'open']);
+
+    renderer.act(() => tree.unmount());
+  });
+
+  // B-F6: a text card's chip opened the note, where the recipe was behind Details.
+  it('opens a text post\'s recipe chip on the post\'s Details page at the recipe', () => {
+    queryState.pages = [page([textItem('b', 'delivery-chip-b')])];
+    const { tree } = renderHome();
+
+    renderer.act(() => cardAt(tree, 0).onAssetPress());
+    expect(routerState.push).toHaveBeenCalledWith('/post/b?deliveryId=delivery-chip-b&page=details&section=resources');
+
+    // The card's own tap still opens the note itself.
+    routerState.push.mockClear();
+    renderer.act(() => cardAt(tree, 0).onOpen(null));
+    expect(routerState.push).toHaveBeenCalledWith('/post/b?deliveryId=delivery-chip-b');
 
     renderer.act(() => tree.unmount());
   });

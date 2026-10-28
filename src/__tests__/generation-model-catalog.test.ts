@@ -22,7 +22,7 @@ describe('generation model catalog', () => {
     expect(first.revision).toMatch(/^[a-f0-9]{16}$/);
     expect(first.defaults).toEqual({
       image: 'nano-banana-2',
-      video: 'kling-3.0-video',
+      video: 'seedance-2-mini',
       motion: 'kling-2.6',
     });
     expect(first.models.some((model) => model.id === 'grok-imagine-image')).toBe(true);

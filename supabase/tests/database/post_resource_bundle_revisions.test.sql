@@ -1,10 +1,11 @@
 -- Behavioural coverage for "buyers keep what they bought".
 --
 -- Three invariants, each enforced by a trigger rather than by its callers:
---   * a sale does not mint a revision, and sold content is frozen outright --
---     edits, repricing, retirement, and deletion are explicit conflicts
+--   * a sale does not mint a revision; a sold recipe can still be corrected
+--     (owner decision D1, 2026-10-27) -- every content change, price and title
+--     included, mints a new revision -- and removing it retires it
 --   * a purchase pins the revision that was live at checkout, whichever rail
---     inserted it
+--     inserted it, and keeps it through every later edit
 --   * a post that has been bought can no longer be hard-deleted -- it must be
 --     tombstoned -- while account erasure still cascades everything
 
@@ -121,20 +122,19 @@ select is(
   'recording a sale does not mint a revision'
 );
 
--- 4. Sold content is frozen: the edit is refused and no revision is minted.
-select throws_ok(
+-- 4. A sold recipe can be corrected: the edit lands as a new revision.
+select lives_ok(
   $$update public.post_resource_bundles
-    set prompt_text = 'GUTTED PROMPT'
+    set prompt_text = 'CORRECTED PROMPT'
     where id = 'c0000000-0000-4000-8000-000000000001'::uuid$$,
-  'RESOURCE_BUNDLE_LOCKED: purchased package content cannot be changed',
-  'editing sold bundle content is refused outright'
+  'editing a sold recipe''s content is allowed'
 );
 
 select is(
   (select count(*)::int from public.post_resource_bundle_revisions
    where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
-  1,
-  'the refused edit mints no revision'
+  2,
+  'the correction mints a new revision'
 );
 
 select is(
@@ -146,20 +146,19 @@ select is(
   'the buyer still points at what they paid for'
 );
 
--- 5. Repricing and retitling are identity: equally frozen once sold.
-select throws_ok(
+-- 5. Repricing and retitling are content changes like any other.
+select lives_ok(
   $$update public.post_resource_bundles
     set price_usd_cents = 5000, title = 'Renamed recipe'
     where id = 'c0000000-0000-4000-8000-000000000001'::uuid$$,
-  'RESOURCE_BUNDLE_LOCKED: purchased package content cannot be changed',
-  'repricing a sold bundle is refused'
+  'repricing and retitling a sold recipe is allowed'
 );
 
 select is(
   (select count(*)::int from public.post_resource_bundle_revisions
    where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
-  1,
-  'the refused repricing mints no revision'
+  3,
+  'the repricing mints a revision of its own'
 );
 
 select is(
@@ -193,12 +192,12 @@ select is(
 );
 
 select ok(
-  (select is_latest
+  not (select is_latest
    from public.get_purchased_post_resource_bundle_revision(
      'c0000000-0000-4000-8000-000000000001'::uuid,
      'a2000000-0000-4000-8000-000000000002'::uuid
    )),
-  'the frozen purchase still points at the latest revision'
+  'the purchase reports that a newer version exists'
 );
 
 select is(
@@ -211,37 +210,37 @@ select is(
   'the projection returns nothing for someone who did not buy'
 );
 
--- 8. A sold bundle can no longer be deleted or silently retired. Complete the
---    checkout first so the pending-order guard is not what refuses the delete.
+-- 8. Removing a sold recipe retires it: delisted, marked, kept for its buyer.
+--    Complete the checkout first so the pending-order guard is not what
+--    answers the delete.
 update public.post_resource_bundle_orders
 set status = 'paid'
 where id = 'd0000000-0000-4000-8000-000000000001'::uuid;
 
-select throws_ok(
+select lives_ok(
   $$delete from public.post_resource_bundles
     where id = 'c0000000-0000-4000-8000-000000000001'::uuid$$,
-  'RESOURCE_BUNDLE_LOCKED: purchased packages cannot be retired or deleted',
-  'deleting a sold bundle is an explicit conflict'
+  'removing a sold recipe is not refused'
 );
 
 select is(
   (select status from public.post_resource_bundles
    where id = 'c0000000-0000-4000-8000-000000000001'::uuid),
-  'published',
-  'the refused delete leaves the package live'
+  'draft',
+  'the removed recipe stays as a draft, off sale'
 );
 
 select ok(
   (select retired_at from public.post_resource_bundles
-   where id = 'c0000000-0000-4000-8000-000000000001'::uuid) is null,
-  'no silent retirement happened'
+   where id = 'c0000000-0000-4000-8000-000000000001'::uuid) is not null,
+  'the removed recipe is marked retired'
 );
 
 select is(
   (select count(*)::int from public.post_resource_bundle_purchases
    where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
   1,
-  'the buyer entitlement survives the refused delete'
+  'the buyer entitlement survives the removal'
 );
 
 -- 9. An unsold bundle still deletes normally.

@@ -1372,11 +1372,28 @@ export async function getShowcaseFeedPage(options: {
     ...pricedFeed,
     items: pricedFeed.items.flatMap((pricedItem) => {
       const viewerItem = viewerItemById.get(pricedItem.id);
-      return viewerItem ? [{ ...pricedItem, ...viewerItem, asset: pricedItem.asset }] : [];
+      return viewerItem
+        ? [{ ...pricedItem, ...viewerItem, asset: mergeViewerAssetState(pricedItem.asset, viewerItem.asset) }]
+        : [];
     }),
   };
 
   return sanitizeShowcaseFeedPage(hydratedFeed);
+}
+
+/**
+ * The priced copy of a recipe (it carries the viewer's quote), with what the
+ * viewer pass learned about it: whether this viewer has it.
+ */
+export function mergeViewerAssetState(
+  pricedAsset: ShowcaseFeedItem['asset'],
+  viewerAsset: ShowcaseFeedItem['asset'] | undefined,
+): ShowcaseFeedItem['asset'] {
+  if (!pricedAsset || typeof viewerAsset?.viewerHasUnlocked !== 'boolean') {
+    return pricedAsset;
+  }
+
+  return { ...pricedAsset, viewerHasUnlocked: viewerAsset.viewerHasUnlocked };
 }
 
 export async function attachViewerStateToFeed(
@@ -1389,10 +1406,11 @@ export async function attachViewerStateToFeed(
   }
 
   const feedItemIds = feed.items.map((item) => item.id);
-  const remixEligibleBundleIds = Array.from(
+  // Every recipe on the page, not only those that sell the remix: a card says
+  // "Unlocked" in place of the price of one the viewer has (audit B-F2).
+  const bundleIds = Array.from(
     new Set(
       feed.items
-        .filter((item) => item.asset?.allowRemix)
         .map((item) => item.asset?.id)
         .filter((bundleId): bundleId is string => Boolean(bundleId))
     )
@@ -1431,17 +1449,18 @@ export async function attachViewerStateToFeed(
     );
   };
 
-  const loadPurchasedBundleIds = async () => {
-    if (remixEligibleBundleIds.length === 0) return new Set<string>();
+  // Null when the purchases could not be read: then nothing is claimed either way.
+  const loadPurchasedBundleIds = async (): Promise<Set<string> | null> => {
+    if (bundleIds.length === 0) return new Set<string>();
     const { data: purchaseRows, error: purchaseError } = await adminSupabase
       .from('post_resource_bundle_purchases')
       .select('bundle_id')
       .eq('buyer_user_id', viewerUserId)
-      .in('bundle_id', remixEligibleBundleIds);
+      .in('bundle_id', bundleIds);
 
     if (purchaseError) {
       logBackendError('error_fetching_post_resource_bundle_purchase_state_for_feed_page', { error: purchaseError });
-      return new Set<string>();
+      return null;
     }
 
     return new Set(
@@ -1470,11 +1489,12 @@ export async function attachViewerStateToFeed(
 
   // These viewer-state reads are independent. Running them together removes a
   // full PostgREST round trip from every authenticated feed response.
-  const [blockedCreatorIds, savedIdSet, purchasedBundleIdSet] = await Promise.all([
+  const [blockedCreatorIds, savedIdSet, purchasedBundleIds] = await Promise.all([
     loadBlockedIds(),
     loadSavedIds(),
     loadPurchasedBundleIds(),
   ]);
+  const purchasedBundleIdSet = purchasedBundleIds ?? new Set<string>();
   if (!blockedCreatorIds) {
     return { ...feed, items: [] };
   }
@@ -1527,6 +1547,9 @@ export async function attachViewerStateToFeed(
         canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
         remixCapability: remix.capability,
         remixTarget: remix.target,
+        ...(item.asset && purchasedBundleIds
+          ? { asset: { ...item.asset, viewerHasUnlocked: purchasedBundleIds.has(item.asset.id) } }
+          : {}),
       };
     }),
   };

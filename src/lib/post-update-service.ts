@@ -156,8 +156,9 @@ type BundleStatusRow = {
   access_mode: 'none' | 'free' | 'paid';
   status: 'draft' | 'published';
   sales_count?: number | null;
-  // Free unlocks lock a paid recipe's editor as they did while sales_count counted them.
   free_unlock_count?: number | null;
+  /** Set once the creator removed the recipe while people had it: it is no longer the post's recipe. */
+  retired_at?: string | null;
   summary?: string | null;
   preview_text?: string | null;
   prompt_text?: string | null;
@@ -555,7 +556,7 @@ async function loadOwnedBundleStatus(
   const { data, error } = await adminSupabase
     .from('post_resource_bundles')
     .select(
-      'id, access_mode, status, sales_count, free_unlock_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_items, resource_sections',
+      'id, access_mode, status, sales_count, free_unlock_count, retired_at, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_items, resource_sections',
     )
     .eq('post_id', postId)
     .eq('owner_user_id', ownerUserId)
@@ -1159,7 +1160,7 @@ function createSoldResourceBundleLockedResult(): PostUpdateRouteResult {
     ok: false,
     status: 409,
     body: {
-      error: 'People have already purchased this package, so its contents, price, and access mode are locked.',
+      error: "People have already unlocked this recipe, so it can't be changed this way.",
       code: 'RESOURCE_BUNDLE_LOCKED',
     },
   };
@@ -1212,6 +1213,11 @@ export async function updateOwnerPostForRoute({
       };
     }
     const existingBundle = await loadOwnedBundleStatus(adminSupabase, postId, ownerUserId);
+    // A recipe removed while people had it stays as a retired row for them,
+    // but it is not this post's recipe any more: a visibility change never
+    // republishes it (sync_post_resource_bundle_exposure skips it) and it pins
+    // no proof media.
+    const liveBundle = existingBundle && !existingBundle.retired_at ? existingBundle : null;
 
     const isGenerationBacked = Boolean(post.generation_id);
     // A post made from a creation keeps that creation's media; the only way to
@@ -1278,11 +1284,11 @@ export async function updateOwnerPostForRoute({
       availableMediaKeys.push(defaultPostMediaKey(0));
     }
 
-    if (submittedMediaItems && !hasResourceBundlePayload && existingBundle) {
+    if (submittedMediaItems && !hasResourceBundlePayload && liveBundle) {
       const nextMediaKeySet = new Set(availableMediaKeys);
       const existingScopedMediaKeys = collectScopedMediaKeys(
-        existingBundle.resource_items,
-        existingBundle.resource_sections
+        liveBundle.resource_items,
+        liveBundle.resource_sections
       );
       if (Array.from(existingScopedMediaKeys).some((mediaKey) => !nextMediaKeySet.has(mediaKey))) {
         return {
@@ -1293,19 +1299,11 @@ export async function updateOwnerPostForRoute({
       }
     }
 
-    // What someone paid for cannot be rewritten, repriced, or relabelled -- and
-    // an `accessMode: 'none'` payload would retire the listing outright. Both
-    // composers already omit the bundle for a sold post, so only a stale client
-    // or a direct API call reaches this; omitting it keeps every other edit
-    // (visibility, caption, media) working.
-    if (
-      hasResourceBundlePayload
-      && existingBundle
-      && existingBundle.access_mode === 'paid'
-      && ((existingBundle.sales_count ?? 0) + (existingBundle.free_unlock_count ?? 0)) > 0
-    ) {
-      return createSoldResourceBundleLockedResult();
-    }
+    // A recipe people already have can be corrected (owner decision D1,
+    // 2026-10-27): every content change is a new revision, buyers see the
+    // latest and keep the version they unlocked, and an `accessMode: 'none'`
+    // save retires it rather than deleting it -- both in the database. Only
+    // the moderation lock above still refuses a recipe edit.
 
     // Editors echo the read payload back, and reads merge generation-derived
     // reference items in. Those are re-derived on every read, so drop them
@@ -1428,7 +1426,7 @@ export async function updateOwnerPostForRoute({
     // with no creation has no prompt of its own to cut a title from.
     const hasRecipeAfterSave = hasResourceBundlePayload
       ? Boolean(resourceBundle && resourceBundle.accessMode !== 'none')
-      : Boolean(existingBundle && existingBundle.access_mode !== 'none');
+      : Boolean(liveBundle && liveBundle.access_mode !== 'none');
     let nextTitle = titleAsGiven;
     if (hasRecipeAfterSave && titleAsGiven && post.generation_id) {
       let titleSource: CreationTitleSource | null = null;
@@ -1452,9 +1450,9 @@ export async function updateOwnerPostForRoute({
     const titleReplacedForRecipe = nextTitle !== titleAsGiven;
     const frozenSoldBundleForRepublish = nextVisibility === 'public'
       && !hasResourceBundlePayload
-      && existingBundle
-      && ((existingBundle.sales_count ?? 0) + (existingBundle.free_unlock_count ?? 0)) > 0
-      ? buildStoredBundleForQualityCheck(existingBundle)
+      && liveBundle
+      && ((liveBundle.sales_count ?? 0) + (liveBundle.free_unlock_count ?? 0)) > 0
+      ? buildStoredBundleForQualityCheck(liveBundle)
       : null;
     const bundleForPublicValidation = hasResourceBundlePayload
       ? resourceBundle
@@ -1466,8 +1464,8 @@ export async function updateOwnerPostForRoute({
     // or sold one.
     const bundleForSafetyCheck = hasResourceBundlePayload
       ? resourceBundle
-      : existingBundle && existingBundle.access_mode !== 'none'
-        ? buildStoredBundleForQualityCheck(existingBundle)
+      : liveBundle && liveBundle.access_mode !== 'none'
+        ? buildStoredBundleForQualityCheck(liveBundle)
         : null;
     const safetyViolation = nextVisibility !== 'private'
       ? getPublicUgcSafetyViolation({
@@ -1911,6 +1909,13 @@ export async function updateOwnerPostForRoute({
       logBackendWarning('failed_to_read_post_media_after_update', { error: mediaReadError });
     }
 
+    // A recipe this save removed (deleted, or retired for the people who have
+    // it) is not the post's recipe any more, whatever row the read behind
+    // `bundleStatus` found; nor is one retired by an earlier save.
+    const removedRecipe = resourceBundle?.accessMode === 'none'
+      || (!resourceBundle && Boolean(existingBundle?.retired_at));
+    const savedBundleStatus = removedRecipe ? null : updatedPost.bundleStatus;
+
     return {
       ok: true,
       body: {
@@ -1920,10 +1925,10 @@ export async function updateOwnerPostForRoute({
         showcasePath: updatedPost.visibility === 'private' ? null : `/showcase/${postId}`,
         ownerPath: `/post/${postId}/edit`,
         resourceBundlePath:
-          updatedPost.bundleStatus === 'draft' || updatedPost.visibility === 'private'
+          savedBundleStatus === 'draft' || updatedPost.visibility === 'private'
             ? `/post/${postId}/edit#recipe`
             : `/showcase/${postId}#recipe`,
-        resourceBundleStatus: updatedPost.bundleStatus,
+        resourceBundleStatus: savedBundleStatus,
         ...(savedMediaItems ? { mediaItems: savedMediaItems } : {}),
       },
     };

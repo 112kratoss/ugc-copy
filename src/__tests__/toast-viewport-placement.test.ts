@@ -50,7 +50,8 @@ describe('where toasts are drawn', () => {
     // Above the reel's body, below its header (and the ⋯ menu hanging from it).
     expect(toastLayer).toBeGreaterThan(tailwindZ('z-10'));
     expect(toastLayer).toBeLessThan(tailwindZ('z-20'));
-    // The reference preview covers them, and they wait under it (FeedbackViewport).
-    expect(reelViewer).toMatch(/className="absolute inset-0 z-\[120\] [^"]*"[\s\S]{0,200}aria-modal="true"/);
+    // The reel no longer draws a reference preview of its own over them: an
+    // unlocked recipe is the post page's panel, its images inline (B-F1).
+    expect(reelViewer).not.toMatch(/aria-label="Reference image preview"/);
   });
 });

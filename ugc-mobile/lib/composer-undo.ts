@@ -166,11 +166,13 @@ export function takeComposerMadeWithRow(draft: PostComposerDraft, id: string): P
   };
 }
 
-/** Removes one resource card. Taking the last one, with remix not offered, switches resources off. */
+/**
+ * Removes one item. Taking the last one leaves the recipe on and empty: removing
+ * a recipe is the creator's "No recipe", which the composer asks about on save.
+ */
 export function takeComposerResourceCard(draft: PostComposerDraft, id: string): PostComposerTaken<PostComposerResourceCardRemoval> | null {
   const index = draft.resource.cards.findIndex((card) => card.id === id);
   if (index < 0) return null;
-  const switchesOff = draft.resource.cards.length === 1 && !draft.resource.allowRemix && draft.resource.accessMode !== 'none';
   return {
     draft: {
       ...draft,
@@ -178,14 +180,13 @@ export function takeComposerResourceCard(draft: PostComposerDraft, id: string): 
         ...draft.resource,
         cardAuthoringMode: 'cards',
         cards: draft.resource.cards.filter((card) => card.id !== id),
-        accessMode: switchesOff ? 'none' : draft.resource.accessMode,
       },
     },
     removal: {
       kind: 'resource-card',
       card: draft.resource.cards[index],
       index,
-      accessModeBefore: switchesOff ? draft.resource.accessMode : null,
+      accessModeBefore: null,
     },
   };
 }

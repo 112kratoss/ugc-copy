@@ -14,7 +14,7 @@ import { createNoIndexMetadata } from '@/lib/seo';
  */
 export const metadata: Metadata = createNoIndexMetadata(
   'Home',
-  'Your magicbooklet workspace: community feed, active generations, and quick starts.'
+  'Your magicbooklet workspace: community feed and recent creations.'
 );
 
 export default function HomeDashboardLayout({ children }: { children: React.ReactNode }) {

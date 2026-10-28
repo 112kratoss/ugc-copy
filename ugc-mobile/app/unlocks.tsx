@@ -1,7 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Image } from 'expo-image';
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import { PackageOpen } from 'lucide-react-native';
 import { Platform, Pressable, View } from 'react-native';
 
@@ -24,6 +24,12 @@ import {
 import { useMatureReveal } from '@/lib/use-mature-reveal';
 import { useMediaSource } from '@/lib/use-media-source';
 
+/**
+ * The buyer's library. The side menu's row names it "Unlocked recipes", as
+ * the web's Studio tab does (recipe audit B-F9); the header takes the short
+ * form, since a title stays under 15 characters (hig-navigation-chrome), and
+ * sets it here over the root layout's older "Your Recipes".
+ */
 export default function UnlocksScreen() {
   const { user, api } = useAuth();
   const {
@@ -46,9 +52,10 @@ export default function UnlocksScreen() {
   if (!user) {
     return (
       <Screen>
+        <Stack.Screen options={{ title: 'Unlocked' }} />
         <SectionTitle
-          title="Sign in to see your recipes."
-          body="Prompts, workflows, and files you unlock from other creators live here."
+          title="Sign in to see your unlocked recipes."
+          body="Recipes you unlock from other creators are kept here."
         />
         {/* Back to this list afterwards; a bare /auth ended on Home. */}
         <PrimaryButton
@@ -69,6 +76,7 @@ export default function UnlocksScreen() {
 
   return (
     <Screen>
+      <Stack.Screen options={{ title: 'Unlocked' }} />
       <SectionTitle
         title="Everything you have unlocked."
         body="These stay yours even if the creator later changes or removes the post."
@@ -94,8 +102,8 @@ export default function UnlocksScreen() {
       {!isLoading && !firstLoadError && items.length === 0 ? (
         <View style={{ gap: appTheme.spacing.gap }}>
           <StatusBlock
-            title="No recipes yet"
-            body="When you unlock a creator's prompt, workflow, or reference files, it lands here and stays here."
+            title="No unlocked recipes yet"
+            body="When you unlock a recipe from a creator, it lands here and stays here."
           />
           {/* A way on from an empty library, as the web has. Home reads no chip
               from a link, so this lands on its feed, not its Recipes chip. */}

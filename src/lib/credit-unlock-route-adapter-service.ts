@@ -65,6 +65,47 @@ type CreditUnlockRouteConfig =
     }) => Promise<MobileCommerceSyncResult>;
   };
 
+const EXPECTED_PRICE_ERROR = 'expectedPriceCredits must be a whole number of credits.';
+
+/**
+ * The price the buyer confirmed, from the optional JSON body
+ * `{ "expectedPriceCredits": 900 }` (recipe audit H4, 2026-10-27). No body, an
+ * empty one, or one without the field is no expectation: app builds from
+ * before the check send none and are charged the live price, as before. A body
+ * that tries to state a price and cannot be read is refused rather than read
+ * as no expectation, so a client is never charged a price it did not confirm.
+ */
+async function readExpectedPriceCredits(request: Request): Promise<number | undefined> {
+  let text = '';
+  try {
+    text = await request.text();
+  } catch {
+    text = '';
+  }
+  if (!text.trim()) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new MobileCommerceError(EXPECTED_PRICE_ERROR, 400);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new MobileCommerceError(EXPECTED_PRICE_ERROR, 400);
+  }
+
+  const value = (parsed as { expectedPriceCredits?: unknown }).expectedPriceCredits;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new MobileCommerceError(EXPECTED_PRICE_ERROR, 400);
+  }
+  return value;
+}
+
 function resolveDependencies(dependencies: CreditUnlockRouteDependencies | undefined) {
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
@@ -193,6 +234,8 @@ export async function postResourceBundleCreditUnlockRouteResponse({
       getResourceId: () => context.params,
       rateLimitFailureLogMessage: 'Post resource credit unlock rate limit check failed:',
       unlock: async ({ adminSupabase, resourceId, userId }) => {
+        const expectedPriceCredits = await readExpectedPriceCredits(request);
+
         // The spend RPC checks only the bundle's status. What the detail read
         // would not show this buyer, or a creator either of them has blocked,
         // is answered as the RPC answers a missing unlock: nothing is spent
@@ -205,6 +248,9 @@ export async function postResourceBundleCreditUnlockRouteResponse({
           adminSupabase,
           postId: resourceId,
           userId,
+          // A changed price is refused under the bundle's row lock: 409
+          // RESOURCE_PRICE_CHANGED with the new price, nothing spent.
+          ...(expectedPriceCredits === undefined ? {} : { expectedPriceCredits }),
           // The buyer is waiting on this answer, so the pushes go out behind
           // it rather than in front.
           runAfterResponse: resolvedDependencies.runAfterResponse,

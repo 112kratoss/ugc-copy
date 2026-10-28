@@ -100,7 +100,10 @@ describe('MarketplaceBootstrap', () => {
     );
 
     const cashCard = screen.getByRole('link', { name: 'Unlock for ₹750 · 900 credits: Unlock 1' });
-    expect(within(cashCard).getByText('₹750')).toBeInTheDocument();
+    // The image badge prices it in credits, as every other chip does (audit
+    // B-F13): the cash figure is for the pill and the button that take cash.
+    expect(within(cashCard).getByText('900 credits')).toBeInTheDocument();
+    expect(within(cashCard).queryByText('₹750')).not.toBeInTheDocument();
     expect(within(cashCard).getByText('₹750 · 900 credits')).toBeInTheDocument();
     expect(within(cashCard).getByText('Unlock for ₹750 · 900 credits')).toBeInTheDocument();
 

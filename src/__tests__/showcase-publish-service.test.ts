@@ -1261,7 +1261,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       ok: false,
       status: 409,
       body: {
-        error: 'People have already purchased this package, so its contents, price, and access mode are locked.',
+        error: "People have already unlocked this recipe, so it can't be changed this way.",
         code: 'RESOURCE_BUNDLE_LOCKED',
       },
     });

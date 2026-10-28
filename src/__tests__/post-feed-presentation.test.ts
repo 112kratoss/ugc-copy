@@ -360,7 +360,7 @@ describe('post feed presentation', () => {
 
         it('names a free recipe on a card with no Remix', () => {
             expect(buildPostFeedCard(item({ asset: recipe, canRemix: false })).recipeChip)
-                .toEqual({ label: 'Free recipe', tone: 'free' });
+                .toEqual({ label: 'Free recipe', tone: 'free', kind: 'free' });
         });
 
         // The chip printed this viewer's quote ("₹210"); it prices the recipe in
@@ -374,7 +374,7 @@ describe('post feed presentation', () => {
             } as NonNullable<ShowcaseFeedItem['asset']>;
 
             expect(buildPostFeedCard(item({ asset: paid, canRemix: true })).recipeChip)
-                .toEqual({ label: '250 credits', tone: 'paid' });
+                .toEqual({ label: '250 credits', tone: 'paid', kind: 'price' });
         });
 
         it('prices a credits-only recipe in credits whatever its cash quote says', () => {
@@ -386,7 +386,7 @@ describe('post feed presentation', () => {
             } as NonNullable<ShowcaseFeedItem['asset']>;
 
             expect(buildPostFeedCard(item({ asset: creditsOnly, canRemix: false })).recipeChip)
-                .toEqual({ label: '50 credits', tone: 'paid' });
+                .toEqual({ label: '50 credits', tone: 'paid', kind: 'price' });
         });
 
         it('has nothing to say about a post with no recipe', () => {

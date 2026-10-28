@@ -182,3 +182,20 @@ it('says "Creator left" on an unlock whose creator deleted their account', async
   expect(within(await findCard('Orphaned kit')).getByText('Creator left')).toBeInTheDocument();
   expect(within(await findCard('Live kit')).queryByText('Creator left')).toBeNull();
 });
+
+// The buyer's library is "Unlocked recipes" (B-F9, B-F10): it counted
+// "unlocks" and its empty state sent buyers to "Browse unlocks".
+it('counts recipes, in recipe words', async () => {
+  renderLibrary([unlock({ unlockId: 'u1', title: 'One' }), unlock({ unlockId: 'u2', title: 'Two' })]);
+
+  expect(await screen.findByText('2 recipes · yours permanently')).toBeInTheDocument();
+  expect(screen.queryByText(/unlocks/i)).toBeNull();
+});
+
+it('says so when there are none yet, and where to find some', async () => {
+  renderLibrary([]);
+
+  expect(await screen.findByText('No unlocked recipes yet')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /browse recipes/i })).toHaveAttribute('href', '/marketplace');
+  expect(screen.queryByText(/no unlocks yet|browse unlocks/i)).toBeNull();
+});

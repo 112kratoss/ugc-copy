@@ -4,14 +4,17 @@ import ResourceMediaPreview, { createBatchedUrlResolver } from '@/components/Res
 import { requestConfirmation } from '@/components/feedback-state';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
+  CircleCheck,
   Copy,
   Download,
   ExternalLink,
   EyeOff,
   Loader2,
   Play,
+  Repeat2,
   ShoppingCart,
   Sparkles,
 } from 'lucide-react';
@@ -25,15 +28,14 @@ import {
   formatPostResourceDownloadName,
   formatPostResourcePriceLabel,
   formatUnlockCountLabel,
+  formatUsdCents,
   getPostResourceKinds,
-  getPostResourceItemTypeLabel,
   getPostResourceKindLabel,
   type PostResourceAttachment,
   type PostResourceBundleLockedPreview,
   type PostResourceFileDisposition,
   type PostResourceItem,
   type PostResourceItemScope,
-  type PostResourceItemType,
   type PostResourceKind,
   type PostResourceSection,
   type PostResourceSignedFileUrl,
@@ -42,6 +44,15 @@ import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
+import {
+  UNLOCKED_RECIPES_PATH,
+  buildRecipeTopUpHref,
+  describeRecipeCardPreview,
+  getRecipeItemLinkLabel,
+  groupRecipeItemsForReading,
+  parseGenerationSetupNotes,
+  shouldShowRecipeItemTitle,
+} from '@/app/showcase/recipe-reading';
 import {
   RECIPE_PAYMENT_RECEIVED_MESSAGE,
   clearRazorpayCheckoutIntentKey,
@@ -95,7 +106,7 @@ function loadRazorpayCheckout(): Promise<void> {
   });
 }
 
-interface PostResourceBundlePanelProps {
+export interface PostResourceBundlePanelProps {
   postId: string;
   /**
    * The post's proof media, used to let a buyer filter a package down to one
@@ -162,6 +173,19 @@ interface PostResourceBundlePanelProps {
       items?: PostResourceItem[];
     };
   } | null;
+  /**
+   * The recipe comes with the post's Remix (recipe rule S1, 2026-10-27): named
+   * before buying and pointed at after. The host decides, since only it knows
+   * whether the post can be remixed at all.
+   */
+  remixIncluded?: boolean;
+  /**
+   * The post page's path, for the way back from buying credits ("Back to the
+   * recipe" on Pricing). The reel passes the post page it opens.
+   */
+  returnPath?: string;
+  /** The host has just unlocked it (the reel): the panel says so, as it does after its own unlock. */
+  announceUnlock?: boolean;
 }
 
 interface BundleRefreshPayload {
@@ -178,73 +202,6 @@ interface BundleRefreshPayload {
   } | null;
 }
 
-const RESOURCE_ITEM_GROUP_ORDER: PostResourceItemType[] = [
-  'prompt',
-  'workflow',
-  'reference_image',
-  'reference_video',
-  'reference_audio',
-  'source_file',
-  'preset',
-  'settings',
-  'note',
-  'external_link',
-  'remix_link',
-  'remix_access',
-];
-
-function groupResourceItems(items: PostResourceItem[]) {
-  return RESOURCE_ITEM_GROUP_ORDER
-    .map((type) => ({
-      type,
-      items: items.filter((item) => item.type === type),
-    }))
-    .filter((group) => group.items.length > 0);
-}
-
-function groupResourceItemsBySection(items: PostResourceItem[], sections: PostResourceSection[]) {
-  const sectionIds = new Set(sections.map((section) => section.id));
-  const globalItems = items.filter((item) => !item.sectionId);
-  const globalGroup = globalItems.length > 0
-    ? [{
-        id: 'global',
-        title: 'Full post resources',
-        description: null as string | null,
-        scope: null as PostResourceItemScope | null,
-        items: globalItems,
-      }]
-    : [];
-
-  // A section carries its own scope, and its items may leave theirs at the
-  // default -- so the section's is the one that narrows the whole card.
-  const sectionGroups = sections
-    .map((section) => ({
-      id: section.id,
-      title: section.title,
-      description: section.description,
-      scope: section.scope ?? null,
-      items: items.filter((item) => item.sectionId === section.id),
-    }))
-    .filter((group) => group.items.length > 0);
-
-  const unassignedItems = items.filter((item) => item.sectionId && !sectionIds.has(item.sectionId));
-  const unassignedGroup = unassignedItems.length > 0
-    ? [{
-        id: '__unassigned_resources__',
-        title: 'Other resources',
-        description: null as string | null,
-        scope: null as PostResourceItemScope | null,
-        items: unassignedItems,
-      }]
-    : [];
-
-  return [...globalGroup, ...sectionGroups, ...unassignedGroup];
-}
-
-function getResourceItemGroupTitle(type: PostResourceItemType, count: number) {
-  const label = getPostResourceItemTypeLabel(type, count);
-  return label.charAt(0).toUpperCase() + label.slice(1);
-}
 /**
  * The default scope — everything applies to every output — is the norm, so
  * labeling it is noise. Only a deliberate narrowing is worth a line.
@@ -319,6 +276,9 @@ export default function PostResourceBundlePanel({
   freeUnlockCount,
   initialResources,
   purchasedRevision = null,
+  remixIncluded = false,
+  returnPath,
+  announceUnlock = false,
 }: PostResourceBundlePanelProps) {
   const router = useRouter();
   const { session, credits, marketplaceSpendableCredits, updateCredits } = useAuth();
@@ -361,6 +321,14 @@ export default function PostResourceBundlePanel({
   const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | 'file' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // An unlock this viewer just made: "Recipe unlocked", and where it is kept.
+  const [unlockNotice, setUnlockNotice] = useState<'unlocked' | 'already' | null>(announceUnlock ? 'unlocked' : null);
+  // The item whose Copy just copied, which says so itself for a moment.
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // The credit unlock answered 409 RESOURCE_PRICE_CHANGED: the price the server
+  // holds now, while the page still shows the one it was drawn with. A fresh
+  // read of the page (a new price prop) supersedes it.
+  const [priceChange, setPriceChange] = useState<{ fromPriceCredits: number; priceCredits: number } | null>(null);
   // A payment the sheet took and this page has not yet seen settle.
   const [awaitingPaymentConfirmation, setAwaitingPaymentConfirmation] = useState(false);
   // The credit unlock answered 402 INSUFFICIENT_CREDITS.
@@ -400,16 +368,13 @@ export default function PostResourceBundlePanel({
     () => formatPostResourceBundleCountSummary(preview),
     [preview]
   );
-  const groupedResourceItems = useMemo(
-    () => groupResourceItems(activeResources?.items ?? []),
-    [activeResources?.items]
-  );
-  const groupedSectionResources = useMemo(
-    () => groupResourceItemsBySection(activeResources?.items ?? [], activeResources?.sections ?? []),
+  // The creator's sections in their order, then what has no section of its own.
+  const readingGroups = useMemo(
+    () => groupRecipeItemsForReading(activeResources?.items ?? [], activeResources?.sections ?? []),
     [activeResources?.items, activeResources?.sections]
   );
-  const visibleSectionResources = useMemo(
-    () => groupedSectionResources
+  const visibleReadingGroups = useMemo(
+    () => readingGroups
       // The section's own scope gates the whole card first; an item only
       // narrows further, and falls back to its section when it has no scope.
       .filter((group) => scopeMatchesMediaKey(group.scope, selectedScopeMediaKey))
@@ -418,24 +383,21 @@ export default function PostResourceBundlePanel({
         items: group.items.filter((item) => scopeMatchesMediaKey(item.scope ?? group.scope, selectedScopeMediaKey)),
       }))
       .filter((group) => group.items.length > 0),
-    [groupedSectionResources, selectedScopeMediaKey]
+    [readingGroups, selectedScopeMediaKey]
   );
-  const visibleResourceItems = useMemo(
-    () => groupedResourceItems
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => scopeMatchesMediaKey(item.scope, selectedScopeMediaKey)),
-      }))
-      .filter((group) => group.items.length > 0),
-    [groupedResourceItems, selectedScopeMediaKey]
-  );
-  const hasSectionedResourceItems = (activeResources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
-  const hasStructuredResourceItems = groupedResourceItems.length > 0;
+  const hasStructuredResourceItems = (activeResources?.items?.length ?? 0) > 0;
   const isRecipeVisible = hasAccess || viewerIsOwner;
-  const creditCost = Math.max(0, Math.round(priceUsdCents));
+  const basePriceCredits = Math.max(0, Math.round(priceUsdCents));
+  const creditCost = priceChange && priceChange.fromPriceCredits === basePriceCredits
+    ? priceChange.priceCredits
+    : basePriceCredits;
+  const priceChanged = creditCost !== basePriceCredits;
   const formattedCreditCost = creditCost.toLocaleString('en-US');
   const offersCashCheckout = !isFree && isPostResourceWebCashEligible(creditCost);
-  const accessPriceLabel = formatPostResourcePriceLabel(creditCost, priceLabel);
+  // The viewer's quote was for the old price; until the page is read again
+  // the new one is shown in dollars.
+  const cashPriceLabel = priceChanged ? formatUsdCents(creditCost) : priceLabel;
+  const accessPriceLabel = formatPostResourcePriceLabel(creditCost, cashPriceLabel);
   const allPublicCardPreviews = (preview.cardPreviews ?? []).filter((card) => card.publicTitle.trim().length > 0);
   const selectableMedia = useMemo(
     () => activeMediaItems.filter((item) => Boolean(item.mediaKey)),
@@ -457,7 +419,7 @@ export default function PostResourceBundlePanel({
   const mediaScopeFilter = showMediaScopeFilter ? (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Resources for</div>
+        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Items for</div>
         {chipStillsCovered ? (
           <div className="flex items-center gap-2 text-xs text-zinc-400">
             <EyeOff aria-hidden="true" className="h-3.5 w-3.5 text-zinc-500" />
@@ -484,7 +446,7 @@ export default function PostResourceBundlePanel({
               : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:text-white'
           }`}
         >
-          All resources
+          All items
         </button>
         {selectableMedia.map((item, index) => {
           const mediaKey = item.mediaKey!;
@@ -495,7 +457,7 @@ export default function PostResourceBundlePanel({
               type="button"
               onClick={() => setSelectedScopeMediaKey(selected ? null : mediaKey)}
               aria-pressed={selected}
-              aria-label={`Show resources for output ${index + 1}`}
+              aria-label={`Show items for output ${index + 1}`}
               className={`flex items-center gap-2 rounded-full border py-1.5 pl-1.5 pr-3 text-xs font-semibold transition ${
                 selected
                   ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
@@ -552,11 +514,20 @@ export default function PostResourceBundlePanel({
     };
   }, []);
 
-  const copyText = async (value: string, successMessage: string) => {
+  // "Copied" shows on the button pressed, where the eye already is: the
+  // panel's message slot sat above every item, off screen on a long recipe
+  // (B-F18). The app's Copy does the same.
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+  }, []);
+  const copyText = async (value: string, key: string) => {
     try {
       await navigator.clipboard.writeText(value);
-      setFeedback(successMessage);
       setError(null);
+      setCopiedKey(key);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopiedKey(null), 2000);
     } catch (copyError) {
       setError(copyError instanceof Error ? copyError.message : 'Failed to copy.');
       setFeedback(null);
@@ -625,6 +596,7 @@ export default function PostResourceBundlePanel({
         setAwaitingPaymentConfirmation(false);
         setFeedback(null);
         applyBundleAccess(bundle);
+        setUnlockNotice('unlocked');
         trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
       },
     });
@@ -663,6 +635,7 @@ export default function PostResourceBundlePanel({
       }
 
       await fetchLatestBundle();
+      setUnlockNotice('unlocked');
       trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: postId });
     } catch (unlockError) {
       trackProductEvent('recipe_unlock_failed', { method: 'free', post_id: postId });
@@ -716,6 +689,7 @@ export default function PostResourceBundlePanel({
       if (orderData.alreadyPurchased) {
         clearRazorpayCheckoutIntentKey(checkoutIntentScope);
         await fetchLatestBundle();
+        setUnlockNotice('already');
         return;
       }
 
@@ -766,6 +740,7 @@ export default function PostResourceBundlePanel({
               const bundle = await fetchLatestBundle(await readCheckoutAccessToken());
               if (bundle.viewerCanAccess || bundle.viewerIsOwner) {
                 setFeedback(null);
+                setUnlockNotice('unlocked');
                 trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
                 return;
               }
@@ -807,10 +782,11 @@ export default function PostResourceBundlePanel({
 
     // The spend cannot be undone, so it is confirmed first. (A known shortfall
     // never gets here: the button is disabled and "Buy credits" shows instead.)
+    const confirmedPriceCredits = creditCost;
     const confirmed = await requestConfirmation({
       title: 'Unlock this recipe?',
-      message: `${formattedCreditCost} credits will come off your balance right away.`,
-      confirmLabel: `Use ${formattedCreditCost} credits`,
+      message: `${formattedCreditCost} credits will come off your balance.`,
+      confirmLabel: `Unlock for ${formattedCreditCost} credits`,
     });
     if (!confirmed) {
       return;
@@ -821,12 +797,17 @@ export default function PostResourceBundlePanel({
       setWorkingAction('credits');
       setFeedback(null);
       setError(null);
+      setUnlockNotice(null);
 
+      // The price the buyer said yes to: the server charges nothing if it has
+      // moved since the page was drawn (S3), where it used to charge the new one.
       const response = await fetch(`/api/posts/${postId}/resource-bundle/unlock-with-credits`, {
         method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           Authorization: `Bearer ${session?.access_token}`,
         },
+        body: JSON.stringify({ expectedPriceCredits: confirmedPriceCredits }),
       });
       const data = await response.json();
 
@@ -836,13 +817,24 @@ export default function PostResourceBundlePanel({
           applyServerBalance(data.remainingCredits, data.marketplaceSpendableCredits);
           setCreditsRefused(true);
         }
+        if (response.status === 409 && data?.code === 'RESOURCE_PRICE_CHANGED' && typeof data.priceCredits === 'number') {
+          // Nothing was charged. The page shows the price the server holds,
+          // the buyer confirms again at it, and the page is read again for
+          // the rest (the quote in their currency, a switch to free).
+          const priceCredits = Math.max(0, Math.round(data.priceCredits));
+          setPriceChange({ fromPriceCredits: basePriceCredits, priceCredits });
+          trackProductEvent('recipe_unlock_failed', { method: 'credits', post_id: postId });
+          setError(priceCredits > 0 ? `The price changed to ${priceCredits.toLocaleString('en-US')} credits.` : 'This recipe is free now.');
+          router.refresh();
+          return;
+        }
         throw new Error(data.error || 'Failed to unlock with credits.');
       }
 
       applyServerBalance(data.credits, data.marketplaceSpendableCredits);
 
       await fetchLatestBundle();
-      setFeedback(data.alreadyProcessed ? 'This recipe was already available on your account.' : 'Recipe unlocked with credits.');
+      setUnlockNotice(data.alreadyProcessed ? 'already' : 'unlocked');
       trackProductEvent('recipe_unlock_succeeded', { method: 'credits', post_id: postId });
     } catch (unlockError) {
       trackProductEvent('recipe_unlock_failed', { method: 'credits', post_id: postId });
@@ -1003,44 +995,64 @@ export default function PostResourceBundlePanel({
     />;
   };
 
-  // One renderer for every unlocked item, sectioned or not: media preview,
-  // title, description, file facts, a scope line only when narrowed, then the
-  // actions. No role or remix-use enums — those are composer vocabulary.
-  // `suppressTitle` avoids the stutter of a lone item titled after its group
-  // ("PROMPT" over "Prompt") — the eyebrow already said it.
-  const renderResourceItem = (item: PostResourceItem, key: string, suppressTitle = false) => {
+  // A Copy button that says "Copied" itself, for a moment, once it has.
+  const renderCopyButton = (value: string, key: string, what: string) => {
+    const copied = copiedKey === key;
+    return (
+      <button
+        type="button"
+        onClick={() => void copyText(value, key)}
+        aria-label={copied ? `Copied ${what}` : `Copy ${what}`}
+        className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+      >
+        {copied ? <CircleCheck className="h-3.5 w-3.5 text-emerald-300" /> : <Copy className="h-3.5 w-3.5" />}
+        <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
+      </button>
+    );
+  };
+
+  // One renderer for every unlocked item: media preview, title, description,
+  // file facts, a scope line only when narrowed, then the actions. No role or
+  // remix-use enums — those are composer vocabulary. `showTitle` is false for
+  // a lone item named after its card ("Prompt" under "Prompt or script").
+  // Saved settings read as keys and values, as in the app (B-F17).
+  const renderResourceItem = (item: PostResourceItem, key: string, showTitle = true) => {
     const scopeLabel = formatResourceScopeLabel(item.scope);
     const fileMeta = item.storagePath
       ? [item.contentType, formatFileSize(item.sizeBytes)].filter(Boolean).join(' · ')
       : null;
+    const generationSetup = item.type === 'settings' ? parseGenerationSetupNotes(item.textContent) : null;
 
     return (
       <div key={key} className="border-t border-white/8 pt-4">
         {renderResourceItemMediaPreview(item)}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            {suppressTitle ? null : (
+            {showTitle ? (
               <div className="text-sm font-semibold text-white">{item.title}</div>
-            )}
+            ) : null}
             {item.description ? (
               <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
             ) : null}
             {fileMeta ? <p className="mt-1 text-xs text-zinc-500">{fileMeta}</p> : null}
             {scopeLabel ? <p className="mt-1 text-xs text-emerald-100/70">{scopeLabel}</p> : null}
           </div>
-          {item.textContent ? (
-            <button
-              type="button"
-              onClick={() => void copyText(item.textContent ?? '', `${item.title} copied to clipboard.`)}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-            >
-              <Copy className="h-3.5 w-3.5" />
-              Copy
-            </button>
-          ) : null}
+          {item.textContent ? renderCopyButton(item.textContent, key, item.title) : null}
         </div>
 
-        {item.textContent ? (
+        {generationSetup ? (
+          <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">{generationSetup.title}</div>
+            <dl className="mt-2 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+              {generationSetup.entries.map((entry, index) => (
+                <div key={`${entry.key}:${index}`} className="contents">
+                  <dt className="text-zinc-400">{entry.key}</dt>
+                  <dd className="min-w-0 text-zinc-100 [overflow-wrap:anywhere]">{entry.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ) : item.textContent ? (
           <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">{item.textContent}</pre>
         ) : null}
 
@@ -1051,10 +1063,10 @@ export default function PostResourceBundlePanel({
                 href={item.externalUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
               >
                 <ExternalLink className="h-4 w-4" />
-                Open link
+                {getRecipeItemLinkLabel(item.type)}
               </a>
             ) : null}
             {item.storagePath ? (
@@ -1062,7 +1074,7 @@ export default function PostResourceBundlePanel({
                 <button
                   type="button"
                   onClick={() => void openResourceFile(item.storagePath ?? '')}
-                  className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
+                  className="inline-flex min-h-11 items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
                 >
                   <ExternalLink className="h-4 w-4" />
                   Open file
@@ -1070,7 +1082,7 @@ export default function PostResourceBundlePanel({
                 <button
                   type="button"
                   onClick={() => void downloadResourceFile(item.storagePath ?? '', formatPostResourceDownloadName(item.title, item.contentType))}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                  className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                 >
                   <Download className="h-4 w-4" />
                   Download
@@ -1083,11 +1095,6 @@ export default function PostResourceBundlePanel({
     );
   };
 
-  const soloItemEchoesGroup = (group: { type: PostResourceItemType; items: PostResourceItem[] }) =>
-    group.items.length === 1
-    && group.items[0].title.trim().toLowerCase()
-      === getPostResourceItemTypeLabel(group.type, 1).trim().toLowerCase();
-
   return (
     <section id="recipe" className="min-w-0 scroll-mt-24">
       <span id="resources" aria-hidden className="sr-only" />
@@ -1099,7 +1106,8 @@ export default function PostResourceBundlePanel({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-zinc-500">
         <span className="font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Recipe</span>
         <span className="rounded-full border border-emerald-300/25 bg-emerald-300 px-2.5 py-0.5 font-bold text-slate-950">
-          {isRecipeVisible ? (viewerIsOwner ? 'Owner access' : activeIsFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
+          {/* One word for one state: a recipe the viewer has is "Unlocked" here as on every card. */}
+          {isRecipeVisible ? (viewerIsOwner ? 'Your recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
         </span>
         {typeof activeUnlockCount === 'number' ? (
           <span>{formatUnlockCountLabel(activeIsFree ? 'free' : 'paid', activeUnlockCount)}</span>
@@ -1127,31 +1135,44 @@ export default function PostResourceBundlePanel({
                 {getPostResourceKindLabel(kind)}
               </span>
             ))}
+            {remixIncluded ? (
+              // The post's Remix comes with this recipe (S1): said before
+              // buying, where it was found only after (B-F3).
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/20 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-50">
+                <Repeat2 className="h-3.5 w-3.5" aria-hidden="true" />
+                Remix included
+              </span>
+            ) : null}
             {bundleCountSummary ? (
               <span className="text-xs text-zinc-400">{`Includes ${bundleCountSummary}`}</span>
             ) : null}
-            {priceNote && offersCashCheckout ? (
+            {priceNote && offersCashCheckout && !priceChanged ? (
               <span className="text-xs text-zinc-400">{priceNote}</span>
             ) : null}
           </div>
 
           {allPublicCardPreviews.length > 0 && publicCardPreviews.length === 0 ? (
-            <p className="text-sm text-zinc-400">No resources apply to this output.</p>
+            <p className="text-sm text-zinc-400">No items apply to this output.</p>
           ) : null}
 
           {publicCardPreviews.length > 0 ? (
             <div className="space-y-2">
               {publicCardPreviews.map((card) => {
-                const itemCount = Math.max(0, Math.round(card.itemCount));
-                const typeLabel = getPostResourceItemTypeLabel(card.resourceType, itemCount || 1);
+                // The type only where the title does not already say it, the
+                // count only past one ("Prompt or script · prompt · 1 item", B-F16).
+                const { typeLabel, countLabel } = describeRecipeCardPreview({
+                  title: card.publicTitle,
+                  resourceType: card.resourceType,
+                  itemCount: card.itemCount,
+                });
                 const scopeLabel = formatResourceScopeLabel(card.scope);
 
                 return (
                   <div key={card.sectionId} className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
                     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                       <span className="text-sm font-semibold text-white">{card.publicTitle}</span>
-                      <span className="text-xs text-zinc-500">{typeLabel}</span>
-                      <span className="text-xs text-zinc-500">{`${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}</span>
+                      {typeLabel ? <span className="text-xs text-zinc-500">{typeLabel}</span> : null}
+                      {countLabel ? <span className="text-xs text-zinc-500">{countLabel}</span> : null}
                       {scopeLabel ? <span className="text-xs text-zinc-500">{scopeLabel}</span> : null}
                       {card.hasRemix ? <span className="text-xs font-medium text-emerald-200">Remix included</span> : null}
                     </div>
@@ -1183,11 +1204,15 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          <p className="text-xs leading-6 text-zinc-500">
-            {isPromptOnlyUnlock
-              ? 'The prompt text stays locked until this recipe is unlocked.'
-              : 'Prompt text, notes, workflow links, files, and remix access reveal after unlock.'}
-          </p>
+          {/* A recipe of one prompt says the one thing it hides. Any other
+              recipe is already listed above, in its own words: a fixed line
+              here promised notes, workflows, files and remix to every recipe
+              (B-F5). */}
+          {isPromptOnlyUnlock ? (
+            <p className="text-xs leading-6 text-zinc-500">
+              The prompt text stays locked until this recipe is unlocked.
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -1201,7 +1226,7 @@ export default function PostResourceBundlePanel({
             className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {workingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {workingAction === 'free' ? 'Getting resources…' : 'Get resources — Free'}
+            {workingAction === 'free' ? 'Getting recipe…' : 'Get free recipe'}
           </button>
         ) : null}
 
@@ -1216,7 +1241,7 @@ export default function PostResourceBundlePanel({
               >
                 <span className="inline-flex items-center gap-2">
                   {workingAction === 'razorpay' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-                  Pay {priceLabel} with Razorpay
+                  {`Pay ${cashPriceLabel}`}
                 </span>
                 <span className="text-xs font-medium text-slate-800">Secure checkout</span>
               </button>
@@ -1245,7 +1270,11 @@ export default function PostResourceBundlePanel({
             {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString()} credits available`}</span> : null}
             {holdsUnspendableCredits ? <span>{UNSPENDABLE_CREDITS_NOTE}</span> : null}
             {offersBuyCredits ? (
-              <a href="/pricing" className="font-semibold text-emerald-200 underline-offset-4 transition hover:text-emerald-100 hover:underline">
+              // With the way back: Pricing offers "Back to the recipe" (B-F8).
+              <a
+                href={buildRecipeTopUpHref(returnPath ?? `/showcase/${postId}`)}
+                className="font-semibold text-emerald-200 underline-offset-4 transition hover:text-emerald-100 hover:underline"
+              >
                 Buy credits
               </a>
             ) : null}
@@ -1255,6 +1284,23 @@ export default function PostResourceBundlePanel({
         {feedback ? (
           <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-50">
             {feedback}
+          </div>
+        ) : null}
+
+        {unlockNotice && isRecipeVisible ? (
+          // Where a bought recipe is kept, said where it was got (B-F9).
+          <div role="status" className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-50">
+            <span className="inline-flex items-center gap-2 font-semibold">
+              <CircleCheck className="h-4 w-4 text-emerald-300" aria-hidden="true" />
+              {unlockNotice === 'already' ? 'This recipe was already on your account' : 'Recipe unlocked'}
+            </span>
+            <Link
+              href={UNLOCKED_RECIPES_PATH}
+              prefetch={false}
+              className="font-semibold text-emerald-200 underline-offset-4 transition hover:text-emerald-100 hover:underline"
+            >
+              Unlocked recipes
+            </Link>
           </div>
         ) : null}
 
@@ -1270,7 +1316,7 @@ export default function PostResourceBundlePanel({
           {purchasedRevision ? (
             <div className="rounded-[20px] border border-amber-300/20 bg-amber-300/[0.06] px-4 py-3">
               <p className="text-xs leading-5 text-amber-100/90">
-                The creator has updated this unlock since you bought it. You can read either version.
+                The creator has updated this recipe since you bought it. You can read either version.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
@@ -1311,73 +1357,41 @@ export default function PostResourceBundlePanel({
 
           {mediaScopeFilter}
 
-          {hasStructuredResourceItems && (
-            hasSectionedResourceItems
-              ? visibleSectionResources.length === 0
-              : visibleResourceItems.length === 0
-          ) ? (
-            <p className="text-sm text-zinc-400">No resources apply to this output.</p>
+          {selectedScopeMediaKey !== null && readingGroups.length > 0 && visibleReadingGroups.length === 0 ? (
+            <p className="text-sm text-zinc-400">No items apply to this output.</p>
           ) : null}
 
-          {hasStructuredResourceItems ? (
-            hasSectionedResourceItems ? (
-              <>
-                {visibleSectionResources.map((sectionGroup) => (
-                  <div key={sectionGroup.id}>
-                    <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <h3 className="text-base font-semibold text-white">{sectionGroup.title}</h3>
-                      <span className="text-xs text-zinc-500">
-                        {sectionGroup.items.length} item{sectionGroup.items.length === 1 ? '' : 's'}
-                      </span>
-                    </div>
-                    {sectionGroup.description ? (
-                      <p className="mt-1 text-sm leading-6 text-zinc-400">{sectionGroup.description}</p>
-                    ) : null}
-                    <div className="mt-3 space-y-4">
-                      {groupResourceItems(sectionGroup.items).map((group) => (
-                        <div key={`${sectionGroup.id}:${group.type}`}>
-                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                            {getResourceItemGroupTitle(group.type, group.items.length)}
-                          </div>
-                          <div className="mt-2 space-y-4">
-                            {group.items.map((item, index) =>
-                              renderResourceItem(item, `${sectionGroup.id}:${item.type}:${item.title}:${index}`, soloItemEchoesGroup(group)))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+          {/* The creator's sections in their order, each item where they put
+              it, then whatever has no section under "More from this post"
+              (B-F17). A recipe with no sections reads as one list. */}
+          {visibleReadingGroups.map((group) => (
+            <div key={group.id}>
+              {group.title ? (
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h3 className="text-base font-semibold text-white">{group.title}</h3>
+                  {group.items.length > 1 ? (
+                    <span className="text-xs text-zinc-500">{`${group.items.length} items`}</span>
+                  ) : null}
+                </div>
+              ) : null}
+              {group.description ? (
+                <p className="mt-1 text-sm leading-6 text-zinc-400">{group.description}</p>
+              ) : null}
+              <div className={`${group.title ? 'mt-3 ' : ''}space-y-4`}>
+                {group.items.map((item, index) => renderResourceItem(
+                  item,
+                  `${group.id}:${item.id ?? `${item.type}:${item.title}`}:${index}`,
+                  shouldShowRecipeItemTitle({ title: group.title, itemCount: group.items.length }, item),
                 ))}
-              </>
-            ) : (
-              <>
-                {visibleResourceItems.map((group) => (
-                  <div key={group.type}>
-                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                      {getResourceItemGroupTitle(group.type, group.items.length)}
-                    </div>
-                    <div className="mt-2 space-y-4">
-                      {group.items.map((item, index) =>
-                        renderResourceItem(item, `${item.type}:${item.title}:${index}`, soloItemEchoesGroup(group)))}
-                    </div>
-                  </div>
-                ))}
-              </>
-            )
-          ) : null}
+              </div>
+            </div>
+          ))}
 
           {!hasStructuredResourceItems && activeResources?.promptText ? (
             <div className="border-t border-white/8 pt-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Prompt</div>
-                <button
-                  type="button"
-                  onClick={() => void copyText(activeResources.promptText ?? '', 'Prompt copied to clipboard.')}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                  Copy
-                </button>
+                {renderCopyButton(activeResources.promptText, 'legacy:prompt', 'the prompt')}
               </div>
               <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
                 {activeResources.promptText}
@@ -1389,14 +1403,7 @@ export default function PostResourceBundlePanel({
             <div className="border-t border-white/8 pt-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Notes</div>
-                <button
-                  type="button"
-                  onClick={() => void copyText(activeResources.notesMarkdown ?? '', 'Notes copied to clipboard.')}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                  Copy
-                </button>
+                {renderCopyButton(activeResources.notesMarkdown, 'legacy:notes', 'the notes')}
               </div>
               <article className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
                 {activeResources.notesMarkdown}
@@ -1451,9 +1458,11 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {!hasStructuredResourceItems && activeResources?.allowRemix ? (
-            <p className="border-t border-white/8 pt-4 text-sm leading-7 text-zinc-300">
-              Remix access unlocked — use Remix on this post.
+          {remixIncluded ? (
+            // Remix came with it (S1); the post's Remix button is where it is used.
+            <p className="flex items-center gap-2 border-t border-white/8 pt-4 text-sm leading-7 text-zinc-300">
+              <Repeat2 className="h-4 w-4 text-emerald-300" aria-hidden="true" />
+              Remix included — use Remix on this post
             </p>
           ) : null}
 

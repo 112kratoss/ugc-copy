@@ -148,6 +148,26 @@ describe('immersive preview view model', () => {
     expect(motion).toMatchObject({ badge: 'Motion', recreateTool: 'motion' });
   });
 
+  // Audit B-F2 / S4 (2026-10-27): a recipe the viewer has kept showing its
+  // price on the reel's caption badge, as if unpaid. The same words as the
+  // feed's chip: "Unlocked" for one they have, "Your recipe" for their own.
+  it('badges a recipe by what it is to this viewer: theirs, unlocked, or its price', () => {
+    const asset = {
+      id: 'asset-1', postId: 'post-1', title: 'Kit', accessMode: 'paid' as const, priceUsdCents: 900, previewText: '', allowRemix: false,
+    };
+    const [priced] = buildImmersiveShowcaseItems('showcase-feed', [showcaseItem({ asset })], 'viewer-1');
+    expect(priced.badge).toBe('900 credits');
+    const [unlocked] = buildImmersiveShowcaseItems('showcase-feed', [showcaseItem({ asset: { ...asset, viewerHasUnlocked: true } })], 'viewer-1');
+    expect(unlocked.badge).toBe('Unlocked');
+    const [freeUnlocked] = buildImmersiveShowcaseItems('showcase-feed', [showcaseItem({ asset: { ...asset, accessMode: 'free', priceUsdCents: 0, viewerHasUnlocked: true } })], 'viewer-1');
+    expect(freeUnlocked.badge).toBe('Unlocked');
+    const [own] = buildImmersiveShowcaseItems('showcase-feed', [showcaseItem({ asset })], 'creator-1');
+    expect(own.badge).toBe('Your recipe');
+    // Signed out, nobody owns it.
+    const [guest] = buildImmersiveShowcaseItems('showcase-feed', [showcaseItem({ asset })], null);
+    expect(guest.badge).toBe('900 credits');
+  });
+
   it('builds the shared text-post viewer route for public and owner posts', () => {
     expect(textPostViewerHref({ postId: 'post-1' })).toBe('/post/post-1');
     expect(textPostViewerHref({ postId: 'private/post', source: 'profile-posts' }))
@@ -160,6 +180,22 @@ describe('immersive preview view model', () => {
     expect(textPostViewerHref({ postId: 'post-1', comments: true, deliveryId: '9001' }))
       .toBe('/post/post-1?comments=post-1&deliveryId=9001');
     expect(textPostViewerHref({ postId: 'post-1', deliveryId: null })).toBe('/post/post-1');
+  });
+
+  // Audit B-F6: a text card's recipe chip opened the note itself, where the
+  // recipe was one more tap away behind Details.
+  it('opens a text post on its Details page at the recipe when asked', () => {
+    expect(textPostViewerHref({ postId: 'post-1', initialPage: 'details', initialSection: 'resources' }))
+      .toBe('/post/post-1?page=details&section=resources');
+    expect(textPostViewerHref({ postId: 'post-1', deliveryId: '9001', initialPage: 'details', initialSection: 'resources' }))
+      .toBe('/post/post-1?deliveryId=9001&page=details&section=resources');
+    // A section with no page to hold it is not asked for.
+    expect(textPostViewerHref({ postId: 'post-1', initialSection: 'resources' })).toBe('/post/post-1');
+  });
+
+  it('opens the reel on Details at the recipe for a chip that asks for it', () => {
+    expect(immersiveViewerHref({ source: 'showcase-feed', initialId: 'post-1', initialPage: 'details', initialSection: 'resources' }))
+      .toMatchObject({ pathname: '/viewer', params: { initialPage: 'details', initialSection: 'resources' } });
   });
 
   it('opens showcase-feed text posts in the reading screen from every surface', () => {

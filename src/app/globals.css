@@ -43,6 +43,7 @@
 @source "../components/AppShellAccount.tsx";
 @source "../components/AppShellAccountFallback.tsx";
 @source "../components/AppShellClient.tsx";
+@source "../components/AppShellCreateMenu.tsx";
 @source "../components/AuthProvider.tsx";
 @source "../components/CreatorIdentity.tsx";
 @source "../components/DeferredAppShellAccount.tsx";
@@ -69,9 +70,7 @@
 @source "../components/PublicIdentityDialog.tsx";
 @source "../components/PublicIdentityFields.tsx";
 @source "../components/PublicShareButton.tsx";
-@source "../components/QuickStartsCard.tsx";
 @source "../components/RecoverableMediaVideo.tsx";
-@source "../components/ResourceFileLink.tsx";
 @source "../components/ResourceMediaPreview.tsx";
 @source "../components/RouteAuthBoundary.tsx";
 @source "../components/SignInWorkspaceCard.tsx";
@@ -488,6 +487,14 @@ button:disabled,
 }
 
 .ui-focus-ring:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--ui-bg-app),
+    0 0 0 4px rgba(255, 170, 148, 0.55);
+}
+
+/* A /create tool card (CreatorToolCard) draws the ring of the launch link
+   that fills it: the card clips anything drawn outside its own edge. */
+.creator-tool-card:has(> a:focus-visible) {
   box-shadow:
     0 0 0 2px var(--ui-bg-app),
     0 0 0 4px rgba(255, 170, 148, 0.55);
@@ -994,6 +1001,9 @@ button:disabled,
 }
 
 .app-shell-root {
+  /* Room for the bottom navigation, which floats over the page below 768px:
+     the content keeps it at its end, and the Create menu stands above it. */
+  --app-shell-bottom-nav-space: calc(6.25rem + env(safe-area-inset-bottom));
   min-height: 100dvh;
   background:
     radial-gradient(circle at 72% -12%, rgba(255, 122, 89, 0.045), transparent 32rem),
@@ -1032,12 +1042,13 @@ button:disabled,
 }
 
 /* The top bar's controls on the right never shrink; the search field gives way
-   instead. Below 1024px it folds into its search button and "New creation" into
-   its icon, which leaves the title room beside a signed-in account at 768px.
+   instead. Below 1024px it folds into its search button and Create into its
+   icon, which leaves the title room beside a signed-in account at 768px.
    These breakpoints live here rather than in md:/lg: utilities: routes that add
    non-public-utilities.css load it after this sheet, and its own .hidden beats
    any responsive variant that sheet does not also emit; md:inline-flex hid
-   "New creation" that way on every route that loads the supplement. */
+   Create ("New creation" then) that way on every route that loads the
+   supplement. */
 .app-shell-search,
 .app-shell-create,
 .app-shell-create-label {
@@ -1045,8 +1056,6 @@ button:disabled,
 }
 
 .app-shell-content {
-  /* Room for the bottom navigation, which floats over the page below 768px. */
-  --app-shell-bottom-nav-space: calc(6.25rem + env(safe-area-inset-bottom));
   /* What the shell leaves a page: the window less the top bar and that room.
      Resolved here, so it follows the room's 0px from 768px. */
   --app-shell-page-height: calc(100dvh - var(--app-shell-topbar-height) - var(--app-shell-bottom-nav-space));
@@ -1181,7 +1190,7 @@ button:disabled,
     width: 3rem;
   }
 
-  .app-shell-content {
+  .app-shell-root {
     --app-shell-bottom-nav-space: 0px;
   }
 
@@ -1233,6 +1242,144 @@ button:disabled,
 @media (min-width: 1280px) {
   .app-shell-root {
     grid-template-columns: 224px minmax(0, 1fr);
+  }
+}
+
+/* The Create menu (AppShellCreateMenu.tsx), a popover in the top layer, over
+   everything else on the page. On a phone it fills the window: a scrim of its
+   own, which takes the tap that dismisses it (a popover's ::backdrop never
+   takes pointer events, so a tap there would also land on the page), and the
+   panel over the bottom navigation's +, as the app's sheet stands. From 768px
+   it is the panel alone, hung under the top bar's Create button: held to the
+   button where the browser has anchor positioning, and to the bar's right
+   edge where it does not. A browser without popovers has no top layer and
+   draws it as a fixed layer at the menus' 90 (design-web.md, Layers). */
+.app-shell-create-menu {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  padding: 0 0.75rem calc(var(--app-shell-bottom-nav-space) + 0.5rem);
+  color: var(--ui-text-primary);
+  transition:
+    opacity 160ms ease-out,
+    overlay 160ms ease-out allow-discrete,
+    display 160ms ease-out allow-discrete;
+}
+
+/* Shown: by the browser's popover, or by the component where there is none.
+   A display set on the closed popover would draw it closed, over the
+   browser's own display: none. :is() forgives the pseudo-class a browser
+   without popovers does not know; a plain list would drop the whole rule. */
+.app-shell-create-menu:is(:popover-open, [data-open]) {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.app-shell-create-menu-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.app-shell-create-menu-panel {
+  position: relative;
+  width: min(32rem, 100%);
+  border: 1px solid var(--ui-border-default);
+  border-radius: 1.75rem;
+  background: var(--ui-surface-1);
+  padding: 1.25rem;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  transform-origin: bottom center;
+  transition: transform 160ms ease-out;
+}
+
+.app-shell-create-menu:not(:popover-open):not([data-open]) {
+  opacity: 0;
+}
+
+.app-shell-create-menu:not(:popover-open):not([data-open]) .app-shell-create-menu-panel {
+  transform: translateY(0.5rem) scale(0.98);
+}
+
+@starting-style {
+  .app-shell-create-menu:popover-open {
+    opacity: 0;
+  }
+
+  .app-shell-create-menu:popover-open .app-shell-create-menu-panel {
+    transform: translateY(0.5rem) scale(0.98);
+  }
+}
+
+/* Without popovers the browser draws nothing for it: the component does,
+   through data-open. */
+@supports not selector(:popover-open) {
+  .app-shell-create-menu {
+    display: none;
+  }
+}
+
+@media (min-width: 768px) {
+  .app-shell-create-menu {
+    inset: auto;
+    top: calc(var(--app-shell-topbar-height) + 0.5rem);
+    right: 1.7rem;
+    width: 22.5rem;
+    padding: 0;
+  }
+
+  .app-shell-create-menu:is(:popover-open, [data-open]) {
+    display: block;
+  }
+
+  .app-shell-create-menu-scrim {
+    display: none;
+  }
+
+  .app-shell-create-menu-panel {
+    width: 100%;
+    transform-origin: top right;
+  }
+
+  .app-shell-create-menu:not(:popover-open):not([data-open]) .app-shell-create-menu-panel {
+    transform: translateY(-0.25rem) scale(0.98);
+  }
+
+  @starting-style {
+    .app-shell-create-menu:popover-open .app-shell-create-menu-panel {
+      transform: translateY(-0.25rem) scale(0.98);
+    }
+  }
+
+  @supports (position-area: bottom) {
+    .app-shell-create {
+      anchor-name: --app-shell-create;
+    }
+
+    .app-shell-create-menu {
+      position-anchor: --app-shell-create;
+      position-area: bottom span-left;
+      top: auto;
+      right: auto;
+      margin-top: 0.5rem;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-create-menu,
+  .app-shell-create-menu-panel {
+    transition: none;
   }
 }
 

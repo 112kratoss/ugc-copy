@@ -35,6 +35,12 @@ export interface PricingReferralProgram {
 interface PricingClientProps {
     initialCountryCode?: string | null;
     referralProgram?: PricingReferralProgram | null;
+    /**
+     * The recipe the buyer came from to top up ("Buy credits" on a recipe),
+     * already checked to be a path on this site: the back link and the
+     * settled payment lead back to it ("Back to the recipe", B-F8).
+     */
+    returnTo?: string | null;
 }
 
 // What Razorpay's `payment.failed` says went wrong, when it says anything.
@@ -214,7 +220,7 @@ function inferDefaultCurrency(initialCountryCode?: string | null): SupportedCurr
     return 'USD';
 }
 
-export function PricingClient({ initialCountryCode = null, referralProgram = null }: PricingClientProps) {
+export function PricingClient({ initialCountryCode = null, referralProgram = null, returnTo = null }: PricingClientProps) {
     const [userId, setUserId] = useState<string | null>(null);
     const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
     const [checkoutStatus, setCheckoutStatus] = useState<CheckoutStatus | null>(null);
@@ -467,11 +473,11 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
 
             <div className="studio-shell py-10 sm:py-14">
                 <Link
-                    href="/"
+                    href={returnTo ?? '/'}
                     className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8"
                 >
                     <ArrowLeft className="w-4 h-4" />
-                    Back to Home
+                    {returnTo ? 'Back to the recipe' : 'Back to Home'}
                 </Link>
 
                 <div className="ui-enter mb-12 mt-6 text-center">
@@ -679,11 +685,12 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
                                             ? checkoutStatus.message
                                             : CHECKOUT_STATUS_COPY[checkoutStatus.kind]}
                                         {checkoutStatus.kind === 'settled' ? (
-                                            // The buyer now stays on this page, so the way on to spending the credits is offered here.
+                                            // The buyer now stays on this page, so the way on to spending the
+                                            // credits is offered here: the recipe they came to buy, if any.
                                             <>
                                                 {' '}
-                                                <Link href="/create" className="font-bold text-[var(--ui-primary)] underline-offset-2 hover:underline">
-                                                    Start creating
+                                                <Link href={returnTo ?? '/create'} className="font-bold text-[var(--ui-primary)] underline-offset-2 hover:underline">
+                                                    {returnTo ? 'Back to the recipe' : 'Start creating'}
                                                 </Link>
                                             </>
                                         ) : null}

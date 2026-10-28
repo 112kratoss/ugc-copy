@@ -210,7 +210,8 @@ describe('CreationsPage', () => {
     const sections = await screen.findByRole('navigation', { name: 'Studio sections' });
     const creations = within(sections).getByRole('link', { name: 'Creations' });
     const posts = within(sections).getByRole('link', { name: 'Post Library' });
-    const unlocks = within(sections).getByRole('link', { name: 'Unlocks' });
+    // One name for the buyer's library on both platforms (B-F9, glossary).
+    const unlocks = within(sections).getByRole('link', { name: 'Unlocked recipes' });
 
     expect(creations).toHaveAttribute('href', '/creations');
     expect(posts).toHaveAttribute('href', '/creations?view=posts');
@@ -220,7 +221,7 @@ describe('CreationsPage', () => {
     expect(creations).not.toHaveAttribute('aria-current');
     expect(posts).not.toHaveAttribute('aria-current');
     expect(screen.queryByRole('button', { name: 'Post Library' })).not.toBeInTheDocument();
-    expect(screen.getByText('YOUR UNLOCKS')).toBeInTheDocument();
+    expect(screen.getByText('UNLOCKED RECIPES')).toBeInTheDocument();
   });
 
   it('keeps the visibility filter in the URL and counts the current section in the header', async () => {
@@ -778,7 +779,7 @@ describe('CreationsPage', () => {
     const addRecipeLink = await screen.findByRole('link', { name: /^add recipe$/i });
     expect(addRecipeLink).toHaveAttribute(
       'href',
-      '/post/post-linked/edit?resourceMode=paid&focus=price&from=creations#recipe',
+      '/post/post-linked/edit?recipe=add&from=creations#recipe',
     );
     expect(screen.queryByRole('button', { name: /^add recipe$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: /publish this creation/i })).not.toBeInTheDocument();
@@ -895,7 +896,7 @@ describe('CreationsPage', () => {
     // An uploaded post with no recipe gets the same entry point.
     expect(screen.getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
       'href',
-      '/post/post-uploaded/edit?resourceMode=paid&focus=price&from=creations#recipe',
+      '/post/post-uploaded/edit?recipe=add&from=creations#recipe',
     );
     expect(navigationState.push).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
@@ -1187,7 +1188,7 @@ describe('CreationsPage', () => {
     expect(video).toHaveClass('object-contain');
   });
 
-  it('shows filtered empty states and keeps filter chips horizontally scrollable', async () => {
+  it('offers a filter only for a kind it has, and keeps the filter chips horizontally scrollable', async () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -1208,13 +1209,14 @@ describe('CreationsPage', () => {
 
     render(<CreationsPage />);
 
-    const audioFilter = await screen.findByRole('button', { name: /audio \(0\)/i });
-    expect(audioFilter).toHaveClass('shrink-0', 'whitespace-nowrap');
-    expect(audioFilter.parentElement).toHaveClass('overflow-x-auto');
-
-    fireEvent.click(audioFilter);
-
-    expect(await screen.findByText('No audio creations yet')).toBeInTheDocument();
+    const allFilter = await screen.findByRole('button', { name: 'All (1)' });
+    expect(allFilter).toHaveClass('shrink-0', 'whitespace-nowrap');
+    expect(allFilter.parentElement).toHaveClass('overflow-x-auto');
+    // "Audio (0)" and "Videos (0)" were filters that could only ever show nothing.
+    expect(within(allFilter.parentElement!).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'All (1)',
+      'Images (1)',
+    ]);
   });
 
   // A photo is never required to sell. The card said "Your selling identity is

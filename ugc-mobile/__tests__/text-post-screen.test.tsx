@@ -516,6 +516,17 @@ describe('a shared link', () => {
     mocks.params = { id: 'post-1' };
     renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
     expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1');
+
+    // A "Recipe unlocked" alert links the post's Details page at its recipe
+    // (contracts/mobile-api-v1.json showcasePostRecipe); the post page reads both.
+    mocks.params = { id: 'post-1', page: 'details', section: 'resources' };
+    renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+    expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1?page=details&section=resources');
+
+    // Any other page request is not a Details request and is dropped.
+    mocks.params = { id: 'post-1', s: 'feed', page: 'other', section: 'resources' };
+    renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+    expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1?s=feed');
   });
 });
 
@@ -578,3 +589,118 @@ describe('an old link', () => {
     expect(resolverQuery()?.enabled).toBe(false);
   });
 });
+
+/** Runs a frame's work at once, as the screen schedules its first turn to Details. */
+function runFramesNow() {
+  vi.stubGlobal('requestAnimationFrame', (frame: (time: number) => void) => {
+    frame(0);
+    return 1;
+  });
+  vi.stubGlobal('cancelAnimationFrame', () => undefined);
+}
+
+function detailsPage(tree: renderer.ReactTestRenderer) {
+  return byType(tree, 'post-details-page')[0];
+}
+
+// Audit B-F6: a text card's recipe chip opened the note, where the recipe was
+// one more tap away behind Details.
+describe('a link to the recipe', () => {
+  beforeEach(() => {
+    runFramesNow();
+  });
+
+  it('opens the Details page leading with the recipe', () => {
+    mocks.params = { id: 'post-1', page: 'details', section: 'resources' };
+    const tree = renderScreen();
+
+    expect(detailsPage(tree)?.props).toMatchObject({ active: true, initialSection: 'resources' });
+    // The page draws its own way back, so the post's arrow steps aside.
+    expect(pressable(tree, 'Go back')).toBeUndefined();
+  });
+
+  it('opens on the post as before without it', () => {
+    const tree = renderScreen();
+
+    expect(detailsPage(tree)?.props.active).toBe(false);
+    expect(detailsPage(tree)?.props.initialSection).toBeUndefined();
+    expect(pressable(tree, 'Go back')).toBeDefined();
+  });
+
+  it('hands a media post to the reel with the same request', () => {
+    mocks.params = { id: 'post-1', page: 'details', section: 'resources' };
+    showPost(textPost({ category: 'image', postFormat: 'media', mediaKind: 'image', mediaUrl: 'https://cdn.test/a.jpg' }));
+    const tree = renderScreen();
+
+    const redirect = byType(tree, 'redirect')[0];
+    expect(redirect?.props.href).toMatchObject({
+      pathname: '/viewer',
+      params: expect.objectContaining({ initialId: 'post-1', initialPage: 'details', initialSection: 'resources' }),
+    });
+  });
+});
+
+// D4 (owner, 2026-10-27, "show after reveal") / audit B-F11: a covered post
+// has no Details page, and the reveal drew title, body and media only, so a
+// recipe on a mature post could not be reached at all.
+describe('a revealed NSFW post with a recipe', () => {
+  /** What the reveal answers with: the post itself, its recipe included. */
+  function revealedPost() {
+    return textPost({
+      title: 'The original',
+      body: 'What the creator wrote.',
+      isNsfw: true,
+      nsfwRevealed: true,
+      asset: {
+        id: 'asset-7',
+        postId: 'post-1',
+        title: 'Mature kit',
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        previewText: 'The prompt behind it.',
+        allowRemix: false,
+        resourceKinds: ['prompt'],
+      },
+    });
+  }
+
+  beforeEach(() => {
+    runFramesNow();
+    showPost(coveredPost());
+  });
+
+  it('offers Details once revealed, drawn from the revealed post and its recipe', () => {
+    const tree = renderScreen();
+    expect(detailsPage(tree)).toBeUndefined();
+
+    const notice = byType(tree, 'nsfw-post-notice')[0]!;
+    renderer.act(() => { (notice.props.onRevealedChange as (revealed: boolean, item: unknown) => void)(true, revealedPost()); });
+
+    expect(actionLabels(tree)).toContain('Details');
+    expect(byType(tree, 'viewer-actions-menu')[0]!.props.excludeActions).toEqual([]);
+    const item = detailsPage(tree)!.props.item as ImmersivePreviewItem;
+    expect(item.details?.unlock).toMatchObject({ resourceId: 'asset-7', accessMode: 'paid', priceLabel: '900 credits' });
+  });
+
+  it("opens Details at the recipe from the notice's own button", () => {
+    const tree = renderScreen();
+    const notice = byType(tree, 'nsfw-post-notice')[0]!;
+    renderer.act(() => { (notice.props.onRevealedChange as (revealed: boolean, item: unknown) => void)(true, revealedPost()); });
+
+    renderer.act(() => { (byType(tree, 'nsfw-post-notice')[0]!.props.onOpenRecipe as () => void)(); });
+    expect(detailsPage(tree)?.props).toMatchObject({ active: true, initialSection: 'resources' });
+  });
+
+  it('takes Details away with the post when it is covered again', () => {
+    const tree = renderScreen();
+    const notice = () => byType(tree, 'nsfw-post-notice')[0]!;
+    renderer.act(() => { (notice().props.onRevealedChange as (revealed: boolean, item: unknown) => void)(true, revealedPost()); });
+    renderer.act(() => { (notice().props.onOpenRecipe as () => void)(); });
+
+    renderer.act(() => { (notice().props.onRevealedChange as (revealed: boolean, item: unknown) => void)(false, null); });
+    expect(detailsPage(tree)).toBeUndefined();
+    expect(actionLabels(tree)).not.toContain('Details');
+    expect(pressable(tree, 'Go back')).toBeDefined();
+  });
+});
+

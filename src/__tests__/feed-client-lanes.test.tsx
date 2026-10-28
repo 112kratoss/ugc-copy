@@ -410,7 +410,7 @@ describe('FeedClient lanes and card actions', () => {
             fireEvent.click(screen.getByText('remix:post-1'));
         });
 
-        await waitFor(() => expect(routerPush).toHaveBeenCalledWith('/showcase/post-1?from=community&returnTo=%2Ffeed#recipe'));
+        await waitFor(() => expect(routerPush).toHaveBeenCalledWith('/showcase/post-1?from=home&returnTo=%2F#recipe'));
         // The unlock the tap was sent to is the card's resources opening.
         expect(resourceOpenMock).toHaveBeenCalledWith(expect.objectContaining({
             item: expect.objectContaining({ id: 'post-1' }),
@@ -1024,7 +1024,7 @@ describe('FeedClient lanes and card actions', () => {
         });
 
         await waitFor(() => expect(routerPush).toHaveBeenCalledWith(
-            '/showcase/post-1?from=community&returnTo=%2Ffeed&delivery=901#recipe',
+            '/showcase/post-1?from=home&returnTo=%2F&delivery=901#recipe',
         ));
     });
 
@@ -1276,10 +1276,10 @@ describe('FeedClient lanes and card actions', () => {
             Reflect.deleteProperty(window, 'scrollY');
         });
 
-        it('shows on a return five minutes after the lane came, asks for no lane page, and its tap loads page one from the top', async () => {
+        it("shows on a return five minutes after the lane came, asks for no lane page, and its tap loads page one from the lane's top", async () => {
             const fetchMock = mockLaneAndProbe();
             const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
-            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+            const { container } = render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
 
             await comeBackAfter(NEW_POSTS_PROBE_AFTER_MS / 60_000);
 
@@ -1292,10 +1292,13 @@ describe('FeedClient lanes and card actions', () => {
             expect(laneRequests(fetchMock)).toEqual([]);
             expect(screen.queryByText('Newest')).not.toBeInTheDocument();
 
+            // The lane starts 400 px down the page, which is scrolled to 1,200 px.
             Object.defineProperty(window, 'scrollY', { configurable: true, value: 1_200 });
+            (container.firstElementChild as HTMLElement).getBoundingClientRect = () => ({ top: -800 } as DOMRect);
             fireEvent.click(pill);
 
-            expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+            // The lane's top, less the bar and a rem.
+            expect(scrollTo).toHaveBeenCalledWith({ top: 320, behavior: 'smooth' });
             expect(screen.queryByRole('button', { name: 'New posts' })).not.toBeInTheDocument();
             expect(await screen.findByText('Newest')).toBeInTheDocument();
             expect(laneRequests(fetchMock)).toHaveLength(1);
@@ -1304,7 +1307,7 @@ describe('FeedClient lanes and card actions', () => {
             scrollTo.mockRestore();
         });
 
-        it('takes an embedded lane to its own top, under the shell bar, without motion for a reader who asks for none', async () => {
+        it('takes the lane to its own top, under the shell bar, without motion for a reader who asks for none', async () => {
             mockLaneAndProbe();
             const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
             vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
@@ -1313,7 +1316,7 @@ describe('FeedClient lanes and card actions', () => {
                 addEventListener: vi.fn(),
                 removeEventListener: vi.fn(),
             })));
-            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" variant="embedded" />);
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
 
             await comeBackAfter(6);
             Object.defineProperty(window, 'scrollY', { configurable: true, value: 1_200 });
@@ -1324,7 +1327,7 @@ describe('FeedClient lanes and card actions', () => {
             scrollTo.mockRestore();
         });
 
-        it('keeps an embedded lane a rem under the shell bar at a larger text size, where the bar is taller', async () => {
+        it('keeps the lane a rem under the shell bar at a larger text size, where the bar is taller', async () => {
             mockLaneAndProbe();
             const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
             // Chrome's "Very large" text: 24px, and the 4rem bar 96px tall.
@@ -1334,7 +1337,7 @@ describe('FeedClient lanes and card actions', () => {
             document.body.append(bar);
             document.documentElement.style.fontSize = '24px';
             try {
-                render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" variant="embedded" />);
+                render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
 
                 await comeBackAfter(6);
                 Object.defineProperty(window, 'scrollY', { configurable: true, value: 1_200 });

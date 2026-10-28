@@ -9,13 +9,16 @@ type MockProps = { children?: React.ReactNode; label?: string } & Record<string,
 const { authState, bundleContentProps, mutationOptions, queryOptions, queryState, mutationState, router, showActionSheet } = vi.hoisted(() => ({
   authState: {
     user: { id: 'viewer-1' } as { id: string } | null,
-    api: { resolvePostResourceFileUrl: vi.fn() },
+    api: { getMarketplaceResourceDetail: vi.fn(), resolvePostResourceFileUrl: vi.fn() },
     credits: 2000 as number | null,
     updateCredits: vi.fn(),
   },
   bundleContentProps: vi.fn(),
-  mutationOptions: { current: null as { onSuccess?: (result: unknown, variables: unknown) => Promise<void> } | null },
-  queryOptions: { current: null as { queryKey?: unknown[] } | null },
+  mutationOptions: { current: null as {
+    onSuccess?: (result: unknown, variables: unknown) => Promise<void>;
+    onError?: (error: unknown, variables: unknown) => void;
+  } | null },
+  queryOptions: { current: null as { queryKey?: unknown[]; enabled?: boolean; queryFn?: () => unknown } | null },
   queryState: { current: { data: undefined as unknown, isError: false, error: null as unknown, refetch: vi.fn() } },
   mutationState: { mutate: vi.fn(), isPending: false, error: null as unknown },
   router: { push: vi.fn() },
@@ -60,7 +63,10 @@ vi.mock('@tanstack/react-query', () => ({
     queryOptions.current = options;
     return queryState.current;
   },
-  useMutation: (options: { onSuccess?: (result: unknown, variables: unknown) => Promise<void> }) => {
+  useMutation: (options: {
+    onSuccess?: (result: unknown, variables: unknown) => Promise<void>;
+    onError?: (error: unknown, variables: unknown) => void;
+  }) => {
     mutationOptions.current = options;
     return mutationState;
   },
@@ -244,7 +250,7 @@ describe('PostDetailsPage', () => {
     expect(values).toContain('Recipe');
     expect(values).toContain('Free');
     expect(values).toContain('Prompt');
-    expect(pressable(tree, 'Get resources — Free')).toBeUndefined();
+    expect(pressable(tree, 'Get free recipe')).toBeUndefined();
     expect(bundleContentProps).not.toHaveBeenCalled();
     expect(tree.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(1);
   });
@@ -261,7 +267,7 @@ describe('PostDetailsPage', () => {
     const values = textValues(tree);
     expect(values).toContain('Free');
     expect(values).not.toContain('₹0');
-    expect(pressable(tree, 'Get resources — Free')).toBeDefined();
+    expect(pressable(tree, 'Get free recipe')).toBeDefined();
     expect(bundleContentProps).toHaveBeenCalledWith(expect.objectContaining({ resources: null }));
   });
 
@@ -299,7 +305,7 @@ describe('PostDetailsPage', () => {
     expect(values).not.toContain('₹0');
     expect(values).not.toContain('Free');
     expect(values).not.toContain('The prompt, files and notes behind this result.');
-    expect(pressable(tree, 'Get resources — Free')).toBeUndefined();
+    expect(pressable(tree, 'Get free recipe')).toBeUndefined();
 
     const resources = bundleContentProps.mock.calls.at(-1)?.[0].resources;
     expect(resources.items.map((item: { type: string }) => item.type)).toEqual(['prompt']);
@@ -420,8 +426,8 @@ describe("unlocking the creator's resources", () => {
       message: string;
       actions: Array<{ label: string; onPress: () => void }>;
     };
-    expect(request.title).toBe('Unlock this resource?');
-    expect(request.message).toBe('900 credits will come off your credit balance right away.');
+    expect(request.title).toBe('Unlock this recipe?');
+    expect(request.message).toBe('900 credits will come off your balance.');
     expect(request.actions.map((action) => action.label)).toEqual(['Unlock for 900 credits']);
 
     request.actions[0]!.onPress();
@@ -432,7 +438,7 @@ describe("unlocking the creator's resources", () => {
     queryState.current = lockedBundle(0);
     const tree = render(page());
 
-    renderer.act(() => { pressable(tree, 'Get resources — Free').props.onPress(); });
+    renderer.act(() => { pressable(tree, 'Get free recipe').props.onPress(); });
     expect(showActionSheet).not.toHaveBeenCalled();
     expect(mutationState.mutate).toHaveBeenCalledTimes(1);
   });
@@ -476,7 +482,7 @@ describe("unlocking the creator's resources", () => {
     const tree = render(page({ item: paidItem() }));
 
     expect(pressable(tree, 'Unlock for 900 credits').props.disabled).toBe(true);
-    expect(textValues(tree)).toContain('You need 800 more credits for this unlock.');
+    expect(textValues(tree)).toContain('You need 800 more credits.');
     renderer.act(() => { pressable(tree, 'Unlock for 900 credits').props.onPress(); });
     expect(showActionSheet).not.toHaveBeenCalled();
 
@@ -545,7 +551,8 @@ describe('the locked card', () => {
 
     const values = textValues(tree);
     expect(values).toContain(`12 sold · Updated ${formatUnlockDate(updatedAt)}`);
-    expect(values).toContain('Includes 1 section, 1 prompt, 3 reference images');
+    // What a buyer gets, in plain words: no "sections" (audit B-F16).
+    expect(values).toContain('Includes 1 prompt, 3 reference images');
     expect(values).toContain('Three looks from one prompt.');
     expect(values).not.toContain('A teaser');
   });
@@ -690,7 +697,7 @@ describe('a recipe opened from search', () => {
   it("leads with the creator's resources, under the post's name and before its actions and sections", () => {
     const tree = render(page({ item: recipePost(), initialSection: 'resources', onCreatorOpen: vi.fn() }));
 
-    const unlock = placeOf(tree, pressable(tree, 'Get resources — Free'));
+    const unlock = placeOf(tree, pressable(tree, 'Get free recipe'));
     expect(placeOf(tree, heading(tree, 'Minnal Murali'))).toBeLessThan(unlock);
     expect(placeOf(tree, pressable(tree, 'Open @batman profile'))).toBeLessThan(unlock);
     expect(unlock).toBeLessThan(placeOf(tree, pressable(tree, 'Remix')));
@@ -705,7 +712,7 @@ describe('a recipe opened from search', () => {
     for (const initialSection of [undefined, 'story', 'prompt'] as const) {
       const tree = render(page({ item: recipePost(), initialSection, onCreatorOpen: vi.fn() }));
 
-      const unlock = placeOf(tree, pressable(tree, 'Get resources — Free'));
+      const unlock = placeOf(tree, pressable(tree, 'Get free recipe'));
       expect(placeOf(tree, pressable(tree, 'Save'))).toBeLessThan(unlock);
       expect(placeOf(tree, heading(tree, 'Prompt'))).toBeLessThan(unlock);
       expect(placeOf(tree, heading(tree, 'Story'))).toBeLessThan(unlock);
@@ -736,3 +743,203 @@ describe('a recipe opened from search', () => {
     expect(textValues(tree)).toContain('Unlocked');
   });
 });
+
+describe('the recipe after the audit (2026-10-27)', () => {
+  const lockedPaid = (overrides: Record<string, unknown> = {}) => ({
+    data: { bundle: { viewerCanAccess: false, accessMode: 'paid', priceUsdCents: 900, resources: null, lockedPreview: null, ...overrides } },
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  // A paid recipe that sells the post's Remix: the page has no primary of its own.
+  const paidRemixItem = () => {
+    const details = showcaseItem().details!;
+    return showcaseItem({
+      availableActions: ['save', 'comment', 'share', 'unlock-remix', 'view-details'],
+      details: { ...details, unlock: { ...details.unlock!, accessMode: 'paid', priceLabel: '900 credits' } },
+    });
+  };
+
+  beforeEach(() => {
+    authState.user = { id: 'viewer-1' };
+    authState.credits = 2000;
+    mutationState.mutate.mockClear();
+    mutationOptions.current = null;
+    showActionSheet.mockClear();
+    bundleContentProps.mockClear();
+    authState.api.getMarketplaceResourceDetail.mockReset();
+  });
+
+  // B-F3 / S1: Remix comes with a creation post's recipe, and the locked card said nothing of it.
+  it('names the Remix a locked recipe comes with, once, in place of a bare Remix kind', () => {
+    queryState.current = lockedPaid({ allowRemix: true });
+    const tree = render(page({ item: paidRemixItem() }));
+
+    const values = textValues(tree);
+    expect(values).toContain('Remix included');
+    expect(values).not.toContain('Remix');
+    expect(values).toEqual(expect.arrayContaining(['Prompt', 'Notes']));
+  });
+
+  it('promises no Remix on a post that has none, whatever a legacy recipe stored', () => {
+    // An upload has no creation to remix; a recipe on it can still carry an old `allow_remix`.
+    const details = showcaseItem().details!;
+    const upload = showcaseItem({
+      generationId: null,
+      availableActions: ['save', 'comment', 'share', 'view-details'],
+      details: { ...details, unlock: { ...details.unlock!, accessMode: 'paid', priceLabel: '900 credits', allowRemix: true } },
+    });
+    queryState.current = lockedPaid({ allowRemix: true });
+    expect(textValues(render(page({ item: upload })))).not.toContain('Remix included');
+
+    queryState.current = {
+      data: {
+        bundle: {
+          viewerCanAccess: true,
+          viewerIsOwner: false,
+          lockedPreview: null,
+          resources: { promptText: 'A prompt', notesMarkdown: null, workflowShareUrl: null, workflowSnapshot: null, attachments: [], allowRemix: true, items: [] },
+        },
+      },
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    };
+    const unlocked = render(page({ item: upload }));
+    expect(textValues(unlocked)).toContain('Unlocked');
+    expect(textValues(unlocked)).not.toContain('Remix included');
+  });
+
+  it('reads the Remix from the listing while the recipe itself is still loading', () => {
+    queryState.current = { data: undefined, isError: false, error: null, refetch: vi.fn() };
+    const tree = render(page({ item: paidRemixItem() }));
+
+    expect(textValues(tree)).toContain('Remix included');
+  });
+
+  it('says nothing of Remix for a recipe that does not include it', () => {
+    const details = showcaseItem().details!;
+    queryState.current = lockedPaid({ allowRemix: false });
+    const tree = render(page({
+      item: showcaseItem({
+        availableActions: ['save', 'comment', 'share', 'view-details'],
+        details: { ...details, unlock: { ...details.unlock!, accessMode: 'paid', priceLabel: '900 credits', allowRemix: false, resourceKinds: ['prompt'] } },
+      }),
+    }));
+
+    expect(textValues(tree)).not.toContain('Remix included');
+  });
+
+  it('shows the price the server answered with, once it says the price moved, and asks again', () => {
+    queryState.current = lockedPaid();
+    const tree = render(page({ item: paidRemixItem() }));
+    expect(pressable(tree, 'Unlock for 900 credits')).toBeDefined();
+
+    const refusal = Object.assign(new Error('The price changed to 1200 credits.'), {
+      status: 409,
+      code: 'RESOURCE_PRICE_CHANGED',
+      details: { success: false, code: 'RESOURCE_PRICE_CHANGED', error: 'The price changed to 1200 credits.', priceCredits: 1200 },
+    });
+    renderer.act(() => {
+      mutationOptions.current?.onError?.(refusal, { postId: 'post-1', resourceId: 'asset-1', accessMode: 'paid', priceUsdCents: 900 });
+    });
+
+    expect(pressable(tree, 'Unlock for 1,200 credits')).toBeDefined();
+    expect(textValues(tree)).toContain('1,200 credits');
+    expect(showActionSheet).toHaveBeenCalledTimes(1);
+    expect((showActionSheet.mock.calls[0]?.[0] as { message: string }).message)
+      .toBe('The price changed to 1,200 credits. 1,200 credits will come off your balance.');
+  });
+});
+
+// B-F7: the Details card needed the feed's listing, which carries published
+// recipes only, so a buyer lost the recipe on its post once the creator
+// unlisted or retired it. The post's own recipe read still answers buyers.
+describe('a recipe the viewer has that no listing carries any more', () => {
+  const kept = (overrides: Record<string, unknown> = {}) => ({
+    data: {
+      bundle: {
+        id: 'asset-9',
+        postId: 'post-1',
+        title: 'Retired kit',
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        allowRemix: false,
+        resourceKinds: ['prompt'],
+        viewerCanAccess: true,
+        viewerIsOwner: false,
+        lockedPreview: null,
+        resources: {
+          promptText: null, notesMarkdown: null, workflowShareUrl: null, workflowSnapshot: null, attachments: [], allowRemix: false,
+          items: [{ id: 'p', type: 'prompt', title: 'Prompt', role: 'primary', sectionId: null, description: null, textContent: 'A kept prompt', externalUrl: null, storagePath: null, contentType: null, sizeBytes: null, workflowSnapshot: null, sortOrder: 0, isPrimary: true, remixUse: 'none' }],
+        },
+        ...overrides,
+      },
+    },
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  const unlisted = (overrides: Partial<ImmersivePreviewItem> = {}) => showcaseItem({
+    creatorId: 'creator-1',
+    details: { ...showcaseItem().details!, unlock: null },
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    authState.user = { id: 'viewer-1' };
+    queryOptions.current = null;
+    bundleContentProps.mockClear();
+    authState.api.getMarketplaceResourceDetail.mockReset();
+  });
+
+  it("asks the post for its recipe, and draws the buyer's unlocked card", async () => {
+    queryState.current = kept();
+    const tree = render(page({ item: unlisted() }));
+
+    expect(queryOptions.current?.enabled).toBe(true);
+    expect(queryOptions.current?.queryKey).toEqual(['post-resource-bundle', 'post-1', null, 'viewer-1']);
+    authState.api.getMarketplaceResourceDetail.mockResolvedValue({ success: true, bundle: {} });
+    await queryOptions.current?.queryFn?.();
+    expect(authState.api.getMarketplaceResourceDetail).toHaveBeenCalledWith(null, { postId: 'post-1' });
+
+    const values = textValues(tree);
+    expect(values).toEqual(expect.arrayContaining(['Recipe', 'Unlocked']));
+    expect(bundleContentProps.mock.calls.at(-1)?.[0].resources.items[0].textContent).toBe('A kept prompt');
+    expect(pressable(tree, 'Get free recipe')).toBeUndefined();
+  });
+
+  it('draws nothing when the post has no recipe this viewer may read', () => {
+    queryState.current = kept({ viewerCanAccess: false });
+    const tree = render(page({ item: unlisted() }));
+    expect(textValues(tree)).not.toContain('Recipe');
+
+    queryState.current = { data: undefined, isError: true, error: Object.assign(new Error('Resource bundle not found.'), { status: 404 }), refetch: vi.fn() };
+    const missing = render(page({ item: unlisted() }));
+    expect(textValues(missing)).not.toContain('Recipe');
+    expect(textValues(missing)).not.toContain('Could not load this recipe.');
+  });
+
+  it('asks nothing for a guest, the post\'s own creator, or a page out of view', () => {
+    queryState.current = { data: undefined, isError: false, error: null, refetch: vi.fn() };
+    authState.user = null;
+    render(page({ item: unlisted() }));
+    expect(queryOptions.current?.enabled).toBe(false);
+
+    authState.user = { id: 'creator-1' };
+    render(page({ item: unlisted() }));
+    expect(queryOptions.current?.enabled).toBe(false);
+
+    authState.user = { id: 'viewer-1' };
+    render(page({ item: unlisted(), active: false }));
+    expect(queryOptions.current?.enabled).toBe(false);
+  });
+
+  it('keeps reading the listing when there is one', () => {
+    queryState.current = { data: undefined, isError: false, error: null, refetch: vi.fn() };
+    render(page());
+    expect(queryOptions.current?.queryKey).toEqual(['post-resource-bundle', 'post-1', 'asset-1', 'viewer-1']);
+    expect(queryOptions.current?.enabled).toBe(true);
+  });
+});
+

@@ -70,6 +70,11 @@ export interface ShowcaseAssetSummary {
     priceQuote?: MarketplacePriceQuote;
     previewText: string;
     allowRemix: boolean;
+    /**
+     * True when the signed-in viewer has unlocked this recipe (paid or free).
+     * Left out for signed-out viewers and on reads that do not load ownership.
+     */
+    viewerHasUnlocked?: boolean;
     /** Paid unlocks; left out when there are none. */
     salesCount?: number;
     /** Free unlocks (a free recipe's "N opened"); left out when there are none. */
@@ -233,6 +238,11 @@ export function sanitizeShowcaseAssetSummary(
 
     if (asset.priceQuote) {
         sanitized.priceQuote = asset.priceQuote;
+    }
+
+    // Set only where a viewer is known (`attachViewerStateToFeed`).
+    if (typeof asset.viewerHasUnlocked === 'boolean') {
+        sanitized.viewerHasUnlocked = asset.viewerHasUnlocked;
     }
 
     if (typeof asset.salesCount === 'number') {

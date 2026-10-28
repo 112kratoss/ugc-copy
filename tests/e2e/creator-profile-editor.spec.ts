@@ -110,7 +110,7 @@ async function signInAsTheCreator(context: BrowserContext) {
   return saves;
 }
 
-// Something else is drawn at the centre of every bottom-nav link and at the nav's two ends: an
+// Something else is drawn at the centre of every bottom-nav control and at the nav's two ends: an
 // overlay that covers the page covers the nav too. `next dev` draws its own badge over the
 // bottom-left corner, which is skipped. The check of the same name in
 // app-shell-short-pages.spec.ts, for the workflow canvas's overlays.
@@ -118,7 +118,7 @@ async function expectOverTheBottomNav(page: Page, name: string) {
   const showing = await page.evaluate(() => {
     const nav = document.querySelector('nav.app-shell-bottom-nav')!;
     const box = nav.getBoundingClientRect();
-    const points = [...nav.querySelectorAll('a')].map((link) => {
+    const points = [...nav.querySelectorAll('a, button')].map((link) => {
       const r = link.getBoundingClientRect();
       return { name: link.getAttribute('aria-label') || link.textContent?.trim() || '', x: r.left + r.width / 2, y: r.top + r.height / 2 };
     });

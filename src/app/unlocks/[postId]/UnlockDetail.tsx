@@ -37,11 +37,11 @@ export default function UnlockDetail({ detail }: { detail: ViewerUnlockDetailMod
   const reason = detail.detached
     ? 'The creator deleted their account. Your purchased version and its files are retained here.'
     : detail.tombstoned
-    ? 'The creator removed this post. Your unlock is kept here permanently.'
+    ? 'The creator removed this post. Your recipe is kept here permanently.'
     : detail.retired
-      ? 'This unlock is no longer sold. Yours stays available here.'
+      ? 'This recipe is no longer sold. Yours stays available here.'
       : !detail.postReachable
-        ? "This post isn't available to you. Your unlock stays here."
+        ? "This post isn't available to you. Your recipe stays here."
         : null;
   const initialResources = detail.currentResources ?? detail.purchasedRevision.resources;
   const paidToneClass = detail.paidWith === 'free'
@@ -57,7 +57,7 @@ export default function UnlockDetail({ detail }: { detail: ViewerUnlockDetailMod
             className="inline-flex items-center gap-2 text-sm text-zinc-400 transition hover:text-zinc-200"
           >
             <ArrowLeft className="h-4 w-4" />
-            Your unlocks
+            Unlocked recipes
           </Link>
           <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${paidToneClass}`}>
             <span className="sr-only">What you paid: </span>

@@ -19,6 +19,7 @@ import { getPublicPostMetaDescription, type PublicPostDetail } from '@/lib/publi
 import type { ShowcaseReturnContext } from '@/lib/share';
 
 import PostResourceBundlePanel from './PostResourceBundlePanel';
+import { buildRecipePanelProps, getRecipeRemixOffer } from './recipe-panel-props';
 import ReportPostButton from './ReportPostButton';
 import ShowcaseDetailActions from './ShowcaseDetailActions';
 import ShowcaseDetailBackLink from './ShowcaseDetailBackLink';
@@ -177,63 +178,30 @@ export default function ShowcaseDetailBody({
   // them; the modal no longer does, and 20260824090000 cleared the rows it
   // had left behind.)
   const shouldRenderLede = !isTextOnlyPost && Boolean(detail.description);
+  // A creation post's recipe brings its Remix (S1): locked behind the recipe
+  // for a viewer without it, and named in the panel either way (B-F3).
+  const remixOffer = getRecipeRemixOffer({
+    canRemix: detail.canRemix,
+    remixCapability: detail.remixCapability,
+    remixTarget: detail.remixTarget,
+    bundle,
+  });
   const resourceBundlePanel = bundle ? (
     <PostResourceBundlePanel
-      postId={detail.id}
-      mediaItems={detailMediaItems}
-      title={bundle.title}
-      suppressTitle={normalizeComparableText(bundle.title) === normalizeComparableText(displayTitle)}
-      summary={bundle.summary}
-      previewText={bundle.previewText}
-      priceLabel={bundle.priceQuote.formatted}
-      priceUsdCents={bundle.priceUsdCents}
-      priceNote={bundle.priceQuote.note}
-      isFree={bundle.accessMode === 'free'}
-      viewerCanAccess={bundle.viewerCanAccess}
-      viewerIsOwner={bundle.viewerIsOwner}
-      resourceKinds={bundle.resourceKinds}
-      lockedPreview={bundle.lockedPreview}
-      salesCount={bundle.salesCount}
-      freeUnlockCount={bundle.freeUnlockCount}
-      initialResources={bundle.resources
-        ? {
-            promptText: bundle.resources.promptText,
-            notesMarkdown: bundle.resources.notesMarkdown,
-            workflowShareUrl: bundle.resources.workflowShareUrl,
-            attachments: bundle.resources.attachments,
-            allowRemix: bundle.resources.allowRemix,
-            sections: bundle.resources.sections,
-            items: bundle.resources.items,
-          }
-        : null}
-      purchasedRevision={bundle.purchasedRevision
-        ? {
-            revisionNumber: bundle.purchasedRevision.revisionNumber,
-            purchasedAt: bundle.purchasedRevision.purchasedAt,
-            title: bundle.purchasedRevision.title,
-            summary: bundle.purchasedRevision.summary,
-            previewText: bundle.purchasedRevision.previewText,
-            accessMode: bundle.purchasedRevision.accessMode,
-            priceUsdCents: bundle.purchasedRevision.priceUsdCents,
-            mediaItems: bundle.purchasedRevision.mediaItems,
-            resources: {
-              promptText: bundle.purchasedRevision.resources.promptText,
-              notesMarkdown: bundle.purchasedRevision.resources.notesMarkdown,
-              workflowShareUrl: bundle.purchasedRevision.resources.workflowShareUrl,
-              attachments: bundle.purchasedRevision.resources.attachments,
-              allowRemix: bundle.purchasedRevision.resources.allowRemix,
-              sections: bundle.purchasedRevision.resources.sections,
-              items: bundle.purchasedRevision.resources.items,
-            },
-          }
-        : null}
+      {...buildRecipePanelProps(bundle, {
+        postId: detail.id,
+        mediaItems: detailMediaItems,
+        displayTitle,
+        remixIncluded: remixOffer.remixIncluded,
+      })}
     />
   ) : null;
   /*
-   * Every post reads as one column, the way Reddit orders it: the post, then
-   * the conversation, then the recipe — all beside the rail. The recipe
-   * trails the comments and is pitched nowhere else; the locked-viewer
-   * bottom CTA covers viewports where the panel sits below the fold.
+   * Every post reads as one column: the post, then its recipe, then the
+   * conversation — all beside the rail. The recipe sat after the whole thread
+   * (its buy button some 1,270px down on a laptop); it comes before it now, and
+   * is pitched nowhere else. The rail's pointer and the locked-viewer bottom
+   * CTA still reach it from anywhere on the page.
    */
   const recipeBlock = resourceBundlePanel ? (
     <div
@@ -270,6 +238,7 @@ export default function ShowcaseDetailBody({
       remixCount={detail.remixCount}
       shareVisitCount={detail.shareVisitCount}
       showComments={detail.visibility === 'public'}
+      recipeRemix={remixOffer.recipeRemix}
     />
   );
 
@@ -406,11 +375,11 @@ export default function ShowcaseDetailBody({
 
                       {engagementRow}
                   </article>
+                  {recipeBlock}
                   {commentsBlock}
                 </>
               )}
             </ShowcaseDetailCommentCountProvider>
-            {recipeBlock}
           </section>
 
           <aside
@@ -420,8 +389,8 @@ export default function ShowcaseDetailBody({
             <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.86),rgba(10,10,12,0.9))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
               {/*
                 * A pointer, not a pitch: the recipe is presented once, in the
-                * document column, but it sits below the whole conversation —
-                * this sticky one-liner keeps it reachable at any scroll depth.
+                * document column, under the post — this sticky one-liner keeps
+                * it reachable at any scroll depth.
                 */}
               {bundle ? (
                 <Link
@@ -432,11 +401,13 @@ export default function ShowcaseDetailBody({
                   <span className="inline-flex min-w-0 items-center gap-2">
                     <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
                     <span className="truncate">
-                      {lockedViewer && bundle.accessMode !== 'free'
-                        ? formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote.formatted)
-                        : bundle.accessMode === 'free'
-                          ? 'Free recipe'
-                          : 'Recipe unlocked'}
+                      {bundle.viewerIsOwner
+                        ? 'Your recipe'
+                        : !lockedViewer
+                          ? 'Unlocked'
+                          : bundle.accessMode !== 'free'
+                            ? formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote.formatted)
+                            : 'Free recipe'}
                     </span>
                   </span>
                   <span className="shrink-0 text-xs font-medium text-emerald-200/70">

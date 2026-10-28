@@ -22,7 +22,6 @@ import {
     CreatorMentionPanel,
     CreatorModelChip,
     CreatorPendingStartNotice,
-    CreatorPhoneBalance,
     CreatorReferenceRow,
     CreatorResultActions,
     CreatorSettingChoices,
@@ -60,6 +59,7 @@ import type { CatalogGenerationInputAsset, CatalogGenerationRequestPayload } fro
 import type { CatalogPrimitive, GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
     clearPendingWebStart,
+    getCatalogDescriptorDefaultSettings,
     isAmbiguousWebStartFailure,
     loadPendingWebStart,
     requestWebGenerationStart,
@@ -184,6 +184,21 @@ const MULTI_SHOT_MAX_SHOTS: Readonly<Partial<Record<string, number>>> = {
     'kling-3.0-video': 5,
     'kling-o3': 6,
 };
+
+/**
+ * The form the page draws until a model is picked: Kling 3.0's, the catalog default until 2026-10-28.
+ * At the first pick a setting still at its stand-in value takes the picked model's published default.
+ */
+const STAND_IN_FORM = {
+    modelId: 'kling-3.0-video',
+    mode: 'std',
+    aspectRatio: '16:9',
+    sound: false,
+    resolution: '720p',
+    fixedLens: false,
+    isMultiShot: false,
+    duration: 5,
+} as const;
 
 /** A multi-shot run's length, as the server derives it from the shots: each one whole and at least a second. */
 function multiShotTotalDuration(shots: readonly { duration: number }[]): number {
@@ -994,8 +1009,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const prefillAspectRatio = prefill.aspectRatio ?? null;
     const prefillDuration = prefill.duration ?? null;
 
-    const [selectedModel, setSelectedModel] = useState<VideoModelId>('kling-3.0-video');
-    const [isMultiShot, setIsMultiShot] = useState(false);
+    const [selectedModel, setSelectedModel] = useState<VideoModelId>(STAND_IN_FORM.modelId);
+    const [isMultiShot, setIsMultiShot] = useState<boolean>(STAND_IN_FORM.isMultiShot);
     const [prompt, setPrompt] = useState('');
 
     // Mirrors the live prompt so the remix restore below can tell whether the
@@ -1004,7 +1019,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     useEffect(() => {
         promptRef.current = prompt;
     }, [prompt]);
-    const [singleDuration, setSingleDuration] = useState(5);
+    const [singleDuration, setSingleDuration] = useState<number>(STAND_IN_FORM.duration);
     const [multiPrompts, setMultiPrompts] = useState<MultiShot[]>([
         { id: '1', prompt: '', duration: 5 },
     ]);
@@ -1030,11 +1045,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // frame replaced since does not match, and is uploaded.
     const [startFrameStaged, setStartFrameStaged] = useState<{ file: File; staged: StagedUpload } | null>(null);
     const [endFrameStaged, setEndFrameStaged] = useState<{ file: File; staged: StagedUpload } | null>(null);
-    const [mode, setMode] = useState('std');
-    const [aspectRatio, setAspectRatio] = useState('16:9');
-    const [sound, setSound] = useState(false);
-    const [resolution, setResolution] = useState('720p');
-    const [fixedLens, setFixedLens] = useState(false);
+    const [mode, setMode] = useState<string>(STAND_IN_FORM.mode);
+    const [aspectRatio, setAspectRatio] = useState<string>(STAND_IN_FORM.aspectRatio);
+    const [sound, setSound] = useState<boolean>(STAND_IN_FORM.sound);
+    const [resolution, setResolution] = useState<string>(STAND_IN_FORM.resolution);
+    const [fixedLens, setFixedLens] = useState<boolean>(STAND_IN_FORM.fixedLens);
 
     const [isDraggingStart, setIsDraggingStart] = useState(false);
     const [isDraggingEnd, setIsDraggingEnd] = useState(false);
@@ -1062,6 +1077,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // it, and the catalog does not pick its default model in place of the saved one.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
     const restoredDraftModelRef = useRef(false);
+    // A saved draft with a model was read back, a link's model or not: its settings are the creator's.
+    const restoredDraftSettingsRef = useRef(false);
     const pendingAdditionalSettingsRef = useRef<VideoCreatorDraft['additionalSettings'] | null>(null);
     const unsavedDraftRef = useRef<{ userId: string; draft: VideoCreatorDraft } | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
@@ -1074,6 +1091,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [modelSearchQuery, setModelSearchQuery] = useState('');
     const modelDropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
+    // Whether the model and its settings are the creator's, a saved draft's or the first pick's rather
+    // than the page's stand-in form: only then is the model saved with the draft (a link's model is not
+    // settled until the first pick, which gives it its own settings; a reload keeps the link anyway).
+    const [modelSettled, setModelSettled] = useState(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     const elementInputRef = useRef<HTMLInputElement>(null);
@@ -1161,18 +1182,51 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const draftReady = Boolean(remixId) || !userId || draftRestoredFor === userId;
     useEffect(() => {
         if (!modelCatalog.catalog || !draftReady) return;
-        const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel && !restoredDraftModelRef.current;
-        const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'video', selectedModel, { preferDefault });
+        const firstPick = !hasResolvedInitialCatalogModel.current;
+        // The first pick waits for the revision the network confirms: a catalog read back from
+        // the browser can still name an earlier default, which the page would then keep.
+        if (firstPick && modelCatalog.isCheckingRevision) return;
+        const catalog = modelCatalog.catalog;
+        const preferDefault = firstPick && !remixId && !prefillModel && !restoredDraftModelRef.current;
+        // The default's details are still loading: picking now would settle on the stand-in.
+        const defaultId = catalog.defaults.video;
+        if (preferDefault && defaultId && !catalog.models.some((model) => model.id === defaultId)
+            && !modelCatalog.missingIds.includes(defaultId)) return;
+        const nextModelId = resolveCatalogModelId(catalog, 'video', selectedModel, { preferDefault });
         if (!nextModelId) return;
         hasResolvedInitialCatalogModel.current = true;
-        if (nextModelId && nextModelId !== selectedModel) {
+        setModelSettled(true);
+        if (firstPick && !remixId && !restoredDraftSettingsRef.current) {
+            // Until now the page drew a stand-in form: the default, or the model a link named,
+            // opens on its own published settings, but for a ratio or a length the link asked for
+            // and a setting the creator changed while the page waited.
+            const descriptor = catalog.models.find((model) => model.id === nextModelId);
+            const defaults = descriptor ? getCatalogDescriptorDefaultSettings(descriptor) : {};
+            // The stand-in model's own settings check empties a choice it does not offer.
+            const atStandIn = (value: string, standIn: string) => value === standIn || value === '';
+            if (typeof defaults.mode === 'string' && atStandIn(mode, STAND_IN_FORM.mode)) setMode(defaults.mode);
+            if (typeof defaults.resolution === 'string' && atStandIn(resolution, STAND_IN_FORM.resolution)) setResolution(defaults.resolution);
+            if (typeof defaults.sound === 'boolean' && sound === STAND_IN_FORM.sound) setSound(defaults.sound);
+            if (typeof defaults.fixedLens === 'boolean' && fixedLens === STAND_IN_FORM.fixedLens) setFixedLens(defaults.fixedLens);
+            if (typeof defaults.isMultiShot === 'boolean' && isMultiShot === STAND_IN_FORM.isMultiShot) setIsMultiShot(defaults.isMultiShot);
+            if (typeof defaults.aspectRatio === 'string' && !prefillAspectRatio && aspectRatio === STAND_IN_FORM.aspectRatio) {
+                setAspectRatio(defaults.aspectRatio);
+            }
+            if (defaults.duration !== undefined && !prefillDuration && singleDuration === STAND_IN_FORM.duration) {
+                setSingleDuration(Number(defaults.duration));
+            }
+        }
+        if (nextModelId !== selectedModel) {
             const nextModel = (VIDEO_MODELS as unknown as Record<string, typeof videoModel>)[nextModelId];
             setSelectedModel(nextModelId as VideoModelId);
             if (!preferDefault) {
                 setCatalogNotice(`Your previous video model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
             }
         }
-    }, [modelCatalog.catalog, selectedModel, videoModel, prefillModel, remixId, draftReady]);
+    }, [
+        modelCatalog.catalog, modelCatalog.isCheckingRevision, selectedModel, videoModel, prefillModel, prefillAspectRatio, prefillDuration,
+        remixId, draftReady, mode, resolution, sound, fixedLens, isMultiShot, aspectRatio, singleDuration, modelCatalog.missingIds,
+    ]);
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
     const isKlingVideoModel = selectedModel === 'kling-3.0-video';
     const isKlingO3Model = selectedModel === 'kling-o3';
@@ -2285,6 +2339,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 if (cancelled || settled || !stored) return;
                 const draft = readVideoCreatorDraft(stored);
                 if (draft.prompt !== undefined && !prefillPrompt) setPrompt(draft.prompt);
+                if (draft.modelId) {
+                    restoredDraftSettingsRef.current = true;
+                    setModelSettled(true);
+                }
                 if (draft.modelId && !prefillModel) {
                     restoredDraftModelRef.current = true;
                     setSelectedModel(draft.modelId as VideoModelId);
@@ -2330,7 +2388,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     const textDraft = useMemo<VideoCreatorDraft>(() => ({
         prompt,
-        modelId: selectedModel,
+        // The stand-in model is never saved: the next visit takes the catalog's default instead.
+        modelId: modelSettled ? selectedModel : '',
         mode,
         aspectRatio,
         sound,
@@ -2340,7 +2399,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         shots: multiPrompts,
         duration: singleDuration,
         additionalSettings: { modelId: selectedModel, values: additionalSettings.settings },
-    }), [prompt, selectedModel, mode, aspectRatio, sound, resolution, fixedLens, isMultiShot, multiPrompts, singleDuration, additionalSettings.settings]);
+    }), [prompt, modelSettled, selectedModel, mode, aspectRatio, sound, resolution, fixedLens, isMultiShot, multiPrompts, singleDuration, additionalSettings.settings]);
 
     const flushTextDraft = useCallback(async () => {
         const unsaved = unsavedDraftRef.current;
@@ -3469,6 +3528,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         // A notice about the previous model no longer applies.
         if (modelId !== selectedModel) setCatalogNotice(null);
+        // The creator's pick is the first pick: the catalog's default no longer replaces it.
+        hasResolvedInitialCatalogModel.current = true;
+        setModelSettled(true);
         setSelectedModel(modelId);
         setIsModelDropdownOpen(false);
         setModelSearchQuery('');
@@ -4428,7 +4490,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     })}
                                 </StudioModelPicker>
                             </div>
-                            <CreatorPhoneBalance credits={userCredits} />
                         </div>
 
                         <AnimatePresence>

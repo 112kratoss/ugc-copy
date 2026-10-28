@@ -118,8 +118,17 @@ vi.mock('@/components/PostComments', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailEngagementRow', () => ({
-  default: ({ postId, canRemix }: { postId: string; canRemix: boolean }) => (
-    <div data-testid="showcase-detail-engagement-row">{`${postId}:${canRemix}`}</div>
+  default: ({ postId, canRemix, recipeRemix }: {
+    postId: string;
+    canRemix: boolean;
+    recipeRemix?: { access: string; priceLabel: string } | null;
+  }) => (
+    <div
+      data-testid="showcase-detail-engagement-row"
+      data-recipe-remix={recipeRemix ? `${recipeRemix.access}:${recipeRemix.priceLabel}` : ''}
+    >
+      {`${postId}:${canRemix}`}
+    </div>
   ),
 }));
 
@@ -726,6 +735,61 @@ describe('Showcase detail page', () => {
       fireEvent.click(within(media).getByRole('button', { name: 'Hide this post' }));
       expect(within(media).queryByTestId('post-comments-component')).not.toBeInTheDocument();
     });
+
+    // D4 (2026-10-27): a recipe on an NSFW post showed nowhere, even revealed (B-F11).
+    it('shows the recipe the reveal carries, between the post and its thread', async () => {
+      signInAs('user-2');
+      const detail = await serveCoveredPost();
+      stubPageFetch({
+        ...detail,
+        isNsfw: true,
+        nsfwRevealed: true,
+        mediaItems: [],
+        canRemix: false,
+        remixCapability: 'unlock_required',
+        remixTarget: 'image',
+        resourceBundle: {
+          id: 'bundle-1',
+          postId: 'post-1',
+          accessMode: 'paid',
+          priceQuote: { formatted: '$9.00', note: null },
+          resourceKinds: ['prompt'],
+          lockedPreview: null,
+          viewerCanAccess: false,
+          viewerIsOwner: false,
+          salesCount: 2,
+          freeUnlockCount: 0,
+          resources: null,
+          title: 'Mature recipe',
+          summary: 'The setup.',
+          previewText: '',
+          priceUsdCents: 900,
+          allowRemix: true,
+          status: 'published',
+          purchasedRevision: null,
+        },
+      });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+      expect(screen.queryByTestId('post-resource-bundle-panel')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /18 or older/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
+
+      const media = screen.getByTestId('canonical-post-media');
+      const panel = await within(media).findByTestId('post-resource-bundle-panel');
+      expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({
+        postId: 'post-1',
+        title: 'Mature recipe',
+        priceUsdCents: 900,
+        remixIncluded: true,
+      }));
+      expect(
+        panel.compareDocumentPosition(within(media).getByTestId('post-comments-component')) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+
+      fireEvent.click(within(media).getByRole('button', { name: 'Hide this post' }));
+      expect(within(media).queryByTestId('post-resource-bundle-panel')).not.toBeInTheDocument();
+    });
   });
 
   it('does not mount public-only comments on an unlisted detail page', async () => {
@@ -1206,8 +1270,8 @@ describe('Showcase detail page', () => {
     }));
 
     // A text post pitches the recipe exactly once — in the document column,
-    // after the conversation. The rail keeps a one-line pointer to it (not a
-    // second pitch), so the recipe stays reachable under a long thread.
+    // before the conversation (it sat after the whole thread, its buy button
+    // some 1,270px down on a laptop). The rail keeps a one-line pointer to it.
     expect(screen.queryByTestId('unlock-summary-link')).not.toBeInTheDocument();
     expect(screen.getByTestId('recipe-jump-link')).toHaveAttribute('href', '#recipe');
     expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Free recipe');
@@ -1217,7 +1281,7 @@ describe('Showcase detail page', () => {
     expect(
       screen.getByTestId('canonical-post-comments').compareDocumentPosition(
         screen.getByTestId('canonical-post-recipe')
-      ) & Node.DOCUMENT_POSITION_FOLLOWING
+      ) & Node.DOCUMENT_POSITION_PRECEDING
     ).toBeTruthy();
   });
 
@@ -1335,6 +1399,72 @@ describe('Showcase detail page', () => {
   // A free unlock stopped counting as a sale on 2026-10-17 (decision 6). The
   // panel prints a free recipe's "N opened" from the free count, and the
   // owner's delete and visibility confirmations still count free unlocks.
+  // S1: a creation post's recipe brings its Remix. The page drew no Remix for
+  // a viewer without the recipe and the panel never said it came with it (B-F3).
+  describe('a recipe that brings the post\'s Remix', () => {
+    async function serveRemixRecipe(bundle: Record<string, unknown>, post: Record<string, unknown> = {}) {
+      const detail = await getPublicPostDetailMock('post-1');
+      getPublicPostDetailMock.mockResolvedValueOnce({
+        ...detail,
+        canRemix: false,
+        remixCapability: 'unlock_required',
+        remixTarget: 'image',
+        ...post,
+        resourceBundle: {
+          id: 'bundle-1',
+          accessMode: 'paid',
+          priceQuote: { formatted: '$9.00', note: null },
+          resourceKinds: ['prompt', 'remix'],
+          lockedPreview: null,
+          viewerCanAccess: false,
+          viewerIsOwner: false,
+          salesCount: 0,
+          freeUnlockCount: 0,
+          resources: null,
+          title: 'Recipe',
+          summary: '',
+          previewText: '',
+          priceUsdCents: 900,
+          allowRemix: true,
+          status: 'published',
+          ...bundle,
+        },
+      });
+    }
+
+    it('locks Remix behind the recipe with its price, and names it in the recipe', async () => {
+      await serveRemixRecipe({});
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-recipe-remix', 'paid:900 credits');
+      expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ remixIncluded: true }));
+    });
+
+    it('offers a free recipe\'s Remix as free', async () => {
+      await serveRemixRecipe({ accessMode: 'free', priceUsdCents: 0 });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-recipe-remix', 'free:Free');
+    });
+
+    it('leaves Remix open, and the recipe pointing at it, once the viewer has the recipe', async () => {
+      await serveRemixRecipe({ viewerCanAccess: true }, { canRemix: true, remixCapability: 'public' });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-recipe-remix', '');
+      expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ remixIncluded: true }));
+      expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlocked');
+    });
+
+    it('promises no Remix where the post has none to give', async () => {
+      await serveRemixRecipe({ allowRemix: false }, { remixCapability: 'none' });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-recipe-remix', '');
+      expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ remixIncluded: false }));
+    });
+  });
+
   it('hands the recipe panel and the owner actions both unlock counts', async () => {
     const detail = await getPublicPostDetailMock('post-1');
     getPublicPostDetailMock.mockResolvedValueOnce({

@@ -35,12 +35,11 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 /**
- * The creator tool card is one link wrapping the whole card — title, summary,
- * and call to action — so a keyboard user lands on a single stop and assistive
- * tech announces one target instead of three nested ones. The launchpad
- * (`/create`) is the surface that renders these cards; the home page now
- * renders the community feed with a compact quick-starts rail instead
- * (see anonymous-home-page-cache.test.tsx).
+ * The creator tool card opens its tool with one link that holds the title,
+ * summary and call to action, so a keyboard user lands on a single stop and
+ * assistive tech announces one target instead of three nested ones; a
+ * ready-made setup is a second link beside it, in the card's foot. The
+ * launchpad (`/create`) is the surface that renders these cards.
  */
 function expectCardToUseSingleLink({
   title,
@@ -164,11 +163,28 @@ describe('creator tool card links', () => {
 
     const launchpadVideoCardLink = screen.getByText('Create Video').closest('a');
     expect(within(launchpadVideoCardLink as HTMLAnchorElement).getByTestId('hover-video')).toBeInTheDocument();
-    expect(screen.getByText('Try this image setup').closest('a')).toHaveAttribute(
-      'href',
-      expect.stringContaining('/create-image?')
-    );
-    expect(screen.getByText('Go to Explore').closest('a')).toHaveAttribute('href', '/showcase');
+  });
+
+  // The tools came twice on the page: as cards, and again as examples in a
+  // section of their own, with templates linked twice too.
+  it('offers each tool once, its ready-made setup in its own card, and templates once', async () => {
+    render(await CreateHubPage());
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Create' })).toBeInTheDocument();
+    const imageExample = screen.getByRole('link', { name: /Try: Launch a premium product visual/ });
+    expect(imageExample).toHaveAttribute('href', expect.stringContaining('/create-image?'));
+    // In the image card, beside its launch link rather than inside it.
+    const imageCard = screen.getByText('Create Image').closest('a')!.parentElement!;
+    expect(imageCard).toContainElement(imageExample);
+    expect(screen.getByRole('link', { name: /Try: Create a founder-style teaser/ })).toHaveAttribute('href', expect.stringContaining('/create-video?'));
+    // On the default video's model, inside a new account's welcome credits (Kling 3.0 was 70).
+    expect(screen.getByRole('link', { name: /Try: Create a founder-style teaser/ })).toHaveAttribute('href', expect.stringContaining('model=seedance-2-mini'));
+    expect(screen.getByRole('link', { name: /Try: Animate a UGC-style performance/ })).toHaveAttribute('href', expect.stringContaining('/create-motion?'));
+    // The canvas card already opens an empty canvas.
+    expect(screen.getAllByRole('link').filter((link) => link.getAttribute('href') === '/create-workflow')).toHaveLength(1);
+    expect(screen.queryByText('Try a setup and move.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Go to Explore/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link').filter((link) => link.getAttribute('href') === '/templates')).toHaveLength(1);
   });
 
   it('prefetches neither the video nor the workflow page from its card', async () => {

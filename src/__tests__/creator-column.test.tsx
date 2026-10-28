@@ -15,7 +15,6 @@ import {
   CreatorColumnBar,
   CreatorColumnLayout,
   CreatorMentionPanel,
-  CreatorPhoneBalance,
   CreatorReferenceRow,
   CreatorResultActions,
   CreatorSettingChoices,
@@ -366,16 +365,6 @@ describe('the column tiles', () => {
     const tile = screen.getByRole('link', { name: 'Templates' });
     expect(tile).toHaveAttribute('href', '/templates');
     expect(tile).toHaveAttribute('data-prefetch', 'false');
-  });
-
-  it('shows the balance on a phone, linked to pricing', () => {
-    const view = render(<CreatorPhoneBalance credits={12} />);
-    const balance = screen.getByRole('link', { name: '12 credits' });
-    expect(balance).toHaveAttribute('href', '/pricing');
-    expect(balance).toHaveClass('sm:hidden');
-
-    view.rerender(<CreatorPhoneBalance credits={null} />);
-    expect(screen.getByRole('link', { name: 'Credits' })).toBeInTheDocument();
   });
 });
 

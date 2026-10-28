@@ -262,8 +262,8 @@ describe('NewPostClient', () => {
   // original title. The counter flags it, but the composer must not refuse to
   // save — the server grandfathers an unchanged title, and blocking here would
   // strand the author on every other field.
-  // Preview remains required even when the optional public summary is blank.
-  it('blocks publishing a recipe with no package preview', async () => {
+  // The Recipe preview is required: one the creator clears is asked for.
+  it('blocks publishing a recipe whose preview was cleared', async () => {
     render(<NewPostClient />);
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
@@ -271,17 +271,63 @@ describe('NewPostClient', () => {
       target: { value: 'A note that stands on its own for the community.' },
     });
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'A reusable prompt.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), { target: { value: '' } });
     fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/add a package preview/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Add a recipe preview.');
+    expect(screen.getByLabelText(/recipe preview, required/i)).toHaveAttribute('aria-invalid', 'true');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // S6 (2026-10-27): one public text in place of a "Public summary" that
+  // silently won over a required "Package preview".
+  it('asks for one Recipe preview that everyone sees before unlocking', () => {
+    render(<NewPostClient />);
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+
+    const recipe = within(document.getElementById('recipe')!);
+    const preview = recipe.getByLabelText(/recipe preview, required/i);
+    expect(preview).toHaveAttribute('maxlength', '180');
+    expect(recipe.getByText('0/180')).toBeInTheDocument();
+    expect(recipe.getByText('Everyone sees this before unlocking.')).toBeInTheDocument();
+    expect(recipe.queryByLabelText(/summary/i)).not.toBeInTheDocument();
+    expect(recipe.queryByText(/package|resource/i)).not.toBeInTheDocument();
+    expect(recipe.queryByRole('button', { name: /use suggested preview/i })).not.toBeInTheDocument();
+    // An upload post has no Remix, and the switch is gone everywhere (S1).
+    expect(recipe.queryByRole('checkbox', { name: /remix/i })).not.toBeInTheDocument();
+    expect(recipe.queryByText(/remix comes with this recipe/i)).not.toBeInTheDocument();
+  });
+
+  // S6/S7: the preview is written from the items as they are saved, and
+  // follows them until the creator writes in it.
+  it('suggests the preview from the items and stops once the creator writes it', () => {
+    render(<NewPostClient />);
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+    const preview = () => screen.getByLabelText(/recipe preview, required/i);
+    expect(preview()).toHaveValue('');
+
+    const addItem = (type: RegExp, text: string) => {
+      fireEvent.click(screen.getByRole('button', { name: /^add item$/i }));
+      fireEvent.click(screen.getByRole('button', { name: type }));
+      fireEvent.change(screen.getByLabelText(/^protected content$/i), { target: { value: text } });
+      fireEvent.click(screen.getByRole('button', { name: /save item/i }));
+    };
+    addItem(/prompt or script/i, 'Open with the before state, then reveal the product.');
+    expect(preview()).toHaveValue('Includes the prompt.');
+    addItem(/guide or notes/i, 'Keep the first shot under seven seconds.');
+    expect(preview()).toHaveValue('Includes the prompt and a written guide.');
+
+    fireEvent.change(preview(), { target: { value: 'The hook prompt and the timing notes behind it.' } });
+    addItem(/prompt or script/i, 'A second prompt for the closing shot.');
+    expect(preview()).toHaveValue('The hook prompt and the timing notes behind it.');
   });
 
   // The app's choice, as cards: a creator sees that a recipe can be sold
@@ -298,33 +344,44 @@ describe('NewPostClient', () => {
     expect(new Set([free, paid, none].map((radio) => radio.getAttribute('name'))).size).toBe(1);
     expect(free).toHaveAttribute('name', expect.stringMatching(/\S/));
     expect(screen.queryByRole('checkbox', { name: /add a reusable recipe/i })).toBeNull();
-    expect(screen.queryByLabelText(/price in tokens/i)).toBeNull();
-    expect(screen.queryByRole('button', { name: /add your first resource/i })).toBeNull();
+    expect(screen.queryByLabelText(/price in credits/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /add your first item/i })).toBeNull();
 
     fireEvent.click(paid);
     expect(paid).toBeChecked();
-    expect(screen.getByLabelText(/price in tokens/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /add your first resource/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/price in credits/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add your first item/i })).toBeInTheDocument();
 
     fireEvent.click(free);
     expect(free).toBeChecked();
-    expect(screen.queryByLabelText(/price in tokens/i)).toBeNull();
+    expect(screen.queryByLabelText(/price in credits/i)).toBeNull();
     expect(screen.getByText(/add a free recipe to their library/i)).toBeInTheDocument();
 
     fireEvent.click(none);
     expect(none).toBeChecked();
-    expect(screen.queryByRole('button', { name: /add your first resource/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /add your first item/i })).toBeNull();
   });
 
-  it('shows a sold recipe\'s mode on the cards and takes no change to it', () => {
-    render(<NewPostClient initialPost={{ ...createLegacyPrivateResourcePost(), hasPaidOrders: true }} />);
+  // D1 (2026-10-27): a recipe people have can be corrected; each save is a
+  // new version and they keep the one they got. The composer says so.
+  it('lets a recipe people have be edited, and says they keep the version they got', () => {
+    const { unmount } = render(
+      <NewPostClient initialPost={{ ...createLegacyPrivateResourcePost(), hasPaidOrders: true, resourceBundleBuyerCount: 3 }} />,
+    );
 
     const free = screen.getByRole('radio', { name: /free recipe/i });
     expect(free).toBeChecked();
-    expect(free).toBeDisabled();
-    expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeDisabled();
-    expect(screen.getByRole('radio', { name: /no recipe/i })).toBeDisabled();
-    expect(screen.getByText(/purchased resources are protected/i)).toBeInTheDocument();
+    expect(free).toBeEnabled();
+    expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: /no recipe/i })).toBeEnabled();
+    expect(screen.getByText('3 people have this recipe. They keep the version they got and see your changes.')).toBeInTheDocument();
+    expect(screen.queryByText(/protected/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^add item$/i })).toBeEnabled();
+    expect(screen.getByLabelText(/recipe preview, required/i)).toBeEnabled();
+    unmount();
+
+    render(<NewPostClient initialPost={{ ...createLegacyPrivateResourcePost(), resourceBundleBuyerCount: 1 }} />);
+    expect(screen.getByText('1 person has this recipe. They keep the version they got and see your changes.')).toBeInTheDocument();
   });
 
   // Chrome's implicit submission skips the composer's disabled first submit
@@ -347,21 +404,83 @@ describe('NewPostClient', () => {
 
   // The cards are now the one control that takes a recipe off a post: the
   // save must say so, since the update path keeps what is stored for a
-  // missing key (the sold case above).
-  it('sends the removal when No recipe is chosen on an unsold recipe', async () => {
-    render(<NewPostClient initialPost={createLegacyPrivateResourcePost()} />);
+  // missing key. H2 (2026-10-27): that save deletes the recipe and its
+  // files, so it asks first.
+  it('asks before an edit’s save removes the recipe, and sends the removal only when told to', async () => {
+    const putCalls = () => fetchMock.mock.calls.filter(([url, init]) => String(url).startsWith('/api/posts/') && init?.method === 'PUT');
+    enqueueResponse({
+      ok: true,
+      json: async () => ({ success: true, postId: 'post-private-resource-title', visibility: 'public' }),
+    });
+    render(
+      <>
+        <NewPostClient initialPost={createLegacyPrivateResourcePost()} />
+        <FeedbackViewport />
+      </>
+    );
 
     expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
     fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
     expect(screen.queryByText('Secret client launch prompt')).not.toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
 
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url, init]) => String(url).startsWith('/api/posts/') && init?.method === 'PUT')).toBe(true);
-    });
-    const [, init] = fetchMock.mock.calls.find(([url, request]) => String(url).startsWith('/api/posts/') && request?.method === 'PUT')!;
-    const payload = JSON.parse(String((init as { body: string }).body));
+    const question = await screen.findByRole('alertdialog', { name: 'Remove this recipe?' });
+    expect(question).toHaveAccessibleDescription('Its 1 item and files will be deleted.');
+    fireEvent.click(within(question).getByRole('button', { name: 'Keep recipe' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(putCalls()).toHaveLength(0);
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove recipe' }));
+    await waitFor(() => expect(putCalls()).toHaveLength(1));
+    const payload = JSON.parse(String((putCalls()[0][1] as { body: string }).body));
     expect(payload.resourceBundle).toEqual({ accessMode: 'none' });
+  });
+
+  it('says the people who have a recipe keep it when it is removed', async () => {
+    render(
+      <>
+        <NewPostClient initialPost={{ ...createLegacyPrivateResourcePost(), resourceBundleBuyerCount: 2 }} />
+        <FeedbackViewport />
+      </>
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
+    const question = await screen.findByRole('alertdialog', { name: 'Remove this recipe?' });
+    expect(question).toHaveAccessibleDescription(
+      'Its 1 item and files will be deleted. The 2 people who have it keep their copy; it comes off sale.',
+    );
+    expect(within(question).getByRole('button', { name: 'Remove recipe' })).toBeInTheDocument();
+  });
+
+  // A creation post without a recipe shows its prompt and lets anyone remix
+  // (S1), so taking the recipe off puts the post back that way: said in the
+  // question rather than found out (review of #567).
+  it('says a creation post reopens its prompt and Remix when its recipe is removed', async () => {
+    // A creation-backed edit reads its creation first, as the sold-generation save below does.
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [{ id: 'gen-1', output_url: 'https://proxy.example.com/generated_images/user-1/one.jpg', category: 'image', title: 'One', description: '', prompt: 'The prompt.', model: 'nano-banana-2' }],
+      }),
+    });
+    render(
+      <>
+        <NewPostClient initialPost={{ ...createLegacyPrivateResourcePost(), generationId: 'gen-1', resourceBundleBuyerCount: 2 }} />
+        <FeedbackViewport />
+      </>
+    );
+
+    // The creation loads first; until it has, the save is held.
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^make private/i })[0]).toBeEnabled());
+    fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
+    const question = await screen.findByRole('alertdialog', { name: 'Remove this recipe?' });
+    expect(question).toHaveAccessibleDescription(
+      'Its 1 item and files will be deleted. The 2 people who have it keep their copy; it comes off sale. '
+      + 'The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.',
+    );
   });
 
   // The Free/Paid pills counted every click, the checkbox none; the cards
@@ -405,7 +524,7 @@ describe('NewPostClient', () => {
     expect(free).toBeChecked();
     free.focus();
     fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
-    const priceInput = screen.getByRole('spinbutton', { name: /price in tokens/i });
+    const priceInput = screen.getByRole('spinbutton', { name: /price in credits/i });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
@@ -419,15 +538,91 @@ describe('NewPostClient', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
-    fireEvent.click(screen.getByRole('button', { name: /external link/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    chooseItemType(/external link/i);
 
-    expect(screen.getByRole('button', { name: /save resource/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /save item/i })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText(/^link$/i), {
       target: { value: 'https://ugc.example.com/doc' },
     });
-    expect(screen.getByRole('button', { name: /save resource/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /save item/i })).toBeEnabled();
+  });
+
+  // A-F14: a new item opened in red. Errors now wait for a touched field;
+  // until then a plain line says what Save is waiting for.
+  it('holds the item editor’s errors until a field was touched, with a plain line meanwhile', () => {
+    render(<NewPostClient />);
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    chooseItemType(/external link/i);
+
+    const dialog = within(screen.getByRole('dialog'));
+    const save = dialog.getByRole('button', { name: /save item/i });
+    const link = dialog.getByLabelText(/^link$/i);
+    expect(save).toBeDisabled();
+    expect(save).toHaveAccessibleDescription('Add a link to save this item.');
+    expect(dialog.queryByText(/add the content, link, or file/i)).not.toBeInTheDocument();
+    expect(link).toHaveAttribute('aria-invalid', 'false');
+
+    fireEvent.change(link, { target: { value: 'ugc.example.com/doc' } });
+    expect(dialog.queryByText('Add a valid http:// or https:// link.')).not.toBeInTheDocument();
+    fireEvent.blur(link);
+    expect(dialog.getByText('Add a valid http:// or https:// link.')).toBeInTheDocument();
+    expect(link).toHaveAttribute('aria-invalid', 'true');
+
+    const title = dialog.getByLabelText(/item title, required/i);
+    fireEvent.change(title, { target: { value: '' } });
+    expect(dialog.queryByText('Add an item title.')).not.toBeInTheDocument();
+    fireEvent.blur(title);
+    expect(dialog.getByText('Add an item title.')).toBeInTheDocument();
+
+    fireEvent.change(title, { target: { value: 'Prompt doc' } });
+    fireEvent.change(link, { target: { value: 'https://ugc.example.com/doc' } });
+    expect(save).toBeEnabled();
+    expect(save).not.toHaveAccessibleDescription(expect.stringMatching(/\S/));
+  });
+
+  // S8: the four types nearly every recipe uses come first; the rest wait
+  // behind More types.
+  it('offers four item types first and the other five behind More types', () => {
+    render(<NewPostClient />);
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Add an item' });
+    const rowNames = () => within(dialog).getAllByRole('button')
+      .filter((button) => button.getAttribute('aria-label') !== 'Close item editor')
+      .map((button) => button.textContent ?? '');
+    expect(rowNames()).toEqual([
+      expect.stringMatching(/^Prompt or script/),
+      expect.stringMatching(/^Reference media/),
+      expect.stringMatching(/^Model settings/),
+      expect.stringMatching(/^Guide or notes/),
+      'More types',
+    ]);
+    const more = within(dialog).getByRole('button', { name: 'More types' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(rowNames().slice(5)).toEqual([
+      expect.stringMatching(/^Workflow or project/),
+      expect.stringMatching(/^Source assets/),
+      expect.stringMatching(/^External link/),
+      expect.stringMatching(/^Remix link/),
+      expect.stringMatching(/^Other/),
+    ]);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /^source assets/i }));
+    const editor = within(screen.getByRole('dialog'));
+    expect(editor.getByLabelText(/item title, required/i)).toHaveValue('Source assets');
+    expect(editor.getByText('Everyone sees this before unlocking.')).toBeInTheDocument();
+    expect(editor.getByLabelText(/note shown after unlock/i)).toBeInTheDocument();
+    expect(editor.getByText('Up to 50 MB each.')).toBeInTheDocument();
+    expect(editor.getByRole('button', { name: 'Save item' })).toBeDisabled();
   });
 
   // The editor opens on a type chooser with no card, so its pristine snapshot
@@ -442,7 +637,7 @@ describe('NewPostClient', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'A prompt worth keeping.' },
@@ -450,13 +645,13 @@ describe('NewPostClient', () => {
 
     // The editor hides the rest of the page from assistive tech while it is
     // up; the question, added after it opened, is still reachable.
-    fireEvent.click(screen.getByRole('button', { name: /close resource editor/i }));
-    const question = await screen.findByRole('alertdialog', { name: 'Discard changes to this resource?' });
+    fireEvent.click(screen.getByRole('button', { name: /close item editor/i }));
+    const question = await screen.findByRole('alertdialog', { name: 'Discard changes to this item?' });
     fireEvent.click(within(question).getByRole('button', { name: 'Keep editing' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(screen.getByLabelText(/^protected content$/i)).toHaveValue('A prompt worth keeping.');
 
-    fireEvent.click(screen.getByRole('button', { name: /close resource editor/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close item editor/i }));
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard changes' }));
     await waitFor(() => expect(screen.queryByLabelText(/^protected content$/i)).not.toBeInTheDocument());
   });
@@ -472,14 +667,14 @@ describe('NewPostClient', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
     const content = screen.getByLabelText(/^protected content$/i);
     fireEvent.change(content, { target: { value: 'A prompt worth keeping.' } });
 
     content.focus();
     fireEvent.keyDown(content, { key: 'Escape' });
-    const question = await screen.findByRole('alertdialog', { name: 'Discard changes to this resource?' });
+    const question = await screen.findByRole('alertdialog', { name: 'Discard changes to this item?' });
     const keep = within(question).getByRole('button', { name: 'Keep editing' });
     const discard = within(question).getByRole('button', { name: 'Discard changes' });
     await waitFor(() => expect(keep).toHaveFocus());
@@ -528,8 +723,8 @@ describe('NewPostClient', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
-    fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    chooseItemType(/source assets/i);
 
     // The editor is a portal, so its file input lives outside the container.
     // A .json file is one browsers commonly hand over with no type at all.
@@ -584,8 +779,8 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
-    fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    chooseItemType(/source assets/i);
 
     const resourceInput = document.querySelector('input[type="file"].sr-only') as HTMLInputElement;
     fireEvent.change(resourceInput, {
@@ -599,7 +794,7 @@ describe('NewPostClient', () => {
 
     expect(await screen.findByText('good.json')).toBeInTheDocument();
     expect(await screen.findByRole('alert')).toHaveTextContent(/broken\.zip.*storage is temporarily unavailable/i);
-    expect(screen.getByRole('button', { name: /save resource/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /save item/i })).toBeEnabled();
   });
 
   it('keeps the resource editor open and unsaveable while a file uploads', async () => {
@@ -632,8 +827,8 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
-    fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    chooseItemType(/source assets/i);
 
     const resourceInput = document.querySelector('input[type="file"].sr-only') as HTMLInputElement;
     fireEvent.change(resourceInput, {
@@ -642,8 +837,8 @@ describe('NewPostClient', () => {
 
     expect(await screen.findByText('Uploading')).toBeInTheDocument();
     expect(screen.getByRole('dialog')).toHaveAttribute('aria-busy', 'true');
-    expect(screen.getByRole('button', { name: /close resource editor/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /save resource/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /close item editor/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /save item/i })).toBeDisabled();
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.getByRole('dialog')).toBeInTheDocument();
@@ -656,7 +851,7 @@ describe('NewPostClient', () => {
     expect(await screen.findByText('slow.png')).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByRole('dialog')).toHaveAttribute('aria-busy', 'false');
-      expect(screen.getByRole('button', { name: /save resource/i })).toBeEnabled();
+      expect(screen.getByRole('button', { name: /save item/i })).toBeEnabled();
     });
   });
 
@@ -700,8 +895,8 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
-    fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    chooseItemType(/source assets/i);
 
     const resourceInput = document.querySelector('input[type="file"].sr-only') as HTMLInputElement;
     fireEvent.change(resourceInput, {
@@ -723,7 +918,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /reference media/i }));
 
     const resourceInput = document.querySelector('input[type="file"].sr-only') as HTMLInputElement;
@@ -742,15 +937,16 @@ describe('NewPostClient', () => {
     const { container } = render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    const opener = screen.getByRole('button', { name: /add your first resource/i });
+    const opener = screen.getByRole('button', { name: /add your first item/i });
     opener.focus();
     fireEvent.click(opener);
 
     expect(container).toHaveAttribute('aria-hidden', 'true');
-    const closeButton = screen.getByRole('button', { name: /close resource editor/i });
+    const closeButton = screen.getByRole('button', { name: /close item editor/i });
     closeButton.focus();
     fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
-    expect(screen.getByRole('button', { name: /anything useful that does not fit above/i })).toHaveFocus();
+    // The picker's last stop is "More types" while the other five are folded.
+    expect(screen.getByRole('button', { name: 'More types' })).toHaveFocus();
 
     fireEvent.click(closeButton);
     expect(container).not.toHaveAttribute('aria-hidden');
@@ -801,9 +997,9 @@ describe('NewPostClient', () => {
       target: { value: 'A breakdown with a supporting still attached to it.' },
     });
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
-    fireEvent.click(screen.getByRole('button', { name: /anything useful that does not fit above/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Extras' } });
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    chooseItemType(/anything useful that does not fit above/i);
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'Extras' } });
 
     const resourceInput = document.querySelector('input[type="file"].sr-only') as HTMLInputElement;
     await act(async () => {
@@ -812,8 +1008,8 @@ describe('NewPostClient', () => {
       });
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'A supporting still from this breakdown.' },
     });
     fillRequiredTitle();
@@ -831,10 +1027,10 @@ describe('NewPostClient', () => {
     ]);
   });
 
-  // A bundle someone already paid for is frozen. Buyers keep the revision they
-  // bought either way, but the current version must not be editable underneath
-  // them, and the mobile composer has locked it for a while.
-  it('locks a sold resource package and leaves it out of the update payload', async () => {
+  // D1 (2026-10-27): a sold recipe is no longer frozen. Buyers keep the
+  // version they bought; the creator can still fix a typo, the price or an
+  // item, and the save sends the recipe like any other.
+  it('edits a recipe people have bought and sends it with the save', async () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
@@ -876,29 +1072,32 @@ describe('NewPostClient', () => {
       hasPaidOrders: true,
     }} />);
 
-    expect(screen.getByText(/purchased resources are protected/i)).toBeInTheDocument();
-    expect(screen.queryByRole('spinbutton', { name: /price in tokens/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /add your first resource/i })).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/public package summary, optional/i)).toBeDisabled();
-    expect(screen.getByLabelText(/package preview, required/i)).toBeDisabled();
+    expect(screen.queryByText(/protected/i)).not.toBeInTheDocument();
+    const price = screen.getByRole('spinbutton', { name: /price in credits/i });
+    expect(price).toHaveValue(900);
+    expect(screen.getByRole('button', { name: /^add item$/i })).toBeEnabled();
+    expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('The prompt and setup behind this image.');
 
-    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
+    fireEvent.change(price, { target: { value: '700' } });
+    fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    // Omitted rather than resent: the update path treats a missing key as
-    // "preserve what is stored".
     const payload = JSON.parse(String((fetchMock.mock.calls[1][1] as { body: string }).body));
-    expect(payload).not.toHaveProperty('resourceBundle');
+    expect(payload.resourceBundle).toMatchObject({
+      accessMode: 'paid',
+      priceUsdCents: 700,
+      previewText: 'The prompt and setup behind this image.',
+      resources: { allowRemix: false },
+    });
   });
 
   // An existing post made from a creation is saved through the post route
-  // like any other post; the publish route is for creating one. The sold
-  // package is still left out, since the update path treats a missing key as
-  // "preserve what is stored".
-  it('saves an existing sold generation post through the post route without resending its package', async () => {
+  // like any other post; the publish route is for creating one. A sold
+  // recipe goes with it (D1), with the remix value it was loaded with (S1).
+  it('saves an existing sold generation post through the post route, its recipe with it', async () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
@@ -969,7 +1168,7 @@ describe('NewPostClient', () => {
     const updateCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/posts/post-gen-sold-1');
     const payload = JSON.parse(String((updateCall?.[1] as { body: string }).body));
     expect(payload).toMatchObject({ title: 'A sold generated post', visibility: 'public' });
-    expect(payload).not.toHaveProperty('resourceBundle');
+    expect(payload.resourceBundle).toMatchObject({ accessMode: 'paid', priceUsdCents: 900, resources: { allowRemix: false } });
     expect(payload).not.toHaveProperty('mediaItems');
   });
 
@@ -1125,7 +1324,50 @@ describe('NewPostClient', () => {
     render(<NewPostClient initialPost={post} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /edit prompt or script/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /edit exact generation prompt/i })).toBeInTheDocument();
+    });
+  });
+
+  // S1 (2026-10-27): a creation post's recipe includes its Remix, so there is
+  // no switch for it. An edit sends back the value the recipe was loaded with.
+  it('says Remix comes with a creation post’s recipe and sends back the remix value it was loaded with', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [{
+          id: 'gen-7',
+          output_url: 'https://proxy.example.com/generated_images/user-1/gen-7.png',
+          category: 'image',
+          title: 'Venom hero',
+          description: '',
+          prompt: 'venom hero shot',
+          model: 'nano-banana-2',
+        }],
+      }),
+    });
+    enqueueResponse({
+      ok: true,
+      json: async () => ({ success: true, postId: 'post-gen-recipe-1', visibility: 'public' }),
+    });
+
+    render(<NewPostClient initialPost={createGenerationRecipePost()} />);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/generations'))).toBe(true));
+
+    expect(screen.getByText('Remix comes with this recipe: people who unlock it can remix your post.')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /remix/i })).not.toBeInTheDocument();
+    // No stored preview: the suggestion reads the items.
+    expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt and reference media.');
+
+    fillRequiredTitle();
+    fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-gen-recipe-1', expect.objectContaining({ method: 'PUT' })));
+    const updateCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/posts/post-gen-recipe-1');
+    const payload = JSON.parse(String((updateCall?.[1] as { body: string }).body));
+    expect(payload.resourceBundle).toMatchObject({
+      accessMode: 'free',
+      summary: 'Includes the prompt and reference media.',
+      previewText: 'Includes the prompt and reference media.',
+      resources: { allowRemix: true },
     });
   });
 
@@ -1188,10 +1430,10 @@ describe('NewPostClient', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /edit secret client launch prompt/i }));
     expect(screen.getByText(/older private label stays hidden/i)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), {
+    fireEvent.change(screen.getByLabelText(/item title, required/i), {
       target: { value: 'Reusable launch prompt' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
     fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
 
     await waitFor(() => {
@@ -1204,7 +1446,10 @@ describe('NewPostClient', () => {
     });
   });
 
-  it('exposes and preserves distinct legacy summary and preview copy', async () => {
+  // S6: a recipe saved with a separate summary opens with the one preview
+  // starting from that summary (what buyers saw first), and the save sends
+  // the preview as both.
+  it('starts the one Recipe preview from a stored summary and sends it as the preview', async () => {
     const initialPost = createLegacyPrivateResourcePost();
     initialPost.resourceBundle = {
       ...initialPost.resourceBundle,
@@ -1222,25 +1467,26 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient initialPost={initialPost} />);
 
-    const summary = screen.getByLabelText(/public package summary, optional/i);
-    const preview = screen.getByLabelText(/package preview, required/i);
-    expect(summary).toHaveValue('A short public summary retained from the existing listing.');
-    expect(preview).toHaveValue('A separate detailed preview retained with the package.');
+    expect(screen.queryByLabelText(/summary/i)).not.toBeInTheDocument();
+    const preview = screen.getByLabelText(/recipe preview, required/i);
+    expect(preview).toHaveValue('A short public summary retained from the existing listing.');
 
     fireEvent.change(preview, {
-      target: { value: 'An updated package preview that remains distinct from its summary.' },
+      target: { value: 'An updated recipe preview that replaces the old summary.' },
     });
     fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const payload = JSON.parse(String((fetchMock.mock.calls[1][1] as { body: string }).body));
     expect(payload.resourceBundle).toMatchObject({
-      summary: 'A short public summary retained from the existing listing.',
-      previewText: 'An updated package preview that remains distinct from its summary.',
+      summary: 'An updated recipe preview that replaces the old summary.',
+      previewText: 'An updated recipe preview that replaces the old summary.',
     });
   });
 
-  it('places listing-quality feedback beside a non-empty summary that shadows preview', async () => {
+  // The listing rule (18 characters, no stand-in words) speaks under the one
+  // field it reads, in the app's words.
+  it('puts listing-quality feedback under the Recipe preview', async () => {
     const initialPost = createLegacyPrivateResourcePost();
     initialPost.resourceBundle = {
       ...initialPost.resourceBundle,
@@ -1249,15 +1495,15 @@ describe('NewPostClient', () => {
     };
 
     render(<NewPostClient initialPost={initialPost} />);
+    const preview = screen.getByLabelText(/recipe preview, required/i);
+    expect(preview).toHaveValue('test');
     fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
 
-    const summary = screen.getByLabelText(/public package summary, optional/i);
-    const preview = screen.getByLabelText(/package preview, required/i);
-    await waitFor(() => expect(summary).toHaveAttribute('aria-invalid', 'true'));
-    expect(preview).toHaveAttribute('aria-invalid', 'false');
-    const errorId = summary.getAttribute('aria-describedby');
-    expect(errorId).toBeTruthy();
-    expect(document.getElementById(errorId!)).toHaveTextContent(/useful preview or summary/i);
+    await waitFor(() => expect(preview).toHaveAttribute('aria-invalid', 'true'));
+    expect(preview).toHaveAccessibleDescription(expect.stringContaining(
+      'Write a recipe preview of at least 18 characters that says what people get.',
+    ));
+    expect(screen.getByRole('alert')).toHaveTextContent('Write a recipe preview of at least 18 characters that says what people get.');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1265,12 +1511,12 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    const opener = screen.getByRole('button', { name: /add your first resource/i });
+    const opener = screen.getByRole('button', { name: /add your first item/i });
     opener.focus();
 
     fireEvent.click(opener);
     expect(screen.getByRole('dialog')).toHaveFocus();
-    fireEvent.click(screen.getByRole('button', { name: /close resource editor/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close item editor/i }));
     expect(opener).toHaveFocus();
   });
 
@@ -1278,8 +1524,8 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
-    fireEvent.click(screen.getByRole('button', { name: /source assets/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    chooseItemType(/source assets/i);
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     expect(input.accept).toContain('.workflow');
@@ -1288,76 +1534,14 @@ describe('NewPostClient', () => {
     expect(input.accept).not.toContain('*/*');
   });
 
-  // A sold bundle that grants remix and nothing else hydrates into zero cards,
-  // so validating it would fail a package the composer never sends -- blocking
-  // the caption and visibility edits that are still allowed.
-  it('saves a sold remix-only package without validating its contents', async () => {
-    enqueueResponse({
-      ok: true,
-      json: async () => ({
-        success: true,
-        postId: 'post-sold-remix',
-        visibility: 'public',
-      }),
-    });
-
+  // S1: Remix is no item of its own any more; a recipe needs at least one.
+  // A stored recipe that only granted remix is asked for an item (or No
+  // recipe) when it is saved, and nothing is sent until then.
+  it('asks a recipe that only granted remix for an item before it is saved', async () => {
     render(<NewPostClient initialPost={{
-      id: 'post-sold-remix',
+      id: 'post-remix-only',
       generationId: null,
-      title: 'A sold remix grant with a real title',
-      description: '',
-      prompt: '',
-      body: '',
-      visibility: 'public',
-      category: 'image',
-      postFormat: 'media',
-      sourceKind: 'external',
-      sourceTool: 'Pika Labs',
-      sourceToolSlug: 'pika-labs',
-      sourceTools: [{ toolLabel: 'Pika Labs', toolSlug: 'pika-labs' }],
-      mediaUrl: '/proof.png',
-      mediaKind: 'image',
-      archivedAt: null,
-      resourceBundle: {
-        accessMode: 'paid',
-        priceUsdCents: 900,
-        previewText: 'Remix this creation directly.',
-        resources: {
-          promptText: null,
-          notesMarkdown: null,
-          workflowShareUrl: null,
-          attachments: [],
-          allowRemix: true,
-        },
-      },
-      hasPaidOrders: true,
-    }} />);
-
-    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    const payload = JSON.parse(String((fetchMock.mock.calls[1][1] as { body: string }).body));
-    expect(payload).not.toHaveProperty('resourceBundle');
-  });
-
-  it('saves an unsold remix-only package without requiring a card', async () => {
-    enqueueResponse({
-      ok: true,
-      json: async () => ({
-        success: true,
-        postId: 'post-unsold-remix',
-        visibility: 'private',
-      }),
-    });
-
-    render(<NewPostClient initialPost={{
-      id: 'post-unsold-remix',
-      generationId: null,
-      title: 'An unsold remix grant with a real title',
+      title: 'A remix grant with a real title',
       description: '',
       prompt: '',
       body: '',
@@ -1383,22 +1567,15 @@ describe('NewPostClient', () => {
           allowRemix: true,
         },
       },
-      hasPaidOrders: false,
+      hasPaidOrders: true,
+      resourceBundleBuyerCount: 2,
     }} />);
 
-    expect(screen.getByText(/direct remix access is ready/i)).toBeInTheDocument();
+    expect(screen.getByText('Add at least one item.')).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button', { name: /^make private/i })[0]);
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    const payload = JSON.parse(String((fetchMock.mock.calls[1][1] as { body: string }).body));
-    expect(payload.resourceBundle).toMatchObject({
-      accessMode: 'paid',
-      priceUsdCents: 900,
-      resources: { allowRemix: true, items: [] },
-    });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Add at least one item to the recipe.');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('flags but does not block a grandfathered over-limit title loaded into the editor', async () => {
@@ -1794,17 +1971,17 @@ describe('NewPostClient', () => {
 
     // A package is a list of cards now: pick a type, fill it, save it.
     expect(screen.getByText(/what people receive/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), {
+    fireEvent.change(screen.getByLabelText(/item title, required/i), {
       target: { value: 'Hook prompt' },
     });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'Use a before\/after hook and keep the CTA visible in frame.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
 
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'The exact hook prompt behind this post.' },
     });
     fillRequiredTitle();
@@ -1871,26 +2048,26 @@ describe('NewPostClient', () => {
 
     expect(screen.queryByText(/public post required/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
-    fireEvent.click(screen.getByRole('button', { name: /external link/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), {
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    chooseItemType(/external link/i);
+    fireEvent.change(screen.getByLabelText(/item title, required/i), {
       target: { value: 'Prompt doc' },
     });
     fireEvent.change(screen.getByLabelText(/^link$/i), {
       target: { value: 'https://ugc.example.com/doc' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
 
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'A linked prompt document you can reuse.' },
     });
     // Prices are entered in tokens now, and price_usd_cents stores the token
     // count directly, so 1200 tokens is what the payload should carry.
-    fireEvent.change(screen.getByRole('spinbutton', { name: /price in tokens/i }), {
+    fireEvent.change(screen.getByRole('spinbutton', { name: /price in credits/i }), {
       target: { value: '1200' },
     });
-    // The creator's 85% share is stated outright, the way mobile states it.
-    expect(screen.getByText(/You earn ~1020 tokens/i)).toBeInTheDocument();
+    // What buyers pay and the creator's 85% of it, in money (A-F5).
+    expect(screen.getByText('Buyers pay $12.00 · You earn ~$10.20 (85%) · Payouts from $100')).toBeInTheDocument();
     fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
 
@@ -1943,23 +2120,23 @@ describe('NewPostClient', () => {
     });
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
 
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Hook' } });
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'Hook' } });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'Open with the before state, then reveal the product.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
 
-    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^add item$/i }));
     fireEvent.click(screen.getByRole('button', { name: /guide or notes/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Timing' } });
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'Timing' } });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'Keep this first section under seven seconds.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
 
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'The hook prompt plus the timing notes behind it.' },
     });
     fillRequiredTitle();
@@ -2055,16 +2232,16 @@ describe('NewPostClient', () => {
     expect(readCards()).toHaveLength(2);
 
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Second shot prompt' } });
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'Second shot prompt' } });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'The prompt that produced the second image only.' },
     });
     fireEvent.click(screen.getByRole('button', { name: /apply to media 2/i }));
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
 
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'The prompt behind the second output.' },
     });
     fillRequiredTitle();
@@ -2148,16 +2325,16 @@ describe('NewPostClient', () => {
     });
 
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'New shot prompt' } });
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'New shot prompt' } });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'The prompt behind the image added during this edit.' },
     });
     fireEvent.click(screen.getByRole('button', { name: /apply to media 2/i }));
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
 
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'The prompt behind the newly added output.' },
     });
     fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
@@ -2197,14 +2374,14 @@ describe('NewPostClient', () => {
     const readCards = renderComposerWithTwoImages();
 
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Second shot prompt' } });
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'Second shot prompt' } });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'The prompt that produced the second image only.' },
     });
     fireEvent.click(screen.getByRole('button', { name: /apply to media 2/i }));
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
 
     expect(screen.getByText(/1 selected output/i)).toBeInTheDocument();
 
@@ -2212,7 +2389,7 @@ describe('NewPostClient', () => {
     fireEvent.click(screen.getByRole('button', { name: /remove media 2/i }));
     expect(readCards()).toHaveLength(1);
 
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'The prompt behind this output.' },
     });
     fillRequiredTitle();
@@ -2245,14 +2422,14 @@ describe('NewPostClient', () => {
 
     renderComposerWithTwoImages();
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Second shot prompt' } });
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'Second shot prompt' } });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'The prompt that originally applied to the second output.' },
     });
     fireEvent.click(screen.getByRole('button', { name: /apply to media 2/i }));
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
     expect(screen.getByText(/1 selected output/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
@@ -2262,7 +2439,7 @@ describe('NewPostClient', () => {
       target: { value: 'A useful text proof with enough detail for the community to learn from.' },
     });
 
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'The reusable prompt supporting this written breakdown.' },
     });
     fillRequiredTitle();
@@ -2282,19 +2459,48 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
     fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Keepable prompt' } });
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'Keepable prompt' } });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'A resource that should not disappear on the first click.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /remove keepable prompt/i }));
     expect(screen.getByText('Keepable prompt')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^keep$/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^remove$/i }));
     expect(screen.queryByText('Keepable prompt')).not.toBeInTheDocument();
+  });
+
+  // H2: removing the last item used to switch the recipe to No recipe by
+  // itself (and an edit's save then deleted it). The recipe stays chosen and
+  // Publish asks for an item instead, as the app does.
+  it('keeps the recipe chosen when its last item goes, and asks for an item at Publish', async () => {
+    render(<NewPostClient />);
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
+      target: { value: 'A note that stands on its own for the community.' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
+    fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
+    fireEvent.change(screen.getByLabelText(/^protected content$/i), {
+      target: { value: 'A reusable prompt for the hook.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
+    fireEvent.click(screen.getByRole('button', { name: /remove prompt or script/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^remove$/i }));
+
+    expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeChecked();
+    expect(screen.getByRole('button', { name: /add your first item/i })).toBeInTheDocument();
+    expect(screen.getByText('Add at least one item.')).toBeInTheDocument();
+    fillRequiredTitle();
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Add at least one item to the recipe.');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   // Every post now needs a title, so tests that submit have to name the post
@@ -2309,6 +2515,16 @@ describe('NewPostClient', () => {
 
   function fillRequiredTitle(value = 'Neon skyline color study') {
     fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), { target: { value } });
+  }
+
+  // S8: five of the nine item types wait behind "More types" in the picker.
+  function chooseItemType(name: RegExp) {
+    const picker = within(screen.getByRole('dialog'));
+    const more = picker.getByRole('button', { name: 'More types' });
+    if (more.getAttribute('aria-expanded') === 'false' && !picker.queryByRole('button', { name })) {
+      fireEvent.click(more);
+    }
+    fireEvent.click(picker.getByRole('button', { name }));
   }
 
   function renderComposerWithTwoImages() {
@@ -2641,24 +2857,26 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    // The prefill lands as cards in the package list, not as loose textareas.
-    expect(await screen.findByText('Prompt or script')).toBeInTheDocument();
+    // The prefill lands as items in the list, not as loose textareas; the
+    // prompt is the same item "Include exact prompt" makes.
+    expect(await screen.findByText('Exact generation prompt')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-paid-1&limit=1', {
       headers: { Authorization: 'Bearer test-token' },
     });
     expect(screen.getByText(/saved prompt, reusable setup notes, and remix access are ready/i)).toBeInTheDocument();
-    // The saved generation seeds cards rather than loose fields, and remix
-    // permission rides on the bundle-level toggle.
-    expect(screen.getByRole('checkbox', { name: /allow direct remix/i })).toBeChecked();
-    expect(screen.getByText('Prompt or script')).toBeInTheDocument();
+    // The saved generation seeds items rather than loose fields. Remix comes
+    // with the recipe (S1): there is no switch, and a new recipe sends false.
+    expect(screen.queryByRole('checkbox', { name: /remix/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Remix comes with this recipe: people who unlock it can remix your post.')).toBeInTheDocument();
     expect(screen.getByText('Guide or notes')).toBeInTheDocument();
+    expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt and a written guide.');
 
-    const priceInput = screen.getByRole('spinbutton', { name: /price in tokens/i });
+    const priceInput = screen.getByRole('spinbutton', { name: /price in credits/i });
     await waitFor(() => {
       expect(priceInput).toHaveFocus();
     });
 
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'The saved prompt and setup behind this image.' },
     });
     fillRequiredTitle();
@@ -2677,11 +2895,11 @@ describe('NewPostClient', () => {
       resourceBundle: {
         accessMode: 'paid',
         priceUsdCents: 900,
-        resources: { allowRemix: true },
+        resources: { allowRemix: false },
       },
     });
     expect(payload.resourceBundle.resources.items).toMatchObject([
-      { type: 'prompt', textContent: 'A creator-style product image with warm natural light.' },
+      { type: 'prompt', title: 'Exact generation prompt', textContent: 'A creator-style product image with warm natural light.' },
       { type: 'note', textContent: 'Saved generation setup\nModel: Nano Banana 2.0' },
     ]);
   });
@@ -2715,7 +2933,7 @@ describe('NewPostClient', () => {
 
     expect(await screen.findByText(/does not have enough saved inputs to auto-fill a paid recipe yet/i)).toBeInTheDocument();
     // Nothing to seed, so the package starts empty rather than half-filled.
-    expect(screen.getByRole('button', { name: /add your first resource/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add your first item/i })).toBeInTheDocument();
   });
 
   it('opens the edit flow from creations in resource mode and focuses the price field', async () => {
@@ -2754,11 +2972,51 @@ describe('NewPostClient', () => {
     expect(screen.getAllByText(/you came from my studio/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/this recipe will save as a draft/i).length).toBeGreaterThan(0);
 
-    const priceInput = screen.getByRole('spinbutton', { name: /price in tokens/i });
+    const priceInput = screen.getByRole('spinbutton', { name: /price in credits/i });
     await waitFor(() => {
       expect(priceInput).toHaveFocus();
     });
     expect(priceInput).not.toBeDisabled();
+  });
+
+  // A-F17: Studio's "Add recipe" chose Paid and focused the price of a post
+  // with nothing to sell yet. It now chooses nothing and focuses nothing.
+  it('opens Studio’s Add recipe with no mode chosen, no Studio note and nothing focused', async () => {
+    searchParamsState.value = new URLSearchParams({ recipe: 'add', from: 'creations' });
+
+    render(
+      <NewPostClient
+        initialPost={{
+          id: 'post-add-recipe-1',
+          generationId: null,
+          title: 'Private proof',
+          description: '',
+          prompt: '',
+          body: 'A private proof post.',
+          visibility: 'private',
+          category: 'text',
+          postFormat: 'text',
+          sourceKind: 'manual',
+          sourceTool: null,
+          mediaUrl: null,
+          mediaKind: null,
+          archivedAt: null,
+          resourceBundle: { accessMode: 'none' },
+          hasPaidOrders: false,
+        }}
+      />
+    );
+
+    expect(screen.getByRole('heading', { name: 'Add a recipe to this post' })).toBeInTheDocument();
+    expect(screen.queryByText(/you came from my studio/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+    const priceInput = screen.getByRole('spinbutton', { name: /price in credits/i });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(priceInput).not.toHaveFocus();
   });
 
   it('keeps the seller dashboard as the way back when a listing is edited from it', () => {
@@ -2887,14 +3145,14 @@ describe('NewPostClient', () => {
     });
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'Setup' } });
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'Setup' } });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'Use a simple private-only setup.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
-    fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
+    fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
       target: { value: 'A private-only setup you can reuse later.' },
     });
     fillRequiredTitle();
@@ -4695,13 +4953,13 @@ describe('NewPostClient', () => {
       expect(includePrompt).not.toBeChecked();
       fireEvent.click(includePrompt);
       expect(includePrompt).toBeChecked();
-      expect(screen.getByText('Prompt or script')).toBeInTheDocument();
+      expect(screen.getByText('Exact generation prompt')).toBeInTheDocument();
       fireEvent.click(includePrompt);
-      expect(screen.queryByText('Prompt or script')).not.toBeInTheDocument();
+      expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
       fireEvent.click(includePrompt);
 
       fireEvent.click(screen.getByRole('checkbox', { name: /include creation references/i }));
-      fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+      fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
         target: { value: 'The exact prompt and the product reference behind this still.' },
       });
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
@@ -4741,7 +4999,7 @@ describe('NewPostClient', () => {
       fireEvent.click(screen.getByRole('checkbox', { name: /include exact prompt/i }));
       expect(screen.queryByRole('checkbox', { name: /include creation references/i })).not.toBeInTheDocument();
 
-      fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+      fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
         target: { value: 'The exact prompt behind this window display still.' },
       });
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
@@ -4750,6 +5008,112 @@ describe('NewPostClient', () => {
       const payload = JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body));
       expect(payload).not.toHaveProperty('includeGenerationReferences');
     });
+
+    // A-F16: the app's exact-prompt item, and the preview written from it.
+    it('makes the exact prompt the app’s item and writes the preview from it', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({ input_media: [] });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-recipe-3',
+          showcasePath: '/showcase/post-recipe-3',
+          resourceBundlePath: '/showcase/post-recipe-3#recipe',
+          visibility: 'public',
+          resourceBundleStatus: 'published',
+        }),
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
+      });
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /include exact prompt/i }));
+      expect(screen.getByText('Add the original generation prompt to the recipe.')).toBeInTheDocument();
+      expect(screen.getByText('Exact generation prompt')).toBeInTheDocument();
+      expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt.');
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      const payload = JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body));
+      expect(payload.resourceBundle).toMatchObject({
+        accessMode: 'free',
+        summary: 'Includes the prompt.',
+        previewText: 'Includes the prompt.',
+        resources: { allowRemix: false },
+      });
+      expect(payload.resourceBundle.resources.sections).toMatchObject([
+        { title: 'Exact generation prompt', publicTitle: 'Exact generation prompt', resourceType: 'prompt' },
+      ]);
+    });
+
+    // A-F9: the creation's saved inputs are what some recipes sell. Ticked on
+    // their own they count as the recipe's item, listed where the items are.
+    it('counts the creation’s references as an item and lists them with the items', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation();
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-recipe-4',
+          showcasePath: '/showcase/post-recipe-4',
+          resourceBundlePath: '/showcase/post-recipe-4#recipe',
+          visibility: 'public',
+          resourceBundleStatus: 'published',
+        }),
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
+      });
+      fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+      expect(screen.queryByText('Creation references · 1 file')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('checkbox', { name: /include creation references/i }));
+      expect(screen.getByText('Creation references · 1 file')).toBeInTheDocument();
+      expect(screen.getByText('1 item ready')).toBeInTheDocument();
+      // They read as reference media in the suggestion, as the app writes it.
+      expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes reference media.');
+      fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
+        target: { value: 'The product reference behind this window display still.' },
+      });
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      const payload = JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body));
+      expect(payload).toMatchObject({
+        generationId: 'gen-recipe-1',
+        includeGenerationReferences: true,
+        resourceBundle: {
+          accessMode: 'paid',
+          priceUsdCents: 900,
+          previewText: 'The product reference behind this window display still.',
+          resources: { allowRemix: false, items: [] },
+        },
+      });
+    });
+  });
+
+  // A-F4/A-F5: a creator prices in credits, the buyers' unit, and sees what a
+  // price is in money, their 85% of it and when it can be paid out.
+  it('prices a recipe in credits and says what buyers pay and the creator earns', () => {
+    render(<NewPostClient />);
+    const recipe = within(document.getElementById('recipe')!);
+
+    expect(recipe.getByRole('radio', { name: /paid recipe/i })).toHaveAccessibleName(/set a credit price/i);
+    fireEvent.click(recipe.getByRole('radio', { name: /paid recipe/i }));
+    const price = recipe.getByRole('spinbutton', { name: 'Price in credits' });
+    expect(price).toHaveValue(900);
+    expect(recipe.getByText('Buyers pay $9.00 · You earn ~$7.65 (85%) · Payouts from $100')).toBeInTheDocument();
+    expect(recipe.getByText('Before buying, people see your recipe preview and item titles — never what’s inside.')).toBeInTheDocument();
+    fireEvent.change(price, { target: { value: '50' } });
+    expect(recipe.getByText('Buyers pay $0.50 · You earn ~$0.43 (85%) · Payouts from $100')).toBeInTheDocument();
+    expect(recipe.getByText(/under 100 credits, buyers unlock with credits/i)).toBeInTheDocument();
+    expect(recipe.queryByText(/token/i)).not.toBeInTheDocument();
   });
 
   it('shows its own price rule instead of leaving an off-step price to the browser', async () => {
@@ -4761,19 +5125,19 @@ describe('NewPostClient', () => {
       target: { value: 'A text post long enough to pass the public quality rule.' },
     });
     fillRequiredTitle();
-    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
-    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'The prompt' } });
+    fireEvent.change(screen.getByLabelText(/item title, required/i), { target: { value: 'The prompt' } });
     fireEvent.change(screen.getByLabelText(/^protected content$/i), {
       target: { value: 'The exact prompt behind this post.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save item/i }));
     // 95 fails the input's own step=10, which blocked submit with a browser
     // bubble before the composer could say what it wants.
-    fireEvent.change(screen.getByRole('spinbutton', { name: /price in tokens/i }), { target: { value: '95' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: /price in credits/i }), { target: { value: '95' } });
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
-    expect(await screen.findByText(/paid unlocks start at 10 tokens and go up in 10-token steps/i)).toBeInTheDocument();
+    expect(await screen.findByText('Paid recipes start at 10 credits, in steps of 10.')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

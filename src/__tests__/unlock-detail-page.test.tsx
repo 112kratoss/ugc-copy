@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import UnlockDetailPage from '@/app/unlocks/[postId]/page';
@@ -8,6 +8,7 @@ const redirectMock = vi.hoisted(() => vi.fn((target: string) => {
 }));
 const getServerAuthStateMock = vi.hoisted(() => vi.fn());
 const getViewerUnlockDetailMock = vi.hoisted(() => vi.fn());
+const getViewerUnlockRemovalMock = vi.hoisted(() => vi.fn<(input: unknown) => Promise<'moderation' | null>>(async () => null));
 const unlockDetailProps = vi.hoisted(() => vi.fn());
 
 vi.mock('next/navigation', () => ({
@@ -20,6 +21,7 @@ vi.mock('@/lib/supabase-server', () => ({
 
 vi.mock('@/lib/viewer-unlock-detail', () => ({
   getViewerUnlockDetail: (input: unknown) => getViewerUnlockDetailMock(input),
+  getViewerUnlockRemoval: (input: unknown) => getViewerUnlockRemovalMock(input),
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
@@ -109,6 +111,20 @@ describe('UnlockDetailPage', () => {
 
     expect(redirectMock).not.toHaveBeenCalled();
     expect(unlockDetailProps).toHaveBeenCalledWith({ detail: tombstonedDetail });
+  });
+
+  // D2 (2026-10-27): a take-down made the purchase vanish without a word,
+  // the link landing on the library as if nothing had happened (B-F12).
+  it('says a recipe removed by moderation was removed, where it used to send the buyer away', async () => {
+    getViewerUnlockDetailMock.mockResolvedValue(null);
+    getViewerUnlockRemovalMock.mockResolvedValueOnce('moderation');
+
+    render(await openUnlock());
+
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(screen.getByText('This recipe was removed for breaking the community rules.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Unlocked recipes' })).toHaveAttribute('href', '/creations?view=unlocks');
+    expect(getViewerUnlockRemovalMock).toHaveBeenCalledWith(expect.objectContaining({ unlockId: UNLOCK_ID, viewerUserId: 'buyer-1' }));
   });
 
   it('sends an unlock this buyer does not hold back to the library', async () => {

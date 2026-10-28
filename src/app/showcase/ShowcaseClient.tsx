@@ -173,7 +173,7 @@ function formatShowcaseDate(value: string): string {
 
 const UNLOCK_FILTERS: Array<{ id: ShowcaseUnlockFilter; label: string }> = [
     { id: 'all', label: 'All' },
-    { id: 'with-unlock', label: 'Unlocks' },
+    { id: 'with-unlock', label: 'Recipes' },
     { id: 'free', label: 'Free' },
     { id: 'paid', label: 'Paid' },
 ];
@@ -644,7 +644,8 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
                     <div className="flex flex-wrap items-center gap-1.5 mt-1">
                         {item.asset ? (
                             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/10 bg-emerald-500/[0.06] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                                {getAssetAccessLabel(item.asset)}
+                                {/* "Unlocked" or "Your recipe" in place of a price the viewer need not pay. */}
+                                {getAssetAccessLabel(item.asset, { isOwner: isOwnPost })}
                             </span>
                         ) : null}
                         {resourceKinds.map((kind) => (
@@ -2171,14 +2172,8 @@ export default function ShowcaseClient({
                         </p>
                     </div>
 
+                    {/* A post starts from the top bar's Create menu. */}
                     <div className="flex flex-wrap gap-2">
-                        <Link
-                            href="/post/new?from=community&returnTo=%2Fshowcase"
-                            prefetch={false}
-                            className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
-                        >
-                            Share a post
-                        </Link>
                         <Link
                             href="/marketplace"
                             prefetch={false}

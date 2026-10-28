@@ -278,7 +278,7 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       ...(publicMediaPreconnectHeaders.length > 0
-        ? ["/", "/home", "/feed", "/showcase", "/marketplace"].map((source) => ({
+        ? ["/", "/home", "/showcase", "/marketplace"].map((source) => ({
             source,
             headers: publicMediaPreconnectHeaders,
           }))

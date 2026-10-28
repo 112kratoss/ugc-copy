@@ -198,7 +198,6 @@ describe('Anonymous home cacheability', () => {
       offset: 0,
     }));
     expect(feedClientPropsMock).toHaveBeenCalledWith(expect.objectContaining({
-      variant: 'embedded',
       initialChipId: 'for-you',
       // The page cannot read `?chip=`; the client switches to the lane it names.
       laneFromUrl: true,
@@ -238,14 +237,15 @@ describe('Anonymous home cacheability', () => {
     }));
   });
 
-  it('keeps the shelf, sign-in rail, quick starts, and legal footer', async () => {
+  it('keeps the shelf, sign-in rail, and legal footer', async () => {
     const { default: Home } = await import('@/app/page');
 
     const html = await renderPageToHtml(<Home />);
 
     expect(html).toContain('Make this');
     expect(html).toContain('Sign in');
-    expect(html).toContain('Quick starts');
+    // The top bar's Create menu opens the tools: the rail no longer lists them.
+    expect(html).not.toContain('Quick starts');
     expect(html).toContain('application/ld+json');
     expect(html).toContain('Child safety');
   });
@@ -338,16 +338,11 @@ describe('Anonymous home cacheability', () => {
     container.innerHTML = html;
 
     const shelfLinks = [...container.querySelectorAll('.home-shelf a')];
-    const quickStartImage = [...container.querySelectorAll('a')]
-      .find((link) => (
-        link.getAttribute('href') === '/create-image' && !link.closest('.home-shelf')
-      ));
 
     // The signed-out landing does not warm routes nobody asked for: every
-    // shelf card opens a create page, and the quick starts name the same tools.
+    // shelf card opens a create page.
     expect(shelfLinks.length).toBeGreaterThan(SHELF.length);
     expect(shelfLinks.every((link) => link.getAttribute('data-prefetch') === 'false')).toBe(true);
-    expect(quickStartImage).toHaveAttribute('data-prefetch', 'false');
   });
 
   it('hands the lane to the client when the feed is unavailable', async () => {

@@ -13,6 +13,7 @@ import {
 } from '@/lib/mobile-notifications';
 import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
 import { recordPostResourceBundlePurchaseFeedEvent } from '@/lib/post-resource-bundle-order-service';
+import { formatPostResourceCreditAmount } from '@/lib/post-resource-bundles';
 import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
   fetchWithProviderTimeout,
@@ -1122,10 +1123,13 @@ export async function completeMobilePostResourceUnlock({
   });
 }
 
+export const RESOURCE_PRICE_CHANGED_CODE = 'RESOURCE_PRICE_CHANGED';
+
 export async function unlockPostResourceBundleWithCredits({
   adminSupabase,
   userId,
   postId,
+  expectedPriceCredits,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
   notifyPostResourceUnlockCompleted: notifyUnlockCompleted = notifyPostResourceUnlockCompleted,
   recordPurchaseFeedEvent = recordPostResourceBundlePurchaseFeedEvent,
@@ -1134,6 +1138,12 @@ export async function unlockPostResourceBundleWithCredits({
   adminSupabase: SupabaseClient;
   userId: string;
   postId: string;
+  /**
+   * The price the buyer confirmed. The RPC compares it with the live price
+   * under the bundle's row lock and spends nothing when they differ. Clients
+   * from before 2026-10-27 send none and are charged the live price.
+   */
+  expectedPriceCredits?: number;
   invalidateMarketplaceResourceListCache?: () => void;
   notifyPostResourceUnlockCompleted?: typeof notifyPostResourceUnlockCompleted;
   recordPurchaseFeedEvent?: typeof recordPostResourceBundlePurchaseFeedEvent;
@@ -1146,6 +1156,9 @@ export async function unlockPostResourceBundleWithCredits({
   const { data, error } = await adminSupabase.rpc('unlock_post_resource_bundle_with_credits', {
     p_user_id: userId,
     p_post_id: postId,
+    // Sent only when the client confirmed one, so a call without it is the
+    // call every earlier build makes.
+    ...(expectedPriceCredits === undefined ? {} : { p_expected_credit_cost: expectedPriceCredits }),
   });
 
   if (error || !isRecord(data)) {
@@ -1168,6 +1181,21 @@ export async function unlockPostResourceBundleWithCredits({
 
   if (status === 'not_paid') {
     throw new MobileCommerceError('This post unlock does not require paid access.', 400);
+  }
+
+  // The creator repriced the recipe after the buyer saw it (recipe audit H4):
+  // nothing was spent, and the client shows the new price to confirm again.
+  if (status === 'price_changed') {
+    throw new MobileCommerceError(
+      `The price changed to ${formatPostResourceCreditAmount(creditCost)}.`,
+      409,
+      status,
+      {
+        success: false,
+        code: RESOURCE_PRICE_CHANGED_CODE,
+        priceCredits: creditCost,
+      },
+    );
   }
 
   if (status === 'insufficient_credits') {

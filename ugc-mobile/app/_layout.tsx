@@ -25,6 +25,7 @@ import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome'
 import { OverlayHost } from '@/components/overlay-host';
 import { PublicIdentitySheetHost } from '@/components/public-identity-sheet';
 import { SaverNoticeBar, SaverNoticeSync } from '@/components/saver-notice-bar';
+import { RecipeUnlockedNotice } from '@/components/recipe-unlocked-notice';
 import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
@@ -363,10 +364,10 @@ function RootLayoutNav() {
                     `CreatorTopBar` in components/creator-profile-screen.tsx). */}
                 <Stack.Screen name="creators/[username]" options={{ title: 'Creator', headerShown: !isAppleZoomAvailable() }} />
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Recipe' }} />
-                <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Your Recipe' }} />
+                <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Recipe' }} />
                 <Stack.Screen name="edit-profile" options={{ headerShown: false, presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
                 <Stack.Screen name="seller-dashboard" options={{ title: 'Recipe Sales' }} />
-                <Stack.Screen name="unlocks" options={{ title: 'Your Recipes' }} />
+                <Stack.Screen name="unlocks" options={{ title: 'Unlocked' }} />
                 <Stack.Screen name="credit-history" options={{ title: 'Credit History' }} />
                 <Stack.Screen name="invite" options={{ title: 'Invite & Earn' }} />
                 <Stack.Screen name="r/[code]" options={{ title: 'Your Invite' }} />
@@ -380,6 +381,9 @@ function RootLayoutNav() {
                 {/* The one-line notice at an account's first save, above every
                     screen and in the app's own window (lib/saver-notice.ts). */}
                 <SaverNoticeBar />
+                {/* "Recipe unlocked", with the way to Unlocked recipes, after any
+                    unlock (lib/recipe-unlocked-notice.ts). */}
+                <RecipeUnlockedNotice />
                 {/* Above every screen: the flight a tapped tile's picture makes
                     to the full screen and back, which no screen change can
                     interrupt. Nothing is rendered unless a post is opening or

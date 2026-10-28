@@ -111,14 +111,25 @@ function buildGeneratedPaywallComposerPath(generationId: string): string {
  * loads the stored bundle. The quick publish modal is for first publish only:
  * it rebuilds the bundle from the generation prefill and would replace a
  * hand-built recipe with the automatic one.
+ *
+ * "Add recipe" (a post without one) opens the editor at its recipe with no
+ * mode chosen and no field focused, headed "Add a recipe to this post": it
+ * used to choose Paid and put the cursor in the price before there was
+ * anything to sell (A-F17). "Manage recipe" opens at the recipe's own mode
+ * with its price focused.
  */
 export function buildPostRecipeManagementPath(post: {
   id: string;
   bundle: { accessMode: 'free' | 'paid' } | null;
 }): string {
-  const resourceMode = post.bundle?.accessMode ?? 'paid';
+  if (!post.bundle) {
+    return `/post/${post.id}/edit?${buildCreationsQuery({
+      recipe: 'add',
+      from: 'creations',
+    })}#recipe`;
+  }
   return `/post/${post.id}/edit?${buildCreationsQuery({
-    resourceMode,
+    resourceMode: post.bundle.accessMode,
     focus: 'price',
     from: 'creations',
   })}#recipe`;
@@ -308,4 +319,22 @@ export function resolveCreationWorkspaceCardState(
       href: buildCreationOpenPostPath(linkedPost),
     },
   };
+}
+
+export type CreationMediaFilter = 'all' | 'images' | 'videos' | 'audio';
+
+/**
+ * Studio's media filters, with their counts. A kind with nothing in it is no
+ * filter ("Audio (0)" could only ever show nothing), except the one chosen:
+ * when its last item goes, it stays, at 0, over its empty state, so the
+ * choice does not vanish from under the reader.
+ */
+export function getCreationMediaFilters(
+  counts: Record<CreationMediaFilter, number>,
+  chosen: CreationMediaFilter,
+): Array<{ key: CreationMediaFilter; label: string }> {
+  const names: Record<CreationMediaFilter, string> = { all: 'All', images: 'Images', videos: 'Videos', audio: 'Audio' };
+  return (Object.keys(names) as CreationMediaFilter[])
+    .filter((key) => key === 'all' || counts[key] > 0 || key === chosen)
+    .map((key) => ({ key, label: `${names[key]} (${counts[key]})` }));
 }

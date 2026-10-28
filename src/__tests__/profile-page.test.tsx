@@ -346,6 +346,15 @@ describe('ProfilePage', () => {
     })).rejects.toThrow('NEXT_REDIRECT:/login?returnUrl=%2Fprofile%3Ftab%3Dsaved%26post%3Dpost-1');
   });
 
+  it("opens Studio for an address kept from the profile's old Creations tab", async () => {
+    await expect(ProfilePage({ searchParams: Promise.resolve({ tab: 'creations' }) }))
+      .rejects.toThrow(/^NEXT_REDIRECT:\/creations$/);
+    await expect(ProfilePage({ searchParams: Promise.resolve({ tab: 'creations', generation: 'gen 1' }) }))
+      .rejects.toThrow(/^NEXT_REDIRECT:\/creations\?generation=gen\+1$/);
+    await expect(ProfilePage({ searchParams: Promise.resolve({ generation: 'gen-2' }) }))
+      .rejects.toThrow(/^NEXT_REDIRECT:\/creations\?generation=gen-2$/);
+  });
+
   it('keeps first-time users on /profile and prefills the suggested username', async () => {
     profileState = {
       id: 'a1b2c3d4-1111-2222-3333-444455556666',

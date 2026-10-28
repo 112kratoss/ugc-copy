@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { Play } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
 import { Linking, Platform, Pressable, View } from 'react-native';
@@ -61,7 +61,7 @@ export default function ViewerUnlockScreen() {
     || selectedRevision?.previewText
     || detail?.summary
     || detail?.previewText
-    || 'Reusable creator resources.';
+    || 'The prompt, files and notes behind this post.';
   const activeAccessMode = selectedRevision?.accessMode ?? detail?.accessMode ?? 'free';
   const activePriceUsdCents = selectedRevision?.priceUsdCents ?? detail?.priceUsdCents ?? 0;
   const activeVersionPrice = activeAccessMode === 'free' ? 'Free' : formatUnlockPrice(activePriceUsdCents);
@@ -96,16 +96,21 @@ export default function ViewerUnlockScreen() {
       setFileLoadingPath(storagePath);
       await Linking.openURL(await resolveResourceFileUrl(storagePath));
     } catch (error) {
-      setResourceError(error instanceof Error ? error.message : 'Could not open this resource.');
+      setResourceError(error instanceof Error ? error.message : 'Could not open this file.');
     } finally {
       setFileLoadingPath(null);
     }
   };
 
+  // "Recipe", as the recipe screen is titled: the root layout's "Your Recipe"
+  // is the creator's word for their own (recipe glossary, 2026-10-27).
+  const header = <Stack.Screen options={{ title: 'Recipe' }} />;
+
   if (!user) {
     return (
       <Screen>
-        <SectionTitle title="Sign in to open this recipe." body="Only the buyer account can access retained resources." />
+        {header}
+        <SectionTitle title="Sign in to open this recipe." body="Only the account that unlocked it can open it." />
         <PrimaryButton
           label="Sign in"
           onPress={() => router.push({
@@ -120,6 +125,7 @@ export default function ViewerUnlockScreen() {
 
   return (
     <Screen>
+      {header}
       {/* The header names the page, so its heading is the recipe's title: until the recipe is in the
           skeleton is the page, and after a failure the notice is. Both read "Recipe" under the Your
           Recipe header (redundant-UI audit, 2026-10-21). */}
@@ -145,9 +151,11 @@ export default function ViewerUnlockScreen() {
               </AppText>
               <AppText variant="body" color="text">{activeSummary}</AppText>
               {detail.detached ? (
-                <AppText variant="bodySm" color="muted">The creator deleted their account. Your purchased version and files are retained.</AppText>
-              ) : detail.tombstoned || detail.retired ? (
-                <AppText variant="bodySm" color="muted">This listing is no longer available, but your access remains.</AppText>
+                <AppText variant="bodySm" color="muted">The creator deleted their account. You keep the version you unlocked and its files.</AppText>
+              ) : detail.tombstoned ? (
+                <AppText variant="bodySm" color="muted">The creator removed this post. Your recipe stays here.</AppText>
+              ) : detail.retired ? (
+                <AppText variant="bodySm" color="muted">This recipe is no longer sold. Yours stays here.</AppText>
               ) : !canOpenUnlockedPost(detail) ? (
                 <AppText variant="bodySm" color="muted">{describeUnreachableUnlockedPost(detail)}</AppText>
               ) : null}
@@ -190,7 +198,7 @@ export default function ViewerUnlockScreen() {
                 resources={resources}
               />
             </MatureMediaCovered.Provider>
-            {resourceError ? <StatusBlock tone="danger" title="Resource unavailable" body={resourceError} /> : null}
+            {resourceError ? <StatusBlock tone="danger" title="File unavailable" body={resourceError} /> : null}
           </Card>
 
           {canOpenUnlockedPost(detail) ? (

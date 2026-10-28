@@ -281,9 +281,11 @@ describe('S11 — a removal can be taken back', () => {
   });
 
   // An offer taken mid-typing must not take the typing with it: Undo puts back
-  // what the removal took onto the draft as it is (lib/composer-undo.ts).
+  // what the removal took onto the draft as it is (lib/composer-undo.ts). An
+  // item put back is named again in a Recipe preview that still says what was
+  // suggested (recipe audit 2026-10-27, S6).
   it('puts back only what was removed', () => {
-    expect(composer).toContain('setDraft((current) => putBackComposerRemoval(current, removal));');
+    expect(composer).toContain('setDraft((current) => followSuggestedRecipePreview(current, putBackComposerRemoval(current, removal), selectedGeneration));');
     expect(composer).not.toContain('setDraft(snapshot)');
     // An offer whose list has filled up again meanwhile would do nothing, so it is not drawn.
     expect(composer).toContain('putBackComposerRemoval(draft, undoEntry.removal) !== draft ? undoEntry : null');

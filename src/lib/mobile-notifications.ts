@@ -416,6 +416,7 @@ export function buildMobileNotificationDeepLink(target:
   | { kind: 'templateRun'; runId: string }
   | { kind: 'workflowCanvas'; canvasId: string }
   | { kind: 'showcasePost'; postId: string }
+  | { kind: 'showcasePostRecipe'; postId: string }
   | { kind: 'marketplaceResource'; resourceId: string }
   | { kind: 'creatorProfile'; username: string }
   | { kind: 'sellerDashboard' }
@@ -442,6 +443,14 @@ export function buildMobileNotificationDeepLink(target:
     // a media post on to the reel and keeps a text or covered post on its own
     // page, which the For You reel has nothing to draw for.
     return `/showcase/${encodeURIComponent(target.postId)}`;
+  }
+
+  if (target.kind === 'showcasePostRecipe') {
+    // The post's Details page at its recipe: where a buyer's "Recipe unlocked"
+    // alert leads (B-F9, 2026-10-27). The app's /showcase/<id> hands the query
+    // on to the post page, which reads `page` and `section` (B-F6); the web
+    // turns it into the post page's recipe anchor.
+    return `/showcase/${encodeURIComponent(target.postId)}?page=details&section=resources`;
   }
 
   if (target.kind === 'marketplaceResource') {
@@ -2181,9 +2190,10 @@ export async function notifyPostResourceUnlockCompleted(
     userId: params.buyerUserId,
     type: 'post_resource_unlocked',
     category: 'commerce',
-    title: 'Post resources unlocked',
-    body: 'The prompt, files, or workflow are ready to view.',
-    deepLink: buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: params.postId }),
+    // The glossary's words (2026-10-27): what was bought is a recipe.
+    title: 'Recipe unlocked',
+    body: 'The prompt and files are ready.',
+    deepLink: buildMobileNotificationDeepLink({ kind: 'showcasePostRecipe', postId: params.postId }),
     objectType: 'post',
     objectId: params.postId,
     dedupeKey: `post-resource-unlock:${params.postId}:${params.buyerUserId}`,
@@ -2208,18 +2218,19 @@ export async function notifyPostResourceUnlockCompleted(
 /**
  * The seller's words for an unlock. The name takes the place "A creator" or
  * "Someone" held; a named free open's title already says who, so its body says
- * what they have now. `unnamed_sale_alert_words` (20261020053858) turns the
- * named words back into the unnamed ones, so the two change together.
+ * what they have now. `unnamed_sale_alert_words` (20261027180743, which still
+ * matches the words written before it) turns the named words back into the
+ * unnamed ones, so the two change together.
  */
 export function sellerUnlockWords(free: boolean, buyerHandle: string | null) {
   if (free) {
     return buyerHandle
-      ? { title: `@${buyerHandle} opened your free resources`, body: 'They can view the prompt, files, or workflow now.' }
-      : { title: 'Someone opened your free resources', body: 'A creator opened the resources attached to your post.' };
+      ? { title: `@${buyerHandle} got your free recipe`, body: 'They have the prompt and files now.' }
+      : { title: 'Someone got your free recipe', body: 'A creator got the free recipe on your post.' };
   }
   return {
     title: 'You made a sale',
-    body: `${buyerHandle ? `@${buyerHandle}` : 'A creator'} bought the resources attached to your post.`,
+    body: `${buyerHandle ? `@${buyerHandle}` : 'A creator'} bought your recipe.`,
   };
 }
 

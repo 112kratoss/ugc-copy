@@ -3,17 +3,19 @@
 -- restore change exposure without an editor save, so the trigger is the only
 -- thing standing between "made public again" and "recipe still a draft".
 --
--- Promotion is gated: a sold recipe always comes back (validated when listed,
--- frozen since); any other draft comes back only if it passes the quality
+-- Promotion is gated: a draft comes back only if it passes the quality
 -- predicate a publishing write would apply, so a recipe that was never
--- validated cannot be published by a visibility flip.
+-- validated cannot be published by a visibility flip. Since 20261027172920 a
+-- sold recipe is graded like any other (its content can change after a sale),
+-- and a retired one never comes back by itself
+-- (sold_recipes_can_be_corrected.test.sql covers both).
 
 begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(28);
+select plan(29);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
@@ -106,6 +108,11 @@ select is(
   'the free recipe passes the quality gate'
 );
 select is(
+  public.post_resource_bundle_quality_issue_for('c0000000-0000-4000-8000-00000000e003'::uuid),
+  null,
+  'the sold recipe passes the quality gate, which it now needs to come back'
+);
+select is(
   public.post_resource_bundle_quality_issue_for('c0000000-0000-4000-8000-00000000e004'::uuid),
   'Attach at least one useful prompt, workflow, file, note, or remix permission.',
   'the unfinished recipe fails the quality gate'
@@ -135,9 +142,9 @@ select is(
   'a sold recipe is a draft while its post is private'
 );
 
--- 2. Returning to public promotes every bundle that passes the gate. Only the
---    sold one came back before; the other two stayed drafts until an editor
---    save.
+-- 2. Returning to public promotes every bundle that passes the gate, sold or
+--    not. Only the sold one came back before 20260823130000; the other two
+--    stayed drafts until an editor save.
 update public.posts set visibility = 'public'
 where id in (
   'b0000000-0000-4000-8000-00000000e001'::uuid,

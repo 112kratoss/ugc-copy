@@ -39,7 +39,7 @@ const ACTION_LOOK: Record<HomeShelfAction['id'], { icon: LucideIcon; accent: UiA
   earn: { icon: Coins, accent: 'workflow' },
 };
 
-/** The tools the row ends on: the same catalogue as /create and the quick starts, without the canvas. */
+/** The tools the row ends on: the same catalogue as /create, without the canvas. */
 const START_BLANK_TOOLS = CREATOR_TOOLS.filter((tool) => tool.id !== 'workflow');
 
 export default function HomeShelf({

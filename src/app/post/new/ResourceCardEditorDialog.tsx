@@ -2,12 +2,15 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronRight, Loader2, Play, Plus, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Play, Plus, X } from 'lucide-react';
 
 import {
   createPostComposerResourceCard,
   getPostComposerResourceCardErrors,
+  getPostComposerResourceCardSaveHint,
   isPostComposerResourceCardReady,
+  POST_COMPOSER_MORE_RESOURCE_CARD_TYPES,
+  POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   type PostComposerResourceCardDraft,
   type PostComposerResourceCardType,
@@ -23,7 +26,7 @@ const CARD_TITLE_MAX_LENGTH = 80;
 const CARD_PREVIEW_MAX_LENGTH = 120;
 
 const DISCARD_RESOURCE_CHANGES: ConfirmationRequest = {
-  title: 'Discard changes to this resource?',
+  title: 'Discard changes to this item?',
   message: 'Your edits to it haven’t been saved and will be lost.',
   confirmLabel: 'Discard changes',
   cancelLabel: 'Keep editing',
@@ -165,6 +168,33 @@ export default function ResourceCardEditorDialog({
   );
 }
 
+/** One row of the item picker: the type's icon, name and what it holds. */
+function ResourceTypeRow({
+  type,
+  onChoose,
+}: {
+  type: PostComposerResourceCardType;
+  onChoose: (type: PostComposerResourceCardType) => void;
+}) {
+  const option = POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((candidate) => candidate.id === type)!;
+  return (
+    <button
+      type="button"
+      onClick={() => onChoose(type)}
+      className="flex w-full items-center gap-3 rounded-[18px] border border-white/8 bg-white/[0.03] p-3 text-left transition hover:border-white/20 hover:bg-white/[0.06]"
+    >
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-300">
+        <ResourceTypeIcon type={type} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold text-white">{option.label}</span>
+        <span className="mt-0.5 block text-xs text-zinc-400">{option.body}</span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-zinc-600" />
+    </button>
+  );
+}
+
 function ResourceCardEditorDialogContent({
   card,
   isChoosingType,
@@ -187,8 +217,11 @@ function ResourceCardEditorDialogContent({
   onUploadFile: UploadResourceFile;
 }) {
   const titleId = useId();
+  const moreTypesId = useId();
+  const titleHelpId = useId();
   const titleErrorId = useId();
   const contentErrorId = useId();
+  const saveHintId = useId();
   const uploadStatusId = useId();
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -198,6 +231,11 @@ function ResourceCardEditorDialogContent({
   const uploadAbortRef = useRef<AbortController | null>(null);
   const openedSignatureRef = useRef<string | null>(card ? getCardSignature(card) : null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // A-F14: a field's error waits until the field was touched; the line beside
+  // the disabled Save says what is missing meanwhile.
+  const [touched, setTouched] = useState({ title: false, content: false });
+  // S8: the picker's last five types wait behind "More types".
+  const [showsMoreTypes, setShowsMoreTypes] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [failedUploadFiles, setFailedUploadFiles] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState<{
@@ -213,7 +251,7 @@ function ResourceCardEditorDialogContent({
 
   const requestClose = async () => {
     if (isUploading) {
-      setUploadError('Wait for the file upload to finish or cancel it before closing this resource.');
+      setUploadError('Wait for the file upload to finish or cancel it before closing this item.');
       return;
     }
     if (isDirty && !(await askToConfirm(DISCARD_RESOURCE_CHANGES))) {
@@ -311,6 +349,12 @@ function ResourceCardEditorDialogContent({
   }
 
   const errors = card ? getPostComposerResourceCardErrors(card) : {};
+  const titleError = touched.title ? errors.title : undefined;
+  const contentError = touched.content ? errors.content : undefined;
+  const saveHint = card ? getPostComposerResourceCardSaveHint(card) : null;
+  // The line repeats nothing an error already says in red.
+  const visibleSaveHint = saveHint && !(card?.title.trim() ? contentError : titleError) ? saveHint : null;
+  const touchContent = () => setTouched((current) => (current.content ? current : { ...current, content: true }));
   const showText = card ? TEXT_TYPES.includes(card.type) : false;
   const showLink = card ? LINK_TYPES.includes(card.type) : false;
   // A legacy section may legitimately combine text/link content with files.
@@ -432,7 +476,7 @@ function ResourceCardEditorDialogContent({
         <div className="flex items-center gap-3 border-b border-white/8 px-5 py-4">
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className="text-base font-bold tracking-tight text-white">
-              {isChoosingType ? 'Add a resource' : getResourceCardTypeLabel(card!.type)}
+              {isChoosingType ? 'Add an item' : getResourceCardTypeLabel(card!.type)}
             </h2>
             <p className="mt-0.5 truncate text-xs text-zinc-400">
               {isChoosingType ? 'Choose what people will receive.' : 'Contents stay protected until unlock.'}
@@ -442,7 +486,7 @@ function ResourceCardEditorDialogContent({
             type="button"
             onClick={() => void requestClose()}
             disabled={isUploading}
-            aria-label="Close resource editor"
+            aria-label="Close item editor"
             aria-describedby={isUploading ? uploadStatusId : undefined}
             className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-300 transition hover:text-white disabled:cursor-wait disabled:opacity-50"
           >
@@ -452,23 +496,29 @@ function ResourceCardEditorDialogContent({
 
         {isChoosingType ? (
           <div className="space-y-2 overflow-y-auto px-5 py-4">
-            {POST_COMPOSER_RESOURCE_CARD_OPTIONS.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => onChooseType(option.id)}
-                className="flex w-full items-center gap-3 rounded-[18px] border border-white/8 bg-white/[0.03] p-3 text-left transition hover:border-white/20 hover:bg-white/[0.06]"
-              >
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-300">
-                  <ResourceTypeIcon type={option.id} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-semibold text-white">{option.label}</span>
-                  <span className="mt-0.5 block text-xs text-zinc-400">{option.body}</span>
-                </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-zinc-600" />
-              </button>
+            {POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES.map((type) => (
+              <ResourceTypeRow key={type} type={type} onChoose={onChooseType} />
             ))}
+            <button
+              type="button"
+              onClick={() => setShowsMoreTypes((current) => !current)}
+              aria-expanded={showsMoreTypes}
+              aria-controls={moreTypesId}
+              className="flex min-h-11 w-full items-center gap-2 rounded-[18px] px-3 text-left text-sm font-semibold text-zinc-300 transition hover:bg-white/[0.04] hover:text-white"
+            >
+              <span className="min-w-0 flex-1">More types</span>
+              <ChevronDown
+                aria-hidden="true"
+                className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform duration-150 ${showsMoreTypes ? 'rotate-180' : ''}`}
+              />
+            </button>
+            <div id={moreTypesId} hidden={!showsMoreTypes} className="space-y-2">
+              {showsMoreTypes
+                ? POST_COMPOSER_MORE_RESOURCE_CARD_TYPES.map((type) => (
+                  <ResourceTypeRow key={type} type={type} onChoose={onChooseType} />
+                ))
+                : null}
+            </div>
           </div>
         ) : (
           <>
@@ -476,7 +526,7 @@ function ResourceCardEditorDialogContent({
               <label className="block">
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                    Resource title <span className="text-emerald-300">Required</span>
+                    Item title <span className="text-emerald-300">Required</span>
                   </span>
                   <span aria-hidden="true" className="text-xs text-zinc-500">
                     {card!.title.length}/{CARD_TITLE_MAX_LENGTH}
@@ -491,25 +541,28 @@ function ResourceCardEditorDialogContent({
                     // labelled field, never merely by opening and saving.
                     publicTitleIntent: 'explicit',
                   })}
+                  onBlur={() => setTouched((current) => (current.title ? current : { ...current, title: true }))}
                   maxLength={CARD_TITLE_MAX_LENGTH}
-                  aria-label="Resource title, required"
+                  aria-label="Item title, required"
                   aria-required="true"
-                  aria-invalid={Boolean(errors.title)}
-                  aria-describedby={errors.title ? titleErrorId : undefined}
-                  placeholder="Name this resource"
+                  aria-invalid={Boolean(titleError)}
+                  aria-describedby={titleError ? `${titleHelpId} ${titleErrorId}` : titleHelpId}
+                  placeholder="Name this item"
                   className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35"
                 />
-                <p className="mt-2 text-xs text-zinc-500">
+                <p id={titleHelpId} className="mt-2 text-xs text-zinc-500">
                   {card!.publicTitleIntent === 'legacy_private'
                     ? 'This older private label stays hidden until you edit it here.'
-                    : 'Shown publicly on the locked package.'}
+                    : 'Everyone sees this before unlocking.'}
                 </p>
-                {errors.title ? <p id={titleErrorId} className="mt-1 text-xs text-rose-300">{errors.title}</p> : null}
+                {titleError ? <p id={titleErrorId} className="mt-1 text-xs text-rose-300">{titleError}</p> : null}
               </label>
 
               <label className="block">
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Unlocked description</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                    Note shown after unlock <span className="font-normal normal-case tracking-normal text-zinc-600">Optional</span>
+                  </span>
                   <span aria-hidden="true" className="text-xs text-zinc-500">
                     {card!.preview.length}/{CARD_PREVIEW_MAX_LENGTH}
                   </span>
@@ -518,8 +571,8 @@ function ResourceCardEditorDialogContent({
                   value={card!.preview}
                   onChange={(event) => onChange({ preview: event.target.value.slice(0, CARD_PREVIEW_MAX_LENGTH) })}
                   maxLength={CARD_PREVIEW_MAX_LENGTH}
-                  aria-label="Unlocked description, optional"
-                  placeholder="Optional note shown after unlock"
+                  aria-label="Note shown after unlock, optional"
+                  placeholder="A tip people read once they unlock it"
                   className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35"
                 />
               </label>
@@ -532,10 +585,11 @@ function ResourceCardEditorDialogContent({
                   <textarea
                     value={card!.textContent}
                     onChange={(event) => onChange({ textContent: event.target.value })}
+                    onBlur={touchContent}
                     rows={6}
                     aria-label="Protected content"
-                    aria-invalid={Boolean(errors.content)}
-                    aria-describedby={errors.content ? contentErrorId : undefined}
+                    aria-invalid={Boolean(contentError)}
+                    aria-describedby={contentError ? contentErrorId : undefined}
                     placeholder="This content is revealed only after unlock"
                     className="w-full rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35"
                   />
@@ -550,9 +604,10 @@ function ResourceCardEditorDialogContent({
                   <input
                     value={card!.externalUrl}
                     onChange={(event) => onChange({ externalUrl: event.target.value })}
+                    onBlur={touchContent}
                     aria-label={card!.type === 'remix_link' ? 'Protected remix link' : 'Link'}
-                    aria-invalid={Boolean(errors.content)}
-                    aria-describedby={errors.content ? contentErrorId : undefined}
+                    aria-invalid={Boolean(contentError)}
+                    aria-describedby={contentError ? contentErrorId : undefined}
                     placeholder="https://..."
                     className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35"
                   />
@@ -584,12 +639,12 @@ function ResourceCardEditorDialogContent({
                       event.currentTarget.value = '';
                     }}
                   />
-                  <p className="mt-1 text-xs text-zinc-500">Resource files must be 50MB or smaller.</p>
+                  <p className="mt-1 text-xs text-zinc-500">Up to 50 MB each.</p>
                   {isUploading ? (
                     <div id={uploadStatusId} role="status" aria-live="polite" className="mt-2 space-y-2">
                       <div className="flex items-center justify-between gap-3 text-xs text-zinc-400">
                         <span className="min-w-0 truncate">
-                          {uploadProgress ? `Uploading ${uploadProgress.fileName} · ${uploadProgress.percent}%` : 'Preparing resource upload'}
+                          {uploadProgress ? `Uploading ${uploadProgress.fileName} · ${uploadProgress.percent}%` : 'Preparing upload'}
                         </span>
                         <button
                           type="button"
@@ -601,7 +656,7 @@ function ResourceCardEditorDialogContent({
                       </div>
                       <div
                         role="progressbar"
-                        aria-label={uploadProgress ? `Uploading ${uploadProgress.fileName}` : 'Preparing resource upload'}
+                        aria-label={uploadProgress ? `Uploading ${uploadProgress.fileName}` : 'Preparing upload'}
                         aria-valuemin={0}
                         aria-valuemax={100}
                         aria-valuenow={uploadProgress?.percent ?? 0}
@@ -634,9 +689,12 @@ function ResourceCardEditorDialogContent({
                           <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">{attachment.label}</span>
                           <button
                             type="button"
-                            onClick={() => onChange({
-                              attachments: card!.attachments.filter((row) => row.id !== attachment.id),
-                            })}
+                            onClick={() => {
+                              touchContent();
+                              onChange({
+                                attachments: card!.attachments.filter((row) => row.id !== attachment.id),
+                              });
+                            }}
                             aria-label={`Remove ${attachment.label}`}
                             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:text-rose-200"
                           >
@@ -696,10 +754,15 @@ function ResourceCardEditorDialogContent({
                 </div>
               ) : null}
 
-              {errors.content ? <p id={contentErrorId} className="text-xs text-rose-300">{errors.content}</p> : null}
+              {contentError ? <p id={contentErrorId} className="text-xs text-rose-300">{contentError}</p> : null}
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-white/8 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-t border-white/8 px-5 py-4">
+              {visibleSaveHint ? (
+                <p id={saveHintId} className="mr-auto min-w-0 flex-1 basis-48 text-xs leading-5 text-zinc-400">
+                  {visibleSaveHint}
+                </p>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void requestClose()}
@@ -712,9 +775,10 @@ function ResourceCardEditorDialogContent({
                 type="button"
                 onClick={onSave}
                 disabled={isUploading || !card || !isPostComposerResourceCardReady(card)}
+                aria-describedby={visibleSaveHint ? saveHintId : undefined}
                 className="rounded-full bg-emerald-300 px-5 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Save resource
+                Save item
               </button>
             </div>
           </>

@@ -96,28 +96,35 @@ const RESOURCE_ITEM_COUNT_LABELS: Record<PostResourceItemType, { singular: strin
   reference_image: { singular: 'reference image', plural: 'reference images' },
   reference_video: { singular: 'reference video', plural: 'reference videos' },
   reference_audio: { singular: 'reference audio', plural: 'reference audio files' },
-  source_file: { singular: 'source file', plural: 'source files' },
+  source_file: { singular: 'file', plural: 'files' },
   preset: { singular: 'preset', plural: 'presets' },
-  settings: { singular: 'settings note', plural: 'settings notes' },
+  settings: { singular: 'settings', plural: 'settings' },
   note: { singular: 'note', plural: 'notes' },
   external_link: { singular: 'link', plural: 'links' },
   remix_link: { singular: 'remix link', plural: 'remix links' },
   remix_access: { singular: 'remix access', plural: 'remix access' },
 };
 
-/** "1 section, 3 reference images": the web's `formatPostResourceBundleCountSummary`. */
+// Settings read as one thing however many items hold them: "settings", never
+// "2 settings" (the web's `UNCOUNTED_RESOURCE_ITEM_TYPES`).
+const UNCOUNTED_RESOURCE_ITEM_TYPES = new Set<PostResourceItemType>(['settings']);
+
+/**
+ * What a recipe holds, in buyer words: "1 prompt, 2 files, settings, 1 link",
+ * the web's `formatPostResourceBundleCountSummary`. Cards ("sections") are how
+ * the creator arranged it, not something a buyer gets, so they are not counted
+ * (recipe audit B-F16).
+ */
 export function formatPostResourceBundleCountSummary(
-  preview: Pick<PostResourceBundleLockedPreview, 'itemCounts' | 'sectionCount'> | null | undefined
+  preview: Pick<PostResourceBundleLockedPreview, 'itemCounts'> | null | undefined
 ) {
   const parts: string[] = [];
-  const sectionCount = Math.max(0, Math.round(preview?.sectionCount ?? 0));
-  if (sectionCount > 0) parts.push(`${sectionCount} ${sectionCount === 1 ? 'section' : 'sections'}`);
-
   for (const type of RESOURCE_ITEM_COUNT_ORDER) {
     const count = Math.max(0, Math.round(preview?.itemCounts?.[type] ?? 0));
     if (count === 0) continue;
     const labels = RESOURCE_ITEM_COUNT_LABELS[type];
-    parts.push(`${count} ${count === 1 ? labels.singular : labels.plural}`);
+    const label = count === 1 ? labels.singular : labels.plural;
+    parts.push(UNCOUNTED_RESOURCE_ITEM_TYPES.has(type) ? label : `${count} ${label}`);
   }
 
   return parts.join(', ');

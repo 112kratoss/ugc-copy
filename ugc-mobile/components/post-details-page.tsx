@@ -25,6 +25,8 @@ import {
   getResourceSectionState,
   getUnlockPriceLabel,
   prepareUnlockedResourcesForDetails,
+  retainedRecipeUnlock,
+  shouldReadRetainedRecipe,
   type PostDetailsSection,
 } from '@/lib/post-details-view-model';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
@@ -47,6 +49,11 @@ const CREATOR_ROW_HEIGHT = 36;
  * Prompt section directly beneath it.
  */
 const DETAILS_TITLE_MAX_LINES = 6;
+
+/** A read answered "not found": a post with no recipe, which no retry changes. */
+function isNotFound(error: unknown) {
+  return Boolean(error && typeof error === 'object' && (error as { status?: unknown }).status === 404);
+}
 
 /**
  * The details behind a post: who made it, the prompt, the story, and the
@@ -109,8 +116,12 @@ export function PostDetailsPage({
 }) {
   const theme = useAppTheme();
   const details = item.details;
-  const unlock = details?.unlock ?? null;
+  const listingUnlock = details?.unlock ?? null;
   const { api, user } = useAuth();
+  // A post that came with no listing may still hold a recipe this viewer has:
+  // the creator unlisted or retired it after they unlocked it (B-F7). The
+  // post's own read answers them, so it is asked, and the card drawn from it.
+  const retainedPostId = shouldReadRetainedRecipe(item, user?.id) ? item.showcasePostId : null;
   const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
   // Which bundle the reader switched to the version they unlocked; any other
@@ -122,15 +133,18 @@ export function PostDetailsPage({
     // for someone entitled, and sign-out keeps the query cache. Without the id,
     // an account switch showed the last account's unlocked bundle, and a buyer
     // who had just signed in saw a stale lock for up to a minute.
-    queryKey: ['post-resource-bundle', unlock?.postId, unlock?.resourceId, user?.id ?? null],
-    enabled: active && Boolean(unlock),
+    queryKey: ['post-resource-bundle', listingUnlock?.postId ?? retainedPostId, listingUnlock?.resourceId ?? null, user?.id ?? null],
+    enabled: active && Boolean(listingUnlock || retainedPostId),
     queryFn: async () => {
-      if (!unlock) throw new Error('Missing recipe details');
-      return api.getMarketplaceResourceDetail(unlock.resourceId, { postId: unlock.postId });
+      if (listingUnlock) return api.getMarketplaceResourceDetail(listingUnlock.resourceId, { postId: listingUnlock.postId });
+      if (!retainedPostId) throw new Error('Missing recipe details');
+      return api.getMarketplaceResourceDetail(null, { postId: retainedPostId });
     },
+    retry: (failureCount, error) => failureCount < 1 && !isNotFound(error),
     staleTime: 1000 * 60,
   });
   const bundle = resourceQuery.data?.bundle;
+  const unlock = listingUnlock ?? (retainedPostId ? retainedRecipeUnlock(bundle, retainedPostId) : null);
 
   const bundleUnlock = useBundleUnlock({
     authReturnTo,
@@ -201,7 +215,7 @@ export function PostDetailsPage({
       const signedUrl = await resolveResourceFileUrl(storagePath);
       await Linking.openURL(signedUrl);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to open this resource.';
+      const message = error instanceof Error ? error.message : 'Could not open this file.';
       setResourceError(message);
     } finally {
       setFileLoadingPath(null);
@@ -209,7 +223,16 @@ export function PostDetailsPage({
   };
 
   const unlockAccent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
-  const unlockPriceLabel = getUnlockPriceLabel(unlock, bundle);
+  // The hook's price follows a reprice the server reported before the read of
+  // the recipe catches up (S3).
+  const unlockPriceLabel = bundleUnlock.priceLabel ?? getUnlockPriceLabel(unlock, bundle);
+  // A creation post's recipe comes with its Remix (S1). The card says so once,
+  // in a pill, where a bare "Remix" kind said it least clearly; only on a post
+  // that has a Remix at all, since a legacy recipe on an upload can still
+  // carry the stored flag.
+  const postRemixes = item.availableActions.includes('recreate') || item.availableActions.includes('unlock-remix');
+  const includesRemix = postRemixes && Boolean(bundle?.allowRemix ?? unlock?.allowRemix);
+  const lockedKinds = includesRemix ? resourceKinds.filter((kind) => kind !== 'remix') : resourceKinds;
   const primaryAction = getDetailsPrimaryAction(item, { canAccess });
   const generationStats = buildGenerationStats(details.generationInfo ?? null);
   // A failed run's reason, as its settlement stored it; the web's failed card prints the same line.
@@ -240,7 +263,7 @@ export function PostDetailsPage({
             // The creator reads their own recipe by owning it, not by
             // having unlocked it; the web panel says so too.
             { label: bundle?.viewerIsOwner ? 'Owner access' : 'Unlocked', accent: 'workflow' },
-            ...(prepared?.hasRemixAccess ? [{ label: 'Remix included', accent: 'primary' as ToolAccent }] : []),
+            ...(prepared?.hasRemixAccess && postRemixes ? [{ label: 'Remix included', accent: 'primary' as ToolAccent }] : []),
           ]}
         />
         {purchasedRevision ? (
@@ -278,9 +301,14 @@ export function PostDetailsPage({
             ) : null}
             <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>{lockedSummary}</Text>
           </View>
-          {unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
+          {unlockPriceLabel || includesRemix ? (
+            <View style={{ alignItems: 'flex-end', gap: 6 }}>
+              {unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
+              {includesRemix ? <Pill label="Remix included" accent="primary" /> : null}
+            </View>
+          ) : null}
         </View>
-        <ResourceKindRow kinds={resourceKinds} on="surface" />
+        <ResourceKindRow kinds={lockedKinds} on="surface" />
         {includesSummary ? (
           <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{`Includes ${includesSummary}`}</Text>
         ) : null}
@@ -288,7 +316,7 @@ export function PostDetailsPage({
           <ActivityIndicator color={theme.colors.primary} />
         ) : sectionState === 'error' ? (
           <View style={{ gap: 10 }}>
-            <ErrorText message={resourceQuery.error instanceof Error ? resourceQuery.error.message : 'Could not load these resources.'} />
+            <ErrorText message={resourceQuery.error instanceof Error ? resourceQuery.error.message : 'Could not load this recipe.'} />
             <DetailActionButton label="Try again" icon={<FileText size={appTheme.icon.compact} color={theme.colors.text} />} onPress={() => void resourceQuery.refetch()} />
           </View>
         ) : (
@@ -304,7 +332,7 @@ export function PostDetailsPage({
                   (`useBundleUnlock`). */}
               <DetailActionButton
                 disabled={bundleUnlock.shortfall > 0}
-                label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : unlockPriceLabel ? `Unlock for ${unlockPriceLabel}` : 'Unlock with credits'}
+                label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get free recipe' : unlockPriceLabel ? `Unlock for ${unlockPriceLabel}` : 'Unlock with credits'}
                 icon={<Lock size={appTheme.icon.compact} color={theme.colors.onPrimary} />}
                 loading={bundleUnlock.isPending}
                 primary

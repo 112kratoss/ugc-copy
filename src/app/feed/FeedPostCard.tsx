@@ -1,6 +1,6 @@
 'use client';
 
-import { Heart, Loader2, LockKeyhole, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react';
+import { CircleCheck, Heart, Loader2, LockKeyhole, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react';
 import Link from 'next/link';
 import { memo } from 'react';
 
@@ -15,14 +15,15 @@ import {
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { buildShowcaseDetailPath } from '@/lib/share';
-import type { PostFeedCard } from '@/lib/post-feed-presentation';
+import { getPostFeedRecipeChip, type PostFeedCard } from '@/lib/post-feed-presentation';
 
 export interface FeedDetailContext {
     from: string;
     returnTo: string;
 }
 
-const DEFAULT_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
+// Home's lanes are the feed's only place (the /feed page sends its visitors there).
+const DEFAULT_DETAIL_CONTEXT: FeedDetailContext = { from: 'home', returnTo: '/' };
 
 /**
  * Everything on the card that owns its own click. The card-level handler below
@@ -68,8 +69,8 @@ interface FeedPostCardProps {
         dataUrl: string;
     } | null;
     /**
-     * Where detail links say the viewer came from (and return to). Defaults to
-     * the /feed page; the embedded home-dashboard feed passes its own.
+     * Where detail links say the viewer came from (and return to): Home's
+     * lane, which the feed passes with its chip, by default Home itself.
      */
     detailContext?: FeedDetailContext;
     /** The card's position in the lane, reported with a share. */
@@ -147,6 +148,9 @@ function FeedPostCardView({
     onBlockUser,
 }: FeedPostCardProps) {
     const { item } = card;
+    // The card is built without the viewer; whose post it is comes from the
+    // lane, and the viewer's own recipe reads "Your recipe" (`getPostFeedRecipeChip`).
+    const recipeChip = viewerIsOwner ? getPostFeedRecipeChip(item, { isOwner: true }) : card.recipeChip;
     // The boundary the card sits in reports how far its inline video played
     // (`QualifiedImpressionBoundary`); outside one there is nothing to report.
     const telemetry = useFeedCardTelemetry();
@@ -401,24 +405,27 @@ function FeedPostCardView({
                     iconOnly
                     className="ui-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-full text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                 />
-                {card.recipeChip ? (
+                {recipeChip ? (
                     // The recipe behind the post, at the row's far end and only
-                    // where it adds something: a price, or a free recipe on a card
-                    // with no Remix (`getPostFeedRecipeChip`). It opens the post at
-                    // its recipe, as the bar it replaced did.
+                    // where it adds something: a price, a free recipe on a card
+                    // with no Remix, one the viewer has ("Unlocked", with a
+                    // check) or their own (`getPostFeedRecipeChip`). It opens the
+                    // post at its recipe, as the bar it replaced did.
                     <Link
                         href={recipeHref}
                         prefetch={false}
-                        aria-label={`${card.recipeChip.label}: ${card.title}`}
+                        aria-label={`${recipeChip.label}: ${card.title}`}
                         onClick={() => onOpenResources?.(item.id)}
                         className={`ui-focus-ring ml-auto inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold transition ${
-                            card.recipeChip.tone === 'paid'
+                            recipeChip.tone === 'paid'
                                 ? 'border border-amber-300/20 bg-amber-400/[0.08] text-amber-100 hover:border-amber-300/35'
                                 : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
                         }`}
                     >
-                        <ShoppingBag className="h-4 w-4" aria-hidden="true" />
-                        {card.recipeChip.label}
+                        {recipeChip.kind === 'unlocked'
+                            ? <CircleCheck className="h-4 w-4" aria-hidden="true" data-recipe-chip-icon="check" />
+                            : <ShoppingBag className="h-4 w-4" aria-hidden="true" />}
+                        {recipeChip.label}
                     </Link>
                 ) : null}
             </div>

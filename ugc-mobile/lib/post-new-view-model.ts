@@ -20,6 +20,8 @@ import type {
   SourceToolOption,
   ShowcaseFeedItem,
 } from '@/lib/types';
+import { formatUsdCents } from '@/lib/home-view-model';
+import { formatCreditAmount } from '@/lib/pricing';
 import {
   describeTitleSuggestion,
   followTitleForRecipe,
@@ -508,6 +510,27 @@ export const POST_COMPOSER_RESOURCE_CARD_OPTIONS: Array<{
   { id: 'other', label: 'Other', body: 'Anything useful that does not fit above.' },
 ];
 
+/**
+ * The item picker's order (recipe audit S8, 2026-10-27): the four kinds a
+ * recipe is usually made of come first, and the other five wait under "More
+ * types". Every public recipe so far held one prompt, and nine near-equal rows
+ * made a first-timer read them all. The labels and default titles stay those of
+ * `POST_COMPOSER_RESOURCE_CARD_OPTIONS`, which the authoring contract pins.
+ */
+export const POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES: readonly PostComposerResourceCardType[] = [
+  'prompt',
+  'reference_media',
+  'settings',
+  'guide',
+];
+export const POST_COMPOSER_MORE_RESOURCE_CARD_TYPES: readonly PostComposerResourceCardType[] = [
+  'workflow',
+  'source_assets',
+  'external_link',
+  'remix_link',
+  'other',
+];
+
 const DEFAULT_RESOURCE_SELECTIONS: PostComposerResourceSelections = {
   prompt: true,
   workflow: false,
@@ -534,6 +557,176 @@ export const MAX_MADE_WITH_ROWS = 5;
 
 /** Default recipe price in credits, the same as the web composer's. */
 const DEFAULT_PRICE_TOKENS = 900;
+
+/** The recipe's one public text: its length, and what the composer says under it. */
+export const RECIPE_PREVIEW_MAX_LENGTH = 180;
+const RECIPE_PREVIEW_MIN_USEFUL_LENGTH = 18;
+
+/** The recipe's checks, in the words of the recipe glossary (recipe audit 2026-10-27). */
+export const RECIPE_NEEDS_AN_ITEM_MESSAGE = 'Add at least one item to the recipe.';
+export const RECIPE_PREVIEW_REQUIRED_MESSAGE = 'Add a recipe preview.';
+export const RECIPE_PREVIEW_QUALITY_MESSAGE = `Write a recipe preview of at least ${RECIPE_PREVIEW_MIN_USEFUL_LENGTH} characters that says what people get.`;
+export const RECIPE_PRICE_RULE_MESSAGE = `Paid recipes start at ${MIN_RESOURCE_PRICE_TOKENS} credits, in steps of 10.`;
+
+/** What a seller keeps of each sale, and the balance a payout starts from ($100: 10,000 credits). */
+const RECIPE_CREATOR_SHARE_PERCENT = 85;
+const RECIPE_PAYOUT_MINIMUM_LABEL = '$100';
+
+/**
+ * The line under a recipe's price: what buyers pay, what the creator earns of
+ * it and when that can be paid out. The web composer says "Buyers pay $9.00";
+ * here what buyers pay stays in credits, because the app never puts a cash
+ * price beside a recipe (App Review 2.1(b), 0.1.6; `formatUnlockCreditPrice`),
+ * while the seller's own earnings are money, as Your Sales tells them.
+ */
+export function getRecipeMoneyLine(priceCredits: number): string {
+  const credits = Number.isFinite(priceCredits) ? Math.max(0, Math.trunc(priceCredits)) : 0;
+  // 100 credits are $1, so a credit is a cent; the share is rounded to the cent.
+  const earningsCents = Math.round((credits * RECIPE_CREATOR_SHARE_PERCENT) / 100);
+  return `Buyers pay ${formatCreditAmount(credits)} ${credits === 1 ? 'credit' : 'credits'}`
+    + ` · You earn ~${formatUsdCents(earningsCents)} (${RECIPE_CREATOR_SHARE_PERCENT}%)`
+    + ` · Payouts from ${RECIPE_PAYOUT_MINIMUM_LABEL}`;
+}
+
+/**
+ * The phrase each kind of item adds to a suggested Recipe preview, with its
+ * count where a count reads naturally (recipe audit S7, the same words as the
+ * web composer's).
+ */
+const SUGGESTED_PREVIEW_PHRASES: Record<PostComposerResourceCardType, (count: number) => string> = {
+  prompt: (count) => (count === 1 ? 'the prompt' : `${count} prompts`),
+  reference_media: () => 'reference media',
+  settings: () => 'the model settings',
+  workflow: (count) => (count === 1 ? 'the workflow' : `${count} workflows`),
+  source_assets: () => 'source files',
+  guide: (count) => (count === 1 ? 'a written guide' : `${count} guides`),
+  external_link: (count) => (count === 1 ? 'a useful link' : `${count} links`),
+  remix_link: (count) => (count === 1 ? 'a remix link' : `${count} remix links`),
+  other: (count) => (count === 1 ? 'one more item' : `${count} more items`),
+};
+
+/**
+ * The Recipe preview suggested from the items, in their order: "Includes the
+ * prompt, reference media and the model settings." Nothing when there are no
+ * items. A creation's references, which the server copies in after the items
+ * at publish (`mergeGenerationReferenceItemsIntoBundle`), count as reference
+ * media: they are what such a recipe holds when it is made of them alone.
+ */
+export function buildSuggestedRecipePreview(
+  cards: readonly Pick<PostComposerResourceCardDraft, 'type'>[],
+  options: { creationReferences?: boolean } = {},
+): string {
+  const counts = new Map<PostComposerResourceCardType, number>();
+  for (const card of cards) counts.set(card.type, (counts.get(card.type) ?? 0) + 1);
+  if (options.creationReferences && !counts.has('reference_media')) counts.set('reference_media', 1);
+  const phrases = [...counts.entries()].map(([type, count]) => SUGGESTED_PREVIEW_PHRASES[type](count));
+  if (phrases.length === 0) return '';
+  const listed = phrases.length === 1
+    ? phrases[0]
+    : `${phrases.slice(0, -1).join(', ')} and ${phrases[phrases.length - 1]}`;
+  return `Includes ${listed}.`;
+}
+
+function getSuggestedRecipePreview(draft: PostComposerDraft, generation: GenerationListItem | null | undefined) {
+  return buildSuggestedRecipePreview(draft.resource.cards ?? [], {
+    creationReferences: willAttachGenerationReferences(generation, draft),
+  });
+}
+
+/**
+ * The Recipe preview after a change to what the recipe holds (an item saved or
+ * removed, the exact prompt or the creation's references switched): written
+ * from the items when the field is empty, and kept in step with them while it
+ * still says what was suggested. Once the creator has written their own, it is
+ * theirs. A field they emptied stays empty until the items change. Mirrors
+ * `followCreationTitleSuggestion`, which does the same for the title.
+ */
+export function followSuggestedRecipePreview(
+  current: PostComposerDraft,
+  next: PostComposerDraft,
+  generation: GenerationListItem | null | undefined,
+): PostComposerDraft {
+  const before = getSuggestedRecipePreview(current, generation);
+  const after = getSuggestedRecipePreview(next, generation);
+  if (before === after) return next;
+  const preview = next.resource.previewText;
+  if (preview.trim() && preview !== before) return next;
+  return { ...next, resource: { ...next.resource, previewText: after } };
+}
+
+/**
+ * The one public text a recipe has in the composer (recipe audit S6). A recipe
+ * saved before held a summary and a preview, and the summary was what listings
+ * showed first, so an edit starts from it. The summary is kept empty from then
+ * on: the serializer sends the preview in its place.
+ */
+export function foldRecipeSummaryIntoPreview(resource: PostComposerResourceDraft): PostComposerResourceDraft {
+  const summary = resource.summary?.trim() ? resource.summary : '';
+  return {
+    ...resource,
+    previewText: (summary || resource.previewText || '').slice(0, RECIPE_PREVIEW_MAX_LENGTH),
+    summary: '',
+  };
+}
+
+/** How many saved inputs of a creation "Include creation references" copies into its recipe. */
+export function countCreationReferenceFiles(item: GenerationListItem | null | undefined): number {
+  return (item?.input_media ?? []).filter((media) => media.url || media.kind).length;
+}
+
+/** The note above a recipe's items once people have it (recipe audit S2). */
+export function describeRecipeBuyers(buyerCount: number | null | undefined): string | null {
+  const count = typeof buyerCount === 'number' && Number.isFinite(buyerCount) ? Math.max(0, Math.trunc(buyerCount)) : 0;
+  if (count === 0) return null;
+  return `${count === 1 ? '1 person has' : `${count} people have`} this recipe. They keep the version they got and see your changes.`;
+}
+
+export type RecipeRemovalConfirmation = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  destructive: true;
+};
+
+/**
+ * Asked before an edit saves "No recipe" over a recipe the post had (recipe
+ * audit A-F2). The save deletes the recipe and its files, or, when people
+ * have it, takes it off sale with their copies kept; neither was said before.
+ * Nothing is asked of a new post or of a recipe that stays.
+ */
+export function getRecipeRemovalConfirmation(input: {
+  loadedAccessMode: PostResourceBundleAccessMode | null | undefined;
+  loadedItemCount: number;
+  buyerCount: number | null | undefined;
+  nextAccessMode: PostResourceBundleAccessMode;
+  /**
+   * The post is made from a creation: without a recipe its prompt and Remix
+   * are open to everyone (S1), which the question says (review of #567).
+   */
+  reopensPost?: boolean;
+}): RecipeRemovalConfirmation | null {
+  if (input.nextAccessMode !== 'none') return null;
+  if (input.loadedAccessMode !== 'free' && input.loadedAccessMode !== 'paid') return null;
+  const items = Math.max(0, Math.trunc(input.loadedItemCount));
+  const buyers = Math.max(0, Math.trunc(input.buyerCount ?? 0));
+  const deleted = items > 0
+    ? `Its ${items} ${items === 1 ? 'item' : 'items'} and files will be deleted.`
+    : 'It will be deleted.';
+  const kept = buyers > 0
+    ? ` The ${buyers} ${buyers === 1 ? 'person who has it keeps' : 'people who have it keep'} their copy; it comes off sale.`
+    : '';
+  const reopened = input.reopensPost
+    ? ' The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.'
+    : '';
+  return {
+    title: 'Remove this recipe?',
+    message: `${deleted}${kept}${reopened}`,
+    confirmLabel: 'Remove recipe',
+    cancelLabel: 'Keep recipe',
+    destructive: true,
+  };
+}
 
 export function getDefaultResourceDraft(): PostComposerResourceDraft {
   return {
@@ -837,10 +1030,49 @@ export function postComposerReturnPath(params: {
   return query ? `/post/new?${query}` : '/post/new';
 }
 
+/**
+ * A new recipe's remix flag is always off (recipe audit S1): on a post made
+ * from a creation the server gates Remix behind any published recipe whatever
+ * the flag says, and the composer no longer offers the switch. A draft an
+ * older build saved with it on is published without it.
+ */
+function buildNewRecipeBundleInput(resource: PostComposerResourceDraft): PostResourceBundleInput | null {
+  return buildPostResourceBundleInput({ ...resource, allowRemix: false });
+}
+
+/**
+ * A recipe made of the creation's saved inputs alone: it has no item of its
+ * own to send, so the server, which copies the references in after the items
+ * (`mergeGenerationReferenceItemsIntoBundle`), is sent an empty one to fill.
+ * Without it the publish sent "No recipe" and the references were dropped.
+ */
+function buildCreationReferencesOnlyBundleInput(resource: PostComposerResourceDraft): PostResourceBundleInput {
+  const previewText = trimOrUndefined(resource.previewText);
+  return {
+    accessMode: resource.accessMode,
+    ...(previewText ? { summary: previewText, previewText } : {}),
+    priceUsdCents: resource.accessMode === 'paid' ? getPriceTokens(resource) : 0,
+    resources: {
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [],
+      items: [],
+    },
+  };
+}
+
 export function buildPublishGenerationPostPayload(item: GenerationListItem, draft: PostComposerDraft) {
   const templateResult = isTemplateGeneration(item);
-  const resourceBundle = templateResult ? null : buildPostResourceBundleInput(draft.resource);
   const includeGenerationReferences = templateResult ? false : shouldIncludeGenerationReferences(item, draft);
+  const resourceBundle = templateResult
+    ? null
+    : buildNewRecipeBundleInput(draft.resource)
+      ?? (includeGenerationReferences && draft.resource.accessMode !== 'none'
+        ? buildCreationReferencesOnlyBundleInput(draft.resource)
+        : null);
   const sourceTools = buildSourceToolsPayload(draft, item);
   const primarySourceTool = sourceTools[0];
 
@@ -872,14 +1104,18 @@ function buildDescriptionPatch(draft: PostComposerDraft): { description?: string
   return description ? { description } : {};
 }
 
+/**
+ * An edit always sends its recipe: a recipe people have bought can be
+ * corrected (recipe audit S2), each save a new version that buyers see while
+ * keeping the one they got. Its remix flag goes back as it was loaded (S1).
+ */
 export function buildUpdatePostPayload(
   isGenerationBacked: boolean,
   draft: PostComposerDraft,
-  options: { preserveSoldResourceBundle?: boolean } = {},
 ) {
-  const resourceBundlePatch = options.preserveSoldResourceBundle
-    ? {}
-    : { resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' as const } };
+  const resourceBundlePatch = {
+    resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' as const },
+  };
   const descriptionPatch = buildDescriptionPatch(draft);
 
   if (isGenerationBacked) {
@@ -938,11 +1174,11 @@ export type PostComposerValidationOptions = {
    */
   grandfatheredTitle?: string | null;
   /**
-   * The post keeps a recipe people have bought, which the save leaves as it is.
-   * Its own checks are skipped (the screen validates such a draft as having no
-   * recipe), but the server still judges the post as a listing.
+   * The publish copies the creation's saved inputs into the recipe ("Include
+   * creation references"), which then has something in it with no item of its
+   * own (recipe audit A-F9). `willAttachGenerationReferences` answers it.
    */
-  hasSoldRecipe?: boolean;
+  includesCreationReferences?: boolean;
 };
 
 // The server's public-post rule, from the module the web's routes read too.
@@ -955,15 +1191,37 @@ export { getPublicPostQualityError };
  * rule takes a long enough title in place of text, so only the title half
  * holds there: a placeholder title fails both.
  */
-function getDraftPublicPostQualityError(draft: PostComposerDraft, options: PostComposerValidationOptions): string | null {
+function getDraftPublicPostQualityError(draft: PostComposerDraft): string | null {
   if (draft.visibility !== 'public') return null;
   const error = getPublicPostQualityError({
     title: draft.title,
     body: getCreatePostBody(draft),
     hasMedia: !isTextProof(draft),
   });
-  const judgedAsListing = draft.resource.accessMode !== 'none' || options.hasSoldRecipe === true;
+  const judgedAsListing = draft.resource.accessMode !== 'none';
   return judgedAsListing && error !== PUBLIC_POST_PLACEHOLDER_TITLE_ERROR ? null : error;
+}
+
+/**
+ * The items a recipe holds. Remix access is not one: it comes with any
+ * recipe on a post made from a creation (recipe audit S1), so a recipe of
+ * remix access alone has nothing in it. The builder still sends such a stored
+ * recipe back unchanged, which the authoring contract pins.
+ */
+function countRecipeItems(resource: PostComposerResourceDraft): number {
+  const bundle = buildPostResourceBundleInput(resource);
+  return (bundle?.resources?.items ?? []).filter((item) => item.type !== 'remix_access').length;
+}
+
+function hasValidRecipePrice(resource: PostComposerResourceDraft): boolean {
+  if (resource.accessMode !== 'paid') return true;
+  const priceTokens = getPriceTokens(resource);
+  return priceTokens >= MIN_RESOURCE_PRICE_TOKENS && priceTokens % 10 === 0;
+}
+
+/** What is wrong with a paid recipe's price, said under the price itself; nothing for a price the server takes. */
+export function getRecipePriceError(resource: PostComposerResourceDraft): string | undefined {
+  return hasValidRecipePrice(resource) ? undefined : RECIPE_PRICE_RULE_MESSAGE;
 }
 
 export function validatePostComposerDraft(
@@ -975,43 +1233,32 @@ export function validatePostComposerDraft(
     return detailsValidation;
   }
 
-  const publicPostQualityError = getDraftPublicPostQualityError(draft, options);
+  const publicPostQualityError = getDraftPublicPostQualityError(draft);
   if (publicPostQualityError) {
     return { valid: false, message: publicPostQualityError };
   }
 
-  if (draft.resource.accessMode !== 'none') {
-    const resourceBundle = buildPostResourceBundleInput(draft.resource);
-    if (!resourceBundle) {
-      return { valid: false, message: 'Add at least one item to the recipe.' };
-    }
+  const recipeProblem = getRecipeProblem(draft, options);
+  return recipeProblem ? { valid: false, message: recipeProblem } : { valid: true };
+}
 
-    // The builder has a compatibility fallback for older callers, but the
-    // composer labels this author-written field as required. Validate the raw
-    // draft so an empty field cannot silently submit generated copy instead.
-    if (!draft.resource.previewText.trim()) {
-      return { valid: false, message: 'Add a buyer preview for the recipe.' };
-    }
-
-    if (draft.visibility === 'public' && !hasUsefulBuyerPreview(draft.resource)) {
-      return {
-        valid: false,
-        message: 'Improve this recipe before publishing: Add a useful preview or summary that tells buyers what the recipe includes.',
-      };
-    }
-
-    if (draft.resource.accessMode === 'paid') {
-      const priceTokens = getPriceTokens(draft.resource);
-      if (priceTokens < MIN_RESOURCE_PRICE_TOKENS) {
-        return { valid: false, message: `Paid recipes must cost at least ${MIN_RESOURCE_PRICE_TOKENS} tokens.` };
-      }
-      if (priceTokens % 10 !== 0) {
-        return { valid: false, message: 'Recipe prices must use increments of 10 tokens.' };
-      }
-    }
+/**
+ * The first thing a chosen recipe still needs, or null when it can go out: an
+ * item (or the creation's references), its Recipe preview, a useful one on a
+ * public post, then a price the server takes.
+ */
+function getRecipeProblem(draft: PostComposerDraft, options: PostComposerValidationOptions): string | null {
+  if (draft.resource.accessMode === 'none') return null;
+  if (countRecipeItems(draft.resource) === 0 && !options.includesCreationReferences) {
+    return RECIPE_NEEDS_AN_ITEM_MESSAGE;
   }
-
-  return { valid: true };
+  // The builder has a compatibility fallback for older callers, but the
+  // composer labels this author-written field as required. Validate the raw
+  // draft so an empty field cannot silently submit generated copy instead.
+  if (!draft.resource.previewText.trim()) return RECIPE_PREVIEW_REQUIRED_MESSAGE;
+  if (draft.visibility === 'public' && !hasUsefulBuyerPreview(draft.resource)) return RECIPE_PREVIEW_QUALITY_MESSAGE;
+  if (!hasValidRecipePrice(draft.resource)) return RECIPE_PRICE_RULE_MESSAGE;
+  return null;
 }
 
 export function validatePostComposerDetails(
@@ -1088,7 +1335,7 @@ export function buildCreatePostFormData(draft: PostComposerDraft) {
   formData.append('visibility', draft.visibility);
   formData.append('isNsfw', String(draft.isNsfw === true));
   formData.append('postFormat', getCreatePostFormat(draft));
-  formData.append('resourceBundle', JSON.stringify(buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' }));
+  formData.append('resourceBundle', JSON.stringify(buildNewRecipeBundleInput(draft.resource) ?? { accessMode: 'none' }));
 
   if (draft.mode === 'upload') {
     formData.append('category', getSubmittedPostCategory(draft));
@@ -1485,24 +1732,25 @@ export function applyCreationPromptResource(
   const prompt = selectedGeneration?.prompt?.trim() ?? '';
   const cards = draft.resource.cards ?? [];
   if (!enabled) {
-    return {
+    return followSuggestedRecipePreview(draft, {
       ...draft,
       resource: {
         ...draft.resource,
         cardAuthoringMode: 'cards',
         cards: cards.filter((card) => !isCreationPromptCard(card, prompt)),
       },
-    };
+    }, selectedGeneration);
   }
 
-  return {
+  // The Recipe preview is suggested from the items as for any other item
+  // ("Includes the prompt."), as the web composer does (recipe audit A-F16).
+  return followSuggestedRecipePreview(draft, {
     ...draft,
     resource: {
       ...draft.resource,
       cardAuthoringMode: 'cards',
       accessMode: draft.resource.accessMode === 'none' ? 'free' : draft.resource.accessMode,
       promptText: draft.resource.promptText.trim() ? draft.resource.promptText : prompt,
-      previewText: draft.resource.previewText.trim() ? draft.resource.previewText : 'Includes the exact reusable prompt.',
       // A card made on the web, or by an earlier save, is the prompt already.
       // A new one takes its own id, so it cannot collide with an earlier card
       // whose text was edited away from the prompt.
@@ -1516,56 +1764,41 @@ export function applyCreationPromptResource(
             }),
           ],
     },
-  };
+  }, selectedGeneration);
 }
 
 export function getPostComposerPackageStatus(
   draft: PostComposerDraft,
   selectedGeneration?: GenerationListItem | null
 ): PostComposerReadinessItem {
-  const resourceBundle = buildPostResourceBundleInput(draft.resource);
   const resourceActive = draft.resource.accessMode !== 'none';
   const referencesAttached = willAttachGenerationReferences(selectedGeneration, draft);
 
   if (resourceActive) {
-    const buyerPreviewReady = Boolean(draft.resource.previewText.trim())
-      && (draft.visibility !== 'public' || hasUsefulBuyerPreview(draft.resource));
-    const ready = Boolean(resourceBundle && buyerPreviewReady);
+    const problem = getRecipeProblem(draft, { includesCreationReferences: referencesAttached });
+    if (problem === RECIPE_PRICE_RULE_MESSAGE) {
+      return { id: 'unlock', label: 'Set a valid price', body: problem, state: 'warning' };
+    }
+    if (problem) {
+      return {
+        id: 'unlock',
+        label: 'Finish the recipe',
+        body: problem === RECIPE_NEEDS_AN_ITEM_MESSAGE ? 'Add at least one item.' : problem,
+        state: 'warning',
+      };
+    }
     const promptResource = hasCreationPromptCard(draft.resource.cards, selectedGeneration);
-    const priceTokens = getPriceTokens(draft.resource);
-    const priceNeedsMinimum = draft.resource.accessMode === 'paid' && priceTokens < MIN_RESOURCE_PRICE_TOKENS;
-    const priceNeedsIncrement = draft.resource.accessMode === 'paid' && priceTokens >= MIN_RESOURCE_PRICE_TOKENS && priceTokens % 10 !== 0;
-    if (ready && priceNeedsMinimum) {
-      return {
-        id: 'unlock',
-        label: 'Set a valid price',
-        body: `Paid recipes must cost at least ${MIN_RESOURCE_PRICE_TOKENS} tokens.`,
-        state: 'warning',
-      };
-    }
-    if (ready && priceNeedsIncrement) {
-      return {
-        id: 'unlock',
-        label: 'Set a valid price',
-        body: 'Recipe prices must use increments of 10 tokens.',
-        state: 'warning',
-      };
-    }
     return {
       id: 'unlock',
-      label: ready
-        ? promptResource
-          ? 'Prompt recipe ready'
-          : draft.resource.accessMode === 'paid'
-            ? 'Paid recipe ready'
-            : 'Free recipe ready'
-        : 'Finish the recipe',
-      body: ready
-        ? promptResource
-          ? draft.resource.previewText.trim()
-          : getPostComposerPreviewStatusLabel(draft, selectedGeneration)
-        : 'Add a buyer preview and at least one prompt, workflow, file, note, or remix link.',
-      state: ready ? 'ready' : 'warning',
+      label: promptResource
+        ? 'Prompt recipe ready'
+        : draft.resource.accessMode === 'paid'
+          ? 'Paid recipe ready'
+          : 'Free recipe ready',
+      body: promptResource
+        ? draft.resource.previewText.trim()
+        : getPostComposerPreviewStatusLabel(draft, selectedGeneration),
+      state: 'ready',
     };
   }
 
@@ -1879,26 +2112,90 @@ function getPriceTokens(resource: PostComposerResourceDraft) {
   return legacyUsdValue;
 }
 
+const RESOURCE_CARD_TITLE_ERROR = 'Add an item title.';
+const RESOURCE_CARD_CONTENT_ERROR = 'Add the content, link, or file for this item.';
+const RESOURCE_CARD_INVALID_LINK_ERROR = 'Add a valid http:// or https:// link.';
+
+/**
+ * What each kind of item cannot be saved without, said beside the disabled
+ * Save in the web composer's words (`src/lib/post-composer-resource-cards.ts`).
+ * The app's workflow item has no text field, so it asks for a link or a file.
+ */
+const RESOURCE_CARD_SAVE_HINTS: Record<PostComposerResourceCardType, string> = {
+  prompt: 'Add the prompt to save this item.',
+  reference_media: 'Add a file to save this item.',
+  settings: 'Add the settings to save this item.',
+  workflow: 'Add a link or a file to save this item.',
+  source_assets: 'Add a file to save this item.',
+  guide: 'Add the guide or notes to save this item.',
+  external_link: 'Add a link to save this item.',
+  remix_link: 'Add a link to save this item.',
+  other: 'Add text or a file to save this item.',
+};
+
+export type PostComposerResourceCardErrors = Partial<Record<'title' | 'content', string>>;
+
+/** Which of the item editor's fields the creator has typed in, left, or emptied. */
+export type PostComposerResourceCardTouched = Partial<Record<'title' | 'content', boolean>>;
+
 export function getPostComposerResourceCardErrors(
   card: PostComposerResourceCardDraft,
-): Partial<Record<'title' | 'content', string>> {
-  const errors: Partial<Record<'title' | 'content', string>> = {};
+): PostComposerResourceCardErrors {
+  const errors: PostComposerResourceCardErrors = {};
   if (!card.title.trim()) {
-    errors.title = 'Add a resource title.';
+    errors.title = RESOURCE_CARD_TITLE_ERROR;
   }
-  const hasInvalidUrl = (
+  if (hasInvalidResourceCardLink(card)) {
+    errors.content = RESOURCE_CARD_INVALID_LINK_ERROR;
+  } else if (!resourceCardHasContent(card, { ignoreTitle: true })) {
+    errors.content = RESOURCE_CARD_CONTENT_ERROR;
+  }
+  return errors;
+}
+
+function hasInvalidResourceCardLink(card: PostComposerResourceCardDraft) {
+  return (
     Boolean(card.externalUrl.trim())
     && !isSafeResourceUrl(card.externalUrl)
   ) || card.attachments.some((attachment) => (
     Boolean(attachment.url?.trim())
     && !isSafeResourceUrl(attachment.url)
   ));
-  if (hasInvalidUrl) {
-    errors.content = 'Add a valid http:// or https:// link.';
-  } else if (!resourceCardHasContent(card, { ignoreTitle: true })) {
-    errors.content = 'Add the protected content, link, or file for this resource.';
+}
+
+/**
+ * The item editor's errors that are drawn: a field's only once it has been
+ * touched (recipe audit A-F14). A new item opened already saying in red what
+ * it lacked, read out as an alert. A link that cannot be opened is always
+ * said, since only typing makes one.
+ */
+export function getVisiblePostComposerResourceCardErrors(
+  card: PostComposerResourceCardDraft,
+  touched: PostComposerResourceCardTouched,
+): PostComposerResourceCardErrors {
+  const errors = getPostComposerResourceCardErrors(card);
+  const visible: PostComposerResourceCardErrors = {};
+  if (errors.title && touched.title) visible.title = errors.title;
+  if (errors.content && (touched.content || errors.content === RESOURCE_CARD_INVALID_LINK_ERROR)) {
+    visible.content = errors.content;
   }
-  return errors;
+  return visible;
+}
+
+/**
+ * A plain line beside the disabled Save while the item lacks something whose
+ * error is not drawn yet: "Add a file to save this item." Null once it can be
+ * saved, or once the error itself says it.
+ */
+export function getPostComposerResourceCardSaveHint(
+  card: PostComposerResourceCardDraft,
+  touched: PostComposerResourceCardTouched,
+): string | null {
+  const errors = getPostComposerResourceCardErrors(card);
+  const visible = getVisiblePostComposerResourceCardErrors(card, touched);
+  if (errors.title && !visible.title) return 'Add an item title to save this item.';
+  if (errors.content && !visible.content) return RESOURCE_CARD_SAVE_HINTS[card.type];
+  return null;
 }
 
 export function isPostComposerResourceCardReady(card: PostComposerResourceCardDraft) {

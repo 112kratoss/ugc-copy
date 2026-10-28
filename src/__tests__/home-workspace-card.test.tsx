@@ -6,12 +6,6 @@ import WorkspaceCard from '@/app/home/WorkspaceCard';
 import { announceGenerationStatusSynced } from '@/lib/generation-status-client';
 import type { HomeWorkspaceGenerationView } from '@/lib/home-dashboard';
 
-const useAuthMock = vi.fn();
-
-vi.mock('@/components/AuthProvider', () => ({
-  useAuth: () => useAuthMock(),
-}));
-
 function buildView(overrides: Partial<HomeWorkspaceGenerationView> = {}): HomeWorkspaceGenerationView {
   return {
     id: 'gen-1',
@@ -34,8 +28,6 @@ function buildView(overrides: Partial<HomeWorkspaceGenerationView> = {}): HomeWo
 describe('WorkspaceCard', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
-    useAuthMock.mockReset();
-    useAuthMock.mockReturnValue({ credits: null });
   });
 
   it('renders active runs with a live status row', () => {
@@ -51,30 +43,43 @@ describe('WorkspaceCard', () => {
             completedAt: null,
           }),
         ]}
-        initialCredits={88}
       />,
     );
 
     expect(screen.getByText('Image · nano-banana-2')).toBeInTheDocument();
-    expect(screen.getByText('88 credits')).toBeInTheDocument();
+    // The balance is the top bar's alone.
+    expect(screen.queryByText(/credits/)).not.toBeInTheDocument();
   });
 
   it('marks failed recents inline', () => {
     render(
       <WorkspaceCard
         initialGenerations={[buildView({ id: 'boom', status: 'failed', isFailed: true })]}
-        initialCredits={10}
       />,
     );
 
     expect(screen.getByText('Failed')).toBeInTheDocument();
   });
 
-  it('shows the empty state with the create CTA', () => {
-    render(<WorkspaceCard initialGenerations={[]} initialCredits={0} />);
+  it('shows the empty state, and leaves a new creation to the top bar', () => {
+    render(<WorkspaceCard initialGenerations={[]} />);
 
     expect(screen.getByText(/Nothing in flight yet/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /New creation/ })).toHaveAttribute('href', '/create');
+    // The top bar's Create menu starts one; the card used to offer it again, with Studio
+    // twice. Studio itself stays a link away: on a phone it is otherwise in the drawer only.
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual(['/creations']);
+  });
+
+  it('opens each recent creation in Studio, with one link to Studio itself', () => {
+    render(
+      <WorkspaceCard
+        initialGenerations={[buildView({ id: 'gen 1' }), buildView({ id: 'gen-2', title: 'Second still' })]}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: /Minnal Murali still/ })).toHaveAttribute('href', '/creations?generation=gen%201');
+    expect(screen.getByRole('link', { name: /Second still/ })).toHaveAttribute('href', '/creations?generation=gen-2');
+    expect(screen.getAllByRole('link', { name: /Studio/ }).map((link) => link.getAttribute('href'))).toEqual(['/creations']);
   });
 
   it('moves an active run into recents when a status sync reports success', () => {
@@ -88,7 +93,6 @@ describe('WorkspaceCard', () => {
             completedAt: null,
           }),
         ]}
-        initialCredits={5}
       />,
     );
 
@@ -123,19 +127,10 @@ describe('WorkspaceCard', () => {
         initialGenerations={[
           buildView({ id: 'active-1', status: 'processing', isActive: true, completedAt: null }),
         ]}
-        initialCredits={5}
       />,
     );
 
     expect(screen.getByText('Failed')).toBeInTheDocument();
-  });
-
-  it('prefers live credits from auth context over the server snapshot', () => {
-    useAuthMock.mockReturnValue({ credits: 42 });
-
-    render(<WorkspaceCard initialGenerations={[]} initialCredits={88} />);
-
-    expect(screen.getByText('42 credits')).toBeInTheDocument();
   });
 
   it('renders the compact inline variant with an active count', () => {
@@ -145,13 +140,18 @@ describe('WorkspaceCard', () => {
           buildView({ id: 'a', status: 'processing', isActive: true, completedAt: null }),
           buildView({ id: 'b', status: 'waiting', isActive: true, completedAt: null }),
         ]}
-        initialCredits={12}
         variant="inline"
       />,
     );
 
     expect(screen.getByText('2 renders in progress')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /New creation/ })).toHaveAttribute('href', '/create');
+    expect(screen.getByRole('link', { name: 'Open Studio' })).toHaveAttribute('href', '/creations');
+  });
+
+  it('draws no inline strip while nothing renders', () => {
+    const { container } = render(<WorkspaceCard initialGenerations={[buildView()]} variant="inline" />);
+
+    expect(container).toBeEmptyDOMElement();
   });
 
   describe('the clock', () => {
@@ -176,7 +176,7 @@ describe('WorkspaceCard', () => {
       atRailWidth(true);
       const setIntervalSpy = vi.spyOn(window, 'setInterval');
 
-      render(<WorkspaceCard initialGenerations={running} initialCredits={5} variant="rail" />);
+      render(<WorkspaceCard initialGenerations={running} variant="rail" />);
 
       expect(secondTicks(setIntervalSpy)).toHaveLength(1);
     });
@@ -187,7 +187,7 @@ describe('WorkspaceCard', () => {
       atRailWidth(false);
       const setIntervalSpy = vi.spyOn(window, 'setInterval');
 
-      render(<WorkspaceCard initialGenerations={running} initialCredits={5} variant="inline" />);
+      render(<WorkspaceCard initialGenerations={running} variant="inline" />);
 
       expect(screen.getByText('1 render in progress')).toBeInTheDocument();
       expect(secondTicks(setIntervalSpy)).toHaveLength(0);
