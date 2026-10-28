@@ -139,9 +139,10 @@ vi.mock('@/lib/persisted-media', () => ({
 }));
 
 // The creators' price lists answer from the stand-in: nothing is priced unless a test says so.
-vi.mock('@/lib/use-quote-prices', async () => {
+// The module's pure helpers stay its own.
+vi.mock('@/lib/use-quote-prices', async (importOriginal) => {
   const { quotePricesHookStandIn } = await import('./fixtures/quote-prices-stand-in');
-  return { useQuotePrices: quotePricesHookStandIn };
+  return { ...await importOriginal<typeof import('@/lib/use-quote-prices')>(), useQuotePrices: quotePricesHookStandIn };
 });
 
 vi.mock('@/lib/persisted-creator-draft', () => ({
@@ -1917,6 +1918,37 @@ describe('CreateImageClient prices', () => {
       .toHaveTextContent('8 credits');
   });
 
+  it('says what each model keeps of every picture on the grid, the model in use too', async () => {
+    getPersistedImageElementRecordsMock.mockResolvedValueOnce(Array.from({ length: 11 }, (_, index) => ({
+      id: `restored-${index + 1}`,
+      displayName: `Restored ${index + 1}`,
+      file: new File([`image-${index + 1}`], `restored-${index + 1}.png`, { type: 'image/png' }),
+    })));
+    const view = render(<CreateImageClient prefill={{}} />);
+    expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
+
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')!);
+
+    // Nano Banana 2.0 takes ten of the eleven; Imagen 4 is prompt-only.
+    expect(screen.getByRole('option', { name: /Nano Banana 2\.0/ })).toHaveTextContent('Keeps 10 of your 11 references');
+    expect(screen.getByRole('option', { name: /Imagen 4/ })).toHaveTextContent('Drops your references');
+  });
+
+  it('splits the list once every price is in, a model whose details are missing among the unpriced', async () => {
+    modelCatalogState.summaries = [
+      ...imageModelSummaries,
+      { id: 'ideogram-v3', kind: 'image', displayName: 'Ideogram V3', description: 'Test model without details' },
+    ];
+    modelCatalogState.missingIds = ['ideogram-v3'];
+    const view = render(<CreateImageClient prefill={{}} />);
+    expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')!);
+
+    expect(screen.getByRole('group', { name: 'Fits your 6 credits' })).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'Not priced' })).getByRole('option', { name: /Ideogram V3/ })).toBeInTheDocument();
+  });
+
   it('prices every option of the settings, and reads the balance under the bar', async () => {
     authState.credits = 10;
     render(<CreateImageClient prefill={{}} />);
@@ -1929,5 +1961,7 @@ describe('CreateImageClient prices', () => {
     const settings = screen.getByRole('dialog', { name: 'Generation settings' });
     expect(within(settings).getByRole('radio', { name: '4K, 18 credits, 8 more than your balance' })).toHaveTextContent('4K18 · +8');
     expect(settings).toHaveTextContent('This run 8 credits · leaves 2');
+    // What "+8" means, as the video creator says it.
+    expect(settings).toHaveTextContent('“+8” means 8 credits more than your balance of 10.');
   });
 });

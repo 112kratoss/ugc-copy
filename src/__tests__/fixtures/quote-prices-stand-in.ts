@@ -7,9 +7,9 @@ import type { ListedPrice } from '@/lib/use-quote-prices';
  * asked to price. Unless a test says otherwise nothing is priced, so a page draws no listed
  * price, as it does before its lists' answers come in.
  *
- *   vi.mock('@/lib/use-quote-prices', async () => {
+ *   vi.mock('@/lib/use-quote-prices', async (importOriginal) => {
  *     const { quotePricesHookStandIn } = await import('./fixtures/quote-prices-stand-in');
- *     return { useQuotePrices: quotePricesHookStandIn };
+ *     return { ...await importOriginal<typeof import('@/lib/use-quote-prices')>(), useQuotePrices: quotePricesHookStandIn };
  *   });
  */
 export const priceListStandIn = {
@@ -35,8 +35,8 @@ export function pricedBy(cost: (request: GenerationModelQuoteInput) => number | 
   return (request: GenerationModelQuoteInput): ListedPrice => {
     const credits = cost(request);
     return credits === null
-      ? { status: 'refused', code: 'INVALID_MODEL_SETTINGS', message: 'This model needs something else first.' }
-      : { status: 'ready', costCredits: credits, normalizedSettings: {} };
+      ? { status: 'refused', message: 'This model needs something else first.' }
+      : { status: 'ready', costCredits: credits };
   };
 }
 

@@ -27,10 +27,12 @@ import {
     CreatorMakeImageInstead,
     CreatorMentionPanel,
     CreatorModelChip,
+    CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorReferenceRow,
     CreatorResultActions,
     CreatorSettingChoices,
+    CreatorSettingsFootNote,
     CreatorSettingSwitch,
     CreatorTemplatesTile,
     CreatorToolTabs,
@@ -41,6 +43,7 @@ import {
     CREATOR_BAR_PRIMARY_CLASS,
     CREATOR_NOTE_LINK_CLASS,
     creatorAddButtonClass,
+    creditsWords,
     smallestCreditPackLabel,
 } from '@/components/CreatorColumn';
 import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
@@ -53,13 +56,13 @@ import { videoRunShortSummary, videoSettingsSummary } from '../../../ugc-mobile/
 import {
     cheapestCost,
     fitRemixToBalance,
-    isUnderCheapest,
     longestLengthWithin,
-    optionPriceLabel,
     referenceKeepWords,
+    samePriceForEach,
 } from '../../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import {
     fitVideoFormToModel,
+    sameVideoFormSettings,
     takesSameVideoInputs,
     videoRunInputTally,
     videoRunOnModel,
@@ -67,7 +70,15 @@ import {
     type VideoFormSettings,
     type VideoRunOnModel,
 } from '@/lib/creator-video-candidates';
-import { useQuotePrices, type ListedPrice } from '@/lib/use-quote-prices';
+import {
+    listedFromQuote,
+    NO_SETTINGS_VARIANTS,
+    optionPricesOf,
+    readyCost,
+    settingsVariants,
+    smallestOverBalance,
+    useQuotePrices,
+} from '@/lib/use-quote-prices';
 import {
     StudioBackgroundProcessingNotice,
     StudioElementHandle,
@@ -86,11 +97,11 @@ import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSe
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
-import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
+import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import { planVideoRunInputs, type VideoRunInput } from '@/lib/creator-run-inputs';
 import type { CatalogGenerationInputAsset, CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
-import type { CatalogPrimitive, GenerationModelDescriptor, GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
+import type { CatalogPrimitive, GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
     clearPendingWebStart,
     getCatalogDescriptorDefaultSettings,
@@ -497,34 +508,30 @@ function makeImageInsteadHref(modelId: string, prompt: string): string {
     return `/create-image?${params.toString()}`;
 }
 
-/** A price on Generate as a listed price, for the model in use in the model list. */
-function listedFromQuote(quote: { status: string; quote: { costCredits: number; normalizedSettings: Record<string, CatalogPrimitive> } | null }): ListedPrice {
-    if (quote.status === 'ready' && quote.quote) {
-        return { status: 'ready', costCredits: quote.quote.costCredits, normalizedSettings: quote.quote.normalizedSettings };
-    }
-    return quote.status === 'error' ? { status: 'unavailable' } : { status: 'pending' };
-}
+/** The run a remix fitted to the balance opened on in its original's place. */
+type RemixFitted = { modelId: VideoModelId; settings: VideoFormSettings; cost: number; sameLength: boolean };
 
 /**
- * A remix fitted to the balance (owner, 2026-10-28): the original it came from, the run it
- * opened on instead, and how far the deciding has got. It is decided once, when the
- * original's price first comes in.
+ * A remix fitted to the balance (owner, 2026-10-28): the original it came from and how far
+ * the deciding has got. It is decided once, when the original's price first comes in:
+ * pricing every model, then (when even the cheapest is short at its length) its shorter
+ * lengths, then settled on the run it opened on, or on the original (`fitted` null).
  */
-type RemixFit = {
-    stage: 'pricing' | 'shortening' | 'settled';
-    original: { modelId: VideoModelId; settings: VideoFormSettings; cost: number; durationSeconds: number };
-    fitted: { modelId: VideoModelId; settings: VideoFormSettings; cost: number; sameLength: boolean } | null;
-    /** While shortening: the model whose shorter lengths are priced, at its fitted settings. */
-    shortenOn: { modelId: VideoModelId; settings: VideoFormSettings; belowSeconds: number } | null;
-};
+type RemixFit = { original: { modelId: VideoModelId; settings: VideoFormSettings; cost: number; durationSeconds: number } } & (
+    | { stage: 'pricing' }
+    | {
+        stage: 'shortening';
+        /** The model whose shorter lengths are priced, at its fitted settings, and the one to open when none fits. */
+        shortenOn: { modelId: VideoModelId; settings: VideoFormSettings; belowSeconds: number };
+        otherwise: { modelId: VideoModelId; sameLength: boolean } | null;
+    }
+    | { stage: 'settled'; fitted: RemixFitted | null }
+);
 
 /** A model's lengths below `belowSeconds`, as its settings offer them. */
 function lengthsBelow(modelId: VideoModelId, belowSeconds: number): number[] {
-    const range = getVideoDurationRange(modelId);
-    const lengths = range
-        ? Array.from({ length: range.max - range.min + 1 }, (_, index) => range.min + index)
-        : [...(VIDEO_MODELS[modelId]?.durations ?? [])].map(Number);
-    return lengths.filter((length) => length < belowSeconds);
+    return videoLengthOptions(getVideoDurationRange(modelId), VIDEO_MODELS[modelId]?.durations ?? [])
+        .filter((length) => length < belowSeconds);
 }
 
 function PromptQualityWarnings({ warnings }: { warnings: PromptEnhancementWarning[] }) {
@@ -1727,9 +1734,18 @@ export default function CreateVideoClient({
         characterIds,
         multiShotSeconds: multiShotTotalDuration(multiPrompts),
     }), [elements, referenceVideos, referenceAudios, klingVideoElements, klingSubjects, startImageUrl, startImageFile, endImageUrl, endImageFile, preparedAudioIds, characterIds, multiPrompts]);
+    // While a change is being priced (each settings press: a debounce and a round trip), what
+    // the balance covers is read from this model's last price, so the bar does not swap its
+    // action, its layout and the notices over it and back on every press.
+    const [lastCost, setLastCost] = useState<{ modelId: VideoModelId; cost: number } | null>(null);
+    if (estimatedCost !== null && (lastCost?.modelId !== selectedModel || lastCost.cost !== estimatedCost)) {
+        setLastCost({ modelId: selectedModel, cost: estimatedCost });
+    }
+    const affordCost = estimatedCost
+        ?? (quoteState.status === 'pending' && lastCost?.modelId === selectedModel ? lastCost.cost : null);
     // Every model is priced while the list is open, while a remix is fitted to the balance, and
     // while the balance is short of this run, to tell a balance short of every video.
-    const balanceShort = !isVisitor && insufficientCredits;
+    const balanceShort = !isVisitor && userCredits !== null && affordCost !== null && userCredits < affordCost;
     const pricesModelList = isModelDropdownOpen || remixFit?.stage === 'pricing' || balanceShort;
     const videoModelIdsKey = videoModelOptions.map((option) => option.id).join(',');
     const ensureModelDetails = modelCatalog.ensureDetails;
@@ -1744,62 +1760,51 @@ export default function CreateVideoClient({
         const detailed = new Set(catalog.models.map((model) => model.id));
         for (const id of videoModelIdsKey.split(',')) {
             if (id === selectedModel || !detailed.has(id)) continue;
-            const run = videoRunOnModel({ modelId: id, catalogRevision: catalog.revision, form: pageForm, held: formHeld });
+            const run = videoRunOnModel({ modelId: id, catalogRevision: catalog.revision, settings: fitVideoFormToModel(id, pageForm), held: formHeld });
             if (run) runs.set(id, run);
         }
         return runs;
     }, [pricesModelList, modelCatalog.catalog, videoModelIdsKey, selectedModel, pageForm, formHeld]);
     // Every option of the open settings, each the run with that one setting changed.
-    const lengthOptions = useMemo(() => (
-        singleShotDurationRange
-            ? Array.from({ length: singleShotDurationRange.max - singleShotDurationRange.min + 1 }, (_, index) => singleShotDurationRange.min + index)
-            : [...videoModel.durations].map(Number)
-    ), [singleShotDurationRange, videoModel.durations]);
-    const settingsVariants = useMemo(() => {
-        const variants = new Map<string, GenerationModelQuoteInput>();
-        if (!settingsOpen || !quoteRequest) return variants;
-        const vary = (key: string, values: readonly CatalogPrimitive[]) => {
-            for (const value of values) {
-                variants.set(`${key}=${String(value)}`, { ...quoteRequest, settings: { ...quoteRequest.settings, [key]: value } });
-            }
-        };
-        if (!currentIsMultiShot && lengthOptions.length > 1) vary('duration', lengthOptions);
-        vary('resolution', videoModel.resolutions);
-        vary('mode', videoModel.modeOptions.map((option) => option.value));
-        vary('aspectRatio', videoModel.aspectRatios);
-        if (videoModel.supportsSound) vary('sound', [true, false]);
-        return variants;
-    }, [settingsOpen, quoteRequest, currentIsMultiShot, lengthOptions, videoModel]);
+    const lengthOptions = useMemo(
+        () => videoLengthOptions(singleShotDurationRange, videoModel.durations),
+        [singleShotDurationRange, videoModel.durations],
+    );
+    const lengthPriced = !currentIsMultiShot && lengthOptions.length > 1;
+    const lengthButtons = lengthPriced && (!singleShotDurationRange || lengthOptions.length <= PRICED_LENGTH_BUTTONS_MAX);
+    const settingsAxes = useMemo<Array<readonly [string, readonly CatalogPrimitive[]]>>(() => [
+        ...(lengthPriced ? [['duration', lengthOptions] as const] : []),
+        ['resolution', videoModel.resolutions],
+        ['mode', videoModel.modeOptions.map((option) => option.value)],
+        ['aspectRatio', videoModel.aspectRatios],
+        ...(videoModel.supportsSound ? [['sound', [true, false]] as const] : []),
+    ], [lengthPriced, lengthOptions, videoModel]);
+    const variants = useMemo(
+        () => (settingsOpen ? settingsVariants(quoteRequest, settingsAxes) : NO_SETTINGS_VARIANTS),
+        [settingsOpen, quoteRequest, settingsAxes],
+    );
     // While the balance is short of this run, the image models too, for a balance short of every video.
-    const imageRuns = useMemo<GenerationModelQuoteInput[]>(() => {
+    const imageRuns = useMemo(() => {
         const revision = modelCatalog.catalog?.revision;
         if (!balanceShort || !revision) return [];
-        return Object.keys(IMAGE_MODELS).map((id) => ({
-            schemaVersion: 2,
-            kind: 'image',
-            modelId: id,
-            settings: {},
-            inputCounts: { images: 0, videos: 0, audios: 0 },
-            catalogRevision: revision,
-        }));
+        return Object.keys(IMAGE_MODELS).map((id) => catalogRunQuoteInput({ kind: 'image' as const, modelId: id, catalogRevision: revision, settings: {}, inputs: [] }));
     }, [balanceShort, modelCatalog.catalog?.revision]);
     // A remix whose cheapest fitting model is short of the balance at its length: its shorter lengths.
     const shortenRuns = useMemo(() => {
         const revision = modelCatalog.catalog?.revision;
-        if (remixFit?.stage !== 'shortening' || !remixFit.shortenOn || !revision) return [];
+        if (remixFit?.stage !== 'shortening' || !revision) return [];
         const { modelId, settings, belowSeconds } = remixFit.shortenOn;
         return lengthsBelow(modelId, belowSeconds).flatMap((duration) => {
-            const run = videoRunOnModel({ modelId, catalogRevision: revision, form: remixFit.original.settings, held: formHeld, settings: { ...settings, duration } });
+            const run = videoRunOnModel({ modelId, catalogRevision: revision, settings: { ...settings, duration }, held: formHeld });
             return run ? [run] : [];
         });
     }, [remixFit, modelCatalog.catalog?.revision, formHeld]);
     const priceOf = useQuotePrices([
         ...[...modelRuns.values()].map((run) => run.quoteInput),
-        ...settingsVariants.values(),
+        ...variants.values(),
         ...imageRuns,
         ...shortenRuns.map((run) => run.quoteInput),
     ]);
-    const readyCost = (price: ListedPrice) => (price.status === 'ready' ? price.costCredits : null);
     // Every model's price is in: each model with details has its answer, and the rest are
     // missing, or will not load (a model whose details failed counts as unpriced).
     const modelListSettled = pricesModelList && Boolean(modelCatalog.catalog) && videoModelIdsKey.split(',').every((id) => (
@@ -1807,7 +1812,10 @@ export default function CreateVideoClient({
             || modelCatalog.missingIds.includes(id)
             || (modelRuns.has(id) ? priceOf(modelRuns.get(id)!.quoteInput).status !== 'pending' : Boolean(modelCatalog.error))
     ));
-    const videoCosts = [estimatedCost, ...[...modelRuns.values()].map((run) => readyCost(priceOf(run.quoteInput)))];
+    // A remix is fitted only on prices that are in: one not to be had now is asked again in
+    // half a minute (`useQuotePrices`), and the remix waits for it rather than settling on its original.
+    const remixPricesIn = modelListSettled && [...modelRuns.values()].every((run) => priceOf(run.quoteInput).status !== 'unavailable');
+    const videoCosts = [affordCost, ...[...modelRuns.values()].map((run) => readyCost(priceOf(run.quoteInput)))];
     const videosFrom = cheapestCost(videoCosts);
     // Short of every video (owner, 2026-10-28): an image first, on the image model that costs least.
     const imageOffer = imageRuns.reduce<{ modelId: string; name: string; cost: number } | null>((best, run) => {
@@ -1816,14 +1824,10 @@ export default function CreateVideoClient({
         const name = (IMAGE_MODELS as Record<string, { displayName?: string } | undefined>)[run.modelId]?.displayName ?? run.modelId;
         return { modelId: run.modelId, name, cost };
     }, null);
-    const shortOfEveryVideo = balanceShort && userCredits !== null && modelListSettled && isUnderCheapest(userCredits, videoCosts);
+    const shortOfEveryVideo = balanceShort && userCredits !== null && modelListSettled && videosFrom !== null && userCredits < videosFrom;
     const offersImageInstead = shortOfEveryVideo && imageOffer !== null && imageOffer.cost <= (userCredits ?? 0);
     // An option's price in the settings, against the balance: "19", or "23 · +1" past it.
-    const optionPrice = (key: string, value: CatalogPrimitive) => {
-        const request = settingsVariants.get(`${key}=${String(value)}`);
-        const cost = request ? readyCost(priceOf(request)) : null;
-        return cost === null ? null : { cost, ...optionPriceLabel(cost, listBalance) };
-    };
+    const optionPrice = optionPricesOf(variants, priceOf, listBalance, isVisitor ? 'the free credits' : 'your balance');
     // A single-shot prompt may mention only what its run sends: the server refuses any
     // other handle. A saved image the run leaves out is named as on standby, the rest as
     // unknown.
@@ -3816,18 +3820,35 @@ export default function CreateVideoClient({
     useEffect(() => {
         if (!remixReadyToWeigh || estimatedCost === null || userCredits === null) return;
         const original = { modelId: selectedModel, settings: pageForm, cost: estimatedCost, durationSeconds: totalDuration };
-        setRemixFit({ stage: estimatedCost <= userCredits ? 'settled' : 'pricing', original, fitted: null, shortenOn: null });
+        setRemixFit(estimatedCost <= userCredits ? { original, stage: 'settled', fitted: null } : { original, stage: 'pricing' });
     // Weighed once, from the render that first has the original's price.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [remixReadyToWeigh]);
+    // While it is decided, a creator who moves off the original (picks a model, changes a
+    // setting) has chosen, and a balance that now covers the original needs no fitting:
+    // either settles it where the creator is.
+    const remixLeftAlone = remixFit !== null && remixFit.stage !== 'settled'
+        && selectedModel === remixFit.original.modelId
+        && sameVideoFormSettings(pageForm, remixFit.original.settings)
+        && !(estimatedCost !== null && userCredits !== null && estimatedCost <= userCredits);
+    /** The run on `modelId` the remix opens on, at its listed price; null when it is not priced. */
+    const remixFittedOn = (modelId: string, sameLength: boolean): RemixFitted | null => {
+        const run = modelRuns.get(modelId);
+        const cost = run ? readyCost(priceOf(run.quoteInput)) : null;
+        return run && cost !== null ? { modelId: run.modelId as VideoModelId, settings: run.settings, cost, sameLength } : null;
+    };
+    const settleRemix = (fitted: RemixFitted | null) => {
+        if (!remixFit) return;
+        if (fitted) switchModel(fitted.modelId, fitted.settings);
+        setRemixFit({ original: remixFit.original, stage: 'settled', fitted });
+    };
     useEffect(() => {
         if (remixFit?.stage !== 'pricing' || userCredits === null) return;
-        // A creator who picked a model meanwhile has chosen.
-        if (selectedModel !== remixFit.original.modelId) {
-            setRemixFit({ ...remixFit, stage: 'settled' });
+        if (!remixLeftAlone) {
+            settleRemix(null);
             return;
         }
-        if (!modelListSettled) return;
+        if (!remixPricesIn) return;
         const originalRun = { inputs: runInputs, settings: remixFit.original.settings };
         const decision = fitRemixToBalance({
             original: remixFit.original,
@@ -3840,23 +3861,32 @@ export default function CreateVideoClient({
                 takesInputs: takesSameVideoInputs(originalRun, run),
             })),
         });
-        const run = decision.kind === 'original' ? null : modelRuns.get(decision.modelId);
-        const cost = run ? readyCost(priceOf(run.quoteInput)) : null;
-        if (!run || cost === null) {
-            setRemixFit({ ...remixFit, stage: 'settled' });
+        const shortenOn = decision.kind === 'shorten' ? modelRuns.get(decision.modelId) : undefined;
+        if (decision.kind === 'original') {
+            settleRemix(null);
         } else if (decision.kind === 'fitted') {
-            switchModel(run.modelId as VideoModelId, run.settings);
-            setRemixFit({ ...remixFit, stage: 'settled', fitted: { modelId: run.modelId as VideoModelId, settings: run.settings, cost, sameLength: decision.sameLength } });
+            settleRemix(remixFittedOn(decision.modelId, decision.sameLength));
+        } else if (!shortenOn) {
+            settleRemix(null);
         } else {
-            setRemixFit({ ...remixFit, stage: 'shortening', shortenOn: { modelId: run.modelId as VideoModelId, settings: run.settings, belowSeconds: run.durationSeconds } });
+            setRemixFit({
+                original: remixFit.original,
+                stage: 'shortening',
+                shortenOn: { modelId: shortenOn.modelId as VideoModelId, settings: shortenOn.settings, belowSeconds: decision.durationSeconds },
+                otherwise: decision.otherwise ? { modelId: decision.otherwise.modelId as VideoModelId, sameLength: decision.otherwise.sameLength } : null,
+            });
         }
     // It decides from the prices as they come in; the switch is this render's.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remixFit, modelListSettled, selectedModel, userCredits]);
+    }, [remixFit, remixLeftAlone, remixPricesIn, userCredits]);
     useEffect(() => {
-        if (remixFit?.stage !== 'shortening' || !remixFit.shortenOn || userCredits === null) return;
+        if (remixFit?.stage !== 'shortening' || userCredits === null) return;
+        if (!remixLeftAlone) {
+            settleRemix(null);
+            return;
+        }
         const prices = shortenRuns.map((run) => ({ run, price: priceOf(run.quoteInput) }));
-        if (prices.some(({ price }) => price.status === 'pending')) return;
+        if (prices.some(({ price }) => price.status === 'pending' || price.status === 'unavailable')) return;
         const length = longestLengthWithin(
             prices.map(({ run, price }) => ({ durationSeconds: run.durationSeconds, cost: readyCost(price) })),
             userCredits,
@@ -3864,20 +3894,15 @@ export default function CreateVideoClient({
         );
         const chosen = prices.find(({ run }) => run.durationSeconds === length);
         const cost = chosen ? readyCost(chosen.price) : null;
-        if (!chosen || cost === null) {
-            setRemixFit({ ...remixFit, stage: 'settled', shortenOn: null });
+        if (chosen && cost !== null) {
+            settleRemix({ modelId: chosen.run.modelId as VideoModelId, settings: chosen.run.settings, cost, sameLength: false });
             return;
         }
-        switchModel(chosen.run.modelId as VideoModelId, chosen.run.settings);
-        setRemixFit({
-            ...remixFit,
-            stage: 'settled',
-            shortenOn: null,
-            fitted: { modelId: chosen.run.modelId as VideoModelId, settings: chosen.run.settings, cost, sameLength: false },
-        });
+        // No shorter length fits: the cheapest model that fits at a length of its own, else the original.
+        settleRemix(remixFit.otherwise ? remixFittedOn(remixFit.otherwise.modelId, remixFit.otherwise.sameLength) : null);
     // It decides once every shorter length's price is in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remixFit, shortenRuns, priceOf, userCredits]);
+    }, [remixFit, remixLeftAlone, shortenRuns, priceOf, userCredits]);
 
     useEffect(() => {
         const resumePendingGeneration = async () => {
@@ -4580,11 +4605,11 @@ export default function CreateVideoClient({
     ) : null;
     // A remix moved back to its original that the balance does not cover: the run it was fitted
     // to is one press away (owner, 2026-10-28; the artboard "Short").
-    const remixFitted = remixFit?.fitted ?? null;
+    const remixFitted = remixFit?.stage === 'settled' ? remixFit.fitted : null;
     const onFittedRemix = remixFitted !== null && selectedModel === remixFitted.modelId;
     const onRemixOriginal = remixFitted !== null && remixFit !== null && selectedModel === remixFit.original.modelId;
-    const offersFittedRemix = onRemixOriginal && insufficientCredits && !isGenerating && !isAwaitingStartCheck
-        && userCredits !== null && estimatedCost !== null;
+    const offersFittedRemix = onRemixOriginal && balanceShort && !isGenerating && !isAwaitingStartCheck
+        && userCredits !== null && affordCost !== null;
     const fittedName = remixFitted ? VIDEO_MODELS[remixFitted.modelId]?.displayName ?? remixFitted.modelId : '';
     const originalName = remixFit ? VIDEO_MODELS[remixFit.original.modelId]?.displayName ?? remixFit.original.modelId : '';
     // "the same prompt, references and 5s", or "the same prompt and references at 4s".
@@ -4602,9 +4627,9 @@ export default function CreateVideoClient({
     const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating && !offersFittedRemix && !shortOfEveryVideoShown ? (
         <CreatorTopUpNotice cost={estimatedCost} balance={userCredits} message={creditRefusal?.message ?? null} />
     ) : null;
-    const fitNotice = offersFittedRemix && remixFitted && userCredits !== null && estimatedCost !== null ? (
+    const fitNotice = offersFittedRemix && remixFitted && userCredits !== null && affordCost !== null ? (
         <CreatorFitNotice
-            original={{ name: originalName, cost: estimatedCost }}
+            original={{ name: originalName, cost: affordCost }}
             balance={userCredits}
             fitted={{ name: fittedName, cost: remixFitted.cost, keeps: fittedKeeps }}
         />
@@ -4661,36 +4686,21 @@ export default function CreateVideoClient({
     ) : undefined;
 
     // The settings, each option priced (owner, 2026-10-28): the run with that one option.
-    const sameRatioPrice = (() => {
-        const costs = videoModel.aspectRatios.map((ratio) => optionPrice('aspectRatio', ratio)?.cost ?? null);
-        return costs.length > 1 && costs.every((cost) => cost !== null && cost === costs[0]);
-    })();
+    const sameRatioPrice = samePriceForEach(videoModel.aspectRatios.map((ratio) => optionPrice('aspectRatio', ratio)?.cost ?? null));
     const soundCosts = { on: optionPrice('sound', true), off: optionPrice('sound', false) };
     const soundPriceWords = soundCosts.on && soundCosts.off
         ? soundCosts.on.cost === soundCosts.off.cost
             ? `No extra cost on ${videoModel.displayName}`
-            : `${soundCosts.on.cost > soundCosts.off.cost ? 'Adds' : 'Saves'} ${Math.abs(soundCosts.on.cost - soundCosts.off.cost)} credits`
+            : `${soundCosts.on.cost > soundCosts.off.cost ? 'Adds' : 'Saves'} ${creditsWords(Math.abs(soundCosts.on.cost - soundCosts.off.cost))}`
         : 'Adds sound made for the scene.';
-    const lengthPriced = !currentIsMultiShot && lengthOptions.length > 1;
-    const lengthButtons = lengthPriced && (!singleShotDurationRange || lengthOptions.length <= PRICED_LENGTH_BUTTONS_MAX);
-    // The least an option goes past the balance by, for the line that says what "+N" means.
-    const smallestOver = listBalance === null ? null : [...settingsVariants.values()].reduce<number | null>((least, request) => {
-        const cost = readyCost(priceOf(request));
-        return cost !== null && cost > listBalance && (least === null || cost - listBalance < least) ? cost - listBalance : least;
-    }, null);
+    // "+N" is explained by the least N an option on screen carries: a slider shows only its own length's.
+    const smallestOver = smallestOverBalance(optionPrice, settingsAxes.flatMap(([key, values]) => (
+        key === 'duration' && !lengthButtons ? [[key, [currentDuration]] as const]
+            : key === 'aspectRatio' && sameRatioPrice ? []
+                : key === 'sound' ? [[key, [currentSound]] as const]
+                    : [[key, values] as const]
+    )));
     const sliderPrice = optionPrice('duration', currentDuration);
-    const settingsFootNote = estimatedCost !== null ? (
-        <span>
-            This run <strong className="text-[var(--ui-text-primary)]">{estimatedCost} {estimatedCost === 1 ? 'credit' : 'credits'}</strong>
-            {listBalance !== null
-                ? estimatedCost <= listBalance
-                    ? ` · leaves ${listBalance - estimatedCost}`
-                    : ` · ${estimatedCost - listBalance} more than ${isVisitor ? 'the free credits' : 'your balance'}`
-                : null}
-        </span>
-    ) : (
-        <span>{quoteUi.costLabel}</span>
-    );
 
     const settingsPanel = (
         <div className="space-y-5">
@@ -4728,7 +4738,7 @@ export default function CreateVideoClient({
                             {currentDuration}s
                             {sliderPrice ? (
                                 <span className={sliderPrice.over !== null ? 'text-amber-300' : 'text-[var(--ui-text-faint)]'}>
-                                    {` · ${sliderPrice.cost} credits${sliderPrice.over !== null ? ` · +${sliderPrice.over}` : ''}`}
+                                    {` · ${creditsWords(sliderPrice.cost)}${sliderPrice.over !== null ? ` · +${sliderPrice.over}` : ''}`}
                                 </span>
                             ) : null}
                         </span>
@@ -4798,11 +4808,7 @@ export default function CreateVideoClient({
                 />
             ) : null}
 
-            {smallestOver !== null && listBalance !== null ? (
-                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
-                    “+{smallestOver}” means {smallestOver} {smallestOver === 1 ? 'credit' : 'credits'} more than {isVisitor ? `the ${listBalance} free credits` : `your balance of ${listBalance}`}. Those options stay selectable{isVisitor ? '.' : ', and show Top up in place of Generate.'}
-                </p>
-            ) : null}
+            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} />
 
             <CatalogAdditionalControls
                 appearance="panel"
@@ -4860,7 +4866,9 @@ export default function CreateVideoClient({
             description: modelOption.description,
             price: isSelected
                 ? listedFromQuote(quoteState)
-                : run ? priceOf(run.quoteInput) : { status: modelCatalog.error ? 'unavailable' : 'pending' },
+                : run
+                    ? priceOf(run.quoteInput)
+                    : { status: modelCatalog.error || modelCatalog.missingIds.includes(modelOption.id) ? 'unavailable' : 'pending' },
             summary: isSelected ? settingsSummaryShort : run?.summary ?? null,
             keeps,
         };
@@ -4914,6 +4922,7 @@ export default function CreateVideoClient({
                                         selectedId={selectedModel}
                                         balance={listBalance}
                                         balanceLabel={isVisitor ? `the ${listBalance} free credits` : `your ${listBalance} credits`}
+                                        accent="video"
                                         onSelect={(id) => handleSelectModel(id as VideoModelId)}
                                     />
                                 </StudioModelPicker>
@@ -5792,7 +5801,8 @@ export default function CreateVideoClient({
                             settingsSummary={settingsSummary}
                             settingsSummaryShort={settingsSummaryShort}
                             settings={settingsPanel}
-                            settingsFootNote={settingsFootNote}
+                            settingsFootNote={<CreatorSettingsFootNote cost={estimatedCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
+                            settingsOpen={settingsOpen}
                             onSettingsOpenChange={setSettingsOpen}
                             status={barStatus}
                             action={barAction}

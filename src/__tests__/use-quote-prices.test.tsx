@@ -3,7 +3,8 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
-import { useQuotePrices } from '@/lib/use-quote-prices';
+import { fitImageFormToModel, type ImageFormSettings } from '@/lib/creator-image-candidates';
+import { optionPricesOf, settingsVariants, smallestOverBalance, useQuotePrices, type ListedPrice } from '@/lib/use-quote-prices';
 import { GENERATION_MODEL_QUOTE_BATCH_MAX } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
@@ -66,8 +67,8 @@ describe('useQuotePrices', () => {
     expect(askedLists()).toEqual([['seedance-2-mini@4', 'seedance-2-mini@5', 'refused@6']]);
     expect(fetchMock.mock.calls[0][0]).toBe('/api/generation-models/quotes');
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has('Authorization')).toBe(false);
-    expect(result.current(run(5))).toEqual({ status: 'ready', costCredits: 20, normalizedSettings: { resolution: '480p', duration: 5 } });
-    expect(result.current(run(6, 'refused'))).toEqual({ status: 'refused', code: 'INVALID_MODEL_SETTINGS', message: 'No.' });
+    expect(result.current(run(5))).toEqual({ status: 'ready', costCredits: 20 });
+    expect(result.current(run(6, 'refused'))).toEqual({ status: 'refused', message: 'No.' });
     expect(result.current(null)).toEqual({ status: 'pending' });
   });
 
@@ -137,5 +138,40 @@ describe('useQuotePrices', () => {
     await settle();
 
     expect(result.current(run(5))).toMatchObject({ status: 'ready', costCredits: 20 });
+  });
+});
+
+describe('the settings\' options priced', () => {
+  const imageRun: GenerationModelQuoteInput = {
+    schemaVersion: 2,
+    kind: 'image',
+    modelId: 'gpt-image-2',
+    settings: { aspectRatio: '16:9', resolution: '4K', qualityMode: 'medium', googleSearch: false },
+    catalogRevision: 'rev-1',
+  };
+
+  // GPT Image 2 makes 4K at 16:9 alone: a square option is priced at the resolution the page's
+  // clamp would move it to, not refused for 4K.
+  it('prices an option as the page\'s clamp leaves the run', () => {
+    const variants = settingsVariants(imageRun, [['aspectRatio', ['16:9', '1:1']]], (settings) => ({
+      ...settings,
+      ...fitImageFormToModel('gpt-image-2', settings as ImageFormSettings),
+    }));
+    expect(variants.get('aspectRatio=16:9')?.settings).toMatchObject({ aspectRatio: '16:9', resolution: '4K' });
+    expect(variants.get('aspectRatio=1:1')?.settings).toMatchObject({ aspectRatio: '1:1', resolution: '1K' });
+  });
+
+  it('reads each option against the balance, and the least "+N" among those shown', () => {
+    const variants = settingsVariants(run(5), [['duration', [4, 5, 6]]]);
+    const priceOf = (request: GenerationModelQuoteInput | null): ListedPrice => (request
+      ? { status: 'ready', costCredits: 4 * Number(request.settings?.duration) }
+      : { status: 'pending' });
+    const optionPrice = optionPricesOf(variants, priceOf, 18, 'the free credits');
+
+    expect(optionPrice('duration', 4)).toEqual({ cost: 16, text: '16', over: null, spoken: '16 credits' });
+    expect(optionPrice('duration', 6)).toEqual({ cost: 24, text: '24 · +6', over: 6, spoken: '24 credits, 6 more than the free credits' });
+    expect(optionPrice('duration', 9)).toBeNull();
+    expect(smallestOverBalance(optionPrice, [['duration', [4, 5, 6]]])).toBe(2);
+    expect(smallestOverBalance(optionPrice, [['duration', [4]]])).toBeNull();
   });
 });

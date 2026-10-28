@@ -5,11 +5,11 @@ import {
   fitRemixToBalance,
   fitSettingsToControls,
   groupModelsByBalance,
-  isUnderCheapest,
   longestLengthWithin,
   optionPriceLabel,
   referenceKeepWords,
   resolutionRank,
+  samePriceForEach,
   type FitControl,
   type RemixCandidate,
 } from '../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
@@ -118,8 +118,6 @@ describe('the model list split by the balance', () => {
 
   it('puts the model in use first among those the balance covers, then the cheapest', () => {
     const split = groupModelsByBalance(models, 22, 'seedance-2-mini');
-    expect('fits' in split).toBe(true);
-    if (!('fits' in split)) return;
     expect(ids(split.fits)).toEqual(['seedance-2-mini', 'seedance-1.5-pro', 'grok-imagine-video']);
     expect(ids(split.needsMore)).toEqual(['minimax-h3', 'seedance-2-fast', 'seedance-2', 'seedance-2-5']);
     expect(ids(split.unpriced)).toEqual(['hailuo-2.3']);
@@ -127,13 +125,8 @@ describe('the model list split by the balance', () => {
 
   it('counts a run that costs the whole balance as fitting, and files the model in use by its price when it does not', () => {
     const split = groupModelsByBalance(models, 19, 'seedance-2-5');
-    if (!('fits' in split)) throw new Error('expected a split list');
     expect(ids(split.fits)).toEqual(['seedance-1.5-pro', 'grok-imagine-video', 'seedance-2-mini']);
     expect(ids(split.needsMore).at(-1)).toBe('seedance-2-5');
-  });
-
-  it('splits nothing without a balance', () => {
-    expect(groupModelsByBalance(models, null, 'seedance-2-mini')).toEqual({ unsplit: models });
   });
 });
 
@@ -190,7 +183,14 @@ describe('the model a remix opens on', () => {
   });
 
   it('prices the cheapest model\'s shorter lengths when neither the default nor it fits at the length', () => {
-    expect(fit(10)).toEqual({ kind: 'shorten', modelId: 'grok-imagine-video-1.5', durationSeconds: 5 });
+    // Seedance 1.5 Pro makes 4s, not 5s, for 7: the model to open when no shorter length fits.
+    expect(fit(10)).toEqual({
+      kind: 'shorten',
+      modelId: 'grok-imagine-video-1.5',
+      durationSeconds: 5,
+      otherwise: { modelId: 'seedance-1.5-pro', sameLength: false },
+    });
+    expect(fit(5)).toMatchObject({ kind: 'shorten', otherwise: null });
   });
 
   it('opens the original when no other model takes its inputs, or its price or the balance is not known', () => {
@@ -226,13 +226,16 @@ describe('prices read against the balance', () => {
     expect(optionPriceLabel(57, null)).toEqual({ text: '57', over: null });
   });
 
-  it('tells a balance short of every model\'s run', () => {
-    expect(isUnderCheapest(3, [7, 15, null])).toBe(true);
-    expect(isUnderCheapest(7, [7, 15])).toBe(false);
-    expect(isUnderCheapest(null, [7])).toBe(false);
-    expect(isUnderCheapest(3, [null])).toBe(false);
+  it('finds the cheapest known price, the one a balance short of every run is under', () => {
     expect(cheapestCost([19, null, 7])).toBe(7);
     expect(cheapestCost([null])).toBeNull();
+  });
+
+  it('tells a setting whose options all cost the same, every price known', () => {
+    expect(samePriceForEach([19, 19, 19])).toBe(true);
+    expect(samePriceForEach([19, 23])).toBe(false);
+    expect(samePriceForEach([19, null])).toBe(false);
+    expect(samePriceForEach([19])).toBe(false);
   });
 
   it('says what a model keeps of the run\'s references', () => {

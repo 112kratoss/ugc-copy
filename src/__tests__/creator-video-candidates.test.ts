@@ -9,6 +9,7 @@ import {
   type VideoFormHeld,
   type VideoFormSettings,
 } from '@/lib/creator-video-candidates';
+import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { VideoRunMedia } from '@/lib/creator-run-inputs';
 import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { applyGenerationModelCatalogToRegistries } from '@/lib/generation-model-client';
@@ -47,6 +48,20 @@ describe('the video run moved to another model', () => {
     expect(videoFitControls('not-a-model')).toEqual([]);
   });
 
+  // A model the catalog lists before its details are in has a placeholder entry with no
+  // ratios or resolutions (`seedCatalogSummaryRegistry`): picked then, it keeps the form's.
+  it('keeps the form\'s ratio on a placeholder model that lists none yet', () => {
+    const registry = VIDEO_MODELS as unknown as Record<string, unknown>;
+    registry['placeholder-video'] = {
+      ...VIDEO_MODELS['seedance-2-mini'], catalogDescriptor: undefined, aspectRatios: [], resolutions: [], durations: [5], modeOptions: [],
+    };
+    try {
+      expect(fitVideoFormToModel('placeholder-video', miniForm)).toMatchObject({ aspectRatio: miniForm.aspectRatio, resolution: '', duration: 5 });
+    } finally {
+      delete registry['placeholder-video'];
+    }
+  });
+
   it('keeps the settings the model offers and moves the length to the nearest it makes', () => {
     expect(fitVideoFormToModel('seedance-1.5-pro', { ...miniForm, sound: true }))
       .toEqual({ ...miniForm, duration: 4, sound: true });
@@ -55,7 +70,7 @@ describe('the video run moved to another model', () => {
   });
 
   it('prices the run as the page asks for it: its settings, its references, and what the price is for', () => {
-    const run = videoRunOnModel<Media>({ modelId: 'seedance-2-mini', catalogRevision: 'rev-1', form: miniForm, held: twoPictures });
+    const run = videoRunOnModel<Media>({ modelId: 'seedance-2-mini', catalogRevision: 'rev-1', settings: fitVideoFormToModel('seedance-2-mini', miniForm), held: twoPictures });
     expect(run?.quoteInput).toEqual({
       schemaVersion: 2,
       kind: 'video',
@@ -73,11 +88,11 @@ describe('the video run moved to another model', () => {
 
   it('cuts references to what a model takes, and leaves out a kind it has no place for', () => {
     const three = held({ imageReferences: [{ id: 'ref-1' }, { id: 'ref-2' }, { id: 'ref-3' }] });
-    const onPro = videoRunOnModel<Media>({ modelId: 'seedance-1.5-pro', catalogRevision: 'rev-1', form: miniForm, held: three });
+    const onPro = videoRunOnModel<Media>({ modelId: 'seedance-1.5-pro', catalogRevision: 'rev-1', settings: fitVideoFormToModel('seedance-1.5-pro', miniForm), held: three });
     expect(videoRunInputTally(onPro?.inputs ?? []).references).toBe(2);
     expect(onPro?.summary).toBe('480P · 4s');
 
-    const onKling = videoRunOnModel<Media>({ modelId: 'kling-3.0-video', catalogRevision: 'rev-1', form: miniForm, held: three });
+    const onKling = videoRunOnModel<Media>({ modelId: 'kling-3.0-video', catalogRevision: 'rev-1', settings: fitVideoFormToModel('kling-3.0-video', miniForm), held: three });
     expect(videoRunInputTally(onKling?.inputs ?? []).references).toBe(0);
     expect(onKling?.quoteInput.settings).toMatchObject({ referenceMode: 'frames', mode: 'std' });
     expect(onKling?.summary).toBe('720P · 5s');
@@ -85,7 +100,7 @@ describe('the video run moved to another model', () => {
 
   it('tells a model that takes everything the original sends from one that does not', () => {
     const run = (modelId: string, form = miniForm, from = twoPictures) => {
-      const moved = videoRunOnModel<Media>({ modelId, catalogRevision: 'rev-1', form, held: from });
+      const moved = videoRunOnModel<Media>({ modelId, catalogRevision: 'rev-1', settings: fitVideoFormToModel(modelId, form), held: from });
       if (!moved) throw new Error(`no run on ${modelId}`);
       return moved;
     };

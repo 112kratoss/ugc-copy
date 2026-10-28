@@ -3,8 +3,8 @@ import {
   type FitControl,
 } from '../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import { videoRunShortSummary } from '../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
-import { catalogRunQuoteInput, catalogRunInputFacts } from '../../ugc-mobile/lib/model-catalog/protocol';
-import { getDefaultVideoDuration, VIDEO_MODELS, type VideoModelId } from '@/lib/client-generation-models';
+import { catalogRunQuoteInput, catalogRunInputFacts, SUBJECT_IMAGES_SLOT_KEY } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { getDefaultVideoDuration, getVideoDurationRange, VIDEO_MODELS, type VideoModelId } from '@/lib/client-generation-models';
 import { planVideoRunInputs, type VideoRunInput, type VideoRunMedia, type VideoRunSubject } from '@/lib/creator-run-inputs';
 import { getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor, GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
@@ -49,7 +49,7 @@ export type VideoFormHeld<M extends VideoRunMedia> = {
   multiShotSeconds: number;
 };
 
-const REFERENCE_SLOTS = new Set(['imageReferences', 'videoReferences', 'audioReferences', 'videoElements', 'subjectImages']);
+const REFERENCE_SLOTS = new Set(['imageReferences', 'videoReferences', 'audioReferences', 'videoElements', SUBJECT_IMAGES_SLOT_KEY]);
 
 function entryOf(modelId: string): VideoRegistryEntry | undefined {
   return (VIDEO_MODELS as unknown as Record<string, VideoRegistryEntry | undefined>)[modelId];
@@ -68,17 +68,19 @@ export function videoFitControls(modelId: string): FitControl[] {
           : { key: control.key, type: 'boolean', defaultValue: control.defaultValue }
     ));
   }
-  const choice = (key: string, values: readonly (string | number)[], defaultValue = String(values[0])): FitControl => ({
-    key, type: 'choice', defaultValue, options: values.map((value) => ({ value: String(value) })),
-  });
-  const range = 'singleShotDurationRange' in entry ? entry.singleShotDurationRange : null;
+  // A setting a placeholder lists no options for (its details not in) is left to the
+  // model's defaults, not given the value "undefined".
+  const choice = (key: string, values: readonly (string | number)[], defaultValue = String(values[0])): FitControl[] => (
+    values.length > 0 ? [{ key, type: 'choice', defaultValue, options: values.map((value) => ({ value: String(value) })) }] : []
+  );
+  const range = getVideoDurationRange(modelId as VideoModelId);
   return [
-    ...(entry.modeOptions.length > 0 ? [choice('mode', entry.modeOptions.map((option) => option.value))] : []),
-    choice('aspectRatio', entry.aspectRatios),
-    ...(entry.resolutions.length > 0 ? [choice('resolution', entry.resolutions)] : []),
-    range
-      ? { key: 'duration', type: 'integer', defaultValue: range.default, min: range.min, max: range.max, step: 1 }
-      : choice('duration', entry.durations, String(getDefaultVideoDuration(modelId as VideoModelId))),
+    ...choice('mode', entry.modeOptions.map((option) => option.value)),
+    ...choice('aspectRatio', entry.aspectRatios),
+    ...choice('resolution', entry.resolutions),
+    ...(range
+      ? [{ key: 'duration', type: 'integer', defaultValue: range.default, min: range.min, max: range.max, step: 1 } as const]
+      : choice('duration', entry.durations, String(getDefaultVideoDuration(modelId as VideoModelId)))),
     ...(entry.supportsSound ? [{ key: 'sound', type: 'boolean', defaultValue: false } as const] : []),
     ...(entry.supportsFixedLens ? [{ key: 'fixedLens', type: 'boolean', defaultValue: false } as const] : []),
     ...(entry.supportsMultiShot ? [{ key: 'isMultiShot', type: 'boolean', defaultValue: false } as const] : []),
@@ -99,6 +101,11 @@ export function fitVideoFormToModel(modelId: string, form: VideoFormSettings): V
     fixedLens: fitted.fixedLens === true,
     isMultiShot: fitted.isMultiShot === true,
   };
+}
+
+/** Whether two forms set the same run: what a remix being fitted reads as the creator not having moved. */
+export function sameVideoFormSettings(left: VideoFormSettings, right: VideoFormSettings): boolean {
+  return (Object.keys(left) as Array<keyof VideoFormSettings>).every((key) => left[key] === right[key]);
 }
 
 /** How many references and frames a run sends. */
@@ -122,28 +129,24 @@ export type VideoRunOnModel<M extends VideoRunMedia> = {
 };
 
 /**
- * The run the form would send on `modelId`: its settings moved to the model, the inputs
- * the model takes (a kind it has no place for stays in the draft, and a kind past the
- * model's limit is cut to it, as the creator would have to), and the quote request that
- * prices it.
+ * The run the form would send on `modelId` at `settings` (the form's moved to the model,
+ * `fitVideoFormToModel`): the inputs the model takes (a kind it has no place for stays in
+ * the draft, and a kind past the model's limit is cut to it, as the creator would have
+ * to), and the quote request that prices it.
  */
 export function videoRunOnModel<M extends VideoRunMedia>({
   modelId,
   catalogRevision,
-  form,
+  settings,
   held,
-  settings: given,
 }: {
   modelId: string;
   catalogRevision: string;
-  form: VideoFormSettings;
+  settings: VideoFormSettings;
   held: VideoFormHeld<M>;
-  /** Settings already fitted to the model (a remix's shorter length); the form's are fitted otherwise. */
-  settings?: VideoFormSettings;
 }): VideoRunOnModel<M> | null {
   const entry = entryOf(modelId);
   if (!entry) return null;
-  const settings = given ?? fitVideoFormToModel(modelId, form);
   const { isMultiShot } = settings;
   const affordances = getVideoRunAffordances(
     entry.catalogDescriptor,

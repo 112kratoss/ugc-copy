@@ -1,4 +1,5 @@
 import { catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogChoiceDefault } from '@/components/CatalogAdditionalControls';
 import {
   getImageQualityModes,
   getImageResolutionOptions,
@@ -30,28 +31,31 @@ function entryOf(modelId: string): ImageRegistryEntry | undefined {
   return (IMAGE_MODELS as unknown as Record<string, ImageRegistryEntry | undefined>)[modelId];
 }
 
-/** A choice's default as the model's descriptor gives it, or the first option before its details are in. */
-function choiceDefault(entry: ImageRegistryEntry, key: string, fallback: string): string {
-  const control = entry.catalogDescriptor?.controls.find((candidate) => candidate.key === key);
-  return control?.type === 'choice' ? control.defaultValue : fallback;
-}
-
-/** The form's settings on a model, as the page's clamp leaves them once the model is picked. */
+/**
+ * The form's settings on a model, as the page's clamp sets them (its effect calls this): a
+ * ratio, a resolution (for the ratio) or a quality mode the model lacks becomes the
+ * model's default, and Google Search goes off on a model without it.
+ */
 export function fitImageFormToModel(modelId: string, form: ImageFormSettings): ImageFormSettings | null {
   const entry = entryOf(modelId);
   if (!entry) return null;
   const ratios = entry.aspectRatios as readonly string[];
-  const aspectRatio = ratios.includes(form.aspectRatio) ? form.aspectRatio : choiceDefault(entry, 'aspectRatio', ratios[0]);
+  const aspectRatio = ratios.includes(form.aspectRatio) ? form.aspectRatio : catalogChoiceDefault(entry.catalogDescriptor, 'aspectRatio', ratios[0]);
   const resolutions = getImageResolutionOptions(modelId as ImageModelId, aspectRatio) as readonly string[];
-  const preferred = choiceDefault(entry, 'resolution', resolutions[0] ?? form.resolution);
+  const preferred = catalogChoiceDefault(entry.catalogDescriptor, 'resolution', resolutions[0] ?? form.resolution);
   const resolution = resolutions.includes(form.resolution)
     ? form.resolution
     : resolutions.includes(preferred) ? preferred : (resolutions[0] ?? form.resolution);
   const modes = getImageQualityModes(modelId as ImageModelId) as readonly string[];
   const qualityMode = modes.length === 0 || modes.includes(form.qualityMode)
     ? form.qualityMode
-    : choiceDefault(entry, 'qualityMode', modes[0]);
+    : catalogChoiceDefault(entry.catalogDescriptor, 'qualityMode', modes[0]);
   return { aspectRatio, resolution, qualityMode, googleSearch: entry.supportsGoogleSearch ? form.googleSearch : false };
+}
+
+/** What an image row's price is for: "1K · 16:9". */
+export function imageRunSummary(settings: Pick<ImageFormSettings, 'resolution' | 'aspectRatio'>): string {
+  return [settings.resolution.toUpperCase(), settings.aspectRatio].filter(Boolean).join(' · ');
 }
 
 export type ImageRunOnModel<Element> = {
@@ -96,6 +100,6 @@ export function imageRunOnModel<Element>({
       },
       inputs,
     }),
-    summary: [settings.resolution.toUpperCase(), settings.aspectRatio].filter(Boolean).join(' · '),
+    summary: imageRunSummary(settings),
   };
 }

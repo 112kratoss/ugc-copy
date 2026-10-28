@@ -10,8 +10,8 @@ import { requestWebGenerationQuoteBatch, type WebGenerationQuoteBatchEntry } fro
 /** A listed run's price: asked and not yet in, read, refused by the catalog, or not to be had now. */
 export type ListedPrice =
   | { status: 'pending' }
-  | { status: 'ready'; costCredits: number; normalizedSettings: Record<string, CatalogPrimitive> }
-  | { status: 'refused'; code: string; message: string }
+  | { status: 'ready'; costCredits: number }
+  | { status: 'refused'; message: string }
   | { status: 'unavailable' };
 
 /** A listed price's credits once read; null while it is pending, refused or not to be had. */
@@ -22,16 +22,19 @@ export function readyCost(price: ListedPrice): number | null {
 /** The price on Generate (the run's own quote) as a listed price: the model in use, in the model list. */
 export function listedFromQuote(quote: {
   status: string;
-  quote: { costCredits: number; normalizedSettings: Record<string, CatalogPrimitive> } | null;
+  quote: { costCredits: number } | null;
 }): ListedPrice {
   if (quote.status === 'ready' && quote.quote) {
-    return { status: 'ready', costCredits: quote.quote.costCredits, normalizedSettings: quote.quote.normalizedSettings };
+    return { status: 'ready', costCredits: quote.quote.costCredits };
   }
   return quote.status === 'error' ? { status: 'unavailable' } : { status: 'pending' };
 }
 
 /** The open settings' options, each as the run with that one setting changed, keyed by setting and value. */
 export type SettingsVariants = ReadonlyMap<string, GenerationModelQuoteInput>;
+
+/** Settings that are closed price no options. */
+export const NO_SETTINGS_VARIANTS: SettingsVariants = new Map();
 
 const variantKey = (key: string, value: CatalogPrimitive) => `${key}=${String(value)}`;
 
@@ -42,29 +45,40 @@ const variantKey = (key: string, value: CatalogPrimitive) => `${key}=${String(va
 export function settingsVariants(
   request: GenerationModelQuoteInput | null,
   axes: ReadonlyArray<readonly [key: string, values: readonly CatalogPrimitive[]]>,
+  /** The page's clamp, where one setting moves others (an image ratio its resolution): the settings it would leave. */
+  fit?: (settings: Record<string, unknown>) => Record<string, unknown>,
 ): SettingsVariants {
   const variants = new Map<string, GenerationModelQuoteInput>();
   if (!request) return variants;
   for (const [key, values] of axes) {
     for (const value of values) {
-      variants.set(variantKey(key, value), { ...request, settings: { ...request.settings, [key]: value } });
+      const settings = { ...request.settings, [key]: value };
+      variants.set(variantKey(key, value), { ...request, settings: fit ? fit(settings) : settings });
     }
   }
   return variants;
 }
 
+/** What an option of the settings costs: "19", or "23 · +1" past the balance, and the words a screen reader says. */
+export type OptionPrice = { cost: number; text: string; over: number | null; spoken: string };
+
 /**
  * What the run costs with an option, read against the balance ("19", or "23 · +1" past
- * it, `optionPriceLabel`); null until its price is in, and for an option not varied.
+ * it, `optionPriceLabel`), named as `balanceName` ("your balance", "the free credits");
+ * null until its price is in, and for an option not varied.
  */
 export function optionPricesOf(
   variants: SettingsVariants,
   priceOf: (request: GenerationModelQuoteInput | null) => ListedPrice,
   balance: number | null,
+  balanceName: string,
 ) {
-  return (key: string, value: CatalogPrimitive): { cost: number; text: string; over: number | null } | null => {
+  return (key: string, value: CatalogPrimitive): OptionPrice | null => {
     const cost = readyCost(priceOf(variants.get(variantKey(key, value)) ?? null));
-    return cost === null ? null : { cost, ...optionPriceLabel(cost, balance) };
+    if (cost === null) return null;
+    const label = optionPriceLabel(cost, balance);
+    const credits = `${cost} ${cost === 1 ? 'credit' : 'credits'}`;
+    return { cost, ...label, spoken: label.over === null ? credits : `${credits}, ${label.over} more than ${balanceName}` };
   };
 }
 
@@ -105,8 +119,8 @@ const REFUSED_FOR_NOW = new Set(['CATALOG_UNAVAILABLE', 'CATALOG_CHANGED']);
 function listedFromEntry(entry: WebGenerationQuoteBatchEntry | undefined): ListedPrice {
   if (!entry || (!entry.ok && REFUSED_FOR_NOW.has(entry.code))) return { status: 'unavailable' };
   return entry.ok
-    ? { status: 'ready', costCredits: entry.quote.costCredits, normalizedSettings: entry.quote.normalizedSettings }
-    : { status: 'refused', code: entry.code, message: Object.values(entry.fieldErrors ?? {})[0] ?? entry.error };
+    ? { status: 'ready', costCredits: entry.quote.costCredits }
+    : { status: 'refused', message: Object.values(entry.fieldErrors ?? {})[0] ?? entry.error };
 }
 
 type Prices = { kept: ReadonlyMap<string, ListedPrice>; asking: ReadonlySet<string> };

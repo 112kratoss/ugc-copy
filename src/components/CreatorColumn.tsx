@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode } from 'react';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronDown, Download, Images, LayoutTemplate, Loader2, Share2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
@@ -19,6 +19,7 @@ import { getAccentClasses, IconButton, Text, type UiAccent } from '@/components/
 import PublicShareButton from '@/components/PublicShareButton';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
 import { PRICING_PLANS } from '@/lib/pricing';
+import type { OptionPrice } from '@/lib/use-quote-prices';
 
 /**
  * The creator pages as the app draws them: one column that holds the whole
@@ -210,10 +211,11 @@ export function CreatorSettingChoices<T extends string>({
   capitalize?: boolean;
   /**
    * What the run costs with each option, under it: "19", or "23 · +1" in amber past the
-   * balance (`optionPriceLabel`); null where it is not known yet. An option past the
-   * balance stays selectable: the bar offers a top-up in Generate's place.
+   * balance, with the words a screen reader says ("23 credits, 1 more than your balance";
+   * `optionPricesOf`); null where it is not known yet. An option past the balance stays
+   * selectable: the bar offers a top-up in Generate's place.
    */
-  optionPrice?: (option: T) => { cost: number; text: string; over: number | null } | null;
+  optionPrice?: (option: T) => OptionPrice | null;
 }) {
   const labelId = useId();
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -265,9 +267,7 @@ export function CreatorSettingChoices<T extends string>({
               aria-checked={checked}
               // One name for the option and its price: read from two pieces, browsers
               // joined them differently ("4s , 16 credits").
-              aria-label={price
-                ? `${text}, ${price.cost} ${price.cost === 1 ? 'credit' : 'credits'}${price.over !== null ? `, ${price.over} more than your balance` : ''}`
-                : undefined}
+              aria-label={price ? `${text}, ${price.spoken}` : undefined}
               // One stop in the tab order, on the chosen option (the first while none is).
               tabIndex={checked || (selectedIndex === -1 && index === 0) ? 0 : -1}
               onClick={() => onChange(option)}
@@ -360,6 +360,7 @@ export function CreatorColumnBar({
   settingsSummaryShort,
   settings,
   settingsFootNote,
+  settingsOpen,
   onSettingsOpenChange,
   status,
   action,
@@ -373,7 +374,9 @@ export function CreatorColumnBar({
   settings: ReactNode | null;
   /** At the foot of the open settings, beside Done: what the run costs as set ("This run 19 credits · leaves 3"). */
   settingsFootNote?: ReactNode;
-  /** Told when the settings open and close: the page prices their options only while they show. */
+  /** Whether the settings are open, where the page keeps it: it prices their options only while they show. */
+  settingsOpen?: boolean;
+  /** Told when the settings open and close. */
   onSettingsOpenChange?: (open: boolean) => void;
   status?: ReactNode;
   action: ReactNode;
@@ -382,17 +385,18 @@ export function CreatorColumnBar({
   /** The action's words need the bar's width ("Switch back to Seedance 2 Mini"): the chip goes above it at every width. */
   stacked?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const isOpen = settingsOpen ?? ownOpen;
+  const setIsOpen = useCallback((open: boolean) => {
+    setOwnOpen(open);
+    onSettingsOpenChange?.(open);
+  }, [onSettingsOpenChange]);
   const barRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const reducedMotion = useReducedMotion();
   const showsSettings = isOpen && settings !== null;
-
-  useEffect(() => {
-    onSettingsOpenChange?.(showsSettings);
-  }, [onSettingsOpenChange, showsSettings]);
 
   const closeSettings = (returnFocus: boolean) => {
     setIsOpen(false);
@@ -408,7 +412,7 @@ export function CreatorColumnBar({
     };
     document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [showsSettings]);
+  }, [setIsOpen, showsSettings]);
 
   // Opened, the panel takes the focus, and its height is what the window has
   // between the top bar and this bar: on a short phone a fixed cap put its top
@@ -463,7 +467,7 @@ export function CreatorColumnBar({
             <button
               ref={chipRef}
               type="button"
-              onClick={() => setIsOpen((open) => !open)}
+              onClick={() => setIsOpen(!isOpen)}
               onKeyDown={onEscape}
               aria-expanded={showsSettings}
               aria-controls={showsSettings ? panelId : undefined}
@@ -676,10 +680,16 @@ export function CreatorTopUpNotice({ cost, balance, message }: {
   );
 }
 
-/** The smallest credit pack, as a top-up names it: "500 credits for ₹415". */
-export function smallestCreditPackLabel(): string {
+/** "1 credit", "19 credits". */
+export function creditsWords(count: number): string {
+  return `${count} ${count === 1 ? 'credit' : 'credits'}`;
+}
+
+/** The smallest credit pack, as a top-up names it: "500 credits for ₹415", or "500 for ₹415" `short`. */
+export function smallestCreditPackLabel({ short = false }: { short?: boolean } = {}): string {
   const pack = PRICING_PLANS.reduce((smallest, plan) => (plan.credits < smallest.credits ? plan : smallest));
-  return `${pack.credits.toLocaleString('en-IN')} credits for ₹${pack.priceInr.toLocaleString('en-IN')}`;
+  const credits = pack.credits.toLocaleString('en-IN');
+  return `${short ? credits : `${credits} credits`} for ₹${pack.priceInr.toLocaleString('en-IN')}`;
 }
 
 const NOTE_STRONG_CLASS = 'font-bold text-[var(--ui-text-secondary)]';
@@ -701,13 +711,52 @@ export function CreatorBalanceNote({ balance, cost }: { balance: number; cost: n
 }
 
 /**
+ * At the foot of the open settings, beside Done (owner, 2026-10-28): what the run costs as
+ * set and what it leaves of the balance ("This run 19 credits · leaves 6"), or how far past
+ * it the run is. A visitor's is read against the welcome credits.
+ */
+export function CreatorSettingsFootNote({ cost, costLabel, balance, isVisitor }: {
+  /** The run's price; null while it is not known, when `costLabel` says why. */
+  cost: number | null;
+  costLabel: string;
+  balance: number | null;
+  isVisitor: boolean;
+}) {
+  if (cost === null) return <span>{costLabel}</span>;
+  return (
+    <span>
+      This run <strong className="text-[var(--ui-text-primary)]">{creditsWords(cost)}</strong>
+      {balance === null
+        ? null
+        : cost <= balance
+          ? ` · leaves ${balance - cost}`
+          : ` · ${cost - balance} more than ${isVisitor ? 'the free credits' : 'your balance'}`}
+    </span>
+  );
+}
+
+/**
+ * Under the settings while an option shown costs more than the balance: what "+N" means
+ * (the least such N), and that those options can still be chosen.
+ */
+export function CreatorOverBalanceLegend({ over, balance, isVisitor }: { over: number | null; balance: number | null; isVisitor: boolean }) {
+  if (over === null || balance === null) return null;
+  return (
+    <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
+      “+{over}” means {creditsWords(over)} more than {isVisitor ? `the ${balance} free credits` : `your balance of ${balance}`}.
+      {isVisitor ? ' Those options stay selectable.' : ' Those options stay selectable, and show Top up in place of Generate.'}
+    </p>
+  );
+}
+
+/**
  * In Generate's place while the balance is short of every video model's run (owner,
  * 2026-10-28): an image first, on the image model that costs least, with the prompt.
  */
 export function CreatorMakeImageInstead({ href, fromCost }: { href: string; fromCost: number }) {
   return (
     <Link href={href} className={CREATOR_BAR_PRIMARY_CLASS}>
-      <span className="truncate">{`Make an image instead · from ${fromCost} ${fromCost === 1 ? 'credit' : 'credits'}`}</span>
+      <span className="truncate">{`Make an image instead · from ${creditsWords(fromCost)}`}</span>
     </Link>
   );
 }
@@ -718,7 +767,7 @@ export function CreatorLowBalanceNote({ balance, videosFrom }: { balance: number
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
       <span>Balance <strong className={NOTE_STRONG_CLASS}>{balance}</strong> · videos from {videosFrom}</span>
       <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>
-        Top up: {smallestCreditPackLabel().replace(' credits', '')}
+        Top up: {smallestCreditPackLabel({ short: true })}
       </Link>
     </div>
   );
@@ -735,10 +784,10 @@ export function CreatorLowBalanceNotice({ balance, videosFrom, image }: {
   return (
     <div role="status" className="rounded-ui-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-4">
       <p className="text-sm font-bold text-[var(--ui-text-primary)]">
-        {balance} {balance === 1 ? 'credit' : 'credits'}{coversImage ? ': enough for images' : ''}
+        {creditsWords(balance)}{coversImage ? ': enough for images' : ''}
       </p>
       <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
-        Videos start at {videosFrom} credits.
+        Videos start at {creditsWords(videosFrom)}.
         {image ? ` ${image.name} makes a picture for ${image.cost}, and you can turn a picture into a video later.` : ''}
       </p>
     </div>
@@ -757,7 +806,7 @@ export function CreatorFitNotice({ original, balance, fitted }: {
   const strong = 'font-bold text-[var(--ui-text-primary)]';
   return (
     <p className="text-[var(--ui-text-secondary)]">
-      {original.name} needs <strong className={strong}>{original.cost} credits</strong>; you have <strong className={strong}>{balance}</strong>.
+      {original.name} needs <strong className={strong}>{creditsWords(original.cost)}</strong>; you have <strong className={strong}>{balance}</strong>.
       {' '}{fitted.name} runs {fitted.keeps} for <strong className={strong}>{fitted.cost}</strong>.
     </p>
   );

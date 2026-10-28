@@ -694,6 +694,18 @@ export function getVideoDurationRange(modelId: VideoModelId): { min: number; max
   return model && 'singleShotDurationRange' in model ? model.singleShotDurationRange : null;
 }
 
+/**
+ * The single-shot lengths a model makes, in seconds, shortest first: each second of its
+ * range (`getVideoDurationRange`), or the lengths it lists.
+ */
+export function videoLengthOptions(
+  range: { min: number; max: number } | null,
+  durations: readonly (string | number)[],
+): number[] {
+  if (range) return Array.from({ length: Math.max(0, range.max - range.min + 1) }, (_, index) => range.min + index);
+  return durations.map(Number);
+}
+
 export function getDefaultVideoDuration(modelId: VideoModelId): number {
   return getVideoDurationRange(modelId)?.default ?? (VIDEO_MODELS[modelId]?.durations[0] ?? 5);
 }

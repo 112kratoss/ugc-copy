@@ -4,6 +4,7 @@ import { useId } from 'react';
 import { Check, X } from 'lucide-react';
 import clsx from 'clsx';
 
+import { getAccentClasses, type UiAccent } from '@/components/DesignSystem';
 import { groupModelsByBalance, type PricedModel } from '../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import type { ListedPrice } from '@/lib/use-quote-prices';
 
@@ -25,11 +26,12 @@ function priceWords(price: ListedPrice): string {
   return price.status === 'pending' ? '…' : '—';
 }
 
-function ModelRow({ row, selected, over, onSelect }: {
+function ModelRow({ row, selected, over, accent, onSelect }: {
   row: PickerModelRow;
   selected: boolean;
   /** Its run costs more than the balance. */
   over: boolean;
+  accent: UiAccent;
   onSelect: () => void;
 }) {
   const { price } = row;
@@ -47,7 +49,7 @@ function ModelRow({ row, selected, over, onSelect }: {
       <span className="min-w-0 flex-1">
         <span className={clsx('flex items-center gap-1.5 text-sm font-bold', selected ? 'text-white' : 'text-zinc-200')}>
           {row.name}
-          {selected ? <Check aria-hidden className="h-4 w-4 shrink-0 text-[#ff9a80]" /> : null}
+          {selected ? <Check aria-hidden className={clsx('h-4 w-4 shrink-0', getAccentClasses(accent).mark)} /> : null}
         </span>
         <span className="mt-0.5 block text-xs text-zinc-400">{row.description}</span>
         {row.keeps ? (
@@ -63,7 +65,7 @@ function ModelRow({ row, selected, over, onSelect }: {
           data-testid="model-row-price"
           className={clsx('block text-sm font-bold tabular-nums', over ? 'text-zinc-400' : 'text-white')}
         >
-          {price.status === 'pending' ? <span aria-label="Pricing">…</span> : priceWords(price)}
+          {price.status === 'pending' ? <><span aria-hidden>…</span><span className="sr-only">Pricing</span></> : priceWords(price)}
         </span>
         {price.status === 'ready' && row.summary ? (
           <span className="mt-0.5 block text-xs tabular-nums text-zinc-500">{row.summary}</span>
@@ -73,11 +75,12 @@ function ModelRow({ row, selected, over, onSelect }: {
   );
 }
 
-function RowGroup({ title, rows, selectedId, balance, onSelect }: {
+function RowGroup({ title, rows, selectedId, balance, accent, onSelect }: {
   title: string;
   rows: PricedModel<PickerModelRow>[];
   selectedId: string;
-  balance: number | null;
+  balance: number;
+  accent: UiAccent;
   onSelect: (id: string) => void;
 }) {
   const titleId = useId();
@@ -89,7 +92,8 @@ function RowGroup({ title, rows, selectedId, balance, onSelect }: {
           key={item.id}
           row={item}
           selected={item.id === selectedId}
-          over={balance !== null && cost !== null && cost > balance}
+          over={cost !== null && cost > balance}
+          accent={accent}
           onSelect={() => onSelect(item.id)}
         />
       ))}
@@ -105,13 +109,15 @@ function RowGroup({ title, rows, selectedId, balance, onSelect }: {
  * balance, it stays in the catalog's order, so rows do not move under the pointer while
  * prices arrive.
  */
-export default function CreatorModelPickerRows({ rows, selectedId, balance, balanceLabel, onSelect }: {
+export default function CreatorModelPickerRows({ rows, selectedId, balance, balanceLabel, accent, onSelect }: {
   rows: readonly PickerModelRow[];
   selectedId: string;
   /** What the split reads against: the balance, or a visitor's welcome credits; null splits nothing. */
   balance: number | null;
   /** How the first group names that balance: "your 22 credits", "the 25 free credits". */
   balanceLabel: string;
+  /** The creator's tool accent, for the mark on the model in use. */
+  accent: UiAccent;
   onSelect: (id: string) => void;
 }) {
   const priced = rows.map((row): PricedModel<PickerModelRow> => ({
@@ -120,28 +126,30 @@ export default function CreatorModelPickerRows({ rows, selectedId, balance, bala
     item: row,
   }));
   const settled = rows.every((row) => row.price.status !== 'pending');
-  const split = groupModelsByBalance(priced, settled ? balance : null, selectedId);
-  const groupProps = { selectedId, balance, onSelect };
 
-  return (
-    <>
-      {'unsplit' in split ? (
-        split.unsplit.map(({ item, cost }) => (
+  if (!settled || balance === null) {
+    return (
+      <>
+        {priced.map(({ item, cost }) => (
           <ModelRow
             key={item.id}
             row={item}
             selected={item.id === selectedId}
             over={balance !== null && cost !== null && cost > balance}
+            accent={accent}
             onSelect={() => onSelect(item.id)}
           />
-        ))
-      ) : (
-        <>
-          {split.fits.length > 0 ? <RowGroup title={`Fits ${balanceLabel}`} rows={split.fits} {...groupProps} /> : null}
-          {split.needsMore.length > 0 ? <RowGroup title="Needs more credits" rows={split.needsMore} {...groupProps} /> : null}
-          {split.unpriced.length > 0 ? <RowGroup title="Not priced" rows={split.unpriced} {...groupProps} /> : null}
-        </>
-      )}
+        ))}
+      </>
+    );
+  }
+  const split = groupModelsByBalance(priced, balance, selectedId);
+  const groupProps = { selectedId, balance, accent, onSelect };
+  return (
+    <>
+      {split.fits.length > 0 ? <RowGroup title={`Fits ${balanceLabel}`} rows={split.fits} {...groupProps} /> : null}
+      {split.needsMore.length > 0 ? <RowGroup title="Needs more credits" rows={split.needsMore} {...groupProps} /> : null}
+      {split.unpriced.length > 0 ? <RowGroup title="Not priced" rows={split.unpriced} {...groupProps} /> : null}
     </>
   );
 }

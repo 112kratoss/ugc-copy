@@ -108,15 +108,14 @@ export type PricedModel<T> = {
 /**
  * The model list split by what a balance covers: the models whose run fits it (the one in
  * use first, then the cheapest), those that need more credits (cheapest first), and those
- * with no price yet, in the list's own order. Without a balance nothing is split: the
- * models come back `unsplit`, in the list's order.
+ * with no price, in the list's own order. A caller without a balance, or still waiting for
+ * prices, shows its list as it is.
  */
 export function groupModelsByBalance<T>(
   models: readonly PricedModel<T>[],
-  balance: number | null,
+  balance: number,
   selectedId: string | null,
-): { fits: PricedModel<T>[]; needsMore: PricedModel<T>[]; unpriced: PricedModel<T>[] } | { unsplit: PricedModel<T>[] } {
-  if (balance === null) return { unsplit: [...models] };
+): { fits: PricedModel<T>[]; needsMore: PricedModel<T>[]; unpriced: PricedModel<T>[] } {
   const byCost = (left: PricedModel<T>, right: PricedModel<T>) => (left.cost ?? 0) - (right.cost ?? 0);
   const priced = models.filter((model) => model.cost !== null);
   const fits = priced.filter((model) => (model.cost as number) <= balance)
@@ -141,8 +140,17 @@ export type RemixFit =
   | { kind: 'original' }
   /** Open this model at its fitted settings. */
   | { kind: 'fitted'; modelId: string; sameLength: boolean }
-  /** Not even this model, the cheapest, fits at its length: price its shorter lengths (`longestLengthWithin`). */
-  | { kind: 'shorten'; modelId: string; durationSeconds: number };
+  /**
+   * Not even this model, the cheapest, fits at its length: price its shorter lengths
+   * (`longestLengthWithin`); when none fits, `otherwise` is the cheapest model that fits at
+   * a length of its own (null when none does, and the original opens).
+   */
+  | {
+    kind: 'shorten';
+    modelId: string;
+    durationSeconds: number;
+    otherwise: { modelId: string; sameLength: boolean } | null;
+  };
 
 /**
  * Which model a remix opens on (owner, 2026-10-28): the original while the balance
@@ -184,7 +192,19 @@ export function fitRemixToBalance({
   if (cheapest.cost <= balance) {
     return { kind: 'fitted', modelId: cheapest.modelId, sameLength: cheapest.durationSeconds === original.durationSeconds };
   }
-  return { kind: 'shorten', modelId: cheapest.modelId, durationSeconds: cheapest.durationSeconds };
+  // Every model at the length is past the balance: one that fits at another length, the cheapest.
+  const otherwise = eligible.reduce<(typeof eligible)[number] | null>(
+    (best, candidate) => (candidate.cost <= balance && (!best || candidate.cost < best.cost) ? candidate : best),
+    null,
+  );
+  return {
+    kind: 'shorten',
+    modelId: cheapest.modelId,
+    durationSeconds: cheapest.durationSeconds,
+    otherwise: otherwise
+      ? { modelId: otherwise.modelId, sameLength: otherwise.durationSeconds === original.durationSeconds }
+      : null,
+  };
 }
 
 /** The longest length, below `belowSeconds`, whose price the balance covers; null when none does. */
@@ -209,19 +229,18 @@ export function optionPriceLabel(cost: number, balance: number | null): { text: 
 }
 
 /**
- * Whether a balance is short of every model's run, the cheapest included: then the video
- * creator offers an image first and a top-up second (owner, 2026-10-28). Unknown prices
- * say nothing; with no price known at all, no.
+ * The lowest of the known prices, or null. A balance under it is short of every model's
+ * run, the cheapest included: then the video creator offers an image first and a top-up
+ * second (owner, 2026-10-28). Unknown prices say nothing.
  */
-export function isUnderCheapest(balance: number | null, costs: ReadonlyArray<number | null>): boolean {
-  const known = costs.filter((cost): cost is number => cost !== null);
-  return balance !== null && known.length > 0 && balance < Math.min(...known);
-}
-
-/** The lowest of the known prices, or null. */
 export function cheapestCost(costs: ReadonlyArray<number | null>): number | null {
   const known = costs.filter((cost): cost is number => cost !== null);
   return known.length > 0 ? Math.min(...known) : null;
+}
+
+/** Whether a setting's options all cost the same, every price known: then it says so once ("Same price for each"). */
+export function samePriceForEach(costs: ReadonlyArray<number | null>): boolean {
+  return costs.length > 1 && costs.every((cost) => cost !== null && cost === costs[0]);
 }
 
 /**

@@ -105,9 +105,10 @@ vi.mock('next/navigation', () => ({
 }));
 
 // The creators' price lists answer from the stand-in: nothing is priced unless a test says so.
-vi.mock('@/lib/use-quote-prices', async () => {
+// The module's pure helpers stay its own.
+vi.mock('@/lib/use-quote-prices', async (importOriginal) => {
   const { quotePricesHookStandIn } = await import('./fixtures/quote-prices-stand-in');
-  return { useQuotePrices: quotePricesHookStandIn };
+  return { ...await importOriginal<typeof import('@/lib/use-quote-prices')>(), useQuotePrices: quotePricesHookStandIn };
 });
 
 vi.mock('@/components/AuthProvider', () => ({

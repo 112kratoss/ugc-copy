@@ -27,17 +27,24 @@ import {
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorModelChip,
+    CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorResultActions,
     CreatorSettingChoices,
+    CreatorSettingsFootNote,
     CreatorTemplatesTile,
     CreatorToolTabs,
     CreatorTopUpNotice,
     CreatorUploadSlot,
     CreatorVisitorNote,
 } from '@/components/CreatorColumn';
-import { optionPriceLabel } from '../../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
-import { useQuotePrices } from '@/lib/use-quote-prices';
+import {
+    NO_SETTINGS_VARIANTS,
+    optionPricesOf,
+    settingsVariants,
+    smallestOverBalance,
+    useQuotePrices,
+} from '@/lib/use-quote-prices';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
@@ -90,6 +97,7 @@ import {
 import { useCreatorQuote } from '@/lib/use-creator-quote';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { planMotionRunInputs } from '@/lib/creator-run-inputs';
+import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
 // Kie's motion cap; the motion start refuses a longer prompt before anything is held.
 import { catalogRunQuoteInput, MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import { useTicker } from '@/lib/use-ticker';
@@ -1329,34 +1337,17 @@ export default function CreateMotionClient({
     // Every option of the open settings priced (owner, 2026-10-28), once the run can be:
     // a motion run's price waits for its clip.
     const listBalance = isVisitor ? visitorWelcomeCredits : userCredits;
-    const settingsVariants = useMemo(() => {
-        const variants = new Map<string, NonNullable<typeof quoteRequest>>();
-        if (!settingsOpen || !quoteRequest) return variants;
-        const vary = (key: string, values: readonly string[]) => {
-            for (const value of values) variants.set(`${key}=${value}`, { ...quoteRequest, settings: { ...quoteRequest.settings, [key]: value } });
-        };
-        vary('resolution', model.resolutions);
-        vary('characterOrientation', model.characterOrientations);
-        return variants;
-    }, [settingsOpen, quoteRequest, model.resolutions, model.characterOrientations]);
-    const priceOf = useQuotePrices([...settingsVariants.values()]);
-    const optionPrice = (key: string, value: string) => {
-        const request = settingsVariants.get(`${key}=${value}`);
-        const price = request ? priceOf(request) : null;
-        return price?.status === 'ready' ? { cost: price.costCredits, ...optionPriceLabel(price.costCredits, listBalance) } : null;
-    };
-    const settingsFootNote = estimatedCost !== null ? (
-        <span>
-            This run <strong className="text-[var(--ui-text-primary)]">{estimatedCost} {estimatedCost === 1 ? 'credit' : 'credits'}</strong>
-            {listBalance !== null
-                ? estimatedCost <= listBalance
-                    ? ` · leaves ${listBalance - estimatedCost}`
-                    : ` · ${estimatedCost - listBalance} more than ${isVisitor ? 'the free credits' : 'your balance'}`
-                : null}
-        </span>
-    ) : (
-        <span>{quoteUi.costLabel}</span>
+    const settingsAxes = useMemo<Array<readonly [string, readonly CatalogPrimitive[]]>>(() => [
+        ['resolution', model.resolutions],
+        ['characterOrientation', model.characterOrientations],
+    ], [model.resolutions, model.characterOrientations]);
+    const variants = useMemo(
+        () => (settingsOpen ? settingsVariants(quoteRequest, settingsAxes) : NO_SETTINGS_VARIANTS),
+        [settingsOpen, quoteRequest, settingsAxes],
     );
+    const priceOf = useQuotePrices([...variants.values()]);
+    const optionPrice = optionPricesOf(variants, priceOf, listBalance, isVisitor ? 'the free credits' : 'your balance');
+    const smallestOver = smallestOverBalance(optionPrice, settingsAxes);
     // The server's refusal holds until the balance or the price on screen moves.
     const creditRefusalMessage = creditRefusal && creditRefusal.balance === userCredits && creditRefusal.cost === estimatedCost
         ? creditRefusal.message
@@ -1489,6 +1480,7 @@ export default function CreateMotionClient({
                 accent="motion"
                 optionPrice={(quality) => optionPrice('resolution', quality)}
             />
+            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} />
             <CatalogAdditionalControls
                 appearance="panel"
                 descriptor={catalogDescriptor}
@@ -1787,7 +1779,8 @@ export default function CreateMotionClient({
                         <CreatorColumnBar
                             settingsSummary={settingsSummary}
                             settings={settingsPanel}
-                            settingsFootNote={settingsFootNote}
+                            settingsFootNote={<CreatorSettingsFootNote cost={estimatedCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
+                            settingsOpen={settingsOpen}
                             onSettingsOpenChange={setSettingsOpen}
                             status={barStatus}
                             action={barAction}

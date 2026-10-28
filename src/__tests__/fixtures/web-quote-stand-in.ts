@@ -25,8 +25,8 @@ export const quoteStandIn = {
   forAnotherRequest: false,
   /** Every answer is this refusal, as for a catalog that changed under the page. */
   errorCode: null as string | null,
-  /** A price by the request itself, in place of `answers`: a run on each model its own. */
-  priceFor: null as ((request: GenerationModelQuoteInput) => number) | null,
+  /** A price by the request itself, in place of `answers`: a run on each model its own, or one not in yet. */
+  priceFor: null as ((request: GenerationModelQuoteInput) => number | 'pending') | null,
   /** The page's last quote request (a render without one counts). */
   lastRequest(): GenerationModelQuoteInput | null | undefined {
     return quoteStandIn.requests.at(-1);
