@@ -1380,6 +1380,11 @@ export function normalizeCreationDraftForCatalog(
       missingModel: false,
     };
   }
+  // Until the default's details arrive an untouched draft's model is only the bundled stand-in;
+  // reconciled against it, the draft would get a revision and keep the stand-in. So it waits.
+  if (untouched && defaultId && !fallback && !options.missingIds?.includes(defaultId)) {
+    return { draft, warning: null, missingModel: false };
+  }
   // A seeded draft whose starter is gone waits for the default's details: its model was never the creator's.
   if (seeded) return { draft, warning: null, missingModel: false };
   if (!getCatalogModel(catalog, draft.model)) return { draft, warning: null, missingModel: true };

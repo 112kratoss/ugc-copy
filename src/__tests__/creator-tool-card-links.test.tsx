@@ -177,6 +177,8 @@ describe('creator tool card links', () => {
     const imageCard = screen.getByText('Create Image').closest('a')!.parentElement!;
     expect(imageCard).toContainElement(imageExample);
     expect(screen.getByRole('link', { name: /Try: Create a founder-style teaser/ })).toHaveAttribute('href', expect.stringContaining('/create-video?'));
+    // On the default video's model, inside a new account's welcome credits (Kling 3.0 was 70).
+    expect(screen.getByRole('link', { name: /Try: Create a founder-style teaser/ })).toHaveAttribute('href', expect.stringContaining('model=seedance-2-mini'));
     expect(screen.getByRole('link', { name: /Try: Animate a UGC-style performance/ })).toHaveAttribute('href', expect.stringContaining('/create-motion?'));
     // The canvas card already opens an empty canvas.
     expect(screen.getAllByRole('link').filter((link) => link.getAttribute('href') === '/create-workflow')).toHaveLength(1);

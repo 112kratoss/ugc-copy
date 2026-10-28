@@ -65,6 +65,15 @@ const modelCatalogState = vi.hoisted(() => ({
   summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
   // Catalog entries a test adds to the hook's five, as the server publishes them.
   extraModels: [] as Array<Record<string, unknown>>,
+  // The catalog's default video model, which a page with no draft opens on.
+  videoDefault: 'kling-3.0-video',
+  revision: 'test-catalog-rev',
+  // The hook's own models whose details have not arrived.
+  withoutModels: [] as string[],
+  // Details ready only once every selected model's have arrived, as the real hook says.
+  honestDetails: false,
+  // The network has not yet confirmed the revision: the catalog is the browser's stored copy.
+  checkingRevision: false,
 }));
 // What the result's player was last given; it still plays as it does on the page.
 const resultVideoPropsMock = vi.hoisted(() => vi.fn());
@@ -267,12 +276,11 @@ vi.mock('@/lib/generation-model-client', async () => {
   const { quoteHookStandIn } = await import('./fixtures/web-quote-stand-in');
   return {
     ...actual,
-    useWebGenerationModelCatalog: () => ({
-      summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
-      catalog: {
-        revision: 'test-catalog-rev',
+    useWebGenerationModelCatalog: (options: { selectedIds?: string[] } = {}) => {
+      const catalog = {
+        revision: modelCatalogState.revision,
         schemaVersion: 1,
-        defaults: { image: 'nano-banana-2', video: 'kling-3.0-video', motion: 'kling-3.0' },
+        defaults: { image: 'nano-banana-2', video: modelCatalogState.videoDefault, motion: 'kling-3.0' },
         models: [
           {
             id: 'kling-3.0-video',
@@ -320,13 +328,20 @@ vi.mock('@/lib/generation-model-client', async () => {
             inputs: {},
           },
           ...modelCatalogState.extraModels,
-        ],
-      },
-      error: modelCatalogState.error,
-      isLoading: false,
-      revision: 'test-catalog-rev',
-      refetch: generationCatalogRefetchMock,
-    }),
+        ].filter((model) => !modelCatalogState.withoutModels.includes(String(model.id))),
+      };
+      return {
+        summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds, isLoadingModels: false,
+        detailsReady: !modelCatalogState.honestDetails
+          || (options.selectedIds ?? []).every((id) => catalog.models.some((model) => model.id === id)),
+        catalog,
+        error: modelCatalogState.error,
+        isLoading: false,
+        isCheckingRevision: modelCatalogState.checkingRevision,
+        revision: modelCatalogState.revision,
+        refetch: generationCatalogRefetchMock,
+      };
+    },
     // Unless a test says otherwise, 12 credits, ready, and the price of the very request the page asked.
     useWebGenerationModelQuote: quoteHookStandIn(actual.WebCatalogRequestError),
   };
@@ -450,6 +465,11 @@ describe('CreateVideoClient Kling video elements', () => {
     modelCatalogState.error = null;
     modelCatalogState.summaries = [];
     modelCatalogState.extraModels = [];
+    modelCatalogState.videoDefault = 'kling-3.0-video';
+    modelCatalogState.revision = 'test-catalog-rev';
+    modelCatalogState.withoutModels = [];
+    modelCatalogState.honestDetails = false;
+    modelCatalogState.checkingRevision = false;
     resultVideoPropsMock.mockClear();
     temporaryUploadMock.mockReset();
     temporaryUploadMock.mockImplementation(async (file: File) => ({
@@ -2579,6 +2599,217 @@ describe('CreateVideoClient Kling video elements', () => {
         .toBe('Kling 3.0 Cinematic cannot use @hero. Remove it from the prompt, or pick a model that takes reusable references.');
       expect(temporaryUploadMock).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalledWith('/api/generations', expect.objectContaining({ method: 'POST' }));
+    });
+  });
+
+  /**
+   * What a creator with no draft opens on: the catalog's default video model at that
+   * model's own defaults. Since 2026-10-28 that is Seedance 2 Mini at 480p for 5 s without
+   * sound, 19 credits, inside a new account's 25 welcome credits. The page draws Kling 3.0
+   * until the catalog has loaded, and none of Kling's form may carry over: at the 720p the
+   * page starts with, the run would be 41 credits.
+   */
+  describe('the catalog default', () => {
+    const publishedCatalog = serverCatalog.buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+
+    it('opens on Seedance 2 Mini at 480p for 5 s without sound, 19 credits', async () => {
+      expect(publishedCatalog.defaults.video).toBe('seedance-2-mini');
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      modelCatalogState.extraModels = publishedCatalog.models
+        .filter((model) => model.id === 'seedance-2-mini') as unknown as Array<Record<string, unknown>>;
+      render(<CreateVideoClient prefill={{}} />);
+
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+      const request = quoteStandIn.lastRequest()!;
+      expect(request.settings).toMatchObject({ aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false });
+      expect(screen.getByRole('button', { name: /^Generation settings: / }))
+        .toHaveAccessibleName('Generation settings: 480P · 16:9 · 5s');
+      // The server's own price for the request the page asks.
+      expect(serverCatalog.quoteGenerationModel({ ...request, catalogRevision: undefined }).costCredits).toBe(19);
+    });
+
+    /** Seedance 2 Mini as published, with its control defaults replaced where named. */
+    function miniWithDefaults(defaults: Record<string, string | number | boolean>) {
+      const mini = publishedCatalog.models.find((model) => model.id === 'seedance-2-mini')!;
+      return {
+        ...mini,
+        controls: mini.controls.map((control) => (control.key in defaults ? { ...control, defaultValue: defaults[control.key] } : control)),
+      } as unknown as Record<string, unknown>;
+    }
+
+    it('opens on the default\'s published settings when its details arrive before the stand-in\'s', async () => {
+      // A browser that has Mini's details but not Kling 3.0's: nothing clears the page's
+      // own 720p before Mini is chosen, and the run would be 41 credits.
+      modelCatalogState.honestDetails = true;
+      modelCatalogState.withoutModels = ['kling-3.0-video'];
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      modelCatalogState.extraModels = [miniWithDefaults({ aspectRatio: '9:16', duration: 6, sound: true })];
+      render(<CreateVideoClient prefill={{}} />);
+
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+      await waitFor(() => expect(quoteStandIn.lastRequest()!.settings)
+        .toMatchObject({ aspectRatio: '9:16', resolution: '480p', duration: 6, sound: true }));
+      expect(screen.getByRole('button', { name: /^Generation settings: / }))
+        .toHaveAccessibleName('Generation settings: 480P · 9:16 · 6s');
+    });
+
+    it('keeps a ratio and a length the link asked for, even the stand-in\'s own', async () => {
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      modelCatalogState.extraModels = [miniWithDefaults({ aspectRatio: '9:16', duration: 6 })];
+      render(<CreateVideoClient prefill={{ aspectRatio: '16:9', duration: '5' }} />);
+
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(quoteStandIn.lastRequest()!.settings).toMatchObject({ aspectRatio: '16:9', resolution: '480p', duration: 5 });
+    });
+
+    it('waits for the default\'s details rather than settling on the stand-in', async () => {
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      const view = render(<CreateVideoClient prefill={{}} />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      modelCatalogState.extraModels = [miniWithDefaults({})];
+      view.rerender(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(quoteStandIn.lastRequest()).toMatchObject({
+        modelId: 'seedance-2-mini',
+        settings: { resolution: '480p', duration: 5 },
+      }));
+    });
+
+    it('saves a link\'s model only once the first pick has given it its own settings', async () => {
+      modelCatalogState.checkingRevision = true;
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-mini' }} />);
+      await waitFor(() => expect(saveCreatorDraftMock).toHaveBeenCalled());
+      expect(saveCreatorDraftMock.mock.calls.at(-1)?.[2]).toMatchObject({ modelId: '' });
+
+      modelCatalogState.extraModels = [miniWithDefaults({})];
+      modelCatalogState.checkingRevision = false;
+      view.rerender(<CreateVideoClient prefill={{ model: 'seedance-2-mini' }} />);
+      await waitFor(() => expect(saveCreatorDraftMock.mock.calls.at(-1)?.[2])
+        .toMatchObject({ modelId: 'seedance-2-mini', resolution: '480p', duration: 5 }));
+    });
+
+    it('takes the default of the revision the network confirms, not of the browser\'s stored copy', async () => {
+      // The browser's copy of the catalog is from before Mini was the default.
+      modelCatalogState.revision = 'kept-in-the-browser';
+      modelCatalogState.checkingRevision = true;
+      modelCatalogState.extraModels = [miniWithDefaults({})];
+      const view = render(<CreateVideoClient prefill={{}} />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // The network brings the published revision a moment later.
+      modelCatalogState.revision = 'mini-default-video-20261028';
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      modelCatalogState.checkingRevision = false;
+      view.rerender(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+      await waitFor(() => expect(quoteStandIn.lastRequest()!.settings)
+        .toMatchObject({ aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false }));
+    });
+
+    it('keeps the creator\'s settings when a later revision arrives', async () => {
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      modelCatalogState.extraModels = [miniWithDefaults({})];
+      const view = render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.settings).toMatchObject({ resolution: '480p' }));
+      chooseAspectRatio('9:16');
+      await waitFor(() => expect(quoteStandIn.lastRequest()!.settings).toMatchObject({ aspectRatio: '9:16' }));
+
+      // A stale quote or the model menu refreshes the catalog.
+      modelCatalogState.revision = 'a-later-release';
+      view.rerender(<CreateVideoClient prefill={{}} />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(quoteStandIn.lastRequest()).toMatchObject({ modelId: 'seedance-2-mini', settings: { aspectRatio: '9:16', resolution: '480p' } });
+    });
+
+    it('opens a link that names Seedance 2 Mini on its published settings, not the page\'s 720p', async () => {
+      // The model page prices Mini at its defaults, 19 credits, and links here.
+      modelCatalogState.extraModels = [miniWithDefaults({})];
+      render(<CreateVideoClient prefill={{ model: 'seedance-2-mini' }} />);
+
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.settings).toMatchObject({ resolution: '480p', duration: 5 }));
+      expect(serverCatalog.quoteGenerationModel({ ...quoteStandIn.lastRequest()!, catalogRevision: undefined }).costCredits).toBe(19);
+    });
+
+    it('never saves the stand-in model with the draft', async () => {
+      // The visit ends before the catalog has picked a model: the next one takes the default.
+      modelCatalogState.checkingRevision = true;
+      const view = render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(saveCreatorDraftMock).toHaveBeenCalled());
+      expect(saveCreatorDraftMock.mock.calls.at(-1)?.[2]).toMatchObject({ modelId: '' });
+
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      modelCatalogState.extraModels = [miniWithDefaults({})];
+      modelCatalogState.checkingRevision = false;
+      view.rerender(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(saveCreatorDraftMock.mock.calls.at(-1)?.[2]).toMatchObject({ modelId: 'seedance-2-mini' }));
+    });
+
+    /** The network confirms the revision, whose default is Seedance 2 Mini with these defaults. */
+    function confirmMiniDefault(view: ReturnType<typeof render>, defaults: Record<string, string | number | boolean> = {}) {
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      modelCatalogState.extraModels = [miniWithDefaults(defaults)];
+      modelCatalogState.checkingRevision = false;
+      view.rerender(<CreateVideoClient prefill={{}} />);
+    }
+
+    it('keeps a model the creator picks while the page waits for the revision', async () => {
+      modelCatalogState.checkingRevision = true;
+      modelCatalogState.summaries = videoModelSummaries;
+      const view = render(<CreateVideoClient prefill={{}} />);
+      chooseModel(view.container, 'Seedance 1.5 Pro');
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-1.5-pro'));
+
+      confirmMiniDefault(view);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-1.5-pro');
+    });
+
+    it('keeps a setting the creator changes while the page waits, and takes the default\'s for the rest', async () => {
+      modelCatalogState.checkingRevision = true;
+      const view = render(<CreateVideoClient prefill={{}} />);
+      chooseAspectRatio('9:16');
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.settings).toMatchObject({ aspectRatio: '9:16' }));
+
+      confirmMiniDefault(view, { aspectRatio: '21:9', duration: 6 });
+      await waitFor(() => expect(quoteStandIn.lastRequest()).toMatchObject({
+        modelId: 'seedance-2-mini',
+        settings: { aspectRatio: '9:16', resolution: '480p', duration: 6, sound: false },
+      }));
+    });
+
+    it('keeps a saved draft\'s settings when a link names its model, as after the page\'s own reload', async () => {
+      loadCreatorDraftMock.mockResolvedValue({
+        prompt: 'A harbour at dusk',
+        modelId: 'seedance-2-mini',
+        mode: '',
+        aspectRatio: '9:16',
+        sound: true,
+        resolution: '720p',
+        duration: 10,
+      });
+      modelCatalogState.extraModels = [miniWithDefaults({})];
+      render(<CreateVideoClient prefill={{ model: 'seedance-2-mini' }} />);
+
+      // Read back first, then settled: the page's first pick must not put Mini's defaults over it.
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.settings).toMatchObject({ aspectRatio: '9:16' }));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(quoteStandIn.lastRequest()).toMatchObject({
+        modelId: 'seedance-2-mini',
+        settings: { aspectRatio: '9:16', resolution: '720p', duration: 10, sound: true },
+      });
     });
   });
 

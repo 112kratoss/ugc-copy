@@ -132,9 +132,10 @@ export const CREATOR_STARTER_RECIPES: CreatorStarterRecipe[] = [
   {
     toolId: 'video',
     title: 'Create a founder-style teaser',
+    // The default video's model, 19 credits at 480p for 5 s: inside a new account's 25 welcome credits.
     href: buildVideoLaunchUrl(
       'Confident founder walking through a bright studio, explaining how the product saves time, cinematic commercial energy.',
-      'kling-3.0-video',
+      'seedance-2-mini',
       '9:16',
       '5'
     ),

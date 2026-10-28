@@ -197,9 +197,11 @@ const MODEL_STATUS: Record<string, ModelStatus> = Object.fromEntries([
   ...Object.keys(MOTION_MODELS),
 ].map((id) => [id, 'active'])) as Record<string, ModelStatus>;
 
+// Video opens on Seedance 2 Mini at 480p for 5 s without sound, 19 credits, so a new
+// account's 25 welcome credits cover one run (owner, 2026-10-28; Kling 3.0's 5 s was 70).
 const DEFAULT_MODEL_IDS: Record<GenerationModelKind, string> = {
   image: 'nano-banana-2',
-  video: 'kling-3.0-video',
+  video: 'seedance-2-mini',
   motion: 'kling-2.6',
 };
 
