@@ -1480,7 +1480,7 @@ export default function CreateMotionClient({
                 accent="motion"
                 optionPrice={(quality) => optionPrice('resolution', quality)}
             />
-            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} />
+            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} offersTopUp={!isVisitor} />
             <CatalogAdditionalControls
                 appearance="panel"
                 descriptor={catalogDescriptor}

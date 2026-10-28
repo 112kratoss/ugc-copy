@@ -170,7 +170,7 @@ vi.mock('@/lib/use-deployment-refresh', async (importOriginal) => ({
 
 // Signed in as user-1 with 10,000 credits, unless a test signs out to use the page as a
 // visitor or sets a balance of its own.
-const authState = vi.hoisted(() => ({ signedIn: true, credits: 10_000 }));
+const authState = vi.hoisted(() => ({ signedIn: true, credits: 10_000, token: 'test-token' }));
 
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
@@ -178,7 +178,7 @@ vi.mock('@/components/AuthProvider', () => ({
     isLoading: false,
     session: authState.signedIn
       ? {
-        access_token: 'test-token',
+        access_token: authState.token,
         user: { id: 'user-1' },
       }
       : null,
@@ -451,6 +451,7 @@ describe('CreateVideoClient Kling video elements', () => {
   beforeEach(() => {
     authState.signedIn = true;
     authState.credits = 10_000;
+    authState.token = 'test-token';
     priceListStandIn.reset();
     // A start kept from another test would be replayed when the page opens.
     window.sessionStorage.clear();
@@ -4907,6 +4908,12 @@ describe('CreateVideoClient Kling video elements', () => {
         await waitFor(() => expect(document.querySelector('[data-creator-bar-status]'))
           .toHaveTextContent('Seedance 2.5 needs 140 credits; you have 22. Seedance 2 Mini runs the same prompt and 5s for 19.'));
         expect(screen.getByRole('link', { name: 'Top up · 500 credits for ₹415' })).toHaveAttribute('href', '/pricing');
+        // Here the bar offers Switch back, not Top up: the "+N" line says only that options stay selectable.
+        fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
+        const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+        await waitFor(() => expect(settings).toHaveTextContent(/more than your balance of 22\. Those options stay selectable\./));
+        expect(settings).not.toHaveTextContent('show Top up in place of Generate');
+        fireEvent.click(within(settings).getByRole('button', { name: 'Done' }));
 
         fireEvent.click(screen.getByRole('button', { name: 'Switch back to Seedance 2 Mini' }));
         await waitFor(() => expect(costShown()).toBe('19 credits'));
@@ -4991,6 +4998,36 @@ describe('CreateVideoClient Kling video elements', () => {
         listPriced = true;
         fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Two figures face off in a dim hall, slowly.' } });
         expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
+      });
+
+      // Supabase renews the session token about hourly: the remix is not loaded again over the fit.
+      it('stays fitted when the session token is renewed', async () => {
+        authState.credits = 22;
+        stubRemix(remixOf({ duration: 5 }));
+        const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini/)).toBeInTheDocument();
+
+        authState.token = 'renewed-token';
+        view.rerender(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        await act(async () => {});
+
+        expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/remix-source'))).toHaveLength(1);
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini');
+        expect(screen.getByText(/Fitted to your 22 credits: Seedance 2 Mini/)).toBeInTheDocument();
+      });
+
+      it('waits for Seedance 2 Mini\'s price before fitting, though its details failed to load', async () => {
+        authState.credits = 22;
+        modelCatalogState.extraModels = [];
+        modelCatalogState.error = new Error('Could not load model details.');
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        expect(await screen.findByText(/Settings pre-filled from "intense"/)).toBeInTheDocument();
+        await act(async () => {});
+
+        // Fitted without it, the remix would have opened on Seedance 1.5 Pro at 4 s.
+        expect(screen.queryByText(/Fitted to your/)).toBeNull();
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5');
       });
 
       it('opens on its original while the balance covers it', async () => {

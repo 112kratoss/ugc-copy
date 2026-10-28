@@ -739,12 +739,18 @@ export function CreatorSettingsFootNote({ cost, costLabel, balance, isVisitor }:
  * Under the settings while an option shown costs more than the balance: what "+N" means
  * (the least such N), and that those options can still be chosen.
  */
-export function CreatorOverBalanceLegend({ over, balance, isVisitor }: { over: number | null; balance: number | null; isVisitor: boolean }) {
+export function CreatorOverBalanceLegend({ over, balance, isVisitor, offersTopUp }: {
+  over: number | null;
+  balance: number | null;
+  isVisitor: boolean;
+  /** Such an option puts Top up in Generate's place (not where the bar offers something else, or for a visitor). */
+  offersTopUp: boolean;
+}) {
   if (over === null || balance === null) return null;
   return (
     <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
       “+{over}” means {creditsWords(over)} more than {isVisitor ? `the ${balance} free credits` : `your balance of ${balance}`}.
-      {isVisitor ? ' Those options stay selectable.' : ' Those options stay selectable, and show Top up in place of Generate.'}
+      {offersTopUp ? ' Those options stay selectable, and show Top up in place of Generate.' : ' Those options stay selectable.'}
     </p>
   );
 }

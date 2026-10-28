@@ -521,9 +521,10 @@ type RemixFit = { original: { modelId: VideoModelId; settings: VideoFormSettings
     | { stage: 'pricing' }
     | {
         stage: 'shortening';
-        /** The model whose shorter lengths are priced, at its fitted settings, and the one to open when none fits. */
+        /** The model whose shorter lengths are priced, at its fitted settings. */
         shortenOn: { modelId: VideoModelId; settings: VideoFormSettings; belowSeconds: number };
-        otherwise: { modelId: VideoModelId; sameLength: boolean } | null;
+        /** The run to open when no shorter length fits, priced when it was decided. */
+        otherwise: RemixFitted | null;
     }
     | { stage: 'settled'; fitted: RemixFitted | null }
 );
@@ -1814,7 +1815,14 @@ export default function CreateVideoClient({
     ));
     // A remix is fitted only on prices that are in: one not to be had now is asked again in
     // half a minute (`useQuotePrices`), and the remix waits for it rather than settling on its original.
-    const remixPricesIn = modelListSettled && [...modelRuns.values()].every((run) => priceOf(run.quoteInput).status !== 'unavailable');
+    // The catalog's default video (Seedance 2 Mini) comes first (owner, 2026-10-28), so its price
+    // is waited for too: a model whose details failed counts as settled for the list, not here.
+    const preferredVideo = modelCatalog.catalog?.defaults.video ?? null;
+    const preferredRun = preferredVideo ? modelRuns.get(preferredVideo) : undefined;
+    const preferredPriced = !preferredVideo || preferredVideo === selectedModel || modelCatalog.missingIds.includes(preferredVideo)
+        || (preferredRun !== undefined && priceOf(preferredRun.quoteInput).status !== 'pending');
+    const remixPricesIn = modelListSettled && preferredPriced
+        && [...modelRuns.values()].every((run) => priceOf(run.quoteInput).status !== 'unavailable');
     const videoCosts = [affordCost, ...[...modelRuns.values()].map((run) => readyCost(priceOf(run.quoteInput)))];
     const videosFrom = cheapestCost(videoCosts);
     // Short of every video (owner, 2026-10-28): an image first, on the image model that costs least.
@@ -2122,9 +2130,15 @@ export default function CreateVideoClient({
         ? `This model supports ${videoElementSupport.maxElements} reference image${videoElementSupport.maxElements === 1 ? '' : 's'}. Your references are preserved; remove extras or choose another model.`
         : null;
 
+    // A remix is loaded once: a refreshed session token (Supabase renews it about hourly)
+    // loaded it again and put the original's model and settings back over the creator's, a
+    // remix fitted to the balance included.
+    const loadedRemixRef = useRef<string | null>(null);
     useEffect(() => {
         if (!remixId) return;
         if (!session?.access_token) return;
+        const remixKey = `${remixId}\n${remixPostId ?? ''}`;
+        if (loadedRemixRef.current === remixKey) return;
 
         let isCancelled = false;
         const promptWhenRemixStarted = promptRef.current;
@@ -2151,6 +2165,7 @@ export default function CreateVideoClient({
                 if (isCancelled) {
                     return;
                 }
+                loadedRemixRef.current = remixKey;
 
                 setRemixTitle(bundle.generation.title);
                 setRemixVideoUrl(bundle.result?.mediaType === 'video' ? bundle.result.url : null);
@@ -3837,10 +3852,13 @@ export default function CreateVideoClient({
         const cost = run ? readyCost(priceOf(run.quoteInput)) : null;
         return run && cost !== null ? { modelId: run.modelId as VideoModelId, settings: run.settings, cost, sameLength } : null;
     };
+    // While it is decided the page is on the original, so its price now is the original's
+    // (its inputs may have changed since it was weighed).
+    const remixOriginalNow = remixFit ? { ...remixFit.original, cost: affordCost ?? remixFit.original.cost } : null;
     const settleRemix = (fitted: RemixFitted | null) => {
-        if (!remixFit) return;
+        if (!remixOriginalNow) return;
         if (fitted) switchModel(fitted.modelId, fitted.settings);
-        setRemixFit({ original: remixFit.original, stage: 'settled', fitted });
+        setRemixFit({ original: remixOriginalNow, stage: 'settled', fitted });
     };
     useEffect(() => {
         if (remixFit?.stage !== 'pricing' || userCredits === null) return;
@@ -3851,7 +3869,7 @@ export default function CreateVideoClient({
         if (!remixPricesIn) return;
         const originalRun = { inputs: runInputs, settings: remixFit.original.settings };
         const decision = fitRemixToBalance({
-            original: remixFit.original,
+            original: remixOriginalNow ?? remixFit.original,
             balance: userCredits,
             preferredModelId: modelCatalog.catalog?.defaults.video ?? null,
             candidates: [...modelRuns.values()].map((run) => ({
@@ -3870,10 +3888,10 @@ export default function CreateVideoClient({
             settleRemix(null);
         } else {
             setRemixFit({
-                original: remixFit.original,
+                original: remixOriginalNow ?? remixFit.original,
                 stage: 'shortening',
                 shortenOn: { modelId: shortenOn.modelId as VideoModelId, settings: shortenOn.settings, belowSeconds: decision.durationSeconds },
-                otherwise: decision.otherwise ? { modelId: decision.otherwise.modelId as VideoModelId, sameLength: decision.otherwise.sameLength } : null,
+                otherwise: decision.otherwise ? remixFittedOn(decision.otherwise.modelId, decision.otherwise.sameLength) : null,
             });
         }
     // It decides from the prices as they come in; the switch is this render's.
@@ -3899,7 +3917,7 @@ export default function CreateVideoClient({
             return;
         }
         // No shorter length fits: the cheapest model that fits at a length of its own, else the original.
-        settleRemix(remixFit.otherwise ? remixFittedOn(remixFit.otherwise.modelId, remixFit.otherwise.sameLength) : null);
+        settleRemix(remixFit.otherwise);
     // It decides once every shorter length's price is in.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [remixFit, remixLeftAlone, shortenRuns, priceOf, userCredits]);
@@ -4808,7 +4826,12 @@ export default function CreateVideoClient({
                 />
             ) : null}
 
-            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} />
+            <CreatorOverBalanceLegend
+                over={smallestOver}
+                balance={listBalance}
+                isVisitor={isVisitor}
+                offersTopUp={!isVisitor && !offersFittedRemix && !shortOfEveryVideoShown}
+            />
 
             <CatalogAdditionalControls
                 appearance="panel"
