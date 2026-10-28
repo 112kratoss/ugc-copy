@@ -375,15 +375,28 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
 
   // The shell draws the first page until this list takes it over (Load more,
   // or a scroll down to it). Both draw `MarketplaceRecipeTile`, so the hand-off
-  // moves nothing on screen; only the address a tile opens differs.
+  // moves nothing on screen, a video's poster included, and each tile opens
+  // the same address from either list.
   it('draws the same tiles as the first-paint shell it replaces', () => {
-    const page = createPage(2, false);
+    const page = createPage(3, false);
     page.items[1] = {
       ...page.items[1],
       accessMode: 'paid',
       priceUsdCents: 900,
       priceQuote: { currency: 'INR', amountSubunits: 75000, formatted: '₹750', note: null },
       post: createImagePost('post-2'),
+    };
+    page.items[2] = {
+      ...page.items[2],
+      post: {
+        ...createImagePost('post-3'),
+        title: 'Video post',
+        category: 'video',
+        mediaUrl: 'https://example.com/clip.mp4',
+        mediaPreviewUrl: 'https://example.com/uploads/clip-poster.jpg',
+        mediaRenditionUrl: 'https://example.com/clip.rendition.mp4',
+        mediaKind: 'video',
+      },
     };
 
     const shell = render(
@@ -393,21 +406,19 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
         sourceToolOptions={[]}
       />
     );
-    const shellTiles = tilesWithoutAddress(shell.container);
+    const shellTiles = drawnTiles(shell.container);
     shell.unmount();
 
     const list = renderMarketplace(page);
-    expect(shellTiles).toHaveLength(2);
-    expect(tilesWithoutAddress(list.container)).toEqual(shellTiles);
+    expect(shellTiles).toHaveLength(3);
+    expect(shellTiles[2]).toContain('<video');
+    expect(drawnTiles(list.container)).toEqual(shellTiles);
   });
 });
 
-function tilesWithoutAddress(container: HTMLElement) {
-  return Array.from(container.querySelectorAll('a[aria-label^="View free recipe"], a[aria-label^="Unlock for"]'), (tile) => {
-    const copy = tile.cloneNode(true) as HTMLElement;
-    copy.removeAttribute('href');
-    return copy.outerHTML;
-  });
+function drawnTiles(container: HTMLElement) {
+  const grid = container.querySelector('a[aria-label^="View"], a[aria-label^="Unlock for"]')?.parentElement;
+  return Array.from(grid?.children ?? [], (tile) => tile.outerHTML);
 }
 
 function createImagePost(id: string): NonNullable<MarketplaceResourceListItem['post']> {

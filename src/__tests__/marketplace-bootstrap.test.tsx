@@ -124,7 +124,8 @@ describe('MarketplaceBootstrap', () => {
   // creator, and the recipe's price and kinds, in Explore's own grid.
   it('draws each recipe as Explore draws a post', () => {
     const page = createPage(1, false);
-    page.items[0] = { ...page.items[0], freeUnlockCount: 5 };
+    // Edited since: Recent sorts by when a recipe went up, so that is its date.
+    page.items[0] = { ...page.items[0], freeUnlockCount: 5, updatedAt: '2026-10-27T10:00:00.000Z' };
 
     render(
       <MarketplaceBootstrap
@@ -139,8 +140,11 @@ describe('MarketplaceBootstrap', () => {
     expect(tile.firstElementChild).toHaveClass('aspect-[4/5]');
     expect(within(tile).getByRole('heading', { name: 'Unlock 1' })).toBeInTheDocument();
     expect(within(tile).getByText('Apr 25')).toHaveAttribute('datetime', '2026-04-25T10:00:00.000Z');
+    expect(tile).not.toHaveTextContent('Oct 27');
     expect(within(tile).getByText('Creator 1')).toBeInTheDocument();
     expect(within(tile).getByText('@creator-1')).toBeInTheDocument();
+    // The tile is the one link: the creator row inside it has none of its own.
+    expect(within(tile).queryByRole('link')).not.toBeInTheDocument();
     expect(within(tile).getByText('5 opened')).toBeInTheDocument();
     expect(within(tile).getByText('Prompt')).toBeInTheDocument();
   });

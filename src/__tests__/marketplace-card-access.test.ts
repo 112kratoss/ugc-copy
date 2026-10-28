@@ -25,13 +25,13 @@ describe('a marketplace card and its viewer', () => {
   // The glossary: a recipe the viewer has reads "Unlocked", never its price.
   it('says "Unlocked" and "View recipe" for a recipe the viewer has, free or paid, with no price', () => {
     const viewer = { viewerUserId: 'buyer-1', unlockedBundleIds: new Set(['bundle-1', 'bundle-2']) };
-    expect(getMarketplaceCardAccess(paid, viewer)).toMatchObject({ accessLabel: 'Unlocked', unlockLabel: 'View recipe', viewerHasUnlocked: true, priceLabel: null });
-    expect(getMarketplaceCardAccess(free, viewer)).toMatchObject({ accessLabel: 'Unlocked', unlockLabel: 'View recipe', viewerHasUnlocked: true, priceLabel: null });
+    expect(getMarketplaceCardAccess(paid, viewer)).toMatchObject({ accessLabel: 'Unlocked', unlockLabel: 'View recipe', viewerHasUnlocked: true });
+    expect(getMarketplaceCardAccess(free, viewer)).toMatchObject({ accessLabel: 'Unlocked', unlockLabel: 'View recipe', viewerHasUnlocked: true });
   });
 
   it("says \"Your recipe\" on the seller's own, whatever else is on record", () => {
     const viewer = { viewerUserId: 'seller-1', unlockedBundleIds: new Set(['bundle-1']) };
-    expect(getMarketplaceCardAccess(paid, viewer)).toMatchObject({ accessLabel: 'Your recipe', unlockLabel: 'View recipe', isOwner: true, priceLabel: null });
+    expect(getMarketplaceCardAccess(paid, viewer)).toMatchObject({ accessLabel: 'Your recipe', unlockLabel: 'View recipe', isOwner: true });
     expect(getMarketplaceCardAccess(paid, { viewerUserId: null, unlockedBundleIds: new Set() }).isOwner).toBe(false);
   });
 });

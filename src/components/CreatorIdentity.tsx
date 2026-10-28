@@ -1,12 +1,14 @@
 import Link from 'next/link';
 
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
-import { getUserInitials } from '@/lib/profile';
 import type { ShowcaseCreator } from '@/lib/showcase';
+import { getUserInitials } from '@/lib/user-initials';
 
 interface CreatorIdentityProps {
   creator: ShowcaseCreator;
   compact?: boolean;
+  /** False draws the row without its link to the creator, for a row inside another link. */
+  linked?: boolean;
   prefetch?: boolean;
   usernamePrefix?: boolean;
 }
@@ -14,6 +16,7 @@ interface CreatorIdentityProps {
 export default function CreatorIdentity({
   creator,
   compact = false,
+  linked = true,
   prefetch,
   usernamePrefix = true,
 }: CreatorIdentityProps) {
@@ -57,9 +60,10 @@ export default function CreatorIdentity({
     </>
   );
 
-  const className = `inline-flex items-center gap-3 min-w-0 ${creator.username ? 'hover:opacity-90 transition-opacity' : ''}`;
+  const isLink = linked && Boolean(creator.username);
+  const className = `inline-flex items-center gap-3 min-w-0 ${isLink ? 'hover:opacity-90 transition-opacity' : ''}`;
 
-  if (!creator.username) {
+  if (!isLink) {
     return <div className={className}>{content}</div>;
   }
 

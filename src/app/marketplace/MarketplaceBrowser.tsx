@@ -17,7 +17,7 @@ import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import {
   MARKETPLACE_RECIPE_GRID_CLASS,
   MarketplaceRecipeTile,
-  type MarketplaceRecipeClip,
+  type MarketplaceRecipeTileLinkProps,
 } from '@/app/marketplace/MarketplaceRecipeTile';
 import { useAuth } from '@/components/AuthProvider';
 import {
@@ -30,7 +30,6 @@ import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { SourceToolFilterOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
-import { HoverVideo } from '@/components/HoverVideo';
 import { MARKETPLACE_COMPACT_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 
@@ -350,8 +349,7 @@ export default function MarketplaceBrowser({
                   returnTo: marketplaceReturnPath,
                   section: 'resources',
                 })}
-                linkComponent={Link}
-                renderClip={renderHoverClip}
+                linkComponent={RecipeTileLink}
               />
             ))}
           </div>
@@ -446,9 +444,12 @@ function FilterGroup({
   );
 }
 
-/** The interactive list plays a video post's clip under the pointer. */
-function renderHoverClip({ src, poster }: MarketplaceRecipeClip) {
-  return <HoverVideo src={src} poster={poster} className="h-full w-full object-cover" />;
+/**
+ * A tile's link, unprefetched as Explore's are: nothing is fetched for a recipe
+ * the visitor only scrolls past.
+ */
+function RecipeTileLink(props: MarketplaceRecipeTileLinkProps) {
+  return <Link {...props} prefetch={false} />;
 }
 
 function buildMarketplacePath(filters: MarketplaceBrowserProps['initialFilters']): string {

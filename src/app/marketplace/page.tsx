@@ -109,7 +109,7 @@ function MarketplaceResultsFallback() {
       <div className={MARKETPLACE_RECIPE_GRID_CLASS}>
         {Array.from({ length: MARKETPLACE_INITIAL_PAGE_SIZE }, (_, item) => (
           <div key={item} className="min-w-0">
-            <div className="relative aspect-[4/5] overflow-hidden rounded-[1.5rem] border border-white/8 bg-zinc-950/70">
+            <div className="relative aspect-[4/5] overflow-hidden rounded-ui-2xl border border-white/8 bg-zinc-950/70">
               <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
             </div>
             <div className="mt-3 h-3.5 w-2/3 rounded-full bg-white/8" />

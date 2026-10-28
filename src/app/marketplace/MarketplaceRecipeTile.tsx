@@ -1,15 +1,18 @@
 import type { ComponentType, ReactNode } from 'react';
-import { BookText, Play, ShoppingBag } from 'lucide-react';
+import { Play, ShoppingBag } from 'lucide-react';
 
 import {
   getMarketplaceCardAccess,
   type MarketplaceViewerState,
 } from '@/app/marketplace/marketplace-card-access';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
+import CreatorIdentity from '@/components/CreatorIdentity';
+import { HoverVideo } from '@/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
+import TextPostPreviewCard from '@/components/TextPostPreviewCard';
+import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { formatUnlockCountLabel, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
-import { getUserInitials } from '@/lib/profile';
 
 /**
  * Explore's grid, so a recipe sits in the same place and at the same size as
@@ -28,13 +31,7 @@ const TILE_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
   timeZone: 'UTC',
 });
 
-export interface MarketplaceRecipeClip {
-  src: string;
-  poster: string | null;
-  title: string;
-}
-
-interface MarketplaceRecipeTileLinkProps {
+export interface MarketplaceRecipeTileLinkProps {
   href: string;
   className: string;
   'aria-label': string;
@@ -48,8 +45,6 @@ interface MarketplaceRecipeTileProps {
   href: string;
   /** `next/link` in the interactive list, a plain anchor in the first-paint shell. */
   linkComponent?: 'a' | ComponentType<MarketplaceRecipeTileLinkProps>;
-  /** A video post's cover. The default is its poster frame, without the clip's bytes. */
-  renderClip?: (clip: MarketplaceRecipeClip) => ReactNode;
 }
 
 /**
@@ -57,14 +52,13 @@ interface MarketplaceRecipeTileProps {
  * cover in a 4:5 frame, and under it the title and date, the creator, and the
  * recipe's price and kinds. The shell and the interactive list both draw this,
  * so nothing moves when the list takes over. The whole tile is one link to the
- * post's recipe, which is why the creator has no link of their own here.
+ * post's recipe, which is why the creator row has no link of its own here.
  */
 export function MarketplaceRecipeTile({
   asset,
   viewer,
   href,
   linkComponent: LinkComponent = 'a',
-  renderClip = renderPosterFrame,
 }: MarketplaceRecipeTileProps) {
   // The chip prices it in credits, as every other chip does (audit B-F13), or
   // says "Free recipe", "Unlocked" or "Your recipe"; the unlock action names
@@ -82,23 +76,26 @@ export function MarketplaceRecipeTile({
     <LinkComponent
       href={href}
       aria-label={`${unlockLabel}: ${postTitle}`}
-      className="group/recipe ui-focus-ring flex min-w-0 flex-col rounded-[1.5rem]"
+      className="group ui-focus-ring flex min-w-0 flex-col rounded-ui-2xl"
     >
-      <div className="relative aspect-[4/5] overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-black transition duration-200 group-hover/recipe:border-[rgba(255,122,89,0.28)] group-hover/recipe:shadow-[var(--ui-shadow-card-hover)]">
-        <RecipeTileCover asset={asset} renderClip={renderClip} />
+      <div className="relative aspect-[4/5] overflow-hidden rounded-ui-2xl border border-[var(--ui-border-subtle)] bg-black transition duration-200 group-hover:border-[rgba(255,122,89,0.28)] group-hover:shadow-[var(--ui-shadow-card-hover)]">
+        <RecipeTileCover asset={asset} />
 
         {isClip ? (
-          <span className="pointer-events-none absolute bottom-3 left-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md transition-opacity duration-200 group-hover/recipe:opacity-0">
+          <span className="pointer-events-none absolute bottom-3 left-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md">
             <Play className="h-4 w-4 fill-current" aria-hidden="true" />
           </span>
         ) : null}
 
-        {/* What a click does, where a pointer can hover, as Explore shows a
-            tile's actions. Without hover the chip under the tile prices it. */}
-        <div className="pointer-events-none absolute inset-0 flex items-end justify-end bg-gradient-to-t from-black/70 via-transparent to-transparent p-3 opacity-0 transition-opacity duration-200 group-hover/recipe:opacity-100 group-focus-visible/recipe:opacity-100">
-          <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-amber-400 px-3 py-2 text-xs font-bold text-[#1a0d08] shadow-md">
+        {/* The unlock action, shown as Explore shows a tile's actions
+            (`.showcase-card-actions`): always on a touch screen, under the
+            pointer with a mouse. It is the one place the tile names every way
+            to pay, so a long price wraps rather than being cut, and `ml-12`
+            keeps it clear of the play badge. */}
+        <div className="showcase-card-actions pointer-events-none absolute inset-0 flex items-end justify-end bg-gradient-to-t from-black/70 via-transparent to-transparent p-3 transition-opacity duration-200">
+          <span className="ml-12 inline-flex min-w-0 items-center gap-1.5 rounded-full bg-amber-400 px-3 py-2 text-xs font-bold leading-tight text-[#1a0d08] shadow-md">
             <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span className="truncate">{unlockLabel}</span>
+            <span>{unlockLabel}</span>
           </span>
         </div>
       </div>
@@ -108,16 +105,20 @@ export function MarketplaceRecipeTile({
           <h2 className="line-clamp-1 min-w-0 flex-1 text-sm font-semibold leading-snug text-zinc-100">
             {postTitle}
           </h2>
+          {/* When the recipe went up, which is what Recent sorts by: its last
+              edit read as the post's date and put the dates out of order. */}
           <time
-            dateTime={asset.updatedAt}
+            dateTime={asset.createdAt}
             className="mt-0.5 whitespace-nowrap text-[10px] font-semibold text-zinc-500"
           >
-            {TILE_DATE_FORMATTER.format(new Date(asset.updatedAt))}
+            {TILE_DATE_FORMATTER.format(new Date(asset.createdAt))}
           </time>
         </div>
 
         <div className="flex items-center justify-between gap-2">
-          <RecipeTileSeller seller={asset.seller} />
+          <div className="min-w-0 flex-1">
+            <CreatorIdentity creator={asset.seller} compact linked={false} />
+          </div>
           <span className="shrink-0 text-[11px] font-semibold text-zinc-500">{unlockCountLabel}</span>
         </div>
 
@@ -140,13 +141,7 @@ export function MarketplaceRecipeTile({
   );
 }
 
-function RecipeTileCover({
-  asset,
-  renderClip,
-}: {
-  asset: MarketplaceResourceListItem;
-  renderClip: (clip: MarketplaceRecipeClip) => ReactNode;
-}) {
+function RecipeTileCover({ asset }: { asset: MarketplaceResourceListItem }) {
   const post = asset.post;
 
   if (post?.mediaUrl && post.mediaKind === 'image') {
@@ -162,25 +157,27 @@ function RecipeTileCover({
   }
 
   if (post?.mediaUrl && post.mediaKind === 'video') {
-    return renderClip({
-      src: post.mediaRenditionUrl ?? post.mediaUrl,
-      poster: post.mediaPreviewUrl,
-      title: post.title,
-    });
+    // The clip's source is attached only under the pointer, so the shell
+    // fetches no clip bytes and draws the poster the list draws.
+    return (
+      <HoverVideo
+        src={resolvePlaybackUrl({ url: post.mediaUrl, renditionUrl: post.mediaRenditionUrl })}
+        poster={post.mediaPreviewUrl}
+        className="absolute inset-0 h-full w-full object-cover"
+      />
+    );
   }
 
   if (post?.postFormat === 'text') {
+    // The text cover the profile hub draws in the same 4:5 frame; the tile's
+    // chips and stats sit under it.
     return (
-      <div className="flex h-full flex-col bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.12),transparent_46%),var(--ui-surface-inset)] p-5">
-        <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
-          <BookText className="h-3.5 w-3.5" aria-hidden="true" />
-          Text
-        </span>
-        <div className="mt-6 line-clamp-3 text-lg font-semibold leading-snug text-white">{post.title}</div>
-        <p className="mt-3 line-clamp-6 whitespace-pre-wrap text-sm leading-6 text-zinc-300">
-          {post.body || asset.summary || asset.previewText}
-        </p>
-      </div>
+      <TextPostPreviewCard
+        title={post.title}
+        summary={post.body || asset.summary || asset.previewText}
+        className="h-full rounded-none border-0 shadow-none"
+        showStats={false}
+      />
     );
   }
 
@@ -189,48 +186,6 @@ function RecipeTileCover({
   return (
     <div className="flex h-full items-center justify-center bg-[var(--ui-surface-inset)] text-zinc-500">
       <ShoppingBag className="h-9 w-9" aria-hidden="true" />
-    </div>
-  );
-}
-
-/** The poster alone: the clip's bytes wait for the interactive list. */
-function renderPosterFrame({ poster, title }: MarketplaceRecipeClip) {
-  return (
-    <video
-      aria-label={title}
-      poster={poster ?? undefined}
-      preload="none"
-      muted
-      playsInline
-      className="h-full w-full object-cover"
-    />
-  );
-}
-
-/** `CreatorIdentity`'s compact row, without its link (the tile is the link). */
-function RecipeTileSeller({ seller }: { seller: MarketplaceResourceListItem['seller'] }) {
-  const showUsername = Boolean(seller.username)
-    && seller.username?.trim().toLowerCase() !== seller.name.trim().toLowerCase();
-
-  return (
-    <div className="flex min-w-0 flex-1 items-center gap-3">
-      <span className="relative inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5 text-[11px] font-semibold text-zinc-200">
-        <span aria-hidden="true">{getUserInitials(seller.name)}</span>
-        {seller.avatar ? (
-          <OptimizedPreviewImage
-            previewSrc={seller.avatar}
-            fallbackSrc={seller.avatar}
-            fallbackToUnoptimized
-            alt={`${seller.name} avatar`}
-            sizes="32px"
-            className="object-cover"
-          />
-        ) : null}
-      </span>
-      <div className="min-w-0">
-        <div className="truncate text-xs font-medium text-white">{seller.name}</div>
-        {showUsername ? <div className="truncate text-xs text-zinc-400">@{seller.username}</div> : null}
-      </div>
     </div>
   );
 }
