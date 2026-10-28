@@ -405,16 +405,7 @@ export function getCreatorDisplayName(profile: {
   return 'Creator';
 }
 
-export function getUserInitials(name: string): string {
-  return (
-    name
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() ?? '')
-      .join('') || 'U'
-  );
-}
+export { getUserInitials } from '@/lib/user-initials';
 
 export function getAuthAvatarUrl(
   userMetadata: Record<string, unknown> | null | undefined

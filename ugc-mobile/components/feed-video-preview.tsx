@@ -3,7 +3,7 @@ import type { ImageProps } from 'expo-image';
 import { createVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { Play, RotateCcw } from 'lucide-react-native';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { ActivityIndicator, Pressable, Text, View, type DimensionValue } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, Text, View, type DimensionValue } from 'react-native';
 
 import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
@@ -62,12 +62,14 @@ const PLAYER_RELEASE_GRACE_MS = 100;
 /**
  * Asks a player the tile still holds the slot for to play again, after the app
  * or a loan paused it. Nothing to do when it already plays (iOS's `inactive`,
- * Control Center or a system alert, pauses nothing); a player released under
- * a hand-back race throws, and then there is nothing to resume.
+ * Control Center or a system alert, pauses nothing), unless the tile has just
+ * paused it itself (`pausedHere`): `playing` says true until that pause has
+ * reached the player. A player released under a hand-back race throws, and
+ * then there is nothing to resume.
  */
-function resumePlayer(player: VideoPlayer) {
+function resumePlayer(player: VideoPlayer, pausedHere = false) {
   try {
-    if (!player.playing) player.play();
+    if (pausedHere || !player.playing) player.play();
   } catch {
     // Released already: its native side is gone.
   }
@@ -614,14 +616,28 @@ function FeedVideoPlayerLayer({
   // change of state is not lost. Going withdraws a start or a stall still being
   // timed, as scrolling away does: time away is not start-up time. Coming back
   // asks the player to play again, unless the reel has it on loan.
+  //
+  // On Android going also pauses the player, unless the reel has it on loan.
+  // expo-video pauses every view's player as the activity pauses, playing or
+  // waiting for data (PictureInPictureManager.onAppBackgrounded), but JS hears
+  // of the leaving only once its thread is free: a play() sent by work already
+  // under way (Home electing this tile as Home was pressed) reached the player
+  // after that pause, and the clip ran muted behind the launcher once its data
+  // came (Pixel 9a emulator, 2026-10-27). That pause is queued like play(), so
+  // coming back plays without asking `playing` first. Not on iOS, where Control
+  // Center or a system alert makes the app `inactive`, a leaving here too, and
+  // the clip plays on under it.
   useEffect(() => {
     if (!playing || returning) return undefined;
+    let pausedOnLeave = false;
     return subscribeToAppForeground((foreground) => {
       if (!foreground) {
         cancelPlaybackStart(metricsKey);
         endPlaybackStall(metricsKey);
+        pausedOnLeave = Platform.OS === 'android' && !isVideoPlayerOnLoan(player);
+        if (pausedOnLeave) player.pause();
       } else if (!isVideoPlayerOnLoan(player)) {
-        resumePlayer(player);
+        resumePlayer(player, pausedOnLeave);
       }
     });
   }, [metricsKey, player, playing, returning]);

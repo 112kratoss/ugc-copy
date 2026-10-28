@@ -4,6 +4,7 @@ import { ShoppingBag } from 'lucide-react';
 import { Suspense, use } from 'react';
 
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
+import { MARKETPLACE_RECIPE_GRID_CLASS } from '@/app/marketplace/MarketplaceRecipeTile';
 import { filterMarketplaceItemsForViewer } from '@/lib/marketplace-viewer-filter';
 import {
   getMarketplaceResourceList,
@@ -104,13 +105,15 @@ function MarketplaceResultsFallback() {
         </div>
         <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
       </div>
-      <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {[1, 2, 3].map((item) => (
-          <div
-            key={item}
-            className="relative min-h-[430px] overflow-hidden rounded-[30px] border border-white/8 bg-zinc-950/70"
-          >
-            <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
+      {/* The tiles' own shape (`MarketplaceRecipeTile`), so nothing moves when they arrive. */}
+      <div className={MARKETPLACE_RECIPE_GRID_CLASS}>
+        {Array.from({ length: MARKETPLACE_INITIAL_PAGE_SIZE }, (_, item) => (
+          <div key={item} className="min-w-0">
+            <div className="relative aspect-[4/5] overflow-hidden rounded-ui-2xl border border-white/8 bg-zinc-950/70">
+              <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
+            </div>
+            <div className="mt-3 h-3.5 w-2/3 rounded-full bg-white/8" />
+            <div className="mt-2.5 h-8 w-1/2 rounded-full bg-white/[0.04]" />
           </div>
         ))}
       </div>

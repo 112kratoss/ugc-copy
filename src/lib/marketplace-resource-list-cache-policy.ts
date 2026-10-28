@@ -6,7 +6,9 @@ type MarketplaceResourceListCachePolicyOptions = {
   bypassCache?: boolean;
 };
 
-export const MARKETPLACE_INITIAL_PAGE_SIZE = 3;
+// One full row of the recipe grid at its widest (four across, as on Explore),
+// so a laptop's first screen has no gap; still a third of a continuation page.
+export const MARKETPLACE_INITIAL_PAGE_SIZE = 4;
 // Keep web/mobile continuation pages compact while the server bootstrap stays
 // smaller still. The broader default remains available to explicit API users.
 export const MARKETPLACE_COMPACT_PAGE_SIZE = 12;

@@ -9,7 +9,7 @@ import {
 
 describe('marketplace resource list cache policy', () => {
   it('caches bounded first pages at every supported page size', () => {
-    expect(MARKETPLACE_INITIAL_PAGE_SIZE).toBe(3);
+    expect(MARKETPLACE_INITIAL_PAGE_SIZE).toBe(4);
     expect(MARKETPLACE_COMPACT_PAGE_SIZE).toBe(12);
     for (const limit of [
       MARKETPLACE_INITIAL_PAGE_SIZE,

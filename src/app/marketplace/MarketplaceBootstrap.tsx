@@ -11,12 +11,14 @@ import {
 } from 'react';
 
 import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
+import {
+  MARKETPLACE_RECIPE_GRID_CLASS,
+  MarketplaceRecipeTile,
+} from '@/app/marketplace/MarketplaceRecipeTile';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
-import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
+import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
-import { getMarketplaceCardAccess, type MarketplaceViewerState } from '@/app/marketplace/marketplace-card-access';
 import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
-import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 export type MarketplaceBootstrapProps = ComponentProps<typeof MarketplaceBrowser>;
 
@@ -44,14 +46,6 @@ const SORT_FILTERS = [
   { label: 'Price low', value: 'price-low' },
   { label: 'Price high', value: 'price-high' },
 ] as const;
-
-const RESOURCE_KIND_LABELS: Record<string, string> = {
-  prompt: 'Prompt',
-  workflow: 'Workflow',
-  files: 'Files',
-  notes: 'Notes',
-  remix: 'Remix',
-};
 
 let marketplaceBrowserPromise: Promise<MarketplaceBrowserComponent> | null = null;
 
@@ -148,7 +142,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   const marketplaceReturnPath = buildMarketplacePath(initialFilters);
   const activeFilterLabels = getActiveFilterLabels(initialFilters, sourceToolOptions);
   const hasActiveFilters = activeFilterLabels.length > 0 || initialFilters.sort !== 'recent';
-  const bootstrapItems = initialPage.items.slice(0, 3);
+  const bootstrapItems = initialPage.items.slice(0, MARKETPLACE_INITIAL_PAGE_SIZE);
 
   return (
     <div data-marketplace-bootstrap-shell>
@@ -293,13 +287,13 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
         )
       ) : (
         <>
-          <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+          <div className={MARKETPLACE_RECIPE_GRID_CLASS}>
             {bootstrapItems.map((asset) => (
-              <BootstrapMarketplaceCard
+              <MarketplaceRecipeTile
                 key={asset.id}
                 asset={asset}
                 viewer={viewer}
-                marketplaceReturnPath={marketplaceReturnPath}
+                href={buildMarketplaceDetailPath(asset.postId, marketplaceReturnPath)}
               />
             ))}
           </div>
@@ -419,146 +413,6 @@ function BootstrapFilterLink({
     >
       {label}
     </a>
-  );
-}
-
-function BootstrapMarketplaceCard({
-  asset,
-  viewer,
-  marketplaceReturnPath,
-}: {
-  asset: MarketplaceResourceListItem;
-  viewer: MarketplaceViewerState;
-  marketplaceReturnPath: string;
-}) {
-  // The same words the interactive browser draws once it takes over: one figure
-  // on the badge (in credits, as every other chip; "Unlocked" or "Your recipe"
-  // once the viewer's state is read), every way to pay on the pill and the
-  // button. The bare quote priced a credits-only recipe in a currency no
-  // checkout takes.
-  const { accessLabel, priceLabel, unlockLabel } = getMarketplaceCardAccess(asset, viewer);
-  const previewText = asset.summary || asset.previewText || (
-    asset.post?.postFormat === 'text'
-      ? 'Reusable resources from this note are included.'
-      : asset.post?.body || 'Reusable creator resources included.'
-  );
-  const detailHref = buildMarketplaceDetailPath(asset.postId, marketplaceReturnPath);
-  const postTitle = asset.post?.title?.trim() || asset.title;
-  const showRecipeTitle = asset.title.trim().toLocaleLowerCase() !== postTitle.trim().toLocaleLowerCase();
-
-  return (
-    <a
-      href={detailHref}
-      aria-label={`${unlockLabel}: ${postTitle}`}
-      className="group overflow-hidden rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,14,0.98))] shadow-[0_24px_70px_rgba(0,0,0,0.35)] transition hover:border-white/14"
-    >
-      <BootstrapMediaPreview asset={asset} accessLabel={accessLabel} previewText={previewText} />
-
-      <div className="p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-              {asset.seller.username ? `@${asset.seller.username}` : asset.seller.name}
-            </div>
-            <h2 className="mt-2 text-xl font-semibold text-white">{postTitle}</h2>
-            {showRecipeTitle ? (
-              <div className="mt-1 truncate text-xs font-medium text-zinc-500">Recipe: {asset.title}</div>
-            ) : null}
-          </div>
-          {priceLabel ? (
-            <span className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
-              {priceLabel}
-            </span>
-          ) : null}
-        </div>
-
-        <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">{previewText}</p>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {asset.resourceKinds.map((kind) => (
-            <span
-              key={`${asset.id}-${kind}`}
-              className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200"
-            >
-              {RESOURCE_KIND_LABELS[kind] ?? kind}
-            </span>
-          ))}
-        </div>
-
-        <div className="mt-5 text-right text-xs font-semibold text-zinc-200">{unlockLabel}</div>
-      </div>
-    </a>
-  );
-}
-
-function BootstrapMediaPreview({
-  asset,
-  accessLabel,
-  previewText,
-}: {
-  asset: MarketplaceResourceListItem;
-  accessLabel: string;
-  previewText: string;
-}) {
-  const post = asset.post;
-
-  if (post?.postFormat === 'text') {
-    return (
-      <div className="min-h-56 border-b border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.12),transparent_46%),rgba(9,9,12,0.98)] p-5">
-        <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
-          <span>Text</span>
-          <span>{accessLabel}</span>
-        </div>
-        <div className="mt-8 text-lg font-semibold text-white">{post.title}</div>
-        <p className="mt-3 line-clamp-4 text-sm leading-6 text-zinc-300">{post.body || previewText}</p>
-      </div>
-    );
-  }
-
-  if (post?.mediaUrl && post.mediaKind === 'image') {
-    return (
-      <div className="relative h-56 overflow-hidden border-b border-white/8 bg-black/60">
-        <OptimizedPreviewImage
-          previewSrc={post.mediaPreviewUrl ?? post.mediaUrl}
-          fallbackSrc={post.mediaUrl}
-          alt={post.title}
-          sizes="(min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
-          className="object-cover transition duration-500 group-hover:scale-[1.02]"
-        />
-        <PreviewAccessBadge label={accessLabel} />
-      </div>
-    );
-  }
-
-  if (post?.mediaUrl && post.mediaKind === 'video') {
-    return (
-      <div className="relative h-56 overflow-hidden border-b border-white/8 bg-black/60">
-        <video
-          aria-label={post.title}
-          poster={post.mediaPreviewUrl ?? undefined}
-          preload="none"
-          muted
-          playsInline
-          className="h-full w-full object-cover"
-        />
-        <PreviewAccessBadge label={accessLabel} />
-      </div>
-    );
-  }
-
-  return (
-    <div className="relative flex h-44 items-center justify-center border-b border-white/8 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_48%),rgba(10,10,14,1)] text-sm font-medium text-zinc-400">
-      Reusable creator recipe
-      <PreviewAccessBadge label={accessLabel} />
-    </div>
-  );
-}
-
-function PreviewAccessBadge({ label }: { label: string }) {
-  return (
-    <span className="absolute left-4 top-4 rounded-full border border-black/20 bg-black/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white">
-      {label}
-    </span>
   );
 }
 

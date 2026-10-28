@@ -69,7 +69,7 @@ describe('MarketplacePage', () => {
     expect(revalidate).toBe(60);
     expect(getMarketplaceResourceListMock).toHaveBeenCalledWith(expect.objectContaining({
       countryCode: 'IN',
-      limit: 3,
+      limit: 4,
       offset: 0,
     }));
     expect(screen.getByRole('heading', {
@@ -185,6 +185,7 @@ describe('MarketplacePage', () => {
           accessMode: 'free',
           priceUsdCents: 0,
           salesCount: 0,
+          freeUnlockCount: 0,
           earningsUsdCents: 0,
           allowRemix: false,
           resourceKinds: ['prompt'],
@@ -326,6 +327,7 @@ function createMarketplaceResourceItem(overrides: Record<string, unknown> = {}) 
     accessMode: 'free',
     priceUsdCents: 0,
     salesCount: 0,
+    freeUnlockCount: 0,
     earningsUsdCents: 0,
     allowRemix: false,
     resourceKinds: ['prompt'],
