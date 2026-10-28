@@ -2208,6 +2208,21 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
     expect(none.dependencies.loadGenerationInputOrigins).not.toHaveBeenCalled();
   });
 
+  // The switch is stored by truth (`allow_remix: Boolean(...)`), so a request that is not a
+  // boolean is read the same way: it cannot skip the read and keep the hand-over on.
+  it('reads the origins for a hand-over asked for with any true value', async () => {
+    const asText = { ...recipe(true), resources: { ...recipe(true).resources, allowRemix: 'true' as unknown as boolean } };
+    const { dependencies } = await publish(
+      { leaveOutOwnGenerationReferences: true, resourceBundle: asText },
+      { byRowId: new Map([['row-own', 'own']]), hasOwn: true },
+    );
+
+    expect(dependencies.loadGenerationInputOrigins).toHaveBeenCalled();
+    expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: false }) }),
+    }));
+  });
+
   // Whose an input is decides only what is copied and whether the hand-over stays on.
   it('reads no origins for a recipe that copies no references and hands nothing over', async () => {
     const { result, dependencies } = await publish(

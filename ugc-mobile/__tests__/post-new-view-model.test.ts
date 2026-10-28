@@ -316,6 +316,18 @@ describe('post new view model', () => {
       expect(followCreationTitleSuggestion(kept, withRecipe(kept), titledFromPrompt).title).toBe('Video recipe');
     });
 
+    // The composer runs this on every change to the recipe, not only to its access: an edit to
+    // a free recipe's preview must not retitle a post titled before 2026-10-29 ("Video recipe").
+    // Taking the recipe off, or making it paid, still follows the rule.
+    it('leaves the title alone while the recipe keeps its access', () => {
+      const legacy = creationDraft({ title: 'Video recipe' });
+      const free: PostComposerDraft = { ...legacy, resource: { ...legacy.resource, accessMode: 'free' } };
+      const edited: PostComposerDraft = { ...free, resource: { ...free.resource, previewText: 'A fox, step by step.' } };
+      expect(followCreationTitleSuggestion(free, edited, untitled).title).toBe('Video recipe');
+      expect(followCreationTitleSuggestion(free, { ...free, resource: { ...free.resource, accessMode: 'none' } }, untitled).title)
+        .toBe('Red fox running through fresh snow at dawn');
+    });
+
     it('says the title is a suggestion until the creator changes it', () => {
       expect(getCreationTitleSuggestionHint(creationDraft(), untitled)).toBe('Suggested from your prompt. Edit it if you like.');
       expect(getCreationTitleSuggestionHint(withRecipe(creationDraft({ title: 'Video recipe' })), untitled))

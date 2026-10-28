@@ -256,6 +256,45 @@ test('on a phone a bar holds Publish while the form’s own is out of view, and 
   expect(answers.publishes[0].postDataJSON()).toMatchObject({ title: 'Paper boat at dawn', resourceBundle: { accessMode: 'free' } });
 });
 
+// The floating bottom navigation covers the window's foot: the form's Publish behind it is not
+// in reach, so the bar stays until the button is above it.
+test('on a phone the bar stays while the form’s Publish is behind the bottom navigation', async ({ page, context }) => {
+  await page.setViewportSize(PHONE);
+  await signIn(context);
+  const answers: Answers = { publishes: [], profileSaves: [] };
+  await answerApi(page, answers);
+  await runToDone(page);
+
+  const formPublish = publishForm(page).getByRole('button', { name: 'Publish to the feed' });
+  const navSpace = await formPublish.evaluate((button) => {
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:absolute;visibility:hidden;height:var(--app-shell-bottom-nav-space,0px)';
+    button.parentElement!.appendChild(probe);
+    const height = probe.getBoundingClientRect().height;
+    probe.remove();
+    return height;
+  });
+  expect(navSpace).toBeGreaterThan(48);
+  /** Puts the button's middle this far above the window's foot, at once, and lets the observers answer. */
+  const middleAbove = async (fromFoot: number) => {
+    await formPublish.evaluate((button, offset) => {
+      const box = button.getBoundingClientRect();
+      window.scrollBy({ top: box.top + box.height / 2 - (window.innerHeight - offset), behavior: 'instant' });
+    }, fromFoot);
+    await expect.poll(() => formPublish.evaluate((button) => Math.round(window.innerHeight - button.getBoundingClientRect().top - button.getBoundingClientRect().height / 2)))
+      .toBe(Math.round(fromFoot));
+    await page.waitForTimeout(300);
+  };
+  const bar = page.getByTestId('creator-publish-bar');
+
+  // In the window, but under the navigation: out of reach, so the bar stays.
+  await middleAbove(navSpace / 2);
+  await expect(bar).toBeVisible();
+  // Above the navigation: in reach, so the bar goes.
+  await middleAbove(navSpace + 48);
+  await expect(bar).toHaveCount(0);
+});
+
 // The column's own bar, with Generate, waits at the page's end until the creation is posted
 // (the artboard Result at 390): the Publish bar, fixed at the window's foot, would sit over it.
 test('on a phone the bar gives way to the column’s bar at the page’s end, leaving it uncovered', async ({ page, context }) => {

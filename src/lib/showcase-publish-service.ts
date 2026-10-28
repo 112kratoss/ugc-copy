@@ -580,7 +580,8 @@ export async function publishGenerationToShowcaseForRoute({
   // that switch, so a recipe with neither is not read for it.
   const inputOrigins = requestBody.leaveOutOwnGenerationReferences === true
     && requestedAccessMode !== 'none'
-    && (shouldIncludeGenerationReferences || effectiveResourceBundle?.resources?.allowRemix === true)
+    // By truth, as the switch is stored (`allow_remix: Boolean(...)`).
+    && (shouldIncludeGenerationReferences || Boolean(effectiveResourceBundle?.resources?.allowRemix))
     ? await resolvedDependencies.loadGenerationInputOrigins({ supabase: adminSupabase, ownerUserId: userId, generationId })
     : null;
   if (inputOrigins?.hasOwn && effectiveResourceBundle?.resources?.allowRemix) {

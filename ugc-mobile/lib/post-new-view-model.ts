@@ -1910,14 +1910,21 @@ function readCreationTitleSource(item: GenerationListItem) {
  * (`followTitleForPromptPrivacy`): it becomes the recipe's kind title while a
  * paid recipe keeps the prompt private, and comes back when that goes. A free
  * recipe leaves it (owner, 2026-10-29). Compared with the prompt itself, so it
- * holds in an edit too. Any other title stays.
+ * holds in an edit too. Any other title stays. Only a change of the recipe's
+ * access moves it, as on the web: this runs on every edit of the recipe, and a
+ * free recipe's kind title from before stays until its access changes.
  */
 export function followCreationTitleSuggestion(
   previous: PostComposerDraft,
   next: PostComposerDraft,
   generation: GenerationListItem | null | undefined,
 ): PostComposerDraft {
-  if (!generation || next.mode !== 'creation' || next.title !== previous.title) return next;
+  if (
+    !generation
+    || next.mode !== 'creation'
+    || next.title !== previous.title
+    || next.resource.accessMode === previous.resource.accessMode
+  ) return next;
   const title = followTitleForPromptPrivacy(
     next.title,
     readCreationTitleSource(generation),

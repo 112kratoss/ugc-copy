@@ -654,14 +654,33 @@ export function CreatorPostedNext({ balance, runCost, imageHref, onMakeAnother }
 // ---------------------------------------------------------------------------------------------
 // The panel: the form, or Posted, and the phone's bar
 
-/** The floating bottom navigation's room at the window's foot, in pixels: none where the shell has none. */
-function bottomNavSpacePx(): number {
+/**
+ * The floating bottom navigation's room at the window's foot, in pixels: none where the shell
+ * has none. The shell sets it on its own root, so it is measured inside the page, beside `inside`.
+ */
+function bottomNavSpacePx(inside: Element): number {
   const probe = document.createElement('div');
-  probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;height:var(--app-shell-bottom-nav-space,0px)';
-  document.body.appendChild(probe);
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;height:var(--app-shell-bottom-nav-space,0px)';
+  (inside.parentElement ?? document.body).appendChild(probe);
   const height = probe.getBoundingClientRect().height;
   probe.remove();
   return Math.round(height);
+}
+
+/** Where the shell's bottom navigation goes away (`--app-shell-bottom-nav-space` turns 0). */
+const BOTTOM_NAV_GONE_QUERY = '(min-width: 768px)';
+
+/** Counts the window's crossings of the bottom navigation's breakpoint, so what it covers is measured again. */
+function useBottomNavChanges(): number {
+  const [changes, setChanges] = useState(0);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(BOTTOM_NAV_GONE_QUERY);
+    const changed = () => setChanges((count) => count + 1);
+    query.addEventListener('change', changed);
+    return () => query.removeEventListener('change', changed);
+  }, []);
+  return changes;
 }
 
 export interface CreatorPublishPanelProps {
@@ -724,6 +743,7 @@ export function CreatorPublishPanel({
   const titleRef = useRef<HTMLInputElement>(null);
   const [submitInView, setSubmitInView] = useState(true);
   const [columnBarInView, setColumnBarInView] = useState(false);
+  const bottomNavChanges = useBottomNavChanges();
   // Counts the bar's presses that were refused: the focus then goes to the form's Publish.
   const [refusedBarPresses, setRefusedBarPresses] = useState(0);
   const id = useId();
@@ -745,7 +765,7 @@ export function CreatorPublishPanel({
   useEffect(() => {
     const target = submitRef.current;
     if (!target || typeof IntersectionObserver === 'undefined') return;
-    const rootMargin = `0px 0px -${bottomNavSpacePx()}px 0px`;
+    const rootMargin = `0px 0px -${bottomNavSpacePx(target)}px 0px`;
     const submitObserver = new IntersectionObserver(([entry]) => setSubmitInView(entry.isIntersecting), { threshold: 0.5, rootMargin });
     submitObserver.observe(target);
     const columnBar = document.querySelector('[data-creator-bar]');
@@ -757,7 +777,7 @@ export function CreatorPublishPanel({
       submitObserver.disconnect();
       columnBarObserver?.disconnect();
     };
-  }, [published]);
+  }, [published, bottomNavChanges]);
 
   // Refused from the bar, the press brings the form into view and the bar goes with the focus
   // it held: it moves to the form's Publish, once that is no longer waiting on the publish.
@@ -888,7 +908,9 @@ export function CreatorPublishPanel({
 
         {original ? <CreatorRemixCredit original={original} follow={follow} /> : null}
 
-        {draft.formError ? <StatusCallout tone="danger" title={draft.formError} icon={CircleAlert} /> : null}
+        {draft.formError ? (
+          <StatusCallout tone="danger" title="Couldn’t publish" body={draft.formError} icon={CircleAlert} className="[overflow-wrap:anywhere]" />
+        ) : null}
 
         {/* Beside the column the pane scrolls: there Publish rides its foot until the form is in
             view (the mock-up's round 4), on the form's own surface, a hairline above it; its offset

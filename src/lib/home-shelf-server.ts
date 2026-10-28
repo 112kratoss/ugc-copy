@@ -50,7 +50,7 @@ export const HOME_SHELF_REVALIDATE_SECONDS = 300;
  * Part of the build's cache key. The Data Cache outlives a deploy, so bump this
  * whenever what a build holds or which posts it lets in changes.
  */
-const HOME_SHELF_BUILD_VERSION = 'home-shelf-creations-v4';
+const HOME_SHELF_BUILD_VERSION = 'home-shelf-creations-v3';
 
 /** The shelf could not be read, or not filtered for its viewer; the app's route answers an error. */
 export class HomeShelfUnavailableError extends Error {
@@ -95,13 +95,6 @@ interface ShelfCatalogs {
 export interface HomeShelfCreationDependencies {
   getPosts: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
   loadGenerations: (generationIds: string[]) => Promise<ShelfGenerationRow[]>;
-  /**
-   * Of these posts, those whose published recipe hands the creation's inputs to whoever
-   * unlocks it: its stored remix switch, which `loadGenerationRecipeRemixInputMediaByPostId`
-   * reads. The feed's `asset.allowRemix` cannot say so: it is on for every published recipe of
-   * a creation (`get_public_post_resource_bundle_summaries`).
-   */
-  loadRecipeHandovers: (postIds: string[]) => Promise<ReadonlySet<string>>;
   loadCatalogs: () => Promise<ShelfCatalogs>;
   quote: typeof quotePublishedGenerationModel;
   loadWelcomeCredits: () => Promise<number | null>;
@@ -125,16 +118,6 @@ const defaultCreationDependencies: HomeShelfCreationDependencies = {
       .in('id', generationIds);
     if (error) throw error;
     return (data ?? []) as ShelfGenerationRow[];
-  },
-  async loadRecipeHandovers(postIds) {
-    const { data, error } = await createServiceClient()
-      .from('post_resource_bundles')
-      .select('post_id')
-      .in('post_id', postIds)
-      .eq('status', 'published')
-      .eq('allow_remix', true);
-    if (error) throw error;
-    return new Set(((data ?? []) as Array<{ post_id: string }>).map((row) => row.post_id));
   },
   async loadCatalogs() {
     const [web, mobile] = await Promise.all([loadCatalogModels('web'), loadCatalogModels('mobile')]);
@@ -182,8 +165,6 @@ export function remixQuoteSettings(
 async function describeShelfPost(
   post: ShowcaseFeedItem,
   generation: ShelfGenerationRow | undefined,
-  /** Its recipe hands the creation's inputs to whoever unlocks it (`loadRecipeHandovers`). */
-  recipeHandsInputs: boolean,
   catalogs: ShelfCatalogs,
   quote: HomeShelfCreationDependencies['quote'],
 ): Promise<{ modelName: string; price: HomeShelfPrice | null } | null> {
@@ -199,12 +180,8 @@ async function describeShelfPost(
   if (kind === 'motion') return { modelName: descriptor.displayName, price: { kind: 'clip-length' } };
   // A creator who shared their inputs hands them to every remix, and the editor
   // prices them; the shelf does not count them, so it shows no price rather
-  // than a lower one (and never "Free to try" on it). So does a recipe whose
-  // remix switch is on: it hands them to whoever unlocks it, and a free one is
-  // unlocked by the Remix tap (`loadGenerationRecipeRemixInputMediaByPostId`).
-  if (generation.share_input_media_for_remix === true || recipeHandsInputs) {
-    return { modelName: descriptor.displayName, price: null };
-  }
+  // than a lower one (and never "Free to try" on it).
+  if (generation.share_input_media_for_remix === true) return { modelName: descriptor.displayName, price: null };
   const settings = remixQuoteSettings(descriptor, stored);
   if (!settings) return { modelName: descriptor.displayName, price: null };
 
@@ -248,10 +225,8 @@ export async function buildHomeShelfCreations(
   const posts = await resolved.getPosts(uniquePins.map((pin) => pin.postId));
   const postById = new Map(posts.map((post) => [post.id, post]));
   const generationIds = posts.flatMap((post) => (post.generationId ? [post.generationId] : []));
-  const recipePostIds = posts.flatMap((post) => (post.asset ? [post.id] : []));
-  const [generations, recipeHandovers, catalogs, welcomeCredits] = await Promise.all([
+  const [generations, catalogs, welcomeCredits] = await Promise.all([
     resolved.loadGenerations(generationIds),
-    recipePostIds.length > 0 ? resolved.loadRecipeHandovers(recipePostIds) : new Set<string>(),
     catalogsRead,
     welcomeRead,
   ]);
@@ -263,7 +238,6 @@ export async function buildHomeShelfCreations(
     const facts = await describeShelfPost(
       post,
       post.generationId ? generationById.get(post.generationId) : undefined,
-      recipeHandovers.has(post.id),
       catalogs,
       resolved.quote,
     );

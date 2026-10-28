@@ -4212,16 +4212,9 @@ export default function CreateVideoClient({
             return;
         }
 
-        const { data: { session: activeSession } } = await supabase.auth.getSession();
-        if (!activeSession) {
-            // The session lapsed since the page opened: back here after signing in, on this
-            // page's own link, with the draft saved under the account it belongs to.
-            activeGenerationRequestKeyRef.current = null;
-            await saveTextDraftNow();
-            router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
-            return;
-        }
-
+        // The run takes the canvas at the press, before the session is read, as the image
+        // creator's does: a finished result's publish form goes with it, so no publish can
+        // start while the session read is awaited (Generate waits for one already sent).
         setIsGenerating(true);
         setError(null);
         setRunFailure(null);
@@ -4243,6 +4236,18 @@ export default function CreateVideoClient({
             startedAtMs,
             estimatedTotalMs,
         }));
+
+        const { data: { session: activeSession } } = await supabase.auth.getSession();
+        if (!activeSession) {
+            // The session lapsed since the page opened: back here after signing in, on this
+            // page's own link, with the draft saved under the account it belongs to.
+            activeGenerationRequestKeyRef.current = null;
+            setIsGenerating(false);
+            setGenerationTiming(null);
+            await saveTextDraftNow();
+            router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
+            return;
+        }
 
         // A prepared Seedance asset goes as its id beside the file's own link: the server
         // measures the link and gives the provider the id. One still processing, or one
