@@ -223,17 +223,20 @@ const TEXT_VARIANTS: Record<TextVariant, string> = {
 export function Text({
   as = 'p',
   variant = 'body',
+  id,
   className,
   children,
 }: {
   as?: TextElement;
   variant?: TextVariant;
+  /** For a heading or message that labels or describes something else (aria-labelledby, aria-describedby). */
+  id?: string;
   className?: string;
   children: ReactNode;
 }) {
   const Component = as;
 
-  return <Component className={clsx(TEXT_VARIANTS[variant], className)}>{children}</Component>;
+  return <Component id={id} className={clsx(TEXT_VARIANTS[variant], className)}>{children}</Component>;
 }
 
 export function Kicker({

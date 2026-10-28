@@ -1,4 +1,5 @@
-import { RequireAuth } from '@/components/RouteAuthBoundary';
+import { RequestHintedOptionalAuth, RequireAuth } from '@/components/RouteAuthBoundary';
+import { loadVisitorWelcomeCredits, readCreatorReturn } from '@/lib/creator-page-server';
 
 import CreateMotionClient, { type CreateMotionPrefill } from './CreateMotionClient';
 
@@ -28,10 +29,21 @@ export default async function CreateMotionPage({
   const returnTo = returnParams.size > 0
     ? `/create-motion?${returnParams.toString()}`
     : '/create-motion';
-
-  return (
-    <RequireAuth returnTo={returnTo}>
-      <CreateMotionClient prefill={prefill} returnTo={returnTo} />
-    </RequireAuth>
+  const { welcome, handoverNonce } = readCreatorReturn(resolvedSearchParams);
+  const client = (visitorWelcomeCredits: number | null) => (
+    <CreateMotionClient
+      prefill={prefill}
+      returnTo={returnTo}
+      welcome={welcome}
+      handoverNonce={handoverNonce}
+      visitorWelcomeCredits={visitorWelcomeCredits}
+    />
   );
+
+  // Remixing someone's post takes an account (the remix source answers no one
+  // else), so a signed-out remix signs in first and comes back to it. Everything
+  // else works signed out up to Generate, which asks for an account.
+  return prefill.remixId
+    ? <RequireAuth returnTo={returnTo}>{client(null)}</RequireAuth>
+    : <RequestHintedOptionalAuth>{client(await loadVisitorWelcomeCredits())}</RequestHintedOptionalAuth>;
 }

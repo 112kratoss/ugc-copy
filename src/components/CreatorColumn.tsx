@@ -336,12 +336,15 @@ export function CreatorColumnBar({
   settings,
   status,
   action,
+  note,
 }: {
   settingsSummary: string;
   /** The controls the chip opens; null where the model has nothing to set. */
   settings: ReactNode | null;
   status?: ReactNode;
   action: ReactNode;
+  /** A quiet line under the buttons: what signing up gives a visitor. */
+  note?: ReactNode;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
@@ -430,6 +433,11 @@ export function CreatorColumnBar({
           ) : null}
           <div className="flex min-w-0 flex-[1.2]">{action}</div>
         </div>
+        {note ? (
+          <div data-creator-bar-note className="px-4 pb-3 text-xs leading-5 text-[var(--ui-text-muted)]">
+            {note}
+          </div>
+        ) : null}
       </div>
 
       <AnimatePresence>
@@ -494,6 +502,7 @@ export function CreatorBarAction({
   costLabel,
   hasPrice,
   onGenerate,
+  signUp = false,
 }: {
   awaitingCheck: boolean;
   onCheckAgain: () => void;
@@ -503,7 +512,19 @@ export function CreatorBarAction({
   costLabel: string;
   hasPrice: boolean;
   onGenerate: () => void;
+  /**
+   * Signed out: the press checks the form as Generate does, then asks the
+   * visitor to sign up. Its face says so; the price is in the line under the bar.
+   */
+  signUp?: boolean;
 }) {
+  if (signUp) {
+    return (
+      <button type="button" onClick={onGenerate} disabled={disabled} className={CREATOR_BAR_PRIMARY_CLASS}>
+        Sign up to generate
+      </button>
+    );
+  }
   if (awaitingCheck) {
     return (
       <button type="button" onClick={onCheckAgain} className={CREATOR_BAR_PRIMARY_CLASS}>
@@ -538,6 +559,29 @@ export function CreatorBarAction({
         <span className="truncate">{costLabel}</span>
       )}
     </button>
+  );
+}
+
+/** The empty canvas's line for a signed-out visitor: nothing is lost by setting up first. */
+export const CREATOR_VISITOR_CANVAS_HINT = 'Set everything up first. When you sign up, your prompt, settings and images stay.';
+
+/** Under a signed-out visitor's bar: what a new account starts with, and what this run takes of it. */
+export function CreatorVisitorNote({ welcomeCredits, cost }: { welcomeCredits: number | null; cost: number | null }) {
+  const strong = 'font-bold text-[var(--ui-text-secondary)]';
+  return (
+    <div className="flex flex-wrap justify-between gap-x-4 gap-y-1">
+      <span>
+        {welcomeCredits !== null
+          ? <>New accounts get <strong className={strong}>{welcomeCredits} free credits</strong></>
+          : 'Sign in with Google to generate'}
+      </span>
+      {cost !== null ? (
+        <span>
+          This run <strong className={strong}>{cost}</strong>
+          {welcomeCredits !== null && cost <= welcomeCredits ? ` · leaves ${welcomeCredits - cost}` : null}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -981,6 +1025,7 @@ export function CreatorCanvas({
   subtitle,
   revealKey = 0,
   tall = false,
+  showStudioLink = true,
   children,
   footer,
 }: {
@@ -988,6 +1033,8 @@ export function CreatorCanvas({
   subtitle?: ReactNode;
   revealKey?: number;
   tall?: boolean;
+  /** Off for a signed-out visitor: Studio holds an account's creations. */
+  showStudioLink?: boolean;
   children: ReactNode;
   footer?: ReactNode;
 }) {
@@ -1018,13 +1065,15 @@ export function CreatorCanvas({
           <Text as="h2" variant="label">{title}</Text>
           {subtitle ? <Text variant="caption" className="mt-0.5 line-clamp-1">{subtitle}</Text> : null}
         </div>
-        <Link
-          href="/creations"
-          className="ui-focus-ring inline-flex min-h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--ui-border-subtle)] px-3 text-xs font-semibold text-[var(--ui-text-secondary)] transition-colors duration-150 hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]"
-        >
-          Studio
-          <Images aria-hidden className="h-3.5 w-3.5" />
-        </Link>
+        {showStudioLink ? (
+          <Link
+            href="/creations"
+            className="ui-focus-ring inline-flex min-h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--ui-border-subtle)] px-3 text-xs font-semibold text-[var(--ui-text-secondary)] transition-colors duration-150 hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]"
+          >
+            Studio
+            <Images aria-hidden className="h-3.5 w-3.5" />
+          </Link>
+        ) : null}
       </header>
       {/* Beside the column, a size container, so a frame can take the shape of the
           run's ratio and still fit whichever of its sides is shorter; a picture

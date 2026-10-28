@@ -6,6 +6,7 @@ import { type CSSProperties, useEffect, useState } from 'react';
 import { ArrowRight, Gift, Loader2, Sparkles } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
+import { describeReferralClaim } from '@/lib/referral-claim-copy';
 import { supabase } from '@/lib/supabase';
 
 // The server's `requires_account` (a guest) never reaches this page: the web
@@ -21,31 +22,6 @@ type WelcomeCreditResponse = {
 
 const CELEBRATION_DURATION_MS = 850;
 const CONFETTI_PIECES = 14;
-
-/**
- * /auth/continue and /auth/callback put `?referral=` on this page when a
- * sign-up claimed an invite: "applied", or why it was refused. The app says the
- * same on its invite screen; a web sign-up otherwise heard nothing.
- */
-function describeReferralClaim(status: string | null) {
-  switch (status) {
-    case null:
-    case '':
-      return null;
-    case 'applied':
-      return 'Invite applied: your first verified credit-pack purchase gets the invite bonus.';
-    case 'existing_account':
-      return 'Invite not applied: invite bonuses are for new accounts only.';
-    case 'self_referral':
-      return 'Invite not applied: you cannot use your own invite link.';
-    case 'already_attributed':
-      return 'Invite not applied: this account already has an inviter.';
-    case 'visit_unavailable':
-      return 'Invite not applied: this invite link is no longer active. It may have expired or already been used.';
-    default:
-      return 'Invite not applied: this account is not eligible for this invite.';
-  }
-}
 
 function prefersReducedMotion() {
   return typeof window !== 'undefined'

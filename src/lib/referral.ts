@@ -2,6 +2,8 @@ import 'server-only';
 
 import { createHmac } from 'node:crypto';
 
+import { CREATOR_WELCOME_PARAM, isCreatorPath } from '@/lib/auth-onboarding';
+import { REFERRAL_CLAIM_REASON_PATTERN, REFERRAL_CLAIM_STATUS_PARAM } from '@/lib/referral-claim-copy';
 import { logBackendWarning } from '@/lib/backend-logger';
 import { getClientNetworkKey } from '@/lib/client-network-key';
 
@@ -116,13 +118,13 @@ export function readReferralVisitCookie(cookieHeader: string | null): string | n
   return null;
 }
 
-/** The query parameter that carries a sign-up's invite claim to the welcome-reward page. */
-export const REFERRAL_CLAIM_STATUS_PARAM = 'referral';
+// The query parameter and the shape of a claim status live with the copy that reads them on
+// the client (the welcome-reward page and the creators' welcome card).
+export { REFERRAL_CLAIM_STATUS_PARAM };
 
 const REFERRAL_PATH_BASE = 'https://magicbooklet.local';
 const WELCOME_REWARD_PATH = '/welcome-reward';
 const PROFILE_SETUP_PATH = '/profile';
-const REFERRAL_CLAIM_REASON_PATTERN = /^[a-z_]{1,64}$/;
 
 /**
  * What a post-auth redirect tells the new account about the invite it opened:
@@ -145,11 +147,11 @@ export function referralClaimStatus(outcome: {
 }
 
 /**
- * Puts the claim status on the welcome-reward page a post-auth destination
- * leads to, the one page that greets a new account. A new account sets up its
- * profile first, so that page is usually the `next` of `/profile`; any other
- * destination drops the status rather than carry it somewhere that cannot
- * show it.
+ * Puts the claim status on the page a post-auth destination leads to that
+ * greets a new account: the welcome-reward page, usually the `next` of
+ * `/profile` since a new account sets up its profile first, or a creator a
+ * sign-up came back to (its welcome card). Any other destination drops the
+ * status rather than carry it somewhere that cannot show it.
  */
 export function withReferralClaimStatus(destination: string, status: string | null): string {
   if (!status) return destination;
@@ -157,7 +159,10 @@ export function withReferralClaimStatus(destination: string, status: string | nu
   try {
     const url = new URL(destination, REFERRAL_PATH_BASE);
     if (url.origin !== REFERRAL_PATH_BASE) return destination;
-    if (url.pathname === WELCOME_REWARD_PATH) {
+    if (
+      url.pathname === WELCOME_REWARD_PATH
+      || (isCreatorPath(url.pathname) && url.searchParams.get(CREATOR_WELCOME_PARAM) === '1')
+    ) {
       url.searchParams.set(REFERRAL_CLAIM_STATUS_PARAM, status);
       return `${url.pathname}${url.search}${url.hash}`;
     }

@@ -147,6 +147,32 @@ describe('/auth/callback', () => {
     expect(mocks.clearReferralVisitCookie).toHaveBeenCalledWith(response, true);
   });
 
+  it('tells an account back at the creator its sign-up started from how its invite went', async () => {
+    mocks.resolveServerPostAuthPath.mockResolvedValue('/create-video?prompt=boat&welcome=1');
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(withVisitCookie(
+      'https://magicbooklet.com/auth/callback?code=auth-code&next=%2Fcreate-video%3Fprompt%3Dboat'
+    ));
+
+    const location = locationOf(response);
+    expect(location.pathname).toBe('/create-video');
+    expect(location.searchParams.get('prompt')).toBe('boat');
+    expect(location.searchParams.get('welcome')).toBe('1');
+    expect(location.searchParams.get('referral')).toBe('applied');
+  });
+
+  it('drops the invite status on a creator that has nobody to greet', async () => {
+    mocks.resolveServerPostAuthPath.mockResolvedValue('/create-video?prompt=boat');
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(withVisitCookie(
+      'https://magicbooklet.com/auth/callback?code=auth-code&next=%2Fcreate-video%3Fprompt%3Dboat'
+    ));
+
+    expect(response.headers.get('location')).toBe('https://magicbooklet.com/create-video?prompt=boat');
+  });
+
   it('carries the reason an invite was refused', async () => {
     mocks.claimReferralForUser.mockResolvedValue({ claimed: false, clearCookie: true, reason: 'existing_account' });
     mocks.resolveServerPostAuthPath.mockResolvedValue('/welcome-reward?next=%2Fcreate');

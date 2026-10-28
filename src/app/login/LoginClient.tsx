@@ -8,34 +8,8 @@ import { siteConfig } from '@/lib/seo';
 import { supabase } from '@/lib/supabase';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, Info, WandSparkles } from 'lucide-react';
 import { buildAuthContinuePath } from '@/lib/auth-onboarding';
-
-function getConfiguredAuthOrigin() {
-    const configuredOrigin =
-        process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN ||
-        process.env.NEXT_PUBLIC_SITE_URL;
-
-    if (configuredOrigin) {
-        try {
-            const parsed = new URL(configuredOrigin);
-            const isSecure = parsed.protocol === 'https:';
-            const isLocal =
-                parsed.protocol === 'http:' &&
-                (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1');
-
-            if (isSecure || isLocal) {
-                return parsed.origin;
-            }
-        } catch {
-            // Fall through to the active browser origin.
-        }
-    }
-
-    return window.location.origin;
-}
-
-function getAuthCallbackUrl(nextPath: string) {
-    return `${getConfiguredAuthOrigin()}/auth/callback?next=${encodeURIComponent(nextPath)}`;
-}
+import { getAuthCallbackUrl } from '@/lib/auth-callback-url';
+import GoogleSignInAgreement from '@/components/GoogleSignInAgreement';
 
 const SUPPORT_MAILTO = `mailto:${siteConfig.supportEmail}`;
 
@@ -334,15 +308,7 @@ export default function LoginClient({
                                 Continue with Google
                             </button>
                             {/* Google creates an account from either tab, so the agreement sits under it in both; the app shows it in both modes too. */}
-                            <p id="google-agreement" className="mt-3 text-center text-xs leading-5 text-[var(--ui-text-muted)]">
-                                By continuing you agree to the{' '}
-                                <Link href="/terms" prefetch={false} className="font-bold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">Terms</Link>
-                                {' '}and the{' '}
-                                <Link href="/privacy" prefetch={false} className="font-bold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">Privacy Policy</Link>
-                                . Prompts and media you generate are processed by the AI providers{' '}
-                                <Link href="/privacy#ai-processing" prefetch={false} className="font-bold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">listed in the policy</Link>
-                                .
-                            </p>
+                            <GoogleSignInAgreement id="google-agreement" />
                         </div>
                     </div>
                 </div>

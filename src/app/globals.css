@@ -52,6 +52,7 @@
 @source "../components/FeatureLandingPage.tsx";
 @source "../components/FeedbackViewport.tsx";
 @source "../components/GenerationNotifications.tsx";
+@source "../components/GoogleSignInAgreement.tsx";
 @source "../components/HomeExperience.tsx";
 @source "../components/HomeFeedSkeleton.tsx";
 @source "../components/HomeShelf.tsx";

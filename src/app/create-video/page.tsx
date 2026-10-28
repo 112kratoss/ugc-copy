@@ -1,4 +1,5 @@
-import { RequireAuth } from '@/components/RouteAuthBoundary';
+import { RequestHintedOptionalAuth, RequireAuth } from '@/components/RouteAuthBoundary';
+import { loadVisitorWelcomeCredits, readCreatorReturn } from '@/lib/creator-page-server';
 
 import CreateVideoClient, { type CreateVideoPrefill } from './CreateVideoClient';
 
@@ -32,10 +33,20 @@ export default async function CreateVideoPage({
   const returnTo = returnParams.size > 0
     ? `/create-video?${returnParams.toString()}`
     : '/create-video';
-
-  return (
-    <RequireAuth returnTo={returnTo}>
-      <CreateVideoClient prefill={prefill} />
-    </RequireAuth>
+  const { welcome, handoverNonce } = readCreatorReturn(resolvedSearchParams);
+  const client = (visitorWelcomeCredits: number | null) => (
+    <CreateVideoClient
+      prefill={prefill}
+      welcome={welcome}
+      handoverNonce={handoverNonce}
+      visitorWelcomeCredits={visitorWelcomeCredits}
+    />
   );
+
+  // Remixing someone's post takes an account (the remix source answers no one
+  // else), so a signed-out remix signs in first and comes back to it. Everything
+  // else works signed out up to Generate, which asks for an account.
+  return prefill.remixId
+    ? <RequireAuth returnTo={returnTo}>{client(null)}</RequireAuth>
+    : <RequestHintedOptionalAuth>{client(await loadVisitorWelcomeCredits())}</RequestHintedOptionalAuth>;
 }

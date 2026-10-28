@@ -30,8 +30,14 @@ import {
     CreatorToolTabs,
     CreatorTopUpNotice,
     CreatorUploadSlot,
+    CreatorVisitorNote,
+    CREATOR_VISITOR_CANVAS_HINT,
     creatorAddButtonClass,
 } from '@/components/CreatorColumn';
+import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
+import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
+import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
+import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses, IconButton } from '@/components/DesignSystem';
 import { videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import {
@@ -998,10 +1004,31 @@ function standbyClipAndTrackNotice(modelName: string, clips: number, tracks: num
     return `Your saved ${saved} ${one ? 'stays' : 'stay'} saved. ${modelName} takes no reference ${slots}, so this run does not use ${one ? 'it' : 'them'}.`;
 }
 
-export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPrefill }) {
+export default function CreateVideoClient({
+    prefill,
+    welcome = null,
+    handoverNonce = null,
+    visitorWelcomeCredits = null,
+}: {
+    prefill: CreateVideoPrefill;
+    /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
+    welcome?: CreatorWelcome | null;
+    /** The sign-up sheet's `?handover=` nonce on the way back: the visitor's draft moves to the account by it. */
+    handoverNonce?: string | null;
+    /** What a new account starts with, told to a signed-out visitor. */
+    visitorWelcomeCredits?: number | null;
+}) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
+    // The visitor's draft until someone signs in, then the account's, which takes
+    // the visitor's when sign-up was opened here.
+    const { owner: draftOwner, carriedDraft } = useCreatorDraftOwner('video', userId, handoverNonce);
+    // A page that opened signed out works up to Generate, which asks for an account
+    // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
+    // signed-in face, and its Generate signs in again on the login page.
+    const isVisitor = draftOwner === VISITOR_DRAFT_OWNER;
+    const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
@@ -1073,14 +1100,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // The server's "not enough credits", for the balance and price it was given at. A
     // fresh balance or another price is a new question, so it applies only while both hold.
     const [creditRefusal, setCreditRefusal] = useState<{ message: string; credits: number | null; cost: number | null } | null>(null);
-    // The account whose saved draft has been read back. Until then nothing is saved over
+    // The owner whose saved draft has been read back. Until then nothing is saved over
     // it, and the catalog does not pick its default model in place of the saved one.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
     const restoredDraftModelRef = useRef(false);
     // A saved draft with a model was read back, a link's model or not: its settings are the creator's.
     const restoredDraftSettingsRef = useRef(false);
     const pendingAdditionalSettingsRef = useRef<VideoCreatorDraft['additionalSettings'] | null>(null);
-    const unsavedDraftRef = useRef<{ userId: string; draft: VideoCreatorDraft } | null>(null);
+    const unsavedDraftRef = useRef<{ owner: string; draft: VideoCreatorDraft } | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [promptQualityWarnings, setPromptQualityWarnings] = useState<PromptEnhancementWarning[]>([]);
     const [multiPromptQualityWarnings, setMultiPromptQualityWarnings] = useState<Record<string, PromptEnhancementWarning[]>>({});
@@ -1179,7 +1206,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return searchableModelText.includes(normalizedModelSearchQuery);
         })
         : videoModelOptions;
-    const draftReady = Boolean(remixId) || !userId || draftRestoredFor === userId;
+    const draftReady = Boolean(remixId) || (draftOwner !== null && draftRestoredFor === draftOwner);
     useEffect(() => {
         if (!modelCatalog.catalog || !draftReady) return;
         const firstPick = !hasResolvedInitialCatalogModel.current;
@@ -1248,11 +1275,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         klingVideoElementsRef.current = nextElements;
         setKlingVideoElements(nextElements);
     };
-    // Staged files are saved under the account that added them, so the next account to
-    // use this browser does not open them. A remix keeps none: it restores its source.
+    // Staged files are saved under the account that added them (or the visitor, until
+    // one signs in), so the next account to use this browser does not open them. A
+    // remix keeps none: it restores its source.
     const mediaKey = useCallback((key: string) => (
-        !remixId && userId ? scopedPersistedMediaKey(key, userId) : null
-    ), [remixId, userId]);
+        !remixId && draftOwner ? scopedPersistedMediaKey(key, draftOwner) : null
+    ), [remixId, draftOwner]);
     const persistVideoElements = useCallback(async (nextElements: VideoElementDraft[]) => {
         const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoElements);
         if (!key) {
@@ -2196,12 +2224,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, []);
 
     useEffect(() => {
-        if (remixId || !userId) {
+        if (remixId || !draftOwner) {
             return;
         }
 
         let isMounted = true;
-        const key = (name: string) => scopedPersistedMediaKey(name, userId);
+        const key = (name: string) => scopedPersistedMediaKey(name, draftOwner);
 
         const loadPersistedMedia = async () => {
             try {
@@ -2319,22 +2347,22 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         return () => {
             isMounted = false;
         };
-    }, [remixId, userId]);
+    }, [remixId, draftOwner]);
 
     // The saved text draft, read back before the catalog checks the settings against a
     // model. A link's own prompt, model, ratio or length wins over it; what the link
     // leaves alone comes back. A remix restores its source instead.
     useEffect(() => {
-        if (remixId || !userId) return;
+        if (remixId || !draftOwner) return;
         let cancelled = false;
         // The catalog waits for the draft, so a store that never answers must not hold
         // it: past this the page goes on without the draft, and a late one is ignored.
         let settled = false;
         const giveUp = window.setTimeout(() => {
             settled = true;
-            if (!cancelled) setDraftRestoredFor(userId);
+            if (!cancelled) setDraftRestoredFor(draftOwner);
         }, 3000);
-        void loadCreatorDraft<unknown>('video', userId)
+        void loadCreatorDraft<unknown>('video', draftOwner)
             .then((stored) => {
                 if (cancelled || settled || !stored) return;
                 const draft = readVideoCreatorDraft(stored);
@@ -2363,13 +2391,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             .finally(() => {
                 window.clearTimeout(giveUp);
                 settled = true;
-                if (!cancelled) setDraftRestoredFor(userId);
+                if (!cancelled) setDraftRestoredFor(draftOwner);
             });
         return () => {
             cancelled = true;
             window.clearTimeout(giveUp);
         };
-    }, [remixId, userId, prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration]);
+    }, [remixId, draftOwner, prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration]);
 
     // A model's extra settings can be set only once its descriptor is here.
     useEffect(() => {
@@ -2406,7 +2434,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         unsavedDraftRef.current = null;
         if (!unsaved) return;
         try {
-            await saveCreatorDraft('video', unsaved.userId, {
+            await saveCreatorDraft('video', unsaved.owner, {
                 ...unsaved.draft,
                 // Settings still waiting for their model's descriptor are the ones to keep.
                 additionalSettings: pendingAdditionalSettingsRef.current ?? unsaved.draft.additionalSettings,
@@ -2418,17 +2446,17 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, []);
 
     useEffect(() => {
-        if (remixId || !userId || draftRestoredFor !== userId) {
-            // Signed out, or not yet read back: nothing is written over an account's draft.
+        if (remixId || !draftOwner || draftRestoredFor !== draftOwner) {
+            // Not yet read back: nothing is written over the owner's draft.
             unsavedDraftRef.current = null;
             return;
         }
-        unsavedDraftRef.current = { userId, draft: textDraft };
+        unsavedDraftRef.current = { owner: draftOwner, draft: textDraft };
         const timer = window.setTimeout(() => {
             void flushTextDraft();
         }, 500);
         return () => window.clearTimeout(timer);
-    }, [draftRestoredFor, flushTextDraft, remixId, textDraft, userId]);
+    }, [draftRestoredFor, flushTextDraft, remixId, textDraft, draftOwner]);
 
     // An edit made in the last half second is not lost when the page goes.
     useEffect(() => () => {
@@ -2437,10 +2465,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     /** Saves the form now, for a reload or a sign-in round trip about to leave the page. */
     const saveTextDraftNow = async () => {
-        if (!remixId && userId && draftRestoredFor === userId) {
-            unsavedDraftRef.current = { userId, draft: textDraft };
+        if (!remixId && draftOwner && draftRestoredFor === draftOwner) {
+            unsavedDraftRef.current = { owner: draftOwner, draft: textDraft };
         }
         await flushTextDraft();
+    };
+    /** Asks a visitor to sign up for what they pressed, with the form saved for the way back. */
+    const openSignUp = async (reason: CreatorSignUpReason) => {
+        await saveTextDraftNow();
+        setSignUpReason(reason);
     };
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
     const reloadPage = async () => {
@@ -3151,6 +3184,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
 
     const prepareElementSeedanceAsset = async (elementId: string) => {
+        // Preparing uploads the file, which takes an account.
+        if (isVisitor) {
+            await openSignUp('prepare');
+            return;
+        }
         const activeKey = createSeedanceAssetKey('image', elementId);
         setActiveSeedanceAssetKey(activeKey);
 
@@ -3196,6 +3234,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         kind: 'video' | 'audio',
         referenceId: string
     ) => {
+        if (isVisitor) {
+            await openSignUp('prepare');
+            return;
+        }
         const activeKey = createSeedanceAssetKey(kind, referenceId);
         setActiveSeedanceAssetKey(activeKey);
 
@@ -3766,6 +3808,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }
         }
 
+        if (isVisitor) {
+            // Signed out: the sign-up comes back here, on this page's own link, with the
+            // draft saved, and nothing runs until Generate is pressed again.
+            await openSignUp('generate');
+            return;
+        }
+
         // Held from here, so a second click while the session is read sends nothing.
         const idempotencyKey = createGenerationIdempotencyKey('video');
         activeGenerationRequestKeyRef.current = idempotencyKey;
@@ -3780,7 +3829,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         const { data: { session: activeSession } } = await supabase.auth.getSession();
         if (!activeSession) {
-            // Back here after signing in, on this page's own link, with the draft saved.
+            // The session lapsed since the page opened: back here after signing in, on this
+            // page's own link, with the draft saved under the account it belongs to.
             activeGenerationRequestKeyRef.current = null;
             await saveTextDraftNow();
             router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
@@ -4254,16 +4304,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     ) : null;
 
     // Check again goes through Generate's own path, which checks an unanswered start first.
+    // A visitor's press needs no price: it checks the form, then asks for an account.
     const barAction = (
         <CreatorBarAction
             awaitingCheck={isAwaitingStartCheck}
             onCheckAgain={() => void handleGenerate()}
             showTopUp={showTopUp}
             isGenerating={isGenerating}
-            disabled={quotePending || Boolean(promptLimitMessage)}
+            disabled={(!isVisitor && quotePending) || Boolean(promptLimitMessage)}
             costLabel={quoteUi.costLabel}
             hasPrice={estimatedCost !== null}
             onGenerate={() => void handleGenerate()}
+            signUp={isVisitor}
         />
     );
 
@@ -4412,6 +4464,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 column={
                     <>
                         <CreatorToolTabs currentToolId="video" />
+                        {welcome && !isVisitor ? <CreatorWelcomeCard welcome={welcome} carriedDraft={carriedDraft} /> : null}
 
                         <div className="flex items-start gap-2">
                             <div className="relative min-w-0 flex-1" ref={modelDropdownRef}>
@@ -4612,6 +4665,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     prepareContext={prepareSinglePromptEnhancerContext}
                                     disabled={isGenerating}
                                     showWarnings={false}
+                                    onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
                                 />
                                 <PromptQualityWarnings warnings={promptQualityWarnings} />
                             </>
@@ -4644,6 +4698,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             context={buildShotPromptQualityContext(shot, index)}
                                             disabled={isGenerating}
                                             showWarnings={false}
+                                            onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
                                         />
                                         <PromptQualityWarnings warnings={multiPromptQualityWarnings[shot.id] ?? []} />
                                         <textarea
@@ -5335,6 +5390,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             settings={settingsPanel}
                             status={barStatus}
                             action={barAction}
+                            note={isVisitor ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={estimatedCost} /> : undefined}
                         />
                     </>
                 }
@@ -5344,6 +5400,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         subtitle={canvasSubtitle}
                         revealKey={canvasRevealKey}
                         tall={Boolean(outputVideo)}
+                        showStudioLink={!isVisitor}
                         footer={canvasFooter}
                     >
                         {outputVideo ? (
@@ -5368,12 +5425,25 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)]">
                                     <Video className="h-5 w-5 text-[var(--ui-text-muted)]" />
                                 </span>
-                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">Your video will appear here</p>
-                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">{emptyCanvasHint}</p>
+                                <p className="text-sm font-semibold text-[var(--ui-text-secondary)]">{isVisitor ? 'Try it before you sign up' : 'Your video will appear here'}</p>
+                                <p className="text-xs leading-5 text-[var(--ui-text-faint)]">{isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint}</p>
                             </CreatorCanvasFrame>
                         )}
                     </CreatorCanvas>
                 }
+            />
+
+            <CreatorSignUpSheet
+                reason={signUpReason}
+                handsOverDraft={draftOwner === VISITOR_DRAFT_OWNER}
+                tool="video"
+                welcomeCredits={visitorWelcomeCredits}
+                runCost={estimatedCost}
+                modelName={videoModel.displayName}
+                settingsSummary={settingsSummary}
+                keepsPrompt={currentIsMultiShot ? multiPrompts.some((shot) => shot.prompt.trim()) : Boolean(prompt.trim())}
+                keepsImages={Boolean(startImageFile || endImageFile) || elements.length > 0 || klingSubjects.length > 0}
+                onClose={() => setSignUpReason(null)}
             />
 
             <StudioMediaPreviewModal
