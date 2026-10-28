@@ -124,7 +124,7 @@ import {
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogRunQuoteInput, catalogSettingsAtControlDefaults, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import {
     creatorPromptViolation,
     promptLengthMeter,
@@ -413,6 +413,31 @@ function readVideoCreatorDraft(value: unknown): Partial<VideoCreatorDraft> {
             ? { modelId: additional.modelId, values: additionalValues }
             : undefined,
     };
+}
+
+/** The page's own settings a saved draft holds, as the restore puts them in the form. */
+function savedVideoFormValues(draft: Partial<VideoCreatorDraft>) {
+    return {
+        ...(draft.mode !== undefined ? { mode: draft.mode } : {}),
+        ...(draft.aspectRatio ? { aspectRatio: draft.aspectRatio } : {}),
+        ...(draft.sound !== undefined ? { sound: draft.sound } : {}),
+        ...(draft.resolution !== undefined ? { resolution: draft.resolution } : {}),
+        ...(draft.fixedLens !== undefined ? { fixedLens: draft.fixedLens } : {}),
+        ...(draft.isMultiShot !== undefined ? { isMultiShot: draft.isMultiShot } : {}),
+        ...(draft.duration !== undefined ? { duration: draft.duration } : {}),
+    };
+}
+
+/**
+ * Whether a saved draft's settings are its model's published defaults (catalogSettingsAtControlDefaults):
+ * the page's own and the extra ones it saved for that model.
+ */
+function savedVideoSettingsAtDefaults(draft: Partial<VideoCreatorDraft>, descriptor: GenerationModelDescriptor): boolean {
+    const saved: Record<string, unknown> = {
+        ...(draft.additionalSettings?.modelId === draft.modelId ? draft.additionalSettings?.values : undefined),
+        ...savedVideoFormValues(draft),
+    };
+    return catalogSettingsAtControlDefaults(descriptor.controls, (control) => saved[control.key]);
 }
 
 function isPaywallPrefill(value: unknown): value is GenerationPaywallPrefill {
@@ -1196,6 +1221,12 @@ export default function CreateVideoClient({
     const restoredDraftModelRef = useRef(false);
     // A saved draft with a model was read back, a link's model or not: its settings are the creator's.
     const restoredDraftSettingsRef = useRef(false);
+    // A saved draft read back with a model and no words. If the form still holds nothing when the first
+    // pick comes, the saved files restored, and its settings are its model's published defaults, it was
+    // never the creator's: the first pick gives it the catalog's default instead.
+    const emptySavedDraftRef = useRef<Partial<VideoCreatorDraft> | null>(null);
+    // The owner whose saved files have been read back (`complete`), or given up on.
+    const [mediaRestoredFor, setMediaRestoredFor] = useState<{ owner: string; complete: boolean } | null>(null);
     const pendingAdditionalSettingsRef = useRef<VideoCreatorDraft['additionalSettings'] | null>(null);
     const unsavedDraftRef = useRef<{ owner: string; draft: VideoCreatorDraft } | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
@@ -1303,6 +1334,13 @@ export default function CreateVideoClient({
             return searchableModelText.includes(normalizedModelSearchQuery);
         })
         : videoModelOptions;
+    // Anything the creator has put in the form. A link's own prompt is not theirs.
+    const formHoldsWork = Boolean(prompt.trim() && prompt !== prefillPrompt)
+        || multiPrompts.some((shot) => shot.prompt.trim())
+        || elements.length > 0 || referenceVideos.length > 0 || referenceAudios.length > 0
+        || klingVideoElements.length > 0 || klingSubjects.length > 0
+        || Boolean(startImageUrl || startImageFile || endImageUrl || endImageFile)
+        || preparedAudioIds.length > 0 || characterIds.length > 0;
     const draftReady = Boolean(remixId) || (draftOwner !== null && draftRestoredFor === draftOwner);
     useEffect(() => {
         if (!modelCatalog.catalog || !draftReady) return;
@@ -1311,7 +1349,26 @@ export default function CreateVideoClient({
         // the browser can still name an earlier default, which the page would then keep.
         if (firstPick && modelCatalog.isCheckingRevision) return;
         const catalog = modelCatalog.catalog;
-        const preferDefault = firstPick && !remixId && !prefillModel && !restoredDraftModelRef.current;
+        // A saved draft with nothing in it, at its model's published defaults, was never the creator's:
+        // the default of its day (Kling 3.0 until 2026-10-28), or the form as the page opened. It takes
+        // the default, as a new form does, while the form still holds nothing and its settings are as
+        // the restore drew them. Its model's details and the read of its saved files say which it is.
+        const emptySaved = firstPick ? emptySavedDraftRef.current : null;
+        const emptySavedModel = emptySaved && catalog.models.find((model) => model.id === emptySaved.modelId && model.kind === 'video');
+        if (emptySaved && !emptySavedModel && !modelCatalog.missingIds.includes(emptySaved.modelId ?? '')) return;
+        if (emptySaved && mediaRestoredFor?.owner !== draftOwner) return;
+        const drawn = emptySaved ? { ...STAND_IN_FORM, ...savedVideoFormValues(emptySaved) } : STAND_IN_FORM;
+        // The drawn model's own settings check empties a choice it does not offer.
+        const asDrawn = (value: string, drawnValue: string) => value === drawnValue || value === '';
+        const formAsDrawn = asDrawn(mode, drawn.mode) && asDrawn(resolution, drawn.resolution) && sound === drawn.sound
+            && fixedLens === drawn.fixedLens && isMultiShot === drawn.isMultiShot
+            && (Boolean(prefillAspectRatio) || aspectRatio === drawn.aspectRatio)
+            && (Boolean(prefillDuration) || singleDuration === drawn.duration);
+        const untouchedSaved = emptySaved && emptySavedModel && mediaRestoredFor?.complete && !formHoldsWork && formAsDrawn
+            && savedVideoSettingsAtDefaults(emptySaved, emptySavedModel)
+            ? emptySaved
+            : null;
+        const preferDefault = firstPick && !remixId && !prefillModel && (!restoredDraftModelRef.current || Boolean(untouchedSaved));
         // The default's details are still loading: picking now would settle on the stand-in.
         const defaultId = catalog.defaults.video;
         if (preferDefault && defaultId && !catalog.models.some((model) => model.id === defaultId)
@@ -1320,23 +1377,21 @@ export default function CreateVideoClient({
         if (!nextModelId) return;
         hasResolvedInitialCatalogModel.current = true;
         setModelSettled(true);
-        if (firstPick && !remixId && !restoredDraftSettingsRef.current) {
-            // Until now the page drew a stand-in form: the default, or the model a link named,
-            // opens on its own published settings, but for a ratio or a length the link asked for
-            // and a setting the creator changed while the page waited.
+        if (firstPick && !remixId && (!restoredDraftSettingsRef.current || untouchedSaved)) {
+            // Until now the page drew a stand-in form, or an untouched saved draft's: the default, or
+            // the model a link named, opens on its own published settings, but for a ratio or a length
+            // the link asked for and a setting the creator changed while the page waited.
             const descriptor = catalog.models.find((model) => model.id === nextModelId);
             const defaults = descriptor ? getCatalogDescriptorDefaultSettings(descriptor) : {};
-            // The stand-in model's own settings check empties a choice it does not offer.
-            const atStandIn = (value: string, standIn: string) => value === standIn || value === '';
-            if (typeof defaults.mode === 'string' && atStandIn(mode, STAND_IN_FORM.mode)) setMode(defaults.mode);
-            if (typeof defaults.resolution === 'string' && atStandIn(resolution, STAND_IN_FORM.resolution)) setResolution(defaults.resolution);
-            if (typeof defaults.sound === 'boolean' && sound === STAND_IN_FORM.sound) setSound(defaults.sound);
-            if (typeof defaults.fixedLens === 'boolean' && fixedLens === STAND_IN_FORM.fixedLens) setFixedLens(defaults.fixedLens);
-            if (typeof defaults.isMultiShot === 'boolean' && isMultiShot === STAND_IN_FORM.isMultiShot) setIsMultiShot(defaults.isMultiShot);
-            if (typeof defaults.aspectRatio === 'string' && !prefillAspectRatio && aspectRatio === STAND_IN_FORM.aspectRatio) {
+            if (typeof defaults.mode === 'string' && asDrawn(mode, drawn.mode)) setMode(defaults.mode);
+            if (typeof defaults.resolution === 'string' && asDrawn(resolution, drawn.resolution)) setResolution(defaults.resolution);
+            if (typeof defaults.sound === 'boolean' && sound === drawn.sound) setSound(defaults.sound);
+            if (typeof defaults.fixedLens === 'boolean' && fixedLens === drawn.fixedLens) setFixedLens(defaults.fixedLens);
+            if (typeof defaults.isMultiShot === 'boolean' && isMultiShot === drawn.isMultiShot) setIsMultiShot(defaults.isMultiShot);
+            if (typeof defaults.aspectRatio === 'string' && !prefillAspectRatio && aspectRatio === drawn.aspectRatio) {
                 setAspectRatio(defaults.aspectRatio);
             }
-            if (defaults.duration !== undefined && !prefillDuration && singleDuration === STAND_IN_FORM.duration) {
+            if (defaults.duration !== undefined && !prefillDuration && singleDuration === drawn.duration) {
                 setSingleDuration(Number(defaults.duration));
             }
         }
@@ -1350,6 +1405,7 @@ export default function CreateVideoClient({
     }, [
         modelCatalog.catalog, modelCatalog.isCheckingRevision, selectedModel, videoModel, prefillModel, prefillAspectRatio, prefillDuration,
         remixId, draftReady, mode, resolution, sound, fixedLens, isMultiShot, aspectRatio, singleDuration, modelCatalog.missingIds,
+        formHoldsWork, mediaRestoredFor, draftOwner,
     ]);
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
     const isKlingVideoModel = selectedModel === 'kling-3.0-video';
@@ -2573,15 +2629,24 @@ export default function CreateVideoClient({
 	                        })),
 	                    }))));
 	                }
+                if (isMounted) setMediaRestoredFor({ owner: draftOwner, complete: true });
             } catch (err) {
                 console.error('Error loading persisted video media:', err);
+                // A store that cannot say what it holds keeps the saved draft's model.
+                if (isMounted) setMediaRestoredFor({ owner: draftOwner, complete: false });
             }
         };
 
-        void loadPersistedMedia();
+        // The first pick waits for these files when the saved draft holds no words: a store that
+        // never answers must not hold it, and past this the draft keeps its model.
+        const giveUp = window.setTimeout(() => {
+            if (isMounted) setMediaRestoredFor((current) => (current?.owner === draftOwner ? current : { owner: draftOwner, complete: false }));
+        }, 3000);
+        void loadPersistedMedia().finally(() => window.clearTimeout(giveUp));
 
         return () => {
             isMounted = false;
+            window.clearTimeout(giveUp);
         };
     }, [remixId, draftOwner]);
 
@@ -2602,6 +2667,10 @@ export default function CreateVideoClient({
             .then((stored) => {
                 if (cancelled || settled || !stored) return;
                 const draft = readVideoCreatorDraft(stored);
+                emptySavedDraftRef.current = draft.modelId && !prefillModel && !draft.prompt?.trim()
+                    && !draft.shots?.some((shot) => shot.prompt.trim())
+                    ? draft
+                    : null;
                 if (draft.prompt !== undefined && !prefillPrompt) setPrompt(draft.prompt);
                 if (draft.modelId) {
                     restoredDraftSettingsRef.current = true;

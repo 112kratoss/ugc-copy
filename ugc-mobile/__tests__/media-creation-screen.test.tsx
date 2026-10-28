@@ -273,12 +273,13 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
 
 import { AppState, PanResponder } from 'react-native';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
+import { normalizeCreationDraftForCatalog } from '../lib/generation-model-draft';
 import { MediaCreationScreen } from '../components/media-creation-screen';
 import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-prompt';
 import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '../lib/media';
 import { UploadCancelledError } from '../lib/upload-file';
-import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel, seedance2MiniModel } from './fixtures/generation-model-catalog';
+import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel, seedance2MiniAtRelease, seedance2MiniModel } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 import type { CatalogInputMode, CatalogInputSlot, GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
 import { creationDraftStorageKey, ordinaryDraftScope, remixDraftScope } from '../lib/creation-draft-resume';
@@ -998,6 +999,141 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
       expect(quotedModels()).toContain('kling-3.0-video');
       expect(quotedModels()).not.toContain('seedance-2-mini');
+    });
+  });
+
+  /**
+   * Anyone who had opened the video creator before 2026-10-28 kept Kling 3.0 (70 credits) after Seedance 2
+   * Mini became the default: the app had saved their untouched draft with the default it settled on and a
+   * revision, and a draft with a revision kept its model.
+   */
+  describe('a draft saved untouched on a default since replaced', () => {
+    const quotedModels = () => authState.api.quoteGenerationModel.mock.calls.map(([request]) => (request as { modelId: string }).modelId);
+    const releaseCatalog = (): GenerationModelCatalog => {
+      const catalog = createTestGenerationModelCatalog([seedance2MiniAtRelease]);
+      return { ...catalog, revision: 'mini-default-video-20261028', defaults: { ...catalog.defaults, video: 'seedance-2-mini' } };
+    };
+    /** The Create drafts as the app saved them before the release, the video one with `video` over it. */
+    const savedBeforeRelease = (video: Record<string, unknown> = {}) => {
+      const before = createTestGenerationModelCatalog();
+      const settle = <T extends Parameters<typeof normalizeCreationDraftForCatalog>[0]>(draft: T) => (
+        normalizeCreationDraftForCatalog(draft, before, { modelSelectionTouched: false }).draft
+      );
+      return JSON.stringify({
+        image: settle(createDefaultCreationDraft('image')),
+        video: { ...settle(createDefaultCreationDraft('video')), ...video },
+        motion: settle(createDefaultCreationDraft('motion')),
+        updatedAt: '2026-10-27T10:00:00.000Z',
+      });
+    };
+    const savedVideo = () => {
+      const calls = draftStorage.setItem.mock.calls.filter(([key]) => key === creationDraftStorageKey(ordinaryDraftScope('user-123')));
+      return calls.length ? JSON.parse(calls[calls.length - 1][1] as string).video : null;
+    };
+    /** The Create tab as it opens, on Image, then its Video tab. */
+    async function openVideoFromTheCreateTab(saved: string) {
+      vi.useFakeTimers();
+      draftStorage.getItem.mockImplementation(async (key: string) => (
+        key === creationDraftStorageKey(ordinaryDraftScope('user-123')) ? saved : null
+      ));
+      catalogState.catalog = releaseCatalog();
+      quoteEchoingSettings(19);
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      const videoTab = tree.root.findAll((node) => (
+        node.props.accessibilityRole === 'button' && node.props.accessibilityLabel === 'Video' && typeof node.props.onPress === 'function'
+      ))[0];
+      renderer.act(() => {
+        videoTab.props.onPress();
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      return tree;
+    }
+
+    it('opens the video creator on the current default at its published settings, and saves it there', async () => {
+      const tree = await openVideoFromTheCreateTab(savedBeforeRelease());
+
+      expect(quotedModels()).toContain('seedance-2-mini');
+      expect(quotedModels()).not.toContain('kling-3.0-video');
+      expect(authState.api.quoteGenerationModel.mock.calls.at(-1)?.[0]).toMatchObject({
+        modelId: 'seedance-2-mini',
+        catalogRevision: 'mini-default-video-20261028',
+        settings: { aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false },
+      });
+      expect(collectText(tree.root)).toContain('Seedance 2 Mini');
+      expect(collectText(tree.root)).not.toContain('Model updated');
+      expect(savedVideo()).toMatchObject({ model: 'seedance-2-mini', catalogRevision: 'mini-default-video-20261028', duration: 5 });
+      vi.useRealTimers();
+    });
+
+    it('keeps the model of a saved draft that holds a prompt or a changed setting, and once its prompt is cleared', async () => {
+      // As saved, the draft moves: each change below is what keeps it.
+      await openVideoFromTheCreateTab(savedBeforeRelease());
+      expect(savedVideo()).toMatchObject({ model: 'seedance-2-mini' });
+
+      for (const change of [{ prompt: 'A lighthouse in a storm' }, { aspectRatio: '9:16' }]) {
+        renderer.act(() => {
+          for (const tree of mountedTrees.splice(0)) tree.unmount();
+        });
+        vi.useRealTimers();
+        authState.api.quoteGenerationModel.mockClear();
+        draftStorage.setItem.mockClear();
+        const tree = await openVideoFromTheCreateTab(savedBeforeRelease(change));
+        expect(quotedModels()).toContain('kling-3.0-video');
+        expect(quotedModels()).not.toContain('seedance-2-mini');
+        if ('prompt' in change) {
+          // The visit found it on Kling 3.0: clearing its words, then another model's details landing, leaves it there.
+          renderer.act(() => {
+            tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('');
+          });
+          catalogState.catalog = releaseCatalog();
+          await renderer.act(async () => {
+            tree.update(<MediaCreationScreen initialTool="image" insideTab />);
+            await vi.advanceTimersByTimeAsync(500);
+          });
+          expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 3.0');
+          expect(quotedModels()).not.toContain('seedance-2-mini');
+          expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('');
+        }
+        vi.useRealTimers();
+      }
+    });
+
+    it('opens a prompt-only entry on the current default, keeping the link\'s words', async () => {
+      // A Recreate of a post with no source to restore opens with the post's words, which are not the creator's:
+      // a new identity used to open on the Kling 3.0 stand-in, and a saved untouched draft kept Kling 3.0.
+      const words = 'A lighthouse in a storm';
+      for (const saved of [null, savedBeforeRelease()]) {
+        renderer.act(() => {
+          for (const tree of mountedTrees.splice(0)) tree.unmount();
+        });
+        vi.useFakeTimers();
+        authState.api.quoteGenerationModel.mockClear();
+        draftStorage.getItem.mockImplementation(async (key: string) => (
+          key === creationDraftStorageKey(ordinaryDraftScope('user-123')) ? saved : null
+        ));
+        catalogState.catalog = releaseCatalog();
+        quoteEchoingSettings(19);
+        let tree!: renderer.ReactTestRenderer;
+        renderer.act(() => {
+          tree = renderer.create(<MediaCreationScreen initialTool="video" initialPrompt={words} />);
+        });
+        await renderer.act(async () => {
+          await vi.advanceTimersByTimeAsync(500);
+        });
+
+        expect(quotedModels(), saved ? 'a saved untouched draft' : 'a new identity').toContain('seedance-2-mini');
+        expect(quotedModels()).not.toContain('kling-3.0-video');
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe(words);
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -7309,7 +7445,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       // That both inputs are required is said by the panel's title and by the bar: a slot carries no
       // badge, and an empty slot no line of its own (owner's call on A2, 2026-10-21; #510 drew both).
       it('draw Kling 3.0’s picture and clip slots named as its descriptor names them, under one "Required inputs"', async () => {
-        onMotionModel('kling-3.0');
+        // Words of the creator's own make Kling 3.0 their model: an empty draft follows the default, Kling 2.6.
+        onMotionModel('kling-3.0', { prompt: 'Dance like the clip' });
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
         expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 3.0');

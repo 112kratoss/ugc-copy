@@ -233,6 +233,28 @@ function isTool(value: unknown): value is CreatorToolId {
   return value === 'image' || value === 'video' || value === 'motion';
 }
 
+/**
+ * What the screen tells normalizeCreationDraftForCatalog about one tool's draft, built here for every
+ * call, so the remix restore's baselines are normalized as the live drafts are. `linkPrompt` is the
+ * prompt the screen's entry link put in its own tool's draft.
+ */
+function screenCatalogOptions(kind: CreatorToolId, screen: {
+  touched: boolean;
+  guided: boolean;
+  initialTool: CreatorToolId;
+  missingIds: readonly string[];
+  linkPrompt: string | null;
+}) {
+  const starterScreen = { guided: screen.guided, initialTool: screen.initialTool };
+  return {
+    modelSelectionTouched: screen.touched,
+    starter: guidedCreationStarter(kind, starterScreen, screen.missingIds),
+    missingIds: screen.missingIds,
+    seededModelIds: guidedCreationStarters(kind, starterScreen).map((starter) => starter.modelId),
+    seededPrompt: kind === screen.initialTool ? screen.linkPrompt : null,
+  };
+}
+
 function catalogControlDraftKey(draft: CreationDraft, controlKey: string) {
   return draft.tool === 'motion' && controlKey === 'resolution' ? 'mode' : controlKey;
 }
@@ -959,6 +981,8 @@ function IdentityCreationScreen({
   // quoted first; the catalog reconcile below applies the starter's settings. A remix restores
   // its source's model instead, so a remix opened as guided takes no starter.
   const guidedScreen = guided && !remixSource;
+  // A prompt-only entry (a Recreate of a post with no source to restore) puts its words in its tool's draft.
+  const linkPrompt = !remixSource && initialPrompt ? initialPrompt : null;
   // Every starter the guided draft may land on, in order: the catalog may have dropped the first.
   const guidedStarterIds = guidedCreationStarters(initialTool, { guided: guidedScreen, initialTool }).map((starter) => starter.modelId);
   const withGuidedStart = <T extends CreationDraft>(draft: T): T => {
@@ -1118,6 +1142,12 @@ function IdentityCreationScreen({
   const growPersistentBarRoom = (height: number) => setPersistentBarRoom((current) => Math.max(current, height));
   const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
   const modelSelectionTouched = useRef<Record<CreatorToolId, boolean>>({ image: false, video: false, motion: false });
+  // The catalog revision each tool's draft was read against in this visit. A draft saved untouched follows
+  // the default when it is first read; once on screen its model changes only at the creator's hand, or with
+  // a new revision. A read counts from the next reconcile, so a remix baseline taken in the same commit is
+  // normalized as the reconcile normalized the draft.
+  const draftReadAt = useRef<Record<CreatorToolId, string | null>>({ image: null, video: null, motion: null });
+  const draftReadPending = useRef<Partial<Record<CreatorToolId, string>>>({});
   const activeGenerationRequestKeyRef = useRef<string | null>(null);
   const generationPollControllerRef = useRef<AbortController | null>(null);
   const remixHydrationKeyRef = useRef<string | null>(null);
@@ -1171,6 +1201,9 @@ function IdentityCreationScreen({
     void load.then((persisted) => {
       if (!active) return;
       if (persisted) {
+        // Drafts read back are read against the catalog afresh (draftReadAt).
+        draftReadAt.current = { image: null, video: null, motion: null };
+        draftReadPending.current = {};
         // The fingerprint below stays the saved record's, so the autosave writes the seeded prompt.
         setImageDraft(seed(persisted.image));
         setVideoDraft(seed(persisted.video));
@@ -1221,12 +1254,9 @@ function IdentityCreationScreen({
         // Compare with the baseline as the catalog leaves it, so the screen's own
         // normalization is never saved as something the creator changed.
         const baseline = catalog
-          ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, {
-              modelSelectionTouched: false,
-              starter: guidedCreationStarter(tool, { guided: guidedScreen, initialTool }, catalogQuery.missingIds),
-              missingIds: catalogQuery.missingIds,
-              seededModelIds: guidedCreationStarters(tool, { guided: guidedScreen, initialTool }).map((starter) => starter.modelId),
-            }).draft
+          ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, screenCatalogOptions(tool, {
+              touched: false, guided: guidedScreen, initialTool, missingIds: catalogQuery.missingIds, linkPrompt,
+            })).draft
           : remixBaseline.current[tool];
         return [tool, Object.keys(saved[tool]).filter((key) => JSON.stringify((saved[tool] as unknown as Record<string, unknown>)[key]) !== JSON.stringify((baseline as unknown as Record<string, unknown>)[key]))];
       }));
@@ -1296,17 +1326,22 @@ function IdentityCreationScreen({
 
   useEffect(() => {
     if (!catalog) return;
+    // The reads the previous reconcile made count from this one (draftReadAt).
+    Object.assign(draftReadAt.current, draftReadPending.current);
+    draftReadPending.current = {};
     const reconcile = <T extends CreationDraft>(
       kind: CreatorToolId,
       setter: (updater: (draft: T) => T) => void
     ) => {
+      const options = screenCatalogOptions(kind, {
+        touched: modelSelectionTouched.current[kind] || draftReadAt.current[kind] === catalog.revision,
+        guided: guidedScreen,
+        initialTool,
+        missingIds: catalogQuery.missingIds,
+        linkPrompt,
+      });
       setter((draft) => {
-        const result = normalizeCreationDraftForCatalog(draft, catalog, {
-          modelSelectionTouched: modelSelectionTouched.current[kind],
-          starter: guidedCreationStarter(kind, { guided: guidedScreen, initialTool }, catalogQuery.missingIds),
-          missingIds: catalogQuery.missingIds,
-          seededModelIds: guidedCreationStarters(kind, { guided: guidedScreen, initialTool }).map((starter) => starter.modelId),
-        });
+        const result = normalizeCreationDraftForCatalog(draft, catalog, options);
         if (result.missingModel) {
           if (catalogQuery.missingIds.includes(draft.model)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
           return draft;
@@ -1314,11 +1349,18 @@ function IdentityCreationScreen({
         if (result.warning) setCatalogNotice(result.warning);
         return result.draft as T;
       });
+      // A draft that need not wait for details is read against this revision; one that waits comes back as it was.
+      const current = latestDrafts.current[kind];
+      const read = normalizeCreationDraftForCatalog(current, catalog, options);
+      if (!read.missingModel && read.draft !== current) draftReadPending.current[kind] = catalog.revision;
     };
     reconcile<ImageCreationDraft>('image', setImageDraft);
     reconcile<VideoCreationDraft>('video', setVideoDraft);
     reconcile<MotionCreationDraft>('motion', setMotionDraft);
-  }, [catalog, catalogQuery.missingIds, guidedScreen, initialTool]);
+    // Saved drafts are read against the catalog as they land, as the remix restore's baseline
+    // assumes: a catalog settled before them (a stored one the network confirms unchanged) may
+    // not change again this visit, and an untouched draft would keep a replaced default.
+  }, [catalog, catalogQuery.missingIds, guidedScreen, initialTool, linkPrompt, draftsHydrated]);
 
   const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
   const currentCatalogModel = useMemo(
@@ -1571,6 +1613,8 @@ function IdentityCreationScreen({
   const pickModel = async (tool: CreatorToolId, modelId: string) => {
     const withModel = () => ({ ...latestDrafts.current[tool], model: modelId }) as CreationDraft;
     if (catalog && getCatalogModel(catalog, modelId)) {
+      // A pick of the model already on screen is the creator's choice too.
+      modelSelectionTouched.current[tool] = true;
       replaceDraft(withModel());
       setModelPickerVisible(false);
       return;
@@ -1581,6 +1625,7 @@ function IdentityCreationScreen({
       const loaded = await loadCatalogDetails([modelId]);
       if (modelPickRef.current !== modelId) return;
       if (!getCatalogModel(loaded, modelId)) throw new Error('This model is no longer available. Choose another model.');
+      modelSelectionTouched.current[tool] = true;
       replaceDraft(withModel(), loaded);
       setModelPick(null);
       setModelPickerVisible(false);
@@ -1631,11 +1676,17 @@ function IdentityCreationScreen({
     // Taken as this catalog leaves the draft. The reconcile effect above normalizes the same
     // draft in this commit, but its update has not rendered yet; the raw draft would make the
     // catalog's own defaults read as edits made while the source loaded, spread over the restore.
-    // A remix takes no guided starter (guidedScreen), so its baseline needs none either.
+    // It is told what the reconcile was told (screenCatalogOptions, draftReadAt).
     const draftWhenRemixStarted = normalizeCreationDraftForCatalog(
       latestDrafts.current[targetTool],
       catalog,
-      { modelSelectionTouched: modelSelectionTouched.current[targetTool] },
+      screenCatalogOptions(targetTool, {
+        touched: modelSelectionTouched.current[targetTool] || draftReadAt.current[targetTool] === catalog.revision,
+        guided: guidedScreen,
+        initialTool,
+        missingIds: catalogQuery.missingIds,
+        linkPrompt,
+      }),
     ).draft;
 
     void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })
@@ -1721,7 +1772,7 @@ function IdentityCreationScreen({
       // is back, and marked resolved, before this cleanup runs.
       setIsRestoringRemix(false);
     };
-  }, [api, catalog, loadCatalogDetails, draftsHydrated, initialTool, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId]);
+  }, [api, catalog, catalogQuery.missingIds, loadCatalogDetails, draftsHydrated, guidedScreen, initialTool, linkPrompt, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId]);
 
   const updatePrompt = (prompt: string) => {
     if (activeTool === 'image') setImageDraft((draft) => ({ ...draft, prompt }));

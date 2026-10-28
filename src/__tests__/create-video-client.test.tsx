@@ -343,7 +343,9 @@ vi.mock('@/lib/generation-model-client', async () => {
             inputs: {},
           },
           ...modelCatalogState.extraModels,
-        ].filter((model) => !modelCatalogState.withoutModels.includes(String(model.id))),
+        ].filter((model, index, all) => !modelCatalogState.withoutModels.includes(String(model.id))
+          // A test's own entry stands in for the hook's of the same id.
+          && all.map((other) => other.id).lastIndexOf(model.id) === index),
       };
       return {
         summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds, isLoadingModels: false,
@@ -2854,6 +2856,157 @@ describe('CreateVideoClient Kling video elements', () => {
         modelId: 'seedance-2-mini',
         settings: { aspectRatio: '9:16', resolution: '720p', duration: 10, sound: true },
       });
+    });
+
+    /**
+     * What the page saved, until 2026-10-28, for a creator who opened it and changed nothing: the
+     * form as it opened, on Kling 3.0. Restored as the creator's own, it kept every such account on
+     * Kling 3.0, 70 credits, after Seedance 2 Mini became the default.
+     */
+    const untouchedKlingDraft = {
+      prompt: '',
+      modelId: 'kling-3.0-video',
+      mode: 'std',
+      aspectRatio: '16:9',
+      sound: false,
+      resolution: '720p',
+      fixedLens: false,
+      isMultiShot: false,
+      shots: [{ id: '1', prompt: '', duration: 5 }],
+      duration: 5,
+      additionalSettings: { modelId: 'kling-3.0-video', values: {} },
+    };
+
+    /** Kling 3.0 as published, in place of the page's test entry, and Seedance 2 Mini the default. */
+    function publishKlingBesideMini() {
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      modelCatalogState.extraModels = [
+        publishedCatalog.models.find((model) => model.id === 'kling-3.0-video') as unknown as Record<string, unknown>,
+        miniWithDefaults({}),
+      ];
+    }
+
+    /** Past the draft's read, the first pick and the save after it. */
+    async function settle() {
+      for (let tick = 0; tick < 3; tick += 1) {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      }
+    }
+
+    it('opens a draft saved untouched on Kling 3.0 on the default, at the default\'s published settings', async () => {
+      loadCreatorDraftMock.mockResolvedValue(untouchedKlingDraft);
+      publishKlingBesideMini();
+      render(<CreateVideoClient prefill={{}} />);
+
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+      await waitFor(() => expect(quoteStandIn.lastRequest()!.settings)
+        .toMatchObject({ aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false }));
+      expect(screen.getByRole('button', { name: /^Generation settings: / }))
+        .toHaveAccessibleName('Generation settings: 480P · 16:9 · 5s · Sound off');
+      await waitFor(() => expect(saveCreatorDraftMock.mock.calls.at(-1)?.[2])
+        .toMatchObject({ modelId: 'seedance-2-mini', resolution: '480p', duration: 5, sound: false }));
+      expect(screen.queryByText(/no longer available/)).toBeNull();
+    });
+
+    it('keeps the model of a saved draft that holds words, a saved file or a setting of the creator\'s', async () => {
+      const startFrame = new File(['frame'], 'start.png', { type: 'image/png' });
+      const cases: Array<[string, Record<string, unknown>, boolean, 'seedance-2-mini' | 'kling-3.0-video']> = [
+        // As saved, the draft moves: each change below is what keeps it.
+        ['nothing', {}, false, 'seedance-2-mini'],
+        ['a prompt', { prompt: 'A harbour at dusk' }, false, 'kling-3.0-video'],
+        ['a shot\'s words', { shots: [{ id: '1', prompt: 'Gulls lift off', duration: 5 }] }, false, 'kling-3.0-video'],
+        ['a saved start frame', {}, true, 'kling-3.0-video'],
+        ['another ratio', { aspectRatio: '9:16' }, false, 'kling-3.0-video'],
+        ['another quality', { mode: 'pro' }, false, 'kling-3.0-video'],
+        ['sound', { sound: true }, false, 'kling-3.0-video'],
+        ['another length', { duration: 10 }, false, 'kling-3.0-video'],
+        // Chosen when the model offered it: a release that drops a value does not make it the default.
+        ['a ratio Kling 3.0 no longer offers', { aspectRatio: '4:3' }, false, 'kling-3.0-video'],
+      ];
+      for (const [change, saved, savedFrame, model] of cases) {
+        quoteStandIn.reset(12);
+        loadCreatorDraftMock.mockResolvedValue({ ...untouchedKlingDraft, ...saved });
+        getPersistedFileMock.mockImplementation(async (key: string) => (
+          savedFrame && key === 'create-video:start-image:user-1' ? startFrame : null
+        ));
+        publishKlingBesideMini();
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBeTruthy());
+        await settle();
+
+        expect(quoteStandIn.lastRequest()?.modelId, change).toBe(model);
+        view.unmount();
+      }
+    });
+
+    it('keeps the saved model for words or a setting the creator puts in while the page waits', async () => {
+      const promptBox = () => screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
+      const edits: Array<[string, (() => void) | null, 'seedance-2-mini' | 'kling-3.0-video']> = [
+        // Nothing done while the page waits for the revision: the draft moves.
+        ['nothing', null, 'seedance-2-mini'],
+        ['words', () => fireEvent.change(promptBox(), { target: { value: 'A harbour at dusk' } }), 'kling-3.0-video'],
+        ['another ratio', () => chooseAspectRatio('9:16'), 'kling-3.0-video'],
+      ];
+      for (const [edit, makeEdit, model] of edits) {
+        quoteStandIn.reset(12);
+        loadCreatorDraftMock.mockResolvedValue(untouchedKlingDraft);
+        publishKlingBesideMini();
+        modelCatalogState.checkingRevision = true;
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('kling-3.0-video'));
+        if (makeEdit) {
+          makeEdit();
+          await settle();
+        }
+
+        modelCatalogState.checkingRevision = false;
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await settle();
+        expect(quoteStandIn.lastRequest()?.modelId, edit).toBe(model);
+        view.unmount();
+      }
+    });
+
+    it('keeps the saved model while the browser cannot say what files it saved, and moves once it can', async () => {
+      for (const [store, model] of [['unreadable', 'kling-3.0-video'], ['readable', 'seedance-2-mini']] as const) {
+        quoteStandIn.reset(12);
+        loadCreatorDraftMock.mockResolvedValue(untouchedKlingDraft);
+        if (store === 'unreadable') getPersistedMediaRecordsMock.mockRejectedValue(new Error('Connection to Indexed Database server lost'));
+        else getPersistedMediaRecordsMock.mockResolvedValue([]);
+        publishKlingBesideMini();
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBeTruthy());
+        await settle();
+
+        expect(quoteStandIn.lastRequest()?.modelId, store).toBe(model);
+        view.unmount();
+      }
+    });
+
+    it('reads a saved draft\'s settings only once its model\'s details are in', async () => {
+      loadCreatorDraftMock.mockResolvedValue(untouchedKlingDraft);
+      publishKlingBesideMini();
+      modelCatalogState.withoutModels = ['kling-3.0-video'];
+      const view = render(<CreateVideoClient prefill={{}} />);
+      await settle();
+      expect(quoteStandIn.requests.some((request) => request?.modelId === 'seedance-2-mini')).toBe(false);
+
+      modelCatalogState.withoutModels = [];
+      view.rerender(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+    });
+
+    it('moves an untouched saved draft to the default under a link\'s own prompt, keeping the words', async () => {
+      // A Recreate of a post with no source to restore: the words are the post's, not the creator's.
+      loadCreatorDraftMock.mockResolvedValue(untouchedKlingDraft);
+      publishKlingBesideMini();
+      render(<CreateVideoClient prefill={{ prompt: 'A lighthouse in a storm' }} />);
+
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+      expect(quoteStandIn.lastRequest()!.settings).toMatchObject({ aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false });
+      expect(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/)).toHaveValue('A lighthouse in a storm');
     });
   });
 
