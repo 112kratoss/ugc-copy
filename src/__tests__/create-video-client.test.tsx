@@ -65,6 +65,8 @@ const modelCatalogState = vi.hoisted(() => ({
   summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
   // Catalog entries a test adds to the hook's five, as the server publishes them.
   extraModels: [] as Array<Record<string, unknown>>,
+  // The catalog's default video model, which a page with no draft opens on.
+  videoDefault: 'kling-3.0-video',
 }));
 // What the result's player was last given; it still plays as it does on the page.
 const resultVideoPropsMock = vi.hoisted(() => vi.fn());
@@ -267,7 +269,7 @@ vi.mock('@/lib/generation-model-client', async () => {
       catalog: {
         revision: 'test-catalog-rev',
         schemaVersion: 1,
-        defaults: { image: 'nano-banana-2', video: 'kling-3.0-video', motion: 'kling-3.0' },
+        defaults: { image: 'nano-banana-2', video: modelCatalogState.videoDefault, motion: 'kling-3.0' },
         models: [
           {
             id: 'kling-3.0-video',
@@ -444,6 +446,7 @@ describe('CreateVideoClient Kling video elements', () => {
     modelCatalogState.error = null;
     modelCatalogState.summaries = [];
     modelCatalogState.extraModels = [];
+    modelCatalogState.videoDefault = 'kling-3.0-video';
     resultVideoPropsMock.mockClear();
     temporaryUploadMock.mockReset();
     temporaryUploadMock.mockImplementation(async (file: File) => ({
@@ -2573,6 +2576,33 @@ describe('CreateVideoClient Kling video elements', () => {
         .toBe('Kling 3.0 Cinematic cannot use @hero. Remove it from the prompt, or pick a model that takes reusable references.');
       expect(temporaryUploadMock).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalledWith('/api/generations', expect.objectContaining({ method: 'POST' }));
+    });
+  });
+
+  /**
+   * What a creator with no draft opens on: the catalog's default video model at that
+   * model's own defaults. Since 2026-10-28 that is Seedance 2 Mini at 480p for 5 s without
+   * sound, 19 credits, inside a new account's 25 welcome credits. The page draws Kling 3.0
+   * until the catalog has loaded, and none of Kling's form may carry over: at the 720p the
+   * page starts with, the run would be 41 credits.
+   */
+  describe('the catalog default', () => {
+    const publishedCatalog = serverCatalog.buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+
+    it('opens on Seedance 2 Mini at 480p for 5 s without sound, 19 credits', async () => {
+      expect(publishedCatalog.defaults.video).toBe('seedance-2-mini');
+      modelCatalogState.videoDefault = 'seedance-2-mini';
+      modelCatalogState.extraModels = publishedCatalog.models
+        .filter((model) => model.id === 'seedance-2-mini') as unknown as Array<Record<string, unknown>>;
+      render(<CreateVideoClient prefill={{}} />);
+
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+      const request = quoteStandIn.lastRequest()!;
+      expect(request.settings).toMatchObject({ aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false });
+      expect(screen.getByRole('button', { name: /^Generation settings: / }))
+        .toHaveAccessibleName('Generation settings: 480P · 16:9 · 5s');
+      // The server's own price for the request the page asks.
+      expect(serverCatalog.quoteGenerationModel({ ...request, catalogRevision: undefined }).costCredits).toBe(19);
     });
   });
 
