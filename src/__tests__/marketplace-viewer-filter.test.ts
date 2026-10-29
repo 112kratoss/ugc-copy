@@ -157,11 +157,13 @@ describe('isPostResourceBundleBuyWithheld', () => {
       { getPostResourceBundleDetailByPostId, isUserRelationshipBlocked },
     )).resolves.toBe(true);
     // As for the buyer's own purchase: a repeat buy is still answered
-    // "already owned", and a stranger still needs the reveal.
+    // "already owned", and a stranger still needs the reveal. The check only
+    // decides access, so it asks for no teaser count.
     expect(getPostResourceBundleDetailByPostId).toHaveBeenCalledWith('post-1', {
       viewerUserId: 'buyer-1',
       adminSupabase,
       entitledPurchase: true,
+      countLockedReferences: false,
     });
     expect(isUserRelationshipBlocked).not.toHaveBeenCalled();
   });

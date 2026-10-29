@@ -597,6 +597,10 @@ function mapInputMediaRow(
   };
 }
 
+/** The columns of a saved input row, as every read of them selects them. */
+export const GENERATION_INPUT_MEDIA_COLUMNS =
+  'id, generation_id, user_id, media_type, role, label, storage_path, source_generation_id, sort_order, metadata';
+
 /**
  * Saved input rows read some other way than `loadGenerationInputMediaMap`
  * (embedded in a post's read), as the items it makes of them without links:
@@ -627,7 +631,7 @@ export async function loadGenerationInputMediaMap(params: {
   try {
     const { data, error } = await params.supabase
       .from('generation_input_media')
-      .select('id, generation_id, user_id, media_type, role, label, storage_path, source_generation_id, sort_order, metadata')
+      .select(GENERATION_INPUT_MEDIA_COLUMNS)
       .in('generation_id', generationIds)
       .order('sort_order', { ascending: true });
 

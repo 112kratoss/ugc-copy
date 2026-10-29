@@ -63,12 +63,55 @@ let profileReadError: unknown;
 // The content revisions the hydrate path reads its `updatedAt` from.
 let revisionRows: Array<{ bundle_id: string; revision_number: number; created_at: string }>;
 let revisionReadError: unknown;
+// Holds the hydrate's revision read open, so a test can see what else has
+// started while it waits.
+let revisionReadGate: Promise<void> | null;
 // Every table the service asked, in order, and what each posts read selected:
 // what a read costs is part of what these tests pin.
 let tableReads: string[];
 let postSelects: string[];
-// The locked teaser's one read of the post with its generation and inputs.
+// The locked teaser's one read of the post with its generation and inputs:
+// failing, or never answering until its signal gives up on it.
 let embeddedSourceReadError: unknown;
+let embeddedSourceReadHangs: boolean;
+
+/**
+ * What PostgREST sends for a row under a select: only the columns it names,
+ * and each embed under its alias, itself narrowed by its own list. A column
+ * the select leaves out is missing, as it would be from the real response.
+ */
+function projectSelectedColumns(row: Record<string, unknown>, select: string): Record<string, unknown> {
+  const entries: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index <= select.length; index += 1) {
+    const character = select[index];
+    if (character === '(') depth += 1;
+    if (character === ')') depth -= 1;
+    if (index === select.length || (character === ',' && depth === 0)) {
+      entries.push(select.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+
+  const projected: Record<string, unknown> = {};
+  for (const entry of entries) {
+    const open = entry.indexOf('(');
+    if (open === -1) {
+      if (entry in row) projected[entry] = row[entry];
+      continue;
+    }
+    const alias = entry.slice(0, open).split(':')[0].split('!')[0];
+    const inner = entry.slice(open + 1, -1);
+    const value = row[alias];
+    projected[alias] = Array.isArray(value)
+      ? value.map((nested) => projectSelectedColumns(nested as Record<string, unknown>, inner))
+      : value && typeof value === 'object'
+        ? projectSelectedColumns(value as Record<string, unknown>, inner)
+        : null;
+  }
+  return projected;
+}
 
 // Calls through, so a test can see whether the bundle read asked posts itself.
 vi.mock('@/lib/nsfw-content-server', async (importOriginal) => {
@@ -215,6 +258,7 @@ vi.mock('@/lib/server-helpers', () => ({
       if (table === 'posts') {
         let eqId: string | null = null;
         let selectedColumns = '';
+        let signal: AbortSignal | null = null;
         const equalityFilters: Record<string, unknown> = {};
         const nullFilters: string[] = [];
 
@@ -252,11 +296,20 @@ vi.mock('@/lib/server-helpers', () => ({
           neq() {
             return query;
           },
+          abortSignal(value: AbortSignal) {
+            signal = value;
+            return query;
+          },
           async maybeSingle() {
             const row = eqId === 'post-1' && matchesFilters() ? postRow : null;
             // PostgREST nests a select's embedded resources in the row: the
             // post's generation (none once unlinked), and its saved inputs.
             if (selectedColumns.includes('generation:generations')) {
+              if (embeddedSourceReadHangs) {
+                // supabase-js answers a request its signal aborted with an error.
+                await new Promise((resolve) => signal?.addEventListener('abort', resolve));
+                return { data: null, error: { code: '', message: 'AbortError: This operation was aborted' } };
+              }
               if (embeddedSourceReadError) return { data: null, error: embeddedSourceReadError };
               const generation = row && generationRow && row.generation_id === generationRow.id
                 ? {
@@ -264,7 +317,10 @@ vi.mock('@/lib/server-helpers', () => ({
                     inputs: generationInputRows.filter((input) => input.generation_id === generationRow?.id),
                   }
                 : null;
-              return { data: row ? { ...row, generation } : null, error: null };
+              return {
+                data: row ? projectSelectedColumns({ ...row, generation }, selectedColumns) : null,
+                error: null,
+              };
             }
             return { data: row, error: null };
           },
@@ -307,6 +363,7 @@ vi.mock('@/lib/server-helpers', () => ({
             return query;
           },
           async order(column: string, options?: { ascending?: boolean }) {
+            if (revisionReadGate) await revisionReadGate;
             if (revisionReadError) return { data: null, error: revisionReadError };
             const rows = revisionRows
               .filter((row) => bundleIds.includes(row.bundle_id))
@@ -505,9 +562,11 @@ describe('post resource bundle server access', () => {
     profileReadError = null;
     revisionRows = [];
     revisionReadError = null;
+    revisionReadGate = null;
     tableReads = [];
     postSelects = [];
     embeddedSourceReadError = null;
+    embeddedSourceReadHangs = false;
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -916,10 +975,7 @@ describe('post resource bundle server access', () => {
       metadata: {},
       ...overrides,
     });
-    const countTypes = (items: Array<{ type: string }>) => items.reduce<Record<string, number>>(
-      (counts, item) => ({ ...counts, [item.type]: (counts[item.type] ?? 0) + 1 }),
-      {},
-    );
+    const embeddedSourceReads = () => postSelects.filter((columns) => columns.includes('generation:generations'));
 
     beforeEach(() => {
       bundleRow = {
@@ -1003,6 +1059,7 @@ describe('post resource bundle server access', () => {
         inputRow({ id: 'audio-1', media_type: 'audio', role: 'reference_audio', storage_path: 'generation_inputs/owner-1/gen-1/audio-1.mp3', sort_order: 4 }),
       ];
       const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
 
       const locked = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
       viewerHasPurchased = true;
@@ -1010,7 +1067,10 @@ describe('post resource bundle server access', () => {
 
       expect(locked?.viewerCanAccess).toBe(false);
       expect(unlocked?.viewerCanAccess).toBe(true);
-      expect(locked?.lockedPreview.itemCounts).toEqual(countTypes(unlocked?.resources?.items ?? []));
+      expect(locked?.lockedPreview.itemCounts).toEqual(getPostResourceItemCounts(unlocked?.resources?.items ?? []));
+      // And the recipe names the same contents once unlocked.
+      expect(unlocked?.lockedPreview.itemCounts).toEqual(locked?.lockedPreview.itemCounts);
+      expect(unlocked?.resourceKinds).toEqual(locked?.resourceKinds);
       expect(locked?.lockedPreview.itemCounts).toEqual({
         prompt: 1,
         reference_image: 2,
@@ -1034,13 +1094,14 @@ describe('post resource bundle server access', () => {
         },
       };
       const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
 
       const locked = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
       viewerHasPurchased = true;
       const unlocked = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
 
       expect(locked?.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 1 });
-      expect(locked?.lockedPreview.itemCounts).toEqual(countTypes(unlocked?.resources?.items ?? []));
+      expect(locked?.lockedPreview.itemCounts).toEqual(getPostResourceItemCounts(unlocked?.resources?.items ?? []));
     });
 
     it('counts none when the creator’s stored switch keeps them, and reads nothing for it', async () => {
@@ -1052,7 +1113,7 @@ describe('post resource bundle server access', () => {
 
       expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
       expect(detail?.resourceKinds).toEqual(['prompt', 'remix']);
-      expect(postSelects.some((columns) => columns.includes('generation:generations'))).toBe(false);
+      expect(embeddedSourceReads()).toEqual([]);
     });
 
     it('counts none once the generation is no longer public', async () => {
@@ -1093,13 +1154,72 @@ describe('post resource bundle server access', () => {
       expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
     });
 
+    // postgrest-js retries a 503 for seconds; the count is only a teaser.
+    it('gives up on a count that runs long and keeps the stored counts', async () => {
+      embeddedSourceReadHangs = true;
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const started = Date.now();
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+      expect(Date.now() - started).toBeLessThan(3000);
+    }, 10_000);
+
+    // The app's recipe page names the kinds whether or not it is unlocked.
+    it('counts what was merged in for a buyer and for the owner, without the teaser’s read', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      viewerHasPurchased = true;
+      const bought = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+      viewerHasPurchased = false;
+      const own = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'owner-1' });
+
+      for (const detail of [bought, own]) {
+        expect(detail?.viewerCanAccess).toBe(true);
+        expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+        expect(detail?.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+      }
+      expect(embeddedSourceReads()).toEqual([]);
+    });
+
+    it('reads nothing for a caller that only decides access', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', {
+        viewerUserId: 'viewer-1',
+        countLockedReferences: false,
+      });
+
+      expect(detail?.viewerCanAccess).toBe(false);
+      expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+      expect(embeddedSourceReads()).toEqual([]);
+    });
+
+    it('starts the count beside the reads the recipe already makes, so it adds no wait', async () => {
+      let releaseRevisionRead!: () => void;
+      revisionReadGate = new Promise((resolve) => {
+        releaseRevisionRead = resolve;
+      });
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const pending = getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false });
+      // Asked for while the hydrate's own read is still out, not after it.
+      await vi.waitFor(() => expect(embeddedSourceReads()).toHaveLength(1));
+      releaseRevisionRead();
+
+      await expect(pending).resolves.toMatchObject({
+        lockedPreview: { itemCounts: { prompt: 1, reference_image: 3, reference_video: 1 } },
+      });
+    });
+
     // The post page and the app's Details read a recipe on every view.
     it('costs one more request on a locked view: the post with its generation and that generation’s inputs', async () => {
       const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
 
       await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false });
       const sharingReads = [...tableReads];
-      const sourceSelects = postSelects.filter((columns) => columns.includes('generation:generations'));
+      const sourceSelects = embeddedSourceReads();
       tableReads = [];
       bundleRow = { ...(bundleRow as BundleRow), allow_remix: false };
       await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false });

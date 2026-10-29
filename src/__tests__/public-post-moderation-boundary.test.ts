@@ -218,6 +218,21 @@ describe('public post detail read', () => {
     }));
   });
 
+  // The page's metadata draws no teaser, so its read asks for no count of the
+  // creation's references; the page itself still gets one.
+  it('passes on a read that wants no count of a locked recipe\'s references', async () => {
+    useClientFor(postRow());
+    await getPublicPostDetail('post-1', { countLockedRecipeReferences: false });
+    expect(detailMocks.getPostResourceBundleDetailByPostId).toHaveBeenLastCalledWith('post-1', expect.objectContaining({
+      countLockedReferences: false,
+    }));
+
+    await getPublicPostDetail('post-1');
+    expect(detailMocks.getPostResourceBundleDetailByPostId).toHaveBeenLastCalledWith('post-1', expect.not.objectContaining({
+      countLockedReferences: false,
+    }));
+  });
+
   // A template's recipe and model are its author's: Studio shows the result's
   // model as `template-workflow`, and the post page said the real one to anyone.
   it.each([

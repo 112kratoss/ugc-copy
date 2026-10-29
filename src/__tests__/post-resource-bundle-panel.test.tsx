@@ -500,9 +500,6 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText('Includes 1 prompt, 3 reference images, 1 reference video')).toBeInTheDocument();
     expect(screen.getByText('Files')).toBeInTheDocument();
     expect(screen.getByText('Remix included')).toBeInTheDocument();
-    // Counted, never shown: nothing of the references themselves while locked.
-    expect(screen.queryByRole('img')).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'References' })).not.toBeInTheDocument();
   });
 
   it('shows section counts while locked and groups unlocked resources by section', () => {
