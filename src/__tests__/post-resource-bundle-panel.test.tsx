@@ -452,7 +452,8 @@ describe('PostResourceBundlePanel', () => {
       initialResources: null,
     });
 
-    expect(screen.getByText(/includes 2 workflows, 2 reference images/i)).toBeInTheDocument();
+    // Counted in the order the recipe reads once unlocked: references before workflows.
+    expect(screen.getByText(/includes 2 reference images, 2 workflows/i)).toBeInTheDocument();
     expect(screen.queryByText('Main workflow')).not.toBeInTheDocument();
 
     locked.unmount();
@@ -472,12 +473,13 @@ describe('PostResourceBundlePanel', () => {
       viewerCanAccess: true,
     });
 
-    expect(screen.queryByText(/includes 2 workflows, 2 reference images/i)).not.toBeInTheDocument();
-    // A recipe with no sections reads as one list, in the creator's order: no
-    // type headings regrouping it (B-F17).
-    expect(screen.queryByText('Workflows')).not.toBeInTheDocument();
-    expect(screen.queryByText('Reference images')).not.toBeInTheDocument();
-    const titles = ['Main workflow', 'Variation workflow', 'Style frame', 'Product frame'];
+    expect(screen.queryByText(/includes 2 reference images, 2 workflows/i)).not.toBeInTheDocument();
+    // A recipe with no cards reads by kind, the order both clients share:
+    // the pictures as one gallery, then the workflows (recipe reading review,
+    // 2026-10-29). The web used to list them flat while the app grouped them.
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['References', 'Workflows']);
+    expect(screen.getByText('2 images')).toBeInTheDocument();
+    const titles = ['Style frame', 'Product frame', 'Main workflow', 'Variation workflow'];
     const positions = titles.map((title) => document.body.textContent?.indexOf(title) ?? -1);
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
@@ -511,8 +513,9 @@ describe('PostResourceBundlePanel', () => {
       viewerCanAccess: true,
     });
 
-    // The creator's section first, then what has no section of its own (B-F17).
-    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['Hook', 'More from this post']);
+    // The creator's card first, then the pictures it has no card for, named
+    // for what they are where they used to read "More from this post".
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['Hook', 'References']);
     expect(screen.getByText('Hook prompt')).toBeInTheDocument();
     expect(screen.getByText('Global style reference')).toBeInTheDocument();
   });
@@ -524,9 +527,8 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.getByText('Hook video references')).toBeInTheDocument();
-    expect(screen.getByText('reference videos')).toBeInTheDocument();
-    expect(screen.getByText('Applies to 2 selected outputs')).toBeInTheDocument();
-    expect(screen.getByText('2 items')).toBeInTheDocument();
+    // The title already says what the card is, so its line counts it and says where it applies.
+    expect(screen.getByText('2 items · Applies to 2 selected outputs')).toBeInTheDocument();
     expect(screen.getByText('Remix included')).toBeInTheDocument();
     expect(screen.queryByText('Private creator organization title')).not.toBeInTheDocument();
     expect(screen.queryByText('Private creator organization description')).not.toBeInTheDocument();
@@ -873,10 +875,9 @@ describe('PostResourceBundlePanel', () => {
       viewerCanAccess: true,
     });
 
-    expect(screen.getByText('Hero output')).toBeInTheDocument();
-    expect(screen.getByText('More from this post')).toBeInTheDocument();
-    // Each item under its own title, its link named by what it opens (B-F17):
-    // no type headings over them any more.
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['Hero output', 'References']);
+    // Each item under its own title, its link named by what it opens (B-F17);
+    // a picture or clip under its name in the gallery, with its outputs.
     expect(screen.getByRole('link', { name: 'Open remix' })).toHaveAttribute('href', 'https://example.com/remix');
     expect(screen.getByText('Motion reference')).toBeInTheDocument();
     expect(screen.getByText('Shared voice reference')).toBeInTheDocument();
@@ -1195,7 +1196,8 @@ describe('PostResourceBundlePanel', () => {
       await waitFor(() => {
         expect(container.querySelector('img')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/frame.png');
       });
-      expect(container.querySelector('video')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/motion.mp4');
+      // A clip's first frame stands in for its poster.
+      expect(container.querySelector('video')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/motion.mp4#t=0.1');
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0][0]).toBe('/api/posts/post-1/resource-bundle/file-url');
       expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
@@ -1228,27 +1230,73 @@ describe('PostResourceBundlePanel', () => {
         saved.push({ href: this.href, download: this.download });
       });
       try {
-        renderPanel(unlockedWith(mediaItems.slice(0, 1)));
+        renderPanel(unlockedWith(normalizePostResourceItems([
+          mediaItems[0],
+          { type: 'source_file', title: 'Brief', storagePath: 'user-1/files/brief.pdf', contentType: 'application/pdf', sizeBytes: 2_202_009 },
+        ])));
 
+        // A file a reader opens rather than looks at keeps its row, with its type in words.
+        expect(screen.getByText('PDF · 2.1 MB')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Open file' }));
         await waitFor(() => {
           expect(open).toHaveBeenCalledWith(
-            'https://signed.example.com/inline/user-1/references/frame.png',
+            'https://signed.example.com/inline/user-1/files/brief.pdf',
             '_blank',
             'noopener,noreferrer',
           );
         });
 
+        fireEvent.click(screen.getByRole('button', { name: 'Download Reference 1' }));
         fireEvent.click(screen.getByRole('button', { name: 'Download' }));
         await waitFor(() => {
-          expect(saved).toEqual([{
-            href: 'https://signed.example.com/attachment/user-1/references/frame.png',
-            download: 'Reference 1.png',
-          }]);
+          expect(saved).toEqual([
+            { href: 'https://signed.example.com/attachment/user-1/references/frame.png', download: 'Reference 1.png' },
+            { href: 'https://signed.example.com/attachment/user-1/files/brief.pdf', download: 'Brief.pdf' },
+          ]);
         });
       } finally {
         open.mockRestore();
         click.mockRestore();
+      }
+    });
+
+    it('opens a picture full screen on the link its thumbnail already holds, from the cache', async () => {
+      const fetchMock = stubFileUrlFetch();
+      renderPanel(unlockedWith(mediaItems));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'View Reference 1' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'View Reference 1' }));
+
+      const viewer = await screen.findByRole('dialog', { name: 'References' });
+      expect(viewer.querySelector('img[src="https://signed.example.com/user-1/references/frame.png"]')).not.toBeNull();
+      // Drawn over the page, not inside the post column, whose stacking the top bar sits above.
+      expect(viewer.closest('section')).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close media' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
+
+    it('signs the view anew, in one request, once the thumbnails\' links are near their ten minutes', async () => {
+      const fetchMock = stubFileUrlFetch();
+      const start = Date.now();
+      const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+      try {
+        renderPanel(unlockedWith(mediaItems));
+        await waitFor(() => expect(screen.getByRole('button', { name: 'View Reference 1' })).toBeEnabled());
+
+        now.mockReturnValue(start + 9 * 60 * 1000);
+        fireEvent.click(screen.getByRole('button', { name: 'View Reference 1' }));
+
+        await screen.findByRole('dialog', { name: 'References' });
+        // The thumbnails' request, then one for the view: the picture and the clip, not the sound.
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+          storagePaths: ['user-1/references/frame.png', 'user-1/references/motion.mp4'],
+          disposition: 'inline',
+        });
+      } finally {
+        now.mockRestore();
       }
     });
 
@@ -1269,27 +1317,27 @@ describe('PostResourceBundlePanel', () => {
       ]);
       const { container } = renderPanel({ ...unlockedWith(items), mediaItems: outputs, coverMedia: true });
 
-      // One plate per preview, and the outputs' row.
-      expect(screen.getAllByRole('button', { name: 'Show mature content' })).toHaveLength(4);
-      expect(screen.getAllByText('Mature content')).toHaveLength(4);
+      // One plate over the gallery, and the outputs' row; each picture keeps
+      // its name and its download under the plate.
+      expect(screen.getAllByRole('button', { name: 'Show mature content' })).toHaveLength(2);
+      expect(screen.getAllByText('Mature content')).toHaveLength(2);
       expect(screen.getByRole('button', { name: /show items for output 1/i })).toBeInTheDocument();
       expect(container.querySelector('img, video, audio')).toBeNull();
-      expect(screen.queryAllByText(/^Loading (image|video|audio)/)).toHaveLength(0);
+      expect(screen.queryAllByRole('status', { name: /^Loading/ })).toHaveLength(0);
       expect(screen.getByText('Reference 1')).toBeInTheDocument();
-      expect(screen.getAllByRole('button', { name: 'Open file' })).toHaveLength(3);
-      expect(screen.getAllByRole('button', { name: 'Download' })).toHaveLength(3);
+      expect(screen.getAllByRole('button', { name: /^Download / })).toHaveLength(3);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(fetchMock).not.toHaveBeenCalled();
 
-      fireEvent.click(screen.getAllByRole('button', { name: 'Show mature content' })[2]);
+      fireEvent.click(screen.getAllByRole('button', { name: 'Show mature content' })[1]);
 
       expect(screen.queryByRole('button', { name: 'Show mature content' })).toBeNull();
       expect(container.querySelector('img[src="/a-still.jpg"]')).not.toBeNull();
       expect(container.querySelector('img[src="/b-still.jpg"]')).not.toBeNull();
       await waitFor(() => {
-        expect(container.querySelector('video')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/motion.mp4');
+        expect(container.querySelector('video')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/motion.mp4#t=0.1');
       });
-      expect(container.querySelector('img[alt="Reference 1"]')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/frame.png');
+      expect(container.querySelector('img[src="https://signed.example.com/user-1/references/frame.png"]')).not.toBeNull();
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
         storagePaths: mediaItems.map((item) => item.storagePath),

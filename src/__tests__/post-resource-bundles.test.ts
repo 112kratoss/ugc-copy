@@ -70,7 +70,8 @@ describe('post resource bundle validation', () => {
       note: 1,
     });
     expect(preview.resourceKinds).toEqual(['prompt', 'workflow', 'files', 'notes']);
-    expect(formatPostResourceItemCountSummary(preview.itemCounts)).toBe('1 prompt, 2 workflows, 2 reference images, 1 note');
+    // Counted in the order an unlocked recipe reads (the shared reading rule).
+    expect(formatPostResourceItemCountSummary(preview.itemCounts)).toBe('1 prompt, 2 reference images, 1 note, 2 workflows');
   });
 
   it('falls back from legacy resource fields to typed resource items', () => {
@@ -628,8 +629,8 @@ describe('buyer-facing recipe counts', () => {
       items,
     });
 
-    expect(formatPostResourceBundleCountSummary(preview)).toBe('1 prompt, 2 files, settings, 1 link');
-    expect(formatPostResourceItemCountSummary({ settings: 2, source_file: 1 })).toBe('1 file, settings');
+    expect(formatPostResourceBundleCountSummary(preview)).toBe('1 prompt, settings, 2 files, 1 link');
+    expect(formatPostResourceItemCountSummary({ settings: 2, source_file: 1 })).toBe('settings, 1 file');
   });
 });
 
