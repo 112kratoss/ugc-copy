@@ -541,6 +541,13 @@ describe('remixShowcasePostForRoute', () => {
         workflow_settings: {
           model: 'nano-banana-2',
           referenceImageUrls: ['https://cdn.example/private-face.png'],
+          // A catalog run's input slots and where settling kept its pictures,
+          // both under the creator's account id.
+          inputs: [{ slot: 'imageReferences', kind: 'image', storagePath: 'uploads/creator-1/1730000000000-passport-scan.jpg' }],
+          outputs: [
+            { index: 0, storagePath: 'generated_images/creator-1/generated_task-1_0.png' },
+            { index: 1, storagePath: 'generated_images/creator-1/generated_task-1_1.png' },
+          ],
         },
       },
     });

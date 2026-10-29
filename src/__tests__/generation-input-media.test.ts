@@ -961,3 +961,38 @@ describe('the pictures of a Kling O3 named subject', () => {
     ]);
   });
 });
+
+// A catalog picture run records each input as a slot with the path it was
+// staged under, and settling two pictures records where each was kept: all in
+// the creator's folders.
+describe('the settings a remix is given', () => {
+  const storedSettings = () => ({
+    model: 'nano-banana-2',
+    aspectRatio: '3:4',
+    settings: { aspectRatio: '3:4' },
+    inputs: [{ slot: 'imageReferences', kind: 'image', storagePath: 'uploads/user-1/1730000000000-passport-scan.jpg' }],
+    outputs: [
+      { index: 0, storagePath: 'generated_images/user-1/generated_task-1_0.png' },
+      { index: 1, storagePath: 'generated_images/user-1/generated_task-1_1.png' },
+    ],
+    primaryOutputIndex: 0,
+  });
+
+  it('holds the input slots only with the inputs, and never where the pictures were kept', async () => {
+    const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
+    const restored = { model: 'nano-banana-2', aspectRatio: '3:4', settings: { aspectRatio: '3:4' } };
+
+    expect(sanitizeWorkflowSettingsForRemix(storedSettings(), false)).toEqual(restored);
+    expect(sanitizeWorkflowSettingsForRemix(storedSettings(), true)).toEqual({ ...restored, inputs: storedSettings().inputs });
+  });
+
+  it('leaves the stored settings as they were', async () => {
+    const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
+    const stored = storedSettings();
+
+    sanitizeWorkflowSettingsForRemix(stored, false);
+    sanitizeWorkflowSettingsForRemix(stored, true);
+
+    expect(stored).toEqual(storedSettings());
+  });
+});

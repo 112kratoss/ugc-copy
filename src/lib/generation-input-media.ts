@@ -98,6 +98,12 @@ interface LegacyGenerationReference {
   showcase_asset_path?: string | null;
 }
 
+/**
+ * What a run's settings say about its inputs: each shape a start has recorded
+ * them in (the catalog path's `inputs` slots among them), with the paths they
+ * were staged under in the creator's folders, and the prompt compiled to name
+ * them. A remix is given these only with the inputs themselves.
+ */
 const INPUT_MEDIA_WORKFLOW_KEYS = new Set([
   'elements',
   'startFrame',
@@ -112,6 +118,17 @@ const INPUT_MEDIA_WORKFLOW_KEYS = new Set([
   'referenceVideo',
   'compiledPrompt',
   'promptMode',
+  'inputs',
+]);
+
+/**
+ * Where settling kept each picture of a run that made several (or of any
+ * grok-imagine-image run), in the creator's folder. Only the owner's own views
+ * read them, from the row, so no remix is given them.
+ */
+const OUTPUT_LIST_WORKFLOW_KEYS = new Set([
+  'outputs',
+  'primaryOutputIndex',
 ]);
 
 const STORAGE_BUCKETS = new Set([
@@ -1018,15 +1035,11 @@ export function sanitizeWorkflowSettingsForRemix(
   workflowSettings: Record<string, unknown>,
   includeInputMedia: boolean
 ): Record<string, unknown> {
-  if (includeInputMedia) {
-    return workflowSettings;
-  }
-
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(workflowSettings)) {
-    if (!INPUT_MEDIA_WORKFLOW_KEYS.has(key)) {
-      sanitized[key] = value;
-    }
+    if (OUTPUT_LIST_WORKFLOW_KEYS.has(key)) continue;
+    if (!includeInputMedia && INPUT_MEDIA_WORKFLOW_KEYS.has(key)) continue;
+    sanitized[key] = value;
   }
 
   return sanitized;
