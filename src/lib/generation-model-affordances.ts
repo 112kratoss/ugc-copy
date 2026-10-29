@@ -254,7 +254,8 @@ function referencesBudgetOf(
   if (!constraint) return null;
   const weight = (slotKey: string) => {
     if (!constraint.slotKeys.includes(slotKey)) return 0;
-    return constraint.type === 'weighted-count' ? constraint.weights?.[slotKey] ?? 1 : 1;
+    // As the server's check counts it: a weighted slot without a weight counts nothing.
+    return constraint.type === 'weighted-count' ? constraint.weights?.[slotKey] ?? 0 : 1;
   };
   return {
     max: constraint.max,

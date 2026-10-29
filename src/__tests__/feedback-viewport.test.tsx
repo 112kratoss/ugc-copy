@@ -140,8 +140,27 @@ describe('feedback viewport', () => {
     await expect(answer).resolves.toBe(false);
   });
 
+  // The same double-click's second click can land on one of its buttons instead: on a phone the
+  // question is a sheet whose confirming action sits on top, where the switch was.
+  it('ignores the second click of a double-click on its buttons', async () => {
+    render(<FeedbackViewport />);
+
+    let answer: Promise<boolean> | null = null;
+    act(() => {
+      answer = requestConfirmation({ title: 'Switch to frames?', message: 'm', confirmLabel: 'Switch to frames' });
+    });
+    await screen.findByRole('alertdialog', { name: 'Switch to frames?' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to frames' }), { detail: 2 });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }), { detail: 2 });
+    expect(screen.getByRole('alertdialog', { name: 'Switch to frames?' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to frames' }), { detail: 1 });
+    await expect(answer).resolves.toBe(true);
+  });
+
   it('makes the page beneath inert while it is up, and gives it back', async () => {
-    const view = render(
+    render(
       <>
         <button type="button">Archive post</button>
         <FeedbackViewport />
@@ -154,14 +173,15 @@ describe('feedback viewport', () => {
       void requestConfirmation({ title: 'Archive this post?', message: 'm', confirmLabel: 'Archive' });
     });
     await screen.findByRole('alertdialog', { name: 'Archive this post?' });
-    expect(view.container.inert).toBe(true);
-    expect(view.container).toHaveAttribute('aria-hidden', 'true');
-    expect(document.body.style.overflow).toBe('hidden');
+    expect(opener.inert).toBe(true);
+    expect(opener).toHaveAttribute('aria-hidden', 'true');
+    // The page's scroll stays with the overlays that lock it (the reel, the lightboxes).
+    expect(document.body.style.overflow).toBe('');
 
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
-    expect(view.container.inert).toBeFalsy();
-    expect(view.container).not.toHaveAttribute('aria-hidden');
+    expect(opener.inert).toBeFalsy();
+    expect(opener).not.toHaveAttribute('aria-hidden');
     expect(document.body.style.overflow).toBe('');
     // The focus goes back once the page can take it again.
     expect(opener).toHaveFocus();
@@ -189,9 +209,9 @@ describe('feedback viewport', () => {
     await screen.findByRole('alertdialog', { name: 'Discard changes?' });
 
     sheet.unmount();
-    // Still beneath the question.
+    // Still beneath the question; the sheet's scroll lock went with the sheet.
     expect(page.container.inert).toBe(true);
-    expect(document.body.style.overflow).toBe('hidden');
+    expect(document.body.style.overflow).toBe('');
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await expect(answer).resolves.toBe(false);
@@ -199,6 +219,114 @@ describe('feedback viewport', () => {
     expect(page.container.inert).toBeFalsy();
     expect(page.container).not.toHaveAttribute('aria-hidden');
     expect(document.body.style.overflow).toBe('');
+  });
+
+  /** An overlay that locks the page's scroll itself, as the Showcase reel and the lightboxes do. */
+  function OwnScrollLock() {
+    React.useEffect(() => {
+      const previous = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = previous;
+      };
+    }, []);
+    return null;
+  }
+
+  // Back closes the reel first, then the question asked in it (Unlock, Report, a comment's
+  // Delete). The question put back the 'hidden' it found, the reel's, and the page could not
+  // scroll until a reload.
+  it('leaves a scroll lock it did not take to its owner', async () => {
+    render(<FeedbackViewport />);
+    const reel = render(<OwnScrollLock />);
+    act(() => {
+      void requestConfirmation({ title: 'Unlock this recipe?', message: 'm', confirmLabel: 'Unlock' });
+    });
+    await screen.findByRole('alertdialog', { name: 'Unlock this recipe?' });
+
+    reel.unmount();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(document.body.style.overflow).toBe('');
+  });
+
+  it('leaves the scroll alone when a lock taken before its own went first', async () => {
+    function Sheet() {
+      const overlayRef = React.useRef<HTMLDivElement | null>(null);
+      useInertPageBeneath(overlayRef);
+      return createPortal(<div ref={overlayRef} role="dialog" aria-label="Edit item" />, document.body);
+    }
+    const reel = render(<OwnScrollLock />);
+    const sheet = render(<Sheet />);
+    reel.unmount();
+    expect(document.body.style.overflow).toBe('');
+
+    sheet.unmount();
+    expect(document.body.style.overflow).toBe('');
+  });
+
+  // The toasts are drawn above the question (z-index 110 over its 100). Inert, a press on one's
+  // close button went through to the backdrop and answered the question, and a toast arriving
+  // while it was up sat in a live region hidden from a reader.
+  it('keeps the toasts above it live', async () => {
+    render(<FeedbackViewport />);
+    let answer: Promise<boolean> | null = null;
+    act(() => {
+      pushToast({ tone: 'success', message: 'Your video is ready.', durationMs: 60_000 });
+      answer = requestConfirmation({ title: 'Switch to frames?', message: 'm', confirmLabel: 'Switch' });
+    });
+    await screen.findByRole('alertdialog', { name: 'Switch to frames?' });
+
+    const region = screen.getByRole('status');
+    expect(region.inert).toBeFalsy();
+    fireEvent.click(within(region).getByRole('button', { name: 'Dismiss notification' }));
+    await waitFor(() => expect(screen.queryByText('Your video is ready.')).not.toBeInTheDocument());
+    expect(screen.getByRole('alertdialog', { name: 'Switch to frames?' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await expect(answer).resolves.toBe(false);
+  });
+
+  // A question asked while another is up takes its place. Kept in the same dialog, its focus
+  // return recorded the dialog's own Cancel (the first question's return did nothing while the
+  // page was still inert), and the focus fell to the page's body when it went.
+  it('gives the focus back to the page after a question that replaced another', async () => {
+    // A browser's focus() does nothing inside an inert subtree; jsdom's knows no inert.
+    const focus = HTMLElement.prototype.focus;
+    const insideInert = (element: HTMLElement) => {
+      for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+        if (node.inert) return true;
+      }
+      return false;
+    };
+    vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      if (!insideInert(this)) focus.call(this, options);
+    });
+    render(
+      <>
+        <button type="button">Back</button>
+        <FeedbackViewport />
+      </>,
+    );
+    const opener = screen.getByRole('button', { name: 'Back' });
+    opener.focus();
+
+    let second: Promise<boolean> | null = null;
+    act(() => {
+      void requestConfirmation({ title: 'Leave?', message: 'm', confirmLabel: 'Leave' });
+    });
+    await screen.findByRole('alertdialog', { name: 'Leave?' });
+    // The first question holds the focus when the second comes (a second Back).
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
+    act(() => {
+      second = requestConfirmation({ title: 'Leave now?', message: 'm', confirmLabel: 'Leave' });
+    });
+    await screen.findByRole('alertdialog', { name: 'Leave now?' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await expect(second).resolves.toBe(false);
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(opener).toHaveFocus();
   });
 
   it('answers an open confirmation with cancel when another one arrives', async () => {
@@ -703,8 +831,8 @@ describe('the saver notice in the viewport', () => {
     act(() => {
       vi.advanceTimersByTime(60_000);
     });
-    // Still drawn, beneath the question, which hides the page from a reader while it is up.
-    expect(screen.getByRole('status', { hidden: true })).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+    // Still drawn, above the question, and read.
+    expect(screen.getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
     expect(told()).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));

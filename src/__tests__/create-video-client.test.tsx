@@ -979,7 +979,8 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(dialog).toHaveAccessibleDescription('Seedance 2.5 takes frames or references, not both. Your start image can come with you as a reference.');
       // The safe answer takes the focus, so Enter never clears by accident.
       await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Keep frames' })).toHaveFocus());
-      expect(within(dialog).getByRole('button', { name: 'Move start.jpg to references' })).toBeInTheDocument();
+      // Nothing is lost on this yes, so it is the plain primary action.
+      expect(within(dialog).getByRole('button', { name: 'Move start.jpg to references' })).toHaveClass('ui-button-primary');
       // Until it is answered the switch stays on frames.
       expect(screen.getByRole('radio', { name: 'Frames', hidden: true })).toBeChecked();
 
@@ -1044,6 +1045,8 @@ describe('CreateVideoClient Kling video elements', () => {
         'Seedance 2.5 takes frames or references, not both. @element_1 and @element_2 can come with you as the start and end images. The other reference is cleared.',
       );
       expect(within(dialog).getByRole('button', { name: 'Keep references' })).toBeInTheDocument();
+      // A yes that clears a reference cannot be taken back: the danger action, as the guide has it.
+      expect(within(dialog).getByRole('button', { name: 'Move both to frames' })).toHaveClass('ui-button-danger');
       fireEvent.click(within(dialog).getByRole('button', { name: 'Move both to frames' }));
 
       await waitFor(() => expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked());
@@ -1175,6 +1178,58 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(postedRun()).toBeDefined());
       expect(postedRun().prompt).toBe(named);
       expect(postedRun().inputs.map((input: { slot: string }) => input.slot)).toEqual(['startFrame', 'endFrame']);
+    });
+
+    it('writes as names the mentions a rename put in the prompt while the question was up', async () => {
+      // A rename takes its new handle at once and rewrites the prompt when its write is done.
+      // Done while the question was up, it put "@hero" in the prompt, which the question's plan,
+      // made before it, did not know: the move left a mention of a reference the run lacks.
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await chooseInputs('References');
+      await attachPictures(view.container, [picture('hero'), picture('prop')]);
+      fireEvent.change(promptField(), { target: { value: '@element_1 walks past @element_2 at dusk, slow push in.' } });
+      let finishRename: (() => void) | null = null;
+      setPersistedImageElementRecordsMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishRename = resolve; }));
+      const name = screen.getAllByPlaceholderText('Rename element')[0];
+      fireEvent.change(name, { target: { value: 'Hero' } });
+      fireEvent.keyDown(name, { key: 'Enter' });
+      await waitFor(() => expect(finishRename).not.toBeNull());
+
+      await chooseInputs('Frames');
+      const dialog = await question('Switch to frames?');
+      await act(async () => finishRename!());
+      await waitFor(() => expect(promptField()).toHaveValue('@hero walks past @element_2 at dusk, slow push in.'));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Move both to frames' }));
+
+      await waitFor(() => expect(promptField()).toHaveValue('Hero walks past Element 2 at dusk, slow push in.'));
+    });
+
+    it('writes a switch back only once the switch before it is written', async () => {
+      // A move writes the new copy before it takes the old one off. A switch back answered
+      // before the first move's writes were done wrote the start image first, and the first
+      // move's removal then took it off: after a reload the draft held neither picture nor frame.
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      const start = new File(['frame'], 'start.jpg', { type: 'image/jpeg' });
+      await attachStart(view.container, start);
+      let finishFirstWrite: (() => void) | null = null;
+      setPersistedImageElementRecordsMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirstWrite = resolve; }));
+      setPersistedFileMock.mockClear();
+      removePersistedMediaMock.mockClear();
+
+      await chooseInputs('References');
+      fireEvent.click(within(await question('Switch to references?')).getByRole('button', { name: 'Move start.jpg to references' }));
+      await waitFor(() => expect(finishFirstWrite).not.toBeNull());
+      await chooseInputs('Frames');
+      fireEvent.click(within(await question('Switch to frames?')).getByRole('button', { name: 'Move @element_1 to frames' }));
+      await waitFor(() => expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked());
+      await act(async () => finishFirstWrite!());
+
+      const START_KEY = 'create-video:start-image:user-1';
+      await waitFor(() => expect(setPersistedFileMock).toHaveBeenCalledWith(START_KEY, start));
+      const order = (mock: typeof setPersistedFileMock | typeof removePersistedMediaMock) => mock.mock.calls
+        .map(([key], index) => (key === START_KEY ? mock.mock.invocationCallOrder[index] : 0));
+      // The last word on the start image's saved copy is the switch back's write.
+      expect(Math.max(...order(setPersistedFileMock))).toBeGreaterThan(Math.max(...order(removePersistedMediaMock)));
     });
 
     it('writes a moved start image as a reference before it takes the frame’s saved copy off', async () => {
@@ -1320,6 +1375,19 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(postedRun().settings.referenceMode).toBe('frames');
         expect((postedRun().inputs as Array<Record<string, unknown>>).map((input) => [input.slot, input.storagePath]))
           .toEqual([['startFrame', START.storagePath], ['endFrame', END.storagePath]]);
+      });
+
+      it('leaves out the frames of a run that brought its pictures back as references', async () => {
+        // A references run can hold frames beside its pictures (a draft from before the switch,
+        // an old run whose prepared assets come back as pictures): its frames stay out, as they
+        // did before, rather than coming back under "kept for Frames".
+        stubRemix(remixOf('seedance-2-mini', { referenceMode: 'elements', startFrame: START }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+        expect(screen.queryByText(/is kept for Frames/)).toBeNull();
+        expect(screen.queryByAltText('Start image')).toBeNull();
       });
 
       it('still brings the frames of a run recorded as references back as its references', async () => {

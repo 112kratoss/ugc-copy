@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type MouseEvent,
   type ReactNode,
   type RefObject,
 } from 'react';
@@ -98,9 +99,14 @@ export default function FeedbackViewport() {
     readServerFeedbackSnapshot,
   );
   const host = useSyncExternalStore(subscribeToToastHost, readToastHost, readServerToastHost);
+  // On the page the toasts are drawn above the question, so they stay live under it: inert, a
+  // press on one went through to the question's backdrop. A dialog's own (the reel's) sits
+  // beneath the question, with the rest of that dialog.
+  const viewportRef = useRef<HTMLDivElement | null>(null);
 
   const viewport = (
     <div
+      ref={viewportRef}
       className={host ? 'ui-toast-viewport ui-toast-viewport-in-dialog' : 'ui-toast-viewport'}
       role="status"
       aria-live="polite"
@@ -119,7 +125,11 @@ export default function FeedbackViewport() {
           modal that makes the rest of the page inert while it is up (the
           composer's resource editor) knew nothing of it then, so it can still
           be pressed and focused over that modal. */}
-      {confirmation ? createPortal(<ConfirmDialog confirmation={confirmation} />, document.body) : null}
+      {/* One dialog per question: a question that takes another's place gives the page and the
+          focus back first, so the focus it records is the page's, not the old question's. */}
+      {confirmation
+        ? createPortal(<ConfirmDialog key={confirmation.id} confirmation={confirmation} keepLive={host ? undefined : viewportRef} />, document.body)
+        : null}
       {publicIdentity
         ? createPortal(
           <PublicIdentityDialogBoundary key={publicIdentity.id} id={publicIdentity.id}>
@@ -289,7 +299,11 @@ function Toast({ toast }: { toast: ToastRecord }) {
   );
 }
 
-function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) {
+function ConfirmDialog({ confirmation, keepLive }: {
+  confirmation: PendingConfirmation;
+  /** The page's toasts, drawn above the question. */
+  keepLive?: RefObject<HTMLElement | null>;
+}) {
   const { id, request } = confirmation;
   const backdropRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -297,10 +311,12 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   const isDanger = request.tone === 'danger';
 
-  // The page beneath takes no press, scroll or reader's attention while it is up. First: the
-  // focus useModalQuestion gives back as the question goes does nothing while the page is
-  // still inert, and effects are undone in the order they were declared.
-  useInertPageBeneath(backdropRef);
+  // The page beneath takes no press or reader's attention while it is up. Its scroll stays with
+  // the overlays that lock it: a question asked in the Showcase reel outlives the reel on Back,
+  // and put the reel's lock back after it had gone. First: the focus useModalQuestion gives
+  // back as the question goes does nothing while the page is still inert, and effects are
+  // undone in the order they were declared.
+  useInertPageBeneath(backdropRef, { lockScroll: false, keepLive });
   useModalQuestion({
     questionId: id,
     dialogRef,
@@ -314,16 +330,19 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
     onCancel: () => resolveConfirmation(id, false),
   });
 
+  // Not the second click of a double-click: its first, on what asked (the video creator's
+  // frames/references switch), brought the question up under the pointer, and its second lands
+  // on the backdrop or, on a phone's sheet, an answer. A key's click has no count (0).
+  const answer = (confirmed: boolean) => (event: MouseEvent<HTMLElement>) => {
+    if (event.detail < 2) resolveConfirmation(id, confirmed);
+  };
+
   return (
     <div
       ref={backdropRef}
       className="ui-confirm-backdrop"
       onClick={(event) => {
-        // Not the second click of a double-click: its first, on what asked (the video
-        // creator's frames/references switch), brought the question up under the pointer.
-        if (event.target === event.currentTarget && event.detail < 2) {
-          resolveConfirmation(id, false);
-        }
+        if (event.target === event.currentTarget) answer(false)(event);
       }}
     >
       <div
@@ -351,7 +370,7 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
           <button
             ref={cancelRef}
             type="button"
-            onClick={() => resolveConfirmation(id, false)}
+            onClick={answer(false)}
             className="ui-button ui-button-secondary ui-focus-ring"
           >
             {request.cancelLabel ?? 'Cancel'}
@@ -359,7 +378,7 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
           <button
             ref={confirmRef}
             type="button"
-            onClick={() => resolveConfirmation(id, true)}
+            onClick={answer(true)}
             className={`ui-button ui-focus-ring ${isDanger ? 'ui-button-danger' : 'ui-button-primary'}`}
           >
             {request.confirmLabel}

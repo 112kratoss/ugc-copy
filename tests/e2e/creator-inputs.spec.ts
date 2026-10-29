@@ -226,6 +226,28 @@ test('a remix’s reference is replaced in place, keeping its @handle', async ({
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue('@lead walks past @prop at dusk');
 });
 
+// A double-click on the switch: its first click brings the question up under the pointer, and the
+// second landed on the question's backdrop, which took it for a press of its own and answered
+// "keep" as the question came. On a phone the sheet leaves the backdrop where the switch was.
+test('a double-click on the switch leaves its question up', async ({ page, context }) => {
+  await page.setViewportSize(PHONE);
+  await signIn(context);
+  await answerApi(page);
+  await openCreator(page, 'model=seedance-2-5');
+  await page.locator('#video-start-frame-input').setInputFiles(png('start.png'));
+  await expect(page.getByAltText('Start image', { exact: true })).toBeVisible();
+
+  await inputs(page).getByRole('radio', { name: 'References' }).dblclick();
+
+  const dialog = page.getByRole('alertdialog', { name: 'Switch to references?' });
+  await expect(dialog).toBeVisible();
+  // The page beneath is hidden from the accessibility tree while the question is up.
+  await expect(page.getByRole('radio', { name: 'Frames', includeHidden: true })).toBeChecked();
+  await dialog.getByRole('button', { name: 'Keep frames' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByAltText('Start image', { exact: true })).toBeVisible();
+});
+
 test('on a phone the switch fits its card and the question is a sheet along the bottom', async ({ page, context }) => {
   await page.setViewportSize(PHONE);
   await signIn(context);

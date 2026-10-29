@@ -161,6 +161,7 @@ describe('switching to references', () => {
       message: 'Seedance 2.5 takes frames or references, not both. Your start image can come with you as a reference.',
       keepLabel: 'Keep frames',
       confirmLabel: 'Move start.jpg to references',
+      clears: false,
     });
     expect(plan.framesToReferences).toEqual(['start']);
     expect(plan.framesCleared).toEqual([]);
@@ -189,6 +190,8 @@ describe('switching to references', () => {
     const plan = planVideoInputSwitch(onePicture, { ...NOTHING, start: true, end: true }, 'references', names('Seedance 2.5', { start: 'a.png' }));
     expect(plan.question?.message).toBe('Seedance 2.5 takes frames or references, not both. Your start image can come with you as a reference. Your end image is cleared.');
     expect(plan.question?.confirmLabel).toBe('Move a.png to references');
+    // A yes that clears something cannot be taken back: the question says so with its tone.
+    expect(plan.question?.clears).toBe(true);
     expect(plan.framesToReferences).toEqual(['start']);
     expect(plan.framesCleared).toEqual(['end']);
   });
@@ -213,6 +216,7 @@ describe('switching back to frames (the mirror question)', () => {
       message: 'Seedance 2.5 takes frames or references, not both. @reference_1 can come with you as the start image.',
       keepLabel: 'Keep references',
       confirmLabel: 'Move @reference_1 to frames',
+      clears: false,
     });
     expect(plan.picturesToFrames).toEqual([{ index: 0, frame: 'start' }]);
     expect(plan.promptNames).toEqual([]);
@@ -227,6 +231,7 @@ describe('switching back to frames (the mirror question)', () => {
     );
     expect(plan.question?.message).toBe('Seedance 2.5 takes frames or references, not both. @lead and @prop can come with you as the start and end images. The other 3 references are cleared.');
     expect(plan.question?.confirmLabel).toBe('Move both to frames');
+    expect(plan.question?.clears).toBe(true);
     expect(plan.picturesToFrames).toEqual([{ index: 0, frame: 'start' }, { index: 1, frame: 'end' }]);
   });
 
@@ -256,6 +261,7 @@ describe('switching back to frames (the mirror question)', () => {
     const one = planVideoInputSwitch(seedance, { ...NOTHING, clips: 1 }, 'frames', names('Seedance 2.5'));
     expect(one.question?.message).toBe('Seedance 2.5 takes frames or references, not both. Your reference is cleared.');
     expect(one.question?.confirmLabel).toBe('Switch to frames');
+    expect(one.question?.clears).toBe(true);
     expect(planVideoInputSwitch(seedance, { ...NOTHING, clips: 1, tracks: 1 }, 'frames', names('Seedance 2.5')).question?.message)
       .toBe('Seedance 2.5 takes frames or references, not both. Your 2 references are cleared.');
   });

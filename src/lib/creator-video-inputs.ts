@@ -136,6 +136,8 @@ export type VideoInputQuestion = {
   /** Cancels: the card stays on the side it shows. */
   keepLabel: string;
   confirmLabel: string;
+  /** Its yes clears something, which cannot be taken back. */
+  clears: boolean;
 };
 
 /** What switching sides does: nothing to ask, or a question and what its yes carries and clears. */
@@ -234,6 +236,7 @@ export function planVideoInputSwitch(
         confirmLabel: moving.length === 1
           ? `Move ${nameOf(moving[0])} to ${label('references')}`
           : moving.length === 2 ? `Move both to ${label('references')}` : `Switch to ${label('references')}`,
+        clears: cleared.length > 0,
       },
       framesToReferences: moving,
       framesCleared: cleared,
@@ -274,6 +277,7 @@ export function planVideoInputSwitch(
       confirmLabel: moving.length === 1
         ? `Move ${handles[0]} to ${label('frames')}`
         : moving.length === 2 ? `Move both to ${label('frames')}` : `Switch to ${label('frames')}`,
+      clears: left > 0,
     },
     picturesToFrames: moving,
     promptNames,

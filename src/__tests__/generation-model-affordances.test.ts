@@ -271,6 +271,17 @@ describe('descriptor-driven affordances', () => {
     for (const modelId of videoModelIds) {
       expect(budget(modelId, null), modelId).toEqual(budget(modelId));
     }
+    // A weighted count's slot without a weight counts nothing, as the server's check has it.
+    const omni = descriptorFor('gemini-omni-video')!;
+    const unweighted = {
+      ...omni,
+      inputConstraints: (omni.inputConstraints ?? []).map((constraint) => (
+        constraint.type === 'weighted-count'
+          ? { ...constraint, weights: Object.fromEntries(Object.entries(constraint.weights ?? {}).filter(([slotKey]) => slotKey !== 'videoReferences')) }
+          : constraint
+      )),
+    };
+    expect(budget('gemini-omni-video', unweighted)?.weights.clips).toBe(0);
   });
 
   it('answers for a model the built-in tables do not know, before the catalog arrives', () => {

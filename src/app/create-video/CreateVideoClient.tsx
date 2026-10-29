@@ -1220,6 +1220,8 @@ export default function CreateVideoClient({
     // The file a Replace last picked for each clip or track: a pick measured later than a newer
     // one for the same reference does not take its place.
     const latestReplacePicksRef = useRef(new Map<string, File>());
+    // The last switch's writes, which the next switch's wait for (`writeAfterEarlierSwitches`).
+    const inputSwitchWritesRef = useRef<Promise<void>>(Promise.resolve());
 
     const [isDraggingStart, setIsDraggingStart] = useState(false);
     const [isDraggingEnd, setIsDraggingEnd] = useState(false);
@@ -1688,7 +1690,6 @@ export default function CreateVideoClient({
     const canUseVideoElements = affordances.elements.enabled;
     const activeReferenceMode = affordances.activeMode;
     const combinesFrameWithReferences = affordances.combineFramesWithReferences;
-    const supportsStartFrame = affordances.frames.start;
     const supportsEndFrame = affordances.frames.end;
     const activeSupportsEndFrame = supportsEndFrame && !combinesFrameWithReferences;
     const referenceVideoLimit = affordances.referenceVideos.max;
@@ -2368,6 +2369,11 @@ export default function CreateVideoClient({
                 );
                 if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
 
+                // The run's frames come back as its frames, but where the Seedance 2 family's
+                // restore below takes them for its pictures or leaves them out.
+                const restoredStartFrame = createRestoredRemixAssetState(restoredVideoInputs?.startFrame ?? null);
+                const restoredEndFrame = createRestoredRemixAssetState(restoredVideoInputs?.endFrame ?? null);
+                let restoresFrames = true;
                 if (isSeedance2VideoModelId(nextModelId)) {
                     const restoredElements = restoredVideoInputs?.elements ?? [];
                     const restoredSeeds = createRemixElementSeeds(
@@ -2383,13 +2389,14 @@ export default function CreateVideoClient({
                         ] ?? undefined,
                     }));
 
-                    const restoredStartFrame = createRestoredRemixAssetState(restoredVideoInputs?.startFrame ?? null);
-                    const restoredEndFrame = createRestoredRemixAssetState(restoredVideoInputs?.endFrame ?? null);
                     // A references run of the family kept its pictures as frames before the
                     // family took frames (2026-04-04): those come back as its references. A
-                    // frames run gets its frames back as frames, and runs as one again.
+                    // frames run gets its frames back as frames, and runs as one again. A run
+                    // that brings pictures back is a references run, and frames recorded beside
+                    // them (an old run's prepared assets come back as pictures) stay out.
                     const framesWereReferences = restoredSeeds.length === 0
                         && restoredVideoInputs?.referenceMode === 'elements';
+                    restoresFrames = restoredSeeds.length === 0 && !framesWereReferences;
                     const legacyFrameSeeds = framesWereReferences
                         ? [restoredStartFrame, restoredEndFrame]
                             .filter((item): item is NonNullable<typeof item> => Boolean(item))
@@ -2473,15 +2480,6 @@ export default function CreateVideoClient({
 	                        // Said beside a cap notice too, and once if the bundle already said it.
 	                        setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, REMIX_RESTORE_WARNING));
 	                    }
-
-	                    const keptStartFrame = framesWereReferences ? null : restoredStartFrame;
-	                    const keptEndFrame = framesWereReferences ? null : restoredEndFrame;
-	                    setStartImageFile(null);
-                    setStartImageUrl(keptStartFrame?.url ?? null);
-                    setStartFrameDescriptor(keptStartFrame?.descriptor ?? null);
-                    setEndImageFile(null);
-                    setEndImageUrl(keptEndFrame?.url ?? null);
-                    setEndFrameDescriptor(keptEndFrame?.descriptor ?? null);
                 } else {
                     // A run on any other model gets its references back too. Its
                     // image references come back under the handles the prompt
@@ -2536,21 +2534,16 @@ export default function CreateVideoClient({
 	                            }] : []))
 	                        : [];
 	                    commitKlingVideoElements(hydrateKlingVideoElements(klingVideoSeeds));
-
-	                    const restoredStartFrame = createRestoredRemixAssetState(
-                        restoredVideoInputs?.startFrame ?? null
-                    );
-                    const restoredEndFrame = createRestoredRemixAssetState(
-                        restoredVideoInputs?.endFrame ?? null
-                    );
-
-                    setStartImageFile(null);
-                    setStartImageUrl(restoredStartFrame?.url ?? null);
-                    setStartFrameDescriptor(restoredStartFrame?.descriptor ?? null);
-                    setEndImageFile(null);
-                    setEndImageUrl(restoredEndFrame?.url ?? null);
-                    setEndFrameDescriptor(restoredEndFrame?.descriptor ?? null);
                 }
+
+                const keptStartFrame = restoresFrames ? restoredStartFrame : null;
+                const keptEndFrame = restoresFrames ? restoredEndFrame : null;
+                setStartImageFile(null);
+                setStartImageUrl(keptStartFrame?.url ?? null);
+                setStartFrameDescriptor(keptStartFrame?.descriptor ?? null);
+                setEndImageFile(null);
+                setEndImageUrl(keptEndFrame?.url ?? null);
+                setEndFrameDescriptor(keptEndFrame?.descriptor ?? null);
             } catch (fetchError) {
                 console.error('Error fetching remix:', fetchError);
                 if (!isCancelled) {
@@ -2895,28 +2888,13 @@ export default function CreateVideoClient({
         updateShotMentionState(shot.id, shot.prompt);
     };
 
-    const persistFrame = async (file: File, type: 'start' | 'end') => {
+    const persistFrame = async (file: File, frame: VideoFrame) => {
         const { refusal } = screenPickedFiles([file], 'image');
         setPickNotice(refusal);
         if (refusal) return;
 
-        if (type === 'start') {
-            revokeObjectUrl(startImageUrl);
-            setStartImageFile(file);
-            setStartImageUrl(URL.createObjectURL(file));
-            setStartFrameDescriptor(null);
-            const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoStartImage);
-            if (key) {
-                await setPersistedFile(key, file);
-            }
-            return;
-        }
-
-        revokeObjectUrl(endImageUrl);
-        setEndImageFile(file);
-        setEndImageUrl(URL.createObjectURL(file));
-        setEndFrameDescriptor(null);
-        const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoEndImage);
+        setFrame(frame, { file, url: URL.createObjectURL(file), descriptor: null, staged: null });
+        const key = savedFrameKey(frame);
         if (key) {
             await setPersistedFile(key, file);
         }
@@ -3222,10 +3200,25 @@ export default function CreateVideoClient({
             message: plan.question.message,
             cancelLabel: plan.question.keepLabel,
             confirmLabel: plan.question.confirmLabel,
+            // A yes that clears something cannot be taken back.
+            tone: plan.question.clears ? 'danger' : undefined,
         });
         focusInputSwitch();
         if (!confirmed) return;
         await (plan.to === 'references' ? moveFramesToReferences(plan) : movePicturesToFrames(plan));
+    };
+
+    /**
+     * A switch's writes, run once the switch before it is written: each writes its new copy
+     * before it takes the old one off, and a switch back answered while the earlier one was still
+     * writing had its start image taken off by the earlier one's removal.
+     */
+    const writeAfterEarlierSwitches = (side: VideoInputSide, writes: () => Promise<void>) => {
+        const written = inputSwitchWritesRef.current.then(writes).catch((saveError) => {
+            console.error(`Failed to save the inputs moved to ${side}:`, saveError);
+        });
+        inputSwitchWritesRef.current = written;
+        return written;
     };
 
     const moveFramesToReferences = async (plan: VideoInputSwitch) => {
@@ -3253,16 +3246,14 @@ export default function CreateVideoClient({
         frames.forEach((frame) => setFrame(frame, null));
         setPickedInputSide('references');
         // The new copy is written before the old one goes, so a write that fails loses nothing.
-        try {
+        await writeAfterEarlierSwitches('references', async () => {
             await persistVideoElements(nextElements);
             await persistSeedanceAssets(nextElements, referenceVideosRef.current, referenceAudiosRef.current);
             await Promise.all(frames.map((frame) => {
                 const key = savedFrameKey(frame);
                 return key ? removePersistedMedia(key) : undefined;
             }));
-        } catch (saveError) {
-            console.error('Failed to save the inputs moved to references:', saveError);
-        }
+        });
     };
 
     const movePicturesToFrames = async (plan: VideoInputSwitch) => {
@@ -3313,7 +3304,7 @@ export default function CreateVideoClient({
         setPickedInputSide('frames');
         // The frames are written before the lists that held them, so a write that fails loses
         // nothing; only the lists that changed are written.
-        try {
+        await writeAfterEarlierSwitches('frames', async () => {
             await Promise.all(savedFrames.map(({ frame, file }) => {
                 const key = savedFrameKey(frame);
                 return key ? setPersistedFile(key, file) : undefined;
@@ -3324,9 +3315,7 @@ export default function CreateVideoClient({
                 carries.audios ? persistReferenceAudios(nextAudios) : undefined,
             ]);
             await persistSeedanceAssets(nextElements, nextVideos, nextAudios);
-        } catch (saveError) {
-            console.error('Failed to save the inputs moved to frames:', saveError);
-        }
+        });
     };
 
     /** The frames a draft holds beside its references, which the run leaves out, taken off. */
@@ -3428,17 +3417,19 @@ export default function CreateVideoClient({
         const replacements = createElementHandleReplacementMap(currentElements, nextElements);
 
         commitElements(nextElements);
-        await persistVideoElements(nextElements);
+        // The prompt follows the new handle at once, with the card: a switch or Generate pressed
+        // while the write below runs reads the two together (a tap on Frames blurs the name
+        // field, and the switch's question read the old handle in the prompt).
         if (replacements.size > 0) {
             setPrompt((currentPrompt) => {
                 const nextPrompt = replacePromptHandles(currentPrompt, replacements);
                 requestAnimationFrame(() => updateMentionState(nextPrompt));
                 return nextPrompt;
             });
-            return;
+        } else {
+            requestAnimationFrame(() => updateMentionState(prompt));
         }
-
-        requestAnimationFrame(() => updateMentionState(prompt));
+        await persistVideoElements(nextElements);
     };
 
     const handleKlingVideoElementRename = async (elementId: string, nextDisplayName: string) => {
@@ -5864,7 +5855,7 @@ export default function CreateVideoClient({
                                         ) : null}
                                     </div>
                                         ) : null}
-                                        {inputSides.references?.keepsStart && supportsStartFrame
+                                        {inputSides.references?.keepsStart
                                             ? renderFrameSlot('start', `${videoModel.displayName} can start from it, with your references.`)
                                             : null}
                                     </>
