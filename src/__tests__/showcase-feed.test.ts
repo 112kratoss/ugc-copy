@@ -157,6 +157,8 @@ let lastPurchaseBundleIds: unknown[] | null = null;
 let profilesGate: Promise<void> | null = null;
 let tableAccesses: string[] = [];
 let rpcAccesses: string[] = [];
+// Every direct read of the recipe table: its columns, posts and filters.
+let bundleTableReads: Array<{ columns: string; postIds: unknown[]; filters: Record<string, unknown> }> = [];
 // Forces the fake to answer the top-sales RPC as missing, so the legacy
 // scan fallback for un-migrated databases stays covered.
 let topSalesRpcMissingState = false;
@@ -189,6 +191,46 @@ function createPostRow(overrides: Partial<PostRow> & { id: string; created_at: s
     source_tool_slug: 'runway',
     generation_id: null,
     ...overrides,
+  };
+}
+
+/**
+ * A recipe as the read of what its unlock adds from the creation's saved
+ * inputs (B3) nests it: its post, the post's generation and that generation's
+ * inputs.
+ */
+function creationInputSource(bundle: ResourceBundleRow) {
+  const post = postsState.find((row) => row.id === bundle.post_id) ?? null;
+  const generation = post?.generation_id
+    ? generationModelsState.find((row) => row.id === post.generation_id) ?? null
+    : null;
+  return {
+    post_id: bundle.post_id,
+    owner_user_id: post?.user_id ?? null,
+    attachments: bundle.attachments ?? [],
+    resource_items: bundle.resource_items ?? [],
+    post: post
+      ? {
+          id: post.id,
+          user_id: post.user_id,
+          generation_id: post.generation_id,
+          category: post.category,
+          visibility: post.visibility,
+          archived_at: post.archived_at ?? null,
+          review_status: post.review_status ?? POSTS_COLUMN_DEFAULTS.review_status,
+          source_kind: post.source_kind,
+          generation: generation
+            ? {
+                id: generation.id,
+                user_id: generation.user_id ?? null,
+                is_public: generation.is_public ?? null,
+                category: generation.category ?? null,
+                workflow_settings: generation.workflow_settings ?? null,
+                inputs: generationInputMediaState.filter((input) => input.generation_id === generation.id),
+              }
+            : null,
+        }
+      : null,
   };
 }
 
@@ -542,30 +584,37 @@ function createServiceClientMock() {
       }
 
       if (table === 'post_resource_bundles' || table === 'marketplace_assets') {
-        let postIds: unknown[] = [];
-        let status: unknown = null;
+        const read = { columns: '', postIds: [] as unknown[], filters: {} as Record<string, unknown> };
+        if (table === 'post_resource_bundles') {
+          bundleTableReads.push(read);
+        }
 
         const query = {
-          select() {
+          select(columns?: string) {
+            read.columns = columns ?? '';
             return query;
           },
           in(column: string, values: unknown[]) {
             if (column === 'post_id') {
-              postIds = values;
+              read.postIds = values;
             }
             return query;
           },
           eq(column: string, value: unknown) {
-            if (column === 'status') {
-              status = value;
-            }
+            read.filters[column] = value;
             return query;
           },
-          then(resolve: (value: { data: ResourceBundleRow[]; error: null }) => void) {
+          abortSignal() {
+            return query;
+          },
+          then(resolve: (value: { data: unknown[]; error: null }) => void) {
+            const rows = resourceBundlesState.filter(
+              (row) => read.postIds.includes(row.post_id)
+                && (!('status' in read.filters) || row.status === read.filters.status)
+                && (!('allow_remix' in read.filters) || row.allow_remix === read.filters.allow_remix)
+            );
             resolve({
-              data: resourceBundlesState.filter(
-                (row) => postIds.includes(row.post_id) && (status === null || row.status === status)
-              ),
+              data: read.columns.includes('generation:generations') ? rows.map(creationInputSource) : rows,
               error: null,
             });
           },
@@ -739,6 +788,7 @@ describe('showcase feed', () => {
     profilesGate = null;
     tableAccesses = [];
     rpcAccesses = [];
+    bundleTableReads = [];
     topSalesRpcMissingState = false;
     postsRangeReads = [];
     nextCacheState.invocations = [];
@@ -1280,6 +1330,8 @@ describe('showcase feed', () => {
 
     expect(page.items[0].asset).toBeNull();
     expect(rpcAccesses.filter((name) => name === 'get_public_post_resource_bundle_summaries')).toHaveLength(1);
+    // A page with no published recipe asks nothing about what an unlock adds
+    // from a creation's inputs (B3).
     expect(tableAccesses).not.toContain('post_resource_bundles');
     expect(tableAccesses).not.toContain('generation_input_media');
   });
@@ -2226,6 +2278,182 @@ describe('showcase feed', () => {
       expect(tableAccesses.filter((table) => table === 'posts')).toHaveLength(2);
       openProfiles();
       await expect(pending).resolves.toMatchObject({ id: 'post-1', isNsfw: false });
+    });
+  });
+
+  // Recipe reading review B3: a card teases what its recipe's unlock gives,
+  // the creation's inputs its creator shares included. Review of 2026-10-29:
+  // counted once, for the page a response serves, and never deciding which
+  // posts a filter keeps, which a best-effort read would make shift between
+  // pages.
+  describe('recipe teasers that count what the unlock adds from the creation’s inputs', () => {
+    const storedPrompt = [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'The prompt behind it.' }];
+    const inputReads = () => bundleTableReads.filter((read) => read.columns.includes('generation:generations'));
+
+    // A creation post whose published recipe stores a prompt (and `storedItems`
+    // when given), and whose creator shares the creation's two pictures.
+    function addCreationRecipe(index: number, storedItems: unknown[] = storedPrompt) {
+      const id = `post-${String(index).padStart(2, '0')}`;
+      const generationId = `gen-${String(index).padStart(2, '0')}`;
+      postsState.push(createPostRow({
+        id,
+        created_at: new Date(Date.UTC(2026, 2, 20) - index * 60_000).toISOString(),
+        generation_id: generationId,
+        source_kind: 'magicbooklet',
+      }));
+      generationModelsState.push({
+        id: generationId,
+        model: 'nano-banana-2',
+        user_id: 'user-1',
+        is_public: true,
+        category: 'image',
+        workflow_settings: { model: 'nano-banana-2' },
+      });
+      for (const [sortOrder, name] of ['image-1', 'image-2'].entries()) {
+        generationInputMediaState.push({
+          id: `${generationId}-${name}`,
+          generation_id: generationId,
+          user_id: 'user-1',
+          media_type: 'image',
+          role: 'reference_image',
+          label: `Private name of ${name}`,
+          storage_path: `generation_inputs/user-1/${generationId}/${name}.png`,
+          source_generation_id: null,
+          sort_order: sortOrder,
+          metadata: {},
+        });
+      }
+      resourceBundlesState.push({
+        id: `bundle-${id}`,
+        post_id: id,
+        title: 'Launch hook recipe',
+        access_mode: 'free',
+        price_usd_cents: 0,
+        preview_text: 'The prompt behind it.',
+        allow_remix: true,
+        resource_items: storedItems,
+        status: 'published',
+      });
+      return id;
+    }
+
+    beforeEach(() => {
+      postsState = [];
+      generationModelsState = [];
+      generationInputMediaState = [];
+      resourceBundlesState = [];
+    });
+
+    it('counts the page a filtered scan serves in one read, once the page is cut', async () => {
+      // 60 creation posts, 48 to a scanned batch: five recipes in the first
+      // batch and ten in the second, so the page of 12 takes two batches.
+      for (let index = 0; index < 60; index += 1) {
+        if (index < 5 || index >= 50) {
+          addCreationRecipe(index);
+        } else {
+          postsState.push(createPostRow({
+            id: `post-${String(index).padStart(2, '0')}`,
+            created_at: new Date(Date.UTC(2026, 2, 20) - index * 60_000).toISOString(),
+            generation_id: `gen-${String(index).padStart(2, '0')}`,
+            source_kind: 'magicbooklet',
+          }));
+        }
+      }
+      const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+      const page = await getShowcaseFeedPage({
+        category: 'all',
+        sort: 'recent',
+        offset: 0,
+        limit: 12,
+        resource: 'prompt',
+      });
+
+      expect(page.items.map((item) => item.id)).toEqual([
+        'post-00', 'post-01', 'post-02', 'post-03', 'post-04',
+        'post-50', 'post-51', 'post-52', 'post-53', 'post-54', 'post-55', 'post-56',
+      ]);
+      for (const item of page.items) {
+        expect(item.asset?.lockedPreview?.itemCounts).toEqual({ prompt: 1, reference_image: 2 });
+        expect(item.asset?.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+      }
+      // Two batches hydrated, one read, for the twelve served.
+      expect(inputReads()).toHaveLength(1);
+      expect(inputReads()[0]?.postIds).toEqual(page.items.map((item) => item.id));
+      expect(inputReads()[0]?.filters).toEqual({ allow_remix: true, status: 'published' });
+      // How many, never which.
+      expect(JSON.stringify(page)).not.toContain('Private name');
+      expect(JSON.stringify(page)).not.toContain('generation_inputs');
+    });
+
+    it('keeps a recipe under Files only for a file it stores, as the marketplace’s Files filter does', async () => {
+      const storesAFile = addCreationRecipe(0, [
+        ...storedPrompt,
+        { id: 'lut-1', type: 'reference_image', title: 'Colour LUT', storagePath: 'user-1/resources/lut.png', contentType: 'image/png' },
+      ]);
+      addCreationRecipe(1);
+      addCreationRecipe(2);
+      const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+      const files = await getShowcaseFeedPage({ category: 'all', sort: 'recent', offset: 0, limit: 12, resource: 'files' });
+      const all = await getShowcaseFeedPage({ category: 'all', sort: 'recent', offset: 0, limit: 12 });
+
+      expect(files.items.map((item) => item.id)).toEqual([storesAFile]);
+      // The cards themselves still name what the unlock adds.
+      expect(all.items.map((item) => [item.id, item.asset?.resourceKinds])).toEqual([
+        ['post-00', ['prompt', 'files', 'remix']],
+        ['post-01', ['prompt', 'files', 'remix']],
+        ['post-02', ['prompt', 'files', 'remix']],
+      ]);
+      expect(all.items[1]?.asset?.itemCounts).toEqual({ prompt: 1, reference_image: 2 });
+    });
+
+    it('counts a For you page once, whether the ranked pool or the fallback brought a post', async () => {
+      addCreationRecipe(0);
+      addCreationRecipe(1);
+      const personalization = await import('@/lib/showcase-feed-personalization');
+      vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+        const ranked = await options.hydratePostIds(['post-00']);
+        const fallback = await options.fallbackItems(2);
+        return {
+          items: [...ranked, ...fallback.filter((item) => !ranked.some((rankedItem) => rankedItem.id === item.id))],
+          feedSessionId: null,
+          algorithmVersion: 'test-v1',
+          pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 2, offset: 0 },
+        };
+      });
+      const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+      const page = await getShowcaseFeedPage({
+        category: 'all',
+        sort: 'for-you',
+        offset: 0,
+        limit: 2,
+        anonymousKeyHash: 'a'.repeat(64),
+        bypassCache: true,
+      });
+
+      expect(page.items.map((item) => [item.id, item.asset?.itemCounts])).toEqual([
+        ['post-00', { prompt: 1, reference_image: 2 }],
+        ['post-01', { prompt: 1, reference_image: 2 }],
+      ]);
+      expect(inputReads()).toHaveLength(1);
+    });
+
+    it('counts the post read by id, and the posts search and the home shelf read by id', async () => {
+      addCreationRecipe(0);
+      addCreationRecipe(1);
+      const { getShowcaseFeedItemById, getShowcaseFeedItemsByPostIds } = await import('@/lib/showcase-feed');
+
+      const item = await getShowcaseFeedItemById({ postId: 'post-00' });
+      const items = await getShowcaseFeedItemsByPostIds({ postIds: ['post-01', 'post-00'] });
+
+      expect(item?.asset?.itemCounts).toEqual({ prompt: 1, reference_image: 2 });
+      expect(items.map((listed) => [listed.id, listed.asset?.itemCounts])).toEqual([
+        ['post-01', { prompt: 1, reference_image: 2 }],
+        ['post-00', { prompt: 1, reference_image: 2 }],
+      ]);
+      expect(inputReads()).toHaveLength(2);
     });
   });
 });

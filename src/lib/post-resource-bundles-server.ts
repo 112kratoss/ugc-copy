@@ -1036,77 +1036,206 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
   };
 }
 
-// The post, its generation and the generation's saved inputs in one request:
-// the three reads loadEligibleGenerationRecipeInputMedia makes one by one.
-const GENERATION_RECIPE_INPUT_SOURCE_SELECT = [
-  'id, user_id, generation_id, category, visibility, archived_at, review_status, source_kind',
-  'generation:generations!posts_generation_id_fkey(id, user_id, is_public, category, workflow_settings, '
-    + `inputs:generation_input_media!generation_input_media_generation_id_fkey(${GENERATION_INPUT_MEDIA_COLUMNS}))`,
-].join(', ');
+// A recipe's post, the post's generation and that generation's saved inputs,
+// embedded under the recipe: one request for a page of recipes, where
+// loadEligibleGenerationRecipeInputMedia reads one post's in three.
+const GENERATION_RECIPE_INPUT_POST_EMBED =
+  'post:posts!post_resource_bundles_post_id_fkey(id, user_id, generation_id, category, visibility, archived_at, review_status, source_kind, '
+  + 'generation:generations!posts_generation_id_fkey(id, user_id, is_public, category, workflow_settings, '
+  + `inputs:generation_input_media!generation_input_media_generation_id_fkey(${GENERATION_INPUT_MEDIA_COLUMNS})))`;
 
-// The count only adds to a teaser, so a slow read (a retried 503, a busy
-// database) is given up on rather than waited for by the whole recipe read.
-const LOCKED_RECIPE_REFERENCE_COUNT_TIMEOUT_MS = 1000;
+// What merging the inputs into a recipe keys on (normalizeStoredReferenceKeyItems),
+// read for a page that does not hold its recipes' rows.
+const GENERATION_RECIPE_STORED_KEY_COLUMNS = 'attachments, resource_items';
 
-type GenerationRecipeInputSourceRow = GenerationRecipeGatePostRow & Pick<GenerationRecipePostRow, 'id' | 'category'> & {
+// A count only adds to a teaser, so a slow read (a retried 503, a busy
+// database) is given up on rather than waited for by the page or the recipe.
+const RECIPE_REFERENCE_COUNT_TIMEOUT_MS = 1000;
+
+type GenerationRecipeInputPostRow = GenerationRecipeGatePostRow & Pick<GenerationRecipePostRow, 'id' | 'category'> & {
   generation: (Pick<GenerationRecipeRow, 'id' | 'user_id' | 'is_public' | 'category' | 'workflow_settings'> & {
     inputs: GenerationInputMediaRow[] | null;
   }) | null;
 };
 
+type GenerationRecipeInputSourceRow = Pick<BundleRow, 'post_id' | 'owner_user_id'>
+  & Partial<Pick<BundleRow, 'attachments' | 'resource_items'>>
+  & { post: GenerationRecipeInputPostRow | null };
+
+/** Who reads a recipe, as the third gate on its creation's inputs asks. */
+type GenerationRecipeInputReader = Parameters<typeof canViewGenerationRecipeInputs>[1];
+
 /**
- * What unlocking a locked creation recipe adds from the creation's saved
- * inputs, counted by type for its teaser (recipe reading review B3), for a
- * recipe whose creator shares them (the stored switch, which the caller
- * checks). It runs the unlock's own gates and merge as they stand for someone
- * who has just bought it -- the post live, the generation still public -- so
- * nothing is counted that the unlock then withholds. One request; a read that
- * fails or runs long counts nothing, and nothing but the counts leaves this
- * function.
+ * Reads the recipes among these posts whose creators share the creation's
+ * inputs (the stored switch), each with its post, generation and saved
+ * inputs, in one request, keyed by the database's own spelling of the post
+ * id. It gates nothing: `resolveGenerationRecipeInputs` applies the unlock's
+ * gates for whoever reads.
  */
-async function countLockedRecipeReferenceItems(params: {
+async function loadGenerationRecipeInputSources(params: {
   adminSupabase: SupabaseClient;
-  postId: string;
-  storedItems: PostResourceItem[];
-}): Promise<PostResourceItemCounts | null> {
-  try {
-    const { data, error } = await params.adminSupabase
-      .from('posts')
-      .select(GENERATION_RECIPE_INPUT_SOURCE_SELECT)
-      .eq('id', params.postId)
-      .abortSignal(AbortSignal.timeout(LOCKED_RECIPE_REFERENCE_COUNT_TIMEOUT_MS))
-      .maybeSingle();
-    if (error) {
-      throw error;
-    }
+  postIds: readonly string[];
+  /**
+   * The list page it reads for: a public one reads published recipes alone,
+   * as no one a list could know of opens the rest, and an owner's own page
+   * every recipe of theirs, drafts too. The single-post detail, which has
+   * settled who may read already, passes none.
+   */
+  page?: { ownerUserId: string | null };
+  /** Also what each recipe stores, for a page that does not hold its rows. */
+  withStoredKeys?: boolean;
+  signal?: AbortSignal;
+}): Promise<Map<string, GenerationRecipeInputSourceRow>> {
+  const postIds = [...new Set(params.postIds)];
+  if (postIds.length === 0) {
+    return new Map();
+  }
 
-    const post = data as GenerationRecipeInputSourceRow | null;
-    const generation = post?.generation ?? null;
-    if (
-      !post
-      || !generation
-      || !isGenerationRecipeInputPost(post, generation.id)
-      || !(await isGenerationRecipeInputGeneration(params.adminSupabase, post, generation))
-      || !canViewGenerationRecipeInputs(generation, { isOwner: false, boughtTombstonedPost: false })
-    ) {
-      return null;
-    }
+  const query = params.adminSupabase
+    .from('post_resource_bundles')
+    .select([
+      'post_id, owner_user_id',
+      ...(params.withStoredKeys ? [GENERATION_RECIPE_STORED_KEY_COLUMNS] : []),
+      GENERATION_RECIPE_INPUT_POST_EMBED,
+    ].join(', '))
+    .in('post_id', postIds)
+    .eq('allow_remix', true);
+  const paged = !params.page
+    ? query
+    : params.page.ownerUserId
+      ? query.eq('owner_user_id', params.page.ownerUserId)
+      : query.eq('status', 'published');
+  const { data, error } = await (params.signal ? paged.abortSignal(params.signal) : paged);
+  if (error) {
+    throw error;
+  }
 
-    const inputMedia = await resolveGenerationRecipeInputMedia({
-      adminSupabase: params.adminSupabase,
-      post,
-      generation,
-      durableInputMedia: mapGenerationInputMediaRowsWithoutUrls(generation.inputs ?? []),
-      urlMode: 'none',
-    });
-    const addedItems = addGenerationRecipeReferenceItems(params.storedItems, inputMedia)
-      .slice(params.storedItems.length);
+  return new Map(((data ?? []) as unknown as GenerationRecipeInputSourceRow[]).map((source) => [source.post_id, source]));
+}
 
-    return addedItems.length > 0 ? getPostResourceItemCounts(addedItems) : null;
-  } catch (error) {
-    logBackendError('post_resource_locked_reference_count_failed', { error: error });
+/**
+ * The creation's saved inputs a recipe's reader gets with it, by the unlock's
+ * three gates, or null where one holds them back: without links, for a teaser
+ * to count or an unlock to list.
+ */
+async function resolveGenerationRecipeInputs(params: {
+  adminSupabase: SupabaseClient;
+  post: GenerationRecipeInputPostRow | null;
+  reader: GenerationRecipeInputReader;
+}): Promise<GenerationInputMediaItem[] | null> {
+  const { post, reader } = params;
+  const generation = post?.generation ?? null;
+  if (
+    !post
+    || !generation
+    // A buyer keeps reading through a tombstone; everyone else needs the post
+    // on a public surface.
+    || !isGenerationRecipeInputPost(post, generation.id, { entitled: reader.boughtTombstonedPost })
+    // Awaited: a pending answer is truthy, and would let any account's
+    // generation through.
+    || !(await isGenerationRecipeInputGeneration(params.adminSupabase, post, generation))
+    || !canViewGenerationRecipeInputs(generation, reader)
+  ) {
     return null;
   }
+
+  return resolveGenerationRecipeInputMedia({
+    adminSupabase: params.adminSupabase,
+    post,
+    generation,
+    durableInputMedia: mapGenerationInputMediaRowsWithoutUrls(generation.inputs ?? []),
+    urlMode: 'none',
+  });
+}
+
+/**
+ * A recipe's stored items with the creation's inputs merged in, as its unlock
+ * lists them, and what the merge added, by type (null for nothing): the one
+ * merge behind an unlock and every teaser's count of it.
+ */
+function mergeGenerationRecipeInputs(
+  storedItems: PostResourceItem[],
+  inputMedia: GenerationInputMediaItem[] | null,
+): { items: PostResourceItem[]; addedCounts: PostResourceItemCounts | null } {
+  const items = inputMedia ? addGenerationRecipeReferenceItems(storedItems, inputMedia) : storedItems;
+  const addedItems = items.slice(storedItems.length);
+  return { items, addedCounts: addedItems.length > 0 ? getPostResourceItemCounts(addedItems) : null };
+}
+
+/**
+ * A recipe's stored items as far as merging the creation's inputs reads them:
+ * by id (a stored `reference-<input id>` copy) and by file path, which only
+ * `resource_items` and a legacy recipe's attachments carry. Its prompt, notes
+ * and workflow make items with neither, so a page does not read that paid
+ * text to count.
+ */
+function normalizeStoredReferenceKeyItems(
+  source: Partial<Pick<BundleRow, 'attachments' | 'resource_items'>>,
+): PostResourceItem[] {
+  return normalizePostResourceItems(source.resource_items, { attachments: normalizeAttachments(source.attachments) });
+}
+
+/**
+ * What unlocking each of these posts' recipes adds from its creation's saved
+ * inputs, counted by type (recipe reading review B3), so a page's teasers --
+ * the reel's and the feed's, the marketplace's and search's, the owner's lists
+ * -- name what the unlock gives, as the post page does. The unlock's own read,
+ * gates and merge: an owner's own page reads every recipe of theirs as their
+ * own unlock does, and any other page reads published recipes as a buyer
+ * would, since a list knows no purchases. One request for the page; a read
+ * that fails or runs long counts nothing, a recipe whose inputs cannot be read
+ * counts nothing on its own, and nothing but the counts leaves this function.
+ */
+export async function countGenerationRecipeReferenceItemsByPostId(params: {
+  adminSupabase: SupabaseClient;
+  postIds: readonly string[];
+  /** The owner whose own page this is; null for a public page. */
+  ownerUserId: string | null;
+  /** What each recipe stores, from a page that holds its rows: not read again. */
+  storedItemsByPostId?: ReadonlyMap<string, PostResourceItem[]>;
+}): Promise<Map<string, PostResourceItemCounts>> {
+  const { adminSupabase, ownerUserId, storedItemsByPostId } = params;
+  if (params.postIds.length === 0) {
+    return new Map();
+  }
+
+  let sources: Map<string, GenerationRecipeInputSourceRow>;
+  try {
+    sources = await loadGenerationRecipeInputSources({
+      adminSupabase,
+      postIds: params.postIds,
+      page: { ownerUserId },
+      withStoredKeys: !storedItemsByPostId,
+      signal: AbortSignal.timeout(RECIPE_REFERENCE_COUNT_TIMEOUT_MS),
+    });
+  } catch (error) {
+    logBackendError('post_resource_list_reference_count_failed', { error: error });
+    return new Map();
+  }
+
+  const counted = await Promise.all([...sources.values()].map(async (source) => {
+    try {
+      const storedItems = storedItemsByPostId
+        ? storedItemsByPostId.get(source.post_id) ?? []
+        : normalizeStoredReferenceKeyItems(source);
+      const { addedCounts } = mergeGenerationRecipeInputs(storedItems, await resolveGenerationRecipeInputs({
+        adminSupabase,
+        post: source.post,
+        reader: {
+          // An owner's page reads only their own recipes; checked here all the same.
+          isOwner: ownerUserId !== null && source.owner_user_id === ownerUserId,
+          boughtTombstonedPost: false,
+        },
+      }));
+      return addedCounts ? [[source.post_id, addedCounts] as const] : [];
+    } catch (error) {
+      // One recipe whose inputs cannot be read leaves the rest of the page counted.
+      logBackendError('post_resource_list_reference_count_failed', { error: error, postId: source.post_id });
+      return [];
+    }
+  }));
+
+  return new Map(counted.flat());
 }
 
 export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
@@ -1489,25 +1618,76 @@ async function loadLinkedPostMap(
   return new Map(linkedPosts.map((row) => [row.id, row]));
 }
 
+/**
+ * What unlocking each of these listed recipes adds from its creation's saved
+ * inputs (B3), for a page that holds their rows: an owner's own page as their
+ * own unlock reads them, any other as a buyer's would. Only a recipe whose
+ * creator shares the inputs (the stored switch) can gain any.
+ */
+function countListedRecipeReferences(
+  rows: readonly BundleRow[],
+  ownerUserId: string | null,
+  storedItemsOf: (row: BundleRow) => PostResourceItem[] = (row) => normalizeResources(row).items ?? [],
+): Promise<Map<string, PostResourceItemCounts>> {
+  const sharing = rows.filter((row) => row.allow_remix === true);
+  return countGenerationRecipeReferenceItemsByPostId({
+    adminSupabase: createServiceClient(),
+    postIds: sharing.map((row) => row.post_id),
+    ownerUserId,
+    storedItemsByPostId: new Map(sharing.map((row) => [row.post_id, storedItemsOf(row)])),
+  });
+}
+
+/** A listed recipe whose teaser counts what its unlock adds (B3): counts and kinds only. */
+function withCreationReferenceCounts(
+  item: MarketplaceResourceListItem,
+  counts: PostResourceItemCounts | undefined,
+): MarketplaceResourceListItem {
+  if (!counts) {
+    return item;
+  }
+
+  const lockedPreview = addPostResourceItemCountsToLockedPreview(item.lockedPreview, counts);
+  return { ...item, resourceKinds: lockedPreview.resourceKinds, lockedPreview };
+}
+
 async function hydrateBundleRows(
   rows: BundleRow[],
   countryCode?: string | null,
   scope: LinkedPostScope = 'public',
   includeMediaPreviews = false,
-  // Presentation scope and post-visibility scope usually agree, but a buyer
-  // reading a delisted or tombstoned unlock needs the wider post lookup while
-  // still getting the public presentation.
-  postScope: LinkedPostScope = scope,
-  allowNsfw = false,
+  options: {
+    // Presentation scope and post-visibility scope usually agree, but a buyer
+    // reading a delisted or tombstoned unlock needs the wider post lookup while
+    // still getting the public presentation.
+    postScope?: LinkedPostScope;
+    allowNsfw?: boolean;
+    // A page that serves every recipe it hydrates (the seller dashboard)
+    // counts what each unlock adds from the creation's inputs (B3) beside its
+    // other reads: an owner's own page as their unlock reads it, a public one
+    // as a buyer's would. A page that filters what it hydrates (the
+    // marketplace, its search) counts only what it serves, after filtering on
+    // what recipes store; the single-post detail counts its own.
+    creationReferencesFor?: { ownerUserId: string | null };
+  } = {},
 ): Promise<MarketplaceResourceListItem[]> {
+  const { postScope = scope, allowNsfw = false, creationReferencesFor } = options;
   if (scope === 'public' && !allowNsfw) {
     const nsfwIds = await loadNsfwPostIds(createServiceClient(), rows.map((row) => row.post_id));
     rows = rows.filter((row) => !nsfwIds.has(row.post_id));
   }
-  const [profilesMap, postMap, contentUpdatedAtMap] = await Promise.all([
+  const storedResourcesByBundleId = new Map(rows.map((row) => [row.id, normalizeResources(row)]));
+  const [profilesMap, postMap, contentUpdatedAtMap, creationReferenceCounts] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
     loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews),
     loadLatestContentRevisionTimes(rows.map((row) => row.id)),
+    creationReferencesFor
+      ? countListedRecipeReferences(
+          rows,
+          creationReferencesFor.ownerUserId,
+          (row) => storedResourcesByBundleId.get(row.id)?.items ?? [],
+        )
+      : new Map<string, PostResourceItemCounts>(),
   ]);
 
   return Promise.all(
@@ -1521,7 +1701,7 @@ async function hydrateBundleRows(
         status: row.status,
         generationId: post?.generationId ?? null,
       });
-      const normalizedResources = { ...normalizeResources(row), allowRemix };
+      const normalizedResources = { ...(storedResourcesByBundleId.get(row.id) ?? normalizeResources(row)), allowRemix };
       const updatedAt = contentUpdatedAtMap.get(row.id) ?? row.updated_at;
       const fullLockedPreview = buildPostResourceBundleLockedPreview(normalizedResources, updatedAt);
       const lockedPreview = scope === 'owner'
@@ -1539,7 +1719,7 @@ async function hydrateBundleRows(
         },
       });
 
-      return {
+      return withCreationReferenceCounts({
         id: row.id,
         postId: row.post_id,
         legacyAssetId: row.legacy_asset_id,
@@ -1561,7 +1741,7 @@ async function hydrateBundleRows(
         priceQuote: await buildPriceQuote(row.price_usd_cents, countryCode),
         remixCapability: remix.capability,
         remixTarget: remix.target,
-      };
+      }, creationReferenceCounts.get(row.post_id));
     })
   );
 }
@@ -1971,6 +2151,7 @@ async function getMarketplaceResourceListFallback(options: {
   };
 
   const matchingItems: MarketplaceResourceListItem[] = [];
+  const rowsByBundleId = new Map<string, BundleRow>();
   const targetMatchCount = offset + limit + 1;
   const batchSize = Math.min(
     MARKETPLACE_FALLBACK_MAX_BATCH_SIZE,
@@ -2029,7 +2210,11 @@ async function getMarketplaceResourceListFallback(options: {
       break;
     }
 
+    // Filtered on what each recipe stores, as the RPC's SQL filters: what an
+    // unlock adds from the creation's inputs (B3) is a best-effort read,
+    // counted below for the page served alone.
     const hydratedItems = await hydrateBundleRows(rows, countryCode, 'public', true);
+    for (const row of rows) rowsByBundleId.set(row.id, row);
     matchingItems.push(...hydratedItems.filter((item) => {
       if (!item.post) {
         return false;
@@ -2056,9 +2241,16 @@ async function getMarketplaceResourceListFallback(options: {
 
   const pageItems = matchingItems.slice(offset, offset + limit);
   const hasMore = matchingItems.length > offset + limit;
+  const referenceCounts = await countListedRecipeReferences(
+    pageItems.flatMap((item) => {
+      const row = rowsByBundleId.get(item.id);
+      return row ? [row] : [];
+    }),
+    null,
+  );
 
   return {
-    items: pageItems,
+    items: pageItems.map((item) => withCreationReferenceCounts(item, referenceCounts.get(item.postId))),
     pageInfo: {
       hasMore,
       nextOffset: hasMore ? offset + limit : null,
@@ -2135,6 +2327,9 @@ async function getMarketplaceResourceListBase(
 
   const rows = ((data ?? []) as BundleRow[]).slice(0, limit + 1);
   const hasMore = rows.length > limit;
+  // Checked below on what each recipe stores, as the RPC's SQL filtered it:
+  // what an unlock adds from the creation's inputs (B3) is a best-effort read,
+  // counted after for the recipes the page serves alone.
   const hydratedItems = await hydrateBundleRows(rows, null, 'public', true);
   // Walked by raw row, not by hydrated item: hydration drops an NSFW bundle
   // before this loop, and a dropped row still occupies its raw position. Left
@@ -2142,6 +2337,7 @@ async function getMarketplaceResourceListBase(
   // page re-read (and repeated) the rows after it.
   const hydratedById = new Map(hydratedItems.map((item) => [item.id, item]));
   const pageItems: MarketplaceResourceListItem[] = [];
+  const pageRows: BundleRow[] = [];
   let consumedRowCount = 0;
 
   for (const row of rows) {
@@ -2173,11 +2369,14 @@ async function getMarketplaceResourceListBase(
     consumedRowCount += 1;
     if (isEligible) {
       pageItems.push(item);
+      pageRows.push(row);
     }
   }
+  // As a buyer's unlock would add them.
+  const referenceCounts = await countListedRecipeReferences(pageRows, null);
 
   return {
-    items: pageItems,
+    items: pageItems.map((item) => withCreationReferenceCounts(item, referenceCounts.get(item.postId))),
     pageInfo: {
       hasMore,
       nextOffset: hasMore ? offset + consumedRowCount : null,
@@ -2446,9 +2645,13 @@ export async function getPostResourceBundleDetailByPostId(
     return null;
   }
 
+  // Every check below goes by the post id as the database spells it. Postgres
+  // found the recipe by the caller's spelling whatever its case, but answers
+  // with its own, so an NSFW post looked up by an id in capitals read as safe.
+  const recipePostId = row.post_id;
   const nsfwGated = row.owner_user_id !== viewerUserId
-    && (isNsfw ?? (await loadNsfwPostIds(adminSupabase, [postId])).has(postId));
-  if (nsfwGated && !entitledPurchase && !await hasNsfwReveal(adminSupabase, postId, viewerUserId)) return null;
+    && (isNsfw ?? (await loadNsfwPostIds(adminSupabase, [recipePostId])).has(recipePostId));
+  if (nsfwGated && !entitledPurchase && !await hasNsfwReveal(adminSupabase, recipePostId, viewerUserId)) return null;
 
   // Entitlement is resolved before the publish gate, because a delisted or
   // retired bundle must still open for the people who bought it -- that is the
@@ -2473,7 +2676,7 @@ export async function getPostResourceBundleDetailByPostId(
 
   // Whatever show_mature or the reveal say, a buyer reads what they bought;
   // anyone else still needs a reveal.
-  if (nsfwGated && entitledPurchase && !viewerHasPurchased && !await hasNsfwReveal(adminSupabase, postId, viewerUserId)) {
+  if (nsfwGated && entitledPurchase && !viewerHasPurchased && !await hasNsfwReveal(adminSupabase, recipePostId, viewerUserId)) {
     return null;
   }
 
@@ -2500,28 +2703,43 @@ export async function getPostResourceBundleDetailByPostId(
   // inputs go to the people who unlock the recipe. Whether the recipe comes
   // with its Remix is `hydrated.allowRemix` (resolveRecipeAllowRemix).
   const normalizedResources = normalizeResources(row);
-  const [[hydrated], lockedReferenceCounts] = await Promise.all([
-    hydrateBundleRows(
-      [row],
-      countryCode,
-      viewerIsOwner ? 'owner' : 'public',
-      false,
+  // A recipe the creator shares the creation's inputs with (the stored switch)
+  // reads them beside the reads above, so neither adds a wait to the post page
+  // or the app's Details: for the unlock to merge them in, or for someone
+  // without it to be told how many come with it (B3). The teaser gives up on a
+  // slow read; the unlock waits for its references. The kept inputs come
+  // embedded in that one request, so a failed read of them fails it, and the
+  // recipe goes out without references (below): it never reads as "nothing
+  // kept", which would list the uploads the run's settings name (#584).
+  const readsCreationInputs = row.allow_remix === true && (viewerCanAccess || countLockedReferences);
+  const creationInputsFailure = viewerCanAccess
+    ? 'post_resource_recipe_reference_load_failed'
+    : 'post_resource_locked_reference_count_failed';
+  const [[hydrated], creationInputSource] = await Promise.all([
+    hydrateBundleRows([row], countryCode, viewerIsOwner ? 'owner' : 'public', false, {
       postScope,
-      true, // The owner, reveal or purchase check above already authorized this single post.
-    ),
-    // Someone who has not unlocked a recipe the creator shares the creation's
-    // inputs with is told how many come with it (B3), read beside the reads
-    // above so the count adds no wait to the post page or the app's Details.
-    countLockedReferences && !viewerCanAccess && row.allow_remix === true
-      ? countLockedRecipeReferenceItems({ adminSupabase, postId, storedItems: normalizedResources.items ?? [] })
+      allowNsfw: true, // The owner, reveal or purchase check above already authorized this single post.
+    }),
+    readsCreationInputs
+      ? loadGenerationRecipeInputSources({
+          adminSupabase,
+          postIds: [recipePostId],
+          signal: viewerCanAccess ? undefined : AbortSignal.timeout(RECIPE_REFERENCE_COUNT_TIMEOUT_MS),
+        }).then(
+          (sources) => sources.get(recipePostId) ?? null,
+          (error: unknown) => {
+            logBackendError(creationInputsFailure, { error: error });
+            return null;
+          },
+        )
       : null,
   ]);
   if (!hydrated || (!viewerIsOwner && !hydrated.post)) {
     return null;
   }
-  // What the creation's inputs add to the recipe: counted for a viewer
-  // without access, merged in below for one with it.
-  let referenceCounts = lockedReferenceCounts;
+  // What the creation's inputs add to the recipe: counted below for every
+  // reader, and merged into the items for one with access.
+  let referenceCounts: PostResourceItemCounts | null = null;
 
   // What the buyer actually paid for. Later edits reach them as improvements,
   // but the revision pinned at checkout stays available so a creator cannot
@@ -2551,37 +2769,28 @@ export async function getPostResourceBundleDetailByPostId(
   // deliberately not consulted here — it governs restoring these files into a
   // viewer's own remix (/api/remix-source), not seeing them inside an unlock
   // they are entitled to. Failing to load references must degrade to the
-  // bundle without them, never take the whole unlock down.
-  if (viewerCanAccess && row.allow_remix === true && hydrated.post?.generationId) {
+  // bundle without them, never take the whole unlock down. Someone without
+  // the recipe is told how many come with it, by the same read and gates, as
+  // they stand for a buyer: the post live, the generation still public.
+  if (creationInputSource) {
     try {
-      const eligible = await loadEligibleGenerationRecipeInputMedia({
+      const merged = mergeGenerationRecipeInputs(normalizedResources.items ?? [], await resolveGenerationRecipeInputs({
         adminSupabase,
-        postId,
-        generationId: hydrated.post.generationId,
-        urlMode: 'none',
-        // A buyer keeps reading through a tombstone; everyone else still needs
-        // the post to be on a public surface.
-        entitled: viewerHasPurchased && hydrated.post.tombstoned === true,
-        // A failed read degrades to the bundle without references, below,
-        // rather than listing the uploads the run's settings name.
-        throwOnError: true,
-      });
-      const canViewReferences = Boolean(
-        eligible
-        && canViewGenerationRecipeInputs(eligible.generation, {
+        post: creationInputSource.post,
+        // Without access this reads as no owner and no buyer: a would-be buyer.
+        reader: {
           isOwner: viewerIsOwner,
-          boughtTombstonedPost: viewerHasPurchased && hydrated.post.tombstoned === true,
-        }),
-      );
-      if (eligible && canViewReferences) {
-        const storedItems = normalizedResources.items ?? [];
-        normalizedResources.items = addGenerationRecipeReferenceItems(storedItems, eligible.inputMedia);
-        // Counted too, so the recipe names the same kinds once it is unlocked
-        // as it did before (the app's recipe page shows them either way).
-        referenceCounts = getPostResourceItemCounts(normalizedResources.items.slice(storedItems.length));
+          boughtTombstonedPost: viewerHasPurchased && hydrated.post?.tombstoned === true,
+        },
+      }));
+      // Counted for a viewer with access too, so the recipe names the same
+      // kinds once it is unlocked (the app's recipe page shows them either way).
+      referenceCounts = merged.addedCounts;
+      if (viewerCanAccess) {
+        normalizedResources.items = merged.items;
       }
     } catch (error) {
-      logBackendError('post_resource_recipe_reference_load_failed', { error: error });
+      logBackendError(creationInputsFailure, { error: error });
     }
   }
   const lockedPreview = referenceCounts
@@ -2688,7 +2897,9 @@ export async function getSellerPostResourceBundleDashboard(
   }
 
   const rows = (data ?? []) as unknown as BundleRow[];
-  const hydratedBundles = await hydrateBundleRows(rows, countryCode, 'owner');
+  const hydratedBundles = await hydrateBundleRows(rows, countryCode, 'owner', false, {
+    creationReferencesFor: { ownerUserId: userId },
+  });
   const bundles = hydratedBundles.map((bundle, index) => ({
     ...bundle,
     status: rows[index]?.status ?? 'draft',
