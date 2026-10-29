@@ -1070,6 +1070,7 @@ export function replaceMediaDraftMedia(media: MediaDraft, upload: UploadedMediaI
 export function createDefaultCreationDraft(tool: 'image'): ImageCreationDraft;
 export function createDefaultCreationDraft(tool: 'video'): VideoCreationDraft;
 export function createDefaultCreationDraft(tool: 'motion'): MotionCreationDraft;
+export function createDefaultCreationDraft(tool: CreatorToolId): CreationDraft;
 export function createDefaultCreationDraft(tool: CreatorToolId): CreationDraft {
   if (tool === 'image') {
     return {

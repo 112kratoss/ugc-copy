@@ -40,6 +40,7 @@ import { reportGenerationOutput } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { countDraftMedia, heldDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
+import { APP_CREATOR_OPENINGS } from '@/lib/app-creator-opening/app-creator-opening';
 import { creatorParameterSummary } from '@/lib/creator-parameter-summary';
 import { recordCreatorSession } from '@/lib/creator-session-diagnostics';
 import { CREATION_DRAFT_FORMAT, clearPersistedCreationDrafts, loadOrdinaryCreationDrafts, loadPersistedCreationDrafts, ordinaryDraftScope, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
@@ -84,6 +85,7 @@ import {
   catalogStartRequest,
   catalogSubjectSlot,
   catalogVideoRunReferenceMode,
+  createOpeningCreationDraft,
   getCatalogDraftSettings,
   hasCreatorEditedPromptDuringRemix,
   hydrateCatalogCreationDraftFromRemixSource,
@@ -989,18 +991,26 @@ function IdentityCreationScreen({
     const starter = guidedCreationStarter(draft.tool, { guided: guidedScreen, initialTool });
     return starter ? { ...draft, model: starter.modelId } : draft;
   };
+  // Each tool opens on the default the app was built with, drawn from the first frame: the catalog
+  // takes half a second or more to arrive (lib/app-creator-opening).
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => withGuidedStart({
-    ...createDefaultCreationDraft('image'),
+    ...createOpeningCreationDraft('image'),
     prompt: initialTool === 'image' ? initialPrompt ?? '' : '',
   }));
   const [videoDraft, setVideoDraft] = useState<VideoCreationDraft>(() => withGuidedStart({
-    ...createDefaultCreationDraft('video'),
+    ...createOpeningCreationDraft('video'),
     prompt: initialTool === 'video' ? initialPrompt ?? '' : '',
   }));
   const [motionDraft, setMotionDraft] = useState<MotionCreationDraft>(() => withGuidedStart({
-    ...createDefaultCreationDraft('motion'),
+    ...createOpeningCreationDraft('motion'),
     prompt: initialTool === 'motion' ? initialPrompt ?? '' : '',
   }));
+  // The opening a draft is on, whose name and settings the chips draw until the catalog describes its
+  // model. A remix waits for its source instead, which names a model of its own.
+  const openingFor = (draft: CreationDraft) => {
+    const opening = APP_CREATOR_OPENINGS[draft.tool];
+    return !remixSource && draft.model === opening.modelId ? opening : null;
+  };
   const [isUploading, setIsUploading] = useState(false);
   // The running upload's tile, progress and Cancel (uploadPicks).
   const [upload, setUpload] = useState<UploadProgress | null>(null);
@@ -2877,7 +2887,7 @@ function IdentityCreationScreen({
       : null;
     const activeGenerationStatus = generationTool === activeTool ? status : null;
     const activeOutputUrl = generationTool === activeTool ? outputUrl : null;
-    const parameterSummary = creatorParameterSummary(activeTool === 'video' ? videoDraft : motionDraft, selectedCreatorModel);
+    const parameterSummary = creatorParameterSummary(activeTool === 'video' ? videoDraft : motionDraft, selectedCreatorModel, openingFor(currentDraft));
     const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
@@ -2919,7 +2929,7 @@ function IdentityCreationScreen({
         >
           <CompactCreatorHeader
             activeTool={activeTool}
-            modelName={selectedCreatorModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model) ? 'Choose another model' : 'Loading model settings…')}
+            modelName={selectedCreatorModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model) ? 'Choose another model' : openingFor(currentDraft)?.displayName ?? 'Loading model settings…')}
             modelDisabled={!catalogQuery.current && !catalog}
             onChangeTool={changeTool}
             onOpenModels={() => setModelPickerVisible(true)}
@@ -3202,7 +3212,7 @@ function IdentityCreationScreen({
         >
           <CompactCreatorHeader
             activeTool={activeTool}
-            modelName={selectedImageModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model) ? 'Choose another model' : 'Loading model settings…')}
+            modelName={selectedImageModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model) ? 'Choose another model' : openingFor(currentDraft)?.displayName ?? 'Loading model settings…')}
             modelDisabled={!catalogQuery.current && !catalog}
             onChangeTool={changeTool}
             onOpenModels={() => setModelPickerVisible(true)}
@@ -4850,7 +4860,8 @@ function VideoCreatorComposer({
           </View>
         ) : null}
 
-        {supportsFrames || supportsReusable || subjectSlot ? null : (
+        {/* Said only of a model the catalog has described: before its details arrive, every model reads as taking nothing. */}
+        {!model || supportsFrames || supportsReusable || subjectSlot ? null : (
           <Text style={{ color: theme.colors.muted, fontSize: 11 }}>This model creates from text without reference media.</Text>
         )}
 

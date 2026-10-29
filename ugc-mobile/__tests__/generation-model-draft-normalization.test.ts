@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
-import { normalizeCreationDraftForCatalog } from '../lib/generation-model-draft';
+import { createOpeningCreationDraft, normalizeCreationDraftForCatalog } from '../lib/generation-model-draft';
 import { GUIDED_CREATION_STARTERS, guidedCreationStarter } from '../lib/guided-creation-starter';
 import { createDefaultCreationDraft, type CreationDraft, type MediaDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
 import { createRemixRestoreCatalog, seedance15ProModel, seedance2MiniAtRelease, seedance2MiniModel } from './fixtures/generation-model-catalog';
@@ -89,6 +89,48 @@ describe('normalizeCreationDraftForCatalog', () => {
       expect(twice.draft).toEqual(once);
       expect(twice.warning).toBeNull();
     }
+  });
+});
+
+/**
+ * The app's creators open on APP_CREATOR_OPENINGS from the first frame, before the catalog arrives;
+ * src/__tests__/app-creator-opening.test.ts holds it to the code catalog's defaults.
+ */
+describe('the opening draft', () => {
+  // Each tool's default at its published settings, as production publishes them (kie-catalog-inputs-20261029).
+  const published: GenerationModelCatalog = {
+    ...createRemixRestoreCatalog(),
+    revision: 'kie-catalog-inputs-20261029',
+    defaults: { image: 'nano-banana-2', video: 'seedance-2-mini', motion: 'kling-2.6' },
+    models: [...createRemixRestoreCatalog().models, seedance2MiniAtRelease],
+  };
+
+  it('writes the opening\'s settings where the draft keeps them', () => {
+    expect(createOpeningCreationDraft('video')).toMatchObject({
+      model: 'seedance-2-mini', resolution: '480p', aspectRatio: '16:9', duration: 5, sound: false, referenceMode: 'frames', catalogRevision: null,
+    });
+    // A motion run's resolution is the draft's `mode`.
+    expect(createOpeningCreationDraft('motion')).toMatchObject({ model: 'kling-2.6', mode: '720p', characterOrientation: 'video', duration: 10 });
+    expect(createOpeningCreationDraft('image')).toMatchObject({ model: 'nano-banana-2', resolution: '1K', aspectRatio: 'auto', outputFormat: 'jpg' });
+  });
+
+  it.each(['image', 'video', 'motion'] as const)('settles on the %s default with nothing changed but its revision', (tool) => {
+    const opening = createOpeningCreationDraft(tool);
+    const { draft, warning } = normalizeCreationDraftForCatalog(opening, published, { modelSelectionTouched: false });
+
+    expect(warning).toBeNull();
+    expect(draft.catalogRevision).toBe('kie-catalog-inputs-20261029');
+    expect({ ...draft, catalogRevision: null, catalogSettings: {} }).toEqual(opening);
+  });
+
+  it('keeps words typed before the catalog arrives on the default, where the stand-in kept Kling 3.0', () => {
+    const typed = { ...createOpeningCreationDraft('video'), prompt: 'A lighthouse in a storm' };
+
+    expect(normalizeCreationDraftForCatalog(typed, published, { modelSelectionTouched: false }).draft).toMatchObject({
+      model: 'seedance-2-mini', prompt: 'A lighthouse in a storm', resolution: '480p', catalogRevision: 'kie-catalog-inputs-20261029',
+    });
+    const stoodIn = { ...createDefaultCreationDraft('video'), prompt: 'A lighthouse in a storm' };
+    expect(normalizeCreationDraftForCatalog(stoodIn, published, { modelSelectionTouched: false }).draft.model).toBe('kling-3.0-video');
   });
 });
 

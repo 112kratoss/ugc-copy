@@ -1137,6 +1137,107 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
   });
 
+  /**
+   * The app has no server render: until the catalog arrives (half a second on the Pixel 9a against
+   * production on 2026-10-30, longer on a slow network) a creator draws the draft it opens on. That was a
+   * stand-in, Kling 3.0 at 720p and 9:16 under "Loading model settings…", then Kling 3.0 Cinematic for a
+   * frame, then the default; image opened at 4:5 before `auto`. The opening is now the default itself.
+   */
+  describe('before the catalog arrives', () => {
+    const quotedModels = () => authState.api.quoteGenerationModel.mock.calls.map(([request]) => (request as { modelId: string }).modelId);
+    const OPENINGS = [
+      { tool: 'video', model: 'Seedance 2 Mini', settings: '480P · 16:9 · 5s · Sound off' },
+      { tool: 'image', model: 'Nano Banana 2.0', settings: '1K · AUTO · JPG' },
+      { tool: 'motion', model: 'Kling 2.6', settings: '720P · Add motion' },
+    ] as const;
+    /** Each tool's default as production publishes it (release kie-catalog-inputs-20261029), and Kling 3.0's two. */
+    const publishedCatalog = (): GenerationModelCatalog => ({
+      ...createTestGenerationModelCatalog(),
+      revision: 'kie-catalog-inputs-20261029',
+      defaults: { image: 'nano-banana-2', video: 'seedance-2-mini', motion: 'kling-2.6' },
+      models: [
+        ...createRemixRestoreCatalog().models.filter((model) => model.id === 'nano-banana-2' || model.id === 'kling-3.0-video'),
+        seedance2MiniAtRelease,
+        ...productionMotion.models.map((model) => parseModelCatalogDetail(model)),
+      ],
+    });
+    /** What the model chip and the settings chip say. */
+    const shown = (tree: renderer.ReactTestRenderer) => ({
+      model: findPressableByLabelPrefix(tree.root, 'Selected model ').props.accessibilityLabel,
+      settings: findPressableByLabelPrefix(tree.root, 'Generation parameters. ').props.accessibilityLabel,
+    });
+    const openWithoutCatalog = (tool: (typeof OPENINGS)[number]['tool']) => {
+      catalogState.catalog = null;
+      catalogState.isLoading = true;
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool={tool} insideTab />);
+      });
+      return tree;
+    };
+    const catalogArrives = async (tree: renderer.ReactTestRenderer, tool: (typeof OPENINGS)[number]['tool']) => {
+      catalogState.catalog = publishedCatalog();
+      catalogState.isLoading = false;
+      renderer.act(() => {
+        tree.update(<MediaCreationScreen initialTool={tool} insideTab />);
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+    };
+
+    it.each(OPENINGS)('names the $tool default and draws its published settings', ({ tool, model, settings }) => {
+      const tree = openWithoutCatalog(tool);
+
+      expect(shown(tree)).toEqual({
+        model: `Selected model ${model}. Change model`,
+        settings: `Generation parameters. ${settings}`,
+      });
+      // Only the defaults' details are asked for: a stand-in's came with them and was drawn for a frame.
+      expect([...catalogHookCalls.selectedIds].sort()).toEqual(['kling-2.6', 'nano-banana-2', 'seedance-2-mini']);
+    });
+
+    it.each(OPENINGS)('changes nothing on the $tool chips when the catalog arrives', async ({ tool }) => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      const tree = openWithoutCatalog(tool);
+      const before = shown(tree);
+
+      await catalogArrives(tree, tool);
+
+      expect(shown(tree)).toEqual(before);
+      if (tool !== 'motion') expect(quotedModels()).toEqual([publishedCatalog().defaults[tool]]);
+    });
+
+    it('says what the video inputs take only once the catalog describes the model', async () => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      const textOnly = 'This model creates from text without reference media.';
+      const tree = openWithoutCatalog('video');
+
+      // Seedance 2 Mini takes frames and references: before its details, the card claimed it took neither.
+      expect(collectText(tree.root)).not.toContain(textOnly);
+      await catalogArrives(tree, 'video');
+      expect(collectText(tree.root)).not.toContain(textOnly);
+      expect(collectText(tree.root)).toContain('Start frame');
+    });
+
+    it('keeps words typed before the catalog arrives on the default', async () => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      const tree = openWithoutCatalog('video');
+      renderer.act(() => {
+        tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('A lighthouse in a storm');
+      });
+
+      await catalogArrives(tree, 'video');
+
+      // The draft was started on the stand-in, so it kept Kling 3.0 (70 credits) for good.
+      expect(quotedModels()).toEqual(['seedance-2-mini']);
+      expect(shown(tree).model).toBe('Selected model Seedance 2 Mini. Change model');
+    });
+  });
+
   it('renders the compact image composer with model selection outside parameters', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {

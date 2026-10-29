@@ -16,7 +16,9 @@ import {
   isUsableCatalogModel,
   normalizeCatalogSettings,
 } from './generation-model-catalog';
+import { APP_CREATOR_OPENINGS } from './app-creator-opening/app-creator-opening';
 import {
+  createDefaultCreationDraft,
   extractPromptHandles,
   hydrateCreationDraftFromRemixSource,
   REMIX_RESTORE_WARNING_MESSAGE,
@@ -523,6 +525,27 @@ export function applyCatalogModelInitialDefaults(
     model: model.id,
     catalogSettings: {},
   } as CreationDraft, model, catalogRevision);
+}
+
+/**
+ * The draft a creator opens on until its catalog arrives: the app's opening for the tool
+ * (APP_CREATOR_OPENINGS), the default model at its published settings, written as
+ * applyCatalogModelInitialDefaults writes them. It has no revision, so the catalog still reads it
+ * as new and settles it on whatever default it names; while that is the opening's, nothing on
+ * screen changes, and words typed before then keep the default.
+ */
+export function createOpeningCreationDraft(tool: 'image'): ImageCreationDraft;
+export function createOpeningCreationDraft(tool: 'video'): VideoCreationDraft;
+export function createOpeningCreationDraft(tool: 'motion'): MotionCreationDraft;
+export function createOpeningCreationDraft(tool: CreationDraft['tool']): CreationDraft;
+export function createOpeningCreationDraft(tool: CreationDraft['tool']): CreationDraft {
+  const draft = createDefaultCreationDraft(tool);
+  const opening = APP_CREATOR_OPENINGS[tool];
+  const settings = Object.fromEntries(Object.entries(opening.settings).map(([key, value]) => [
+    draftKey(draft, key),
+    key === 'duration' ? Number(value) : value,
+  ]));
+  return { ...draft, ...settings, model: opening.modelId } as CreationDraft;
 }
 
 function referenceSummary(draft: CreationDraft) {

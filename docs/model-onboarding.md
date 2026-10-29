@@ -251,11 +251,17 @@ waits for a clip). So a changed default reaches the web's first paint with the r
 Each web creator's first pick then waits for the revision the network confirms; on a later revision the video
 creator moves to the new default with its published control defaults (`CreateVideoClient.tsx`'s first pick),
 and the image and motion creators to the new model, resetting only a setting it does not offer. The app
-draws a stand-in until its catalog arrives (`normalizeCreationDraftForCatalog`, which waits for the default's
-details). A saved draft that holds nothing and is still at its model's published defaults follows a
-changed default too, the first time it is opened after the change (the app for every tool, the web video
-creator; the web image and motion creators keep a saved draft's model). A draft with words, files or a changed
-setting keeps its model. So a changed default reaches existing accounts' untouched drafts, at its own price.
+has no server render: its creators draw the default it was built with, by name and at its published settings,
+until their catalog arrives (`APP_CREATOR_OPENINGS` in `ugc-mobile/lib/app-creator-opening/`), and the catalog
+then settles a new draft on the default it names (`normalizeCreationDraftForCatalog`, which waits for the
+default's details). `src/__tests__/app-creator-opening.test.ts` holds that table to the code catalog, so a
+changed default, a new name for it or a new published setting means changing the table in the same piece of
+work and shipping it to phones with an app OTA; until then an installed app opens on the old default and
+moves to the new one when its catalog arrives. A saved draft that holds nothing and is still at its model's
+published defaults follows a changed default too, the first time it is opened after the change (the app for
+every tool, the web video creator; the web image and motion creators keep a saved draft's model). A draft with
+words, files or a changed setting keeps its model. So a changed default reaches existing accounts' untouched
+drafts, at its own price.
 
 ## Background
 
