@@ -557,6 +557,22 @@ describe('the locked card', () => {
     expect(values).not.toContain('A teaser');
   });
 
+  // Recipe reading review B3 (2026-10-29): the server counts a creation's saved
+  // inputs into the teaser of a recipe whose creator shares them, where it
+  // said "1 prompt" and the unlock then gave a prompt and four references.
+  it("counts the creation's references the recipe comes with, after its prompt", () => {
+    queryState.current = lockedPaid({
+      allowRemix: true,
+      resourceKinds: ['prompt', 'files', 'remix'],
+      lockedPreview: { updatedAt, itemCounts: { prompt: 1, reference_image: 3, reference_video: 1 } },
+    });
+    const tree = render(page());
+
+    const values = textValues(tree);
+    expect(values).toContain('Includes 1 prompt, 3 reference images, 1 reference video');
+    expect(values).toEqual(expect.arrayContaining(['Prompt', 'Files', 'Remix included']));
+  });
+
   // A free unlock stopped counting as a sale (decision 6, 2026-10-17): a free
   // recipe's "opened" reads its free unlocks, not the sales it made while paid.
   it('counts a free recipe as opened, and falls back to the preview text without a summary', () => {

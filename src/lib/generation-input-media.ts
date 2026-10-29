@@ -77,7 +77,7 @@ export interface PersistGenerationInputCandidate {
   metadata?: Record<string, unknown> | null;
 }
 
-interface GenerationInputMediaRow {
+export interface GenerationInputMediaRow {
   id: string;
   generation_id: string;
   user_id: string;
@@ -595,6 +595,21 @@ function mapInputMediaRow(
     sortOrder: row.sort_order ?? 0,
     metadata: row.metadata ?? {},
   };
+}
+
+/**
+ * Saved input rows read some other way than `loadGenerationInputMediaMap`
+ * (embedded in a post's read), as the items it makes of them without links:
+ * each file trusted by the same rule, in the same order.
+ */
+export function mapGenerationInputMediaRowsWithoutUrls(
+  rows: readonly GenerationInputMediaRow[],
+): GenerationInputMediaItem[] {
+  // The read's `order('sort_order')`, which puts a row with none last.
+  const sortOrder = (row: GenerationInputMediaRow) => row.sort_order ?? Number.MAX_SAFE_INTEGER;
+  return [...rows]
+    .sort((first, second) => sortOrder(first) - sortOrder(second))
+    .map((row) => mapInputMediaRow(row, null, prepareGenerationInputMediaRow(row, false).trustedStoragePath));
 }
 
 export async function loadGenerationInputMediaMap(params: {

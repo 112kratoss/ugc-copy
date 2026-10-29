@@ -980,7 +980,7 @@ function getPostResourceKindForItemType(type: PostResourceItemType): PostResourc
   }
 }
 
-function getPostResourceItemCounts(items: PostResourceItem[]): PostResourceItemCounts {
+export function getPostResourceItemCounts(items: PostResourceItem[]): PostResourceItemCounts {
   return items.reduce<PostResourceItemCounts>((counts, item) => ({
     ...counts,
     [item.type]: (counts[item.type] ?? 0) + 1,
@@ -1470,6 +1470,31 @@ export function sanitizePostResourceBundleLockedPreview(
     hasWorkflow: preview.hasWorkflow,
     hasRemix: preview.hasRemix,
     updatedAt: preview.updatedAt,
+  };
+}
+
+/**
+ * A locked recipe's preview with what its unlock adds at read time counted in:
+ * a creation's saved inputs, which the creator's stored remix switch hands to
+ * whoever unlocks the recipe (recipe reading review B3). Counts and the kinds
+ * they make only: which items they are stays behind the access check.
+ */
+export function addPostResourceItemCountsToLockedPreview(
+  preview: PostResourceBundleLockedPreview,
+  counts: PostResourceItemCounts,
+): PostResourceBundleLockedPreview {
+  const itemCounts: PostResourceItemCounts = { ...preview.itemCounts };
+  const kinds = new Set(preview.resourceKinds);
+  for (const [type, count] of Object.entries(counts) as Array<[PostResourceItemType, number | undefined]>) {
+    if (!count || count <= 0) continue;
+    itemCounts[type] = (itemCounts[type] ?? 0) + count;
+    kinds.add(getPostResourceKindForItemType(type));
+  }
+
+  return {
+    ...preview,
+    itemCounts,
+    resourceKinds: POST_RESOURCE_KIND_ORDER.filter((kind) => kinds.has(kind)),
   };
 }
 

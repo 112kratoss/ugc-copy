@@ -63,6 +63,12 @@ let profileReadError: unknown;
 // The content revisions the hydrate path reads its `updatedAt` from.
 let revisionRows: Array<{ bundle_id: string; revision_number: number; created_at: string }>;
 let revisionReadError: unknown;
+// Every table the service asked, in order, and what each posts read selected:
+// what a read costs is part of what these tests pin.
+let tableReads: string[];
+let postSelects: string[];
+// The locked teaser's one read of the post with its generation and inputs.
+let embeddedSourceReadError: unknown;
 
 // Calls through, so a test can see whether the bundle read asked posts itself.
 vi.mock('@/lib/nsfw-content-server', async (importOriginal) => {
@@ -104,6 +110,7 @@ vi.mock('@/lib/server-helpers', () => ({
       })),
     },
     from(table: string) {
+      tableReads.push(table);
       if (table === 'post_resource_bundles') {
         let checksPresence = false;
         let readsOwnerBundles = false;
@@ -207,6 +214,7 @@ vi.mock('@/lib/server-helpers', () => ({
 
       if (table === 'posts') {
         let eqId: string | null = null;
+        let selectedColumns = '';
         const equalityFilters: Record<string, unknown> = {};
         const nullFilters: string[] = [];
 
@@ -219,7 +227,9 @@ vi.mock('@/lib/server-helpers', () => ({
         };
 
         const query = {
-          select() {
+          select(columns?: string) {
+            selectedColumns = columns ?? '';
+            postSelects.push(selectedColumns);
             return query;
           },
           in() {
@@ -243,10 +253,20 @@ vi.mock('@/lib/server-helpers', () => ({
             return query;
           },
           async maybeSingle() {
-            return {
-              data: eqId === 'post-1' && matchesFilters() ? postRow : null,
-              error: null,
-            };
+            const row = eqId === 'post-1' && matchesFilters() ? postRow : null;
+            // PostgREST nests a select's embedded resources in the row: the
+            // post's generation (none once unlinked), and its saved inputs.
+            if (selectedColumns.includes('generation:generations')) {
+              if (embeddedSourceReadError) return { data: null, error: embeddedSourceReadError };
+              const generation = row && generationRow && row.generation_id === generationRow.id
+                ? {
+                    ...generationRow,
+                    inputs: generationInputRows.filter((input) => input.generation_id === generationRow?.id),
+                  }
+                : null;
+              return { data: row ? { ...row, generation } : null, error: null };
+            }
+            return { data: row, error: null };
           },
           then(resolve: (value: { data: unknown[]; error: null }) => void) {
             resolve({
@@ -485,6 +505,9 @@ describe('post resource bundle server access', () => {
     profileReadError = null;
     revisionRows = [];
     revisionReadError = null;
+    tableReads = [];
+    postSelects = [];
+    embeddedSourceReadError = null;
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -873,6 +896,220 @@ describe('post resource bundle server access', () => {
     expect(references.map((item) => item.storagePath)).toEqual([
       'owner-1/generation-references/gen-1/input.png',
     ]);
+  });
+
+  // Recipe reading review B3 (2026-10-29): a creation recipe gains the
+  // creation's saved inputs only when it is read unlocked, so its teaser said
+  // "1 prompt" and the unlock then gave a prompt, three pictures and a clip
+  // (post 6487f689).
+  describe('a locked creation recipe whose creator shares the creation’s inputs', () => {
+    type InputRow = (typeof generationInputRows)[number];
+    const inputRow = (overrides: Partial<InputRow> & Pick<InputRow, 'id'>): InputRow => ({
+      generation_id: 'gen-1',
+      user_id: 'owner-1',
+      media_type: 'image',
+      role: 'reference_image',
+      label: `Private name of ${overrides.id}`,
+      storage_path: `generation_inputs/owner-1/gen-1/${overrides.id}.png`,
+      source_generation_id: null,
+      sort_order: 0,
+      metadata: {},
+      ...overrides,
+    });
+    const countTypes = (items: Array<{ type: string }>) => items.reduce<Record<string, number>>(
+      (counts, item) => ({ ...counts, [item.type]: (counts[item.type] ?? 0) + 1 }),
+      {},
+    );
+
+    beforeEach(() => {
+      bundleRow = {
+        ...(bundleRow as BundleRow),
+        allow_remix: true,
+        resource_items: [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Public prompt text' }],
+      };
+      generationInputRows = [
+        inputRow({ id: 'image-1', sort_order: 0 }),
+        inputRow({ id: 'image-2', sort_order: 1 }),
+        inputRow({ id: 'image-3', sort_order: 2 }),
+        inputRow({
+          id: 'video-1',
+          media_type: 'video',
+          role: 'reference_video',
+          storage_path: 'generation_inputs/owner-1/gen-1/video-1.mp4',
+          sort_order: 3,
+        }),
+      ];
+    });
+
+    it('counts the references its unlock adds, in the order the unlocked recipe reads', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const { formatPostResourceBundleCountSummary } = await import('@/lib/post-resource-bundles');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.viewerCanAccess).toBe(false);
+      expect(detail?.resources).toBeNull();
+      expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+      expect(formatPostResourceBundleCountSummary(detail?.lockedPreview))
+        .toBe('1 prompt, 3 reference images, 1 reference video');
+      // The kind chips name them too, as they name a reference the recipe stores.
+      expect(detail?.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+      expect(detail?.lockedPreview.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+    });
+
+    it('says how many, never which: no name, file or id of an input leaves the server', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+      const sent = JSON.stringify(detail);
+
+      expect(detail?.viewerCanAccess).toBe(false);
+      expect(sent).not.toContain('generation_inputs');
+      expect(sent).not.toContain('Private name');
+      expect(sent).not.toMatch(/image-[123]|video-1/);
+      // The per-item preview stays the creator's stored items alone.
+      expect(detail?.lockedPreview.itemPreviews.map((item) => item.type)).toEqual(['prompt']);
+    });
+
+    it('counts exactly what the unlock then shows', async () => {
+      bundleRow = {
+        ...(bundleRow as BundleRow),
+        resource_items: [
+          { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Public prompt text' },
+          // "Include creation references" stored a copy of image-1 (S-F8)…
+          {
+            id: 'reference-image-1',
+            type: 'reference_image',
+            title: 'Image 1',
+            storagePath: 'owner-1/generation-references/gen-1/image-1.png',
+            contentType: 'image/png',
+          },
+          // …and the creator attached image-2's own file.
+          {
+            id: 'stored-2',
+            type: 'reference_image',
+            title: 'Image 2',
+            storagePath: 'generation_inputs/owner-1/gen-1/image-2.png',
+            contentType: 'image/png',
+          },
+        ],
+      };
+      generationInputRows = [
+        inputRow({ id: 'image-1', sort_order: 0 }),
+        inputRow({ id: 'image-2', sort_order: 1 }),
+        // Outside its owner's folder: never signed, so never shown.
+        inputRow({ id: 'image-3', storage_path: 'generation_inputs/someone-else/gen-1/image-3.png', sort_order: 2 }),
+        inputRow({ id: 'video-1', media_type: 'video', role: 'reference_video', storage_path: 'generation_inputs/owner-1/gen-1/video-1.mp4', sort_order: 3 }),
+        inputRow({ id: 'audio-1', media_type: 'audio', role: 'reference_audio', storage_path: 'generation_inputs/owner-1/gen-1/audio-1.mp3', sort_order: 4 }),
+      ];
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const locked = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+      viewerHasPurchased = true;
+      const unlocked = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+      expect(locked?.viewerCanAccess).toBe(false);
+      expect(unlocked?.viewerCanAccess).toBe(true);
+      expect(locked?.lockedPreview.itemCounts).toEqual(countTypes(unlocked?.resources?.items ?? []));
+      expect(locked?.lockedPreview.itemCounts).toEqual({
+        prompt: 1,
+        reference_image: 2,
+        reference_video: 1,
+        reference_audio: 1,
+      });
+    });
+
+    it('counts the references of a creation made before its inputs were kept, as the unlock reads them', async () => {
+      generationInputRows = [];
+      generationRow = {
+        ...(generationRow as NonNullable<typeof generationRow>),
+        workflow_settings: {
+          model: 'nano-banana-2',
+          elements: [{
+            id: 'element-1',
+            displayName: 'Image input',
+            handle: '@alisa',
+            storagePath: 'generation_inputs/owner-1/gen-1/legacy-reference.png',
+          }],
+        },
+      };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const locked = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+      viewerHasPurchased = true;
+      const unlocked = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+      expect(locked?.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 1 });
+      expect(locked?.lockedPreview.itemCounts).toEqual(countTypes(unlocked?.resources?.items ?? []));
+    });
+
+    it('counts none when the creator’s stored switch keeps them, and reads nothing for it', async () => {
+      // The Remix still comes with the recipe; the inputs do not (2026-10-27).
+      bundleRow = { ...(bundleRow as BundleRow), allow_remix: false };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+      expect(detail?.resourceKinds).toEqual(['prompt', 'remix']);
+      expect(postSelects.some((columns) => columns.includes('generation:generations'))).toBe(false);
+    });
+
+    it('counts none once the generation is no longer public', async () => {
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), is_public: false };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+      expect(detail?.resourceKinds).toEqual(['prompt', 'remix']);
+    });
+
+    it('counts none from a generation the post’s creator does not own', async () => {
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), user_id: 'someone-else' };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+    });
+
+    it('counts none on a post that is not a Magicbooklet creation', async () => {
+      postRow = { ...(postRow as Record<string, unknown>), source_kind: 'external' };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+    });
+
+    it('keeps the stored counts when the inputs cannot be read', async () => {
+      embeddedSourceReadError = { code: '57014', message: 'canceling statement due to statement timeout' };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.viewerCanAccess).toBe(false);
+      expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+    });
+
+    // The post page and the app's Details read a recipe on every view.
+    it('costs one more request on a locked view: the post with its generation and that generation’s inputs', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false });
+      const sharingReads = [...tableReads];
+      const sourceSelects = postSelects.filter((columns) => columns.includes('generation:generations'));
+      tableReads = [];
+      bundleRow = { ...(bundleRow as BundleRow), allow_remix: false };
+      await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false });
+
+      expect(sharingReads).toHaveLength(tableReads.length + 1);
+      expect(sourceSelects).toHaveLength(1);
+      expect(sourceSelects[0]).toContain('generation_input_media');
+      expect(sharingReads).not.toContain('generations');
+      expect(sharingReads).not.toContain('generation_input_media');
+    });
   });
 
   // Recipe audit B-F4: "Updated <date>" moved with every sale and free open.

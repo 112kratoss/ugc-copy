@@ -82,6 +82,13 @@ describe('formatPostResourceBundleCountSummary', () => {
     expect(formatPostResourceBundleCountSummary({ itemCounts: { source_file: 1 } })).toBe('1 file');
   });
 
+  // A locked creation recipe now counts the creation's saved inputs its unlock
+  // adds (recipe reading review B3): pictures before clips, after the prompt.
+  it("counts a creation recipe's references in the order the unlock reads them", () => {
+    expect(formatPostResourceBundleCountSummary({ itemCounts: { reference_video: 1, prompt: 1, reference_image: 3 } }))
+      .toBe('1 prompt, 3 reference images, 1 reference video');
+  });
+
   it('says nothing for a recipe with nothing counted', () => {
     expect(formatPostResourceBundleCountSummary(preview(2, {}))).toBe('');
     expect(formatPostResourceBundleCountSummary(null)).toBe('');
