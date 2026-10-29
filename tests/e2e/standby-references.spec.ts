@@ -201,16 +201,17 @@ test.describe('references saved on another video model', () => {
       await expect.poll(() => savedCount(page, 'create-video:reference-videos:workflow-user')).toBe(1);
     }).toPass({ timeout: 50_000 });
 
-    // Seedance 1.5 Pro takes two images and has no place for a clip, and says so.
-    await openModel(page, 'seedance-1.5-pro');
+    // Kling O3 takes pictures and has no place for a clip, and says so (Seedance 1.5 Pro was this
+    // model until Kie retired it).
+    await openModel(page, 'kling-o3');
     await expect(page.getByPlaceholder('Rename element')).toHaveCount(1);
     await expect(page.getByRole('heading', { name: 'Reference videos' })).toHaveCount(0);
     await expect(page.getByText('Saved references are on standby')).toBeVisible();
-    await expect(page.getByText('Your saved clip stays saved. Seedance 1.5 Pro takes no reference clip, so this run does not use it.')).toBeVisible();
+    await expect(page.getByText('Your saved clip stays saved. Kling O3 takes no reference clip, so this run does not use it.')).toBeVisible();
 
     await expect(canvasAsksFor(page)).toHaveText('Write a prompt, add references if you like, then Generate.');
-    await expect.poll(() => newestQuote('seedance-1.5-pro', 'imageReferences')).not.toBeNull();
-    const request = newestQuote('seedance-1.5-pro', 'imageReferences')!;
+    await expect.poll(() => newestQuote('kling-o3', 'imageReferences')).not.toBeNull();
+    const request = newestQuote('kling-o3', 'imageReferences')!;
     expect(request.settings?.referenceMode).toBe('elements');
     expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
     // The quote names the slots the run fills: the picture, and no clip.

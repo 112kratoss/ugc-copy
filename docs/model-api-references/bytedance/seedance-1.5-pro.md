@@ -1,6 +1,8 @@
 # Seedance 1.5 Pro API Documentation
 
 > **Superseded 2026-09-04 for pricing (per second; 480p 12 s is 21 / 42).** See `reference-audit-2026-09-04.md`.
+>
+> **Retired upstream: every createTask answers code 410 (2026-10-29); the app offers it on no platform.** See `kie-catalog-inputs-2026-10-29.md`.
 
 > Generate content using the Seedance 1.5 Pro model
 

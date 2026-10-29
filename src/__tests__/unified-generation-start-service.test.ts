@@ -1095,10 +1095,16 @@ describe('a page run with a named reference picture', () => {
 
   it.each([
     {
-      label: 'Seedance 1.5 Pro',
-      modelId: 'seedance-1.5-pro',
-      settings: { duration: 4, resolution: '720p' },
-      request: { model: 'bytedance/seedance-1.5-pro', input: { input_urls: [REFERENCE] } },
+      label: 'Grok Imagine Video',
+      modelId: 'grok-imagine-video',
+      settings: { mode: 'normal', duration: 6, resolution: '480p' },
+      request: { model: 'grok-imagine/image-to-video', input: { image_urls: [REFERENCE] } },
+    },
+    {
+      label: 'Grok Imagine Video 1.5',
+      modelId: 'grok-imagine-video-1.5',
+      settings: { duration: 5, resolution: '480p' },
+      request: { model: 'grok-imagine-video-1-5-preview', input: { image_urls: [REFERENCE] } },
     },
     {
       label: 'Wan 2.7',
@@ -1153,6 +1159,34 @@ describe('a page run with a named reference picture', () => {
       model: 'wan/2-7-r2v',
       input: { reference_image: [REFERENCE], first_frame: FIRST_FRAME },
     });
+  });
+
+  it('sends Grok Imagine Video 1.5 the picture beside a first frame', async () => {
+    // grok-imagine-video-1-5-preview: first_frame_url "Can be passed together with image_urls"
+    // (two paid runs kept both, 2026-10-29).
+    const { outcome, request } = await startFromPage('grok-imagine-video-1.5', { duration: 5, resolution: '480p' }, [{
+      slot: 'startFrame',
+      kind: 'image',
+      url: FIRST_FRAME,
+      label: 'Start frame',
+      storagePath: 'uploads/user-1/first-frame.png',
+      sourceGenerationId: null,
+    }]);
+
+    expect(outcome).toMatchObject({ success: true, modelId: 'grok-imagine-video-1.5' });
+    expect(request).toMatchObject({
+      model: 'grok-imagine-video-1-5-preview',
+      input: { image_urls: [REFERENCE], first_frame_url: FIRST_FRAME },
+    });
+    expect((request as { input: Record<string, unknown> }).input).not.toHaveProperty('aspect_ratio');
+  });
+
+  it('refuses a page run on Seedance 1.5 Pro, which Kie retired, at its quote, so nothing reaches Kie', async () => {
+    // The catalog no longer offers it; the start's own guard before the hold is in
+    // generation-services.test.ts ("refuses a model Kie retired before anything is held").
+    await expect(startFromPage('seedance-1.5-pro', { duration: 4, resolution: '720p' }))
+      .rejects.toThrow('This model is no longer available.');
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

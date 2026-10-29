@@ -2670,7 +2670,7 @@ export function inspectWorkflowNodeCapabilities(
     if (isGrokVideoModel && endFrameCount > 0) {
       issues.push({
         code: 'end-frame-not-supported',
-        message: 'Grok Imagine Video supports one image reference only. Remove the end-frame connection or use the Start frame input.',
+        message: 'Grok Imagine Video takes no end frame. Remove the end-frame connection or use the Start frame input.',
       });
     }
 
@@ -3062,7 +3062,7 @@ export function validateWorkflowConnectionForGraph(params: {
       if (data.model === 'grok-imagine-video') {
         return {
           valid: false,
-          message: 'Grok Imagine Video supports one image reference only. Use Start frame for image-to-video.',
+          message: 'Grok Imagine Video takes no end frame. Use Start frame for image-to-video.',
         };
       }
 

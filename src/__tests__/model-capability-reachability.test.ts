@@ -17,7 +17,8 @@ import { VIDEO_MODELS, getVideoElementSupport, type VideoModelId } from '@/lib/m
  * silently. These tests make that class of gap fail loudly instead.
  */
 
-const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+// Models offered nowhere too (a retired one keeps its descriptor for a release that brings it back).
+const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true });
 
 function descriptorFor(modelId: string) {
   const model = catalog.models.find((entry) => entry.id === modelId);

@@ -110,7 +110,17 @@ const END_FRAME_NEEDS_START_FRAME: readonly string[] = [
   'wan-3.0-prime',
   // pixverse-v6/transition requires both frame fields; a lone end frame has no endpoint.
   'pixverse-v6',
+  // grok-imagine-video-1-5-preview: Kie's own form clears the end frame when the first goes.
+  'grok-imagine-video-1.5',
 ];
+
+/**
+ * Video models whose provider takes a first frame beside its reference pictures, so a
+ * references run keeps the start frame apart from the reference cap. Mirrors
+ * `VIDEO_INPUT_LIMITS.startFrameWithReferences` in generation-model-catalog; a test pins
+ * the two in agreement.
+ */
+const START_FRAME_WITH_REFERENCES: readonly string[] = ['wan-2.7', 'grok-imagine-video-1.5'];
 
 /** wan/2-7-r2v declares `duration: min 2, max 10`; text and image-to-video allow 15. */
 export const WAN_REFERENCE_MAX_DURATION_SECONDS = 10;
@@ -144,7 +154,7 @@ const VIDEO_REFERENCE_IMAGE_CAPS: Record<string, number> = {
   'happyhorse-1.1': 9,
   'gemini-omni-video': 7,
   'veo-3.1': 3,
-  'grok-imagine-video': 1,
+  'grok-imagine-video': 7,
   'kling-o3': 7,
   // Kie takes 9 but bills each image past the fifth; the app caps references at five.
   'minimax-h3': 5,
@@ -936,17 +946,18 @@ function validationConfigForModel(
     // run that attaches one — which is exactly how seedance-2-5, kling-o3, and
     // minimax-h3 shipped with their reference support unreachable.
     const max = VIDEO_REFERENCE_IMAGE_CAPS[modelId];
-    if (max !== undefined && modelId === 'wan-2.7') {
-      // wan/2-7-r2v takes a `first_frame` beside its reference pictures, so the cap counts
-      // the reference slot rather than every picture the run sends. No other model's
-      // reference mode carries a frame, so for them the two counts are the same.
+    if (max !== undefined && START_FRAME_WITH_REFERENCES.includes(modelId)) {
+      // wan/2-7-r2v takes a `first_frame` and grok-imagine-video-1-5-preview a
+      // `first_frame_url` beside their reference pictures, so the cap counts the reference
+      // slot rather than every picture the run sends. No other model's reference mode
+      // carries a frame, so for them the two counts are the same.
       rules.push({
         type: 'max-slot-count',
         slotKey: 'imageReferences',
         max,
         conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
         field: 'images',
-        message: `Wan 2.7 supports up to ${max} reference images.`,
+        message: `${VIDEO_MODELS[modelId as VideoModelId].displayName} supports up to ${max} reference images.`,
       });
     } else if (max !== undefined) {
       rules.push({

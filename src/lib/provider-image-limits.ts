@@ -97,9 +97,10 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   // reference_image "Maximum file size: 20 MB" (happyhorse-1-1/reference-to-video:109-127).
   'happyhorse-1-1/image-to-video': [limit('image_urls', 'frame', 20)],
   'happyhorse-1-1/reference-to-video': [limit('reference_image', 'reference', 20)],
-  // Grok Imagine Video 1.5: image_urls "Maximum file size: 20MB" (grok-imagine/1-5-preview:106-114);
-  // the run's references, or its frames.
-  'grok-imagine-video-1-5-preview': [limit('image_urls', 'image', 20)],
+  // Grok Imagine Video 1.5: image_urls "Maximum file size: 20MB" (grok-imagine/1-5-preview:109-120,
+  // re-read 2026-10-29), the run's references; its first_frame_url and last_frame_url (:188-194)
+  // name no size.
+  'grok-imagine-video-1-5-preview': [limit('image_urls', 'reference', 20)],
   // PixVerse V6: the start frame "Single image size not exceeding 20 MB"
   // (pixverse/image-to-video:121-129); each frame of a transition "must not exceed 20 MB"
   // (pixverse/transition:120-127, :130-137).

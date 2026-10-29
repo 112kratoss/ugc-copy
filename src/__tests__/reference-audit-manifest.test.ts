@@ -11,6 +11,7 @@ import {
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
+import { descriptorBeforeKieCatalogInputs, operationBeforeKieCatalogInputs } from './fixtures/kie-catalog-inputs-2026-10-29';
 import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
 import { descriptorBeforeMiniDefault } from './fixtures/mini-default-video-2026-10-28';
 
@@ -38,7 +39,8 @@ const manifest = JSON.parse(fs.readFileSync(path.resolve(
   }>;
 };
 
-const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+// Models offered nowhere too: this release carried Seedance 1.5 Pro, which Kie has since retired.
+const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true });
 const operations = new Map(
   buildCodeGenerationModelOperations().map((operation) => [operation.modelId, operation]),
 );
@@ -49,9 +51,9 @@ function descriptor(modelId: string) {
   return found;
 }
 
-function fieldErrorsFor(input: GenerationModelQuoteInput): Record<string, string> {
+function fieldErrorsFor(input: GenerationModelQuoteInput, options: Parameters<typeof quoteGenerationModel>[1] = {}): Record<string, string> {
   try {
-    quoteGenerationModel(input);
+    quoteGenerationModel(input, options);
   } catch (error) {
     if (error instanceof CatalogError) return error.fieldErrors;
     throw error;
@@ -118,8 +120,8 @@ describe('reference-audit release', () => {
       const entry = manifest.entries.find((candidate) => candidate.modelId === modelId)!;
       const { schemaVersion, ...publicDescriptor } = entry.publicDescriptor;
       expect(schemaVersion).toBe(2);
-      expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptorBeforeMiniDefault(descriptor(modelId))));
-      const operation = operationBeforeKieCheckup(operations.get(modelId)!);
+      expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptorBeforeMiniDefault(descriptorBeforeKieCatalogInputs(descriptor(modelId)))));
+      const operation = operationBeforeKieCheckup(operationBeforeKieCatalogInputs(operations.get(modelId)!));
       expect(entry.pricingStrategy).toBe(operation.pricingStrategy);
       expect(entry.pricingConfig).toEqual(operation.pricingConfig);
       const { passthroughSettingKeys, ...validationConfig } = validationConfigAsReleased(
@@ -151,18 +153,19 @@ describe('reference-audit release', () => {
     });
 
     it('bills Seedance 1.5 Pro 480p 12 s at Kie\'s per-second rate', () => {
+      // Read off the full build: Kie has since retired the model, so no platform offers it.
       expect(quoteGenerationModel({
         kind: 'video',
         modelId: 'seedance-1.5-pro',
         settings: { resolution: '480p', duration: 12, aspectRatio: '16:9', sound: false },
         inputCounts: {},
-      }).costCredits).toBe(21);
+      }, { catalog }).costCredits).toBe(21);
       expect(quoteGenerationModel({
         kind: 'video',
         modelId: 'seedance-1.5-pro',
         settings: { resolution: '480p', duration: 12, aspectRatio: '16:9', sound: true },
         inputCounts: {},
-      }).costCredits).toBe(42);
+      }, { catalog }).costCredits).toBe(42);
     });
 
     it('bills Veo quality 4K text-to-video at the listed 370', () => {
@@ -231,7 +234,8 @@ describe('reference-audit release', () => {
         ['kling-3.0-video', { mode: 'std', duration: 6 }],
         ['veo-3.1', { mode: 'veo3_fast', resolution: '720p', duration: 8 }],
       ] as const) {
-        expect(fieldErrorsFor(endOnly(modelId, settings)).startFrame, modelId).toMatch(/start frame/);
+        // The full build, so the rule is read on Seedance 1.5 Pro too, which no platform offers now.
+        expect(fieldErrorsFor(endOnly(modelId, settings), { catalog }).startFrame, modelId).toMatch(/start frame/);
       }
       // minimax-h3/image-to-video: "Either first_frame_url or last_frame_url must be provided".
       expect(() => quoteGenerationModel(endOnly('minimax-h3', { resolution: '768P', duration: 6 }))).not.toThrow();

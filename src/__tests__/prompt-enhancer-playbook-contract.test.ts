@@ -79,8 +79,9 @@ describe('prompt enhancer playbook contract', () => {
       'gemini-omni-1.1-flash': 'gemini-omni-video',
       // docs.kie.ai/market/wan/3-0-video-prime.md, read 2026-10-08: the identical body.
       'wan-3.0-prime': 'wan-3.0',
-      // docs.kie.ai/market/grok-imagine/1-5-preview.md, read 2026-10-08: Grok Imagine's
-      // body without `mode`; audio is still generated with every clip.
+      // docs.kie.ai/market/grok-imagine/1-5-preview.md, re-read 2026-10-29: Grok Imagine's
+      // body without `mode`, plus first_frame_url/last_frame_url (as Gemini Omni 1.1 Flash's
+      // adds a frame pair); audio is still generated with every clip.
       'grok-imagine-video-1.5': 'grok-imagine-video',
     });
   });

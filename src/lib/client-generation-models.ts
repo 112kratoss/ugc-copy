@@ -639,9 +639,13 @@ export function getVideoElementSupport(
       ? { enabled: true, maxElements: 3, maxNamed: 3, reason: null }
       : { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable references require Veo Lite or Fast.' };
   }
-  if (modelId === 'grok-imagine-video') return { enabled: true, maxElements: 1, maxNamed: 1, reason: null };
-  // 7 image_urls (Gemini Omni 1.1 Flash, Grok 1.5 Preview) and 7 image_references (PixVerse V6).
-  if (modelId === 'gemini-omni-1.1-flash' || modelId === 'grok-imagine-video-1.5' || modelId === 'pixverse-v6') {
+  // 7 image_urls (Gemini Omni 1.1 Flash, both Grok Imagine Video ids) and 7 image_references (PixVerse V6).
+  if (
+    modelId === 'gemini-omni-1.1-flash'
+    || modelId === 'grok-imagine-video'
+    || modelId === 'grok-imagine-video-1.5'
+    || modelId === 'pixverse-v6'
+  ) {
     return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
   }
   // Wan 3.0's reference_image_urls takes 10 where Wan 2.7's reference mode stops at 5.

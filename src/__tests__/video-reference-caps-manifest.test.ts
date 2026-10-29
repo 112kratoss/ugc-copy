@@ -200,7 +200,9 @@ describe('video reference caps track Kie', () => {
     const operations = new Map(
       buildCodeGenerationModelOperations().map((operation) => [operation.modelId, operation]),
     );
-    for (const model of catalog.models.filter((entry) => entry.kind === 'video')) {
+    // Models offered nowhere too: a retired model keeps its caps for a release that brings it back.
+    const everyModel = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true });
+    for (const model of everyModel.models.filter((entry) => entry.kind === 'video')) {
       const published = model.inputs.imageReferences?.max ?? 0;
       const rules = (operations.get(model.id)?.validationConfig.rules ?? []) as Array<{
         type: string;
@@ -208,11 +210,13 @@ describe('video reference caps track Kie', () => {
         max?: number;
         conditions?: Array<{ key: string; value: unknown }>;
       }>;
-      // Wan 2.7's cap counts its reference slot, because its start frame rides beside the
-      // references (release wan-start-frame-apart-20261019); every other cap counts pictures.
+      // A model whose start frame rides beside its references (Wan 2.7 since release
+      // wan-start-frame-apart-20261019, Grok Imagine Video 1.5 since 2026-10-29) has its cap
+      // count the reference slot; every other cap counts pictures. Read off the descriptor's
+      // flag, this also pins the runtime's START_FRAME_WITH_REFERENCES to the catalog.
       const elementsRule = rules.find((rule) => (
         rule.type === 'max-slot-count'
-        && rule.slotKey === (model.id === 'wan-2.7' ? 'imageReferences' : 'images')
+        && rule.slotKey === (model.inputs.combineFramesWithReferences ? 'imageReferences' : 'images')
         && (rule.conditions ?? []).some((condition) => (
           condition.key === 'referenceMode' && condition.value === 'elements'
         ))

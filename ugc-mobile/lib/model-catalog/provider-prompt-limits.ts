@@ -62,7 +62,7 @@ export const PROVIDER_PROMPT_RULES: Readonly<Record<string, ProviderPromptRule>>
   'seedance-2': { minLength: 3 },
   'seedance-2-fast': { minLength: 3 },
   'seedance-2-mini': { minLength: 3 },
-  'grok-imagine-video-1.5': { maxLength: 4096 }, // grok-imagine/1-5-preview:105
+  'grok-imagine-video-1.5': { maxLength: 4096 }, // grok-imagine/1-5-preview:108 (re-read 2026-10-29; :105 on 10-20)
   'grok-imagine-video': { maxLength: 5000 }, // grok-imagine/text-to-video:121; image-to-video:178
   'hailuo-2.3': { maxLength: 5000 }, // hailuo/2-3-image-to-video-pro:111; -standard:113
   'happyhorse-1.1': { maxLength: 5000 }, // happyhorse-1-1/text-to-video:102; image-to-video:102; reference-to-video:106

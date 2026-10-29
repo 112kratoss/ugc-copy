@@ -14,6 +14,7 @@ import { getVideoInputAffordances } from '@/lib/generation-model-affordances';
 import { buildGenerationModelCatalog, type GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import { parseClientGenerationModelCatalog } from '@/lib/generation-model-client';
 import type { VideoModelId } from '@/lib/models';
+import { descriptorBeforeKieCatalogInputs } from './fixtures/kie-catalog-inputs-2026-10-29';
 import productionVideo from './fixtures/production-video-descriptors-2026-10-29.json';
 
 /**
@@ -22,7 +23,12 @@ import productionVideo from './fixtures/production-video-descriptors-2026-10-29.
  * it, Wan 2.7 included; the mirror question when switching back to frames).
  */
 
-const codeCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+// The code build as it stood at the snapshot (mini-default-video-20261028): the releases after
+// it rewound, Seedance 1.5 Pro (retired since) included, so every model stays compared.
+const codeAtSnapshot = {
+  models: buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true })
+    .models.map((model) => descriptorBeforeKieCatalogInputs(model)),
+};
 // What the page reads in production: the published descriptors, parsed as the browser parses them.
 const production = parseClientGenerationModelCatalog({
   schemaVersion: 3,
@@ -104,8 +110,8 @@ describe('the sides production publishes', () => {
 
   it('agrees with the code catalog on every model they share', () => {
     for (const model of productionVideo.models) {
-      if (!codeCatalog.models.some((entry) => entry.id === model.id)) continue;
-      const fromCode = sidesOf(codeCatalog, model.id);
+      if (!codeAtSnapshot.models.some((entry) => entry.id === model.id)) continue;
+      const fromCode = sidesOf(codeAtSnapshot, model.id);
       const fromProduction = sidesOf(production, model.id);
       expect(Boolean(fromCode.frames && fromCode.references), model.id).toBe(Boolean(fromProduction.frames && fromProduction.references));
       expect(fromCode.references?.keepsStart ?? false, model.id).toBe(fromProduction.references?.keepsStart ?? false);

@@ -1,6 +1,8 @@
 # Image To Video API Documentation
 
 > **Superseded 2026-09-04 for pricing (now 2.4 / 4.5 / 8 credits per second), `image_urls` up to 7, and the 1080p tier.** See `reference-audit-2026-09-04.md`.
+>
+> **2026-10-29: Kie's validator takes 7 pictures and refuses an eighth; the app offers 7.** See `kie-catalog-inputs-2026-10-29.md`.
 
 > Generate content using the Image To Video model
 

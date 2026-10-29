@@ -191,11 +191,27 @@ export interface GenerationModelQuote {
 
 type ModelStatus = 'active' | 'retired';
 
+/**
+ * Models kept for their old runs, recipes and prices but offered on no platform, because the
+ * provider no longer runs them. Kie retired Seedance 1.5 Pro upstream: its pages were gone by
+ * 2026-10-20, and on 2026-10-29 every createTask answered code 410 "has been retired upstream"
+ * (docs/model-api-references/kie-catalog-inputs-2026-10-29.md). A retired model's descriptor
+ * publishes both platforms off, as release imagen-family-disable-20260824 published the
+ * Imagen 4 family, so its price and routing stay ready for a provider that brings it back; no
+ * catalog build lists it unless a release is being emitted, and no start holds credits for it.
+ */
+const RETIRED_MODEL_IDS: ReadonlySet<string> = new Set(['seedance-1.5-pro']);
+
 const MODEL_STATUS: Record<string, ModelStatus> = Object.fromEntries([
   ...Object.keys(IMAGE_MODELS),
   ...Object.keys(VIDEO_MODELS),
   ...Object.keys(MOTION_MODELS),
-].map((id) => [id, 'active'])) as Record<string, ModelStatus>;
+].map((id) => [id, RETIRED_MODEL_IDS.has(id) ? 'retired' : 'active'])) as Record<string, ModelStatus>;
+
+/** A model the provider no longer runs: offered nowhere, and refused before a start holds credits. */
+export function isRetiredGenerationModel(modelId: string): boolean {
+  return MODEL_STATUS[modelId] === 'retired';
+}
 
 // Video opens on Seedance 2 Mini at 480p for 5 s without sound, 19 credits, so a new
 // account's 25 welcome credits cover one run (owner, 2026-10-28; Kling 3.0's 5 s was 70).
@@ -329,6 +345,12 @@ interface VideoInputLimits {
   audios: number;
   startFrame: boolean;
   endFrame: boolean;
+  /**
+   * The provider takes a first frame beside its reference pictures in one run, so the
+   * references side keeps the start frame (the descriptor's `combineFramesWithReferences`).
+   * Every other model takes frames or references, not both.
+   */
+  startFrameWithReferences?: true;
 }
 
 /**
@@ -352,10 +374,14 @@ const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
   // references at the five it includes rather than price the rest.
   'minimax-h3': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
   'seedance-1.5-pro': { images: 2, videos: 0, audios: 0, startFrame: true, endFrame: true },
-  'grok-imagine-video': { images: 1, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  // grok-imagine/image-to-video (re-read 2026-10-29): one image_urls list of up to 7, no frame
+  // field. One picture is its "single-image mode", the video taking the picture's shape, so
+  // it is the start frame; several are references (Kie refuses an eighth).
+  'grok-imagine-video': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: false },
   'kling-3.0-video': { images: 0, videos: 3, audios: 0, startFrame: true, endFrame: true },
   'kling-3.0-turbo': { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false },
-  'wan-2.7': { images: 5, videos: 5, audios: 1, startFrame: true, endFrame: true },
+  // wan/2-7-r2v takes a `first_frame` beside its references; the end frame is image-to-video's.
+  'wan-2.7': { images: 5, videos: 5, audios: 1, startFrame: true, endFrame: true, startFrameWithReferences: true },
   'happyhorse-1.1': { images: 9, videos: 0, audios: 0, startFrame: true, endFrame: false },
   'gemini-omni-video': { images: 7, videos: 1, audios: 0, startFrame: false, endFrame: false },
   'hailuo-2.3': { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false },
@@ -368,9 +394,10 @@ const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
   // 5 audio files (15 s total), exclusive with the frame pair.
   'wan-3.0': { images: 10, videos: 5, audios: 5, startFrame: true, endFrame: true },
   'wan-3.0-prime': { images: 10, videos: 5, audios: 5, startFrame: true, endFrame: true },
-  // grok-imagine-video-1-5-preview (2026-10-08): image_urls up to 7; a single one is the
-  // first frame.
-  'grok-imagine-video-1.5': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  // grok-imagine-video-1-5-preview (re-read 2026-10-29): image_urls up to 7, and first_frame_url
+  // and last_frame_url, the first "together with image_urls, or sent on its own"; two paid
+  // runs that day kept both frames and a start frame beside two pictures.
+  'grok-imagine-video-1.5': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: true, startFrameWithReferences: true },
   // pixverse-v6 (2026-10-08): image-to-video takes one start frame, transition a frame
   // pair, reference-to-video up to 7 named image_references.
   'pixverse-v6': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: true },
@@ -508,7 +535,7 @@ function videoInputModes(
       ...(audioCapSeconds !== undefined ? { maxDurationSeconds: audioCapSeconds } : {}),
     });
   }
-  if (modelId === 'wan-2.7') {
+  if (limits.startFrameWithReferences) {
     referenceSlots.push({
       key: 'startFrame',
       kind: 'image',
@@ -721,7 +748,7 @@ function videoDescriptors(): GenerationModelDescriptor[] {
         characterReferences: model.id === 'gemini-omni-video' ? { max: 3 } : null,
         startFrame: limits.startFrame,
         endFrame: limits.endFrame,
-        combineFramesWithReferences: model.id === 'wan-2.7',
+        combineFramesWithReferences: limits.startFrameWithReferences === true,
       },
       // A model whose maker the installed apps do not yet name in the AI-data question
       // (ugc-mobile/lib/ai-data-consent.ts) stays off mobile in the published release until
@@ -811,7 +838,10 @@ const ALL_PUBLIC_MODELS: GenerationModelDescriptor[] = [
   ...imageDescriptors(),
   ...videoDescriptors(),
   ...motionDescriptors(),
-];
+  // A retired model is offered on no platform, of whatever kind (RETIRED_MODEL_IDS).
+].map((model) => (MODEL_STATUS[model.id] === 'retired'
+  ? { ...model, availability: { web: false, mobile: false } }
+  : model));
 
 const PRIVATE_GENERATION_MODEL_ALIASES = [
   ...Object.values(IMAGE_MODELS),
@@ -858,28 +888,36 @@ export function projectGenerationModelDescriptor(
 export function buildGenerationModelCatalog({
   platform,
   schemaVersion,
+  includeUnavailable = false,
 }: {
   platform: CatalogPlatform;
   schemaVersion: number;
+  /**
+   * Also list the models offered on no platform, as a release carries them (the emitter):
+   * a release turns a model off by publishing it with its platforms off. Defaults stay
+   * among the models the platform is offered.
+   */
+  includeUnavailable?: boolean;
 }): GenerationModelCatalog {
   const projectedSchemaVersion = schemaVersion >= 3 ? 3 : schemaVersion >= 2 ? 2 : 1;
-  const models = ALL_PUBLIC_MODELS
-    .filter((model) => (
-      MODEL_STATUS[model.id] === 'active'
-      && model.minClientSchemaVersion <= schemaVersion
-      && (model.availability?.[platform] ?? true)
-    ))
+  // Read before projecting: a v1 projection drops `availability`. A retired model is offered
+  // nowhere (RETIRED_MODEL_IDS), so this leaves it out too.
+  const offered = (model: GenerationModelDescriptor) => model.availability?.[platform] ?? true;
+  const listed = ALL_PUBLIC_MODELS.filter((model) => (
+    model.minClientSchemaVersion <= schemaVersion
+    && (includeUnavailable || offered(model))
+  ));
+  const offeredIds = new Set(listed.filter(offered).map((model) => model.id));
+  const models = listed
     .map((model) => projectGenerationModelDescriptor(model, projectedSchemaVersion))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.displayName.localeCompare(b.displayName));
-  const modelIds = new Set(models.map((model) => model.id));
+  const defaultFor = (kind: GenerationModelKind) => (offeredIds.has(DEFAULT_MODEL_IDS[kind])
+    ? DEFAULT_MODEL_IDS[kind]
+    : models.find((model) => model.kind === kind && offeredIds.has(model.id))?.id ?? null);
   return {
     schemaVersion: projectedSchemaVersion,
     revision: buildRevision(ALL_PUBLIC_MODELS),
-    defaults: {
-      image: modelIds.has(DEFAULT_MODEL_IDS.image) ? DEFAULT_MODEL_IDS.image : models.find((model) => model.kind === 'image')?.id ?? null,
-      video: modelIds.has(DEFAULT_MODEL_IDS.video) ? DEFAULT_MODEL_IDS.video : models.find((model) => model.kind === 'video')?.id ?? null,
-      motion: modelIds.has(DEFAULT_MODEL_IDS.motion) ? DEFAULT_MODEL_IDS.motion : models.find((model) => model.kind === 'motion')?.id ?? null,
-    },
+    defaults: { image: defaultFor('image'), video: defaultFor('video'), motion: defaultFor('motion') },
     models,
   };
 }

@@ -21,12 +21,12 @@ const MINI_PER_LENGTH: Record<number, number> = { 4: 16, 5: 19, 6: 23, 7: 27, 8:
 type Run = { kind?: string; modelId?: string; catalogRevision?: string; settings?: Record<string, unknown> };
 type Prices = (run: Run) => number;
 
-/** Production's Mini; Seedance 1.5 Pro at 7; Seedance 2.5 at 28 a second; every other video at 14 a second. */
+/** Production's Mini; Grok Imagine Video at 7; Seedance 2.5 at 28 a second; every other video at 14 a second. */
 const pricesNearProduction: Prices = (run) => {
   const seconds = Number(run.settings?.duration ?? 5);
   if (run.kind === 'image') return run.modelId === 'z-image' ? 1 : 8;
   if (run.modelId === 'seedance-2-mini') return run.settings?.resolution === '720p' ? 41 : MINI_PER_LENGTH[seconds] ?? 4 * seconds;
-  if (run.modelId === 'seedance-1.5-pro') return 7;
+  if (run.modelId === 'grok-imagine-video') return 7;
   if (run.modelId === 'seedance-2-5') return 28 * seconds;
   return 14 * seconds;
 };
@@ -86,13 +86,13 @@ test('every setting and every model is priced against the balance, and a picked 
   await page.locator('button[aria-haspopup="listbox"]').click();
   const fits = page.getByRole('group', { name: 'Fits your 25 credits' });
   await expect(fits.getByRole('option', { name: /Seedance 2 Mini/ })).toContainText('19 credits480P · 5s');
-  await expect(fits.getByRole('option', { name: /Seedance 1\.5 Pro/ })).toContainText('7 credits480P · 4s', COLD_PAGE);
+  await expect(fits.getByRole('option', { name: /^Grok Imagine Video(?! 1\.5)/ })).toContainText('7 credits480P · 6s', COLD_PAGE);
   await expect(page.getByRole('group', { name: 'Needs more credits' }).getByRole('option', { name: /Seedance 2\.5/ }))
     .toContainText('140 credits480P · 5s');
 
-  await fits.getByRole('option', { name: /Seedance 1\.5 Pro/ }).click();
-  // The ratio carries over; the length becomes the nearest the model makes.
-  await expect(settingsChip(page)).toHaveAccessibleName('Generation settings: 480P · 9:16 · 4s · Sound off');
+  await fits.getByRole('option', { name: /^Grok Imagine Video(?! 1\.5)/ }).click();
+  // The ratio carries over; the length becomes the nearest the model makes (Grok's start at 6s).
+  await expect(settingsChip(page)).toHaveAccessibleName(/^Generation settings: 480P · 9:16 · 6s/);
   await expect(page.getByRole('button', { name: 'Generate · 7 credits' })).toBeEnabled();
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue(PROMPT);
 });

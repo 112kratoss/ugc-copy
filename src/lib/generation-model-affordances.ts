@@ -210,10 +210,10 @@ function legacyFallbackAffordances(
       start: modelId !== 'gemini-omni-video',
       // kling-o3 takes a single start image and no end frame; it was missing from this
       // list, so the surface offered an end-frame slot the model cannot use.
-      end: !['grok-imagine-video', 'grok-imagine-video-1.5', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video', 'kling-o3'].includes(modelId),
+      end: !['grok-imagine-video', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video', 'kling-o3'].includes(modelId),
       startRequired: modelId === 'hailuo-2.3',
     },
-    combineFramesWithReferences: modelId === 'wan-2.7' && activeMode === 'elements',
+    combineFramesWithReferences: START_BESIDE_REFERENCES.has(modelId) && activeMode === 'elements',
     namedVideoElements: { enabled: isKling, max: isKling ? references.videos : 0 },
     subjects: modelId === 'kling-o3'
       ? { enabled: true, maxImages: 12, maxNamed: 3, imagesPerSubject: SUBJECT_IMAGES_PER_NAME }
@@ -223,13 +223,16 @@ function legacyFallbackAffordances(
       // The creator's own words until the descriptor brings the control's. Whether there is a
       // switch at all is read off the two sides, which the tables above give.
       labels: null,
-      startBesideReferences: modelId === 'wan-2.7',
+      startBesideReferences: START_BESIDE_REFERENCES.has(modelId),
       referencesBudget: FALLBACK_REFERENCE_BUDGETS[modelId] ?? null,
     },
     activeConstraints: [],
     descriptorDriven: false,
   };
 }
+
+/** Mirrors `VIDEO_INPUT_LIMITS.startFrameWithReferences` in generation-model-catalog. */
+const START_BESIDE_REFERENCES: ReadonlySet<string> = new Set(['wan-2.7', 'grok-imagine-video-1.5']);
 
 /** Mirrors videoInputConstraints in generation-model-catalog (its count constraints). */
 const FALLBACK_REFERENCE_BUDGETS: Partial<Record<VideoModelId, VideoReferenceBudget>> = {

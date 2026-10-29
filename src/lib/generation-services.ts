@@ -130,7 +130,12 @@ import {
   WAN_REFERENCE_MAX_DURATION_SECONDS,
   type GenerationModelOperationalConfig,
 } from '@/lib/generation-model-runtime';
-import { getVideoInputLimits, type CatalogPrimitive, type GenerationModelKind } from '@/lib/generation-model-catalog';
+import {
+  getVideoInputLimits,
+  isRetiredGenerationModel,
+  type CatalogPrimitive,
+  type GenerationModelKind,
+} from '@/lib/generation-model-catalog';
 import {
   providerPromptViolation,
   referenceMediaLengthViolation,
@@ -440,6 +445,12 @@ async function startGenerationRecord(
   predictionId?: string;
   idempotentReplay?: boolean;
 }> {
+  // Every start holds its credits here, so a model the provider retired is refused here, before
+  // the hold. A template run quotes at the revision it was published with, where the model is
+  // still offered, and would otherwise reach Kie's 410 and a refund on every run.
+  if (typeof record.model === 'string' && isRetiredGenerationModel(record.model)) {
+    throw new GenerationServiceError('This model is no longer available.', 409);
+  }
   const rpcName = templateContext ? 'start_template_generation' : 'start_generation';
   const rpcArgs = templateContext
     ? {
@@ -2416,7 +2427,13 @@ export async function startVideoGeneration(params: {
   const normalizedReferenceMode = referenceMode === 'elements' ? 'elements' : 'frames';
   const normalizedStartFrame = normalizeRemixMediaAssetDescriptor(startFrame, 'image');
   const normalizedEndFrame = normalizeRemixMediaAssetDescriptor(endFrame, 'image');
-  const combinesFrameWithReferences = model === 'wan-2.7' && normalizedReferenceMode === 'elements';
+  // The slots the descriptor publishes. Read the clip and audio caps off it too: a literal 3 here
+  // outlived the 2026-09-03 release that gave Seedance 2.5 ten of each, so the quote accepted a
+  // fourth clip and this path refused it after the upload.
+  const videoInputLimits = getVideoInputLimits(model);
+  // Wan 2.7 and Grok Imagine Video 1.5 keep a start frame beside their references.
+  const takesStartFrameWithReferences = videoInputLimits.startFrameWithReferences === true;
+  const combinesFrameWithReferences = takesStartFrameWithReferences && normalizedReferenceMode === 'elements';
   const useLegacyFrameUrls = normalizedReferences.length === 0 && !combinesFrameWithReferences && (
     normalizedReferenceMode === 'frames'
     || Boolean(startImageUrl)
@@ -2574,10 +2591,6 @@ export async function startVideoGeneration(params: {
     );
   }
 
-  // Read the clip and audio caps off the same table the descriptor publishes. A literal
-  // 3 here outlived the 2026-09-03 release that gave Seedance 2.5 ten of each, so the
-  // quote accepted a fourth clip and this path refused it after the upload.
-  const videoInputLimits = getVideoInputLimits(model);
   if (isSeedance2Family && resolvedReferenceVideoUrls.length > videoInputLimits.videos) {
     throw new GenerationServiceError(
       `${selectedModel.displayName} supports up to ${videoInputLimits.videos} reference video${videoInputLimits.videos === 1 ? '' : 's'} per run.`,
@@ -2700,14 +2713,6 @@ export async function startVideoGeneration(params: {
     );
   }
   const frameImageUrls = [startFrameUrl, endFrameUrl].filter((url): url is string => Boolean(url));
-  const grokVideoImageUrls = model === 'grok-imagine-video' || model === 'grok-imagine-video-1.5'
-    ? (
-        resolvedReferenceImageUrls.length > 0
-          ? resolvedReferenceImageUrls
-          : (resolvedElementImageUrls.length > 0 ? resolvedElementImageUrls : frameImageUrls)
-      )
-    : [];
-
   if (totalReferenceImageCount > 0 && frameImageUrls.length > 0 && !combinesFrameWithReferences) {
     throw new GenerationServiceError(
       'Image references cannot be combined with start or end frames in the same run.',
@@ -2722,7 +2727,10 @@ export async function startVideoGeneration(params: {
     );
   }
 
-  if ((model === 'kling-3.0-turbo' || model === 'hailuo-2.3' || model === 'grok-imagine-video-1.5') && frameImageUrls.length > 1) {
+  // The catalog's own word on an end frame. A list of model ids kept here drifted from it: Kling O3
+  // was sent its frame pair as pictures and HappyHorse 1.1 lost its end frame after the hold,
+  // because a workflow or template run's quote counts no frames.
+  if (!videoInputLimits.endFrame && frameImageUrls.length > 1) {
     throw new GenerationServiceError(
       `${selectedModel.displayName} supports a start frame only.`,
       400
@@ -2731,13 +2739,6 @@ export async function startVideoGeneration(params: {
 
   if (model === 'hailuo-2.3' && frameImageUrls.length === 0) {
     throw new GenerationServiceError('Hailuo 2.3 requires a start image.', 400);
-  }
-
-  if (model === 'grok-imagine-video' && grokVideoImageUrls.length > 1) {
-    throw new GenerationServiceError(
-      'Grok Imagine Video supports up to 1 image reference per run.',
-      400
-    );
   }
 
   // google/gemini-omni-flash-1-1: one video_list item, "occupying two image slots" of
@@ -2859,6 +2860,15 @@ export async function startVideoGeneration(params: {
     || resolvedReferenceVideoUrls.length > 0
     || resolvedReferenceAudioUrls.length > 0
   ;
+  // Only the start frame rides beside references (wan/2-7-r2v `first_frame`, Grok 1.5's
+  // `first_frame_url`); an end frame there was left out after the hold. The creators never send
+  // one, and the slot-reporting quote refuses it, but a count-only caller's quote cannot.
+  if (combinesFrameWithReferences && hasReusableReference && frameImageUrls.length > 1) {
+    throw new GenerationServiceError(
+      `${selectedModel.displayName} keeps only a start frame beside references. Remove the end frame, or the references.`,
+      400
+    );
+  }
   const effectiveReferenceMode = hasReusableReference
     ? 'references'
     : frameImageUrls.length > 0
@@ -3315,16 +3325,26 @@ export async function startVideoGeneration(params: {
       };
     } else if (selectedModel.provider === 'grok') {
       // grok-imagine-video-1-5-preview (docs/model-api-references/grok-imagine-video-1-5.md,
-      // 2026-10-08) is one id for text and pictures, has no normal/fun mode, takes up
-      // to seven image_urls, and reads aspect_ratio only when the input is not a single
-      // picture ("This parameter is invalid if it is a single image").
+      // re-read 2026-10-29) is one id for text and pictures and has no normal/fun mode. It
+      // takes up to seven image_urls, and first_frame_url and last_frame_url apart from them;
+      // a references run keeps only its start frame, as Wan 2.7's does. grok-imagine/
+      // image-to-video has no frame field, so its start frame is a single image_urls entry.
+      // Both read aspect_ratio only for text or several pictures: a single picture or a start
+      // frame sets the video's shape ("aspect_ratio has no effect with a single image").
       const isGrokPreview = model === 'grok-imagine-video-1.5';
+      const hasPictures = providerReferenceImageUrls.length > 0;
+      // The older id's start frame is a picture of image_urls; frames and pictures never meet
+      // there (refused above).
+      const imageUrls = hasPictures || isGrokPreview ? providerReferenceImageUrls : frameImageUrls;
+      const firstFrameUrl = isGrokPreview ? frameImageUrls[0] : undefined;
+      const lastFrameUrl = isGrokPreview && !hasPictures ? frameImageUrls[1] : undefined;
+      const sendsPictures = imageUrls.length > 0 || Boolean(firstFrameUrl);
       providerModelId = resolveProviderModelId(
         runtimeConfig,
-        grokVideoImageUrls.length > 0 ? 'image' : 'text',
+        sendsPictures ? 'image' : 'text',
         isGrokPreview
           ? 'grok-imagine-video-1-5-preview'
-          : (grokVideoImageUrls.length > 0 ? 'grok-imagine/image-to-video' : 'grok-imagine/text-to-video'),
+          : (sendsPictures ? 'grok-imagine/image-to-video' : 'grok-imagine/text-to-video'),
       );
 
       const input: Record<string, unknown> = {
@@ -3335,12 +3355,10 @@ export async function startVideoGeneration(params: {
         nsfw_checker: true,
       };
 
-      if (grokVideoImageUrls.length > 0) {
-        input.image_urls = grokVideoImageUrls;
-        if (isGrokPreview && grokVideoImageUrls.length > 1) input.aspect_ratio = aspectRatio;
-      } else {
-        input.aspect_ratio = aspectRatio;
-      }
+      if (firstFrameUrl) input.first_frame_url = firstFrameUrl;
+      if (lastFrameUrl) input.last_frame_url = lastFrameUrl;
+      if (imageUrls.length > 0) input.image_urls = imageUrls;
+      if (!firstFrameUrl && imageUrls.length !== 1) input.aspect_ratio = aspectRatio;
 
       body = {
         model: providerModelId,
@@ -3464,7 +3482,7 @@ export async function startVideoGeneration(params: {
               compiledPrompt,
             }
           : {}),
-        ...((effectiveReferenceMode === 'frames' || model === 'wan-2.7') && normalizedStartFrame
+        ...((effectiveReferenceMode === 'frames' || takesStartFrameWithReferences) && normalizedStartFrame
           ? { startFrame: normalizedStartFrame }
           : {}),
         ...(effectiveReferenceMode === 'frames' && normalizedEndFrame
@@ -3518,8 +3536,9 @@ export async function startVideoGeneration(params: {
     const startFrameSourceUrl = resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null;
     const endFrameSourceUrl = resolvedEndImageUrl || resolvedLegacyImageUrls[1] || null;
 
-    // Wan 2.7 is sent a first frame beside its references, so a remix needs it kept there too.
-    if ((effectiveReferenceMode === 'frames' || model === 'wan-2.7') && startFrameSourceUrl) {
+    // Wan 2.7 and Grok Imagine Video 1.5 are sent a first frame beside their references, so a
+    // remix needs it kept there too.
+    if ((effectiveReferenceMode === 'frames' || takesStartFrameWithReferences) && startFrameSourceUrl) {
       videoInputCandidates.push({
         mediaType: 'image',
         role: 'start_frame',

@@ -1712,7 +1712,8 @@ describe('CreateVideoClient Kling video elements', () => {
      * publishes. Kling 3.0's clips are named video elements, a slot of their own
      * with a panel of their own, so they are not counted here.
      */
-    const publishedCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+    // Models offered nowhere too, so a retired one is read off its own entry, not its absence.
+    const publishedCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true });
     function publishedLimit(modelId: string, slotKey: 'videoReferences' | 'audioReferences') {
       const entry = publishedCatalog.models.find((model) => model.id === modelId);
       return (entry?.inputModes ?? [])
@@ -2314,6 +2315,8 @@ describe('CreateVideoClient Kling video elements', () => {
         ['Gemini Omni', 'gemini-omni-video', {}],
         ['Veo 3.1 Fast', 'veo-3.1', { mode: 'veo3_fast' }],
         ['Veo 3.1 Lite', 'veo-3.1', { mode: 'veo3_lite' }],
+        ['Grok Imagine Video', 'grok-imagine-video', { mode: 'normal' }],
+        ['Grok Imagine Video 1.5', 'grok-imagine-video-1.5', {}],
       ])('brings the image references of a %s run back under the handles its prompt mentions', async (_name, model, settings) => {
         const view = renderRemix(referenceRun(model, { settings }));
 
@@ -2452,11 +2455,14 @@ describe('CreateVideoClient Kling video elements', () => {
       });
 
       it('brings back no more image references than the model takes, and says which mention is left without one', async () => {
-        // A run holds no more than its model takes, so this is a model whose limit
-        // has come down since: Grok Imagine takes one image reference.
-        const view = renderRemix(referenceRun('grok-imagine-video', { settings: { mode: 'normal' } }));
+        // A run holds no more than its model took, so this is a run whose model takes fewer
+        // since, as a release can lower a cap: Veo 3.1 Fast takes three image references.
+        const view = renderRemix(referenceRun('veo-3.1', {
+          settings: { mode: 'veo3_fast' },
+          video: { elements: [LEAD, keptImage('02', 'Quay', '@quay'), keptImage('03', 'Lamp', '@lamp'), PROP] },
+        }));
 
-        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead']));
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@quay', '@lamp']));
         expect(screen.queryByAltText('Umbrella')).not.toBeInTheDocument();
         expect(await unknownMentionLine()).toBe('Unknown element mention: @prop');
       });
@@ -4165,6 +4171,36 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(slotCount(request, 'startFrame')).toBe(1);
     });
 
+    it.each([
+      // Kie's grok-imagine-video-1-5-preview takes a last_frame_url (2026-10-29); the switch
+      // kept its own list of models without an end frame and cleared this one's.
+      ['Grok Imagine Video 1.5', 'grok-imagine-video-1.5', 1],
+      // grok-imagine/image-to-video takes no end frame.
+      ['Grok Imagine Video', 'grok-imagine-video', 0],
+    ] as const)('switching to %s keeps the end image exactly when the model takes one', async (displayName, modelId, endFrames) => {
+      saveInTheBrowser({});
+      getPersistedFileMock.mockImplementation(async (key: string) => (
+        key === 'create-video:start-image:user-1' ? picture('start')
+          : key === 'create-video:end-image:user-1' ? picture('end')
+            : null
+      ));
+      modelCatalogState.summaries = [
+        { id: 'seedance-2-5', kind: 'video', displayName: 'Seedance 2.5', description: 'Test multimodal video model' },
+        { id: modelId, kind: 'video', displayName, description: 'Test Grok video model' },
+      ];
+      modelCatalogState.extraModels = publishedCatalog.models
+        .filter((model) => model.id === modelId) as unknown as Array<Record<string, unknown>>;
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await restored();
+      await waitFor(() => expect(slotCount(lastQuoteRequest(), 'endFrame')).toBe(1));
+
+      chooseModel(view.container, `^${displayName}`);
+
+      await waitFor(() => expect(lastQuoteRequest().modelId).toBe(modelId));
+      expect(slotCount(lastQuoteRequest(), 'startFrame')).toBe(1);
+      expect(slotCount(lastQuoteRequest(), 'endFrame')).toBe(endFrames);
+    });
+
     it('leaves the frames of Seedance 1.5 Pro free while a saved clip and track are on standby', async () => {
       // The model takes two images and no clip. The saved clip greyed the frames out
       // under "Clear your references", on a page with no card for a clip.
@@ -4188,9 +4224,11 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(await screen.findByRole('alertdialog', { name: 'Switch to references?' })).toBeInTheDocument();
     });
 
-    it('counts the image and not the clip in a references run on Seedance 1.5 Pro', async () => {
+    it('counts the image and not the clip in a references run on Kling O3', async () => {
+      // Kling O3 takes pictures and no clip or track, frames or references (Seedance 1.5 Pro
+      // was this model until Kie retired it).
       saveInTheBrowser({ images: 1, clip: true, track: true });
-      const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      const view = render(<CreateVideoClient prefill={{ model: 'kling-o3' }} />);
       await screen.findByPlaceholderText('Rename element');
       await restored();
 
