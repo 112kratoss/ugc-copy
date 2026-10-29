@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
+import { logBackendError } from '@/lib/backend-logger';
+import { resolveRemixAccess, type RemixAccessGeneration } from '@/lib/remix-access';
 import { isTemplateResultGeneration } from '@/lib/template-result';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -59,5 +61,28 @@ export async function resolveSourceGenerationId(
   // an ordinary one, and the result is never credited with a remix.
   if (isTemplateResultGeneration(data)) return null;
 
+  // The id kept here credits the post with a remix and tells its creator
+  // (`record_completed_post_remix`, `notifyCompletedRemix`). So a public source
+  // counts only when Remix would hand the caller its recipe now: the post
+  // exposed, no block between the two, no recipe locked to the caller. The
+  // create page sends its URL's id even after Remix refused, so a refusal
+  // starts an ordinary run, as a template result does.
+  if (data.is_public && !(await remixWouldBeAllowed(adminSupabase, userId, data))) return null;
+
   return sourceGenerationId;
+}
+
+/** Bookkeeping, so a check that cannot be made credits no remix rather than failing the start. */
+async function remixWouldBeAllowed(
+  adminSupabase: SupabaseClient,
+  userId: string,
+  generation: RemixAccessGeneration,
+) {
+  try {
+    const access = await resolveRemixAccess({ adminSupabase, viewerUserId: userId, generation });
+    return access.allowed;
+  } catch (error) {
+    logBackendError('failed_to_check_remix_access_for_source_generation', { error });
+    return false;
+  }
 }

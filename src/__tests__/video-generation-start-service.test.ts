@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createRemixSourceRows } from '@/__tests__/fixtures/remix-source-rows';
 import { buildGenerationModelCatalog, CatalogError } from '@/lib/generation-model-catalog';
 import {
   startVideoGenerationForRoute,
@@ -29,6 +30,7 @@ function createClientMock({
   sourceGeneration?: SourceGenerationRow | null;
   rateLimitAllowed?: boolean;
 } = {}) {
+  const remixSourceRows = createRemixSourceRows(sourceGeneration);
   const rpc = vi.fn(async (fn: string) => {
     if (fn === 'check_backend_rate_limit') {
       return {
@@ -60,7 +62,8 @@ function createClientMock({
 
   const from = vi.fn((table: string) => {
     if (table !== 'generations') {
-      throw new Error(`Unexpected table access: ${table}`);
+      // Refuses any table but those Remix reads.
+      return remixSourceRows.client.from(table);
     }
 
     return {

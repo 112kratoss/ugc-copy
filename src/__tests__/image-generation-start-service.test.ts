@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createRemixSourceRows } from '@/__tests__/fixtures/remix-source-rows';
 import { buildGenerationModelCatalog, CatalogError } from '@/lib/generation-model-catalog';
 import {
   startImageGenerationForRoute,
@@ -25,10 +26,13 @@ type SourceGenerationRow = {
 function createClientMock({
   sourceGeneration = null,
   rateLimitAllowed = true,
+  blocks = [],
 }: {
   sourceGeneration?: SourceGenerationRow | null;
   rateLimitAllowed?: boolean;
+  blocks?: Array<{ blocker_user_id: string; blocked_user_id: string }>;
 } = {}) {
+  const remixSourceRows = createRemixSourceRows(sourceGeneration, { blocks });
   const rpc = vi.fn(async (fn: string) => {
     if (fn === 'check_backend_rate_limit') {
       return {
@@ -60,7 +64,8 @@ function createClientMock({
 
   const from = vi.fn((table: string) => {
     if (table !== 'generations') {
-      throw new Error(`Unexpected table access: ${table}`);
+      // Refuses any table but those Remix reads.
+      return remixSourceRows.client.from(table);
     }
 
     return {
@@ -184,6 +189,51 @@ describe('startImageGenerationForRoute', () => {
       remainingCredits: 92,
       cost: 8,
     });
+  });
+
+  // Remix refuses a blocked pair, so the post is not credited with the run and
+  // its creator is not told (`source-generation.ts`). The run itself starts.
+  it('starts a run from a creator who blocked the caller as an ordinary one', async () => {
+    startImageGenerationMock.mockResolvedValueOnce({
+      predictionId: 'task-image-2',
+      generationId: 'gen-image-2',
+      remainingCredits: 92,
+      cost: 8,
+    });
+    const adminClient = createClientMock({
+      sourceGeneration: {
+        id: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
+        user_id: 'creator-1',
+        is_public: true,
+      },
+      blocks: [{ blocker_user_id: 'creator-1', blocked_user_id: 'user-1' }],
+    });
+
+    const result = await startImageGenerationForRoute({
+      request: new Request('http://localhost/api/generate-image', {
+        headers: { 'idempotency-key': 'image-start-2' },
+      }),
+      body: {
+        prompt: 'A product hero image',
+        model: 'nano-banana-2',
+        aspectRatio: '1:1',
+        resolution: '1K',
+        outputFormat: 'png',
+        sourceGenerationId: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
+        catalogRevision,
+      },
+      userId: 'user-1',
+      supabase: createClientMock().client,
+      adminSupabase: adminClient.client,
+    });
+
+    // The last call: the mock keeps every test's calls, and another test's start
+    // without a source would match too.
+    expect(startImageGenerationMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      userId: 'user-1',
+      sourceGenerationId: null,
+    }));
+    expect(result).toMatchObject({ success: true, generationId: 'gen-image-2' });
   });
 
   it('forwards the server-only input-retention override without reading it from the body', async () => {

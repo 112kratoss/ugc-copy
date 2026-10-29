@@ -9,6 +9,7 @@ import {
   hasAnswered,
   type MobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
+import { createRemixSourceRows } from '@/__tests__/fixtures/remix-source-rows';
 
 import { hashGenerationStartIdempotencyKey } from '@/lib/generation-start-idempotency';
 
@@ -45,8 +46,10 @@ function createSupabaseMock(
   localGeneration: LocalGenerationRow | null = null,
   lockAcquired: LockDecision = true,
   rateLimitAllowed = true,
-  authUser: AuthUser = { id: 'user-1' }
+  authUser: AuthUser = { id: 'user-1' },
+  remixSourceBlocks: Array<{ blocker_user_id: string; blocked_user_id: string }> = [],
 ) {
+  const remixSourceRows = createRemixSourceRows(sourceGeneration, { blocks: remixSourceBlocks });
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
   const selects: string[] = [];
@@ -232,7 +235,8 @@ function createSupabaseMock(
       },
       from: vi.fn((table: string) => {
         if (table !== 'generations') {
-          throw new Error(`Unexpected table access: ${table}`);
+          // Refuses any table but those Remix reads.
+          return remixSourceRows.client.from(table);
         }
 
         return {
@@ -545,6 +549,46 @@ describe('/api/generate-image route', () => {
     expect(currentSupabaseMock.inserts[0].source_generation_id).toBe('11111111-1111-4111-8111-111111111111');
     expect(currentSupabaseMock.inserts[0].client_request_key_hash)
       .toBe(hashGenerationStartIdempotencyKey('user-1', 'image-route-fallback-1'));
+  });
+
+  // The stored lineage is what the database credits a finished remix to
+  // (`record_completed_post_remix`), so a run Remix would refuse keeps none.
+  it('persists no sourceGenerationId when the source’s creator blocked the caller, and still starts the run', async () => {
+    currentSupabaseMock = createSupabaseMock(
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        user_id: 'other-user',
+        is_public: true,
+      },
+      null,
+      true,
+      true,
+      { id: 'user-1' },
+      [{ blocker_user_id: 'other-user', blocked_user_id: 'user-1' }],
+    );
+
+    const { POST } = await importRetiredStart();
+    const response = await POST(
+      new Request('http://localhost/api/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'Idempotency-Key': 'image-route-blocked-source-1',
+          'x-request-id': 'image-route-blocked-source-1',
+        },
+        body: JSON.stringify({
+          prompt: 'A product hero image',
+          model: 'nano-banana-2',
+          sourceGenerationId: '11111111-1111-4111-8111-111111111111',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).success).toBe(true);
+    expect(currentSupabaseMock.inserts).toHaveLength(1);
+    expect(currentSupabaseMock.inserts[0].source_generation_id).toBeNull();
   });
 
   it('rejects inaccessible sourceGenerationId values before inserting', async () => {
