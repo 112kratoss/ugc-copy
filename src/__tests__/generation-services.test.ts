@@ -1179,19 +1179,80 @@ describe('generation services', () => {
         },
       });
 
-      const single = await providerBodyFor({
-        model: 'grok-imagine-video-1.5',
+      const inputOf = (body: Record<string, unknown> | null) => (body as { input: Record<string, unknown> }).input;
+      const pictures = (count: number) => Array.from({ length: count }, (_, index) => `https://cdn.example.com/picture-${index + 1}.jpg`);
+      const common = { model: 'grok-imagine-video-1.5', duration: 15, resolution: '480p', aspectRatio: '3:2' };
+
+      // Frames go as first_frame_url and last_frame_url (re-read 2026-10-29; a paid run kept
+      // both), never in image_urls, and the start frame sets the shape.
+      const frames = inputOf(await providerBodyFor({
+        ...common,
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      }));
+      expect(frames).toMatchObject({
         duration: 15,
         resolution: '480p',
-        aspectRatio: '3:2',
+        first_frame_url: 'https://cdn.example.com/start.jpg',
+        last_frame_url: 'https://cdn.example.com/end.jpg',
+      });
+      for (const key of ['image_urls', 'aspect_ratio', 'mode']) expect(frames, key).not.toHaveProperty(key);
+
+      // References keep the start frame beside them, as Wan 2.7's do; an end frame is the
+      // frames side's alone.
+      const besideStart = inputOf(await providerBodyFor({
+        ...common,
+        referenceMode: 'elements',
         startImageUrl: 'https://cdn.example.com/start.jpg',
+        imageUrls: pictures(2),
+      }));
+      expect(besideStart).toMatchObject({ image_urls: pictures(2), first_frame_url: 'https://cdn.example.com/start.jpg' });
+      for (const key of ['last_frame_url', 'aspect_ratio']) expect(besideStart, key).not.toHaveProperty(key);
+
+      // Several pictures without a frame take the ratio; one sets the shape itself.
+      expect(inputOf(await providerBodyFor({ ...common, referenceMode: 'elements', imageUrls: pictures(7) })))
+        .toMatchObject({ image_urls: pictures(7), aspect_ratio: '3:2' });
+      const single = inputOf(await providerBodyFor({ ...common, referenceMode: 'elements', imageUrls: pictures(1) }));
+      expect(single).toMatchObject({ image_urls: pictures(1) });
+      for (const key of ['first_frame_url', 'aspect_ratio']) expect(single, key).not.toHaveProperty(key);
+
+      await expect(providerBodyFor({ ...common, referenceMode: 'elements', imageUrls: pictures(8) }))
+        .rejects.toThrow('supports up to 7 image references');
+    });
+
+    it('sends Grok Imagine Video up to seven pictures, and its start frame alone', async () => {
+      const inputOf = (body: Record<string, unknown> | null) => (body as { input: Record<string, unknown> }).input;
+      const pictures = (count: number) => Array.from({ length: count }, (_, index) => `https://cdn.example.com/picture-${index + 1}.jpg`);
+      const common = { model: 'grok-imagine-video', duration: 6, resolution: '480p', aspectRatio: '16:9', mode: 'normal' };
+
+      // grok-imagine/image-to-video takes up to 7 image_urls (re-read 2026-10-29; Kie refuses
+      // an eighth), and reads aspect_ratio "only in multi-image generation mode".
+      const several = await providerBodyFor({ ...common, referenceMode: 'elements', imageUrls: pictures(7) });
+      expect(several).toMatchObject({
+        model: 'grok-imagine/image-to-video',
+        input: { image_urls: pictures(7), aspect_ratio: '16:9', mode: 'normal' },
       });
-      expect(single).toMatchObject({
-        model: 'grok-imagine-video-1-5-preview',
-        input: { duration: 15, resolution: '480p', image_urls: ['https://cdn.example.com/start.jpg'] },
-      });
-      expect((single as { input: Record<string, unknown> }).input).not.toHaveProperty('aspect_ratio');
-      expect((single as { input: Record<string, unknown> }).input).not.toHaveProperty('mode');
+
+      // It has no frame field: the start frame is a single picture, whose shape the video takes.
+      const start = await providerBodyFor({ ...common, startImageUrl: 'https://cdn.example.com/start.jpg' });
+      expect(start).toMatchObject({ model: 'grok-imagine/image-to-video', input: { image_urls: ['https://cdn.example.com/start.jpg'] } });
+      expect(inputOf(start)).not.toHaveProperty('aspect_ratio');
+
+      await expect(providerBodyFor({ ...common, referenceMode: 'elements', imageUrls: pictures(8) }))
+        .rejects.toThrow('supports up to 7 image references');
+      // A start frame and pictures would be one list to Kie, read as references.
+      await expect(providerBodyFor({
+        ...common,
+        referenceMode: 'elements',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        references: pictures(2).map((url, index) => ({
+          url,
+          handle: `@picture${index + 1}`,
+          displayName: `Picture ${index + 1}`,
+          storagePath: null,
+          sourceGenerationId: null,
+        })),
+      })).rejects.toThrow('cannot be combined with start or end frames');
     });
   });
 
@@ -3387,7 +3448,7 @@ describe('generation services', () => {
       resolution: '480p',
       startImageUrl: 'https://cdn.example.com/start.jpg',
       endImageUrl: 'https://cdn.example.com/end.jpg',
-    })).rejects.toThrow('Grok Imagine Video supports up to 1 image reference per run.');
+    })).rejects.toThrow('Grok Imagine Video supports a start frame only.');
 
     expect(rpcCalls).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();

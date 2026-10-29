@@ -14,6 +14,7 @@ import { getVideoInputAffordances } from '@/lib/generation-model-affordances';
 import { buildGenerationModelCatalog, type GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import { parseClientGenerationModelCatalog } from '@/lib/generation-model-client';
 import type { VideoModelId } from '@/lib/models';
+import kieCatalogInputs from '../../config/generation-model-catalog/releases/2026-10-29-kie-catalog-inputs.json';
 import productionVideo from './fixtures/production-video-descriptors-2026-10-29.json';
 
 /**
@@ -23,6 +24,8 @@ import productionVideo from './fixtures/production-video-descriptors-2026-10-29.
  */
 
 const codeCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+// The models releases after the snapshot (mini-default-video-20261028) change.
+const CHANGED_SINCE_SNAPSHOT = new Set(kieCatalogInputs.entries.map((entry) => entry.modelId));
 // What the page reads in production: the published descriptors, parsed as the browser parses them.
 const production = parseClientGenerationModelCatalog({
   schemaVersion: 3,
@@ -105,6 +108,9 @@ describe('the sides production publishes', () => {
   it('agrees with the code catalog on every model they share', () => {
     for (const model of productionVideo.models) {
       if (!codeCatalog.models.some((entry) => entry.id === model.id)) continue;
+      // The code is ahead of this snapshot on a model a later release changes, until that
+      // release is published; its manifest test holds those entries to the code build.
+      if (CHANGED_SINCE_SNAPSHOT.has(model.id)) continue;
       const fromCode = sidesOf(codeCatalog, model.id);
       const fromProduction = sidesOf(production, model.id);
       expect(Boolean(fromCode.frames && fromCode.references), model.id).toBe(Boolean(fromProduction.frames && fromProduction.references));

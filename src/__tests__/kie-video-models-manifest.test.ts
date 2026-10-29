@@ -10,6 +10,7 @@ import {
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
+import { descriptorBeforeKieCatalogInputs, operationBeforeKieCatalogInputs } from './fixtures/kie-catalog-inputs-2026-10-29';
 import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
 
 /**
@@ -136,11 +137,11 @@ describe('kie-video-models release', () => {
     expect(schemaVersion).toBe(2);
     // PixVerse shipped web-only in this release; release pixverse-mobile-20261008 turned
     // mobile on once the apps named its maker, so the code build differs there and only there.
-    const built = descriptorBeforeKieCheckup(descriptor(modelId));
+    const built = descriptorBeforeKieCheckup(descriptorBeforeKieCatalogInputs(descriptor(modelId)));
     expect(publicDescriptor).toEqual(modelId === 'pixverse-v6'
       ? { ...built, availability: { web: true, mobile: false } }
       : built);
-    const operation = operationBeforeKieCheckup(operations.get(modelId)!);
+    const operation = operationBeforeKieCheckup(operationBeforeKieCatalogInputs(operations.get(modelId)!));
     expect(entry.kind).toBe('video');
     expect(entry.adapterKey).toBe(operation.adapterKey);
     expect(entry.adapterConfig).toEqual(operation.adapterConfig);

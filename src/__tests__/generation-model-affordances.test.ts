@@ -12,7 +12,8 @@ import { VIDEO_MODELS, type VideoModelId } from '@/lib/models';
  * per-model tables the fallback still carries could rot unnoticed.
  */
 
-const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+// Models offered nowhere too (a retired one keeps its descriptor for a release that brings it back).
+const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true });
 const videoModelIds = Object.keys(VIDEO_MODELS) as VideoModelId[];
 
 function descriptorFor(modelId: string) {
@@ -240,8 +241,10 @@ describe('descriptor-driven affordances', () => {
     // Verified against Kie's live model docs. Seedance sends every field to one endpoint but
     // documents the two as mutually exclusive scenarios; minimax-h3 and kling-o3 route
     // references to an endpoint carrying no frame field; wan-2.7's r2v takes `first_frame`
-    // alongside `reference_image` and `reference_video`. The creator's switch keeps that start
-    // image on its references side, read off `combineFramesWithReferences` as the run is.
+    // alongside `reference_image` and `reference_video`, and grok-imagine-video-1-5-preview a
+    // `first_frame_url` beside its `image_urls` (two paid runs kept both, 2026-10-29). The
+    // creator's switch keeps that start image on its references side, read off
+    // `combineFramesWithReferences` as the run is.
     // `null` asks the built-in tables (an `undefined` here would take the default, the descriptor).
     const beside = (modelId: VideoModelId, descriptor: ReturnType<typeof descriptorFor> | null = descriptorFor(modelId)) => getVideoInputAffordances(
       descriptor,
@@ -249,8 +252,8 @@ describe('descriptor-driven affordances', () => {
       { mode: modelId === 'veo-3.1' ? 'veo3_fast' : undefined },
     ).inputChoice.startBesideReferences;
 
-    expect(videoModelIds.filter((modelId) => beside(modelId))).toEqual(['wan-2.7']);
-    expect(videoModelIds.filter((modelId) => beside(modelId, null))).toEqual(['wan-2.7']);
+    expect(videoModelIds.filter((modelId) => beside(modelId))).toEqual(['wan-2.7', 'grok-imagine-video-1.5']);
+    expect(videoModelIds.filter((modelId) => beside(modelId, null))).toEqual(['wan-2.7', 'grok-imagine-video-1.5']);
     const wan = descriptorFor('wan-2.7')!;
     expect(beside('wan-2.7', { ...wan, inputs: { ...wan.inputs, combineFramesWithReferences: false } })).toBe(false);
   });

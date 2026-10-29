@@ -208,11 +208,13 @@ describe('video reference caps track Kie', () => {
         max?: number;
         conditions?: Array<{ key: string; value: unknown }>;
       }>;
-      // Wan 2.7's cap counts its reference slot, because its start frame rides beside the
-      // references (release wan-start-frame-apart-20261019); every other cap counts pictures.
+      // A model whose start frame rides beside its references (Wan 2.7 since release
+      // wan-start-frame-apart-20261019, Grok Imagine Video 1.5 since 2026-10-29) has its cap
+      // count the reference slot; every other cap counts pictures. Read off the descriptor's
+      // flag, this also pins the runtime's START_FRAME_WITH_REFERENCES to the catalog.
       const elementsRule = rules.find((rule) => (
         rule.type === 'max-slot-count'
-        && rule.slotKey === (model.id === 'wan-2.7' ? 'imageReferences' : 'images')
+        && rule.slotKey === (model.inputs.combineFramesWithReferences ? 'imageReferences' : 'images')
         && (rule.conditions ?? []).some((condition) => (
           condition.key === 'referenceMode' && condition.value === 'elements'
         ))

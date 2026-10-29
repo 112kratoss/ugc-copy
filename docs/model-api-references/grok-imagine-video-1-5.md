@@ -1,5 +1,9 @@
 # Grok Imagine Video 1.5 Preview — verified provider evidence (2026-10-08)
 
+> **Superseded 2026-10-29 for inputs:** Kie added `first_frame_url` and `last_frame_url` (the app now sends its
+> frames there, and keeps the start frame beside up to 7 pictures); its docs page's 1-picture cap is not what Kie
+> runs. See `kie-catalog-inputs-2026-10-29.md`.
+
 Captured from `https://docs.kie.ai/market/grok-imagine/1-5-preview.md` (OpenAPI body) and the
 market page `https://kie.ai/grok-imagine-video-1.5` (`pricingDesc`,
 `scripts/ops/kie-evidence.mjs price grok-imagine-video-1.5`). Credits are Kie credits 1:1

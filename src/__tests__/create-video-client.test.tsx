@@ -2303,6 +2303,8 @@ describe('CreateVideoClient Kling video elements', () => {
         ['Gemini Omni', 'gemini-omni-video', {}],
         ['Veo 3.1 Fast', 'veo-3.1', { mode: 'veo3_fast' }],
         ['Veo 3.1 Lite', 'veo-3.1', { mode: 'veo3_lite' }],
+        ['Grok Imagine Video', 'grok-imagine-video', { mode: 'normal' }],
+        ['Grok Imagine Video 1.5', 'grok-imagine-video-1.5', {}],
       ])('brings the image references of a %s run back under the handles its prompt mentions', async (_name, model, settings) => {
         const view = renderRemix(referenceRun(model, { settings }));
 
@@ -2441,11 +2443,14 @@ describe('CreateVideoClient Kling video elements', () => {
       });
 
       it('brings back no more image references than the model takes, and says which mention is left without one', async () => {
-        // A run holds no more than its model takes, so this is a model whose limit
-        // has come down since: Grok Imagine takes one image reference.
-        const view = renderRemix(referenceRun('grok-imagine-video', { settings: { mode: 'normal' } }));
+        // A run holds no more than its model took, so this is a run whose model takes fewer
+        // since, as a release can lower a cap: Veo 3.1 Fast takes three image references.
+        const view = renderRemix(referenceRun('veo-3.1', {
+          settings: { mode: 'veo3_fast' },
+          video: { elements: [LEAD, keptImage('02', 'Quay', '@quay'), keptImage('03', 'Lamp', '@lamp'), PROP] },
+        }));
 
-        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead']));
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@quay', '@lamp']));
         expect(screen.queryByAltText('Umbrella')).not.toBeInTheDocument();
         expect(await unknownMentionLine()).toBe('Unknown element mention: @prop');
       });
@@ -3939,9 +3944,11 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(await screen.findByRole('alertdialog', { name: 'Switch to references?' })).toBeInTheDocument();
     });
 
-    it('counts the image and not the clip in a references run on Seedance 1.5 Pro', async () => {
+    it('counts the image and not the clip in a references run on Kling O3', async () => {
+      // Kling O3 takes pictures and no clip or track, frames or references (Seedance 1.5 Pro
+      // was this model until Kie retired it).
       saveInTheBrowser({ images: 1, clip: true, track: true });
-      const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      const view = render(<CreateVideoClient prefill={{ model: 'kling-o3' }} />);
       await screen.findByPlaceholderText('Rename element');
       await restored();
 

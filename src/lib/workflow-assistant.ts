@@ -218,7 +218,6 @@ const VIDEO_MODEL_ALIASES: Array<{ id: VideoModelId; patterns: RegExp[] }> = [
   { id: 'grok-imagine-video', patterns: [/\bgrok(?:\s|-)?imagine(?:\s|-)?video\b/i, /\bgrok(?:\s|-)?video\b/i, /\bxai(?:\s|-)?video\b/i] },
   { id: 'seedance-2-fast', patterns: [/\bseedance(?:\s|-)?2(?:\.0)?(?:\s|-)?fast\b/i] },
   { id: 'seedance-2', patterns: [/\bseedance(?:\s|-)?2(?:\.0)?\b/i] },
-  { id: 'seedance-1.5-pro', patterns: [/\bseedance(?:\s|-)?1\.5(?:\s|-)?pro\b/i, /\bseedance(?:\s|-)?1\.5\b/i] },
   { id: 'kling-3.0-video', patterns: [/\bkling(?:\s|-)?3\.0(?:\s|-)?cinematic\b/i, /\bkling(?:\s|-)?3\.0(?:\s|-)?video\b/i, /\bkling(?:\s|-)?3\.0\b/i] },
   { id: 'veo-3.1', patterns: [/\bveo(?:\s|-)?3\.1\b/i] },
 ];
@@ -265,10 +264,6 @@ function normalizeWorkflowAssistantImageModel(value: unknown): ImageModelId {
   return matchModelAlias(value, IMAGE_MODEL_ALIASES) ?? 'nano-banana-pro';
 }
 
-function looksLikeTransformationPrompt(value: string) {
-  return /\b(before|after|transform|transformation|morph|transition|same character|same subject)\b/i.test(value);
-}
-
 function normalizeWorkflowAssistantVideoModel(value: unknown, latestUserMessage: string): VideoModelId {
   const explicitResponseModel = matchModelAlias(value, VIDEO_MODEL_ALIASES);
   if (explicitResponseModel) {
@@ -280,7 +275,10 @@ function normalizeWorkflowAssistantVideoModel(value: unknown, latestUserMessage:
     return explicitRequestedModel;
   }
 
-  return looksLikeTransformationPrompt(latestUserMessage) ? 'seedance-1.5-pro' : 'kling-3.0-video';
+  // A before/after transformation went to Seedance 1.5 Pro until Kie retired it (2026-10-29).
+  // Kling 3.0 takes the start and end frame such a workflow wires, which the Seedance 2 family's
+  // workflows send as references instead.
+  return 'kling-3.0-video';
 }
 
 function normalizeWorkflowAssistantMotionModel(value: unknown): MotionModelId {
@@ -509,11 +507,11 @@ export function buildWorkflowAssistantSystemPrompt(
     'Generate a runnable workflow that uses named media placeholder slots plus prompt-driven generator nodes.',
     'The JSON schema is:',
     '{"title":string,"assistantReply":string,"changeSummary":string,"creativeStrategy":string,"narrative":string,"voiceover":string,"assetSlots":[{"slotKey":string,"kind":"image"|"video"|"audio","label":string,"purpose":string,"required":boolean}],"shots":[{"shotKey":string,"title":string,"purpose":string,"beat":string,"visualPrompt":string,"videoPrompt":string,"motionPrompt":string,"duration":number,"startSlotKey":string|null,"endSlotKey":string|null,"referenceImageSlotKeys":string[],"referenceVideoSlotKeys":string[],"referenceAudioSlotKeys":string[]}],"deliveryPlan":{"primaryModel":string,"stillImageModel":string,"motionModel":string,"aspectRatio":"9:16"|"16:9"|"1:1"}}',
-    'Use the existing models only: stillImageModel must be nano-banana-2-lite, nano-banana-2, nano-banana-pro, gpt-image-2, seedream-5-pro, flux-2-pro, z-image, or grok-imagine-image; primaryModel must be kling-3.0-video, seedance-1.5-pro, seedance-2, seedance-2-fast, veo-3.1, or grok-imagine-video; motionModel must be kling-2.6 or kling-3.0.',
+    'Use the existing models only: stillImageModel must be nano-banana-2-lite, nano-banana-2, nano-banana-pro, gpt-image-2, seedream-5-pro, flux-2-pro, z-image, or grok-imagine-image; primaryModel must be kling-3.0-video, seedance-2, seedance-2-fast, veo-3.1, or grok-imagine-video; motionModel must be kling-2.6 or kling-3.0.',
     'Use stable slotKey and shotKey slugs so follow-up edits can revise the same region without unnecessary churn.',
     'Every asset slot should correspond to a real image, video, or audio placeholder a user can replace later.',
     'If the user explicitly names one of the supported models, preserve that model choice in deliveryPlan unless the request is internally contradictory.',
-    'When the request sounds like a controlled before/after transformation or same-subject transition, default toward seedance-1.5-pro unless another model is explicitly better.',
+    'When the request sounds like a controlled before/after transformation or same-subject transition, default toward kling-3.0-video, which takes a start and an end frame, unless another model is explicitly better.',
     'Keep prompts directly usable in the workflow builder and focused on generation-ready instructions.',
     buildWorkflowPromptFieldGuidance({
       fieldName: 'visualPrompt',
@@ -528,7 +526,7 @@ export function buildWorkflowAssistantSystemPrompt(
       modelSelector: 'primaryModel',
       medium: 'video',
       scenario: 'video.image_to_video_start_end',
-      modelIds: ['kling-3.0-video', 'seedance-1.5-pro', 'seedance-2', 'seedance-2-fast', 'veo-3.1', 'grok-imagine-video'],
+      modelIds: ['kling-3.0-video', 'seedance-2', 'seedance-2-fast', 'veo-3.1', 'grok-imagine-video'],
       context: plannerContext,
       additionalRules: [
         'Use startSlotKey and endSlotKey when the user clearly wants a guided beginning and ending frame.',

@@ -27,7 +27,8 @@ describe('workflow assistant helpers', () => {
       latestUserMessage: 'Use a girl reference image, create a before and after transformation with lightning and audio.',
     });
 
-    expect(blueprint.deliveryPlan.primaryModel).toBe('seedance-1.5-pro');
+    // Kling 3.0 since Kie retired Seedance 1.5 Pro: it takes the start and end frame the workflow wires.
+    expect(blueprint.deliveryPlan.primaryModel).toBe('kling-3.0-video');
     expect(blueprint.assetSlots.map((slot) => slot.slotKey)).toEqual([
       'hero-reference',
       'before-frame',
@@ -118,7 +119,7 @@ describe('workflow assistant helpers', () => {
     expect(blueprint.shots[0].referenceImageSlotKeys).toEqual(['hero']);
     expect(blueprint.shots[0].referenceVideoSlotKeys).toEqual([]);
     expect(blueprint.shots[0].referenceAudioSlotKeys).toEqual(['beat-audio']);
-    expect(blueprint.deliveryPlan.primaryModel).toBe('seedance-1.5-pro');
+    expect(blueprint.deliveryPlan.primaryModel).toBe('kling-3.0-video');
     expect(blueprint.deliveryPlan.stillImageModel).toBe('nano-banana-pro');
     expect(blueprint.deliveryPlan.motionModel).toBe('kling-3.0');
     expect(blueprint.deliveryPlan.aspectRatio).toBe('9:16');
@@ -137,6 +138,25 @@ describe('workflow assistant helpers', () => {
     });
 
     expect(blueprint.deliveryPlan.primaryModel).toBe('seedance-2');
+  });
+
+  it('builds no workflow on Seedance 1.5 Pro, which Kie retired, even when asked for it by name', () => {
+    const named = extractWorkflowAssistantBlueprintFromResponse('not valid json', {
+      latestUserMessage: 'Use Seedance 1.5 Pro for a before and after transformation.',
+    });
+    expect(named.deliveryPlan.primaryModel).toBe('kling-3.0-video');
+
+    const answered = sanitizeWorkflowAssistantBlueprint({
+      deliveryPlan: {
+        primaryModel: 'seedance-1.5-pro',
+        stillImageModel: 'nano-banana-pro',
+        motionModel: 'kling-3.0',
+        aspectRatio: '9:16',
+      },
+    }, {
+      latestUserMessage: 'Build a city timelapse.',
+    });
+    expect(answered.deliveryPlan.primaryModel).toBe('kling-3.0-video');
   });
 
   it('compiles a new assistant-managed graph with slot placeholders and start/end frame wiring', () => {
@@ -168,7 +188,7 @@ describe('workflow assistant helpers', () => {
         },
       ],
       deliveryPlan: {
-        primaryModel: 'seedance-1.5-pro',
+        primaryModel: 'kling-3.0-video',
         stillImageModel: 'nano-banana-pro',
         motionModel: 'kling-3.0',
         aspectRatio: '9:16',
@@ -198,7 +218,7 @@ describe('workflow assistant helpers', () => {
       'audio-cue',
     ]);
     expect(videoNode?.data).toMatchObject({
-      model: 'seedance-1.5-pro',
+      model: 'kling-3.0-video',
       aspectRatio: '9:16',
     });
     expect(voiceoverNode?.type).toBe('voiceover-generate');

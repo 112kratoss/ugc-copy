@@ -1237,18 +1237,14 @@ export function getVideoElementSupport(
         };
     }
 
-    if (modelId === 'grok-imagine-video') {
-        return {
-            enabled: true,
-            maxElements: 1,
-            maxNamed: 1,
-            reason: null,
-        };
-    }
-
-    // Gemini Omni 1.1 Flash takes 7 `image_urls`, Grok 1.5 Preview 7 `image_urls`, and
-    // PixVerse V6 7 `image_references` (see docs/model-api-references for each).
-    if (modelId === 'gemini-omni-1.1-flash' || modelId === 'grok-imagine-video-1.5' || modelId === 'pixverse-v6') {
+    // Gemini Omni 1.1 Flash takes 7 `image_urls`, both Grok Imagine Video ids 7 `image_urls`,
+    // and PixVerse V6 7 `image_references` (see docs/model-api-references for each).
+    if (
+        modelId === 'gemini-omni-1.1-flash'
+        || modelId === 'grok-imagine-video'
+        || modelId === 'grok-imagine-video-1.5'
+        || modelId === 'pixverse-v6'
+    ) {
         return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
     }
 

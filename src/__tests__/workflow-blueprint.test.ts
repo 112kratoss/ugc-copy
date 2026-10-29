@@ -66,7 +66,7 @@ describe('workflow blueprint helpers', () => {
     expect(systemPrompt).toContain('If stillImageModel is gpt-image-2');
     expect(systemPrompt).toContain('videoPrompt guidance:');
     expect(systemPrompt).toContain('If primaryModel is kling-3.0-video');
-    expect(systemPrompt).toContain('If primaryModel is seedance-1.5-pro');
+    expect(systemPrompt).not.toContain('seedance-1.5-pro');
     expect(systemPrompt).toContain('If primaryModel is seedance-2');
     expect(systemPrompt).toContain('If primaryModel is seedance-2-fast');
     expect(systemPrompt).toContain('If primaryModel is veo-3.1');

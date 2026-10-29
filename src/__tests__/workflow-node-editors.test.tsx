@@ -520,12 +520,13 @@ describe('WorkflowNodeEditors', () => {
     expect(screen.queryByLabelText(/fixed lens/i)).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Model'), {
-      target: { value: 'seedance-1.5-pro' },
+      target: { value: 'gemini-omni-1.1-flash' },
     });
 
     expect(screen.queryByLabelText(/quality mode/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText('Resolution')).toBeInTheDocument();
-    expect(screen.getByLabelText(/fixed lens/i)).toBeInTheDocument();
+    // No model offered takes a fixed lens since Kie retired Seedance 1.5 Pro.
+    expect(screen.queryByLabelText(/fixed lens/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText('Duration').tagName).toBe('SELECT');
 
     fireEvent.change(screen.getByLabelText('Model'), {

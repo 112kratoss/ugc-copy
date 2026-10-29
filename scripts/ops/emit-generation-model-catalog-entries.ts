@@ -109,7 +109,9 @@ export interface EmitManifestOptions {
 }
 
 export function emitManifest(options: EmitManifestOptions) {
-  const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+  // Models offered nowhere too: a release turns a model off by carrying it with both
+  // platforms off, and the release it clones lists it all the same.
+  const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true });
   const operations = new Map(
     buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]),
   );
