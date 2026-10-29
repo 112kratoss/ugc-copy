@@ -215,6 +215,7 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
+import { openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-opening';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
@@ -253,8 +254,9 @@ const MULTI_SHOT_MAX_SHOTS: Readonly<Partial<Record<string, number>>> = {
 };
 
 /**
- * The form the page draws until a model is picked: Kling 3.0's, the catalog default until 2026-10-28.
- * At the first pick a setting still at its stand-in value takes the picked model's published default.
+ * The form the page draws until a model is picked when its server could hand it no opening (a
+ * remix, or a catalog it could not read): Kling 3.0's, the catalog default until 2026-10-28. At
+ * the first pick a setting still at its drawn value takes the picked model's published default.
  */
 const STAND_IN_FORM = {
     modelId: 'kling-3.0-video',
@@ -266,6 +268,37 @@ const STAND_IN_FORM = {
     isMultiShot: false,
     duration: 5,
 } as const;
+
+type DrawnVideoSettings = {
+    mode: string;
+    aspectRatio: string;
+    sound: boolean;
+    resolution: string;
+    fixedLens: boolean;
+    isMultiShot: boolean;
+    duration: number;
+};
+
+type DrawnVideoForm = DrawnVideoSettings & { modelId: VideoModelId };
+
+/**
+ * The form the page draws until its first pick: the server's opening (`CreatorOpening`) as that
+ * pick would set it on the stand-in, so on the revision the server read nothing changes.
+ */
+function drawnVideoForm(opening: CreatorOpening | null): DrawnVideoForm {
+    // A length is a number, or a choice's string in some descriptors ("4").
+    const duration = Number(opening?.settings.duration ?? Number.NaN);
+    return {
+        modelId: (opening?.modelId ?? STAND_IN_FORM.modelId) as VideoModelId,
+        mode: openingSetting<string>(opening, 'mode', STAND_IN_FORM.mode),
+        aspectRatio: openingSetting<string>(opening, 'aspectRatio', STAND_IN_FORM.aspectRatio),
+        sound: openingSetting<boolean>(opening, 'sound', STAND_IN_FORM.sound),
+        resolution: openingSetting<string>(opening, 'resolution', STAND_IN_FORM.resolution),
+        fixedLens: openingSetting<boolean>(opening, 'fixedLens', STAND_IN_FORM.fixedLens),
+        isMultiShot: openingSetting<boolean>(opening, 'isMultiShot', STAND_IN_FORM.isMultiShot),
+        duration: Number.isFinite(duration) ? duration : STAND_IN_FORM.duration,
+    };
+}
 
 /** A multi-shot run's length, as the server derives it from the shots: each one whole and at least a second. */
 function multiShotTotalDuration(shots: readonly { duration: number }[]): number {
@@ -388,6 +421,8 @@ type VideoCreatorDraft = {
     additionalSettings: { modelId: string; values: Record<string, CatalogPrimitive> };
     /** The inputs' side last picked: frames or references (the artboard Inputs). */
     inputSide: VideoInputSide;
+    /** What the page drew, saved with a draft that has no model yet (`modelId: ''`). */
+    drawn?: Partial<DrawnVideoSettings>;
 };
 
 /**
@@ -416,6 +451,7 @@ function readVideoCreatorDraft(value: unknown): Partial<VideoCreatorDraft> {
         ))) as Record<string, CatalogPrimitive>
         : null;
     const duration = typeof stored.duration === 'number' && Number.isFinite(stored.duration) ? stored.duration : undefined;
+    const drawn = stored.drawn && typeof stored.drawn === 'object' ? savedVideoFormValues(readVideoCreatorDraft(stored.drawn)) : undefined;
     return {
         prompt: text('prompt')?.slice(0, GENERATION_PROMPT_MAX_LENGTH),
         modelId: modelId && modelId in VIDEO_MODELS ? modelId : undefined,
@@ -431,6 +467,7 @@ function readVideoCreatorDraft(value: unknown): Partial<VideoCreatorDraft> {
             ? { modelId: additional.modelId, values: additionalValues }
             : undefined,
         inputSide: stored.inputSide === 'frames' || stored.inputSide === 'references' ? stored.inputSide : undefined,
+        drawn,
     };
 }
 
@@ -1142,6 +1179,7 @@ export default function CreateVideoClient({
     welcome = null,
     handoverNonce = null,
     visitorWelcomeCredits = null,
+    opening = null,
     startPosts = null,
 }: {
     prefill: CreateVideoPrefill;
@@ -1151,6 +1189,8 @@ export default function CreateVideoClient({
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
+    /** The run the server read the page opens on: its form is drawn from the first paint, and its price stands until the page's own. */
+    opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
 }) {
@@ -1172,8 +1212,10 @@ export default function CreateVideoClient({
     const prefillAspectRatio = prefill.aspectRatio ?? null;
     const prefillDuration = prefill.duration ?? null;
 
-    const [selectedModel, setSelectedModel] = useState<VideoModelId>(STAND_IN_FORM.modelId);
-    const [isMultiShot, setIsMultiShot] = useState<boolean>(STAND_IN_FORM.isMultiShot);
+    // What the page draws until its first pick, kept as it opened: the first pick reads the form against it.
+    const [drawnForm] = useState(() => drawnVideoForm(opening));
+    const [selectedModel, setSelectedModel] = useState<VideoModelId>(drawnForm.modelId);
+    const [isMultiShot, setIsMultiShot] = useState<boolean>(drawnForm.isMultiShot);
     const [prompt, setPrompt] = useState('');
 
     // Mirrors the live prompt so the remix restore below can tell whether the
@@ -1182,7 +1224,7 @@ export default function CreateVideoClient({
     useEffect(() => {
         promptRef.current = prompt;
     }, [prompt]);
-    const [singleDuration, setSingleDuration] = useState<number>(STAND_IN_FORM.duration);
+    const [singleDuration, setSingleDuration] = useState<number>(drawnForm.duration);
     const [multiPrompts, setMultiPrompts] = useState<MultiShot[]>([
         { id: '1', prompt: '', duration: 5 },
     ]);
@@ -1208,11 +1250,11 @@ export default function CreateVideoClient({
     // frame replaced since does not match, and is uploaded.
     const [startFrameStaged, setStartFrameStaged] = useState<{ file: File; staged: StagedUpload } | null>(null);
     const [endFrameStaged, setEndFrameStaged] = useState<{ file: File; staged: StagedUpload } | null>(null);
-    const [mode, setMode] = useState<string>(STAND_IN_FORM.mode);
-    const [aspectRatio, setAspectRatio] = useState<string>(STAND_IN_FORM.aspectRatio);
-    const [sound, setSound] = useState<boolean>(STAND_IN_FORM.sound);
-    const [resolution, setResolution] = useState<string>(STAND_IN_FORM.resolution);
-    const [fixedLens, setFixedLens] = useState<boolean>(STAND_IN_FORM.fixedLens);
+    const [mode, setMode] = useState<string>(drawnForm.mode);
+    const [aspectRatio, setAspectRatio] = useState<string>(drawnForm.aspectRatio);
+    const [sound, setSound] = useState<boolean>(drawnForm.sound);
+    const [resolution, setResolution] = useState<string>(drawnForm.resolution);
+    const [fixedLens, setFixedLens] = useState<boolean>(drawnForm.fixedLens);
     // The inputs' side last picked, frames or references (the artboard Inputs), saved with the
     // draft. What is attached holds the card to its own side (`videoInputView`).
     const [pickedInputSide, setPickedInputSide] = useState<VideoInputSide>('frames');
@@ -1391,7 +1433,7 @@ export default function CreateVideoClient({
         const emptySavedModel = emptySaved && catalog.models.find((model) => model.id === emptySaved.modelId && model.kind === 'video');
         if (emptySaved && !emptySavedModel && !modelCatalog.missingIds.includes(emptySaved.modelId ?? '')) return;
         if (emptySaved && mediaRestoredFor?.owner !== draftOwner) return;
-        const drawn = emptySaved ? { ...STAND_IN_FORM, ...savedVideoFormValues(emptySaved) } : STAND_IN_FORM;
+        const drawn = emptySaved ? { ...drawnForm, ...savedVideoFormValues(emptySaved) } : drawnForm;
         // The drawn model's own settings check empties a choice it does not offer.
         const asDrawn = (value: string, drawnValue: string) => value === drawnValue || value === '';
         const formAsDrawn = asDrawn(mode, drawn.mode) && asDrawn(resolution, drawn.resolution) && sound === drawn.sound
@@ -1439,7 +1481,7 @@ export default function CreateVideoClient({
     }, [
         modelCatalog.catalog, modelCatalog.isCheckingRevision, selectedModel, videoModel, prefillModel, prefillAspectRatio, prefillDuration,
         remixId, draftReady, mode, resolution, sound, fixedLens, isMultiShot, aspectRatio, singleDuration, modelCatalog.missingIds,
-        formHoldsWork, mediaRestoredFor, draftOwner,
+        formHoldsWork, mediaRestoredFor, draftOwner, drawnForm,
     ]);
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
     const isKlingVideoModel = selectedModel === 'kling-3.0-video';
@@ -1801,6 +1843,13 @@ export default function CreateVideoClient({
         quoteErrorMessage: quoteState.error?.message,
     });
     const estimatedCost = quoteUi.costCredits;
+    // The price under the bar: the page's own, or until it is in, the server's for the run the page opened on.
+    const notedCost = estimatedCost ?? openingCost(opening, {
+        run: { modelId: selectedModel, settings: runSettings, inputs: runInputs },
+        quoteStatus: quoteState.status,
+        confirmedRevision: modelCatalog.isCheckingRevision ? null : modelCatalog.revision,
+        catalogFailed: Boolean(modelCatalog.error) || modelCatalog.missingIds.includes(selectedModel),
+    });
     // A page the start keeps refusing at its own price waits for a reload, not another press.
     const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
     const quoteRetry = quoteState.status === 'error' ? <StudioQuoteRetry message={quoteUi.message} onRetry={quoteState.retry} /> : null;
@@ -2736,14 +2785,22 @@ export default function CreateVideoClient({
                     restoredDraftModelRef.current = true;
                     setSelectedModel(draft.modelId as VideoModelId);
                 }
-                if (draft.mode !== undefined) setMode(draft.mode);
-                if (draft.aspectRatio && !prefillAspectRatio) setAspectRatio(draft.aspectRatio);
-                if (draft.sound !== undefined) setSound(draft.sound);
-                if (draft.resolution !== undefined) setResolution(draft.resolution);
-                if (draft.fixedLens !== undefined) setFixedLens(draft.fixedLens);
-                if (draft.isMultiShot !== undefined) setIsMultiShot(draft.isMultiShot);
+                // A draft saved before any model was settled holds what the page drew then beside what the
+                // creator changed: only the changes come back, and the rest is this visit's to draw. One saved
+                // before the page drew the server's opening (2026-10-29) drew the stand-in.
+                const drawnThen: Partial<DrawnVideoSettings> | null = draft.modelId ? null : { ...STAND_IN_FORM, ...draft.drawn };
+                // The page itself empties a choice its model does not offer, so an empty one was never the creator's either.
+                const changed = <T,>(value: T | undefined, drawnValue: T | undefined): value is T => (
+                    value !== undefined && (drawnThen === null || (value !== drawnValue && value !== ''))
+                );
+                if (changed(draft.mode, drawnThen?.mode)) setMode(draft.mode);
+                if (draft.aspectRatio && !prefillAspectRatio && changed(draft.aspectRatio, drawnThen?.aspectRatio)) setAspectRatio(draft.aspectRatio);
+                if (changed(draft.sound, drawnThen?.sound)) setSound(draft.sound);
+                if (changed(draft.resolution, drawnThen?.resolution)) setResolution(draft.resolution);
+                if (changed(draft.fixedLens, drawnThen?.fixedLens)) setFixedLens(draft.fixedLens);
+                if (changed(draft.isMultiShot, drawnThen?.isMultiShot)) setIsMultiShot(draft.isMultiShot);
                 if (draft.shots) setMultiPrompts(draft.shots);
-                if (draft.duration !== undefined && !prefillDuration) setSingleDuration(draft.duration);
+                if (changed(draft.duration, drawnThen?.duration) && !prefillDuration) setSingleDuration(draft.duration);
                 if (draft.additionalSettings) pendingAdditionalSettingsRef.current = draft.additionalSettings;
                 if (draft.inputSide) setPickedInputSide(draft.inputSide);
             })
@@ -2790,7 +2847,9 @@ export default function CreateVideoClient({
         duration: singleDuration,
         additionalSettings: { modelId: selectedModel, values: additionalSettings.settings },
         inputSide: pickedInputSide,
-    }), [prompt, modelSettled, selectedModel, mode, aspectRatio, sound, resolution, fixedLens, isMultiShot, multiPrompts, singleDuration, additionalSettings.settings, pickedInputSide]);
+        // Until a model is settled, what the page drew, so the next visit tells it from the creator's own.
+        drawn: modelSettled ? undefined : savedVideoFormValues(drawnForm),
+    }), [prompt, modelSettled, selectedModel, mode, aspectRatio, sound, resolution, fixedLens, isMultiShot, multiPrompts, singleDuration, additionalSettings.settings, drawnForm, pickedInputSide]);
 
     const flushTextDraft = useCallback(async () => {
         const unsaved = unsavedDraftRef.current;
@@ -5071,7 +5130,7 @@ export default function CreateVideoClient({
         />
     );
     const barNote = isVisitor ? (
-        <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={estimatedCost} />
+        <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={notedCost} />
     ) : offersFittedRemix ? (
         <div className="flex flex-wrap justify-between gap-x-4 gap-y-1">
             <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>Top up · {smallestCreditPackLabel()}</Link>
@@ -5089,7 +5148,7 @@ export default function CreateVideoClient({
     ) : shortOfEveryVideoShown && userCredits !== null && videosFrom !== null ? (
         <CreatorLowBalanceNote balance={userCredits} videosFrom={videosFrom} />
     ) : userCredits !== null ? (
-        <CreatorBalanceNote balance={userCredits} cost={estimatedCost} />
+        <CreatorBalanceNote balance={userCredits} cost={notedCost} />
     ) : undefined;
 
     // The settings, each option priced (owner, 2026-10-28): the run with that one option.

@@ -160,6 +160,7 @@ import {
 } from '@/lib/generation-model-client';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
+import { openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-opening';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
@@ -334,6 +335,7 @@ export default function CreateImageClient({
     welcome = null,
     handoverNonce = null,
     visitorWelcomeCredits = null,
+    opening = null,
     startPosts = null,
 }: {
     prefill: CreateImagePrefill;
@@ -343,6 +345,11 @@ export default function CreateImageClient({
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
+    /**
+     * The run the server read the page opens on: its model, settings and price are drawn from the
+     * first paint, until the first pick and the page's own price.
+     */
+    opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
 }) {
@@ -357,7 +364,7 @@ export default function CreateImageClient({
     // signed-in face, and its Generate signs in again on the login page.
     const isVisitor = draftOwner === VISITOR_DRAFT_OWNER;
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
-    const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
+    const [selectedModel, setSelectedModel] = useState<ModelId>((opening?.modelId ?? 'nano-banana-2') as ModelId);
     const [prompt, setPrompt] = useState('');
 
     // Mirrors the live prompt so the remix restore below can tell whether the
@@ -367,10 +374,11 @@ export default function CreateImageClient({
         promptRef.current = prompt;
     }, [prompt]);
     const [elements, setElements] = useState<ImageElementDraft[]>([]);
-    const [aspectRatio, setAspectRatio] = useState('auto');
-    const [resolution, setResolution] = useState<ImageResolution>('1K');
-    const [qualityMode, setQualityMode] = useState<ImageQualityMode>('standard');
-    const [googleSearch, setGoogleSearch] = useState(false);
+    // The opening's published settings until the first pick; the page's own where it publishes none.
+    const [aspectRatio, setAspectRatio] = useState(() => openingSetting<string>(opening, 'aspectRatio', 'auto'));
+    const [resolution, setResolution] = useState(() => openingSetting<string>(opening, 'resolution', '1K') as ImageResolution);
+    const [qualityMode, setQualityMode] = useState(() => openingSetting<string>(opening, 'qualityMode', 'standard') as ImageQualityMode);
+    const [googleSearch, setGoogleSearch] = useState(() => openingSetting<boolean>(opening, 'googleSearch', false));
     const [isDragging, setIsDragging] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationTiming, setGenerationTiming] = useState<GenerationTiming | null>(null);
@@ -495,6 +503,9 @@ export default function CreateImageClient({
 
     useEffect(() => {
         if (!modelCatalog.catalog || !isDraftRestoreSettled) return;
+        // The first pick waits for the revision the network confirms, as the video page's does: a catalog
+        // read back from the browser can name an earlier default than the one the page was drawn on.
+        if (!hasResolvedInitialCatalogModel.current && modelCatalog.isCheckingRevision) return;
         const preferDefault = !hasResolvedInitialCatalogModel.current
             && !remixId
             && !prefillModel
@@ -509,7 +520,7 @@ export default function CreateImageClient({
                 setCatalogNotice(`Your previous image model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
             }
         }
-    }, [isDraftRestoreSettled, modelCatalog.catalog, selectedModel, prefillModel, remixId]);
+    }, [isDraftRestoreSettled, modelCatalog.catalog, modelCatalog.isCheckingRevision, selectedModel, prefillModel, remixId]);
 
     // A route's own prompt, model or frame wins over the saved one, and a model's
     // settings come back only with that model.
@@ -1170,6 +1181,13 @@ export default function CreateImageClient({
         quoteErrorMessage: quoteState.error?.message,
     });
     const currentCost = quoteUi.costCredits;
+    // The price under the bar: the page's own, or until it is in, the server's for the run the page opened on.
+    const notedCost = currentCost ?? openingCost(opening, {
+        run: { modelId: selectedModel, settings: generationSettings, inputs: runInputs },
+        quoteStatus: quoteState.status,
+        confirmedRevision: modelCatalog.isCheckingRevision ? null : modelCatalog.revision,
+        catalogFailed: Boolean(modelCatalog.error) || modelCatalog.missingIds.includes(selectedModel),
+    });
     const availableResolutions = getImageResolutionOptions(selectedModel, aspectRatio);
     // Descriptor-derived where the catalog is available: a resolution control offering a
     // single value is a fixed setting, not a choice worth rendering. Falls back to the
@@ -1266,8 +1284,10 @@ export default function CreateImageClient({
         })
         : [];
 
-    // The run's settings read back as the app's bar reads them: "1K · AUTO · JPG".
-    const outputFormat = additionalSettings.settings.outputFormat;
+    // The run's settings read back as the app's bar reads them: "1K · AUTO · JPG". The format is the
+    // model's descriptor's; until that is in, the opening's for the model the page opened on.
+    const outputFormat = additionalSettings.settings.outputFormat
+        ?? (selectedModel === opening?.modelId ? opening.settings.outputFormat : undefined);
     const settingsSummary = [
         showResolutionControl
             ? resolution
@@ -1962,6 +1982,8 @@ export default function CreateImageClient({
                                     onSelect={(id) => {
                                         // A notice about the previous model no longer applies.
                                         if (id !== selectedModel) setCatalogNotice(null);
+                                        // The creator's pick is the first pick: the catalog's default no longer replaces it.
+                                        hasResolvedInitialCatalogModel.current = true;
                                         setSelectedModel(id as ModelId);
                                         setIsModelDropdownOpen(false);
                                         setModelSearchQuery('');
@@ -2216,8 +2238,8 @@ export default function CreateImageClient({
                             ) : null}
                             action={barAction}
                             note={isVisitor
-                                ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={currentCost} />
-                                : userCredits !== null ? <CreatorBalanceNote balance={userCredits} cost={currentCost} /> : undefined}
+                                ? <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={notedCost} />
+                                : userCredits !== null ? <CreatorBalanceNote balance={userCredits} cost={notedCost} /> : undefined}
                         />
                     </>
                 }

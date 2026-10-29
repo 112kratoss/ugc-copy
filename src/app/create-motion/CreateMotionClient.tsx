@@ -100,6 +100,7 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
+import { openingSetting, type CreatorOpening } from '@/lib/creator-opening';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { planMotionRunInputs } from '@/lib/creator-run-inputs';
 import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
@@ -226,6 +227,7 @@ export default function CreateMotionClient({
     welcome = null,
     handoverNonce = null,
     visitorWelcomeCredits = null,
+    opening = null,
     startPosts = null,
 }: {
     prefill: CreateMotionPrefill;
@@ -237,6 +239,11 @@ export default function CreateMotionClient({
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
+    /**
+     * The run the server read the page opens on: its model and settings are drawn from the first
+     * paint, in place of Kling 3.0's, until the first pick. A motion run is priced by its clip.
+     */
+    opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
 }) {
@@ -251,7 +258,7 @@ export default function CreateMotionClient({
     // signed-in face, and its Generate signs in again on the login page.
     const isVisitor = draftOwner === VISITOR_DRAFT_OWNER;
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
-    const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
+    const [selectedModel, setSelectedModel] = useState<ModelId>((opening?.modelId ?? 'kling-3.0') as ModelId);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     // Open settings price each of their options; the bar says when they open and close.
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -279,8 +286,8 @@ export default function CreateMotionClient({
     const [resolvedOutputVideo, setResolvedOutputVideo] = useState<{ outputUrl: string; url: string } | null>(null);
     const [latestGenerationId, setLatestGenerationId] = useState<string | null>(null);
     const [duration, setDuration] = useState<number>(0);
-    const [characterOrientation, setCharacterOrientation] = useState<'video' | 'image'>('video');
-    const [mode, setMode] = useState<'720p' | '1080p'>('720p');
+    const [characterOrientation, setCharacterOrientation] = useState(() => openingSetting<string>(opening, 'characterOrientation', 'video') as 'video' | 'image');
+    const [mode, setMode] = useState(() => openingSetting<string>(opening, 'resolution', '720p') as '720p' | '1080p');
     // Bumped once a start the creator pressed is confirmed: the result canvas comes into view.
     const [canvasRevealKey, setCanvasRevealKey] = useState(0);
     // The run in flight's model and settings, which the canvas names while the form changes.
@@ -392,6 +399,9 @@ export default function CreateMotionClient({
         // The saved draft names the model first: resolving before it lands would
         // replace the creator's model with the catalog default.
         if (!modelCatalog.catalog || !isDraftReady) return;
+        // The first pick waits for the revision the network confirms, as the video page's does: a catalog
+        // read back from the browser can name an earlier default than the one the page was drawn on.
+        if (!hasResolvedInitialCatalogModel.current && modelCatalog.isCheckingRevision) return;
         const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel && !restoredDraftModelRef.current;
         const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'motion', selectedModel, { preferDefault });
         if (!nextModelId) return;
@@ -403,7 +413,7 @@ export default function CreateMotionClient({
                 setCatalogNotice(`Your previous motion model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
             }
         }
-    }, [isDraftReady, modelCatalog.catalog, selectedModel, model, prefillModel, remixId]);
+    }, [isDraftReady, modelCatalog.catalog, modelCatalog.isCheckingRevision, selectedModel, model, prefillModel, remixId]);
     useEffect(() => {
         if (!modelCatalog.detailsReady) return;
         let changed = false;
@@ -1540,6 +1550,8 @@ export default function CreateMotionClient({
                                                 onClick={() => {
                                                     // A notice about the previous model no longer applies.
                                                     if (motionModel.id !== selectedModel) setCatalogNotice(null);
+                                                    // The creator's pick is the first pick: the catalog's default no longer replaces it.
+                                                    hasResolvedInitialCatalogModel.current = true;
                                                     setSelectedModel(motionModel.id as ModelId);
                                                     setIsModelDropdownOpen(false);
                                                     setModelSearchQuery('');

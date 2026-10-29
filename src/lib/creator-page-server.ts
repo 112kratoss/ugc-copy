@@ -2,12 +2,21 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import { catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { requestHasAuthHint } from '@/components/RouteAuthBoundary';
 import { CREATOR_HANDOVER_PARAM, CREATOR_WELCOME_PARAM } from '@/lib/auth-onboarding';
 import { logBackendError } from '@/lib/backend-logger';
+import { creatorOpeningFromCatalog, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { loadCreatorStartPosts } from '@/lib/creator-start-posts-server';
+import {
+  CatalogError,
+  GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
+  quoteGenerationModel,
+  type GenerationModelKind,
+} from '@/lib/generation-model-catalog';
+import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
 import { REFERRAL_CLAIM_REASON_PATTERN, REFERRAL_CLAIM_STATUS_PARAM } from '@/lib/referral-claim-copy';
 import { getServerAuthState } from '@/lib/supabase-server';
 import { loadWelcomeCreditAmount } from '@/lib/welcome-credit-program-server';
@@ -76,5 +85,50 @@ export async function loadCreatorStartPostsForRequest(): Promise<CreatorStartPos
   } catch (error) {
     logBackendError('creator_start_posts_load_failed', { error });
     return [];
+  }
+}
+
+async function readCreatorOpening(kind: GenerationModelKind, link: CreatorOpeningLink): Promise<CreatorOpening | null> {
+  // The store's own copy of the release, at most a minute old on this instance, as the quote route reads it.
+  // A data cache over it outlived publishes and rollbacks, and deployments, which no key here could name.
+  const snapshot = await loadPublishedGenerationModelCatalog({
+    platform: 'web',
+    schemaVersion: GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
+  });
+  const opening = creatorOpeningFromCatalog(snapshot.catalog, kind, link);
+  if (!opening) return null;
+  // A motion run takes a clip and is priced by its length: it opens unpriced.
+  if (kind === 'motion') return { ...opening, costCredits: null };
+  try {
+    // Priced on the release just read, as a start prices its run (`unified-generation-start-service`).
+    const quote = quoteGenerationModel(catalogRunQuoteInput({
+      kind,
+      modelId: opening.modelId,
+      catalogRevision: opening.revision,
+      settings: opening.settings,
+      inputs: [],
+    }), { catalog: snapshot.catalog, operations: snapshot.operations });
+    return { ...opening, costCredits: quote.costCredits };
+  } catch (error) {
+    // A run the catalog will not price without inputs opens unpriced; anything else is a fault.
+    if (!(error instanceof CatalogError)) {
+      logBackendError('creator_opening_price_failed', { error, kind, modelId: opening.modelId });
+    }
+    return { ...opening, costCredits: null };
+  }
+}
+
+/**
+ * The run a creator page opens on (`CreatorOpening`), from the published web catalog: a link's
+ * model, or the default, at its published settings and price. Null when the catalog cannot be
+ * read, or a link names a model the page cannot draw or the catalog does not offer; the page then
+ * draws its own stand-in until its first pick. Never throws.
+ */
+export async function loadCreatorOpening(kind: GenerationModelKind, link: CreatorOpeningLink = {}): Promise<CreatorOpening | null> {
+  try {
+    return await readCreatorOpening(kind, link);
+  } catch (error) {
+    logBackendError('creator_opening_load_failed', { error, kind });
+    return null;
   }
 }
