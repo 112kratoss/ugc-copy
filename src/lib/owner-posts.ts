@@ -643,7 +643,10 @@ async function toOwnerPostListItem(
   mediaItemsMap: Map<string, PostMediaSummary[]>,
   generationPreviewMap: Map<string, GenerationPreviewInfo>,
   sellerProfile: OwnerSellerProfile | null,
-  creationReferenceCounts: Map<string, PostResourceItemCounts>
+  // What the owner's own unlock of each recipe holds that its stored kinds do
+  // not say, by post: the creation's inputs it merges in (B3). Only the kinds
+  // of the items counted are added.
+  unlockedItemCounts: ReadonlyMap<string, PostResourceItemCounts>
 ) {
   const rawMediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
     supabase: adminSupabase,
@@ -681,9 +684,9 @@ async function toOwnerPostListItem(
     : storedResourceKinds;
   // Nor do they know the creation's inputs a recipe whose creator shares them
   // hands over with the unlock (B3), counted as the owner's own unlock reads them.
-  const referenceCounts = creationReferenceCounts.get(row.id);
-  const resourceKinds = referenceCounts
-    ? addPostResourceItemCountKinds(recipeResourceKinds, referenceCounts)
+  const unlockedCounts = unlockedItemCounts.get(row.id);
+  const resourceKinds = bundleRow && unlockedCounts
+    ? addPostResourceItemCountKinds(recipeResourceKinds, unlockedCounts)
     : recipeResourceKinds;
   const title =
     row.title?.trim() ||
@@ -773,6 +776,17 @@ export async function getOwnerPostList(
   const sellerProfilePromise = bundleMapPromise.then((bundles) => (
     bundles.size > 0 ? loadOwnerSellerProfile(adminSupabase, userId) : null
   ));
+  // Only a creation post with a recipe whose stored switch may share the
+  // creation's inputs (the compact summary does not say) can gain any, so a
+  // page without one asks nothing.
+  const creationReferenceCountsPromise = bundleMapPromise.then((bundles) => {
+    const sharingPostIds = rows
+      .filter((row) => row.generation_id && bundles.has(row.id) && bundles.get(row.id)?.allow_remix !== false)
+      .map((row) => row.id);
+    return sharingPostIds.length > 0
+      ? countGenerationRecipeReferenceItemsByPostId({ adminSupabase, postIds: sharingPostIds, ownerUserId: userId })
+      : new Map<string, PostResourceItemCounts>();
+  });
   const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile, creationReferenceCounts] = await Promise.all([
     bundleMapPromise,
     loadSourceToolsMap(adminSupabase, postIds),
@@ -789,12 +803,7 @@ export async function getOwnerPostList(
       },
     ),
     sellerProfilePromise,
-    // A post made outside the app has no creation, so no inputs to count.
-    countGenerationRecipeReferenceItemsByPostId({
-      adminSupabase,
-      postIds: rows.filter((row) => row.generation_id).map((row) => row.id),
-      viewerUserId: userId,
-    }),
+    creationReferenceCountsPromise,
   ]);
   const filteredRows = rows.filter((row) => {
     if (visibility === 'archived') {
@@ -840,7 +849,7 @@ export async function getOwnerPostDetail(
   const sellerProfilePromise = bundleMapPromise.then((bundles) => (
     bundles.size > 0 ? loadOwnerSellerProfile(adminSupabase, userId) : null
   ));
-  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile, creationReferenceCounts] = await Promise.all([
+  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile, bundleDetail] = await Promise.all([
     bundleMapPromise,
     loadSourceToolsMap(adminSupabase, [row.id]),
     mediaItemsPromise,
@@ -854,12 +863,15 @@ export async function getOwnerPostDetail(
       },
     ),
     sellerProfilePromise,
-    countGenerationRecipeReferenceItemsByPostId({
-      adminSupabase,
-      postIds: row.generation_id ? [row.id] : [],
+    // Needs none of the reads beside it.
+    getPostResourceBundleDetailByPostId(postId, {
       viewerUserId: userId,
+      countryCode: options?.countryCode ?? null,
     }),
   ]);
+  // A recipe removed while people had it is retired: its row stays for them,
+  // but the post has no recipe, so the editor opens on "No recipe".
+  const liveBundle = bundleDetail && !bundleDetail.retiredAt ? bundleDetail : null;
   const listItem = await toOwnerPostListItem(
     adminSupabase,
     row,
@@ -868,16 +880,10 @@ export async function getOwnerPostDetail(
     mediaItemsMap,
     generationPreviewMap,
     sellerProfile,
-    creationReferenceCounts,
+    // The recipe as the owner's own unlock reads it, with the creation's
+    // inputs it shares merged in (B3): read once, for the editor and its kinds.
+    new Map(liveBundle?.lockedPreview ? [[row.id, liveBundle.lockedPreview.itemCounts]] : []),
   );
-  const bundleDetail = await getPostResourceBundleDetailByPostId(postId, {
-    viewerUserId: userId,
-    countryCode: options?.countryCode ?? null,
-  });
-
-  // A recipe removed while people had it is retired: its row stays for them,
-  // but the post has no recipe, so the editor opens on "No recipe".
-  const liveBundle = bundleDetail && !bundleDetail.retiredAt ? bundleDetail : null;
 
   return {
     ...listItem,

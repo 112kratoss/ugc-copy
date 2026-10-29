@@ -97,6 +97,49 @@ let bundleSummaryRpcCalls = 0;
 let creatorStatsRpcCalls = 0;
 // Every direct read of the recipe table: its columns and filters.
 let bundleTableReads: Array<{ columns: string; filters: Record<string, unknown> }> = [];
+// The generations' saved inputs, which only the read of what a recipe's
+// unlock adds from them (B3) embeds.
+let generationInputsState: Array<Record<string, unknown>> = [];
+
+/**
+ * A recipe as the read of what its unlock adds from the creation's saved
+ * inputs nests it: its post, the post's generation and that generation's
+ * inputs.
+ */
+function creationInputSource(bundle: ResourceBundleRow) {
+  const post = postsState.find((row) => row.id === bundle.post_id) ?? null;
+  const generation = post?.generation_id
+    ? generationsState.find((row) => row.id === post.generation_id) ?? null
+    : null;
+  return {
+    post_id: bundle.post_id,
+    owner_user_id: post?.user_id ?? null,
+    attachments: bundle.attachments ?? [],
+    resource_items: bundle.resource_items ?? [],
+    post: post
+      ? {
+          id: post.id,
+          user_id: post.user_id,
+          generation_id: post.generation_id,
+          category: post.category,
+          visibility: post.visibility,
+          archived_at: post.archived_at ?? null,
+          review_status: post.review_status ?? 'visible',
+          source_kind: post.source_kind,
+          generation: generation
+            ? {
+                id: generation.id,
+                user_id: generation.user_id,
+                is_public: generation.is_public,
+                category: generation.category,
+                workflow_settings: null,
+                inputs: generationInputsState.filter((input) => input.generation_id === generation.id),
+              }
+            : null,
+        }
+      : null,
+  };
+}
 
 function createResourceBundleQuery(columns = '') {
   const filters: Array<(row: ResourceBundleRow) => boolean> = [];
@@ -116,12 +159,13 @@ function createResourceBundleQuery(columns = '') {
     abortSignal() {
       return query;
     },
-    then<TResult1 = { data: ResourceBundleRow[]; error: null }, TResult2 = never>(
-      onfulfilled?: ((value: { data: ResourceBundleRow[]; error: null }) => TResult1 | PromiseLike<TResult1>) | null,
+    then<TResult1 = { data: unknown[]; error: null }, TResult2 = never>(
+      onfulfilled?: ((value: { data: unknown[]; error: null }) => TResult1 | PromiseLike<TResult1>) | null,
       onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
     ) {
+      const rows = resourceBundlesState.filter((row) => filters.every((filter) => filter(row)));
       return Promise.resolve({
-        data: resourceBundlesState.filter((row) => filters.every((filter) => filter(row))),
+        data: columns.includes('generation:generations') ? rows.map(creationInputSource) : rows,
         error: null,
       }).then(onfulfilled, onrejected);
     },
@@ -498,6 +542,7 @@ describe('creator profile data loader', () => {
     bundleSummaryRpcCalls = 0;
     creatorStatsRpcCalls = 0;
     bundleTableReads = [];
+    generationInputsState = [];
     resolveOwnedStoredMediaUrlMock.mockReset();
     resolveOwnedStoredMediaUrlMock.mockImplementation(async (_client, outputUrl: string, ownerUserId: string) => (
       outputUrl.startsWith(`generated_images/${ownerUserId}/`)
@@ -528,7 +573,7 @@ describe('creator profile data loader', () => {
     expect(data?.pageInfo).toMatchObject({ limit: 24, offset: 0, nextOffset: null });
   });
 
-  it('uses one summary query, reads no draft, and keeps draft bundle recipes private on creator pages', async () => {
+  it('uses one bundle query and keeps draft bundle recipes private on creator pages', async () => {
     resourceBundlesState = [{
       id: 'draft-bundle-1',
       post_id: 'post-1',
@@ -553,13 +598,46 @@ describe('creator profile data loader', () => {
 
     expect(data?.items[0].asset).toBeNull();
     expect(bundleSummaryRpcCalls).toBe(1);
-    // Beside it, one read of what the page's unlocks add from their creations'
-    // inputs (B3), with the inputs embedded in it, which never asks for a draft.
-    expect(bundleTableReads).toEqual([{
-      columns: expect.stringContaining('inputs:generation_input_media'),
-      filters: { post_id: ['post-1'], allow_remix: true, status: 'published' },
-    }]);
+    // A page with no published recipe asks nothing about what an unlock adds
+    // from a creation's inputs (B3).
+    expect(tableAccesses).not.toContain('post_resource_bundles');
     expect(tableAccesses).not.toContain('generation_input_media');
+  });
+
+  // Recipe reading review B3: a creator page's cards tease what each recipe's
+  // unlock gives, the creation's inputs its creator shares included.
+  it('counts what each recipe’s unlock adds from the creation’s inputs, in one read for the page', async () => {
+    resourceBundlesState = [{
+      id: 'shared-bundle-1',
+      post_id: 'post-1',
+      title: 'Launch hook recipe',
+      access_mode: 'free',
+      price_usd_cents: 0,
+      preview_text: 'The prompt behind it.',
+      allow_remix: true,
+      status: 'published',
+      resource_items: [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'The prompt behind it.' }],
+    }];
+    generationInputsState = ['image-1', 'image-2'].map((name, sortOrder) => ({
+      id: `gen-1-${name}`,
+      generation_id: 'gen-1',
+      user_id: 'user-1',
+      media_type: 'image',
+      role: 'reference_image',
+      label: `Private name of ${name}`,
+      storage_path: `generation_inputs/user-1/gen-1/${name}.png`,
+      source_generation_id: null,
+      sort_order: sortOrder,
+      metadata: {},
+    }));
+
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const data = await getCreatorProfilePageData('Creator-Name');
+
+    expect(data?.items[0].asset?.lockedPreview?.itemCounts).toEqual({ prompt: 1, reference_image: 2 });
+    expect(data?.items[0].asset?.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+    expect(bundleTableReads.filter((read) => read.columns.includes('generation:generations'))).toHaveLength(1);
+    expect(JSON.stringify(data)).not.toContain('Private name');
   });
 
   it('redacts locked bundle metadata and paid recipe text on public creator pages', async () => {

@@ -607,8 +607,89 @@ describe('owner posts', () => {
       expect(recipeReferenceCounts).toHaveBeenCalledTimes(1);
       expect(recipeReferenceCounts).toHaveBeenCalledWith(expect.objectContaining({
         postIds: ['creation-listing'],
-        viewerUserId: 'user-1',
+        ownerUserId: 'user-1',
       }));
+    });
+
+    // Review of 2026-10-29: every page of a creator's library asked about its
+    // creation posts' inputs, recipe or not.
+    it.each([
+      ['the compact summary RPC', true],
+      ['the bundle select fallback', false],
+    ])('asks about the creation’s inputs only for a creation post with a recipe that may share them, through %s', async (_label, rpcEnabled) => {
+      compactSummaryRpc.enabled = rpcEnabled;
+      postRows.value = [
+        ...postRows.value,
+        listingPost('creation-listing', '2026-07-05T00:00:00.000Z', { generation_id: 'gen-9', source_kind: 'magicbooklet' }),
+        listingPost('creation-kept', '2026-07-06T00:00:00.000Z', { generation_id: 'gen-10', source_kind: 'magicbooklet' }),
+      ] as unknown as typeof postRows.value;
+      // post-3 is a creation post with no recipe; the stored switch keeps
+      // creation-kept's inputs, which only the select fallback can tell.
+      bundleRows.value = [
+        recipe('creation-listing', { allow_remix: true }),
+        recipe('creation-kept', { allow_remix: false }),
+        recipe('listing-ready'),
+      ];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all' });
+
+      expect(recipeReferenceCounts).toHaveBeenCalledTimes(1);
+      expect(recipeReferenceCounts).toHaveBeenCalledWith(expect.objectContaining({
+        postIds: rpcEnabled ? ['creation-kept', 'creation-listing'] : ['creation-listing'],
+        ownerUserId: 'user-1',
+      }));
+    });
+
+    it('asks nothing about the creation’s inputs on a page without a recipe', async () => {
+      bundleRows.value = [];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const posts = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all' });
+
+      expect(posts.map((post) => post.id)).toContain('post-3');
+      expect(recipeReferenceCounts).not.toHaveBeenCalled();
+    });
+
+    // Review of 2026-10-29: the editor's read counted the creation's inputs
+    // once for its kinds and read them again for the recipe, which the owner's
+    // own unlock merges them into.
+    it('names the kinds of the recipe the editor reads, the creation’s inputs included, without reading them twice', async () => {
+      postRows.value = [
+        ...postRows.value,
+        listingPost('creation-listing', '2026-07-05T00:00:00.000Z', { generation_id: 'gen-9', source_kind: 'magicbooklet' }),
+      ] as unknown as typeof postRows.value;
+      bundleRows.value = [recipe('creation-listing', { allow_remix: true })];
+      const bundles = await import('@/lib/post-resource-bundles-server');
+      // A mocked module outlives resetModules, so its spy holds earlier tests' calls.
+      vi.mocked(bundles.getPostResourceBundleDetailByPostId).mockClear().mockResolvedValueOnce({
+        accessMode: 'paid',
+        summary: '',
+        previewText: 'Includes the prompt.',
+        priceUsdCents: 900,
+        salesCount: 2,
+        freeUnlockCount: 0,
+        retiredAt: null,
+        allowRemix: true,
+        resourceKinds: ['prompt', 'files', 'remix'],
+        lockedPreview: { itemCounts: { prompt: 1, reference_image: 2 }, resourceKinds: ['prompt', 'files', 'remix'] },
+        resources: {
+          allowRemix: true,
+          items: [
+            { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'A warm golden hour portrait.' },
+            { type: 'reference_image', title: 'Image input', storagePath: 'generation_inputs/user-1/gen-9/00-reference-image.png' },
+            { type: 'reference_image', title: 'Image input', storagePath: 'generation_inputs/user-1/gen-9/01-reference-image.png' },
+          ],
+        },
+      } as never);
+      const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+      const post = await getOwnerPostDetail('creation-listing', 'user-1');
+
+      expect(post?.bundle?.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+      expect(post?.resourceBundleInput.resources?.items?.map((item) => item.title)).toEqual(['Prompt']);
+      expect(recipeReferenceCounts).not.toHaveBeenCalled();
+      expect(bundles.getPostResourceBundleDetailByPostId).toHaveBeenCalledTimes(1);
     });
 
     it('reads no free unlocks through the select fallback, which serves a database older than the column', async () => {

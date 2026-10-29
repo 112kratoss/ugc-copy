@@ -15,14 +15,15 @@ const state: {
   storedSwitch: boolean;
   generationIsPublic: boolean;
   sourceReadError: unknown;
-  summaryRead: Promise<void> | null;
   sourceSelects: string[];
+  // The posts each read of the creation inputs asked about.
+  sourceReadPostIds: unknown[][];
 } = {
   storedSwitch: true,
   generationIsPublic: true,
   sourceReadError: null,
-  summaryRead: null,
   sourceSelects: [],
+  sourceReadPostIds: [],
 };
 
 const storedItems = [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'The prompt behind it.' }];
@@ -101,7 +102,6 @@ function createAdminClient() {
   return {
     async rpc(name: string, args: { p_post_ids: string[] }) {
       if (name !== 'get_public_post_resource_bundle_summaries') throw new Error(`Unexpected rpc: ${name}`);
-      if (state.summaryRead) await state.summaryRead;
       return { data: args.p_post_ids.filter((id) => id === 'post-1').map(summaryRow), error: null };
     },
     from(table: string) {
@@ -114,6 +114,7 @@ function createAdminClient() {
           return query;
         },
         in(column: string, values: unknown[]) {
+          if (table === 'post_resource_bundles' && column === 'post_id') state.sourceReadPostIds.push([...values]);
           filters.push((row) => values.includes(row[column]));
           return query;
         },
@@ -197,9 +198,14 @@ function postRow(id: string) {
   };
 }
 
+/** A page as a response serves it: hydrated, then its recipe teasers counted. */
 async function loadFeedItems(postIds = ['post-1']) {
-  const { resolvePostRowsToFeedItems } = await import('@/lib/showcase-feed');
-  return resolvePostRowsToFeedItems(postIds.map(postRow), createAdminClient() as never);
+  const { addCreationReferenceCountsToFeedItems, resolvePostRowsToFeedItems } = await import('@/lib/showcase-feed');
+  const adminSupabase = createAdminClient() as never;
+  return addCreationReferenceCountsToFeedItems(
+    await resolvePostRowsToFeedItems(postIds.map(postRow), adminSupabase),
+    adminSupabase,
+  );
 }
 
 describe('a feed card for a recipe whose creator shares the creation’s inputs', () => {
@@ -208,8 +214,8 @@ describe('a feed card for a recipe whose creator shares the creation’s inputs'
     state.storedSwitch = true;
     state.generationIsPublic = true;
     state.sourceReadError = null;
-    state.summaryRead = null;
     state.sourceSelects = [];
+    state.sourceReadPostIds = [];
   });
 
   it('counts what the unlock adds, as the post page does', async () => {
@@ -256,19 +262,29 @@ describe('a feed card for a recipe whose creator shares the creation’s inputs'
     expect(item.asset?.resourceKinds).toEqual(['prompt', 'remix']);
   });
 
-  it('reads the page’s inputs in one request, started beside the summaries', async () => {
-    let releaseSummaries!: () => void;
-    state.summaryRead = new Promise((resolve) => {
-      releaseSummaries = resolve;
-    });
-
-    const pending = loadFeedItems(['post-1', 'post-2', 'post-3']);
-    await vi.waitFor(() => expect(state.sourceSelects).toHaveLength(1));
-    releaseSummaries();
-    const items = await pending;
+  it('reads the page’s inputs in one request, about its creation recipes alone', async () => {
+    const items = await loadFeedItems(['post-1', 'post-2', 'post-3']);
 
     expect(state.sourceSelects).toHaveLength(1);
+    expect(state.sourceReadPostIds).toEqual([['post-1']]);
     expect(items.find((item) => item.id === 'post-1')?.asset?.itemCounts)
       .toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+  });
+
+  // Review of 2026-10-29: hydration asked on every batch with a creation
+  // post, recipe or not; the summaries now say which posts have one.
+  it('hydrates a page without asking about inputs, and asks nothing for a page without a published recipe', async () => {
+    const { resolvePostRowsToFeedItems, addCreationReferenceCountsToFeedItems } = await import('@/lib/showcase-feed');
+    const adminSupabase = createAdminClient() as never;
+
+    const hydrated = await resolvePostRowsToFeedItems(['post-1', 'post-2'].map(postRow), adminSupabase);
+    const unpublished = await addCreationReferenceCountsToFeedItems(
+      await resolvePostRowsToFeedItems(['post-2', 'post-3'].map(postRow), adminSupabase),
+      adminSupabase,
+    );
+
+    expect(hydrated.find((item) => item.id === 'post-1')?.asset?.itemCounts).toEqual({ prompt: 1 });
+    expect(unpublished.map((item) => item.asset)).toEqual([null, null]);
+    expect(state.sourceSelects).toEqual([]);
   });
 });

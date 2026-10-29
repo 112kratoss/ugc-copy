@@ -6,7 +6,7 @@ type BundleRow = {
   owner_user_id: string;
   legacy_asset_id: string | null;
   access_mode: 'free' | 'paid';
-  status: 'published';
+  status: 'published' | 'draft';
   title: string;
   summary: string;
   preview_text: string;
@@ -69,10 +69,9 @@ let revisionReadError: unknown;
 // Holds the hydrate's revision read open, so a test can see what else has
 // started while it waits.
 let revisionReadGate: Promise<void> | null;
-// Every table the service asked, in order, and what each posts read selected:
-// what a read costs is part of what these tests pin.
+// Every table the service asked, in order, and what each recipe-table read
+// selected: what a read costs is part of what these tests pin.
 let tableReads: string[];
-let postSelects: string[];
 let bundleSelects: string[];
 // The one read of a recipe with its post, the post's generation and that
 // generation's inputs: failing, or never answering until its signal gives up.
@@ -80,6 +79,11 @@ let embeddedSourceReadError: unknown;
 let embeddedSourceReadHangs: boolean;
 // The signal each such read was given: a teaser's gives up, an unlock's waits.
 let embeddedSourceSignals: Array<AbortSignal | null>;
+// How each such read was filtered: its `eq` columns and any `or` it sent.
+let embeddedSourceFilters: Array<{ eq: Record<string, unknown>; or: string[] }>;
+// Recipes of other posts the read can return beside `bundleRow`, each already
+// nested with its post, generation and inputs.
+let extraCreationInputSources: Array<Record<string, unknown>>;
 
 /**
  * What PostgREST sends for a row under a select: only the columns it names,
@@ -174,6 +178,7 @@ vi.mock('@/lib/server-helpers', () => ({
         // Each `or` as PostgREST reads it: `column.eq.value` terms, any of
         // which keeps a row.
         const anyOfFilters: Array<Array<[string, string]>> = [];
+        const sentOrFilters: string[] = [];
 
         // The read of a page's creation inputs: each recipe the filters keep,
         // with its post, the post's generation (none once unlinked) and that
@@ -186,15 +191,7 @@ vi.mock('@/lib/server-helpers', () => ({
           }
           if (embeddedSourceReadError) return { data: null, error: embeddedSourceReadError };
           const row = bundleRow as Record<string, unknown> | null;
-          if (
-            !row
-            || !postIds.includes(row.post_id)
-            || !Object.entries(equalityFilters).every(([column, value]) => row[column] === value)
-            || !anyOfFilters.every((terms) => terms.some(([column, value]) => String(row[column]) === value))
-          ) {
-            return { data: [], error: null };
-          }
-          const post = postRow && postRow.id === row.post_id
+          const post = row && postRow && postRow.id === row.post_id
             ? {
                 ...postRow,
                 generation: generationRow && postRow.generation_id === generationRow.id
@@ -205,7 +202,16 @@ vi.mock('@/lib/server-helpers', () => ({
                   : null,
               }
             : null;
-          return { data: [projectSelectedColumns({ ...row, post }, selectedColumns)], error: null };
+          const sources = [...(row ? [{ ...row, post }] : []), ...extraCreationInputSources];
+          // Postgres compares uuids whatever case they are spelled in, and
+          // answers with its own spelling.
+          const requested = new Set(postIds.map((postId) => String(postId).toLowerCase()));
+          const kept = sources.filter((source) => (
+            requested.has(String(source.post_id).toLowerCase())
+            && Object.entries(equalityFilters).every(([column, value]) => source[column] === value)
+            && anyOfFilters.every((terms) => terms.some(([column, value]) => String(source[column]) === value))
+          ));
+          return { data: kept.map((source) => projectSelectedColumns(source, selectedColumns)), error: null };
         };
 
         const query = {
@@ -225,6 +231,7 @@ vi.mock('@/lib/server-helpers', () => ({
             return query;
           },
           or(filters: string) {
+            sentOrFilters.push(filters);
             anyOfFilters.push(filters.split(',').map((term) => {
               const [column, operator, ...value] = term.split('.');
               if (operator !== 'eq') throw new Error(`Unexpected or filter: ${term}`);
@@ -251,6 +258,7 @@ vi.mock('@/lib/server-helpers', () => ({
           ) {
             if (selectedColumns.includes('generation:generations')) {
               embeddedSourceSignals.push(signal);
+              embeddedSourceFilters.push({ eq: { ...equalityFilters }, or: [...sentOrFilters] });
               void readCreationInputSources().then(resolve, reject);
               return;
             }
@@ -351,8 +359,6 @@ vi.mock('@/lib/server-helpers', () => ({
 
       if (table === 'posts') {
         let eqId: string | null = null;
-        let selectedColumns = '';
-        let signal: AbortSignal | null = null;
         const equalityFilters: Record<string, unknown> = {};
         const nullFilters: string[] = [];
 
@@ -365,9 +371,7 @@ vi.mock('@/lib/server-helpers', () => ({
         };
 
         const query = {
-          select(columns?: string) {
-            selectedColumns = columns ?? '';
-            postSelects.push(selectedColumns);
+          select() {
             return query;
           },
           in() {
@@ -390,33 +394,8 @@ vi.mock('@/lib/server-helpers', () => ({
           neq() {
             return query;
           },
-          abortSignal(value: AbortSignal) {
-            signal = value;
-            return query;
-          },
           async maybeSingle() {
-            const row = eqId === 'post-1' && matchesFilters() ? postRow : null;
-            // PostgREST nests a select's embedded resources in the row: the
-            // post's generation (none once unlinked), and its saved inputs.
-            if (selectedColumns.includes('generation:generations')) {
-              if (embeddedSourceReadHangs) {
-                // supabase-js answers a request its signal aborted with an error.
-                await new Promise((resolve) => signal?.addEventListener('abort', resolve));
-                return { data: null, error: { code: '', message: 'AbortError: This operation was aborted' } };
-              }
-              if (embeddedSourceReadError) return { data: null, error: embeddedSourceReadError };
-              const generation = row && generationRow && row.generation_id === generationRow.id
-                ? {
-                    ...generationRow,
-                    inputs: generationInputRows.filter((input) => input.generation_id === generationRow?.id),
-                  }
-                : null;
-              return {
-                data: row ? projectSelectedColumns({ ...row, generation }, selectedColumns) : null,
-                error: null,
-              };
-            }
-            return { data: row, error: null };
+            return { data: eqId === 'post-1' && matchesFilters() ? postRow : null, error: null };
           },
           then(resolve: (value: { data: unknown[]; error: null }) => void) {
             resolve({
@@ -660,11 +639,12 @@ describe('post resource bundle server access', () => {
     revisionReadError = null;
     revisionReadGate = null;
     tableReads = [];
-    postSelects = [];
     bundleSelects = [];
     embeddedSourceReadError = null;
     embeddedSourceReadHangs = false;
     embeddedSourceSignals = [];
+    embeddedSourceFilters = [];
+    extraCreationInputSources = [];
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -729,6 +709,23 @@ describe('post resource bundle server access', () => {
     await expect(getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: true }))
       .resolves.toBeNull();
     expect(loadNsfwPostIds).not.toHaveBeenCalled();
+  });
+
+  // Review of 2026-10-29: the route passes the id as the URL spells it, and the
+  // NSFW check looked it up among the database's own (lowercase) spellings, so
+  // /api/posts/<ID IN CAPITALS>/resource-bundle opened an NSFW post's recipe
+  // without a reveal, and let it be claimed or bought (#454).
+  it('keeps an NSFW post\'s recipe from a viewer who has not revealed it, however its id is spelled', async () => {
+    postRow = { ...(postRow as Record<string, unknown>), is_nsfw: true };
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    for (const spelling of ['post-1', 'POST-1']) {
+      await expect(getPostResourceBundleDetailByPostId(spelling, { viewerUserId: 'viewer-1' })).resolves.toBeNull();
+      await expect(getPostResourceBundleDetailByPostId(spelling, { viewerUserId: null })).resolves.toBeNull();
+    }
+    // Its owner still reads it.
+    await expect(getPostResourceBundleDetailByPostId('POST-1', { viewerUserId: 'owner-1' }))
+      .resolves.toMatchObject({ id: 'bundle-1', viewerIsOwner: true });
   });
 
   it('grants access on entitlement alone, never on the shape of the bundle id', async () => {
@@ -1381,6 +1378,22 @@ describe('post resource bundle server access', () => {
       expect(embeddedSourceSignals[0]).toBeInstanceOf(AbortSignal);
     });
 
+    // Review of 2026-10-29: the inputs read finds the recipe by the id as the
+    // database spells it, and the lookup used the caller's spelling, so an id
+    // in capitals unlocked the recipe without its references.
+    it('gives the creation’s references, and counts them, however the post id is spelled', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
+
+      const locked = await getPostResourceBundleDetailByPostId('POST-1', { viewerUserId: 'viewer-1', isNsfw: false });
+      viewerHasPurchased = true;
+      const unlocked = await getPostResourceBundleDetailByPostId('POST-1', { viewerUserId: 'viewer-1', isNsfw: false });
+
+      expect(locked?.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+      expect(getPostResourceItemCounts(unlocked?.resources?.items ?? []))
+        .toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+    });
+
     // The marketplace, search, the reel and the owner's lists teased stored
     // items only: 6487f689's tile said "Includes 1 prompt" beside a post page
     // that, after #582, said a prompt, three pictures and a clip.
@@ -1468,10 +1481,11 @@ describe('post resource bundle server access', () => {
         } = await import('@/lib/post-resource-bundles-server');
         const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
         const { createServiceClient } = await import('@/lib/server-helpers');
-        const countFor = async (viewerUserId: string | null) => [...await countGenerationRecipeReferenceItemsByPostId({
+        // The page counted for: an owner's own page, or a public one (null).
+        const countFor = async (ownerUserId: string | null) => [...await countGenerationRecipeReferenceItemsByPostId({
           adminSupabase: createServiceClient() as never,
           postIds: ['post-1'],
-          viewerUserId,
+          ownerUserId,
         })];
 
         const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
@@ -1482,9 +1496,124 @@ describe('post resource bundle server access', () => {
         // A list never reads a draft's contents for anyone but its owner.
         expect(await countFor(null)).toEqual([]);
         expect(await countFor('viewer-1')).toEqual([]);
-        // An id that would widen the filter reads as a stranger's.
-        expect(await countFor('viewer-1,status.eq.draft')).toEqual([]);
         expect(await countFor('owner-1')).toEqual([['post-1', { reference_image: 3, reference_video: 1 }]]);
+        // Each page asks with plain filters, never with an id written into an
+        // `or` (postgrest-js does not escape its values).
+        expect(embeddedSourceFilters).toEqual([
+          // The seller page, then the owner's own recipe page, which has
+          // settled who may read already.
+          { eq: { allow_remix: true, owner_user_id: 'owner-1' }, or: [] },
+          { eq: { allow_remix: true }, or: [] },
+          { eq: { allow_remix: true, status: 'published' }, or: [] },
+          { eq: { allow_remix: true, owner_user_id: 'viewer-1' }, or: [] },
+          { eq: { allow_remix: true, owner_user_id: 'owner-1' }, or: [] },
+        ]);
+      });
+
+      // Review of 2026-10-29: the read sent every recipe's stored text again,
+      // which its callers already held and the count never reads.
+      it('reads only what the count needs: the post, generation and inputs, and stored files only where a page has no rows', async () => {
+        const {
+          countGenerationRecipeReferenceItemsByPostId,
+          getMarketplaceResourceList,
+          getPostResourceBundleDetailByPostId,
+        } = await import('@/lib/post-resource-bundles-server');
+        const { createServiceClient } = await import('@/lib/server-helpers');
+        const topLevelColumns = (select: string) => {
+          const columns: string[] = [];
+          let depth = 0;
+          let start = 0;
+          for (let index = 0; index <= select.length; index += 1) {
+            if (select[index] === '(') depth += 1;
+            if (select[index] === ')') depth -= 1;
+            if (index === select.length || (select[index] === ',' && depth === 0)) {
+              const column = select.slice(start, index).trim();
+              columns.push(column.includes('(') ? column.slice(0, column.indexOf(':')) : column);
+              start = index + 1;
+            }
+          }
+          return columns;
+        };
+
+        await getMarketplaceResourceList();
+        await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false });
+        const counts = await countGenerationRecipeReferenceItemsByPostId({
+          adminSupabase: createServiceClient() as never,
+          postIds: ['post-1'],
+          ownerUserId: null,
+        });
+
+        expect(embeddedSourceReads().map(topLevelColumns)).toEqual([
+          ['post_id', 'owner_user_id', 'post'],
+          ['post_id', 'owner_user_id', 'post'],
+          // Merging keys on a stored copy's id and file path, nothing else.
+          ['post_id', 'owner_user_id', 'attachments', 'resource_items', 'post'],
+        ]);
+        expect([...counts]).toEqual([['post-1', { reference_image: 3, reference_video: 1 }]]);
+      });
+
+      it('counts what a stored copy of an input leaves to add on a page that reads its recipes’ files itself', async () => {
+        bundleRow = {
+          ...(bundleRow as BundleRow),
+          resource_items: [
+            { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Public prompt text' },
+            { id: 'reference-image-1', type: 'reference_image', title: 'Image 1', storagePath: 'owner-1/generation-references/gen-1/image-1.png', contentType: 'image/png' },
+            { id: 'stored-2', type: 'reference_image', title: 'Image 2', storagePath: 'generation_inputs/owner-1/gen-1/image-2.png', contentType: 'image/png' },
+          ],
+        };
+        const { countGenerationRecipeReferenceItemsByPostId } = await import('@/lib/post-resource-bundles-server');
+        const { createServiceClient } = await import('@/lib/server-helpers');
+
+        const counts = await countGenerationRecipeReferenceItemsByPostId({
+          adminSupabase: createServiceClient() as never,
+          postIds: ['post-1'],
+          ownerUserId: null,
+        });
+
+        expect([...counts]).toEqual([['post-1', { reference_image: 1, reference_video: 1 }]]);
+      });
+
+      // Review of 2026-10-29: one recipe whose inputs could not be read threw
+      // away every count on the page.
+      it('keeps counting the rest of the page when one recipe’s inputs cannot be read', async () => {
+        // No saved inputs, and settings that name its pictures as something
+        // other than a list, which the legacy reader throws on.
+        extraCreationInputSources = [{
+          post_id: 'post-2',
+          owner_user_id: 'owner-2',
+          status: 'published',
+          allow_remix: true,
+          attachments: [],
+          resource_items: [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Another prompt' }],
+          post: {
+            id: 'post-2',
+            user_id: 'owner-2',
+            generation_id: 'gen-2',
+            category: 'video',
+            visibility: 'public',
+            archived_at: null,
+            review_status: 'visible',
+            source_kind: 'magicbooklet',
+            generation: {
+              id: 'gen-2',
+              user_id: 'owner-2',
+              is_public: true,
+              category: 'video',
+              workflow_settings: { seedanceAssets: { images: 'not-a-list' } },
+              inputs: [],
+            },
+          },
+        }];
+        const { countGenerationRecipeReferenceItemsByPostId } = await import('@/lib/post-resource-bundles-server');
+        const { createServiceClient } = await import('@/lib/server-helpers');
+
+        const counts = await countGenerationRecipeReferenceItemsByPostId({
+          adminSupabase: createServiceClient() as never,
+          postIds: ['post-2', 'post-1'],
+          ownerUserId: null,
+        });
+
+        expect([...counts]).toEqual([['post-1', { reference_image: 3, reference_video: 1 }]]);
       });
 
       it('counts none on a post moderation hid, for its owner too', async () => {
@@ -1503,7 +1632,7 @@ describe('post resource bundle server access', () => {
         const counts = await countGenerationRecipeReferenceItemsByPostId({
           adminSupabase: createServiceClient() as never,
           postIds: ['post-1', 'post-2', 'post-1', 'post-3'],
-          viewerUserId: null,
+          ownerUserId: null,
         });
 
         expect([...counts]).toEqual([['post-1', { reference_image: 3, reference_video: 1 }]]);
