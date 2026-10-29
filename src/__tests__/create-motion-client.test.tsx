@@ -1422,4 +1422,21 @@ describe('CreateMotionClient opening', () => {
     view.rerender(<CreateMotionClient prefill={{}} opening={opening} />);
     await waitFor(() => expect(modelChip()).toHaveTextContent('Kling 3.0'));
   });
+
+  it('keeps a model the creator picks while the page waits for the revision', async () => {
+    modelCatalogState.checkingRevision = true;
+    modelCatalogState.summaries = motionModelSummaries;
+    const view = render(<CreateMotionClient prefill={{}} opening={{ ...opening, modelId: 'kling-3.0' }} />);
+    const modelChip = () => view.container.querySelector('button[aria-haspopup="listbox"]');
+    chooseModel(view.container, 'Kling 2.6');
+    expect(modelChip()).toHaveTextContent('Kling 2.6');
+
+    // This file's catalog names Kling 3.0 its default.
+    modelCatalogState.checkingRevision = false;
+    view.rerender(<CreateMotionClient prefill={{}} opening={{ ...opening, modelId: 'kling-3.0' }} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(modelChip()).toHaveTextContent('Kling 2.6');
+  });
 });

@@ -1982,6 +1982,8 @@ export default function CreateImageClient({
                                     onSelect={(id) => {
                                         // A notice about the previous model no longer applies.
                                         if (id !== selectedModel) setCatalogNotice(null);
+                                        // The creator's pick is the first pick: the catalog's default no longer replaces it.
+                                        hasResolvedInitialCatalogModel.current = true;
                                         setSelectedModel(id as ModelId);
                                         setIsModelDropdownOpen(false);
                                         setModelSearchQuery('');

@@ -2053,4 +2053,19 @@ describe('CreateImageClient opening', () => {
     view.rerender(<CreateImageClient prefill={{}} opening={opening} />);
     await waitFor(() => expect(modelChip(view.container)).toHaveTextContent('Nano Banana 2'));
   });
+
+  it('keeps a model the creator picks while the page waits for the revision', async () => {
+    modelCatalogState.checkingRevision = true;
+    modelCatalogState.summaries = imageModelSummaries;
+    const view = render(<CreateImageClient prefill={{}} opening={opening} />);
+    chooseModel(view.container, 'Imagen 4');
+    expect(modelChip(view.container)).toHaveTextContent('Imagen 4');
+
+    modelCatalogState.checkingRevision = false;
+    view.rerender(<CreateImageClient prefill={{}} opening={opening} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(modelChip(view.container)).toHaveTextContent('Imagen 4');
+  });
 });

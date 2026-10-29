@@ -3150,6 +3150,15 @@ describe('CreateVideoClient Kling video elements', () => {
         });
       });
 
+      it('draws a length a model offers as a choice, as the link asked for it', () => {
+        // Gemini Omni Video publishes its lengths as a choice of strings ("4", "8").
+        const opening = openingFor({ model: 'gemini-omni-video', duration: '8' }, null);
+        expect(opening.settings.duration).toBe('8');
+        modelCatalogState.withoutCatalog = true;
+        expect(serverRendered(<CreateVideoClient prefill={{ model: 'gemini-omni-video', duration: '8' }} opening={opening} />))
+          .toMatchObject({ chip: 'Gemini Omni Video', settings: expect.stringContaining('8s') });
+      });
+
       it('takes a later release\'s defaults over the opening\'s, for every setting still as drawn', async () => {
         modelCatalogState.withoutCatalog = true;
         const opening = { ...openingFor(), revision: 'the-release-the-server-read' };

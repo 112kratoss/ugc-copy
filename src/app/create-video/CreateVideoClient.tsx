@@ -272,7 +272,7 @@ type DrawnVideoForm = DrawnVideoSettings & { modelId: VideoModelId };
  */
 function drawnVideoForm(opening: CreatorOpening | null): DrawnVideoForm {
     // A length is a number, or a choice's string in some descriptors ("4").
-    const duration = Number(openingSetting<CatalogPrimitive>(opening, 'duration', STAND_IN_FORM.duration));
+    const duration = Number(opening?.settings.duration ?? Number.NaN);
     return {
         modelId: (opening?.modelId ?? STAND_IN_FORM.modelId) as VideoModelId,
         mode: openingSetting<string>(opening, 'mode', STAND_IN_FORM.mode),

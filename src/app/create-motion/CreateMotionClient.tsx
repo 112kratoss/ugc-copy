@@ -1550,6 +1550,8 @@ export default function CreateMotionClient({
                                                 onClick={() => {
                                                     // A notice about the previous model no longer applies.
                                                     if (motionModel.id !== selectedModel) setCatalogNotice(null);
+                                                    // The creator's pick is the first pick: the catalog's default no longer replaces it.
+                                                    hasResolvedInitialCatalogModel.current = true;
                                                     setSelectedModel(motionModel.id as ModelId);
                                                     setIsModelDropdownOpen(false);
                                                     setModelSearchQuery('');
