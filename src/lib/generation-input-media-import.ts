@@ -1,7 +1,8 @@
-import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
+import { isGuestUser, isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { loadGenerationRecipeRemixInputMediaByPostId } from '@/lib/post-resource-bundles-server';
+import { resolveRemixAccess, type RemixAccessGeneration } from '@/lib/remix-access';
 import { createServiceClient } from '@/lib/server-helpers';
 import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 
@@ -13,7 +14,12 @@ const MAX_POSTS_PER_GENERATION = 5;
 export type SharedInputMediaImportResult =
   /** Not a shared generation input the viewer may use — the caller's ownership error stands. */
   | { outcome: 'not-eligible' }
-  /** The viewer is entitled to this media but the copy could not be prepared — retryable. */
+  /**
+   * Retryable: a read, the copy or its signing failed (a retry reuses a copy
+   * already made). A check that fails closed answers `not-eligible` instead: a
+   * block check that fails counts as blocked, and the recipe loader reads a
+   * failure as no entitlement.
+   */
   | { outcome: 'failed' }
   | { outcome: 'imported'; storagePath: string; signedUrl: string };
 
@@ -86,16 +92,14 @@ export async function importSharedGenerationInputMedia(params: {
 
   const generationResult = await adminSupabase
     .from('generations')
-    .select('id, user_id, is_public, share_input_media_for_remix')
+    .select('id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id')
     .eq('id', mediaRow.generation_id)
     .maybeSingle();
   if (generationResult.error) {
     logBackendError('failed_to_load_generation_for_shared_input_import', { error: generationResult.error });
     return { outcome: 'failed' };
   }
-  const generation = generationResult.data as
-    | { id: string; user_id: string | null; is_public: boolean | null; share_input_media_for_remix?: boolean | null }
-    | null;
+  const generation = generationResult.data as RemixAccessGeneration | null;
   if (!generation || generation.user_id !== ownerUserId) return { outcome: 'not-eligible' };
 
   // Creations made before the viewer registered keep their guest UUID, so
@@ -118,10 +122,39 @@ export async function importSharedGenerationInputMedia(params: {
     }
     if (blocked) return { outcome: 'not-eligible' };
 
-    // Free sharing first (the same predicate the remix-source endpoint serves
-    // media under), then the paid recipe entitlement via a post that links this
-    // generation — that loader re-checks purchase, allowRemix, and eligibility.
-    let authorized = generation.is_public === true && generation.share_input_media_for_remix === true;
+    // Free sharing first, decided as the remix routes decide it, because the
+    // generation's flags are not the whole answer. Remixing someone else's
+    // creation takes an account (/api/remix-source refuses a guest and
+    // /api/showcase/remix admits none), while a generation start admits
+    // guests. Then `resolveRemixAccess`: the post must show the creation now,
+    // no recipe on it may be locked to this viewer, and it must not be a
+    // template's result. Ownership and the block were settled above, so the
+    // gate is given those answers rather than reading them again. A read that
+    // fails here fails the import instead of allowing it. Then the paid recipe
+    // entitlement via a post that links this generation — that loader
+    // re-checks purchase, allowRemix, and eligibility.
+    let authorized = false;
+    if (generation.is_public === true && generation.share_input_media_for_remix === true) {
+      try {
+        const viewer = await adminSupabase.auth.admin.getUserById(params.viewerUserId);
+        if (viewer.error) throw viewer.error;
+        if (!viewer.data.user || isGuestUser(viewer.data.user)) return { outcome: 'not-eligible' };
+
+        const access = await resolveRemixAccess({
+          adminSupabase,
+          viewerUserId: params.viewerUserId,
+          generation,
+          dependencies: {
+            isOwnOrLinkedAccountId: async () => false,
+            isUserRelationshipBlocked: async () => false,
+          },
+        });
+        authorized = access.allowed && access.includeSharedInputMedia;
+      } catch (error) {
+        logBackendError('failed_to_resolve_remix_access_for_shared_input_import', { error });
+        return { outcome: 'failed' };
+      }
+    }
     if (!authorized) {
       const postsResult = await adminSupabase
         .from('posts')
