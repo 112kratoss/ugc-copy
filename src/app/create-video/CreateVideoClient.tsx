@@ -2574,6 +2574,9 @@ export default function CreateVideoClient({
 	                            })
 	                            : restoredReferenceVideos.flatMap((item, index) => item.url ? [{
 	                                displayName: item.label ?? `Video element ${index + 1}`,
+	                                // The handle the prompt mentions the clip by: one rebuilt
+	                                // from its name and place misses it once a clip was taken away.
+	                                handle: item.handle ?? null,
 	                                file: null,
 	                                previewUrl: item.url,
 	                                providerUrl: item.url,

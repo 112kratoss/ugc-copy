@@ -619,6 +619,8 @@ export interface RemixResolvedAsset extends RemixMediaAssetDescriptor {
   url: string | null;
   /** A clip or track's length, when the source generation kept it. */
   durationSeconds?: number | null;
+  /** The handle the prompt mentions a clip by (Kling 3.0's video elements), when the source generation kept it. */
+  handle?: string | null;
 }
 
 export interface RemixResolvedImageElement extends GenerationElementDescriptor {
@@ -681,6 +683,7 @@ export interface RemixSourceBundle {
       referenceVideo: RemixResolvedAsset | null;
     };
   };
+  /** The owner's remix only: the kept rows, with where each input was staged. */
   inputMedia?: GenerationInputMediaItem[];
   workflowSettings: Record<string, unknown>;
   restoreIssues: string[];

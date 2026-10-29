@@ -144,7 +144,7 @@ export function remixQuoteSettings(
   stored: Record<string, unknown>,
 ): Record<string, unknown> | null {
   // Without shared inputs the remix opens without the creator's media.
-  const visible = sanitizeWorkflowSettingsForRemix(stored, false);
+  const visible = sanitizeWorkflowSettingsForRemix(stored, 'without-inputs');
   const nested = isRecord(visible.settings) ? visible.settings : {};
 
   for (const control of descriptor.controls) {

@@ -224,7 +224,6 @@ export async function remixShowcasePostForRoute({
     generationRow.workflow_settings && typeof generationRow.workflow_settings === 'object'
       ? generationRow.workflow_settings as Record<string, unknown>
       : {};
-  const includeInputMedia = access.basis === 'owner' || access.includeSharedInputMedia;
 
   return {
     ok: true,
@@ -233,7 +232,9 @@ export async function remixShowcasePostForRoute({
       redirectTo: `${redirectPath}?remix=${generationRow.id}&remixPost=${post.id}`,
       prefill: {
         prompt: generationRow.prompt || '',
-        settings: sanitizeWorkflowSettingsForRemix(rawSettings, includeInputMedia),
+        // No client reads these: the editor restores from /api/remix-source.
+        // Anyone but the owner gets none of the inputs here.
+        settings: sanitizeWorkflowSettingsForRemix(rawSettings, access.basis === 'owner' ? 'owner' : 'without-inputs'),
       },
     },
   };

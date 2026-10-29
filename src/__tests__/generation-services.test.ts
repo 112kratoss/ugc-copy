@@ -29,7 +29,7 @@ const CREATOR_STORAGE_PATH = new RegExp(`(?:${[...USER_SCOPED_STORAGE_BUCKETS].j
 afterEach(() => {
   for (const row of mockedGenerationRows.splice(0).flat()) {
     if (!row.workflow_settings) continue;
-    const remixed = JSON.stringify(sanitizeWorkflowSettingsForRemix(row.workflow_settings, false));
+    const remixed = JSON.stringify(sanitizeWorkflowSettingsForRemix(row.workflow_settings, 'without-inputs'));
     expect(remixed, `${row.model}'s stored settings as a remix without its inputs gets them`).not.toMatch(CREATOR_STORAGE_PATH);
   }
 });

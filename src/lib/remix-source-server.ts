@@ -12,6 +12,7 @@ import {
   loadGenerationInputMediaMap,
   sanitizeWorkflowSettingsForRemix,
   toRemixAssetDescriptor,
+  toRemixerInputMedia,
   toRemixImageElement,
   toRemixSubjects,
   type GenerationInputMediaItem,
@@ -320,19 +321,27 @@ export async function loadRemixSourceBundle(
     creationMode: typedGeneration.creation_mode,
     workflowSettings,
   });
-  const includeInputMedia = isOwner || access.includeSharedInputMedia;
-  const effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(workflowSettings, includeInputMedia);
-  const durableInputMediaMap = includeInputMedia
+  // The run's own kept inputs are read for the owner and for a remix the
+  // creator shared them with. A bought recipe's come from its post, below.
+  const readsRunInputs = isOwner || access.includeSharedInputMedia;
+  const effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(
+    workflowSettings,
+    isOwner ? 'owner' : readsRunInputs || access.recipeEntitled ? 'with-inputs' : 'without-inputs',
+  );
+  const durableInputMediaMap = readsRunInputs
     ? await loadGenerationInputMediaMap({
         supabase: adminSupabase,
         generationIds: [typedGeneration.id],
         urlMode: 'signed',
+        // Taken for "nothing kept", a failed read would hand anyone but the
+        // owner the uploads the run's settings name, just below.
+        throwOnError: !isOwner,
       })
     : new Map<string, GenerationInputMediaItem[]>();
   let inputMedia = durableInputMediaMap.get(typedGeneration.id) ?? [];
   const hasDurableInputMedia = inputMedia.length > 0;
 
-  if (includeInputMedia && !hasDurableInputMedia) {
+  if (readsRunInputs && !hasDurableInputMedia) {
     inputMedia = await buildLegacyGenerationInputMedia({
       supabase: adminSupabase,
       generationId: typedGeneration.id,
@@ -344,21 +353,25 @@ export async function loadRemixSourceBundle(
 
   // Bought recipe media is restored from the post the gate verified, never
   // from the id the caller put in the URL.
-  const recipeInputMedia = !includeInputMedia && access.recipeEntitled && access.post
+  const recipeInputMedia = !readsRunInputs && access.recipeEntitled && access.post
     ? await loadGenerationRecipeRemixInputMediaByPostId({
       postId: access.post.id,
       generationId: typedGeneration.id,
       viewerUserId: user.id,
       adminSupabase,
+      throwOnError: true,
       })
     : [];
-  const accessibleInputMedia = includeInputMedia ? inputMedia : recipeInputMedia;
+  const keptInputMedia = readsRunInputs ? inputMedia : recipeInputMedia;
+  // What anyone but the owner restores from: each row cut down to its copy and
+  // what a restore reads (`toRemixerInputMedia`).
+  const restoredInputMedia = isOwner ? keptInputMedia : keptInputMedia.map(toRemixerInputMedia);
 
   const restoreIssues: string[] = [];
   // Keeping inputs fails one item at a time, so the kept rows can hold less
   // than the recipe used. Say so: otherwise a remix restores the kept part as
   // if it were the whole recipe. Read without signing anything.
-  if (includeInputMedia && hasDurableInputMedia) {
+  if (readsRunInputs && hasDurableInputMedia) {
     const declaredInputMedia = await buildLegacyGenerationInputMedia({
       supabase: adminSupabase,
       generationId: typedGeneration.id,
@@ -476,13 +489,17 @@ export async function loadRemixSourceBundle(
     },
     result,
     inputs: {},
-    inputMedia: accessibleInputMedia,
+    // The rows themselves go to the owner only. Beside each kept copy they hold
+    // the path the creator's upload was staged under and the link the run read
+    // it from, both naming the file. Anyone else restores from `inputs`, which
+    // is built below from the same rows cut down to what a restore reads.
+    ...(isOwner ? { inputMedia: keptInputMedia } : {}),
     workflowSettings: effectiveWorkflowSettings,
     restoreIssues,
   };
 
-  if (accessibleInputMedia.length > 0) {
-    const referenceImages = accessibleInputMedia.filter((item) => item.mediaType === 'image' && item.role === 'reference_image');
+  if (restoredInputMedia.length > 0) {
+    const referenceImages = restoredInputMedia.filter((item) => item.mediaType === 'image' && item.role === 'reference_image');
 
     referenceImages.forEach((item, index) => {
       if (!item.url) {
@@ -497,15 +514,15 @@ export async function loadRemixSourceBundle(
     }
 
     if (category === 'video' && !isMotionWorkflow) {
-      const startFrame = accessibleInputMedia.find((item) => item.role === 'start_frame');
-      const endFrame = accessibleInputMedia.find((item) => item.role === 'end_frame');
+      const startFrame = restoredInputMedia.find((item) => item.role === 'start_frame');
+      const endFrame = restoredInputMedia.find((item) => item.role === 'end_frame');
       if (startFrame && !startFrame.url) {
         restoreIssues.push('video-start-frame');
       }
       if (endFrame && !endFrame.url) {
         restoreIssues.push('video-end-frame');
       }
-      const subjects = toRemixSubjects(accessibleInputMedia);
+      const subjects = toRemixSubjects(restoredInputMedia);
       for (const subject of subjects) {
         if (subject.images.some((image) => !image.url)) {
           restoreIssues.push(`video-subject:${subject.displayName}`);
@@ -517,10 +534,10 @@ export async function loadRemixSourceBundle(
         startFrame: startFrame ? toRemixAssetDescriptor(startFrame) : null,
         endFrame: endFrame ? toRemixAssetDescriptor(endFrame) : null,
         elements: referenceImages.map((item, index) => toRemixImageElement(item, index)),
-        referenceVideos: accessibleInputMedia
+        referenceVideos: restoredInputMedia
           .filter((item) => item.mediaType === 'video' && item.role === 'reference_video')
           .map((item) => toRemixAssetDescriptor(item)),
-        referenceAudios: accessibleInputMedia
+        referenceAudios: restoredInputMedia
           .filter((item) => item.mediaType === 'audio' && item.role === 'reference_audio')
           .map((item) => toRemixAssetDescriptor(item)),
         subjects,
@@ -532,10 +549,10 @@ export async function loadRemixSourceBundle(
       // runs got motion roles, in whatever slots the model declares (production's
       // Kling 3.0: imageReferences and videoReferences). A motion run holds one
       // picture and one clip, so for those rows the kind says which is which.
-      const characterImage = accessibleInputMedia.find((item) => item.role === 'character_image')
-        ?? accessibleInputMedia.find((item) => item.mediaType === 'image');
-      const referenceVideo = accessibleInputMedia.find((item) => item.role === 'motion_reference_video')
-        ?? accessibleInputMedia.find((item) => item.mediaType === 'video');
+      const characterImage = restoredInputMedia.find((item) => item.role === 'character_image')
+        ?? restoredInputMedia.find((item) => item.mediaType === 'image');
+      const referenceVideo = restoredInputMedia.find((item) => item.role === 'motion_reference_video')
+        ?? restoredInputMedia.find((item) => item.mediaType === 'video');
       if (characterImage && !characterImage.url) {
         restoreIssues.push('motion-character-image');
       }
@@ -548,7 +565,7 @@ export async function loadRemixSourceBundle(
         referenceVideo: referenceVideo ? toRemixAssetDescriptor(referenceVideo) : null,
       };
     }
-  } else if (includeInputMedia) {
+  } else if (readsRunInputs) {
     if (category === 'image') {
       bundle.inputs.image = {
         elements: await resolveElementDescriptors('image-element'),
