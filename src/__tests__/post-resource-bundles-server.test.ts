@@ -60,6 +60,9 @@ let orderRows: Record<string, unknown>[];
 let deletionAuditRows: Record<string, unknown>[];
 let buyerProfileRows: Array<{ id: string; username: string | null; display_name: string | null; avatar_url: string | null }>;
 let profileReadError: unknown;
+// Guest identities and the account each was linked to, for who-is-linked reads.
+let linkedGuestRows: Array<{ id: string; merged_into_user_id: string | null }>;
+let linkedGuestReadError: unknown;
 // The content revisions the hydrate path reads its `updatedAt` from.
 let revisionRows: Array<{ bundle_id: string; revision_number: number; created_at: string }>;
 let revisionReadError: unknown;
@@ -236,6 +239,15 @@ vi.mock('@/lib/server-helpers', () => ({
                     display_name: 'Creator',
                     avatar_url: null,
                   }, ...buyerProfileRows].filter((row) => ids.includes(row.id)),
+                  error: null,
+                };
+              },
+              // Honours its filter, as the database would: an account's linked
+              // guests are the ones merged into it, not every merged guest.
+              async eq(column: string, value: unknown) {
+                if (linkedGuestReadError) return { data: null, error: linkedGuestReadError };
+                return {
+                  data: linkedGuestRows.filter((row) => row[column as keyof typeof row] === value),
                   error: null,
                 };
               },
@@ -560,6 +572,8 @@ describe('post resource bundle server access', () => {
     deletionAuditRows = [];
     buyerProfileRows = [];
     profileReadError = null;
+    linkedGuestRows = [];
+    linkedGuestReadError = null;
     revisionRows = [];
     revisionReadError = null;
     revisionReadGate = null;
@@ -1135,6 +1149,23 @@ describe('post resource bundle server access', () => {
       expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
     });
 
+    // Publish files a creation made as a guest under the account the guest was
+    // linked to; the generation and its saved inputs keep the guest's id.
+    it('counts those of a creation made as a guest, posted by the account it was linked to', async () => {
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), user_id: 'guest-1' };
+      generationInputRows = generationInputRows.map((row) => ({
+        ...row,
+        user_id: 'guest-1',
+        storage_path: row.storage_path.replace('/owner-1/', '/guest-1/'),
+      }));
+      linkedGuestRows = [{ id: 'guest-1', merged_into_user_id: 'owner-1' }];
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+    });
+
     it('counts none on a post that is not a Magicbooklet creation', async () => {
       postRow = { ...(postRow as Record<string, unknown>), source_kind: 'external' };
       const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
@@ -1279,6 +1310,109 @@ describe('post resource bundle server access', () => {
     expect(detail?.resources?.items?.some(
       (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
     )).toBe(false);
+  });
+
+  // Publish files a creation made as a guest under the account the guest was
+  // linked to, while the generation and its saved inputs keep the guest's id.
+  describe('a creation made as a guest, posted by the account it was linked to', () => {
+    const GUEST_INPUT_PATH = 'generation_inputs/guest-1/gen-1/00-reference-image.png';
+
+    beforeEach(() => {
+      bundleRow = {
+        ...(bundleRow as BundleRow),
+        access_mode: 'paid',
+        price_usd_cents: 900,
+        allow_remix: true,
+      };
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), user_id: 'guest-1' };
+      generationInputRows = generationInputRows.map((row) => ({
+        ...row,
+        user_id: 'guest-1',
+        storage_path: GUEST_INPUT_PATH,
+      }));
+      linkedGuestRows = [{ id: 'guest-1', merged_into_user_id: 'owner-1' }];
+      viewerHasPurchased = true;
+    });
+
+    it('lists its saved references in the recipe the buyer unlocked', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+      expect(detail?.resources?.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'reference_image', storagePath: GUEST_INPUT_PATH }),
+      ]));
+    });
+
+    it('hands them to the buyer’s remix, signed from the guest’s folder', async () => {
+      const { loadGenerationRecipeRemixInputMediaByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const media = await loadGenerationRecipeRemixInputMediaByPostId({
+        postId: 'post-1',
+        generationId: 'gen-1',
+        viewerUserId: 'viewer-1',
+      });
+
+      expect(media).toEqual([expect.objectContaining({
+        id: 'input-1',
+        storagePath: GUEST_INPUT_PATH,
+        url: 'https://signed.example.com/guest-1/gen-1/00-reference-image.png',
+      })]);
+    });
+
+    it('signs the references named by a creation made before inputs were kept, from the guest’s folder', async () => {
+      generationInputRows = [];
+      generationRow = {
+        ...(generationRow as NonNullable<typeof generationRow>),
+        workflow_settings: {
+          model: 'nano-banana-2',
+          elements: [{
+            id: 'element-1',
+            displayName: 'Image input',
+            handle: '@alisa',
+            storagePath: 'generation_inputs/guest-1/gen-1/legacy-reference.png',
+          }],
+        },
+      };
+      const { loadGenerationRecipeRemixInputMediaByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const media = await loadGenerationRecipeRemixInputMediaByPostId({
+        postId: 'post-1',
+        generationId: 'gen-1',
+        viewerUserId: 'viewer-1',
+      });
+
+      expect(media).toEqual([expect.objectContaining({
+        storagePath: 'generation_inputs/guest-1/gen-1/legacy-reference.png',
+        url: 'https://signed.example.com/guest-1/gen-1/legacy-reference.png',
+      })]);
+    });
+
+    it.each([
+      ['the guest was linked to another account', () => {
+        linkedGuestRows = [{ id: 'guest-1', merged_into_user_id: 'someone-else' }];
+      }],
+      ['who is linked to the account cannot be read', () => {
+        linkedGuestReadError = { code: '57014', message: 'profiles read timed out' };
+      }],
+    ])('withholds them when %s', async (_label, arrange) => {
+      arrange();
+      const {
+        getPostResourceBundleDetailByPostId,
+        loadGenerationRecipeRemixInputMediaByPostId,
+      } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+      const media = await loadGenerationRecipeRemixInputMediaByPostId({
+        postId: 'post-1',
+        generationId: 'gen-1',
+        viewerUserId: 'viewer-1',
+      });
+
+      expect(detail?.viewerCanAccess).toBe(true);
+      expect(detail?.resources?.items?.some((item) => item.storagePath === GUEST_INPUT_PATH)).toBe(false);
+      expect(media).toEqual([]);
+    });
   });
 
   it('does not duplicate a reference the bundle already stores', async () => {

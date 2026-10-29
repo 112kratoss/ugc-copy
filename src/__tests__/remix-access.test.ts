@@ -243,6 +243,100 @@ describe('resolveRemixAccess', () => {
     expect(unverifiable).toEqual({ allowed: false, reason: 'not_found' });
   });
 
+  // Publish files a creation made as a guest under the account the guest was
+  // linked to, while the generation keeps the guest's id, so every such post
+  // is the account's and its generation the guest's.
+  describe('a creation made as a guest, posted by the account it was linked to', () => {
+    const GUEST_GENERATION: RemixAccessGeneration = { ...GENERATION, user_id: 'guest-1' };
+    const LINKED_GUEST = { id: 'guest-1', merged_into_user_id: 'creator-1' };
+
+    it('opens to anyone else as the account’s own creation does', async () => {
+      const { client } = createClient({ tables: { profiles: [LINKED_GUEST] } });
+
+      const decision = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'viewer-1',
+        generation: GUEST_GENERATION,
+        requestedPostId: 'post-1',
+        dependencies: notBlocked(),
+      });
+
+      expect(decision).toEqual({
+        allowed: true,
+        basis: 'public',
+        post: EXPOSED_POST,
+        includeSharedInputMedia: true,
+        recipeEntitled: false,
+      });
+    });
+
+    it('asks about a block with the account, the one a viewer sees on the post', async () => {
+      const { client } = createClient({ tables: { profiles: [LINKED_GUEST] } });
+      const isUserRelationshipBlocked = vi.fn(
+        async ({ secondUserId }: { secondUserId: string }) => secondUserId === 'creator-1',
+      );
+
+      const decision = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'viewer-1',
+        generation: GUEST_GENERATION,
+        dependencies: { isUserRelationshipBlocked },
+      });
+
+      expect(decision).toEqual({ allowed: false, reason: 'not_found' });
+      expect(isUserRelationshipBlocked).toHaveBeenCalledWith(
+        expect.objectContaining({ firstUserId: 'viewer-1', secondUserId: 'creator-1' }),
+      );
+    });
+
+    it.each([
+      ['another account', [{ id: 'guest-1', merged_into_user_id: 'someone-else' }]],
+      ['no account', [{ id: 'guest-1', merged_into_user_id: null }]],
+    ] as Array<[string, Row[]]>)('stays closed on the post when the guest was linked to %s', async (_label, profiles) => {
+      const { client } = createClient({ tables: { profiles } });
+
+      const decision = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'viewer-1',
+        generation: GUEST_GENERATION,
+        dependencies: notBlocked(),
+      });
+
+      expect(decision).toEqual({ allowed: false, reason: 'not_found' });
+    });
+
+    // A caller that has already settled the viewer's ownership passes its
+    // answer in; that answer is about the viewer, not about the post's owner.
+    it('opens though a caller answered the viewer’s ownership itself', async () => {
+      const { client } = createClient({ tables: { profiles: [LINKED_GUEST] } });
+
+      const decision = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'viewer-1',
+        generation: GUEST_GENERATION,
+        dependencies: { ...notBlocked(), isOwnOrLinkedAccountId: vi.fn(async () => false) },
+      });
+
+      expect(decision).toMatchObject({ allowed: true, basis: 'public' });
+    });
+
+    it('stays closed when who is linked to the account cannot be read', async () => {
+      const { client } = createClient({
+        tables: { profiles: [LINKED_GUEST] },
+        errors: { profiles: { code: '57014', message: 'profiles read timed out' } },
+      });
+
+      const decision = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'viewer-1',
+        generation: GUEST_GENERATION,
+        dependencies: notBlocked(),
+      });
+
+      expect(decision).toEqual({ allowed: false, reason: 'not_found' });
+    });
+  });
+
   it('answers unlock_required where the post surface does, for a remix-enabled recipe nobody bought', async () => {
     const { client } = createClient({ tables: { post_resource_bundles: [REMIX_RECIPE] } });
 
