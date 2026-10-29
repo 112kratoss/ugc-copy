@@ -26,9 +26,14 @@ import {
   resolveOwnedStoredMediaUrl,
 } from '@/lib/server-helpers';
 import {
+  countGenerationRecipeReferenceItemsByPostId,
   getPostResourceBundlePriceQuote,
 } from '@/lib/post-resource-bundles-server';
-import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
+import {
+  addPostResourceItemCountsToLockedPreview,
+  resolvePostRemixCapability,
+  type PostResourceItemCounts,
+} from '@/lib/post-resource-bundles';
 import {
   coverNeedsGenerationPreview,
   graftGenerationPreviewOntoCover,
@@ -568,6 +573,29 @@ function buildAvailableTools(items: ShowcaseFeedItem[]) {
   }));
 }
 
+/**
+ * The page's recipe summaries with what each unlock adds from the creation's
+ * saved inputs counted in, so the reel's "Recipe includes …" and every card's
+ * chips name what the unlock gives (recipe reading review B3).
+ */
+function addCreationReferenceCounts(
+  assetMap: Map<string, NonNullable<ShowcaseFeedItem['asset']>>,
+  creationReferenceCounts: Map<string, PostResourceItemCounts>,
+): Map<string, NonNullable<ShowcaseFeedItem['asset']>> {
+  for (const [postId, counts] of creationReferenceCounts) {
+    const asset = assetMap.get(postId);
+    if (!asset?.lockedPreview) continue;
+    const lockedPreview = addPostResourceItemCountsToLockedPreview(asset.lockedPreview, counts);
+    assetMap.set(postId, {
+      ...asset,
+      lockedPreview,
+      itemCounts: lockedPreview.itemCounts,
+      resourceKinds: lockedPreview.resourceKinds,
+    });
+  }
+  return assetMap;
+}
+
 export async function resolvePostRowsToFeedItems(
   rows: PostRow[],
   adminSupabase: ReturnType<typeof createServiceClient>,
@@ -668,8 +696,20 @@ export async function resolvePostRowsToFeedItems(
   };
 
   const postIds = rowsToHydrate.map((row) => row.id);
-  const assetHydrationPromise = timed('hydrate_bundles', () =>
-    getMarketplaceAssetSummaryHydration(postIds, adminSupabase));
+  const assetHydrationPromise = timed('hydrate_bundles', async () => {
+    // What each recipe's unlock adds from its creation's saved inputs (B3),
+    // read beside the summaries, so a card teases what its post page does.
+    // A post made outside the app has no creation, so no inputs to count.
+    const [hydration, creationReferenceCounts] = await Promise.all([
+      getMarketplaceAssetSummaryHydration(postIds, adminSupabase),
+      countGenerationRecipeReferenceItemsByPostId({
+        adminSupabase,
+        postIds: rowsToHydrate.filter((row) => row.generation_id).map((row) => row.id),
+        viewerUserId: null,
+      }),
+    ]);
+    return { ...hydration, assetMap: addCreationReferenceCounts(hydration.assetMap, creationReferenceCounts) };
+  });
   const assetMapPromise = assetHydrationPromise.then(({ assetMap }) => assetMap);
   // Every read still starts together. Only the preview signing inside
   // `loadGenerationInfo` waits on the media rows, because only it needs to

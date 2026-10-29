@@ -116,6 +116,8 @@ const sellerProfile = vi.hoisted(() => ({
 // Production lists bundles through the compact summary RPC; without it the
 // service falls back to selecting the bundle rows.
 const compactSummaryRpc = vi.hoisted(() => ({ enabled: false }));
+// What each recipe's unlock adds from its creation's saved inputs, by post.
+const recipeReferenceCounts = vi.hoisted(() => vi.fn(async (): Promise<Map<string, Record<string, number>>> => new Map()));
 const initialPostRows = postRows.value.slice();
 
 function pickColumns(row: Record<string, unknown>, selectedColumns: string) {
@@ -275,6 +277,7 @@ vi.mock('@/lib/post-resource-bundles-server', async (importOriginal) => ({
   assessOwnerListingQuality: (await importOriginal<typeof import('@/lib/post-resource-bundles-server')>())
     .assessOwnerListingQuality,
   getPostResourceBundleDetailByPostId: vi.fn(async () => null),
+  countGenerationRecipeReferenceItemsByPostId: recipeReferenceCounts,
 }));
 
 describe('owner posts', () => {
@@ -286,6 +289,7 @@ describe('owner posts', () => {
     sellerProfile.value = { username: 'maya-creates', display_name: 'Maya R', avatar_url: null };
     sellerProfile.error = null;
     compactSummaryRpc.enabled = false;
+    recipeReferenceCounts.mockReset().mockResolvedValue(new Map());
   });
 
   it('loads structured source tools for edit prefill', async () => {
@@ -576,6 +580,35 @@ describe('owner posts', () => {
 
       expect(listings.find((post) => post.id === 'creation-listing')?.bundle?.resourceKinds).toEqual(['prompt', 'remix']);
       expect(listings.find((post) => post.id === 'listing-ready')?.bundle?.resourceKinds).toEqual(['prompt']);
+    });
+
+    // Recipe reading review B3: a recipe whose creator shares the creation's
+    // inputs hands them over with the unlock, which neither the stored items
+    // nor the summary RPC's kinds say.
+    it.each([
+      ['the compact summary RPC', true],
+      ['the bundle select fallback', false],
+    ])('lists Files among the kinds of a recipe whose unlock adds the creation’s inputs, through %s', async (_label, rpcEnabled) => {
+      compactSummaryRpc.enabled = rpcEnabled;
+      postRows.value = [
+        ...postRows.value,
+        listingPost('creation-listing', '2026-07-05T00:00:00.000Z', { generation_id: 'gen-9', source_kind: 'magicbooklet' }),
+      ] as unknown as typeof postRows.value;
+      bundleRows.value = [recipe('creation-listing', { allow_remix: true }), recipe('listing-ready')];
+      recipeReferenceCounts.mockResolvedValue(new Map([['creation-listing', { reference_image: 2 }]]));
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
+
+      expect(listings.find((post) => post.id === 'creation-listing')?.bundle?.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+      expect(listings.find((post) => post.id === 'listing-ready')?.bundle?.resourceKinds).toEqual(['prompt']);
+      // Counted for the page in one call, as its owner's own unlock reads them,
+      // asking only about the posts with a creation behind them.
+      expect(recipeReferenceCounts).toHaveBeenCalledTimes(1);
+      expect(recipeReferenceCounts).toHaveBeenCalledWith(expect.objectContaining({
+        postIds: ['creation-listing'],
+        viewerUserId: 'user-1',
+      }));
     });
 
     it('reads no free unlocks through the select fallback, which serves a database older than the column', async () => {

@@ -1484,18 +1484,33 @@ export function addPostResourceItemCountsToLockedPreview(
   counts: PostResourceItemCounts,
 ): PostResourceBundleLockedPreview {
   const itemCounts: PostResourceItemCounts = { ...preview.itemCounts };
-  const kinds = new Set(preview.resourceKinds);
   for (const [type, count] of Object.entries(counts) as Array<[PostResourceItemType, number | undefined]>) {
     if (!count || count <= 0) continue;
     itemCounts[type] = (itemCounts[type] ?? 0) + count;
-    kinds.add(getPostResourceKindForItemType(type));
   }
 
   return {
     ...preview,
     itemCounts,
-    resourceKinds: POST_RESOURCE_KIND_ORDER.filter((kind) => kinds.has(kind)),
+    resourceKinds: addPostResourceItemCountKinds(preview.resourceKinds, counts),
   };
+}
+
+/**
+ * A recipe's kinds with those of the items counted added, in the order kinds
+ * are listed: for a read that names the kinds (the owner's post list) without
+ * a preview to add the counts to.
+ */
+export function addPostResourceItemCountKinds(
+  kinds: readonly PostResourceKind[],
+  counts: PostResourceItemCounts,
+): PostResourceKind[] {
+  const merged = new Set(kinds);
+  for (const [type, count] of Object.entries(counts) as Array<[PostResourceItemType, number | undefined]>) {
+    if (count && count > 0) merged.add(getPostResourceKindForItemType(type));
+  }
+
+  return POST_RESOURCE_KIND_ORDER.filter((kind) => merged.has(kind));
 }
 
 export function getPostResourceKindLabel(kind: PostResourceKind): string {

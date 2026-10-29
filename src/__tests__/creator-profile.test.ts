@@ -95,16 +95,25 @@ let creatorStatsRpcState: Record<string, unknown> | null = null;
 let tableAccesses: string[] = [];
 let bundleSummaryRpcCalls = 0;
 let creatorStatsRpcCalls = 0;
+// Every direct read of the recipe table: its columns and filters.
+let bundleTableReads: Array<{ columns: string; filters: Record<string, unknown> }> = [];
 
-function createResourceBundleQuery() {
+function createResourceBundleQuery(columns = '') {
   const filters: Array<(row: ResourceBundleRow) => boolean> = [];
+  const read = { columns, filters: {} as Record<string, unknown> };
+  bundleTableReads.push(read);
   const query = {
     in(column: string, values: unknown[]) {
+      read.filters[column] = values;
       filters.push((row) => values.includes((row as unknown as Record<string, unknown>)[column]));
       return query;
     },
     eq(column: string, value: unknown) {
+      read.filters[column] = value;
       filters.push((row) => (row as unknown as Record<string, unknown>)[column] === value);
+      return query;
+    },
+    abortSignal() {
       return query;
     },
     then<TResult1 = { data: ResourceBundleRow[]; error: null }, TResult2 = never>(
@@ -381,8 +390,8 @@ function createServiceClientMock() {
 
       if (table === 'post_resource_bundles') {
         return {
-          select() {
-            return createResourceBundleQuery();
+          select(columns?: string) {
+            return createResourceBundleQuery(columns);
           },
         };
       }
@@ -488,6 +497,7 @@ describe('creator profile data loader', () => {
     tableAccesses = [];
     bundleSummaryRpcCalls = 0;
     creatorStatsRpcCalls = 0;
+    bundleTableReads = [];
     resolveOwnedStoredMediaUrlMock.mockReset();
     resolveOwnedStoredMediaUrlMock.mockImplementation(async (_client, outputUrl: string, ownerUserId: string) => (
       outputUrl.startsWith(`generated_images/${ownerUserId}/`)
@@ -518,7 +528,7 @@ describe('creator profile data loader', () => {
     expect(data?.pageInfo).toMatchObject({ limit: 24, offset: 0, nextOffset: null });
   });
 
-  it('uses one bundle query and keeps draft bundle recipes private on creator pages', async () => {
+  it('uses one summary query, reads no draft, and keeps draft bundle recipes private on creator pages', async () => {
     resourceBundlesState = [{
       id: 'draft-bundle-1',
       post_id: 'post-1',
@@ -543,7 +553,12 @@ describe('creator profile data loader', () => {
 
     expect(data?.items[0].asset).toBeNull();
     expect(bundleSummaryRpcCalls).toBe(1);
-    expect(tableAccesses).not.toContain('post_resource_bundles');
+    // Beside it, one read of what the page's unlocks add from their creations'
+    // inputs (B3), with the inputs embedded in it, which never asks for a draft.
+    expect(bundleTableReads).toEqual([{
+      columns: expect.stringContaining('inputs:generation_input_media'),
+      filters: { post_id: ['post-1'], allow_remix: true, status: 'published' },
+    }]);
     expect(tableAccesses).not.toContain('generation_input_media');
   });
 

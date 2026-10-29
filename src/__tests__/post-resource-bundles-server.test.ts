@@ -73,10 +73,13 @@ let revisionReadGate: Promise<void> | null;
 // what a read costs is part of what these tests pin.
 let tableReads: string[];
 let postSelects: string[];
-// The locked teaser's one read of the post with its generation and inputs:
-// failing, or never answering until its signal gives up on it.
+let bundleSelects: string[];
+// The one read of a recipe with its post, the post's generation and that
+// generation's inputs: failing, or never answering until its signal gives up.
 let embeddedSourceReadError: unknown;
 let embeddedSourceReadHangs: boolean;
+// The signal each such read was given: a teaser's gives up, an unlock's waits.
+let embeddedSourceSignals: Array<AbortSignal | null>;
 
 /**
  * What PostgREST sends for a row under a select: only the columns it names,
@@ -133,6 +136,10 @@ vi.mock('@/lib/server-helpers', () => ({
       }
       // Nobody in these fixtures has revealed an NSFW post.
       if (name === 'has_nsfw_reveal') return { data: false, error: null };
+      // The marketplace lists the one published recipe there is.
+      if (name === 'list_marketplace_resource_bundles') {
+        return { data: bundleRow?.status === 'published' ? [bundleRow] : [], error: null };
+      }
 
       throw new Error(`Unexpected rpc: ${name}`);
     },
@@ -160,19 +167,76 @@ vi.mock('@/lib/server-helpers', () => ({
       if (table === 'post_resource_bundles') {
         let checksPresence = false;
         let readsOwnerBundles = false;
+        let selectedColumns = '';
+        let postIds: unknown[] = [];
+        let signal: AbortSignal | null = null;
+        const equalityFilters: Record<string, unknown> = {};
+        // Each `or` as PostgREST reads it: `column.eq.value` terms, any of
+        // which keeps a row.
+        const anyOfFilters: Array<Array<[string, string]>> = [];
+
+        // The read of a page's creation inputs: each recipe the filters keep,
+        // with its post, the post's generation (none once unlinked) and that
+        // generation's saved inputs, as PostgREST nests them.
+        const readCreationInputSources = async () => {
+          if (embeddedSourceReadHangs) {
+            // supabase-js answers a request its signal aborted with an error.
+            await new Promise((resolve) => signal?.addEventListener('abort', resolve));
+            return { data: null, error: { code: '', message: 'AbortError: This operation was aborted' } };
+          }
+          if (embeddedSourceReadError) return { data: null, error: embeddedSourceReadError };
+          const row = bundleRow as Record<string, unknown> | null;
+          if (
+            !row
+            || !postIds.includes(row.post_id)
+            || !Object.entries(equalityFilters).every(([column, value]) => row[column] === value)
+            || !anyOfFilters.every((terms) => terms.some(([column, value]) => String(row[column]) === value))
+          ) {
+            return { data: [], error: null };
+          }
+          const post = postRow && postRow.id === row.post_id
+            ? {
+                ...postRow,
+                generation: generationRow && postRow.generation_id === generationRow.id
+                  ? {
+                      ...generationRow,
+                      inputs: generationInputRows.filter((input) => input.generation_id === generationRow?.id),
+                    }
+                  : null,
+              }
+            : null;
+          return { data: [projectSelectedColumns({ ...row, post }, selectedColumns)], error: null };
+        };
+
         const query = {
-          select() {
+          select(columns?: string) {
+            selectedColumns = columns ?? '';
+            bundleSelects.push(selectedColumns);
             return query;
           },
-          in() {
+          in(column?: string, values?: unknown[]) {
             checksPresence = true;
+            if (column === 'post_id') postIds = values ?? [];
             return query;
           },
-          eq(column?: string) {
+          eq(column?: string, value?: unknown) {
             if (column === 'owner_user_id') readsOwnerBundles = true;
+            if (column) equalityFilters[column] = value;
+            return query;
+          },
+          or(filters: string) {
+            anyOfFilters.push(filters.split(',').map((term) => {
+              const [column, operator, ...value] = term.split('.');
+              if (operator !== 'eq') throw new Error(`Unexpected or filter: ${term}`);
+              return [column, value.join('.')] as [string, string];
+            }));
             return query;
           },
           order() {
+            return query;
+          },
+          abortSignal(value: AbortSignal) {
+            signal = value;
             return query;
           },
           async maybeSingle() {
@@ -181,7 +245,15 @@ vi.mock('@/lib/server-helpers', () => ({
               error: null,
             };
           },
-          then(resolve: (value: { data: unknown[] | null; error: unknown }) => void) {
+          then(
+            resolve: (value: { data: unknown[] | null; error: unknown }) => void,
+            reject?: (reason: unknown) => void,
+          ) {
+            if (selectedColumns.includes('generation:generations')) {
+              embeddedSourceSignals.push(signal);
+              void readCreationInputSources().then(resolve, reject);
+              return;
+            }
             if (readsOwnerBundles) {
               resolve({ data: bundleRow ? [bundleRow] : [], error: null });
               return;
@@ -214,6 +286,16 @@ vi.mock('@/lib/server-helpers', () => ({
           },
         };
 
+        return query;
+      }
+
+      // A listing's media previews: none, so a card falls back to its post.
+      if (table === 'post_media') {
+        const query = {
+          select() { return query; },
+          in() { return query; },
+          async order() { return { data: [], error: null }; },
+        };
         return query;
       }
 
@@ -579,8 +661,10 @@ describe('post resource bundle server access', () => {
     revisionReadGate = null;
     tableReads = [];
     postSelects = [];
+    bundleSelects = [];
     embeddedSourceReadError = null;
     embeddedSourceReadHangs = false;
+    embeddedSourceSignals = [];
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -989,7 +1073,7 @@ describe('post resource bundle server access', () => {
       metadata: {},
       ...overrides,
     });
-    const embeddedSourceReads = () => postSelects.filter((columns) => columns.includes('generation:generations'));
+    const embeddedSourceReads = () => bundleSelects.filter((columns) => columns.includes('generation:generations'));
 
     beforeEach(() => {
       bundleRow = {
@@ -1198,7 +1282,7 @@ describe('post resource bundle server access', () => {
     }, 10_000);
 
     // The app's recipe page names the kinds whether or not it is unlocked.
-    it('counts what was merged in for a buyer and for the owner, without the teaser’s read', async () => {
+    it('counts what was merged in for a buyer and for the owner, read as the teaser reads it', async () => {
       const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
 
       viewerHasPurchased = true;
@@ -1211,7 +1295,11 @@ describe('post resource bundle server access', () => {
         expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
         expect(detail?.resourceKinds).toEqual(['prompt', 'files', 'remix']);
       }
-      expect(embeddedSourceReads()).toEqual([]);
+      // One read each, the teaser's, in place of the post, the generation and
+      // its inputs read one after another.
+      expect(embeddedSourceReads()).toHaveLength(2);
+      expect(tableReads).not.toContain('generations');
+      expect(tableReads).not.toContain('generation_input_media');
     });
 
     it('reads nothing for a caller that only decides access', async () => {
@@ -1260,6 +1348,233 @@ describe('post resource bundle server access', () => {
       expect(sourceSelects[0]).toContain('generation_input_media');
       expect(sharingReads).not.toContain('generations');
       expect(sharingReads).not.toContain('generation_input_media');
+    });
+
+    // #582 read a locked recipe's inputs in one request but an unlocked one's
+    // in three, one after another, after everything else the recipe reads.
+    it('reads a buyer’s references with the teaser’s one read, beside the reads the recipe already makes', async () => {
+      let releaseRevisionRead!: () => void;
+      revisionReadGate = new Promise((resolve) => {
+        releaseRevisionRead = resolve;
+      });
+      viewerHasPurchased = true;
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
+
+      const pending = getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1', isNsfw: false });
+      await vi.waitFor(() => expect(embeddedSourceReads()).toHaveLength(1));
+      releaseRevisionRead();
+      const unlocked = await pending;
+
+      expect(getPostResourceItemCounts(unlocked?.resources?.items ?? []))
+        .toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+      // The unlock waits for its references, where a teaser gives up on them.
+      expect(embeddedSourceSignals).toEqual([null]);
+    });
+
+    it('gives up on the teaser’s read, and only the teaser’s', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false });
+
+      expect(embeddedSourceSignals).toHaveLength(1);
+      expect(embeddedSourceSignals[0]).toBeInstanceOf(AbortSignal);
+    });
+
+    // The marketplace, search, the reel and the owner's lists teased stored
+    // items only: 6487f689's tile said "Includes 1 prompt" beside a post page
+    // that, after #582, said a prompt, three pictures and a clip.
+    describe('on a page that lists recipes', () => {
+      type Counts = Record<string, number>;
+      const shared: Counts = { prompt: 1, reference_image: 3, reference_video: 1 };
+      const storedOnly: Counts = { prompt: 1 };
+      // What the creator did, what a buyer's unlock then gives, and what the
+      // owner's own unlock gives.
+      const gateCases: Array<[string, () => void, Counts, Counts]> = [
+        ['shares the creation’s inputs', () => {}, shared, shared],
+        ['keeps them with the stored switch', () => {
+          bundleRow = { ...(bundleRow as BundleRow), allow_remix: false };
+        }, storedOnly, storedOnly],
+        ['made the generation private since', () => {
+          generationRow = { ...(generationRow as NonNullable<typeof generationRow>), is_public: false };
+        }, storedOnly, shared],
+        ['linked a generation they do not own', () => {
+          generationRow = { ...(generationRow as NonNullable<typeof generationRow>), user_id: 'someone-else' };
+        }, storedOnly, storedOnly],
+        ['posted it from outside Magicbooklet', () => {
+          postRow = { ...(postRow as Record<string, unknown>), source_kind: 'external' };
+        }, storedOnly, storedOnly],
+        ['already stores two of them', () => {
+          bundleRow = {
+            ...(bundleRow as BundleRow),
+            resource_items: [
+              { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Public prompt text' },
+              // A copy "Include creation references" stored, and the file itself.
+              { id: 'reference-image-1', type: 'reference_image', title: 'Image 1', storagePath: 'owner-1/generation-references/gen-1/image-1.png', contentType: 'image/png' },
+              { id: 'stored-2', type: 'reference_image', title: 'Image 2', storagePath: 'generation_inputs/owner-1/gen-1/image-2.png', contentType: 'image/png' },
+            ],
+          };
+        }, shared, shared],
+        ['kept one outside their own folder', () => {
+          generationInputRows = [
+            ...generationInputRows,
+            inputRow({ id: 'stray-1', storage_path: 'generation_inputs/someone-else/gen-1/stray-1.png', sort_order: 9 }),
+          ];
+        }, shared, shared],
+        ['made it before inputs were kept', () => {
+          generationInputRows = [];
+          generationRow = {
+            ...(generationRow as NonNullable<typeof generationRow>),
+            workflow_settings: {
+              model: 'nano-banana-2',
+              elements: [{ id: 'element-1', displayName: 'Image input', handle: '@alisa', storagePath: 'generation_inputs/owner-1/gen-1/legacy-reference.png' }],
+            },
+          };
+        }, { prompt: 1, reference_image: 1 }, { prompt: 1, reference_image: 1 }],
+      ];
+
+      it.each(gateCases)('the marketplace tile counts what a buyer’s unlock gives when the creator %s', async (_case, arrange, buyerCounts) => {
+        arrange();
+        const { getMarketplaceResourceList, getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+        const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
+
+        const [tile] = (await getMarketplaceResourceList()).items;
+        viewerHasPurchased = true;
+        const unlocked = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+        expect(unlocked?.viewerCanAccess).toBe(true);
+        expect(getPostResourceItemCounts(unlocked?.resources?.items ?? [])).toEqual(buyerCounts);
+        expect(tile.lockedPreview.itemCounts).toEqual(buyerCounts);
+      });
+
+      it.each(gateCases)('the seller page counts what the owner’s unlock gives when the creator %s', async (_case, arrange, _buyerCounts, ownerCounts) => {
+        arrange();
+        const { getPostResourceBundleDetailByPostId, getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+        const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
+
+        const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
+        const own = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'owner-1' });
+
+        expect(getPostResourceItemCounts(own?.resources?.items ?? [])).toEqual(ownerCounts);
+        expect(listing.lockedPreview.itemCounts).toEqual(ownerCounts);
+      });
+
+      it('counts a recipe not yet published on its owner’s pages, and for no one else', async () => {
+        bundleRow = { ...(bundleRow as BundleRow), status: 'draft' };
+        const {
+          countGenerationRecipeReferenceItemsByPostId,
+          getPostResourceBundleDetailByPostId,
+          getSellerPostResourceBundleDashboard,
+        } = await import('@/lib/post-resource-bundles-server');
+        const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
+        const { createServiceClient } = await import('@/lib/server-helpers');
+        const countFor = async (viewerUserId: string | null) => [...await countGenerationRecipeReferenceItemsByPostId({
+          adminSupabase: createServiceClient() as never,
+          postIds: ['post-1'],
+          viewerUserId,
+        })];
+
+        const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
+        const own = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'owner-1' });
+
+        expect(listing.lockedPreview.itemCounts).toEqual(getPostResourceItemCounts(own?.resources?.items ?? []));
+        expect(listing.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+        // A list never reads a draft's contents for anyone but its owner.
+        expect(await countFor(null)).toEqual([]);
+        expect(await countFor('viewer-1')).toEqual([]);
+        // An id that would widen the filter reads as a stranger's.
+        expect(await countFor('viewer-1,status.eq.draft')).toEqual([]);
+        expect(await countFor('owner-1')).toEqual([['post-1', { reference_image: 3, reference_video: 1 }]]);
+      });
+
+      it('counts none on a post moderation hid, for its owner too', async () => {
+        postRow = { ...(postRow as Record<string, unknown>), review_status: 'hidden' };
+        const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+
+        const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
+
+        expect(listing.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+      });
+
+      it('reads a page of recipes in one request, filtered to those whose creator shares the inputs', async () => {
+        const { countGenerationRecipeReferenceItemsByPostId } = await import('@/lib/post-resource-bundles-server');
+        const { createServiceClient } = await import('@/lib/server-helpers');
+
+        const counts = await countGenerationRecipeReferenceItemsByPostId({
+          adminSupabase: createServiceClient() as never,
+          postIds: ['post-1', 'post-2', 'post-1', 'post-3'],
+          viewerUserId: null,
+        });
+
+        expect([...counts]).toEqual([['post-1', { reference_image: 3, reference_video: 1 }]]);
+        expect(embeddedSourceReads()).toHaveLength(1);
+        expect(tableReads.filter((table) => table !== 'post_resource_bundles')).toEqual([]);
+      });
+
+      it('asks nothing when no recipe on the page shares its inputs', async () => {
+        bundleRow = { ...(bundleRow as BundleRow), allow_remix: false };
+        const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+        await getMarketplaceResourceList();
+
+        expect(embeddedSourceReads()).toEqual([]);
+      });
+
+      it('keeps the stored counts when the page’s read fails or runs long', async () => {
+        const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+        embeddedSourceReadError = { code: '57014', message: 'canceling statement due to statement timeout' };
+        const failed = await getMarketplaceResourceList();
+        embeddedSourceReadError = null;
+        embeddedSourceReadHangs = true;
+        const started = Date.now();
+        const slow = await getMarketplaceResourceList();
+
+        expect(failed.items[0]?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+        expect(slow.items[0]?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+        expect(Date.now() - started).toBeLessThan(3000);
+      }, 10_000);
+      it('the marketplace tile counts what the unlock then gives, and never which', async () => {
+        const { getMarketplaceResourceList, getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+        const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
+
+        const page = await getMarketplaceResourceList();
+        viewerHasPurchased = true;
+        const unlocked = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+        expect(page.items).toHaveLength(1);
+        const [tile] = page.items;
+        expect(tile.lockedPreview.itemCounts).toEqual(getPostResourceItemCounts(unlocked?.resources?.items ?? []));
+        expect(tile.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+        expect(tile.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+        const sent = JSON.stringify(page);
+        expect(sent).not.toContain('generation_inputs');
+        expect(sent).not.toContain('Private name');
+        expect(sent).not.toMatch(/image-[123]|video-1/);
+      });
+
+      it('the seller page counts them as its owner’s own unlock reads them', async () => {
+        // The owner keeps reading the inputs of a generation that is no longer
+        // public; a buyer, and so the public tile, gets none of them.
+        generationRow = { ...(generationRow as NonNullable<typeof generationRow>), is_public: false };
+        const {
+          getMarketplaceResourceList,
+          getPostResourceBundleDetailByPostId,
+          getSellerPostResourceBundleDashboard,
+        } = await import('@/lib/post-resource-bundles-server');
+        const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');
+
+        const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+        const own = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'owner-1' });
+        const page = await getMarketplaceResourceList();
+
+        const [listing] = dashboard.bundles;
+        expect(listing.lockedPreview.itemCounts).toEqual(getPostResourceItemCounts(own?.resources?.items ?? []));
+        expect(listing.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+        expect(listing.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+        expect(page.items[0]?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
+        expect(page.items[0]?.resourceKinds).toEqual(['prompt', 'remix']);
+      });
     });
   });
 

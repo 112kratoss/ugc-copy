@@ -157,6 +157,8 @@ let lastPurchaseBundleIds: unknown[] | null = null;
 let profilesGate: Promise<void> | null = null;
 let tableAccesses: string[] = [];
 let rpcAccesses: string[] = [];
+// Every direct read of the recipe table: its columns, posts and filters.
+let bundleTableReads: Array<{ columns: string; postIds: unknown[]; filters: Record<string, unknown> }> = [];
 // Forces the fake to answer the top-sales RPC as missing, so the legacy
 // scan fallback for un-migrated databases stays covered.
 let topSalesRpcMissingState = false;
@@ -542,29 +544,35 @@ function createServiceClientMock() {
       }
 
       if (table === 'post_resource_bundles' || table === 'marketplace_assets') {
-        let postIds: unknown[] = [];
-        let status: unknown = null;
+        const read = { columns: '', postIds: [] as unknown[], filters: {} as Record<string, unknown> };
+        if (table === 'post_resource_bundles') {
+          bundleTableReads.push(read);
+        }
 
         const query = {
-          select() {
+          select(columns?: string) {
+            read.columns = columns ?? '';
             return query;
           },
           in(column: string, values: unknown[]) {
             if (column === 'post_id') {
-              postIds = values;
+              read.postIds = values;
             }
             return query;
           },
           eq(column: string, value: unknown) {
-            if (column === 'status') {
-              status = value;
-            }
+            read.filters[column] = value;
+            return query;
+          },
+          abortSignal() {
             return query;
           },
           then(resolve: (value: { data: ResourceBundleRow[]; error: null }) => void) {
             resolve({
               data: resourceBundlesState.filter(
-                (row) => postIds.includes(row.post_id) && (status === null || row.status === status)
+                (row) => read.postIds.includes(row.post_id)
+                  && (!('status' in read.filters) || row.status === read.filters.status)
+                  && (!('allow_remix' in read.filters) || row.allow_remix === read.filters.allow_remix)
               ),
               error: null,
             });
@@ -739,6 +747,7 @@ describe('showcase feed', () => {
     profilesGate = null;
     tableAccesses = [];
     rpcAccesses = [];
+    bundleTableReads = [];
     topSalesRpcMissingState = false;
     postsRangeReads = [];
     nextCacheState.invocations = [];
@@ -1248,7 +1257,7 @@ describe('showcase feed', () => {
     expect(serializedAsset).not.toContain('generation_inputs/user-1');
   });
 
-  it('uses one bundle query while drafts suppress automatic recipe summaries', async () => {
+  it('uses one summary query, and reads no draft, while drafts suppress automatic recipe summaries', async () => {
     resourceBundlesState = [{
       id: 'draft-asset-1',
       post_id: 'post-1',
@@ -1280,7 +1289,13 @@ describe('showcase feed', () => {
 
     expect(page.items[0].asset).toBeNull();
     expect(rpcAccesses.filter((name) => name === 'get_public_post_resource_bundle_summaries')).toHaveLength(1);
-    expect(tableAccesses).not.toContain('post_resource_bundles');
+    // Beside it, one read of what the page's unlocks add from their creations'
+    // inputs (B3), with the inputs embedded in it, which never asks for a draft.
+    expect(bundleTableReads).toEqual([{
+      columns: expect.stringContaining('inputs:generation_input_media'),
+      postIds: ['post-1'],
+      filters: { allow_remix: true, status: 'published' },
+    }]);
     expect(tableAccesses).not.toContain('generation_input_media');
   });
 

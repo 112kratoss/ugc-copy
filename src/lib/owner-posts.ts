@@ -3,6 +3,7 @@ import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
 import {
+  addPostResourceItemCountKinds,
   getPostResourceKinds,
   resolveRecipeAllowRemix,
   stripDerivedGenerationReferenceItems,
@@ -12,10 +13,12 @@ import {
   type PostResourceBundleInput,
   type PostResourceBundleResources,
   type PostResourceBundleStatus,
+  type PostResourceItemCounts,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import {
   assessOwnerListingQuality,
+  countGenerationRecipeReferenceItemsByPostId,
   getPostResourceBundleDetailByPostId,
 } from '@/lib/post-resource-bundles-server';
 import {
@@ -639,7 +642,8 @@ async function toOwnerPostListItem(
   sourceToolsMap: Map<string, SourceToolSelection[]>,
   mediaItemsMap: Map<string, PostMediaSummary[]>,
   generationPreviewMap: Map<string, GenerationPreviewInfo>,
-  sellerProfile: OwnerSellerProfile | null
+  sellerProfile: OwnerSellerProfile | null,
+  creationReferenceCounts: Map<string, PostResourceItemCounts>
 ) {
   const rawMediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
     supabase: adminSupabase,
@@ -666,7 +670,7 @@ async function toOwnerPostListItem(
   const storedResourceKinds = bundleRow?.resource_kinds ?? getPostResourceKinds(normalizedBundleResources);
   // A creation post's published recipe includes its Remix whatever its stored
   // switch says (2026-10-27), which the summary RPC's kinds do not know.
-  const resourceKinds: PostResourceKind[] = bundleRow
+  const recipeResourceKinds: PostResourceKind[] = bundleRow
     && !storedResourceKinds.includes('remix')
     && resolveRecipeAllowRemix({
       storedAllowRemix: bundleRow.allow_remix,
@@ -675,6 +679,12 @@ async function toOwnerPostListItem(
     })
     ? [...storedResourceKinds, 'remix']
     : storedResourceKinds;
+  // Nor do they know the creation's inputs a recipe whose creator shares them
+  // hands over with the unlock (B3), counted as the owner's own unlock reads them.
+  const referenceCounts = creationReferenceCounts.get(row.id);
+  const resourceKinds = referenceCounts
+    ? addPostResourceItemCountKinds(recipeResourceKinds, referenceCounts)
+    : recipeResourceKinds;
   const title =
     row.title?.trim() ||
     deriveTitleFromBody(row.body) ||
@@ -763,7 +773,7 @@ export async function getOwnerPostList(
   const sellerProfilePromise = bundleMapPromise.then((bundles) => (
     bundles.size > 0 ? loadOwnerSellerProfile(adminSupabase, userId) : null
   ));
-  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile] = await Promise.all([
+  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile, creationReferenceCounts] = await Promise.all([
     bundleMapPromise,
     loadSourceToolsMap(adminSupabase, postIds),
     mediaItemsPromise,
@@ -779,6 +789,12 @@ export async function getOwnerPostList(
       },
     ),
     sellerProfilePromise,
+    // A post made outside the app has no creation, so no inputs to count.
+    countGenerationRecipeReferenceItemsByPostId({
+      adminSupabase,
+      postIds: rows.filter((row) => row.generation_id).map((row) => row.id),
+      viewerUserId: userId,
+    }),
   ]);
   const filteredRows = rows.filter((row) => {
     if (visibility === 'archived') {
@@ -793,7 +809,16 @@ export async function getOwnerPostList(
   });
 
   return Promise.all(filteredRows.map((row) =>
-    toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile)
+    toOwnerPostListItem(
+      adminSupabase,
+      row,
+      bundleMap,
+      sourceToolsMap,
+      mediaItemsMap,
+      generationPreviewMap,
+      sellerProfile,
+      creationReferenceCounts,
+    )
   ));
 }
 
@@ -815,7 +840,7 @@ export async function getOwnerPostDetail(
   const sellerProfilePromise = bundleMapPromise.then((bundles) => (
     bundles.size > 0 ? loadOwnerSellerProfile(adminSupabase, userId) : null
   ));
-  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile] = await Promise.all([
+  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile, creationReferenceCounts] = await Promise.all([
     bundleMapPromise,
     loadSourceToolsMap(adminSupabase, [row.id]),
     mediaItemsPromise,
@@ -829,6 +854,11 @@ export async function getOwnerPostDetail(
       },
     ),
     sellerProfilePromise,
+    countGenerationRecipeReferenceItemsByPostId({
+      adminSupabase,
+      postIds: row.generation_id ? [row.id] : [],
+      viewerUserId: userId,
+    }),
   ]);
   const listItem = await toOwnerPostListItem(
     adminSupabase,
@@ -838,6 +868,7 @@ export async function getOwnerPostDetail(
     mediaItemsMap,
     generationPreviewMap,
     sellerProfile,
+    creationReferenceCounts,
   );
   const bundleDetail = await getPostResourceBundleDetailByPostId(postId, {
     viewerUserId: userId,
