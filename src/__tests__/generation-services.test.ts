@@ -7,6 +7,8 @@ import {
 } from '@/__tests__/fixtures/mobile-notification-history';
 import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { BackendLogRecord } from '@/lib/backend-logger';
+import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
+import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
 
 // Foreign references stay rejected by default; individual tests opt into an
 // authorized shared-media import.
@@ -15,6 +17,22 @@ const sharedImportMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/generation-input-media-import', () => sharedImportMocks);
+
+// The generations rows every mock held in the current test.
+const mockedGenerationRows: GenerationRow[][] = [];
+const CREATOR_STORAGE_PATH = new RegExp(`(?:${[...USER_SCOPED_STORAGE_BUCKETS].join('|')})/[^/"]+/`);
+
+// Whatever a start or a settlement stored is read back by remixes. A path in
+// the creator's folders under a key the remix sanitizer keeps reaches every
+// remixer without their inputs, as `inputs` and `outputs` once did, so each
+// test's stored settings are read here the way such a remix gets them.
+afterEach(() => {
+  for (const row of mockedGenerationRows.splice(0).flat()) {
+    if (!row.workflow_settings) continue;
+    const remixed = JSON.stringify(sanitizeWorkflowSettingsForRemix(row.workflow_settings, false));
+    expect(remixed, `${row.model}'s stored settings as a remix without its inputs gets them`).not.toMatch(CREATOR_STORAGE_PATH);
+  }
+});
 
 type GenerationRow = {
   id: string;
@@ -64,6 +82,7 @@ type SupabaseMockOptions = {
 
 function createSupabaseMock(initialRows: GenerationRow[] = [], options: SupabaseMockOptions = {}) {
   const generations = options.sharedGenerations ?? [...initialRows];
+  mockedGenerationRows.push(generations);
   const uploads: Array<{ bucket: string; filePath: string }> = [];
   const inputMediaRows: Record<string, unknown>[] = [];
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];

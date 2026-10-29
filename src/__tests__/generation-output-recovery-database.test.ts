@@ -198,6 +198,12 @@ describe.skipIf(!connectionString)('generation output recovery with real queue a
     expect(await state()).toMatchObject({ status: 'succeeded', credits: 500, refunded: false });
     const row = (await db.query('select workflow_settings from public.generations where id=$1', [generationId])).rows[0];
     expect(row.workflow_settings.outputs).toHaveLength(2);
+    // Where settling kept the pictures is read by the owner's views alone: no
+    // remix is given it, even one the creator shared the inputs with.
+    const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
+    const remixed = sanitizeWorkflowSettingsForRemix(row.workflow_settings, true);
+    expect(remixed).not.toHaveProperty('outputs');
+    expect(remixed).not.toHaveProperty('primaryOutputIndex');
     expect(upload).toHaveBeenCalledTimes(4);
   });
 

@@ -62,6 +62,7 @@ import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-cand
 import { collectReferenceMediaCandidates, collectSubjectImageCandidates } from '@/lib/generation-input-media';
 import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-server';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
+import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 const LOCKED_PROMPT = 'The prompt a buyer pays for';
@@ -827,5 +828,71 @@ describe('a Kling O3 run with named subjects', () => {
     expect(bundle.inputs.video?.subjects).toEqual(RESTORED_SUBJECTS);
     expect(bundle.workflowSettings).toEqual({ model: 'kling-o3', referenceMode: 'elements' });
     expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
+  });
+});
+
+// A picture run started through the catalog records each input as a slot with
+// the path it was staged under in its creator's folder, and settling a run
+// that made several pictures lists where each was kept. Neither is a setting
+// an editor restores, and both name the creator's account and their files.
+describe("a catalog picture run's own media in its settings", () => {
+  const OWNER_ACCESS = { allowed: true, basis: 'owner', post: null, includeSharedInputMedia: true, recipeEntitled: false };
+  const PUBLIC_ACCESS = { allowed: true, basis: 'public', post: EXPOSED_POST, includeSharedInputMedia: false, recipeEntitled: false };
+  const CREATOR_FOLDER = new RegExp(`(?:${[...USER_SCOPED_STORAGE_BUCKETS].join('|')})/creator-1/`);
+  // What startCatalogGeneration writes, in three parts: what an editor restores,
+  // what is kept of the inputs, then where settling two pictures kept them.
+  const RESTORED = {
+    aspectRatio: '3:4',
+    resolution: '2K',
+    model: 'nano-banana-2',
+    catalogRevision: 'rev-1',
+    settings: { aspectRatio: '3:4', resolution: '2K' },
+  };
+  const OF_THE_INPUTS = {
+    compiledPrompt: '@me in a linen suit. @me is the first attached image.',
+    elements: [{ displayName: 'me', handle: '@me', storagePath: 'uploads/creator-1/1730000000000-passport-scan.jpg', sourceGenerationId: null }],
+    inputs: [
+      { slot: 'imageReferences', kind: 'image', label: 'me', handle: '@me', storagePath: 'uploads/creator-1/1730000000000-passport-scan.jpg' },
+      { slot: 'imageReferences', kind: 'image', sourceGenerationId: 'gen-private-7' },
+    ],
+  };
+  const OF_THE_PICTURES = {
+    outputs: [
+      { index: 0, storagePath: 'generated_images/creator-1/generated_task-1_0.png' },
+      { index: 1, storagePath: 'generated_images/creator-1/generated_task-1_1.png' },
+    ],
+    primaryOutputIndex: 0,
+  };
+
+  beforeEach(() => {
+    mocks.generation = {
+      ...mocks.generation,
+      share_input_media_for_remix: false,
+      // A public post's result is its showcase copy, outside the creator's folders.
+      showcase_asset_path: 'showcase/gen-1/result.png',
+      prompt: '@me in a linen suit.',
+      workflow_settings: structuredClone({ ...RESTORED, ...OF_THE_INPUTS, ...OF_THE_PICTURES }),
+    };
+  });
+
+  it("hands someone else's remix the settings without a path to the creator's uploads or pictures", async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(PUBLIC_ACCESS);
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.result?.url).toBe('https://public.example/showcase/gen-1/result.png');
+    expect(bundle.workflowSettings).toEqual(RESTORED);
+    expect(JSON.stringify(bundle)).not.toMatch(CREATOR_FOLDER);
+    expect(JSON.stringify(bundle)).not.toMatch(/passport-scan|gen-private-7/);
+  });
+
+  it('gives the owner, and a remix the creator shared the inputs with, the inputs but not where the pictures were kept', async () => {
+    for (const access of [OWNER_ACCESS, { ...PUBLIC_ACCESS, includeSharedInputMedia: true }]) {
+      mocks.resolveRemixAccess.mockResolvedValue(access);
+
+      const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+      expect(bundle.workflowSettings).toEqual({ ...RESTORED, ...OF_THE_INPUTS });
+    }
   });
 });
