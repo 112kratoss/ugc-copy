@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import PostResourceBundlePanel from '@/app/showcase/[id]/PostResourceBundlePanel';
 import {
+  addPostResourceItemCountsToLockedPreview,
   normalizePostResourceItems,
   normalizePostResourceSections,
   type PostResourceBundleLockedPreview,
@@ -483,6 +484,22 @@ describe('PostResourceBundlePanel', () => {
     const positions = titles.map((title) => document.body.textContent?.indexOf(title) ?? -1);
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+  });
+
+  // Recipe reading review B3 (2026-10-29): the server counts a creation's saved
+  // inputs into the teaser of a recipe whose creator shares them (post
+  // 6487f689 read "1 prompt" and unlocked a prompt, three pictures and a clip).
+  it('counts the creation’s references a locked creation recipe comes with, after its prompt', () => {
+    const lockedPreview = addPostResourceItemCountsToLockedPreview(
+      { ...promptOnlyPreview, resourceKinds: ['prompt', 'remix'], hasRemix: true },
+      { reference_image: 3, reference_video: 1 },
+    );
+
+    renderPanel({ resourceKinds: lockedPreview.resourceKinds, lockedPreview, remixIncluded: true });
+
+    expect(screen.getByText('Includes 1 prompt, 3 reference images, 1 reference video')).toBeInTheDocument();
+    expect(screen.getByText('Files')).toBeInTheDocument();
+    expect(screen.getByText('Remix included')).toBeInTheDocument();
   });
 
   it('shows section counts while locked and groups unlocked resources by section', () => {

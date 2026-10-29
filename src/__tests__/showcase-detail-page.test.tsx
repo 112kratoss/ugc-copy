@@ -15,6 +15,8 @@ const mockRedirect = vi.fn((target: string) => {
 });
 const getPostReferenceForShowcaseIdMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
 const getPublicPostDetailMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
+// What each read of the post asked for besides its id.
+const getPublicPostDetailOptionsMock = vi.fn<(id: string, options: unknown) => void>();
 const recordPostShareEventMock = vi.fn(async (_payload: unknown) => {
   void _payload;
 });
@@ -78,7 +80,10 @@ vi.mock('next/server', () => ({
 
 vi.mock('@/lib/public-posts', () => ({
   getPostReferenceForShowcaseId: (id: string) => getPostReferenceForShowcaseIdMock(id),
-  getPublicPostDetail: (id: string) => getPublicPostDetailMock(id),
+  getPublicPostDetail: (id: string, options?: unknown) => {
+    getPublicPostDetailOptionsMock(id, options);
+    return getPublicPostDetailMock(id);
+  },
   getPublicPostMetaDescription: (detail: { description?: string; body?: string; prompt?: string; title: string }) =>
     detail.description || detail.body || detail.prompt || detail.title,
 }));
@@ -166,6 +171,7 @@ describe('Showcase detail page', () => {
     // Once answer can go unread; a reset keeps it from reaching the next test.
     getPostReferenceForShowcaseIdMock.mockReset();
     getPublicPostDetailMock.mockReset();
+    getPublicPostDetailOptionsMock.mockReset();
     getPostReferenceForShowcaseIdMock.mockResolvedValue({
       id: 'post-1',
       generation_id: 'gen-1',
@@ -925,6 +931,9 @@ describe('Showcase detail page', () => {
       width: 1080,
       height: 1920,
     });
+    // The metadata draws no recipe teaser, so it asks for no count of the
+    // creation's references, whoever is viewing.
+    expect(getPublicPostDetailOptionsMock).toHaveBeenCalledWith('post-1', { countLockedRecipeReferences: false });
   });
 
   it('falls back to the site card while a poster is still rendering', async () => {

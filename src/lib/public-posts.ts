@@ -311,6 +311,8 @@ export async function getPublicPostDetail(
     viewerUserId?: string | null;
     countryCode?: string | null;
     revealNsfw?: boolean;
+    /** False where nothing draws the recipe's teaser (the page's metadata). */
+    countLockedRecipeReferences?: boolean;
   }
 ): Promise<PublicPostDetail | null> {
   const adminSupabase = createServiceClient();
@@ -418,6 +420,7 @@ export async function getPublicPostDetail(
       countryCode,
       // The row already says, so the bundle read need not ask posts again.
       ...(row.is_nsfw === undefined ? {} : { isNsfw: row.is_nsfw === true }),
+      ...(options?.countLockedRecipeReferences === false ? { countLockedReferences: false } : {}),
     }),
     loadPublicPostGeneration(adminSupabase, row.generation_id),
   ]);

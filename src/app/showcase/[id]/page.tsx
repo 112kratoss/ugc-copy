@@ -168,8 +168,8 @@ async function isBlockedBetween(viewerUserId: string | null, creatorId: string |
 export async function generateMetadata({ params }: ShowcaseDetailPageProps): Promise<Metadata> {
   const { id } = await params;
   // As the page reads it: the post's own row first, the legacy reference only
-  // when no post has this id.
-  const detail = await getPublicPostDetail(id);
+  // when no post has this id. The metadata never draws the recipe's teaser.
+  const detail = await getPublicPostDetail(id, { countLockedRecipeReferences: false });
 
   if (!detail) {
     const reference = await getPostReferenceForShowcaseId(id);

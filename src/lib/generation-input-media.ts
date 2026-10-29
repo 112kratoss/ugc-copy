@@ -77,7 +77,7 @@ export interface PersistGenerationInputCandidate {
   metadata?: Record<string, unknown> | null;
 }
 
-interface GenerationInputMediaRow {
+export interface GenerationInputMediaRow {
   id: string;
   generation_id: string;
   user_id: string;
@@ -597,6 +597,25 @@ function mapInputMediaRow(
   };
 }
 
+/** The columns of a saved input row, as every read of them selects them. */
+export const GENERATION_INPUT_MEDIA_COLUMNS =
+  'id, generation_id, user_id, media_type, role, label, storage_path, source_generation_id, sort_order, metadata';
+
+/**
+ * Saved input rows read some other way than `loadGenerationInputMediaMap`
+ * (embedded in a post's read), as the items it makes of them without links:
+ * each file trusted by the same rule, in the same order.
+ */
+export function mapGenerationInputMediaRowsWithoutUrls(
+  rows: readonly GenerationInputMediaRow[],
+): GenerationInputMediaItem[] {
+  // The read's `order('sort_order')`, which puts a row with none last.
+  const sortOrder = (row: GenerationInputMediaRow) => row.sort_order ?? Number.MAX_SAFE_INTEGER;
+  return [...rows]
+    .sort((first, second) => sortOrder(first) - sortOrder(second))
+    .map((row) => mapInputMediaRow(row, null, prepareGenerationInputMediaRow(row, false).trustedStoragePath));
+}
+
 export async function loadGenerationInputMediaMap(params: {
   supabase: SupabaseClient;
   generationIds: string[];
@@ -612,7 +631,7 @@ export async function loadGenerationInputMediaMap(params: {
   try {
     const { data, error } = await params.supabase
       .from('generation_input_media')
-      .select('id, generation_id, user_id, media_type, role, label, storage_path, source_generation_id, sort_order, metadata')
+      .select(GENERATION_INPUT_MEDIA_COLUMNS)
       .in('generation_id', generationIds)
       .order('sort_order', { ascending: true });
 

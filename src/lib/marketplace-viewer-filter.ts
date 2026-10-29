@@ -93,7 +93,7 @@ export async function isPostResourceBundleBuyWithheld(
 ): Promise<boolean> {
   const detail = await (dependencies.getPostResourceBundleDetailByPostId ?? getPostResourceBundleDetailByPostId)(
     postId,
-    { viewerUserId: buyerUserId, adminSupabase, entitledPurchase: true },
+    { viewerUserId: buyerUserId, adminSupabase, entitledPurchase: true, countLockedReferences: false },
   );
   if (!detail) return true;
   if (detail.viewerIsOwner) return false;

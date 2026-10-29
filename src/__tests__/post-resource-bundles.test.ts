@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addPostResourceItemCountsToLockedPreview,
   buildPostResourceBundleLockedPreview,
   formatPostResourceBundleCountSummary,
   formatPostResourceCompactPriceLabel,
@@ -631,6 +632,42 @@ describe('buyer-facing recipe counts', () => {
 
     expect(formatPostResourceBundleCountSummary(preview)).toBe('1 prompt, settings, 2 files, 1 link');
     expect(formatPostResourceItemCountSummary({ settings: 2, source_file: 1 })).toBe('settings, 1 file');
+  });
+
+  // Recipe reading review B3 (2026-10-29): what an unlock adds at read time,
+  // a creation's saved inputs, is counted into the locked teaser, and nothing
+  // about those items comes with the numbers.
+  it('counts in what an unlock adds, with the kinds it makes, and changes nothing else', () => {
+    const preview = sanitizePostResourceBundleLockedPreview(buildPostResourceBundleLockedPreview({
+      items: normalizePostResourceItems([{ type: 'prompt', title: 'Prompt', textContent: 'A neon portrait of @ali.' }]),
+      allowRemix: true,
+    }))!;
+
+    const counted = addPostResourceItemCountsToLockedPreview(preview, {
+      reference_video: 1,
+      reference_image: 3,
+      reference_audio: 0,
+    });
+
+    expect(counted.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+    expect(counted.resourceKinds).toEqual(['prompt', 'files', 'remix']);
+    expect(formatPostResourceBundleCountSummary(counted)).toBe('1 prompt, 3 reference images, 1 reference video');
+    expect({ ...counted, itemCounts: preview.itemCounts, resourceKinds: preview.resourceKinds }).toEqual(preview);
+    expect(preview.itemCounts).toEqual({ prompt: 1 });
+  });
+
+  it('adds to a type the recipe already stores', () => {
+    const preview = buildPostResourceBundleLockedPreview({
+      items: normalizePostResourceItems([
+        { type: 'prompt', title: 'Prompt', textContent: 'A neon portrait.' },
+        { type: 'reference_image', title: 'Stored', storagePath: 'user-1/references/stored.png' },
+      ]),
+    });
+
+    const counted = addPostResourceItemCountsToLockedPreview(preview, { reference_image: 2 });
+
+    expect(counted.itemCounts).toEqual({ prompt: 1, reference_image: 3 });
+    expect(counted.resourceKinds).toEqual(['prompt', 'files']);
   });
 });
 

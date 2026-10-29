@@ -209,6 +209,7 @@ export async function createPostResourceFileReadUrlForRoute({
   const detail = await getDetailByPostId(postId, {
     viewerUserId,
     countryCode,
+    countLockedReferences: false,
   });
 
   if (!detail || !detail.viewerCanAccess || !detail.resources) {
