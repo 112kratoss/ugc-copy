@@ -1,10 +1,11 @@
 import { AudioLines, ExternalLink, FileText, ImageIcon, Play } from 'lucide-react-native';
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { MatureCover, MatureMediaCovered } from '@/components/mature-cover';
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
+import { PagerRowScrollView } from '@/components/pager-row-scroll-view';
 import { isRecipeMediaItem } from '@/lib/recipe-reading/recipe-reading';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -167,8 +168,7 @@ export function PostResourceReferences({
           {label}
         </Text>
       ) : null}
-      <ScrollView
-        horizontal
+      <PagerRowScrollView
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ gap: 10 }}
         showsHorizontalScrollIndicator={false}
@@ -236,11 +236,14 @@ export function PostResourceReferences({
                 )}
               </View>
               <View style={{ padding: 10, gap: 4 }}>
-                <Text selectable numberOfLines={2} style={{ color: theme.colors.text, ...appTheme.type.label }}>
+                {/* Selectable on iOS only. On Android the row takes a drag at gesture handler's root, which
+                    leaves the touch on a selectable word uncancelled, and a flick that began on a title
+                    selected it ~0.4 s later (Pixel 9a, 2026-10-29). The prompt holds the same names. */}
+                <Text selectable={Platform.OS === 'ios'} numberOfLines={2} style={{ color: theme.colors.text, ...appTheme.type.label }}>
                   {item.title}
                 </Text>
                 {item.description ? (
-                  <Text selectable numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.caption, fontWeight: '400' }}>
+                  <Text selectable={Platform.OS === 'ios'} numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.caption, fontWeight: '400' }}>
                     {item.description}
                   </Text>
                 ) : null}
@@ -254,7 +257,7 @@ export function PostResourceReferences({
             </Pressable>
           );
         })}
-      </ScrollView>
+      </PagerRowScrollView>
       <MediaLightbox
         items={lightboxItems}
         activeIndex={lightboxIndex >= 0 ? lightboxIndex : null}

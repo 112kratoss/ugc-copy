@@ -19,6 +19,8 @@ vi.mock('react-native', () => ({
   ScrollView: (p: Props) => React.createElement('scroll-view', p),
   Pressable: (p: Props) => React.createElement('pressable', p),
   Linking: { openURL: vi.fn() },
+  // Android draws the rows through gesture handler's scroll view (its double is the one above).
+  Platform: { OS: 'android' },
 }));
 vi.mock('lucide-react-native', () => ({
   FileText: () => null,

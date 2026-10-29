@@ -20,6 +20,10 @@ export default defineConfig({
       // Aliasing it lets a test render a real lucide icon and read the stroke
       // width the component actually resolved.
       'react-native-svg': path.resolve(__dirname, '__tests__/mocks/react-native-svg.ts'),
+      // react-native-gesture-handler's entry imports react-native too. Suites
+      // reach only its scroll view (the rows on a pager page; no suite draws the
+      // root layout's GestureHandlerRootView), so the double is React Native's.
+      'react-native-gesture-handler': path.resolve(__dirname, '__tests__/mocks/react-native-gesture-handler.ts'),
     },
   },
   test: {
