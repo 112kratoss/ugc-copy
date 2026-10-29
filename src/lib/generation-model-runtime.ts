@@ -165,6 +165,16 @@ const VIDEO_REFERENCE_IMAGE_CAPS: Record<string, number> = {
   'pixverse-v6': 7,
 };
 
+type VeoMode = (typeof VIDEO_MODELS)['veo-3.1']['modeOptions'][number]['value'];
+
+/**
+ * The Veo 3.1 variants that take reference pictures: Kie's REFERENCE_2_VIDEO "supports veo3_fast
+ * and veo3_lite" (docs/model-api-references/veo-3-1.md, Jobs API; re-read 2026-10-30). The quote
+ * refuses references on any other variant, and the catalog's descriptor opens its references mode
+ * on these alone, so no creator offers Quality a picture its quote refuses.
+ */
+export const VEO_REFERENCE_MODES = ['veo3_lite', 'veo3_fast'] as const satisfies readonly VeoMode[];
+
 export const GENERATION_MODEL_VALIDATION_RULE_TYPES = [
   'control-options',
   'control-range',
@@ -995,7 +1005,7 @@ function validationConfigForModel(
           max: 0,
           conditions: [
             { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
-            { source: 'setting', key: 'mode', operator: 'notIn', value: ['veo3_lite', 'veo3_fast'] },
+            { source: 'setting', key: 'mode', operator: 'notIn', value: [...VEO_REFERENCE_MODES] },
           ],
           message: 'Reusable references require Veo Lite or Fast.',
         },

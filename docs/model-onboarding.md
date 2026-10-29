@@ -147,6 +147,10 @@ Tests that name what is missing:
 - `prompt-enhancer-playbook-contract.test.ts`: every model resolves to a model-specific playbook
   with a word budget, and the alias table matches exactly.
 - `models.test.ts`: add the new model's prices and caps.
+- `model-catalog-client-parity.test.ts`: every input shape a video descriptor opens, on every option
+  of its `mode` control, quotes with an input in each slot it opens. A quote rule that refuses a slot
+  on some settings needs the descriptor's input mode gated on the same settings, as Veo 3.1's
+  references are on its Lite and Fast variants (`VEO_REFERENCE_MODES`).
 - `npm run typecheck`: a new video model does not compile until `getVideoCost`,
   `videoPricingExpression`, `VIDEO_INPUT_LIMITS` and `VIDEO_PROVIDER_MODELS` handle it.
 

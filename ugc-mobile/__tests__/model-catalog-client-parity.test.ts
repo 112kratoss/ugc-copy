@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import veoQualityReferencesRelease from '../../config/generation-model-catalog/releases/2026-10-30-veo-quality-references.json';
 import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.json';
 import {
   getActiveCatalogInputSlots,
   parseGenerationModelCatalog,
+  parseModelCatalogDetail,
   type CatalogInputMode,
   type GenerationModelDescriptor,
 } from '../lib/generation-model-catalog';
@@ -11,7 +13,10 @@ import {
   applyCatalogModelDefaults,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
+  catalogDraftInputCounts,
+  catalogRunInputSlots,
   catalogSubjectSlot,
+  getCatalogDraftSettings,
   hydrateCatalogCreationDraftFromRemixSource,
   reconcileCreationDraftWithCatalog,
   validateCatalogCreationDraft,
@@ -352,5 +357,60 @@ describe('named subjects on the native creator', () => {
     expect(draft.subjects?.[0]).toMatchObject({ handle: '@hero', displayName: 'Hero' });
     expect(draft.subjects?.[0].images).toHaveLength(2);
     expect(validateCatalogCreationDraft(draft, model, { credits: 999 }).errors).toEqual([]);
+  });
+});
+
+/**
+ * Veo 3.1 as release veo-quality-references-20261030 publishes it: its reference pictures open on
+ * Lite and Fast only, the variants Kie's REFERENCE_2_VIDEO takes, through an `in` condition on
+ * `mode` beside `referenceMode`. The app reads it with no update: the parser has taken an `in`
+ * condition with a list of values since the v2 catalog, and the draft opens a mode by the shared
+ * evaluator. Read off the release file itself, as the catalog serves it.
+ */
+describe('Veo 3.1 references gated on the variant', () => {
+  const entry = veoQualityReferencesRelease.entries.find((candidate) => candidate.modelId === 'veo-3.1');
+  const { schemaVersion: _schemaVersion, ...publicDescriptor } = entry!.publicDescriptor;
+  const veo = parseModelCatalogDetail(publicDescriptor);
+
+  function veoDraft(mode: string, pictures: number): VideoCreationDraft {
+    return applyCatalogModelDefaults({
+      ...createDefaultCreationDraft('video'),
+      model: 'veo-3.1',
+      prompt: 'A product turning slowly on a table',
+      aspectRatio: '16:9',
+      mode,
+      references: Array.from({ length: pictures }, (_, index) => picture(index + 1)),
+    }, veo, 'veo-revision') as VideoCreationDraft;
+  }
+
+  it('is kept by the native parser, with its references mode gated on the variant', () => {
+    expect(veo.inputModes?.find((mode) => mode.key === 'references')?.conditions).toEqual([
+      { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
+      { source: 'setting', key: 'mode', operator: 'in', value: ['veo3_lite', 'veo3_fast'] },
+    ]);
+  });
+
+  it('keeps a Quality draft\'s pictures out of its run, which goes as frames', () => {
+    const draft = veoDraft('veo3', 2);
+    // The composer's references rail asks for the references shape, which Quality does not open.
+    const rail = getActiveCatalogInputSlots(veo, { ...getCatalogDraftSettings(draft, veo), referenceMode: 'elements' }, catalogDraftInputCounts(draft, veo));
+    expect(rail.map((slot) => slot.key)).toEqual([]);
+    expect(catalogRunInputSlots(draft, veo).imageReferences).toBeUndefined();
+    const request = buildCatalogQuoteRequest(draft, veo, 'veo-revision');
+    expect(request.settings).toMatchObject({ mode: 'veo3', referenceMode: 'frames' });
+    expect(request.inputCounts.images).toBe(0);
+    expect(request.inputMetadata?.slots).toEqual({});
+    // The pictures wait in the draft ("Not sent with this run"): nothing blocks the run.
+    expect(draft.references).toHaveLength(2);
+    expect(validateCatalogCreationDraft(draft, veo, { credits: 1000, quotedCost: 250 }).errors).toEqual([]);
+  });
+
+  it.each(['veo3_lite', 'veo3_fast'])('sends a %s draft\'s pictures, up to three', (mode) => {
+    const draft = veoDraft(mode, 3);
+    const request = buildCatalogQuoteRequest(draft, veo, 'veo-revision');
+    expect(request.settings).toMatchObject({ mode, referenceMode: 'elements' });
+    expect(request.inputMetadata?.slots).toEqual({ imageReferences: { count: 3 } });
+    expect(validateCatalogCreationDraft(veoDraft(mode, 4), veo, { credits: 1000, quotedCost: 60 }).errors)
+      .toEqual(['Reference images supports up to 3 inputs.']);
   });
 });

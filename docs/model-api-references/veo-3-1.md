@@ -667,7 +667,10 @@ in `src/lib/veo-provider-api.ts`; its tests pin every shape below.
   in `input`:
   - `prompt` (string, required).
   - `model`: the tier, `veo3_fast` (Kie's default), `veo3_lite` or `veo3` (Quality). `REFERENCE_2_VIDEO`
-    supports `veo3_fast` and `veo3_lite` only.
+    supports `veo3_fast` and `veo3_lite` only (re-read 2026-10-30, unchanged: "REFERENCE_2_VIDEO supports
+    veo3_fast and veo3_lite"). The quote refuses reference pictures on Quality, and since release
+    `veo-quality-references-20261030` the catalog descriptor opens its references mode on those two tiers
+    alone (`VEO_REFERENCE_MODES` in `src/lib/generation-model-runtime.ts`).
   - `generation_type`: `TEXT_2_VIDEO`, `FIRST_AND_LAST_FRAMES_2_VIDEO` or `REFERENCE_2_VIDEO`; the app
     always sends one. `image_urls`: the start frame, or start and end in that order, or 1–3 reference
     pictures (reference runs are 8 s only).

@@ -1,0 +1,468 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "veo-quality-references-20261030",
+    "basedOnRevision": "kie-catalog-inputs-20261029",
+    "changeNote": "Veo 3.1 offers reference pictures on Lite and Fast only. Kie's REFERENCE_2_VIDEO supports veo3_fast and veo3_lite (docs/model-api-references/veo-3-1.md, re-read 2026-10-30), and the quote already refused references on Quality (\"Reusable references require Veo Lite or Fast.\"), yet the descriptor opened its references input mode on every variant. The mode now also needs mode in veo3_lite or veo3_fast, beside referenceMode elements. No price, quote rule or other input changes.",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-1.1-flash",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "grok-imagine-video-1.5",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "pixverse-v6",
+    "qwen-image-2.1",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-flash",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "wan-3.0",
+    "wan-3.0-prime",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "seedance-2-mini",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "seedance-2-mini",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "veo-3.1",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "veo-3.1",
+        "kind": "video",
+        "displayName": "Veo 3.1",
+        "description": "Google-class video generation with fast and quality variants",
+        "badge": null,
+        "recommended": false,
+        "sortOrder": 100,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "Auto",
+                "label": "Auto"
+              }
+            ]
+          },
+          {
+            "key": "mode",
+            "label": "Model variant",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "veo3_lite",
+            "options": [
+              {
+                "value": "veo3_lite",
+                "label": "Lite"
+              },
+              {
+                "value": "veo3_fast",
+                "label": "Fast"
+              },
+              {
+                "value": "veo3",
+                "label": "Quality"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "720p",
+            "options": [
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              },
+              {
+                "value": "4k",
+                "label": "4k"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "8",
+            "options": [
+              {
+                "value": "8",
+                "label": "8"
+              }
+            ],
+            "normalizedValueType": "number"
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 3,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              },
+              {
+                "source": "setting",
+                "key": "mode",
+                "operator": "in",
+                "value": [
+                  "veo3_lite",
+                  "veo3_fast"
+                ]
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 3,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "veo3_fast",
+        "veo3_lite": "veo3_lite",
+        "veo3_fast": "veo3_fast",
+        "veo3": "veo3"
+      },
+      "pricingStrategy": "conditional",
+      "pricingConfig": {
+        "branches": [
+          {
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "mode",
+                "operator": "equals",
+                "value": "veo3"
+              }
+            ],
+            "pricing": {
+              "strategy": "lookup",
+              "config": {
+                "dimensions": [
+                  {
+                    "source": "inputCount",
+                    "key": "images",
+                    "presence": true
+                  },
+                  {
+                    "source": "setting",
+                    "key": "resolution",
+                    "defaultValue": "720p"
+                  }
+                ],
+                "table": {
+                  "false": {
+                    "720p": 250,
+                    "1080p": 255,
+                    "4k": 370
+                  },
+                  "true": {
+                    "720p": 250,
+                    "1080p": 255,
+                    "4k": 370
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "fallback": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "mode",
+                "defaultValue": "veo3_fast"
+              },
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "720p"
+              }
+            ],
+            "table": {
+              "veo3_lite": {
+                "720p": 30,
+                "1080p": 35,
+                "4k": 150
+              },
+              "veo3_fast": {
+                "720p": 60,
+                "1080p": 65,
+                "4k": 180
+              }
+            }
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 3,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 0,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              },
+              {
+                "source": "setting",
+                "key": "mode",
+                "operator": "notIn",
+                "value": [
+                  "veo3_lite",
+                  "veo3_fast"
+                ]
+              }
+            ],
+            "message": "Reusable references require Veo Lite or Fast."
+          },
+          {
+            "type": "control-options",
+            "key": "aspectRatio",
+            "options": [
+              "16:9",
+              "9:16"
+            ],
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              },
+              {
+                "source": "inputCount",
+                "key": "imageReferences",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "aspectRatio",
+            "message": "Veo 3.1 renders reference runs at 16:9 or 9:16 only."
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ]
+}

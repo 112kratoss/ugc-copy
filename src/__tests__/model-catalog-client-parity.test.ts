@@ -19,6 +19,8 @@ import {
   CLIENT_RENDERED_INPUT_SLOT_ROLES,
   SUBJECT_IMAGES_PER_NAME,
   SUBJECT_IMAGES_SLOT_KEY,
+  catalogConditionsMatch,
+  catalogRunQuoteInput,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
@@ -108,6 +110,63 @@ describe('the catalog publishes only what both creators render', () => {
         } catch (error) {
           const refusal = error instanceof CatalogError ? error.fieldErrors.referenceMode : String(error);
           if (refusal) refusals.push({ model: model.id, what: `${referenceMode}: ${refusal}` });
+        }
+      }
+    }
+    expect(refusals).toEqual([]);
+  });
+
+  it('opens no input shape, on any tier, whose run its quote refuses', () => {
+    // Both creators draw the slots a descriptor opens, so a slot its own quote refuses is a run
+    // that cannot start: Veo 3.1 opened its reference pictures on every variant while the quote
+    // took them on Lite and Fast only ("Reusable references require Veo Lite or Fast."). Each
+    // shape is quoted on each option of the model's tier control, with an input in every slot
+    // it opens. They go together, as an end frame needs a start frame and Wan 2.7's and MiniMax
+    // H3's audio a picture or a clip beside it.
+    const refusals: Offence[] = [];
+    for (const platform of ['web', 'mobile'] as const) {
+      const catalog = buildGenerationModelCatalog({ platform, schemaVersion: 3 });
+      for (const model of catalog.models) {
+        if (model.kind !== 'video') continue;
+        const defaults = Object.fromEntries(model.controls.map((control) => [control.key, control.defaultValue]));
+        const tierControl = model.controls.find((control) => control.key === 'mode');
+        const tiers = tierControl?.type === 'choice' ? tierControl.options.map((option) => option.value) : [undefined];
+        const shapes = [...new Set((model.inputModes ?? []).flatMap((mode) => (mode.conditions ?? [])
+          .filter((condition) => condition.source === 'setting' && condition.key === 'referenceMode' && condition.operator === 'equals')
+          .map((condition) => String(condition.value))))];
+        for (const tier of tiers) {
+          for (const referenceMode of shapes.length > 0 ? shapes : [undefined]) {
+            const settings = {
+              ...defaults,
+              ...(tier === undefined ? {} : { mode: tier }),
+              ...(referenceMode === undefined ? {} : { referenceMode }),
+            };
+            const open = (model.inputModes ?? [])
+              .filter((mode) => catalogConditionsMatch(mode.conditions, settings))
+              .flatMap((mode) => mode.slots)
+              .filter((slot) => slot.max > 0 && catalogConditionsMatch(slot.conditions, settings));
+            if (open.length === 0) continue;
+            const inputs = open.flatMap((slot) => Array.from({ length: Math.max(1, slot.min) }, () => ({
+              slot: slot.key,
+              kind: slot.kind,
+              ...(slot.kind === 'video' || slot.kind === 'audio' ? { durationSeconds: 4 } : {}),
+            })));
+            try {
+              quoteGenerationModel(catalogRunQuoteInput({
+                kind: 'video',
+                modelId: model.id,
+                catalogRevision: catalog.revision,
+                settings,
+                inputs,
+              }) as GenerationModelQuoteInput, { catalog });
+            } catch (error) {
+              const refusal = error instanceof CatalogError ? Object.values(error.fieldErrors).join(' ') : String(error);
+              refusals.push({
+                model: model.id,
+                what: `${platform}, ${tier ?? 'one tier'}, ${referenceMode ?? 'one shape'}, ${open.map((slot) => slot.key).join(' + ')}: ${refusal}`,
+              });
+            }
+          }
         }
       }
     }

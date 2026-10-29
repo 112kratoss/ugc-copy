@@ -356,10 +356,10 @@ describe('descriptor-driven affordances', () => {
   it.each(videoModelIds)('%s: descriptor and fallback draw the same inputs card in every mode', (modelId) => {
     // The creator draws the card from the fallback before the catalog arrives and from the
     // descriptor after, so the two must draw the same sides, or the card changes shape as the
-    // catalog lands. Every mode is asked: Veo 3.1 takes reference pictures in Lite and Fast only.
-    // (Production's release still offers them in Quality too, where the quote refuses them: a
-    // catalog fix, `archive/creator-page-build-2026-10-28/pr4/kie-audit.md`.) The page always
-    // asks with the mode chosen, so a model with modes is asked in each of them.
+    // catalog lands. Every mode is asked: Veo 3.1 takes reference pictures in Lite and Fast only,
+    // and its descriptor opens its references on those two alone (it offered them in Quality
+    // too, where the quote refuses them, until release veo-quality-references-20261030). The page
+    // always asks with the mode chosen, so a model with modes is asked in each of them.
     const options = VIDEO_MODELS[modelId].modeOptions.map((option) => option.value);
     const modes = options.length > 0 ? options : [undefined];
     for (const mode of modes) {
@@ -370,14 +370,6 @@ describe('descriptor-driven affordances', () => {
         );
         const fromFallback = sides(undefined);
         const fromDescriptor = sides(descriptorFor(modelId));
-        if (modelId === 'veo-3.1' && mode === 'veo3' && !isMultiShot) {
-          // The one known gap, pinned so that its catalog fix shows here: the descriptor offers
-          // Quality the pictures Kie's REFERENCE_2_VIDEO takes in Lite and Fast only, which the
-          // quote refuses ("Reusable references require Veo Lite or Fast."). The tables do not.
-          expect(fromFallback.references).toBeNull();
-          expect(fromDescriptor.references?.pictures).toBe(3);
-          continue;
-        }
         expect(fromFallback, `${modelId} ${mode ?? 'default mode'}${isMultiShot ? ', multi-shot' : ''}`).toEqual(fromDescriptor);
       }
     }

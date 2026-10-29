@@ -16,6 +16,7 @@ import { parseClientGenerationModelCatalog } from '@/lib/generation-model-client
 import type { VideoModelId } from '@/lib/models';
 import { descriptorBeforeKieCatalogInputs } from './fixtures/kie-catalog-inputs-2026-10-29';
 import productionVideo from './fixtures/production-video-descriptors-2026-10-29.json';
+import { descriptorBeforeVeoQualityReferences } from './fixtures/veo-quality-references-2026-10-30';
 
 /**
  * The video creator's inputs as one choice, frames or references (the artboard Inputs, PR 4 of
@@ -27,8 +28,10 @@ import productionVideo from './fixtures/production-video-descriptors-2026-10-29.
 // it rewound, Seedance 1.5 Pro (retired since) included, so every model stays compared.
 const codeAtSnapshot = {
   models: buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true })
-    .models.map((model) => descriptorBeforeKieCatalogInputs(model)),
+    .models.map((model) => descriptorBeforeKieCatalogInputs(descriptorBeforeVeoQualityReferences(model))),
 };
+// The code build as it is now.
+const code = { models: buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 }).models };
 // What the page reads in production: the published descriptors, parsed as the browser parses them.
 const production = parseClientGenerationModelCatalog({
   schemaVersion: 3,
@@ -123,6 +126,29 @@ describe('the sides production publishes', () => {
     const sides = sidesOf(production, 'kling-o3', { isMultiShot: true });
     expect(sides.references).toBeNull();
     expect(sides.frames).toMatchObject({ start: true, end: false });
+  });
+});
+
+describe('Veo 3.1 by variant', () => {
+  it('offers references on Lite and Fast, where Kie and the quote take them, and frames alone on Quality', () => {
+    for (const mode of ['veo3_lite', 'veo3_fast']) {
+      const sides = sidesOf(code, 'veo-3.1', { mode });
+      expect(sides.frames, mode).toEqual({ start: true, end: true, startRequired: false });
+      expect(sides.references, mode).toEqual({ pictures: 3, keepsStart: false, budget: null });
+    }
+    const quality = sidesOf(code, 'veo-3.1', { mode: 'veo3' });
+    expect(quality.frames).toEqual({ start: true, end: true, startRequired: false });
+    expect(quality.references).toBeNull();
+    // The release at the snapshot opened them on Quality too, where the quote refused them;
+    // release veo-quality-references-20261030 publishes the gate.
+    expect(sidesOf(production, 'veo-3.1', { mode: 'veo3' }).references).toMatchObject({ pictures: 3 });
+  });
+
+  it('shows Quality the frames side with no switch, whichever side was picked last', () => {
+    const quality = sidesOf(code, 'veo-3.1', { mode: 'veo3' });
+    expect(videoInputView(quality, NOTHING, 'references')).toEqual({ side: 'frames', switchable: false, heldSide: null, framesLeftOut: [] });
+    expect(videoInputsHint({ view: videoInputView(quality, NOTHING, 'references'), sides: quality, model: 'Veo 3.1', held: NOTHING, remixPictures: 0, subjectsHeld: false }))
+      .toBe('Optional. Set a first and last image.');
   });
 });
 
