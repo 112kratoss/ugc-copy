@@ -96,6 +96,7 @@
 @source "../components/useAnchoredMenu.ts";
 @source "../components/useConfirmation.ts";
 @source "../components/useHandleAvailability.ts";
+@source "../components/useInertPageBeneath.ts";
 @source "../components/useInlineMediaPlayback.ts";
 @source "../components/useMediaLoadingPreferences.ts";
 @source "../components/useModalQuestion.ts";

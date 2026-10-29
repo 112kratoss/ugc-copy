@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
+import FeedbackViewport from '@/components/FeedbackViewport';
+import { resetFeedbackState } from '@/components/feedback-state';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import { buildGenerationModelCatalog, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
@@ -49,7 +51,7 @@ const getPersistedValueMock = vi.hoisted(() => vi.fn(async (_key: string): Promi
 }));
 const refreshTemporaryMediaUrlMock = vi.hoisted(() => vi.fn(async (storagePath: string) => `https://signed.example.com/refreshed/${storagePath}`));
 // The page's duration reader, as the browser would answer it: a clip is 4.2 seconds long and a track 6.5.
-const readDurationMock = vi.hoisted(() => vi.fn(async (source: File | string) => (
+const readDurationMock = vi.hoisted(() => vi.fn(async (source: File | string): Promise<number> => (
   typeof source !== 'string' && source.type.startsWith('audio/') ? 6.5 : 4.2
 )));
 // Whether a deploy newer than the page is known, and what the page asked the watcher.
@@ -102,6 +104,9 @@ const setPersistedMediaRecordsMock = vi.hoisted(() => vi.fn(
     void _records;
   }
 ));
+const removePersistedMediaMock = vi.hoisted(() => vi.fn(async (_key: string): Promise<void> => {
+  void _key;
+}));
 const getPersistedFileMock = vi.hoisted(() => vi.fn(async (_key: string): Promise<File | null> => {
   void _key;
   return null;
@@ -229,7 +234,7 @@ vi.mock('@/lib/persisted-media', () => ({
   // The keys of persisted-media.ts: every key is saved under its account.
   scopedPersistedMediaKey: (key: string, userId: string) => `${key}:${userId}`,
   purgeLegacyPersistedMedia: purgeLegacyPersistedMediaMock,
-  removePersistedMedia: vi.fn(async () => undefined),
+  removePersistedMedia: removePersistedMediaMock,
   setPersistedFile: setPersistedFileMock,
   setPersistedImageElementRecords: setPersistedImageElementRecordsMock,
   setPersistedMediaRecords: setPersistedMediaRecordsMock,
@@ -355,6 +360,11 @@ const videoModelSummaries = [
   { id: 'kling-3.0-video', kind: 'video', displayName: 'Kling 3.0 Cinematic', description: 'Test video model' },
   { id: 'seedance-1.5-pro', kind: 'video', displayName: 'Seedance 1.5 Pro', description: 'Test element-capable video model' },
 ];
+
+/** The inputs' switch (the artboard Inputs): picks a side, as a creator presses it. */
+async function chooseInputs(side: 'Frames' | 'References') {
+  fireEvent.click(await screen.findByRole('radio', { name: side }));
+}
 
 function chooseModel(container: HTMLElement, displayName: string) {
   const picker = container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]');
@@ -516,6 +526,7 @@ describe('CreateVideoClient Kling video elements', () => {
     getPersistedImageElementRecordsMock.mockResolvedValue([]);
     getPersistedFileMock.mockReset();
     getPersistedFileMock.mockResolvedValue(null);
+    removePersistedMediaMock.mockClear();
     setPersistedImageElementRecordsMock.mockClear();
     getPersistedMediaRecordsMock.mockReset();
     getPersistedMediaRecordsMock.mockResolvedValue([]);
@@ -534,9 +545,12 @@ describe('CreateVideoClient Kling video elements', () => {
 
     fetchMock = vi.fn(defaultResponse);
     vi.stubGlobal('fetch', fetchMock);
+    // The app's questions are drawn by the root layout's viewport (the inputs' switch asks one).
+    render(<FeedbackViewport />);
   });
 
   afterEach(() => {
+    resetFeedbackState();
     URL.createObjectURL = originalCreateObjectURL;
     URL.revokeObjectURL = originalRevokeObjectURL;
     vi.restoreAllMocks();
@@ -678,6 +692,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
   it('persists image elements on upload and removal without prompt-rerender rewrites', async () => {
     const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+    await chooseInputs('References');
 
     const file = new File(['image-bytes'], 'video-element.png', { type: 'image/png' });
     const input = await waitFor(() => {
@@ -850,54 +865,36 @@ describe('CreateVideoClient Kling video elements', () => {
     expect(screen.getAllByText('@subject_1').length).toBeGreaterThan(0);
   });
 
-  it('offers Seedance 2.5 reference video and audio slots with nothing attached', async () => {
-    // The reported bug: the model publishes video and audio reference slots that the page
-    // never rendered, because reaching them needed a mode picker that was itself hidden
-    // until you were already in that mode. Every slot is on screen from a fresh session now.
+  it('opens Seedance 2.5 on frames and offers every reference slot under References', async () => {
+    // The reported bug behind the old layout: the model publishes video and audio reference
+    // slots the page never rendered. They are one press away now, behind the switch.
     render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
 
-    expect(await screen.findByText('Video and audio references')).toBeInTheDocument();
-    expect(screen.getByText('Reference videos')).toBeInTheDocument();
-    // The heading and the @-mention row both carry this label.
-    expect(screen.getAllByText('Reusable image references').length).toBeGreaterThan(0);
-    // Frames stay on screen alongside them.
-    expect(screen.getAllByText(/Start Frame/i).length).toBeGreaterThan(0);
-    // And the run is frame-shaped until a reference is attached.
-    expect(screen.getByText(/takes either frames or references/i)).toBeInTheDocument();
+    expect(await screen.findByRole('radio', { name: 'Frames' })).toBeChecked();
+    expect(screen.getByRole('radiogroup', { name: 'Start from frames or references' })).toBeInTheDocument();
+    // Each frame's file field says which frame it adds.
+    expect(screen.getByLabelText('Add a start image')).toHaveAttribute('id', 'video-start-frame-input');
+    expect(screen.getByLabelText('Add an end image')).toHaveAttribute('id', 'video-end-frame-input');
+    expect(screen.getByRole('heading', { name: /^Start image/ })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^End image/ })).toBeInTheDocument();
+    expect(screen.getByText('Optional. Set a first and last image, or switch to References to bring in people and products by name.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Reference videos' })).toBeNull();
+    // The locked card and its notes are gone.
+    expect(screen.queryByText(/cannot combine|takes either frames or references/i)).toBeNull();
+
+    await chooseInputs('References');
+
+    expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+    expect(screen.getByRole('heading', { name: 'Reference images' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Reference videos' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Reference audio' })).toBeInTheDocument();
+    expect(screen.getByText('Type @ in the prompt, or tap a handle, to use a reference. 0 of 30.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^Start image/ })).toBeNull();
   });
 
-  it('locks the reference group once a Seedance 2.5 frame is attached, and releases it', async () => {
-    // Kie documents first/last frame and multimodal references as mutually exclusive
-    // scenarios for seedance-2-5, so attaching one greys the other rather than hiding it.
-    const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
-
-    const referenceGroup = await waitFor(() => {
-      const found = view.container.querySelector('[aria-disabled]');
-      expect(found).not.toBeNull();
-      return found!;
-    });
-    expect(referenceGroup.getAttribute('aria-disabled')).toBe('false');
-
-    const startInput = view.container.querySelector<HTMLInputElement>('#video-start-frame-input');
-    expect(startInput).not.toBeNull();
-    fireEvent.change(startInput!, {
-      target: { files: [new File(['frame-bytes'], 'start.png', { type: 'image/png' })] },
-    });
-
-    await waitFor(() => {
-      const locked = Array.from(view.container.querySelectorAll('[aria-disabled="true"]'));
-      expect(locked.length).toBeGreaterThan(0);
-    });
-    // The slots are still on screen — greyed, not removed.
-    expect(screen.getByText('Reference videos')).toBeInTheDocument();
-    expect(screen.getByText(/cannot combine references with frames/i)).toBeInTheDocument();
-  });
-
-  it('never locks both groups at once, even when a draft restores a frame and a reference', async () => {
-    // Before this layout, a draft could legitimately hold both: the old surface kept the
-    // frames while you worked in references ("your start and end frames are still saved").
-    // Those drafts still restore, and locking each group against the other would leave a
-    // panel where nothing can be removed and so nothing can be un-locked.
+  it('shows the references of a draft that holds a frame too, and says the run leaves the frame out', async () => {
+    // A draft from before the switch can hold both. The run sends the references, so the card
+    // shows them and names the frame it leaves out, with a way to take it off.
     const startFrame = new File(['frame-bytes'], 'start.png', { type: 'image/png' });
     getPersistedFileMock.mockImplementation(async (key: string) => (
       key === 'create-video:start-image:user-1' ? startFrame : null
@@ -906,28 +903,664 @@ describe('CreateVideoClient Kling video elements', () => {
       { id: 'element-1', displayName: 'Hero', handle: '@Hero', file: new File(['ref'], 'hero.png', { type: 'image/png' }), source: 'upload' },
     ] as never);
 
-    const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
-    await screen.findByRole('heading', { name: 'Reference videos' });
+    render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
 
-    await waitFor(() => {
-      expect(getPersistedImageElementRecordsMock).toHaveBeenCalled();
-    });
+    expect(await screen.findByText('Your start image is kept for Frames. This run uses your references and leaves it out.')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
 
-    // At least one group has to stay interactive, or the run can never be resolved.
-    await waitFor(() => {
-      const groups = Array.from(view.container.querySelectorAll('[aria-disabled]'));
-      expect(groups.length).toBeGreaterThan(0);
-      expect(groups.every((group) => group.getAttribute('aria-disabled') === 'true')).toBe(false);
-    });
+    const remove = screen.getByRole('button', { name: 'Remove the start image' });
+    remove.focus();
+    fireEvent.click(remove);
+    await waitFor(() => expect(screen.queryByText(/is kept for Frames/)).toBeNull());
+    expect(removePersistedMediaMock).toHaveBeenCalledWith('create-video:start-image:user-1');
+    // The notice went with the focus in it: the focus goes to the switch, on the side shown.
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'References' })).toHaveFocus());
   });
 
-  it('keeps both input groups live for Wan 2.7, which combines them', async () => {
-    // wan/2-7-r2v takes `first_frame` alongside `reference_image` and `reference_video`,
-    // so Wan must never show the either/or copy the exclusive models get.
-    render(<CreateVideoClient prefill={{ model: 'wan-2.7' }} />);
+  it('keeps Wan 2.7’s start image under References, beside its references', async () => {
+    // wan/2-7-r2v takes `first_frame` beside `reference_image` and `reference_video`.
+    const view = render(<CreateVideoClient prefill={{ model: 'wan-2.7' }} />);
+    fireEvent.change(await waitFor(() => view.container.querySelector<HTMLInputElement>('#video-start-frame-input')!), {
+      target: { files: [new File(['frame-bytes'], 'start.png', { type: 'image/png' })] },
+    });
+    await screen.findByAltText('Start image');
 
-    expect((await screen.findAllByText('Reusable image references')).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/takes either frames or references/i)).toBeNull();
+    // Nothing to clear: the start image stays, and no question is asked.
+    await chooseInputs('References');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+    expect(screen.getByAltText('Start image')).toBeInTheDocument();
+    expect(screen.getByText('Wan 2.7 can start from it, with your references.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^End image/ })).toBeNull();
+  });
+
+  /**
+   * The inputs as one choice, frames or references (the artboard Inputs, PR 4 of the creator
+   * redesign; the owner's answers of 2026-10-29): a switch that would clear something asks
+   * first, and its yes brings along what the other side can take; "@" is offered only while
+   * References is on; a remix's references can be replaced in place.
+   */
+  describe('the inputs, frames or references', () => {
+    const picture = (name: string) => new File([name], `${name}.png`, { type: 'image/png' });
+    const promptField = () => screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
+
+    async function attachStart(container: HTMLElement, file: File) {
+      const field = await waitFor(() => {
+        const found = container.querySelector<HTMLInputElement>('#video-start-frame-input');
+        expect(found).not.toBeNull();
+        return found!;
+      });
+      fireEvent.change(field, { target: { files: [file] } });
+      await screen.findByAltText('Start image');
+    }
+
+    async function attachPictures(container: HTMLElement, files: File[]) {
+      const field = await waitFor(() => {
+        const found = container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]');
+        expect(found).not.toBeNull();
+        return found!;
+      });
+      fireEvent.change(field, { target: { files } });
+      await waitFor(() => expect(screen.getAllByPlaceholderText('Rename element')).toHaveLength(files.length));
+    }
+
+    /** The question a switch asks; the page beneath it is inert, so its radios are read hidden. */
+    async function question(name: string) {
+      return screen.findByRole('alertdialog', { name });
+    }
+
+    it('asks before a switch to references clears the start image, and Keep frames keeps it', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await attachStart(view.container, new File(['frame'], 'start.jpg', { type: 'image/jpeg' }));
+
+      await chooseInputs('References');
+
+      const dialog = await question('Switch to references?');
+      expect(dialog).toHaveAccessibleDescription('Seedance 2.5 takes frames or references, not both. Your start image can come with you as a reference.');
+      // The safe answer takes the focus, so Enter never clears by accident.
+      await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Keep frames' })).toHaveFocus());
+      // Nothing is lost on this yes, so it is the plain primary action.
+      expect(within(dialog).getByRole('button', { name: 'Move start.jpg to references' })).toHaveClass('ui-button-primary');
+      // Until it is answered the switch stays on frames.
+      expect(screen.getByRole('radio', { name: 'Frames', hidden: true })).toBeChecked();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Keep frames' }));
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+      expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked();
+      expect(screen.getByAltText('Start image')).toBeInTheDocument();
+      // The focus goes back to the switch, on the side shown.
+      await waitFor(() => expect(screen.getByRole('radio', { name: 'Frames' })).toHaveFocus());
+    });
+
+    it('keeps frames on Escape, as on Keep frames', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await attachStart(view.container, picture('start'));
+      await chooseInputs('References');
+      await question('Switch to references?');
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+      expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked();
+      expect(screen.getByAltText('Start image')).toBeInTheDocument();
+    });
+
+    it('brings the start image along as a reference, which the run sends as a picture', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      const start = new File(['frame'], 'start.jpg', { type: 'image/jpeg' });
+      await attachStart(view.container, start);
+
+      await chooseInputs('References');
+      fireEvent.click(within(await question('Switch to references?')).getByRole('button', { name: 'Move start.jpg to references' }));
+
+      await waitFor(() => expect(screen.getByRole('radio', { name: 'References' })).toBeChecked());
+      expect(screen.getAllByPlaceholderText('Rename element')).toHaveLength(1);
+      expect(screen.getByRole('button', { name: 'Insert @element_1' })).toBeInTheDocument();
+      // The same picture, under a preview of its own: the frame's went with the frame.
+      const referencePreview = screen.getByAltText('Element 1').getAttribute('src');
+      expect(referencePreview).toMatch(/^blob:start\.jpg:/);
+      expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(referencePreview);
+      expect(view.container.querySelector('#video-start-frame-input')).toBeNull();
+      await waitFor(() => expect(removePersistedMediaMock).toHaveBeenCalledWith('create-video:start-image:user-1'));
+      await waitFor(() => expect(screen.getByRole('radio', { name: 'References' })).toHaveFocus());
+
+      fireEvent.change(promptField(), { target: { value: '@element_1 walks along the harbour at dusk, slow push in.' } });
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedRun()).toBeDefined());
+      expect(postedRun().settings.referenceMode).toBe('elements');
+      expect(postedRun().inputs.map((input: { slot: string }) => input.slot)).toEqual(['imageReferences']);
+      expect(temporaryUploadMock).toHaveBeenCalledWith(start);
+    });
+
+    it('asks the mirror question going back to frames, and brings the first pictures along as the start and end images', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await chooseInputs('References');
+      const [hero, prop, extra] = [picture('hero'), picture('prop'), picture('extra')];
+      await attachPictures(view.container, [hero, prop, extra]);
+
+      await chooseInputs('Frames');
+      const dialog = await question('Switch to frames?');
+      expect(dialog).toHaveAccessibleDescription(
+        'Seedance 2.5 takes frames or references, not both. @element_1 and @element_2 can come with you as the start and end images. The other reference is cleared.',
+      );
+      expect(within(dialog).getByRole('button', { name: 'Keep references' })).toBeInTheDocument();
+      // A yes that clears a reference cannot be taken back: the danger action, as the guide has it.
+      expect(within(dialog).getByRole('button', { name: 'Move both to frames' })).toHaveClass('ui-button-danger');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Move both to frames' }));
+
+      await waitFor(() => expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked());
+      expect(screen.getByAltText('Start image').getAttribute('src')).toMatch(/^blob:hero\.png:/);
+      expect(screen.getByAltText('End image').getAttribute('src')).toMatch(/^blob:prop\.png:/);
+      expect(screen.queryAllByPlaceholderText('Rename element')).toHaveLength(0);
+      await waitFor(() => expect(setPersistedFileMock).toHaveBeenCalledWith('create-video:start-image:user-1', hero));
+      expect(setPersistedFileMock).toHaveBeenCalledWith('create-video:end-image:user-1', prop);
+      await waitFor(() => expect(setPersistedImageElementRecordsMock.mock.calls.at(-1)?.[1]).toEqual([]));
+
+      fireEvent.change(promptField(), { target: { value: 'A paper boat drifting across a sunlit pond, gentle ripples, slow push-in.' } });
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedRun()).toBeDefined());
+      expect(postedRun().settings.referenceMode).toBe('frames');
+      expect(postedRun().inputs.map((input: { slot: string }) => input.slot)).toEqual(['startFrame', 'endFrame']);
+    });
+
+    it('clears the clips and tracks going back to frames, and switches without a question when nothing is held', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+      await chooseInputs('References');
+      fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="video/*"]')!, {
+        target: { files: [new File(['video'], 'walk.mp4', { type: 'video/mp4' })] },
+      });
+      expect(await screen.findByText('Video reference 1')).toBeInTheDocument();
+
+      await chooseInputs('Frames');
+      const dialog = await question('Switch to frames?');
+      expect(dialog).toHaveAccessibleDescription('MiniMax H3 takes frames or references, not both. Your reference is cleared.');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Switch to frames' }));
+
+      await waitFor(() => expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked());
+      // Back with nothing held: no question.
+      await chooseInputs('References');
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+      expect(screen.queryByText('Video reference 1')).toBeNull();
+    });
+
+    it('stays on references when the last reference of a draft saved before the switch is taken off', async () => {
+      // Such a draft holds references and no side picked: the references hold the card to their
+      // side, and that becomes the side picked, so taking the last one off leaves it there.
+      getPersistedImageElementRecordsMock.mockResolvedValue([
+        { id: 'saved-1', displayName: 'Hero', file: new File(['image'], 'hero.png', { type: 'image/png' }) },
+      ]);
+      render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      await screen.findByPlaceholderText('Rename element');
+      expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Hero' }));
+
+      await waitFor(() => expect(screen.queryByPlaceholderText('Rename element')).toBeNull());
+      expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+      expect(screen.getByText('Type @ in the prompt, or tap a handle, to use a reference. 0 of 2.')).toBeInTheDocument();
+    });
+
+    it('shows the Seedance assets card with the references only', async () => {
+      render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await screen.findByRole('radio', { name: 'Frames' });
+      expect(screen.queryByRole('heading', { name: 'Seedance Assets' })).toBeNull();
+
+      await chooseInputs('References');
+      expect(screen.getByRole('heading', { name: 'Seedance Assets' })).toBeInTheDocument();
+    });
+
+    it('offers "@" in the prompt only while References is on', async () => {
+      render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await screen.findByRole('radio', { name: 'Frames' });
+
+      fireEvent.change(promptField(), { target: { value: 'A scene with @' } });
+      expect(screen.queryByText('Insert reference')).toBeNull();
+
+      await chooseInputs('References');
+      fireEvent.change(promptField(), { target: { value: 'A scene with @h' } });
+      expect(await screen.findByText('Insert reference')).toBeInTheDocument();
+      expect(screen.getByText('No matching references yet.')).toBeInTheDocument();
+    });
+
+    it('saves the side picked with the draft, and opens on it again', async () => {
+      const first = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await chooseInputs('References');
+      await waitFor(() => expect(saveCreatorDraftMock.mock.calls.at(-1)?.[2]).toMatchObject({ inputSide: 'references' }));
+      const saved = saveCreatorDraftMock.mock.calls.at(-1)?.[2];
+      first.unmount();
+
+      loadCreatorDraftMock.mockResolvedValue(saved);
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(screen.getByRole('radio', { name: 'References' })).toBeChecked());
+    });
+
+    it('follows the side the references hold when the saved words come back after them', async () => {
+      // A draft saved on a model that left its references on standby says Frames. On a model
+      // that takes them, the references hold the card, and the side picked follows them, so
+      // taking the last one off leaves the card where it is.
+      let answerDraft: ((draft: unknown) => void) | null = null;
+      loadCreatorDraftMock.mockImplementation(() => new Promise((resolve) => { answerDraft = resolve; }));
+      getPersistedImageElementRecordsMock.mockResolvedValue([
+        { id: 'saved-1', displayName: 'Hero', file: picture('hero') },
+      ]);
+      render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await screen.findByPlaceholderText('Rename element');
+      await waitFor(() => expect(answerDraft).not.toBeNull());
+      await act(async () => answerDraft!({ inputSide: 'frames' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Hero' }));
+      await waitFor(() => expect(screen.queryByPlaceholderText('Rename element')).toBeNull());
+      expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+    });
+
+    it('writes the prompt’s mentions of the pictures that go as their names, so the run still starts', async () => {
+      // Every picture leaves the references, as a frame or cleared, and the server refuses a
+      // prompt that mentions a reference the run does not send: Generate stopped on them.
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await chooseInputs('References');
+      await attachPictures(view.container, [picture('hero'), picture('prop'), picture('extra')]);
+      fireEvent.change(promptField(), { target: { value: '@element_1 walks past @element_3 along the harbour at dusk, slow push in.' } });
+
+      await chooseInputs('Frames');
+      const dialog = await question('Switch to frames?');
+      expect(dialog).toHaveAccessibleDescription(/ In your prompt, @element_1 and @element_3 become “Element 1” and “Element 3”\.$/);
+      setPersistedMediaRecordsMock.mockClear();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Move both to frames' }));
+
+      const named = 'Element 1 walks past Element 3 along the harbour at dusk, slow push in.';
+      await waitFor(() => expect(promptField()).toHaveValue(named));
+      await waitFor(() => expect(setPersistedImageElementRecordsMock.mock.calls.at(-1)?.[1]).toEqual([]));
+      // Only the lists that changed are written: this run carried no clip or track.
+      expect(setPersistedMediaRecordsMock).not.toHaveBeenCalled();
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedRun()).toBeDefined());
+      expect(postedRun().prompt).toBe(named);
+      expect(postedRun().inputs.map((input: { slot: string }) => input.slot)).toEqual(['startFrame', 'endFrame']);
+    });
+
+    it('writes as names the mentions a rename put in the prompt while the question was up', async () => {
+      // A rename takes its new handle at once and rewrites the prompt when its write is done.
+      // Done while the question was up, it put "@hero" in the prompt, which the question's plan,
+      // made before it, did not know: the move left a mention of a reference the run lacks.
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await chooseInputs('References');
+      await attachPictures(view.container, [picture('hero'), picture('prop')]);
+      fireEvent.change(promptField(), { target: { value: '@element_1 walks past @element_2 at dusk, slow push in.' } });
+      let finishRename: (() => void) | null = null;
+      setPersistedImageElementRecordsMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishRename = resolve; }));
+      const name = screen.getAllByPlaceholderText('Rename element')[0];
+      fireEvent.change(name, { target: { value: 'Hero' } });
+      fireEvent.keyDown(name, { key: 'Enter' });
+      await waitFor(() => expect(finishRename).not.toBeNull());
+
+      await chooseInputs('Frames');
+      const dialog = await question('Switch to frames?');
+      await act(async () => finishRename!());
+      await waitFor(() => expect(promptField()).toHaveValue('@hero walks past @element_2 at dusk, slow push in.'));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Move both to frames' }));
+
+      await waitFor(() => expect(promptField()).toHaveValue('Hero walks past Element 2 at dusk, slow push in.'));
+    });
+
+    it('writes a switch back only once the switch before it is written', async () => {
+      // A move writes the new copy before it takes the old one off. A switch back answered
+      // before the first move's writes were done wrote the start image first, and the first
+      // move's removal then took it off: after a reload the draft held neither picture nor frame.
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      const start = new File(['frame'], 'start.jpg', { type: 'image/jpeg' });
+      await attachStart(view.container, start);
+      let finishFirstWrite: (() => void) | null = null;
+      setPersistedImageElementRecordsMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirstWrite = resolve; }));
+      setPersistedFileMock.mockClear();
+      removePersistedMediaMock.mockClear();
+
+      await chooseInputs('References');
+      fireEvent.click(within(await question('Switch to references?')).getByRole('button', { name: 'Move start.jpg to references' }));
+      await waitFor(() => expect(finishFirstWrite).not.toBeNull());
+      await chooseInputs('Frames');
+      fireEvent.click(within(await question('Switch to frames?')).getByRole('button', { name: 'Move @element_1 to frames' }));
+      await waitFor(() => expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked());
+      await act(async () => finishFirstWrite!());
+
+      const START_KEY = 'create-video:start-image:user-1';
+      await waitFor(() => expect(setPersistedFileMock).toHaveBeenCalledWith(START_KEY, start));
+      const order = (mock: typeof setPersistedFileMock | typeof removePersistedMediaMock) => mock.mock.calls
+        .map(([key], index) => (key === START_KEY ? mock.mock.invocationCallOrder[index] : 0));
+      // The last word on the start image's saved copy is the switch back's write.
+      expect(Math.max(...order(setPersistedFileMock))).toBeGreaterThan(Math.max(...order(removePersistedMediaMock)));
+    });
+
+    it('writes a moved start image as a reference before it takes the frame’s saved copy off', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await attachStart(view.container, new File(['frame'], 'start.jpg', { type: 'image/jpeg' }));
+      setPersistedImageElementRecordsMock.mockClear();
+      removePersistedMediaMock.mockClear();
+
+      await chooseInputs('References');
+      fireEvent.click(within(await question('Switch to references?')).getByRole('button', { name: 'Move start.jpg to references' }));
+
+      await waitFor(() => expect(removePersistedMediaMock).toHaveBeenCalledWith('create-video:start-image:user-1'));
+      expect(setPersistedImageElementRecordsMock).toHaveBeenCalled();
+      expect(setPersistedImageElementRecordsMock.mock.invocationCallOrder[0])
+        .toBeLessThan(removePersistedMediaMock.mock.invocationCallOrder[0]);
+    });
+
+    it('keeps the frame’s saved copy when the moved picture cannot be written, and says why in the console', async () => {
+      const failure = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await attachStart(view.container, new File(['frame'], 'start.jpg', { type: 'image/jpeg' }));
+      removePersistedMediaMock.mockClear();
+      setPersistedImageElementRecordsMock.mockRejectedValueOnce(new Error('The quota has been exceeded.'));
+
+      await chooseInputs('References');
+      fireEvent.click(within(await question('Switch to references?')).getByRole('button', { name: 'Move start.jpg to references' }));
+
+      await waitFor(() => expect(failure).toHaveBeenCalledWith('Failed to save the inputs moved to references:', expect.any(Error)));
+      expect(removePersistedMediaMock).not.toHaveBeenCalled();
+      expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+    });
+
+    it('draws the page for a model the built-in tables do not know', async () => {
+      // A link can name any model. Reading the switch off the tables threw for one they lack,
+      // before the catalog arrived, and the page drew nothing.
+      render(<CreateVideoClient prefill={{ model: 'not-a-model' }} />);
+      expect(await screen.findByRole('group', { name: 'Inputs' })).toBeInTheDocument();
+    });
+
+    describe('a remix’s inputs, and Replace on its references', () => {
+      const KEPT = 'generation_inputs/owner-1/gen-1';
+      const LEAD = {
+        id: 'remix-00', displayName: 'Hero shot', handle: '@lead',
+        url: `https://signed.example.com/${KEPT}/00-reference_image.png`, storagePath: `${KEPT}/00-reference_image.png`, sourceGenerationId: 'gen-1',
+      };
+      const PROP = {
+        id: 'remix-01', displayName: 'Umbrella', handle: '@prop',
+        url: `https://signed.example.com/${KEPT}/01-reference_image.png`, storagePath: `${KEPT}/01-reference_image.png`, sourceGenerationId: 'gen-1',
+      };
+      const CLIP = {
+        kind: 'video' as const, label: 'Camera move', storagePath: `${KEPT}/02-reference_video.mp4`, sourceGenerationId: 'gen-1',
+        url: `https://signed.example.com/${KEPT}/02-reference_video.mp4`, durationSeconds: 4.5,
+      };
+      function remixOf(model: string, video: Partial<NonNullable<RemixSourceBundle['inputs']['video']>> = {}): RemixSourceBundle {
+        return {
+          generation: { id: 'gen-1', title: 'Harbour', prompt: '@lead walks past @prop at dusk', category: 'video', model },
+          result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+          inputs: {
+            video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [LEAD, PROP], referenceVideos: [], referenceAudios: [], ...video },
+          },
+          workflowSettings: { model, referenceMode: 'elements' },
+          restoreIssues: [],
+        };
+      }
+
+      it('replaces a picture in place: its @handle stays, and the run uploads the new photo instead of sending the original’s', async () => {
+        stubRemix(remixOf('seedance-1.5-pro'));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByText('Replace the photos to make it yours. Each keeps its @handle, so the prompt still works. 2 of 2.')).toBeInTheDocument();
+        const replace = screen.getByRole('button', { name: 'Replace @lead with your own photo' });
+        const mine = new File(['mine'], 'me.png', { type: 'image/png' });
+        fireEvent.change(replace.parentElement!.querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [mine] } });
+
+        await waitFor(() => expect(screen.getByAltText('Hero shot').getAttribute('src')).toMatch(/^blob:me\.png:/));
+        // Still @lead, still replaceable.
+        expect(screen.getByRole('button', { name: 'Insert @lead' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Replace @lead with your own photo' })).toBeInTheDocument();
+
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(temporaryUploadMock).toHaveBeenCalledWith(mine);
+        const sent = postedRun().inputs as Array<Record<string, unknown>>;
+        expect(sent[0]).toMatchObject({ slot: 'imageReferences', handle: '@lead', label: 'Hero shot', url: 'https://signed.example.com/uploads/user-1/me.png' });
+        expect(String(sent[0].storagePath)).not.toContain(KEPT);
+        expect(sent[1]).toMatchObject({ slot: 'imageReferences', handle: '@prop', url: PROP.url, storagePath: PROP.storagePath });
+      });
+
+      it('replaces a clip in place, with the new clip’s length', async () => {
+        stubRemix(remixOf('minimax-h3', { referenceVideos: [CLIP] }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        const replace = await screen.findByRole('button', { name: 'Replace Camera move with your own clip' });
+        const mine = new File(['video'], 'mine.mp4', { type: 'video/mp4' });
+        fireEvent.change(replace.parentElement!.querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [mine] } });
+
+        expect(await screen.findByText('4.2s clip')).toBeInTheDocument();
+        expect(screen.getByText('Camera move')).toBeInTheDocument();
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.2] }));
+
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(temporaryUploadMock).toHaveBeenCalledWith(mine);
+        expect((postedRun().inputs as Array<Record<string, unknown>>).find((input) => input.slot === 'videoReferences'))
+          .toMatchObject({ url: 'https://signed.example.com/uploads/user-1/mine.mp4', label: 'Camera move', durationSeconds: 4.2 });
+      });
+
+      it('offers no Replace on the creator’s own references', async () => {
+        const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+        await chooseInputs('References');
+        await attachPictures(view.container, [picture('own')]);
+        expect(screen.queryByRole('button', { name: /^Replace / })).toBeNull();
+      });
+
+      const START = {
+        kind: 'image' as const, label: 'Start frame', storagePath: `${KEPT}/00-start_frame.png`, sourceGenerationId: 'gen-1',
+        url: `https://signed.example.com/${KEPT}/00-start_frame.png`,
+      };
+      const END = {
+        kind: 'image' as const, label: 'End frame', storagePath: `${KEPT}/01-end_frame.png`, sourceGenerationId: 'gen-1',
+        url: `https://signed.example.com/${KEPT}/01-end_frame.png`,
+      };
+
+      it('brings a Seedance 2-family frames run back as frames, and runs it as one', async () => {
+        // The family kept a references run's pictures as frames before it took frames
+        // (2026-04-04), and the restore turned every frame of the family into a reference: a
+        // frames run came back on References and ran as a references run.
+        const bundle = remixOf('seedance-2-mini', { referenceMode: 'frames', startFrame: START, endFrame: END, elements: [] });
+        stubRemix({
+          ...bundle,
+          generation: { ...bundle.generation, prompt: 'A paper boat drifts across a sunlit pond, slow push in.' },
+          workflowSettings: { model: 'seedance-2-mini', referenceMode: 'frames' },
+        });
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        await waitFor(() => expect(screen.getByAltText('Start image')).toHaveAttribute('src', START.url));
+        expect(screen.getByAltText('End image')).toHaveAttribute('src', END.url);
+        expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked();
+        expect(screen.queryAllByPlaceholderText('Rename element')).toHaveLength(0);
+
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(postedRun().settings.referenceMode).toBe('frames');
+        expect((postedRun().inputs as Array<Record<string, unknown>>).map((input) => [input.slot, input.storagePath]))
+          .toEqual([['startFrame', START.storagePath], ['endFrame', END.storagePath]]);
+      });
+
+      it('leaves out the frames of a run that brought its pictures back as references', async () => {
+        // A references run can hold frames beside its pictures (a draft from before the switch,
+        // an old run whose prepared assets come back as pictures): its frames stay out, as they
+        // did before, rather than coming back under "kept for Frames".
+        stubRemix(remixOf('seedance-2-mini', { referenceMode: 'elements', startFrame: START }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+        expect(screen.queryByText(/is kept for Frames/)).toBeNull();
+        expect(screen.queryByAltText('Start image')).toBeNull();
+      });
+
+      it('still brings the frames of a run recorded as references back as its references', async () => {
+        stubRemix(remixOf('seedance-2-mini', { referenceMode: 'elements', startFrame: START, endFrame: null, elements: [] }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByAltText('Image reference 1')).toHaveAttribute('src', START.url);
+        expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+        expect(screen.queryByAltText('Start image')).toBeNull();
+      });
+
+      it('takes the later of two picks for one clip, whichever is measured last', async () => {
+        // A Replace measures the new clip before it lands. A clip picked again meanwhile landed
+        // first, and then the earlier pick, measured late, took its place.
+        stubRemix(remixOf('minimax-h3', { referenceVideos: [CLIP] }));
+        const measure = readDurationMock.getMockImplementation()!;
+        let finishFirst: ((seconds: number) => void) | null = null;
+        readDurationMock.mockImplementation((source: File | string) => {
+          if (typeof source !== 'string' && source.name === 'first.mp4') return new Promise<number>((resolve) => { finishFirst = resolve; });
+          if (typeof source !== 'string' && source.name === 'second.mp4') return Promise.resolve(3.1);
+          return measure(source);
+        });
+        try {
+          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+          const field = async () => (await screen.findByRole('button', { name: 'Replace Camera move with your own clip' }))
+            .parentElement!.querySelector<HTMLInputElement>('input[type="file"]')!;
+          const first = new File(['first'], 'first.mp4', { type: 'video/mp4' });
+          const second = new File(['second'], 'second.mp4', { type: 'video/mp4' });
+
+          fireEvent.change(await field(), { target: { files: [first] } });
+          await waitFor(() => expect(finishFirst).not.toBeNull());
+          fireEvent.change(await field(), { target: { files: [second] } });
+          expect(await screen.findByText('3.1s clip')).toBeInTheDocument();
+
+          await act(async () => finishFirst!(9.9));
+          expect(screen.queryByText('9.9s clip')).toBeNull();
+          expect(screen.getByText('3.1s clip')).toBeInTheDocument();
+
+          fireEvent.click(generateButton());
+          await waitFor(() => expect(postedRun()).toBeDefined());
+          // By name: two files compare equal as objects.
+          const uploaded = temporaryUploadMock.mock.calls.map(([file]) => (file as File).name);
+          expect(uploaded).toContain(second.name);
+          expect(uploaded).not.toContain(first.name);
+        } finally {
+          readDurationMock.mockImplementation(measure);
+        }
+      });
+
+      /**
+       * A Seedance asset step (Prepare asset, Refresh) answers after the creator's own file took
+       * the reference's place: Replace keeps the card's id, and the original's asset landed on
+       * the new file, which the run then sent as that asset.
+       */
+      describe('a Seedance asset step that ends after a Replace', () => {
+        // As [kind, case]: a `%s` names the kind in the test's name as it is (a `$kind` quotes it).
+        const REPLACED = [
+          ['picture', {
+            row: 0, replace: 'Replace @lead with your own photo',
+            file: () => new File(['mine'], 'me.png', { type: 'image/png' }),
+            landed: () => waitFor(() => expect(screen.getByAltText('Hero shot').getAttribute('src')).toMatch(/^blob:me\.png:/)),
+          }],
+          ['clip', {
+            row: 2, replace: 'Replace Camera move with your own clip',
+            file: () => new File(['video'], 'mine.mp4', { type: 'video/mp4' }),
+            landed: () => screen.findByText('4.2s clip'),
+          }],
+        ] as const;
+
+        /** Answers the remix with this bundle, and holds each Seedance asset request until the test answers it. */
+        function holdAssetRequests(bundle: RemixSourceBundle) {
+          const answers: Array<(assetId: string) => void> = [];
+          fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+            if (url.includes('/api/remix-source')) return { ok: true, status: 200, json: async () => bundle } as Response;
+            if (url.includes('/api/seedance-assets')) {
+              return new Promise<Response>((resolve) => {
+                answers.push((assetId) => resolve({
+                  ok: true, status: 200, json: async () => ({ success: true, assetId, status: 'active' }),
+                } as Response));
+              });
+            }
+            return defaultResponse(input, init);
+          });
+          return answers;
+        }
+
+        async function replaceWithOwn(replaced: (typeof REPLACED)[number][1]) {
+          const button = screen.getByRole('button', { name: replaced.replace });
+          fireEvent.change(button.parentElement!.querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [replaced.file()] } });
+          await replaced.landed();
+        }
+
+        /** The step is over once no button in the card waits on it. */
+        async function stepOver(card: HTMLElement) {
+          await waitFor(() => within(card).getAllByRole('button').forEach((button) => expect(button).toBeEnabled()));
+        }
+
+        it.each(REPLACED)('leaves a %s’s prepared asset off the file that replaced it', async (_kind, replaced) => {
+          const answers = holdAssetRequests(remixOf('seedance-2-mini', { referenceVideos: [CLIP] }));
+          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+          const card = await screen.findByRole('group', { name: 'Seedance Assets' });
+
+          fireEvent.click(within(card).getAllByRole('button', { name: 'Prepare asset' })[replaced.row]);
+          await waitFor(() => expect(answers).toHaveLength(1));
+          await replaceWithOwn(replaced);
+          await act(async () => answers[0]('asset-original'));
+
+          await stepOver(card);
+          expect(card).not.toHaveTextContent('asset-original');
+        });
+
+        it.each(REPLACED)('leaves a %s’s refreshed asset off the file that replaced it', async (_kind, replaced) => {
+          const answers = holdAssetRequests(remixOf('seedance-2-mini', { referenceVideos: [CLIP] }));
+          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+          const card = await screen.findByRole('group', { name: 'Seedance Assets' });
+          fireEvent.click(within(card).getAllByRole('button', { name: 'Prepare asset' })[replaced.row]);
+          await waitFor(() => expect(answers).toHaveLength(1));
+          await act(async () => answers[0]('asset-1'));
+          await waitFor(() => expect(card).toHaveTextContent('Asset ID: asset-1'));
+
+          fireEvent.click(within(card).getByRole('button', { name: 'Refresh' }));
+          await waitFor(() => expect(answers).toHaveLength(2));
+          await replaceWithOwn(replaced);
+          await act(async () => answers[1]('asset-2'));
+
+          await stepOver(card);
+          expect(card).not.toHaveTextContent('asset-2');
+        });
+
+        it('keeps an upload that ends after a Replace off the file that replaced it', async () => {
+          // Prepare uploads a picture of the creator's own first. Replaced again while it
+          // uploaded, the first file's upload landed on the second, and the run, which reuses a
+          // card's upload, sent the first file in the second's place.
+          const bundle = remixOf('seedance-2-mini');
+          fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+            if (url.includes('/api/remix-source')) return { ok: true, status: 200, json: async () => bundle } as Response;
+            if (url.includes('/api/seedance-assets')) {
+              return { ok: true, status: 200, json: async () => ({ success: true, assetId: 'asset-first', status: 'active' }) } as Response;
+            }
+            return defaultResponse(input, init);
+          });
+          const upload = temporaryUploadMock.getMockImplementation()!;
+          let finishUpload: (() => void) | null = null;
+          temporaryUploadMock.mockImplementation(async (file: File) => {
+            if (file.name === 'first.png') await new Promise<void>((resolve) => { finishUpload = resolve; });
+            return upload(file);
+          });
+          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+          const card = await screen.findByRole('group', { name: 'Seedance Assets' });
+          async function replaceLead(name: string) {
+            const field = screen.getByRole('button', { name: 'Replace @lead with your own photo' })
+              .parentElement!.querySelector<HTMLInputElement>('input[type="file"]')!;
+            fireEvent.change(field, { target: { files: [new File([name], name, { type: 'image/png' })] } });
+            await waitFor(() => expect(screen.getByAltText('Hero shot').getAttribute('src')).toMatch(new RegExp(`^blob:${name.replace('.', '\\.')}:`)));
+          }
+
+          await replaceLead('first.png');
+          fireEvent.click(within(card).getAllByRole('button', { name: 'Prepare asset' })[0]);
+          await waitFor(() => expect(finishUpload).not.toBeNull());
+          await replaceLead('second.png');
+          await act(async () => finishUpload!());
+
+          await stepOver(card);
+          expect(card).not.toHaveTextContent('asset-first');
+          fireEvent.click(generateButton());
+          await waitFor(() => expect(postedRun()).toBeDefined());
+          expect((postedRun().inputs as Array<Record<string, unknown>>).find((input) => input.handle === '@lead'))
+            .toMatchObject({ url: 'https://signed.example.com/uploads/user-1/second.png' });
+        });
+      });
+    });
   });
 
   /**
@@ -946,9 +1579,11 @@ describe('CreateVideoClient Kling video elements', () => {
     const trackInput = 'input[type="file"][accept="audio/*"]';
     const runPrompt = 'A dancer crosses a bright studio in the rhythm of the reference clip, slow push in.';
 
-    /** The panel's heading, or null where the page draws no clip and track panel. */
-    function panelHeading() {
-      return screen.queryByRole('heading', { name: /^Video( and audio)? references$/ });
+    /** The references side, where the model has a switch (Gemini Omni video shows it alone). */
+    async function openReferences() {
+      await screen.findByRole('group', { name: 'Inputs' });
+      const references = screen.queryByRole('radio', { name: 'References' });
+      if (references) fireEvent.click(references);
     }
 
     /** What the run sent of one kind: its clips, or its tracks. */
@@ -966,8 +1601,9 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('gives MiniMax H3 the panel, with a button for a clip and a button for a track', async () => {
       render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+      await openReferences();
 
-      expect(await screen.findByRole('heading', { name: 'Video and audio references' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Reference videos' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Add video' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Add audio' })).toBeEnabled();
       // Three of each, which is what the model takes.
@@ -977,7 +1613,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('sends the clip and the track attached on MiniMax H3, and tells the quote about both', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
-      await screen.findByRole('heading', { name: 'Video and audio references' });
+      await openReferences();
+      await screen.findByRole('heading', { name: 'Reference videos' });
       const clip = new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' });
       const track = new File(['audio-bytes'], 'voice.mp3', { type: 'audio/mpeg' });
 
@@ -1048,7 +1685,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('keeps the note about prepared assets on a Seedance 2.5 track', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
-      await screen.findByRole('heading', { name: 'Video and audio references' });
+      await openReferences();
+      await screen.findByRole('heading', { name: 'Reference audio' });
 
       fireEvent.change(view.container.querySelector<HTMLInputElement>(trackInput)!, {
         target: { files: [new File(['audio-bytes'], 'voice.mp3', { type: 'audio/mpeg' })] },
@@ -1078,10 +1716,10 @@ describe('CreateVideoClient Kling video elements', () => {
         const takesTracks = publishedLimit(modelId, 'audioReferences') > 0;
         const view = render(<CreateVideoClient prefill={{ model: modelId }} />);
         await screen.findByPlaceholderText(`Describe the ${displayName} scene in rich cinematic detail...`);
+        await openReferences();
 
-        expect(panelHeading()?.textContent ?? null).toBe(
-          takesTracks ? 'Video and audio references' : takesClips ? 'Video references' : null
-        );
+        expect(Boolean(screen.queryByRole('heading', { name: 'Reference videos' }))).toBe(takesClips);
+        expect(Boolean(screen.queryByRole('heading', { name: 'Reference audio' }))).toBe(takesTracks);
         expect(Boolean(screen.queryByRole('button', { name: 'Add video' }))).toBe(takesClips);
         expect(Boolean(view.container.querySelector(clipInput))).toBe(takesClips);
         expect(Boolean(screen.queryByRole('button', { name: 'Add audio' }))).toBe(takesTracks);
@@ -1192,9 +1830,10 @@ describe('CreateVideoClient Kling video elements', () => {
     /** The @handle each card of one kind shows, in card order. */
     function cardHandles(container: HTMLElement, placeholder: string) {
       return Array.from(container.querySelectorAll<HTMLInputElement>(`input[placeholder="${placeholder}"]`)).map((field) => {
-        // The card body is the name field's nearest ancestor that holds the Insert button.
+        // The card body is the name field's nearest ancestor that holds the Insert button (the
+        // handle itself on a picture's card).
         let card = field.parentElement;
-        while (card && !Array.from(card.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Insert')) {
+        while (card && !Array.from(card.querySelectorAll('button')).some((button) => /^Insert @/.test(button.getAttribute('aria-label') ?? ''))) {
           card = card.parentElement;
         }
         return Array.from(card?.querySelectorAll('span') ?? [])
@@ -1226,6 +1865,25 @@ describe('CreateVideoClient Kling video elements', () => {
       // Nothing on the page still offers the old handle, and the prompt has no stale mention.
       expect(screen.queryByText('@video_element_1')).not.toBeInTheDocument();
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    it('rewrites the prompt with a renamed Kling clip’s handle before the clip’s write is done', async () => {
+      // The rename takes its new handle at once. A Generate pressed while the clip's write ran (its
+      // press blurs the name field) read the new handle beside the old prompt, and refused
+      // "Unknown element mention: @video_element_1".
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+      fireEvent.change(promptBox(), { target: { value: 'A dancer follows @video_element_1.' } });
+      let finishWrite: (() => void) | null = null;
+      setPersistedMediaRecordsMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishWrite = resolve; }));
+
+      renameCard(view.container, KLING_RENAME, 0, 'Red jacket');
+
+      await waitFor(() => expect(finishWrite).not.toBeNull());
+      expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@red_jacket']);
+      expect(promptBox()).toHaveValue('A dancer follows @red_jacket.');
+      await act(async () => finishWrite!());
     });
 
     it('rewrites the mention in every shot prompt when a Kling clip is renamed', async () => {
@@ -1498,6 +2156,7 @@ describe('CreateVideoClient Kling video elements', () => {
       ]);
       const first = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
       await waitFor(() => expect(cardHandles(first.container, IMAGE_RENAME)).toEqual(['@dancer']));
+      expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
 
       // A second reference with the same name takes a numbered handle.
       const input = first.container.querySelector<HTMLInputElement>(imageElementInput);
@@ -1698,11 +2357,12 @@ describe('CreateVideoClient Kling video elements', () => {
         const view = renderRemix(referenceRun('wan-2.7', { video: { startFrame: firstFrame } }));
 
         await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
-        expect(screen.getByAltText('Start frame')).toHaveAttribute('src', firstFrame.url);
-        // Wan 2.7 is the one model that takes a first frame together with
-        // references, so neither side is locked and nothing is in conflict.
-        expect(screen.getByText(/can use this first frame together with your reusable images/)).toBeInTheDocument();
-        expect(screen.queryByText(/cannot combine/)).not.toBeInTheDocument();
+        // Wan 2.7 is the one model that takes a first frame together with references: its
+        // references side keeps the start image, and nothing is left out.
+        expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+        expect(screen.getByAltText('Start image')).toHaveAttribute('src', firstFrame.url);
+        expect(screen.getByText('Wan 2.7 can start from it, with your references.')).toBeInTheDocument();
+        expect(screen.queryByText(/is kept for Frames/)).not.toBeInTheDocument();
 
         fireEvent.click(generateButton());
 
@@ -1867,8 +2527,9 @@ describe('CreateVideoClient Kling video elements', () => {
           video: { referenceMode: 'frames', startFrame, endFrame, elements: [] },
         }));
 
-        await waitFor(() => expect(screen.getByAltText('Start frame')).toHaveAttribute('src', startFrame.url));
-        expect(screen.getByAltText('End frame')).toHaveAttribute('src', endFrame.url);
+        await waitFor(() => expect(screen.getByAltText('Start image')).toHaveAttribute('src', startFrame.url));
+        expect(screen.getByAltText('End image')).toHaveAttribute('src', endFrame.url);
+        expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked();
         expect(cardHandles(view.container, IMAGE_RENAME)).toEqual([]);
         expect(promptBox()).toHaveValue(prompt);
       });
@@ -1943,6 +2604,12 @@ describe('CreateVideoClient Kling video elements', () => {
       });
       await waitFor(() => expect(card).toHaveTextContent(`${names.length}/4 images`));
     }
+
+    it('says the named subjects replace frames and references for the run', async () => {
+      // A subjects run sends neither side, so the inputs' line no longer invites a start image.
+      await renderWithSubjects('Hero creator');
+      expect(screen.getByText('Named subjects replace frames and references for this run.')).toBeInTheDocument();
+    });
 
     it('writes the handle in lower case, on the card and where the prompt offers it', async () => {
       const view = await renderWithSubjects('Hero creator');
@@ -3114,11 +3781,10 @@ describe('CreateVideoClient Kling video elements', () => {
     const ASKS_FOR_START_FRAME = 'Add a start frame and write a prompt, then Generate.';
     const ASKS_FOR_PROMPT = 'Write a prompt, then Generate.';
 
-    /** The group that holds the start frame, and whether the page has greyed it out. */
-    function frameGroupLocked(container: HTMLElement) {
-      const group = container.querySelector('#video-start-frame-input')?.closest('[aria-disabled]');
-      expect(group).not.toBeNull();
-      return group!.getAttribute('aria-disabled') === 'true';
+    /** Whether the inputs show the frames side, with the start image's field there to take a file. */
+    function showsFrames(container: HTMLElement) {
+      const field = container.querySelector<HTMLInputElement>('#video-start-frame-input');
+      return Boolean(field && !field.disabled) && (screen.queryByRole('radio', { name: 'Frames' }) as HTMLInputElement | null)?.checked !== false;
     }
 
     function runInputs(slot: string) {
@@ -3255,23 +3921,22 @@ describe('CreateVideoClient Kling video elements', () => {
       // under "Clear your references", on a page with no card for a clip.
       saveInTheBrowser({ clip: true, track: true });
       const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
-      await screen.findByText('Frames or references');
+      await screen.findByRole('radio', { name: 'Frames' });
       await restored();
 
-      expect(frameGroupLocked(view.container)).toBe(false);
-      expect(screen.getByText(/takes either frames or references in a single run/)).toBeInTheDocument();
+      expect(showsFrames(view.container)).toBe(true);
       expect(canvasAsksFor()).toBe(ASKS_FOR_FRAMES);
       expect(slotCount(lastQuoteRequest(), 'startFrame')).toBe(0);
       expect(lastQuoteRequest().settings.referenceMode).toBe('frames');
 
-      // A frame attached now locks the references, as on a draft that holds no clip.
+      // A frame attached now holds the inputs to frames, as on a draft that holds no clip.
       fireEvent.change(view.container.querySelector<HTMLInputElement>('#video-start-frame-input')!, {
         target: { files: [picture('start')] },
       });
-      expect(await screen.findByText(/cannot combine references with frames\. Clear your frames/)).toBeInTheDocument();
       await waitFor(() => expect(slotCount(lastQuoteRequest(), 'startFrame')).toBe(1));
-      // Locked for the keyboard too: the add tile's file field is off, not just greyed.
-      expect(screen.getByText('Add reference images').closest('label')?.querySelector('input[type="file"]')).toBeDisabled();
+      // Switching to references would clear it, so the switch asks first.
+      await chooseInputs('References');
+      expect(await screen.findByRole('alertdialog', { name: 'Switch to references?' })).toBeInTheDocument();
     });
 
     it('counts the image and not the clip in a references run on Seedance 1.5 Pro', async () => {
@@ -3281,9 +3946,9 @@ describe('CreateVideoClient Kling video elements', () => {
       await restored();
 
       expect(canvasAsksFor()).toBe(ASKS_FOR_REFERENCES);
-      // The reference holds the run, so the frames are locked, for the keyboard too.
-      expect(frameGroupLocked(view.container)).toBe(true);
-      expect(view.container.querySelector('#video-start-frame-input')).toBeDisabled();
+      // The reference holds the inputs to references, so no frame can be added beside it.
+      expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
+      expect(view.container.querySelector('#video-start-frame-input')).toBeNull();
       const request = lastQuoteRequest();
       expect(slotCount(request, 'imageReferences')).toBe(1);
       expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
@@ -3301,7 +3966,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.getByText('Saved clip')).toBeInTheDocument();
       // The track is offered only on the standby card, where it can be taken off.
       expect(standbyChips()).toEqual(['Saved track']);
-      expect(screen.queryByRole('heading', { name: 'Video and audio references' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Reference audio' })).toBeNull();
       expect(slotCount(lastQuoteRequest(), 'imageReferences') + slotCount(lastQuoteRequest(), 'videoReferences')).toBe(2);
       expect(refusedByTheServer(lastQuoteRequest())).toBeNull();
 
@@ -3332,7 +3997,9 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
       expect(slotCount(request, 'imageReferences')).toBe(0);
       expect(refusedByTheServer(request)).toBeNull();
-      expect(frameGroupLocked(view.container)).toBe(false);
+      // Multi-shot sends no reference, so the inputs show the frames alone, with no switch.
+      expect(view.container.querySelector('#video-start-frame-input')).not.toBeNull();
+      expect(screen.queryByRole('radio', { name: 'References' })).toBeNull();
 
       fireEvent.change(screen.getByPlaceholderText('Describe shot 1...'), {
         target: { value: 'A lighthouse keeper climbs the stairs with a lamp, the camera rising with him, warm light on stone.' },
@@ -3567,11 +4234,10 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(await screen.findByText('character-0001')).toBeInTheDocument();
 
       chooseModel(view.container, 'Seedance 1.5 Pro');
-      await screen.findByText('Frames or references');
+      await screen.findByRole('radio', { name: 'Frames' });
 
       expect(screen.queryByText('character-0001')).toBeNull();
-      expect(frameGroupLocked(view.container)).toBe(false);
-      expect(screen.getByText(/takes either frames or references in a single run/)).toBeInTheDocument();
+      expect(showsFrames(view.container)).toBe(true);
       expect(lastQuoteRequest().settings.referenceMode).toBe('frames');
     });
   });
@@ -4287,7 +4953,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('uploads a clip once for two presses, and sends its staged copy the second time', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
-      await screen.findByRole('heading', { name: 'Video and audio references' });
+      await chooseInputs('References');
+      await screen.findByRole('heading', { name: 'Reference videos' });
       await attachClip(view.container, new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' }));
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
@@ -4351,7 +5018,8 @@ describe('CreateVideoClient Kling video elements', () => {
     it('uploads a clip again when its staged copy is gone', async () => {
       refreshTemporaryMediaUrlMock.mockRejectedValue(new TemporaryMediaReadUrlError('That upload is no longer available.', 404, 'MEDIA_OBJECT_NOT_FOUND'));
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
-      await screen.findByRole('heading', { name: 'Video and audio references' });
+      await chooseInputs('References');
+      await screen.findByRole('heading', { name: 'Reference videos' });
       await attachClip(view.container, new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' }));
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
@@ -4366,7 +5034,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('names a picked file the upload step would refuse, and leaves it out', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
-      await screen.findByRole('heading', { name: 'Video and audio references' });
+      await chooseInputs('References');
+      await screen.findByRole('heading', { name: 'Reference videos' });
       const huge = new File(['video-bytes'], 'huge.mp4', { type: 'video/mp4' });
       Object.defineProperty(huge, 'size', { value: 300 * 1024 * 1024 });
 
@@ -4383,6 +5052,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('says how many picks it added when the model takes fewer', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      await chooseInputs('References');
       const input = await waitFor(() => {
         const found = view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]');
         expect(found).not.toBeNull();
@@ -4716,7 +5386,8 @@ describe('CreateVideoClient Kling video elements', () => {
         inputs: [{ index: 0, slot: 'videoReferences', durationSeconds: 7.9 }],
       }));
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
-      await screen.findByRole('heading', { name: 'Video and audio references' });
+      await chooseInputs('References');
+      await screen.findByRole('heading', { name: 'Reference videos' });
       await attachClip(view.container, new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' }));
       expect(screen.getByText('4.2s clip')).toBeInTheDocument();
       fireEvent.change(promptBox(), { target: { value: PROMPT } });

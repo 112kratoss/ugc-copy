@@ -147,11 +147,12 @@ type CardHandles = {
 async function readCardHandles(page: Page, title: string): Promise<CardHandles | null> {
   try {
     return await page.evaluate((panelTitle) => {
-      const heading = Array.from(document.querySelectorAll<HTMLElement>('h2'))
+      const heading = Array.from(document.querySelectorAll<HTMLElement>('h2, h3'))
         .find((candidate) => candidate.textContent === panelTitle);
-      // The panel is the heading's nearest ancestor that holds a card's Insert button.
+      // The panel is the heading's nearest ancestor that holds a card's Insert button (on the
+      // video creator's pictures the handle itself, since PR 4).
       let panel = heading?.parentElement ?? null;
-      while (panel && !Array.from(panel.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Insert')) {
+      while (panel && !Array.from(panel.querySelectorAll('button')).some((button) => /^Insert @/.test(button.getAttribute('aria-label') ?? ''))) {
         panel = panel.parentElement;
       }
       if (!panel) return null;
@@ -163,7 +164,10 @@ async function readCardHandles(page: Page, title: string): Promise<CardHandles |
       if (handles.length === 0) return null;
 
       const hidden = handles.flatMap((handle) => {
-        const row = handle.parentElement;
+        // On the video creator's pictures the handle is its own Insert button (PR 4): the
+        // button is the handle's box in the row, and the row is the button's.
+        const own = handle.closest<HTMLElement>('button[aria-label^="Insert @"]') ?? handle;
+        const row = own.parentElement;
         if (!row) return [`${handle.textContent}: has no row`];
         // An inline box reports no width, which would pass every check below.
         if (handle.clientWidth === 0) return [`${handle.textContent}: has no box of its own to measure`];
@@ -186,8 +190,9 @@ async function readCardHandles(page: Page, title: string): Promise<CardHandles |
         const lines = new Set(Array.from(text.getClientRects()).map((line) => Math.round(line.top))).size;
         const rowStyle = getComputedStyle(row);
         const rowWidth = row.clientWidth - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight);
-        if (lines > 1 && handle.clientWidth < rowWidth - 1) {
-          faults.push(`wraps onto ${lines} lines in ${handle.clientWidth}px of a ${Math.round(rowWidth)}px row`);
+        const ownWidth = own.getBoundingClientRect().width;
+        if (lines > 1 && ownWidth < rowWidth - 1) {
+          faults.push(`wraps onto ${lines} lines in ${Math.round(ownWidth)}px of a ${Math.round(rowWidth)}px row`);
         }
 
         return faults.map((fault) => `${handle.textContent}: ${fault}`);
@@ -235,7 +240,7 @@ test.describe('reference card handles', () => {
 
     await page.goto(`/create-video?remix=${GENERATION_ID}&remixPost=${POST_ID}`);
 
-    await expectWholeHandles(page, 'Reusable image references', REFERENCES.map((reference) => reference.handle));
+    await expectWholeHandles(page, 'Reference images', REFERENCES.map((reference) => reference.handle));
   });
 
   test('the video creator shows each Kling video element handle whole', async ({ page }) => {

@@ -15,9 +15,11 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 async function attachSubjectImages(page: Page, names: string[], subject = 0) {
-  // The subject cards own the only multi-select image inputs on this screen, one
-  // to a card. `subject` counts the cards from 0.
-  await page.locator('label input[type="file"][accept="image/*"][multiple]').nth(subject).setInputFiles(
+  // Each subject card has one multi-select image input, inside the Named subjects card: the
+  // Inputs card above it holds another under References (its pictures' tile). `subject`
+  // counts the cards from 0.
+  const subjects = page.locator('.ui-card', { has: page.getByRole('heading', { name: 'Named subjects', exact: true }) });
+  await subjects.locator('label input[type="file"][accept="image/*"][multiple]').nth(subject).setInputFiles(
     names.map((name) => ({ name, mimeType: 'image/png', buffer: ONE_PIXEL_PNG })),
   );
 }
