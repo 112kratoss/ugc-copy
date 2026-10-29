@@ -1662,11 +1662,12 @@ async function hydrateBundleRows(
     // still getting the public presentation.
     postScope?: LinkedPostScope;
     allowNsfw?: boolean;
-    // A page that teases its recipes counts what each unlock adds from the
-    // creation's inputs (B3), beside its other reads: an owner's own page as
-    // their unlock reads it, a public one as a buyer's would. The single-post
-    // detail counts its own, and a scan that filters batch after batch counts
-    // only the page it serves.
+    // A page that serves every recipe it hydrates (the seller dashboard)
+    // counts what each unlock adds from the creation's inputs (B3) beside its
+    // other reads: an owner's own page as their unlock reads it, a public one
+    // as a buyer's would. A page that filters what it hydrates (the
+    // marketplace, its search) counts only what it serves, after filtering on
+    // what recipes store; the single-post detail counts its own.
     creationReferencesFor?: { ownerUserId: string | null };
   } = {},
 ): Promise<MarketplaceResourceListItem[]> {
@@ -2326,17 +2327,17 @@ async function getMarketplaceResourceListBase(
 
   const rows = ((data ?? []) as BundleRow[]).slice(0, limit + 1);
   const hasMore = rows.length > limit;
-  // The RPC filtered on what recipes store; the page counts what each unlock
-  // adds from the creation's inputs (B3) as a buyer's would.
-  const hydratedItems = await hydrateBundleRows(rows, null, 'public', true, {
-    creationReferencesFor: { ownerUserId: null },
-  });
+  // Checked below on what each recipe stores, as the RPC's SQL filtered it:
+  // what an unlock adds from the creation's inputs (B3) is a best-effort read,
+  // counted after for the recipes the page serves alone.
+  const hydratedItems = await hydrateBundleRows(rows, null, 'public', true);
   // Walked by raw row, not by hydrated item: hydration drops an NSFW bundle
   // before this loop, and a dropped row still occupies its raw position. Left
   // out of the count, nextOffset fell short by one per hidden row and the next
   // page re-read (and repeated) the rows after it.
   const hydratedById = new Map(hydratedItems.map((item) => [item.id, item]));
   const pageItems: MarketplaceResourceListItem[] = [];
+  const pageRows: BundleRow[] = [];
   let consumedRowCount = 0;
 
   for (const row of rows) {
@@ -2368,11 +2369,14 @@ async function getMarketplaceResourceListBase(
     consumedRowCount += 1;
     if (isEligible) {
       pageItems.push(item);
+      pageRows.push(row);
     }
   }
+  // As a buyer's unlock would add them.
+  const referenceCounts = await countListedRecipeReferences(pageRows, null);
 
   return {
-    items: pageItems,
+    items: pageItems.map((item) => withCreationReferenceCounts(item, referenceCounts.get(item.postId))),
     pageInfo: {
       hasMore,
       nextOffset: hasMore ? offset + consumedRowCount : null,

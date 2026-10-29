@@ -81,6 +81,10 @@ let embeddedSourceReadHangs: boolean;
 let embeddedSourceSignals: Array<AbortSignal | null>;
 // How each such read was filtered: its `eq` columns and any `or` it sent.
 let embeddedSourceFilters: Array<{ eq: Record<string, unknown>; or: string[] }>;
+// The posts each such read asked about.
+let embeddedSourcePostIds: unknown[][];
+// Rows the marketplace's list RPC returns after `bundleRow`.
+let extraListedBundleRows: BundleRow[];
 // Recipes of other posts the read can return beside `bundleRow`, each already
 // nested with its post, generation and inputs.
 let extraCreationInputSources: Array<Record<string, unknown>>;
@@ -140,9 +144,13 @@ vi.mock('@/lib/server-helpers', () => ({
       }
       // Nobody in these fixtures has revealed an NSFW post.
       if (name === 'has_nsfw_reveal') return { data: false, error: null };
-      // The marketplace lists the one published recipe there is.
+      // The marketplace lists the published recipes there are, as its SQL
+      // matched them: the fake searches nothing.
       if (name === 'list_marketplace_resource_bundles') {
-        return { data: bundleRow?.status === 'published' ? [bundleRow] : [], error: null };
+        return {
+          data: [...(bundleRow ? [bundleRow] : []), ...extraListedBundleRows].filter((row) => row.status === 'published'),
+          error: null,
+        };
       }
 
       throw new Error(`Unexpected rpc: ${name}`);
@@ -259,6 +267,7 @@ vi.mock('@/lib/server-helpers', () => ({
             if (selectedColumns.includes('generation:generations')) {
               embeddedSourceSignals.push(signal);
               embeddedSourceFilters.push({ eq: { ...equalityFilters }, or: [...sentOrFilters] });
+              embeddedSourcePostIds.push([...postIds]);
               void readCreationInputSources().then(resolve, reject);
               return;
             }
@@ -644,7 +653,9 @@ describe('post resource bundle server access', () => {
     embeddedSourceReadHangs = false;
     embeddedSourceSignals = [];
     embeddedSourceFilters = [];
+    embeddedSourcePostIds = [];
     extraCreationInputSources = [];
+    extraListedBundleRows = [];
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -1663,6 +1674,31 @@ describe('post resource bundle server access', () => {
         expect(slow.items[0]?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
         expect(Date.now() - started).toBeLessThan(3000);
       }, 10_000);
+
+      // Review of cb35d555: the RPC page counted before its own search check,
+      // which reads a tile's kinds, so whether "files" kept a recipe the SQL
+      // matched on text the tile does not show hung on the count read; the
+      // fallback, which counts after it, always dropped it.
+      it('keeps the same recipes for a search whether or not the count read answers, and counts only those it serves', async () => {
+        // A recipe the page drops: its post is gone.
+        extraListedBundleRows = [{ ...(bundleRow as BundleRow), id: 'bundle-2', post_id: 'post-2' }];
+        const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+        const answered = await getMarketplaceResourceList({ q: 'files' });
+        embeddedSourceReadError = { code: '57014', message: 'canceling statement due to statement timeout' };
+        const failed = await getMarketplaceResourceList({ q: 'files' });
+        embeddedSourceReadError = null;
+        const shown = await getMarketplaceResourceList({ q: 'creation recipe' });
+
+        expect(answered.items).toEqual([]);
+        expect(failed.items).toEqual([]);
+        expect(shown.items.map((item) => [item.postId, item.lockedPreview.itemCounts])).toEqual([
+          ['post-1', { prompt: 1, reference_image: 3, reference_video: 1 }],
+        ]);
+        // One read, for the one recipe served.
+        expect(embeddedSourcePostIds).toEqual([['post-1']]);
+      });
+
       it('the marketplace tile counts what the unlock then gives, and never which', async () => {
         const { getMarketplaceResourceList, getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
         const { getPostResourceItemCounts } = await import('@/lib/post-resource-bundles');

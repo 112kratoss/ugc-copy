@@ -38,8 +38,9 @@ let nsfwPostIds = new Set<string>();
 // Posts made in the app, each with a public generation of two saved pictures
 // its recipe's creator may share (B3).
 let creationPostIds = new Set<string>();
-// The posts each read of what an unlock adds from those pictures asked about.
-let creationInputReads: string[][] = [];
+// The posts each read of what an unlock adds from those pictures asked about,
+// and its filters.
+let creationInputReads: Array<{ postIds: string[]; filters: Record<string, unknown> }> = [];
 
 function creationGenerationId(postId: string) {
   return postId.replace('post-', 'gen-');
@@ -139,13 +140,17 @@ vi.mock('@/lib/server-helpers', () => ({
       if (table === 'post_resource_bundles') {
         let selectedColumns = '';
         let postIds: string[] = [];
+        const filters: Record<string, unknown> = {};
         const query = {
           select(columns: string) {
             selectedColumns = columns;
             selectedBundleColumns.push(columns);
             return query;
           },
-          eq() {
+          // The scan's own filters are not applied (every fixture row is
+          // published); the inputs read's are.
+          eq(column: string, value: unknown) {
+            filters[column] = value;
             return query;
           },
           in(_column: string, values: string[]) {
@@ -158,10 +163,14 @@ vi.mock('@/lib/server-helpers', () => ({
           // Only the read of what each unlock adds from the creation's inputs
           // is awaited without a range.
           then(resolve: (value: { data: unknown[]; error: null }) => void) {
-            creationInputReads.push([...postIds]);
+            creationInputReads.push({ postIds: [...postIds], filters: { ...filters } });
             resolve({
               data: bundleRows
-                .filter((row) => postIds.includes(row.post_id) && row.allow_remix && creationPostIds.has(row.post_id))
+                .filter((row) => (
+                  postIds.includes(row.post_id)
+                  && creationPostIds.has(row.post_id)
+                  && Object.entries(filters).every(([column, value]) => (row as Record<string, unknown>)[column] === value)
+                ))
                 .map(creationInputSource),
               error: null,
             });
@@ -323,7 +332,9 @@ describe('marketplace resource list missing-RPC fallback batching', () => {
     expect(files.items.map((item) => item.postId)).toEqual(['post-025']);
     // Two batches scanned, one read, for the page served.
     expect(rangeCalls).toEqual([{ start: 0, end: 23 }, { start: 24, end: 47 }]);
-    expect(creationInputReads).toEqual([['post-025']]);
+    expect(creationInputReads).toEqual([
+      { postIds: ['post-025'], filters: { allow_remix: true, status: 'published' } },
+    ]);
     expect(files.items[0]?.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3 });
   });
 
