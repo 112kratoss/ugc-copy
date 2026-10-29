@@ -377,8 +377,8 @@ describe('importSharedGenerationInputMedia', () => {
 
   // The block check asks about the account the creation is posted under. For
   // one made under the account's own id that is the creator: their profile
-  // names no account they were linked to. The block cases above answer
-  // "blocked" whoever is asked, so they cannot tell.
+  // names no account they were linked to. The cases above answer "blocked"
+  // whoever is asked, so they cannot tell.
   it('refuses a viewer the creator blocked, having asked about the creator', async () => {
     const stub = createAdminStub({ profileRows: [{ id: CREATOR, merged_into_user_id: null }] });
     const dependencies = {
