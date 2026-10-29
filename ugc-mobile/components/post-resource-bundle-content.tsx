@@ -433,7 +433,6 @@ function UnlockedResourceGroup({
         <ResourceItemRow
           divided={index > 0}
           fileLoadingPath={fileLoadingPath}
-          groupItemCount={itemCount}
           item={item}
           key={resourceItemKey(item)}
           onCopy={onCopy}
@@ -467,16 +466,14 @@ function UnlockedResourceGroup({
 function ResourceItemRow({
   divided,
   fileLoadingPath,
-  groupItemCount,
   item,
   onCopy,
   onOpenFile,
   onOpenUrl,
-  showTitle: showOwnTitle,
+  showTitle,
 }: {
   divided: boolean;
   fileLoadingPath: string | null;
-  groupItemCount: number;
   item: PostResourceItem;
   onCopy?: (text: string) => Promise<void> | void;
   onOpenFile?: (file: ResourceFileInput) => Promise<void> | void;
@@ -489,8 +486,6 @@ function ResourceItemRow({
   const storagePath = item.storagePath?.trim() ?? '';
   const fileLoading = Boolean(storagePath && storagePath === fileLoadingPath);
   const setup = item.type === 'note' || item.type === 'settings' ? parseGenerationSetupNotes(textContent) : null;
-  // A setup alone in its card is the card, whatever the note was titled.
-  const showTitle = showOwnTitle && !(setup && groupItemCount === 1);
   const meta = item.storagePath ? describeRecipeFile(item.contentType, item.sizeBytes) : '';
   const hasHeading = showTitle || Boolean(item.description) || Boolean(meta);
   const hasActions = Boolean((textContent && onCopy) || (externalUrl && onOpenUrl) || (storagePath && onOpenFile));

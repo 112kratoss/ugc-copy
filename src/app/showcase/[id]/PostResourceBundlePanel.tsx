@@ -1164,7 +1164,6 @@ export default function PostResourceBundlePanel({
             items={group.media}
             title={group.title}
             signUrl={signPreviewUrl}
-            onOpenFile={(storagePath) => void openResourceFile(storagePath)}
             onDownload={(item) => void downloadResourceFile(
               item.storagePath ?? '',
               formatPostResourceDownloadName(item.title, item.contentType),

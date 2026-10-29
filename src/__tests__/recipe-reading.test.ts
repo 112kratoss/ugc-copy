@@ -98,6 +98,24 @@ describe('reading an unlocked recipe', () => {
       expect(groups[2].items.map((item) => item.title)).toEqual(['Layers']);
     });
 
+    // A PSD, a TIFF or a HEIC would be a tile that only ever says "Couldn't
+    // load": a source file in a format nothing draws stays a file to open.
+    it('takes only source files in a drawable format into the gallery', () => {
+      const files = normalizePostResourceItems([
+        { type: 'source_file', role: 'other', title: 'Layers', storagePath: 'u/layers.psd', contentType: 'image/vnd.adobe.photoshop' },
+        { type: 'source_file', role: 'other', title: 'Scan', storagePath: 'u/scan.tiff', contentType: 'image/tiff' },
+        { type: 'source_file', role: 'other', title: 'Still', storagePath: 'u/still.webp', contentType: 'Image/WebP' },
+        { type: 'reference_image', role: 'style_reference', title: 'Phone shot', storagePath: 'u/shot.heic', contentType: 'image/heic' },
+      ]);
+
+      const groups = groupRecipeForReading(files, []);
+      expect(groups.map((group) => [group.title, [...group.items, ...group.media].map((item) => item.title)])).toEqual([
+        // A reference is one by its type, whatever its format.
+        ['References', ['Still', 'Phone shot']],
+        ['Files', ['Layers', 'Scan']],
+      ]);
+    });
+
     const sections = normalizePostResourceSections([
       { id: 'look', title: 'The look', kind: 'scene' },
       { id: 'prompt', title: 'Prompt or script', kind: 'scene' },
@@ -222,6 +240,9 @@ describe('reading an unlocked recipe', () => {
     expect(shouldShowRecipeItemTitle({ title: 'Prompt or script', itemCount: 1 }, { title: 'Hook prompt' })).toBe(true);
     expect(shouldShowRecipeItemTitle({ title: 'The look', itemCount: 1 }, { title: 'Prompt' })).toBe(true);
     expect(shouldShowRecipeItemTitle({ title: 'Prompt or script', itemCount: 2 }, { title: 'Prompt' })).toBe(true);
+    // A saved setup alone in its card is the card on both clients, whatever the note was titled.
+    expect(shouldShowRecipeItemTitle({ title: 'The look', itemCount: 1 }, { title: 'Settings', textContent: 'Saved generation setup\nModel: Kling' })).toBe(false);
+    expect(shouldShowRecipeItemTitle({ title: 'The look', itemCount: 1 }, { title: 'Settings', textContent: 'Warm light.' })).toBe(true);
   });
 
   // "Prompt or script · prompt · 1 item": the type repeated the title, and

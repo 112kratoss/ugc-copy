@@ -8,7 +8,6 @@ import { getSafeInternalReturnPath } from '@/lib/share';
  * so the two cannot drift (recipe reading review, 2026-10-29).
  */
 export {
-  GENERATION_SETUP_HEADER,
   describeRecipeCardPreview,
   describeRecipeFile,
   describeRecipeGroup,
@@ -18,9 +17,7 @@ export {
   recipeLinkLabel,
   recipeMediaKind,
   shouldShowRecipeItemTitle,
-  type GenerationSetup,
   type RecipeGroupKind,
-  type RecipeMediaKind,
   type RecipeReadingGroup,
 } from '../../../ugc-mobile/lib/recipe-reading/recipe-reading';
 

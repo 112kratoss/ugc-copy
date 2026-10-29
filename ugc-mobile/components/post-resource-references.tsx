@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-nati
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { MatureCover, MatureMediaCovered } from '@/components/mature-cover';
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
+import { isRecipeMediaItem } from '@/lib/recipe-reading/recipe-reading';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { PostResourceItem } from '@/lib/types';
@@ -289,16 +290,9 @@ export function referenceMediaKind(item: Pick<PostResourceItem, 'type' | 'conten
   return null;
 }
 
+/** The pictures, clips and sounds among a recipe's items, by the rule the web reads by too. */
 export function getReferenceResourceItems(items: PostResourceItem[] | undefined) {
   return (items ?? [])
-    .filter((item) => (
-      item.type === 'reference_image'
-      || item.type === 'reference_video'
-      || item.type === 'reference_audio'
-      || (
-        item.type === 'source_file'
-        && Boolean(item.contentType?.match(/^(image|video|audio)\//))
-      )
-    ))
+    .filter((item) => isRecipeMediaItem(item))
     .sort((left, right) => left.sortOrder - right.sortOrder);
 }

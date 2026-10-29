@@ -11,6 +11,7 @@ import {
   type PostResourceRemixUse,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import { GENERATION_SETUP_HEADER } from '../../ugc-mobile/lib/recipe-reading/recipe-reading';
 import type { GenerationInputMediaItem, GenerationInputMediaType } from '@/lib/generation-input-media';
 import {
   isMotionGeneration,
@@ -463,7 +464,8 @@ export function buildGenerationPaywallNotes(source: GenerationPaywallPrefillSour
     return null;
   }
 
-  return ['Saved generation setup', ...details].join('\n');
+  // The header the recipe reader recognises a saved setup by (the shared reading rule).
+  return [GENERATION_SETUP_HEADER, ...details].join('\n');
 }
 
 export function buildGenerationPaywallPrefill(

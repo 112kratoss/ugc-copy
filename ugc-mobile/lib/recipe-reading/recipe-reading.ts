@@ -147,13 +147,41 @@ export function recipeMediaKind(item: Pick<RecipeReadingItem, 'type' | 'contentT
 }
 
 /**
+ * The picture, clip and sound formats a browser and the app both draw. A
+ * source file in another (a PSD, a TIFF, a HEIC) stays a file to open and
+ * download: as a tile it would only ever show "Couldn't load".
+ */
+const DRAWABLE_CONTENT_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/mp4',
+  'audio/aac',
+  'audio/x-m4a',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/ogg',
+  'audio/webm',
+  'audio/flac',
+]);
+
+/**
  * A picture, clip or sound the reader looks at rather than reads: every
- * reference, and a source file that is one. These are drawn together as one
- * gallery, after a group's text.
+ * reference, and a source file in a format that can be drawn. These are drawn
+ * together as one gallery, after a group's text.
  */
 export function isRecipeMediaItem(item: Pick<RecipeReadingItem, 'type' | 'contentType'>): boolean {
   if (item.type === 'reference_image' || item.type === 'reference_video' || item.type === 'reference_audio') return true;
-  return item.type === 'source_file' && recipeMediaKind(item) !== null;
+  const contentType = item.contentType?.split(';')[0]?.trim().toLowerCase() ?? '';
+  return item.type === 'source_file' && DRAWABLE_CONTENT_TYPES.has(contentType);
 }
 
 /** Which group an item joins when the creator put it in no card of theirs. */
@@ -402,13 +430,16 @@ export function describeRecipeCardPreview(card: { title: string; resourceType: R
 /**
  * Whether an item's own title is printed in its group. In a group of one, an
  * item named like its group, or named by a form label in a group named by
- * one, is the group: "Prompt" in "Prompt or script".
+ * one, is the group: "Prompt" in "Prompt or script". So is a saved setup
+ * alone in its group, whatever the note was titled: its keys and values say
+ * what it is.
  */
 export function shouldShowRecipeItemTitle(
   group: { title: string; itemCount: number },
-  item: Pick<RecipeReadingItem, 'title'>,
+  item: Pick<RecipeReadingItem, 'title'> & Partial<Pick<RecipeReadingItem, 'textContent'>>,
 ): boolean {
   if (group.itemCount !== 1) return true;
+  if (parseGenerationSetupNotes(item.textContent)) return false;
   const title = normalizeTitle(item.title);
   if (!title) return false;
   if (title === normalizeTitle(group.title)) return false;
