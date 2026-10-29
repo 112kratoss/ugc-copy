@@ -227,7 +227,9 @@ describe('startImageGenerationForRoute', () => {
       adminSupabase: adminClient.client,
     });
 
-    expect(startImageGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+    // The last call: the mock keeps every test's calls, and another test's start
+    // without a source would match too.
+    expect(startImageGenerationMock).toHaveBeenLastCalledWith(expect.objectContaining({
       userId: 'user-1',
       sourceGenerationId: null,
     }));

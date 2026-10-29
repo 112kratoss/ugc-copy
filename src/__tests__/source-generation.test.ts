@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  exposedPostOf,
+  remixSourceTables,
+  type RemixSourceRowOptions,
+} from '@/__tests__/fixtures/remix-source-rows';
 import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
 import {
   resolveSourceGenerationId,
@@ -28,85 +33,74 @@ const PUBLIC_SOURCE = {
   template_run_step_id: null,
 };
 
-/** Its post as the feed shows it: public, live and visible. */
-const EXPOSED_POST = {
-  id: 'post-1',
-  user_id: 'other-user',
-  generation_id: SOURCE_ID,
-  category: 'image',
-  post_format: 'media',
-  source_kind: 'magicbooklet',
-  visibility: 'public',
-  archived_at: null,
-  review_status: 'visible',
-};
+/** Its post as the feed shows it, the start tests' own row: public, live and visible. */
+const EXPOSED_POST = exposedPostOf(PUBLIC_SOURCE);
 
 /** A recipe published on the post: its Remix is for those who unlocked it. */
 const PUBLISHED_RECIPE = {
   id: 'bundle-1',
-  post_id: 'post-1',
+  post_id: EXPOSED_POST.id,
   status: 'published',
   allow_remix: true,
 };
 
-/** A table whose every read fails, as a timed-out query does. */
-function failingTable(error: { message: string }) {
+/**
+ * Fails a read at its end, as a timed-out query does. The filters before it
+ * stay the stored rows' own, so a query that changes shape is still checked by
+ * them, not stopped early by a stand-in that lacks the new filter.
+ */
+function failRead<Query extends object>(query: Query, error: { message: string }) {
   const failed = { data: null, error };
-  const query = {
-    select: () => query,
-    eq: () => query,
-    in: () => query,
+  return Object.assign(query, {
+    single: async () => failed,
     maybeSingle: async () => failed,
     then: (resolve: (value: typeof failed) => unknown, reject?: (reason: unknown) => unknown) => (
       Promise.resolve(failed).then(resolve, reject)
     ),
-  };
-  return query;
+  });
 }
 
 /**
  * Reads answer as the database would (`createStoredRows`): filters applied,
  * only the selected columns answered, an unknown table or column refused, and
- * any `or()` filter refused, so no caller value can reach one unnoticed.
+ * any `or()` filter refused, so no caller value can reach one unnoticed. The
+ * tables Remix reads are the start tests' fixture (`remixSourceTables`).
  */
 function createSupabaseMock({
   generation = PUBLIC_SOURCE,
-  posts = [EXPOSED_POST],
-  recipes = [],
-  purchases = [],
-  blocks = [],
   linkedProfiles = [],
   failingReads = {},
-}: {
+  ...remixRows
+}: Omit<RemixSourceRowOptions, 'profiles'> & {
   generation?: Row | null;
-  posts?: Row[];
-  recipes?: Row[];
-  purchases?: Row[];
-  /** `user_blocks` rows: who blocked whom. */
-  blocks?: Array<{ blocker_user_id: string; blocked_user_id: string }>;
   /** Guest profiles and the account each was linked into (`merged_into_user_id`). */
   linkedProfiles?: Array<{ id: string; mergedIntoUserId: string }>;
   failingReads?: Partial<Record<string, { message: string }>>;
 } = {}) {
   const stored = createStoredRows({
     generations: generation ? [generation] : [],
-    profiles: linkedProfiles.map(({ id, mergedIntoUserId }) => ({ id, merged_into_user_id: mergedIntoUserId })),
-    posts,
-    post_resource_bundles: recipes,
-    post_resource_bundle_purchases: purchases,
-    user_blocks: blocks,
+    ...remixSourceTables(PUBLIC_SOURCE, {
+      ...remixRows,
+      profiles: linkedProfiles.map(({ id, mergedIntoUserId }) => ({ id, merged_into_user_id: mergedIntoUserId })),
+    }),
   });
-  const from = vi.fn((table: string) => {
+  const from = (table: string) => {
+    const query = stored.client.from(table);
     const error = failingReads[table];
-    return error ? failingTable(error) : stored.client.from(table);
-  });
+    return error ? { ...query, select: (columns: string) => failRead(query.select(columns), error) } : query;
+  };
 
   return {
     supabase: { from } as unknown as SupabaseClient,
-    tables: () => from.mock.calls.map(([table]) => table),
+    /** The tables read, in order. */
+    tables: () => stored.reads.map(({ table }) => table),
     reads: stored.reads,
   };
 }
+
+beforeEach(() => {
+  logBackendErrorMock.mockClear();
+});
 
 describe('source generation validation', () => {
   it('resolves public remix sources without interpolating the user id into a filter', async () => {
@@ -259,35 +253,39 @@ describe('source generation validation', () => {
   });
 });
 
-// The id a start keeps is what credits the post with a remix and tells its
-// creator (`record_completed_post_remix`, `notifyCompletedRemix`). Someone
-// else's public source is kept only when Remix would hand the caller its recipe
-// now (`resolveRemixAccess`). Otherwise the run goes ahead as an ordinary one,
-// as a template result's does: the create page sends its URL's `remix` id even
-// after Remix refused the caller.
+// The id a start keeps credits the post with a remix and tells its creator
+// (`record_completed_post_remix`, `notifyCompletedRemix`), so someone else's
+// public source is kept only when Remix would hand the caller its recipe now.
+// Otherwise the run goes ahead as an ordinary one: the create page sends its
+// URL's `remix` id even after Remix refused the caller.
 describe('remix credit', () => {
+  /**
+   * No remix is recorded, and by the rule: a read that fails on the way answers
+   * null too, but logs, so a refusal that logged refused for the wrong reason.
+   */
+  async function expectNoRemixByRule(supabase: SupabaseClient) {
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBeNull();
+    expect(logBackendErrorMock).not.toHaveBeenCalled();
+  }
+
   it.each([
     ['the creator blocked the caller', { blocker_user_id: 'other-user', blocked_user_id: 'user-1' }],
     ['the caller blocked the creator', { blocker_user_id: 'user-1', blocked_user_id: 'other-user' }],
   ])('records no remix when %s, and starts the run as an ordinary one', async (_label, block) => {
-    const { supabase } = createSupabaseMock({ blocks: [block] });
-
-    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBeNull();
+    await expectNoRemixByRule(createSupabaseMock({ blocks: [block] }).supabase);
   });
 
   it('records no remix for a caller who has not unlocked the post’s published recipe', async () => {
-    const { supabase } = createSupabaseMock({
+    await expectNoRemixByRule(createSupabaseMock({
       recipes: [PUBLISHED_RECIPE],
-      purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'someone-else' }],
-    });
-
-    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBeNull();
+      purchases: [{ id: 'purchase-1', bundle_id: PUBLISHED_RECIPE.id, buyer_user_id: 'someone-else' }],
+    }).supabase);
   });
 
   it('credits a caller who unlocked the post’s recipe', async () => {
     const { supabase } = createSupabaseMock({
       recipes: [PUBLISHED_RECIPE],
-      purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'user-1' }],
+      purchases: [{ id: 'purchase-1', bundle_id: PUBLISHED_RECIPE.id, buyer_user_id: 'user-1' }],
     });
 
     await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBe(SOURCE_ID);
@@ -296,34 +294,32 @@ describe('remix credit', () => {
   // A post held for review keeps its creation public (`generations.is_public`),
   // but the feed and Remix withhold it.
   it('records no remix of a post held for review', async () => {
-    const { supabase } = createSupabaseMock({ posts: [{ ...EXPOSED_POST, review_status: 'flagged' }] });
-
-    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBeNull();
+    await expectNoRemixByRule(createSupabaseMock({ posts: [{ ...EXPOSED_POST, review_status: 'flagged' }] }).supabase);
   });
 
   it('credits the caller’s own public source without reading its post', async () => {
-    const { supabase, tables } = createSupabaseMock({
-      generation: { ...PUBLIC_SOURCE, user_id: 'user-1' },
-      posts: [{ ...EXPOSED_POST, user_id: 'user-1' }],
-    });
+    const { supabase, tables } = createSupabaseMock({ generation: { ...PUBLIC_SOURCE, user_id: 'user-1' } });
 
     await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBe(SOURCE_ID);
     expect(tables()).toEqual(['generations']);
   });
 
   // The bookkeeping must not cost the caller their run: a check that cannot be
-  // made credits no remix, is logged, and the run starts.
+  // made credits no remix, is logged, and the run starts. The log must carry the
+  // failure each case injects, so another error on the way cannot stand in for it.
   it.each([
-    ['posts', {}],
-    ['user_blocks', {}],
-    ['post_resource_bundles', {}],
-    ['post_resource_bundle_purchases', { recipes: [PUBLISHED_RECIPE] }],
-  ])('records no remix, and starts the run, when its %s read fails', async (table, rows) => {
-    logBackendErrorMock.mockClear();
-    const { supabase, tables } = createSupabaseMock({ ...rows, failingReads: { [table]: { message: 'timeout' } } });
+    ['posts', {}, 'failed_to_check_remix_access_for_source_generation'],
+    // Remix counts a block check it cannot make as a block, and logs that itself.
+    ['user_blocks', {}, 'failed_to_verify_block_state_before_remix_access'],
+    ['post_resource_bundles', {}, 'failed_to_check_remix_access_for_source_generation'],
+    ['post_resource_bundle_purchases', { recipes: [PUBLISHED_RECIPE] }, 'failed_to_check_remix_access_for_source_generation'],
+  ])('records no remix, and starts the run, when its %s read fails', async (table, rows, event) => {
+    const timeout = { message: 'timeout' };
+    const { supabase, tables } = createSupabaseMock({ ...rows, failingReads: { [table]: timeout } });
 
     await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBeNull();
     expect(tables()).toContain(table);
-    expect(logBackendErrorMock).toHaveBeenCalled();
+    expect(logBackendErrorMock).toHaveBeenCalledTimes(1);
+    expect(logBackendErrorMock).toHaveBeenCalledWith(event, { error: timeout });
   });
 });
