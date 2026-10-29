@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { catalogVideoEntryFields } from '@/lib/catalog-video-entry';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
-import { creatorOpeningFromCatalog, openingCost, type CreatorOpening } from '@/lib/creator-opening';
+import { creatorOpeningFromCatalog, drawableLink, openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-opening';
 import { loadCreatorOpening } from '@/lib/creator-page-server';
 import type { VideoRunMedia } from '@/lib/creator-run-inputs';
 import {
@@ -20,7 +20,7 @@ import {
 const logBackendErrorMock = vi.hoisted(() => vi.fn());
 const cacheCalls = vi.hoisted(() => [] as unknown[][]);
 // What the catalog store does in place of answering: a failed read, or a price it refuses or fails to give.
-const store = vi.hoisted(() => ({ readFails: false, quote: null as 'refused' | 'failed' | null }));
+const store = vi.hoisted(() => ({ readFails: false, quote: null as 'refused' | 'failed' | null, reads: 0 }));
 
 vi.mock('next/cache', () => ({
   unstable_cache: (fn: (...args: unknown[]) => unknown) => (...args: unknown[]) => {
@@ -35,18 +35,23 @@ vi.mock('@/components/RouteAuthBoundary', () => ({ requestHasAuthHint: async () 
 
 vi.mock('@/lib/generation-model-catalog-store', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/generation-model-catalog-store')>();
-  const { CatalogError: RefusalError } = await import('@/lib/generation-model-catalog');
   return {
     ...actual,
-    loadPublishedGenerationModelCatalog: (...args: Parameters<typeof actual.loadPublishedGenerationModelCatalog>) => (
-      store.readFails ? Promise.reject(new Error('catalog read failed')) : actual.loadPublishedGenerationModelCatalog(...args)
-    ),
-    quotePublishedGenerationModels: (...args: Parameters<typeof actual.quotePublishedGenerationModels>) => {
-      if (store.quote === 'refused') {
-        return Promise.resolve([{ status: 'rejected', reason: new RefusalError('Pick a start frame.', 'INVALID_MODEL_SETTINGS', 422) }]);
-      }
-      if (store.quote === 'failed') return Promise.resolve([{ status: 'rejected', reason: new Error('pricing broke') }]);
-      return actual.quotePublishedGenerationModels(...args);
+    loadPublishedGenerationModelCatalog: (...args: Parameters<typeof actual.loadPublishedGenerationModelCatalog>) => {
+      store.reads += 1;
+      return store.readFails ? Promise.reject(new Error('catalog read failed')) : actual.loadPublishedGenerationModelCatalog(...args);
+    },
+  };
+});
+
+vi.mock('@/lib/generation-model-catalog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/generation-model-catalog')>();
+  return {
+    ...actual,
+    quoteGenerationModel: (...args: Parameters<typeof actual.quoteGenerationModel>) => {
+      if (store.quote === 'refused') throw new actual.CatalogError('Pick a start frame.', 'INVALID_MODEL_SETTINGS', 422);
+      if (store.quote === 'failed') throw new Error('pricing broke');
+      return actual.quoteGenerationModel(...args);
     },
   };
 });
@@ -119,6 +124,7 @@ describe('openingCost', () => {
     run: opened,
     quoteStatus: 'idle' as const,
     confirmedRevision: null,
+    catalogFailed: false,
     ...overrides,
   });
 
@@ -147,6 +153,43 @@ describe('openingCost', () => {
   it('stops once the network confirms another revision than the one the server priced', () => {
     expect(openingCost(opening, page({ confirmedRevision: 'rev-2' }))).toBeNull();
     expect(openingCost(opening, page({ confirmedRevision: 'rev-1' }))).toBe(19);
+  });
+
+  it('stops when the page cannot price the run at all: its catalog or the model will not load', () => {
+    expect(openingCost(opening, page({ catalogFailed: true }))).toBeNull();
+  });
+});
+
+describe('openingSetting', () => {
+  const opening: CreatorOpening = { revision: 'rev-1', modelId: 'seedance-2-mini', settings: MINI_SETTINGS, costCredits: 19 };
+
+  it('reads a published setting of the type the page holds, and the page\'s own otherwise', () => {
+    expect(openingSetting<string>(opening, 'resolution', '720p')).toBe('480p');
+    expect(openingSetting<boolean>(opening, 'sound', true)).toBe(false);
+    expect(openingSetting<string>(opening, 'mode', 'std')).toBe('std');
+    expect(openingSetting<string>(opening, 'duration', '10')).toBe('10');
+    expect(openingSetting<string>(null, 'resolution', '720p')).toBe('720p');
+  });
+});
+
+describe('drawableLink', () => {
+  it('keeps a link\'s model, ratio and length as the page\'s tables list them', () => {
+    expect(drawableLink('video', {})).toEqual({ model: '', aspectRatio: '', duration: '' });
+    expect(drawableLink('video', { model: 'kling-3.0-video', aspectRatio: '9:16', duration: '7' }))
+      .toEqual({ model: 'kling-3.0-video', aspectRatio: '9:16', duration: '7' });
+    expect(drawableLink('image', { model: 'nano-banana-2', aspectRatio: '4:5' }))
+      .toEqual({ model: 'nano-banana-2', aspectRatio: '4:5', duration: '' });
+    // Without a model, any of the tool's models may list it.
+    expect(drawableLink('video', { aspectRatio: '21:9' })).toEqual({ model: '', aspectRatio: '21:9', duration: '' });
+  });
+
+  it('drops a ratio or a length no model it can mean lists, and has nothing for a model the page cannot draw', () => {
+    expect(drawableLink('video', { model: 'kling-3.0-video', aspectRatio: 'cinema', duration: '99' }))
+      .toEqual({ model: 'kling-3.0-video', aspectRatio: '', duration: '' });
+    expect(drawableLink('video', { duration: '5.5' })).toEqual({ model: '', aspectRatio: '', duration: '' });
+    expect(drawableLink('motion', { model: 'kling-2.6', aspectRatio: '16:9' })).toEqual({ model: 'kling-2.6', aspectRatio: '', duration: '' });
+    expect(drawableLink('video', { model: 'video-from-a-later-release' })).toBeNull();
+    expect(drawableLink('video', { model: 'nano-banana-2' })).toBeNull();
   });
 });
 
@@ -178,7 +221,12 @@ describe('loadCreatorOpening', () => {
       videoRunOnModel({ modelId: mini.id, catalogRevision: catalog.revision, settings: form, held, models: withCatalog }),
     ]) {
       expect(run?.quoteInput.settings).toMatchObject(MINI_SETTINGS);
-      expect(openingCost(opening, { run: { modelId: mini.id, settings: run!.quoteInput.settings ?? {}, inputs: run!.inputs }, quoteStatus: 'pending', confirmedRevision: catalog.revision })).toBe(19);
+      expect(openingCost(opening, {
+        run: { modelId: mini.id, settings: run!.quoteInput.settings ?? {}, inputs: run!.inputs },
+        quoteStatus: 'pending',
+        confirmedRevision: catalog.revision,
+        catalogFailed: false,
+      })).toBe(19);
       expect(quoteGenerationModel({ ...run!.quoteInput, catalogRevision: undefined }).costCredits).toBe(19);
     }
   });
@@ -188,13 +236,19 @@ describe('loadCreatorOpening', () => {
     expect(await loadCreatorOpening('motion')).toMatchObject({ modelId: 'kling-2.6', costCredits: null });
   });
 
-  it('reads a plain visit\'s opening through the data cache and a link\'s fresh', async () => {
+  it('reads every opening through the data cache, under the link as the page\'s tables read it', async () => {
     expect(await loadCreatorOpening('video', { model: 'kling-3.0-video', aspectRatio: '9:16' }))
       .toMatchObject({ modelId: 'kling-3.0-video', settings: { aspectRatio: '9:16' }, costCredits: 70 });
-    expect(cacheCalls).toEqual([]);
     await loadCreatorOpening('video', { model: null, aspectRatio: undefined });
-    expect(cacheCalls).toEqual([['video']]);
+    // A made-up ratio is no key of its own.
+    await loadCreatorOpening('video', { aspectRatio: 'cinema' });
+    expect(cacheCalls).toEqual([['video', 'kling-3.0-video', '9:16', ''], ['video', '', '', ''], ['video', '', '', '']]);
+    // A model the page cannot draw reads nothing at all.
+    const reads = store.reads;
+    expect(await loadCreatorOpening('video', { model: 'video-from-a-later-release' })).toBeNull();
+    expect(store.reads).toBe(reads);
   });
+
 
   it('answers no opening when the catalog cannot be read, and the page draws its own stand-in', async () => {
     store.readFails = true;

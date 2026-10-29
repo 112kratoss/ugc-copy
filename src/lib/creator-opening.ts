@@ -31,6 +31,12 @@ export type CreatorOpening = {
   costCredits: number | null;
 };
 
+/** An opening's published setting as the page holds it, or `fallback` when it publishes none of that type. */
+export function openingSetting<T extends CatalogPrimitive>(opening: CreatorOpening | null, key: string, fallback: T): T {
+  const value = opening?.settings[key];
+  return typeof value === typeof fallback ? value as T : fallback;
+}
+
 /** What a creator's address asks of the run it opens on. */
 export type CreatorOpeningLink = {
   model?: string | null;
@@ -45,6 +51,37 @@ const DRAWABLE: Record<GenerationModelKind, Readonly<Record<string, unknown>>> =
   video: VIDEO_MODELS,
   motion: MOTION_MODELS,
 };
+
+type DrawableEntry = {
+  aspectRatios?: readonly string[];
+  durations?: readonly number[];
+  singleShotDurationRange?: { min: number; max: number };
+};
+
+/**
+ * A link as far as the page's own tables say it can change the opening: what an opening is read
+ * and cached under. Null for a model the page cannot draw, which has no opening. A ratio or a
+ * length that no model the link can mean lists is dropped, so a made-up value reads nothing new.
+ */
+export function drawableLink(
+  kind: GenerationModelKind,
+  link: CreatorOpeningLink,
+): { model: string; aspectRatio: string; duration: string } | null {
+  const table = DRAWABLE[kind] as Readonly<Record<string, DrawableEntry>>;
+  const model = link.model ?? '';
+  if (model && !Object.hasOwn(table, model)) return null;
+  const entries = model ? [table[model]] : Object.values(table);
+  const ratio = link.aspectRatio ?? '';
+  const length = Number(link.duration);
+  return {
+    model,
+    aspectRatio: entries.some((entry) => entry.aspectRatios?.includes(ratio)) ? ratio : '',
+    duration: link.duration && Number.isInteger(length) && entries.some((entry) => (
+      entry.durations?.includes(length)
+      || (entry.singleShotDurationRange && length >= entry.singleShotDurationRange.min && length <= entry.singleShotDurationRange.max)
+    )) ? String(length) : '',
+  };
+}
 
 /** A link's value as the control takes it, or undefined when the model does not offer it. */
 function offeredValue(control: CatalogControl | undefined, raw: string | null | undefined): CatalogPrimitive | undefined {
@@ -87,9 +124,9 @@ export function creatorOpeningFromCatalog(
  * The opening's price, shown under the bar until the page has priced its own run: while the run
  * is still the one the server priced (its model, nothing attached, and every setting the server
  * priced at that value; one the page has yet to set is read as its default, as the server reads
- * it), while the page's own quote has neither answered nor failed, and while the page's catalog
- * is not one the network confirmed at another revision. Generate is never priced by it: a start
- * waits for the page's own quote of the run it sends.
+ * it), while the page's own quote has neither answered nor failed, while its catalog has not
+ * failed, and while that catalog is not one the network confirmed at another revision. Generate
+ * is never priced by it: a start waits for the page's own quote of the run it sends.
  */
 export function openingCost(
   opening: CreatorOpening | null,
@@ -98,9 +135,11 @@ export function openingCost(
     quoteStatus: 'idle' | 'pending' | 'ready' | 'error';
     /** The page's catalog revision once the network has confirmed it, else null. */
     confirmedRevision: string | null;
+    /** The page's catalog or the run's model will not load: the page cannot price this run. */
+    catalogFailed: boolean;
   },
 ): number | null {
-  if (!opening || opening.costCredits === null) return null;
+  if (!opening || opening.costCredits === null || page.catalogFailed) return null;
   if (page.quoteStatus === 'ready' || page.quoteStatus === 'error') return null;
   if (page.confirmedRevision !== null && page.confirmedRevision !== opening.revision) return null;
   const { run } = page;

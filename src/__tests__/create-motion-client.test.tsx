@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
+import type { CreatorOpening } from '@/lib/creator-opening';
 import { GenerationStatusRequestError } from '@/lib/generation-status-client';
 import { loadPendingWebStart, savePendingWebStart, type PendingWebStart } from '@/lib/generation-model-client';
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
@@ -16,6 +17,8 @@ const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
   error: null as Error | null,
   summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
+  /** The network has not yet confirmed the revision: the catalog is the browser's stored copy. */
+  checkingRevision: false,
 }));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
 // One stable catalog: a fresh object per render re-runs every effect keyed on it.
@@ -187,6 +190,7 @@ vi.mock('@/lib/generation-model-client', async () => {
       catalog: motionCatalog,
       error: modelCatalogState.error,
       isLoading: false,
+      isCheckingRevision: modelCatalogState.checkingRevision,
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
     }),
@@ -321,6 +325,7 @@ const originalLocation = window.location;
 beforeEach(() => {
   modelCatalogState.missingIds = [];
   modelCatalogState.error = null;
+  modelCatalogState.checkingRevision = false;
   modelCatalogState.summaries = [];
   quoteStandIn.reset(20);
   priceListStandIn.reset();
@@ -1386,5 +1391,35 @@ describe('CreateMotionClient on the column', () => {
       expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
       expect(scrollIntoView).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * The server's opening (`loadCreatorOpening`), drawn from the first paint (2026-10-29): the model the page
+ * opens on and its published settings, in place of Kling 3.0's, until the first pick.
+ */
+describe('CreateMotionClient opening', () => {
+  const opening: CreatorOpening = {
+    revision: 'test-catalog-rev',
+    modelId: 'kling-2.6',
+    settings: { resolution: '1080p', characterOrientation: 'image', duration: 10 },
+    costCredits: null,
+  };
+
+  it('draws the opening\'s model and settings, and waits for the revision the network confirms before its first pick', async () => {
+    // The browser's stored catalog names Kling 3.0 its default (this file's catalog): until the
+    // network confirms it, the page keeps the run it was drawn on.
+    modelCatalogState.checkingRevision = true;
+    const view = render(<CreateMotionClient prefill={{}} opening={opening} />);
+    const modelChip = () => view.container.querySelector('button[aria-haspopup="listbox"]');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(modelChip()).toHaveTextContent('Kling 2.6');
+    expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 1080P · Add motion');
+
+    modelCatalogState.checkingRevision = false;
+    view.rerender(<CreateMotionClient prefill={{}} opening={opening} />);
+    await waitFor(() => expect(modelChip()).toHaveTextContent('Kling 3.0'));
   });
 });

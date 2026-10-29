@@ -340,7 +340,7 @@ vi.mock('@/lib/generation-model-client', async () => {
       };
       if (modelCatalogState.withoutCatalog) {
         return {
-          summaries: [], missingIds: [], isLoadingModels: false, detailsReady: false, catalog: null, error: null,
+          summaries: [], missingIds: [], isLoadingModels: false, detailsReady: false, catalog: null, error: modelCatalogState.error,
           isLoading: true, isCheckingRevision: false, revision: null, refetch: generationCatalogRefetchMock,
         };
       }
@@ -3099,9 +3099,55 @@ describe('CreateVideoClient Kling video elements', () => {
         modelCatalogState.withoutCatalog = false;
         modelCatalogState.videoDefault = 'seedance-2-mini';
         modelCatalogState.extraModels = [miniWithDefaults({})];
-        render(<CreateVideoClient prefill={{}} opening={{ ...openingFor(), revision: 'an-earlier-release' }} />);
+        const view2 = render(<CreateVideoClient prefill={{}} opening={{ ...openingFor(), revision: 'an-earlier-release' }} />);
         await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
         expect(barNote()).not.toHaveTextContent('Leaves');
+        view2.unmount();
+
+        // A catalog that will not load: the page cannot price the run, so no price stands for it.
+        modelCatalogState.withoutCatalog = true;
+        modelCatalogState.error = new Error('Could not load model settings.');
+        render(<CreateVideoClient prefill={{}} opening={openingFor()} />);
+        expect(barNote()).not.toHaveTextContent('Leaves');
+      });
+
+      it('opens a draft saved before the first pick on the default\'s published settings, keeping what the creator changed', async () => {
+        // What the page saved for a visit that ended before its first pick: the form as drawn, and no
+        // model. Until 2026-10-29 the page drew the stand-in, Kling 3.0's, and kept no record of it.
+        const savedBeforeAnyPick = {
+          prompt: '', modelId: '', mode: 'std', aspectRatio: '16:9', sound: false, resolution: '720p',
+          fixedLens: false, isMultiShot: false, shots: [{ id: '1', prompt: '', duration: 5 }], duration: 5,
+        };
+        for (const [change, saved, settings] of [
+          ['as drawn', {}, { aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false }],
+          ['the creator\'s ratio', { aspectRatio: '9:16' }, { aspectRatio: '9:16', resolution: '480p', duration: 5 }],
+          // Saved by this page on a link's Kling 3.0 at 9:16, then a plain visit.
+          ['drawn for a link', {
+            aspectRatio: '9:16',
+            drawn: { mode: 'std', aspectRatio: '9:16', sound: false, resolution: '720p', fixedLens: false, isMultiShot: false, duration: 5 },
+          }, { aspectRatio: '16:9', resolution: '480p', duration: 5 }],
+        ] as const) {
+          quoteStandIn.reset(12);
+          loadCreatorDraftMock.mockResolvedValue({ ...savedBeforeAnyPick, ...saved });
+          modelCatalogState.videoDefault = 'seedance-2-mini';
+          modelCatalogState.extraModels = [miniWithDefaults({})];
+          const view = render(<CreateVideoClient prefill={{}} opening={openingFor()} />);
+          await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+          await settle();
+
+          expect(quoteStandIn.lastRequest()!.settings, change).toMatchObject(settings);
+          view.unmount();
+        }
+      });
+
+      it('saves what it drew with a draft that has no model yet', async () => {
+        modelCatalogState.checkingRevision = true;
+        render(<CreateVideoClient prefill={{}} opening={openingFor()} />);
+        await waitFor(() => expect(saveCreatorDraftMock).toHaveBeenCalled());
+        expect(saveCreatorDraftMock.mock.calls.at(-1)?.[2]).toMatchObject({
+          modelId: '',
+          drawn: { resolution: '480p', aspectRatio: '16:9', duration: 5, sound: false },
+        });
       });
 
       it('takes a later release\'s defaults over the opening\'s, for every setting still as drawn', async () => {

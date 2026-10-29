@@ -7,15 +7,16 @@ import type { CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { requestHasAuthHint } from '@/components/RouteAuthBoundary';
 import { CREATOR_HANDOVER_PARAM, CREATOR_WELCOME_PARAM } from '@/lib/auth-onboarding';
 import { logBackendError } from '@/lib/backend-logger';
-import { creatorOpeningFromCatalog, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
+import { creatorOpeningFromCatalog, drawableLink, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { loadCreatorStartPosts } from '@/lib/creator-start-posts-server';
 import {
   CatalogError,
   GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
+  quoteGenerationModel,
   type GenerationModelKind,
 } from '@/lib/generation-model-catalog';
-import { loadPublishedGenerationModelCatalog, quotePublishedGenerationModels } from '@/lib/generation-model-catalog-store';
+import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
 import { REFERRAL_CLAIM_REASON_PATTERN, REFERRAL_CLAIM_STATUS_PARAM } from '@/lib/referral-claim-copy';
 import { getServerAuthState } from '@/lib/supabase-server';
 import { loadWelcomeCreditAmount } from '@/lib/welcome-credit-program-server';
@@ -88,46 +89,55 @@ export async function loadCreatorStartPostsForRequest(): Promise<CreatorStartPos
 }
 
 async function readCreatorOpening(kind: GenerationModelKind, link: CreatorOpeningLink): Promise<CreatorOpening | null> {
-  const { catalog } = await loadPublishedGenerationModelCatalog({
+  const snapshot = await loadPublishedGenerationModelCatalog({
     platform: 'web',
     schemaVersion: GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
   });
-  const opening = creatorOpeningFromCatalog(catalog, kind, link);
+  const opening = creatorOpeningFromCatalog(snapshot.catalog, kind, link);
   if (!opening) return null;
   // A motion run takes a clip and is priced by its length: it opens unpriced.
   if (kind === 'motion') return { ...opening, costCredits: null };
-  const [answer] = await quotePublishedGenerationModels([catalogRunQuoteInput({
-    kind,
-    modelId: opening.modelId,
-    catalogRevision: opening.revision,
-    settings: opening.settings,
-    inputs: [],
-  })], { platform: 'web' });
-  if (answer.status === 'rejected' && !(answer.reason instanceof CatalogError)) {
-    logBackendError('creator_opening_price_failed', { error: answer.reason, kind, modelId: opening.modelId });
+  try {
+    // Priced on the release just read, as a start prices its run (`unified-generation-start-service`).
+    const quote = quoteGenerationModel(catalogRunQuoteInput({
+      kind,
+      modelId: opening.modelId,
+      catalogRevision: opening.revision,
+      settings: opening.settings,
+      inputs: [],
+    }), { catalog: snapshot.catalog, operations: snapshot.operations });
+    return { ...opening, costCredits: quote.costCredits };
+  } catch (error) {
+    // A run the catalog will not price without inputs opens unpriced; anything else is a fault.
+    if (!(error instanceof CatalogError)) {
+      logBackendError('creator_opening_price_failed', { error, kind, modelId: opening.modelId });
+    }
+    return { ...opening, costCredits: null };
   }
-  return { ...opening, costCredits: answer.status === 'fulfilled' ? answer.value.costCredits : null };
 }
 
-// A plain visit's opening is everyone's, and changes only with a catalog release: one read a
-// minute serves the creators' anonymous traffic, as the catalog store's own cache does.
-const readCachedPlainOpening = unstable_cache(
-  (kind: GenerationModelKind) => readCreatorOpening(kind, {}),
-  ['creator-plain-opening-v1'],
+// An opening is everyone's, and changes only with a catalog release: one read a minute serves the
+// creators' traffic, as the catalog store's own cache does. It is cached under the link as the page's
+// tables read it (`drawableLink`), so a made-up value in an address adds no entry.
+const readCachedOpening = unstable_cache(
+  (kind: GenerationModelKind, model: string, aspectRatio: string, duration: string) => (
+    readCreatorOpening(kind, { model, aspectRatio, duration })
+  ),
+  ['creator-opening-v2'],
   { revalidate: 60 },
 );
 
 /**
  * The run a creator page opens on (`CreatorOpening`), from the published web catalog: a link's
  * model, or the default, at its published settings and price. Null when the catalog cannot be
- * read or a link names a model it does not offer; the page then draws its own stand-in until
- * its first pick. Never throws.
+ * read, or a link names a model the page cannot draw or the catalog does not offer; the page then
+ * draws its own stand-in until its first pick. Never throws.
  */
 export async function loadCreatorOpening(kind: GenerationModelKind, link: CreatorOpeningLink = {}): Promise<CreatorOpening | null> {
+  const drawable = drawableLink(kind, link);
+  if (!drawable) return null;
   try {
-    return link.model || link.aspectRatio || link.duration
-      ? await readCreatorOpening(kind, link)
-      : await readCachedPlainOpening(kind);
+    return await readCachedOpening(kind, drawable.model, drawable.aspectRatio, drawable.duration);
   } catch (error) {
     logBackendError('creator_opening_load_failed', { error, kind });
     return null;
