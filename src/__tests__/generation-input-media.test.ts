@@ -589,6 +589,39 @@ describe('reference clips and tracks sent as plain URLs', () => {
     expect(toRemixAssetDescriptor({ ...kept, metadata: {} })).not.toHaveProperty('durationSeconds');
   });
 
+  // Kling 3.0 takes clips under handles the prompt mentions them by, and taking
+  // a clip away leaves the others theirs. Rebuilt from the clips' names, the
+  // handles of a remix stopped matching its prompt.
+  it('hands a clip on with the handle the prompt mentions it by', async () => {
+    const { toRemixAssetDescriptor } = await import('@/lib/generation-input-media');
+    const clip: GenerationInputMediaItem = {
+      id: 'row-1',
+      generationId: 'gen-1',
+      mediaType: 'video',
+      role: 'reference_video',
+      label: 'Reference Video',
+      url: 'https://signed.example.com/kept.mp4',
+      storagePath: 'generation_inputs/user-1/gen-1/01-reference_video.mp4',
+      sourceGenerationId: null,
+      sortOrder: 1,
+      metadata: { id: 'clip-2', displayName: 'Reference Video', handle: '@reference_video_3' },
+    };
+
+    expect(toRemixAssetDescriptor(clip)).toEqual({
+      kind: 'video',
+      label: 'Reference Video',
+      storagePath: 'generation_inputs/user-1/gen-1/01-reference_video.mp4',
+      sourceGenerationId: null,
+      url: 'https://signed.example.com/kept.mp4',
+      handle: '@reference_video_3',
+    });
+    // Nothing a prompt could not mention passes for a handle.
+    expect(toRemixAssetDescriptor({ ...clip, metadata: { handle: 'reference video' } })).not.toHaveProperty('handle');
+    expect(toRemixAssetDescriptor({ ...clip, metadata: {} })).not.toHaveProperty('handle');
+    // A picture's handle goes with its element or its subject.
+    expect(toRemixAssetDescriptor({ ...clip, mediaType: 'image', metadata: { handle: '@lead' } })).not.toHaveProperty('handle');
+  });
+
   it('reads the staged file from the reference itself when the caller described nothing', async () => {
     const { collectReferenceMediaCandidates } = await import('@/lib/generation-input-media');
 
@@ -926,8 +959,9 @@ describe('the pictures of a Kling O3 named subject', () => {
       klingSubjects: [{ handle: '@lead', displayName: 'Hero creator', images: [{ storagePath: 'uploads/user-1/hero-front.png' }] }],
     };
 
-    expect(sanitizeWorkflowSettingsForRemix(settings, false)).toEqual({ model: 'kling-o3', duration: 5 });
-    expect(sanitizeWorkflowSettingsForRemix(settings, true)).toEqual(settings);
+    expect(sanitizeWorkflowSettingsForRemix(settings, 'without-inputs')).toEqual({ model: 'kling-o3', duration: 5 });
+    expect(sanitizeWorkflowSettingsForRemix(settings, 'with-inputs')).toEqual({ model: 'kling-o3', duration: 5 });
+    expect(sanitizeWorkflowSettingsForRemix(settings, 'owner')).toEqual(settings);
   });
 
   it('puts the kept pictures back together as subjects, in the order the run used them', async () => {
@@ -982,17 +1016,104 @@ describe('the settings a remix is given', () => {
     const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
     const restored = { model: 'nano-banana-2', aspectRatio: '3:4', settings: { aspectRatio: '3:4' } };
 
-    expect(sanitizeWorkflowSettingsForRemix(storedSettings(), false)).toEqual(restored);
-    expect(sanitizeWorkflowSettingsForRemix(storedSettings(), true)).toEqual({ ...restored, inputs: storedSettings().inputs });
+    expect(sanitizeWorkflowSettingsForRemix(storedSettings(), 'without-inputs')).toEqual(restored);
+    expect(sanitizeWorkflowSettingsForRemix(storedSettings(), 'with-inputs')).toEqual(restored);
+    expect(sanitizeWorkflowSettingsForRemix(storedSettings(), 'owner')).toEqual({ ...restored, inputs: storedSettings().inputs });
+  });
+
+  // A Seedance 2 run keeps what it prepared from each reference, in the order
+  // of its references, with the link each was prepared from: the creator's
+  // upload. The prepared asset is what a run sends for a real person, and a
+  // remixer cannot prepare one from the creator's copy (owner, 2026-10-29).
+  const seedanceSettings = () => ({
+    model: 'seedance-2',
+    seedanceAssets: {
+      images: [
+        {
+          assetId: 'asset-face',
+          assetType: 'Image',
+          status: 'active',
+          sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/1730000000000-passport-scan.jpg?token=read',
+          error: null,
+          lastCheckedAt: '2026-10-29T10:00:00.000Z',
+        },
+        'not an asset',
+      ],
+      videos: [{
+        assetId: null,
+        assetType: 'Video',
+        status: 'failed',
+        sourceUrl: 'uploads/user-1/1730000000001-holiday.mp4',
+        error: 'Could not read uploads/user-1/1730000000001-holiday.mp4',
+        lastCheckedAt: null,
+      }],
+    },
+  });
+
+  it('hands a remix given the inputs what was prepared from them, without the links it was prepared from', async () => {
+    const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
+
+    const remixed = sanitizeWorkflowSettingsForRemix(seedanceSettings(), 'with-inputs');
+
+    expect(remixed).toEqual({
+      model: 'seedance-2',
+      seedanceAssets: {
+        images: [
+          { assetId: 'asset-face', assetType: 'Image', status: 'active', sourceUrl: null, error: null, lastCheckedAt: null },
+          // Each list keeps its length: an entry pairs with its reference by place.
+          null,
+        ],
+        videos: [{ assetId: null, assetType: 'Video', status: 'failed', sourceUrl: null, error: null, lastCheckedAt: null }],
+        audios: [],
+      },
+    });
+    expect(JSON.stringify(remixed)).not.toMatch(/uploads\/user-1|passport-scan|holiday/);
+    // An asset id runs the creator's file: it goes only where the inputs go.
+    expect(sanitizeWorkflowSettingsForRemix(seedanceSettings(), 'without-inputs')).toEqual({ model: 'seedance-2' });
+    expect(sanitizeWorkflowSettingsForRemix(seedanceSettings(), 'owner')).toEqual(seedanceSettings());
   });
 
   it('leaves the stored settings as they were', async () => {
     const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
-    const stored = storedSettings();
+    const stored = { ...storedSettings(), ...seedanceSettings() };
 
-    sanitizeWorkflowSettingsForRemix(stored, false);
-    sanitizeWorkflowSettingsForRemix(stored, true);
+    for (const reader of ['without-inputs', 'with-inputs', 'owner'] as const) {
+      sanitizeWorkflowSettingsForRemix(stored, reader);
+    }
 
-    expect(stored).toEqual(storedSettings());
+    expect(stored).toEqual({ ...storedSettings(), ...seedanceSettings() });
+  });
+});
+
+// A read of what a run kept can fail (a timeout, a busy database). Read as
+// "nothing kept", it sent a remix to the uploads the run's settings name.
+describe('a failed read of the kept inputs', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('answers as if nothing was kept, or rethrows when asked to', async () => {
+    const { loadGenerationInputMediaMap } = await import('@/lib/generation-input-media');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const failure = { message: 'canceling statement due to statement timeout' };
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          in: vi.fn(() => ({
+            order: vi.fn(async () => ({ data: null, error: failure })),
+          })),
+        })),
+      })),
+      storage: { from: vi.fn() },
+    };
+    const read = (throwOnError?: boolean) => loadGenerationInputMediaMap({
+      supabase: supabase as never,
+      generationIds: ['gen-1'],
+      urlMode: 'signed',
+      ...(throwOnError === undefined ? {} : { throwOnError }),
+    });
+
+    await expect(read()).resolves.toEqual(new Map());
+    await expect(read(true)).rejects.toBe(failure);
   });
 });

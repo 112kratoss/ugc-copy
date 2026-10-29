@@ -156,13 +156,17 @@ describe('/api/seedance-assets route', () => {
       })
     );
     expect(timeoutSpy).toHaveBeenCalledWith(30_000);
-    expect(await response.json()).toMatchObject({
+    // Kie's answer names the upload the asset was made from; a read returns
+    // the state alone, and both creators keep the link they already hold.
+    const body = await response.json();
+    expect(body).toMatchObject({
       success: true,
       assetId: 'asset-456',
       assetType: 'Audio',
       status: 'active',
-      sourceUrl: 'https://signed.example.com/uploads/user-1/ref.wav',
+      sourceUrl: null,
     });
+    expect(JSON.stringify(body)).not.toContain('uploads/user-1');
   });
 
   it('rate limits Seedance asset creation before resolving media or calling the provider', async () => {

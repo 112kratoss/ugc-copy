@@ -994,6 +994,11 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
   generationId: string;
   urlMode: 'signed' | 'none';
   entitled?: boolean;
+  /**
+   * Rethrow a failed read of the kept inputs. Taken for "nothing kept", it
+   * hands over the uploads the run's settings name, file names and all.
+   */
+  throwOnError?: boolean;
 }): Promise<{ generation: GenerationRecipeRow; inputMedia: GenerationInputMediaItem[] } | null> {
   const { adminSupabase } = params;
   const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
@@ -1010,6 +1015,7 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
     supabase: adminSupabase,
     generationIds: [params.generationId],
     urlMode: params.urlMode,
+    throwOnError: params.throwOnError,
   });
 
   return {
@@ -1102,6 +1108,8 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
   generationId: string;
   viewerUserId: string;
   adminSupabase?: SupabaseClient;
+  /** Rethrow a failed read of the kept inputs (`loadEligibleGenerationRecipeInputMedia`). */
+  throwOnError?: boolean;
 }): Promise<GenerationInputMediaItem[]> {
   const adminSupabase = params.adminSupabase ?? createServiceClient();
   const entitlement = await getPostResourceBundleDetailByPostId(params.postId, {
@@ -1126,6 +1134,7 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
     postId: params.postId,
     generationId: params.generationId,
     urlMode: 'signed',
+    throwOnError: params.throwOnError,
   });
 
   return eligible?.inputMedia ?? [];
@@ -2547,6 +2556,9 @@ export async function getPostResourceBundleDetailByPostId(
         // A buyer keeps reading through a tombstone; everyone else still needs
         // the post to be on a public surface.
         entitled: viewerHasPurchased && hydrated.post.tombstoned === true,
+        // A failed read degrades to the bundle without references, below,
+        // rather than listing the uploads the run's settings name.
+        throwOnError: true,
       });
       const canViewReferences = Boolean(
         eligible

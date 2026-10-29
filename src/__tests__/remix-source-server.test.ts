@@ -898,12 +898,15 @@ describe("a catalog picture run's own media in its settings", () => {
     expect(bundle.workflowSettings).toEqual({ ...RESTORED, ...OF_THE_INPUTS });
   });
 
-  // Owner, 2026-10-29: such a remix restores the inputs from `inputs`, as a
-  // bought recipe's does, and is not told where they were staged.
-  it('gives a remix the creator shared the inputs with the settings a bought recipe gets', async () => {
-    mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, includeSharedInputMedia: true });
+  // Owner, 2026-10-29: a remix the inputs are handed to restores them from
+  // `inputs`, and is not told where they were staged either.
+  it.each([
+    ['a remix of shared inputs', { ...PUBLIC_ACCESS, includeSharedInputMedia: true }],
+    ["a bought recipe's remix", { ...PUBLIC_ACCESS, basis: 'unlocked', recipeEntitled: true }],
+  ])('gives %s the settings without the inputs', async (_, access) => {
+    mocks.resolveRemixAccess.mockResolvedValue(access);
 
-    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
 
     expect(bundle.workflowSettings).toEqual(RESTORED);
   });
@@ -912,11 +915,14 @@ describe("a catalog picture run's own media in its settings", () => {
     // Where the creator's upload was staged and the link the run read it from,
     // as the start passed them on to be kept.
     const UPLOAD_LINK = 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/1730000000000-passport-scan.jpg?token=original-run';
-    // The row keeping writes: the copy in the run's own folder, with both of
-    // those beside it (persistGenerationInputMedia).
-    const KEPT_INPUT = collectImageInputCandidates({
+    // The id older app builds gave a picked file, made from where it was staged.
+    const APP_ELEMENT_ID = 'image-uploads-creator-1-1730000000000-passport-scan-jpg-m2k9x1';
+    // The row keeping writes: the copy in the run's own folder, with the
+    // element's id and both of those beside it (persistGenerationInputMedia).
+    // Built afresh for each test, so no answer is the fixture compared with itself.
+    const keptInput = () => collectImageInputCandidates({
       resolvedImageUrls: [UPLOAD_LINK],
-      elements: [{ id: 'element-me', ...OF_THE_INPUTS.elements[0] }],
+      elements: [{ id: APP_ELEMENT_ID, ...OF_THE_INPUTS.elements[0] }],
     }).map((candidate, sortOrder) => ({
       id: `row-${sortOrder}`,
       generationId: 'gen-1',
@@ -939,7 +945,7 @@ describe("a catalog picture run's own media in its settings", () => {
       .filter((bucket) => bucket !== 'generation_inputs')
       .join('|')})/creator-1/`);
     const RESTORED_ELEMENT = {
-      id: 'element-me',
+      id: APP_ELEMENT_ID,
       displayName: 'me',
       handle: '@me',
       storagePath: 'generation_inputs/creator-1/gen-1/00-reference_image.jpg',
@@ -947,25 +953,18 @@ describe("a catalog picture run's own media in its settings", () => {
       url: 'https://signed.example/kept-0.jpg',
     };
 
-    it("hands a bought recipe's remix the copy, never the creator's upload, its file name or the link it was read from", async () => {
-      mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, basis: 'unlocked', recipeEntitled: true });
-      mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue(KEPT_INPUT);
+    it.each([
+      ['a remix of shared inputs', { ...PUBLIC_ACCESS, includeSharedInputMedia: true }],
+      ["a bought recipe's remix", { ...PUBLIC_ACCESS, basis: 'unlocked', recipeEntitled: true }],
+    ])("hands %s the copy, never the creator's upload, its file name or the link it was read from", async (_, access) => {
+      mocks.resolveRemixAccess.mockResolvedValue(access);
+      mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', keptInput()]]));
+      mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue(keptInput());
 
       const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
 
-      expect(bundle.inputs.image?.elements).toEqual([RESTORED_ELEMENT]);
-      expect(JSON.stringify(bundle)).not.toMatch(STAGED_IN_CREATOR_FOLDER);
-      expect(JSON.stringify(bundle)).not.toMatch(/passport-scan|original-run/);
-      expect(bundle).not.toHaveProperty('inputMedia');
-    });
-
-    it('hands a remix the creator shared the inputs with the copy, and nothing that names the upload', async () => {
-      mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, includeSharedInputMedia: true });
-      mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', KEPT_INPUT]]));
-
-      const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
-
-      expect(bundle.inputs.image?.elements).toEqual([RESTORED_ELEMENT]);
+      // Under the row's own id: the one the creator's app gave it names the file.
+      expect(bundle.inputs.image?.elements).toEqual([{ ...RESTORED_ELEMENT, id: 'row-0' }]);
       expect(JSON.stringify(bundle)).not.toMatch(STAGED_IN_CREATOR_FOLDER);
       expect(JSON.stringify(bundle)).not.toMatch(/passport-scan|original-run/);
       expect(bundle).not.toHaveProperty('inputMedia');
@@ -973,12 +972,175 @@ describe("a catalog picture run's own media in its settings", () => {
 
     it('still gives the owner the rows themselves', async () => {
       mocks.resolveRemixAccess.mockResolvedValue(OWNER_ACCESS);
-      mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', KEPT_INPUT]]));
+      mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', keptInput()]]));
 
       const bundle = await loadRemixSourceBundle(request(), 'gen-1');
 
       expect(bundle.inputs.image?.elements).toEqual([RESTORED_ELEMENT]);
-      expect(bundle.inputMedia).toEqual(KEPT_INPUT);
+      expect(bundle.inputMedia).toEqual(keptInput());
+      expect(bundle.inputMedia?.[0].metadata).toMatchObject({
+        id: APP_ELEMENT_ID,
+        sourceStoragePath: 'uploads/creator-1/1730000000000-passport-scan.jpg',
+        sourceUrl: UPLOAD_LINK,
+      });
     });
+  });
+});
+
+// A read of what a run kept can fail (a timeout, a busy database). Read as
+// "nothing kept", it handed a remix the uploads the run's settings name, and
+// the owner's choice to hand those over (2026-10-29) is for a run that kept
+// nothing, not for one whose rows could not be read.
+describe('a failed read of what a run kept', () => {
+  const OWNER_ACCESS = { allowed: true, basis: 'owner', post: null, includeSharedInputMedia: true, recipeEntitled: false };
+  const SHARED_ACCESS = { allowed: true, basis: 'public', post: EXPOSED_POST, includeSharedInputMedia: true, recipeEntitled: false };
+  const failure = new Error('canceling statement due to statement timeout');
+
+  beforeEach(() => {
+    mocks.generation = {
+      ...mocks.generation,
+      workflow_settings: {
+        model: 'nano-banana-2',
+        elements: [{ id: 'el-1', displayName: 'me', handle: '@me', storagePath: 'uploads/creator-1/1730000000000-passport-scan.jpg' }],
+      },
+    };
+    // The loader as it stands: a failed read is logged and answered as nothing
+    // kept, unless its caller asks to hear of it.
+    mocks.loadGenerationInputMediaMap.mockImplementation(async (params: { throwOnError?: boolean }) => {
+      if (params.throwOnError) throw failure;
+      return new Map();
+    });
+  });
+
+  it('fails a remix of shared inputs rather than reading the uploads from the settings', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(SHARED_ACCESS);
+
+    await expect(loadRemixSourceBundle(request(), 'gen-1')).rejects.toBe(failure);
+    expect(mocks.buildLegacyGenerationInputMedia).not.toHaveBeenCalled();
+  });
+
+  it("asks a bought recipe's inputs to be read the same way", async () => {
+    mocks.resolveRemixAccess.mockResolvedValue({ ...SHARED_ACCESS, includeSharedInputMedia: false, basis: 'unlocked', recipeEntitled: true });
+
+    await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(mocks.loadGenerationRecipeRemixInputMediaByPostId).toHaveBeenCalledWith(expect.objectContaining({ throwOnError: true }));
+  });
+
+  it("still restores the owner's own run from its settings", async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(OWNER_ACCESS);
+
+    await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(mocks.buildLegacyGenerationInputMedia).toHaveBeenCalled();
+  });
+});
+
+// A Seedance 2 run keeps what it prepared from each reference. The prepared
+// asset is what a run sends for a real person, and a remixer cannot prepare one
+// from the creator's copy, so it goes with the inputs (owner, 2026-10-29) but
+// without the link it was prepared from.
+describe("a Seedance 2 run's prepared assets", () => {
+  const PUBLIC_ACCESS = { allowed: true, basis: 'public', post: EXPOSED_POST, includeSharedInputMedia: false, recipeEntitled: false };
+  const PREPARED = {
+    images: [{
+      assetId: 'asset-face',
+      assetType: 'Image',
+      status: 'active',
+      sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/1730000000000-passport-scan.jpg?token=read',
+      error: null,
+      lastCheckedAt: '2026-10-29T10:00:00.000Z',
+    }],
+  };
+
+  beforeEach(() => {
+    mocks.generation = {
+      ...mocks.generation,
+      share_input_media_for_remix: false,
+      category: 'video',
+      model: 'seedance-2',
+      workflow_settings: { model: 'seedance-2', referenceMode: 'elements', seedanceAssets: structuredClone(PREPARED) },
+    };
+  });
+
+  it.each([
+    ['a remix of shared inputs', { ...PUBLIC_ACCESS, includeSharedInputMedia: true }],
+    ["a bought recipe's remix", { ...PUBLIC_ACCESS, basis: 'unlocked', recipeEntitled: true }],
+  ])('go to %s by id, without the links they were prepared from', async (_, access) => {
+    mocks.resolveRemixAccess.mockResolvedValue(access);
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(bundle.workflowSettings).toEqual({
+      model: 'seedance-2',
+      referenceMode: 'elements',
+      seedanceAssets: {
+        images: [{ assetId: 'asset-face', assetType: 'Image', status: 'active', sourceUrl: null, error: null, lastCheckedAt: null }],
+        videos: [],
+        audios: [],
+      },
+    });
+    expect(JSON.stringify(bundle)).not.toMatch(/passport-scan/);
+  });
+
+  it('stay out of a remix the inputs are not handed to', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(PUBLIC_ACCESS);
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.workflowSettings).toEqual({ model: 'seedance-2', referenceMode: 'elements' });
+  });
+});
+
+// Kling 3.0 takes clips under handles its prompt mentions them by. In the app
+// every clip is named "Reference Video", and taking one away leaves the others
+// their handles, so the handle cannot be rebuilt from the name.
+describe('a Kling 3.0 run with clips under handles', () => {
+  const clipRow = (sortOrder: number, handle: string) => ({
+    id: `row-${sortOrder}`,
+    generationId: 'gen-1',
+    mediaType: 'video',
+    role: 'reference_video',
+    label: 'Reference Video',
+    url: `https://signed.example/kept-${sortOrder}.mp4`,
+    storagePath: `generation_inputs/creator-1/gen-1/0${sortOrder}-reference_video.mp4`,
+    sourceGenerationId: null,
+    sortOrder,
+    metadata: {
+      id: `clip-${sortOrder}`,
+      displayName: 'Reference Video',
+      handle,
+      sourceStoragePath: `uploads/creator-1/173000000000${sortOrder}-holiday-${sortOrder}.mp4`,
+    },
+  });
+
+  beforeEach(() => {
+    mocks.generation = {
+      ...mocks.generation,
+      share_input_media_for_remix: true,
+      category: 'video',
+      model: 'kling-3.0-video',
+      prompt: '@reference_video_2 walks in and @reference_video_3 waves.',
+      workflow_settings: { model: 'kling-3.0-video', referenceMode: 'elements' },
+    };
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [
+      clipRow(0, '@reference_video_2'),
+      clipRow(1, '@reference_video_3'),
+    ]]]));
+  });
+
+  it('hands each clip on under the handle the prompt mentions it by', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue({
+      allowed: true,
+      basis: 'public',
+      post: EXPOSED_POST,
+      includeSharedInputMedia: true,
+      recipeEntitled: false,
+    });
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(bundle.inputs.video?.referenceVideos?.map((clip) => clip.handle)).toEqual(['@reference_video_2', '@reference_video_3']);
+    expect(JSON.stringify(bundle)).not.toMatch(/holiday/);
   });
 });

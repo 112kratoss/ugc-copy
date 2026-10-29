@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { createSeedanceAssetForRoute } from '@/lib/seedance-asset-service';
+import { createSeedanceAssetForRoute, getSeedanceAssetForRoute } from '@/lib/seedance-asset-service';
 
 function createAdminSupabaseMock() {
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
@@ -114,5 +114,33 @@ describe('createSeedanceAssetForRoute', () => {
 
     expect(resolveStoredMediaUrl).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+// A remix the run's inputs are handed to gets the assets prepared from them
+// (owner, 2026-10-29), and reading one back asks Kie, whose answer can carry
+// the link the asset was made from: the creator's upload, file name and all.
+describe('getSeedanceAssetForRoute', () => {
+  it("reads an asset's state back without the link it was prepared from", async () => {
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        data: {
+          assetId: 'asset-face',
+          assetType: 'Image',
+          status: 'success',
+          url: 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/1730000000000-passport-scan.jpg?token=read',
+        },
+      }),
+    } as Response));
+
+    const result = await getSeedanceAssetForRoute({ apiKey: 'test-key', assetId: 'asset-face', fetcher });
+
+    expect(result).toMatchObject({
+      ok: true,
+      body: { success: true, assetId: 'asset-face', assetType: 'Image', status: 'active', sourceUrl: null },
+    });
+    expect(JSON.stringify(result)).not.toMatch(/uploads\/user-1|passport-scan/);
   });
 });

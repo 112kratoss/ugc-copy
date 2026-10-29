@@ -311,9 +311,6 @@ export async function getSeedanceAssetForRoute({
     const payloadRecord = typeof payload === 'object' && payload !== null
       ? payload as Record<string, unknown>
       : {};
-    const sourceUrl = typeof payloadRecord.url === 'string'
-      ? String(payloadRecord.url)
-      : null;
 
     return {
       ok: true,
@@ -322,7 +319,11 @@ export async function getSeedanceAssetForRoute({
         assetType: normalizeAssetType(payloadRecord.assetType ?? null),
         payload,
         rawStatus,
-        sourceUrl,
+        // Kie's answer can carry the link the asset was made from: its
+        // creator's upload. Asset ids go to the remixers the inputs are handed
+        // to (owner, 2026-10-29), so the read gives the state alone, and both
+        // creators keep the link they already hold.
+        sourceUrl: null,
       }),
     };
   } catch (error) {

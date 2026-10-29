@@ -20,7 +20,12 @@ import {
   type RemixMediaAssetDescriptor,
   type RemixResolvedSubject,
 } from '@/lib/remix-source';
-import type { SeedanceAssetCollections, SeedanceAssetMetadata } from '@/lib/seedance-assets';
+import {
+  createSeedanceAssetMetadata,
+  readSeedanceAssetCollections,
+  type SeedanceAssetCollections,
+  type SeedanceAssetMetadata,
+} from '@/lib/seedance-assets';
 import {
   getCanonicalStoredMediaLocation,
   isStorageObjectOwnedByUser,
@@ -104,7 +109,8 @@ interface LegacyGenerationReference {
  * were staged under in the creator's folders, and the prompt compiled to name
  * them. Only the owner's remix is given these (owner, 2026-10-29): anyone
  * else, a remix of shared inputs or of a bought recipe included, restores the
- * inputs from the bundle's `inputs` instead.
+ * inputs from the bundle's `inputs` instead, and of `seedanceAssets` is given
+ * only the asset ids, by `sanitizeWorkflowSettingsForRemix`.
  */
 const INPUT_MEDIA_WORKFLOW_KEYS = new Set([
   'elements',
@@ -622,6 +628,12 @@ export async function loadGenerationInputMediaMap(params: {
   supabase: SupabaseClient;
   generationIds: string[];
   urlMode: 'proxy' | 'signed' | 'none';
+  /**
+   * Rethrow a read that failed rather than answer it as nothing kept: a caller
+   * that would read "nothing kept" as leave to hand over the uploads the run's
+   * settings name has to hear of it.
+   */
+  throwOnError?: boolean;
 }): Promise<Map<string, GenerationInputMediaItem[]>> {
   const generationIds = Array.from(new Set(params.generationIds.filter(Boolean)));
   const inputMap = new Map<string, GenerationInputMediaItem[]>();
@@ -671,6 +683,7 @@ export async function loadGenerationInputMediaMap(params: {
     }
   } catch (error) {
     logBackendError('failed_to_load_generation_input_media', { error: error });
+    if (params.throwOnError) throw error;
   }
 
   return inputMap;
@@ -1052,18 +1065,70 @@ export async function buildLegacyGenerationInputMedia(params: {
   return items;
 }
 
+/**
+ * Who a remix's settings are for: the owner (or a guest identity since linked
+ * to them); someone the run's inputs are handed to, a remix of shared inputs or
+ * of a bought recipe; or anyone else.
+ */
+export type RemixSettingsReader = 'owner' | 'with-inputs' | 'without-inputs';
+
 export function sanitizeWorkflowSettingsForRemix(
   workflowSettings: Record<string, unknown>,
-  forOwner: boolean
+  reader: RemixSettingsReader,
 ): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(workflowSettings)) {
     if (OUTPUT_LIST_WORKFLOW_KEYS.has(key)) continue;
-    if (!forOwner && INPUT_MEDIA_WORKFLOW_KEYS.has(key)) continue;
-    sanitized[key] = value;
+    if (reader === 'owner' || !INPUT_MEDIA_WORKFLOW_KEYS.has(key)) {
+      sanitized[key] = value;
+    } else if (reader === 'with-inputs' && key === 'seedanceAssets') {
+      const prepared = preparedSeedanceAssetIds(value);
+      if (prepared) sanitized[key] = prepared;
+    }
   }
 
   return sanitized;
+}
+
+/**
+ * What a Seedance 2 run prepared from its references, as a remix the inputs
+ * are handed to is given it: each asset's id, kind and state, in the place of
+ * its reference. A remixer cannot prepare an asset from the creator's copy, and
+ * a real person's picture runs only as a prepared asset. The link each was
+ * prepared from, and the error and time of the last check, which can repeat
+ * it, stay out: they name the creator's upload.
+ */
+function preparedSeedanceAssetIds(value: unknown): ReturnType<typeof readSeedanceAssetCollections> {
+  const collections = readSeedanceAssetCollections(value);
+  if (!collections) return null;
+  const idsOnly = (list: Array<SeedanceAssetMetadata | null>) => list.map((asset) => (
+    asset ? createSeedanceAssetMetadata({ assetId: asset.assetId, assetType: asset.assetType, status: asset.status }) : null
+  ));
+  return {
+    images: idsOnly(collections.images),
+    videos: idsOnly(collections.videos),
+    audios: idsOnly(collections.audios),
+  };
+}
+
+/**
+ * Of a kept row's metadata, what restoring it reads. The rest is the
+ * creator's: where the upload was staged and the link the run read it from
+ * (`persistGenerationInputMedia`), and the id their client gave the element,
+ * which older app builds made out of the staged path.
+ */
+const REMIXER_INPUT_METADATA_KEYS = ['displayName', 'handle', 'durationSeconds'] as const;
+
+/**
+ * A kept input as a remix by anyone but the owner is given it: the copy, under
+ * the row's own id, with only the metadata a restore reads.
+ */
+export function toRemixerInputMedia(item: GenerationInputMediaItem): GenerationInputMediaItem {
+  const metadata: Record<string, unknown> = {};
+  for (const key of REMIXER_INPUT_METADATA_KEYS) {
+    if (item.metadata && key in item.metadata) metadata[key] = item.metadata[key];
+  }
+  return { ...item, metadata };
 }
 
 export function toRemixImageElement(item: GenerationInputMediaItem, index: number): ImageElementDescriptor & { url: string | null } {
@@ -1118,10 +1183,19 @@ export function findUncapturedInputMediaTypes(
 
 export function toRemixAssetDescriptor(
   item: GenerationInputMediaItem,
-): RemixMediaAssetDescriptor & { url: string | null; durationSeconds?: number } {
+): RemixMediaAssetDescriptor & { url: string | null; durationSeconds?: number; handle?: string } {
   // A model that prices or caps a run by its reference seconds will not quote a
   // clip of unknown length, so a restored clip says how long it is when known.
   const durationSeconds = positiveSeconds(item.metadata?.durationSeconds);
+  // Kling 3.0 takes clips under handles its prompt mentions them by, and taking
+  // a clip away leaves the others theirs, so a handle rebuilt from a clip's name
+  // can miss the prompt: the kept one goes with the clip. A picture's goes with
+  // its element or its subject.
+  const handle = item.mediaType === 'video'
+    && typeof item.metadata?.handle === 'string'
+    && isValidElementHandle(item.metadata.handle)
+    ? item.metadata.handle
+    : null;
   return {
     kind: item.mediaType,
     label: item.label,
@@ -1129,6 +1203,7 @@ export function toRemixAssetDescriptor(
     sourceGenerationId: item.sourceGenerationId,
     url: item.url,
     ...(durationSeconds === null ? {} : { durationSeconds }),
+    ...(handle === null ? {} : { handle }),
   };
 }
 

@@ -589,7 +589,7 @@ describe('/api/remix-source route', () => {
     expect(data.restoreIssues).toEqual([]);
   });
 
-  it('returns shared durable input media to public remixers after owner opt-in', async () => {
+  it("restores a shared run's kept copy for a public remixer, without the rows or where the upload was staged", async () => {
     currentUserId = 'user-2';
     generationRows.set('video-shared-1', {
       id: 'video-shared-1',
@@ -622,7 +622,11 @@ describe('/api/remix-source route', () => {
         storage_path: 'generation_inputs/creator-1/video-shared-1/00-start-frame.png',
         source_generation_id: null,
         sort_order: 0,
-        metadata: null,
+        // What keeping the frame wrote beside the copy (persistGenerationInputMedia).
+        metadata: {
+          sourceStoragePath: 'uploads/creator-1/old-start.png',
+          sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/old-start.png?token=run',
+        },
       },
     ];
     postRows.set('post-video-shared-1', createExposedPost('video-shared-1', { category: 'video' }));

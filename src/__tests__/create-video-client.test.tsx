@@ -2125,6 +2125,41 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     });
 
+    // A remix of someone else's run is given no settings naming its clips, only
+    // the clips, each with the handle the prompt mentions it by. The app names
+    // every clip "Reference Video", and the first was taken away before the run,
+    // so neither handle is the one a clip's name and place would give.
+    it('restores a Kling clip under the handle its remix bundle hands with it', async () => {
+      stubRemix({
+        generation: { id: 'gen-1', title: 'Harbour', prompt: '@reference_video_2 walks in, @reference_video_3 waves', category: 'video', model: 'kling-3.0-video' },
+        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+        inputs: {
+          video: {
+            referenceMode: 'elements',
+            startFrame: null,
+            endFrame: null,
+            elements: [],
+            referenceVideos: [['00', '@reference_video_2'], ['01', '@reference_video_3']].map(([index, handle]) => ({
+              kind: 'video' as const,
+              label: 'Reference Video',
+              handle,
+              storagePath: `generation_inputs/owner-1/gen-1/${index}-reference_video.mp4`,
+              sourceGenerationId: null,
+              url: `https://signed.example.com/generation_inputs/owner-1/gen-1/${index}-reference_video.mp4`,
+            })),
+            referenceAudios: [],
+          },
+        },
+        workflowSettings: { model: 'kling-3.0-video' },
+        restoreIssues: [],
+      });
+
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@reference_video_2', '@reference_video_3']));
+      expect(promptBox()).toHaveValue('@reference_video_2 walks in, @reference_video_3 waves');
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
     it('gives a renamed image reference the handle of its new name, and the prompt follows', async () => {
       getPersistedImageElementRecordsMock.mockResolvedValue([
         { id: 'saved-1', displayName: 'Saved product', file: new File(['image'], 'saved.png', { type: 'image/png' }) },
