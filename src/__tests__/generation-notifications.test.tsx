@@ -14,6 +14,9 @@ vi.mock('framer-motion', async () => {
   };
 });
 
+let mockedPathname = '/';
+vi.mock('next/navigation', () => ({ usePathname: () => mockedPathname }));
+
 const getSessionMock = vi.fn();
 const onAuthStateChangeMock = vi.fn();
 
@@ -196,6 +199,49 @@ describe('GenerationNotifications', () => {
 
       expect(await screen.findByText(/failed$/i)).toBeInTheDocument();
       expect(creditsUpdated).toHaveBeenCalledTimes(1);
+    });
+
+    // Below 1120px a creator is one column and its bars hold the window's foot (on a phone, with
+    // no bottom navigation under them): a toast rising there covered Generate, and Publish whole.
+    describe('where it comes in', () => {
+      let oneColumn = false;
+      beforeEach(() => {
+        mockedPathname = '/';
+        oneColumn = false;
+        vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+          matches: query === '(max-width: 1119px)' && oneColumn,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })));
+      });
+      afterEach(() => {
+        mockedPathname = '/';
+      });
+
+      const placement = async () => {
+        await pollThrough('processing', 'succeeded');
+        expect(await screen.findByText(/ready$/i)).toBeInTheDocument();
+        const container = screen.getByTestId('generation-notifications');
+        return container.className.includes('top-[calc(var(--app-shell-topbar-height)+0.75rem)]') ? 'under the top bar'
+          : container.className.split(' ').includes('bottom-4') ? 'over the bottom edge' : 'nowhere';
+      };
+
+      it.each(['/create-image', '/create-video', '/create-motion'])('comes down from under the top bar on %s in one column', async (pathname) => {
+        mockedPathname = pathname;
+        oneColumn = true;
+        expect(await placement()).toBe('under the top bar');
+      });
+
+      it('rises over the bottom edge beside a creator\'s two panes', async () => {
+        mockedPathname = '/create-video';
+        expect(await placement()).toBe('over the bottom edge');
+      });
+
+      it('rises over the bottom edge on every other page, a phone\'s included', async () => {
+        mockedPathname = '/showcase';
+        oneColumn = true;
+        expect(await placement()).toBe('over the bottom edge');
+      });
     });
   });
 });

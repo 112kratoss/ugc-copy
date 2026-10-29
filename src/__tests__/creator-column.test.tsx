@@ -158,12 +158,30 @@ describe('the creator column bar', () => {
     expect(screen.getByRole('button', { name: 'Generate' })).toBeInTheDocument();
   });
 
-  it('stays above the bottom navigation on a phone', () => {
+  // The creators hide the shell's bottom navigation below 768px (`hidesBottomNav`), where the bar
+  // holds the window's bottom edge, the safe area inside it; wider it floats 0.75rem above the edge.
+  // Both offsets add the navigation's room (0px on the creators): without it the nav took Generate's taps.
+  it('holds the bottom edge on a phone, the safe area inside it, and floats just above it wider', () => {
     const { container } = renderBar();
     const bar = container.querySelector('[data-creator-bar]');
-    // The shell's room for the bottom navigation, 0px from 768px; without it the nav took Generate's taps.
-    expect(bar?.className).toContain('bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)]');
     expect(bar?.className).toContain('sticky');
+    expect(bar?.className).toContain('bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)]');
+    expect(bar?.className).toContain('max-md:bottom-[var(--app-shell-bottom-nav-space,0px)]');
+    expect(bar?.firstElementChild?.className).toContain('max-md:pb-[env(safe-area-inset-bottom)]');
+  });
+
+  it('keeps no safe area where it waits at the column\'s end rather than at the foot', () => {
+    const { container } = render(
+      <CreatorColumnBar
+        settingsSummary="1K · AUTO · JPG"
+        settings={null}
+        holdsFootUnderColumn={false}
+        action={<button type="button">Generate · 8 credits</button>}
+      />
+    );
+    const bar = container.querySelector('[data-creator-bar]');
+    expect(bar?.className).toContain('max-[1119px]:static');
+    expect(bar?.firstElementChild?.className).not.toContain('safe-area-inset-bottom');
   });
 });
 

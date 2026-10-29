@@ -765,6 +765,78 @@ describe('AppShellClient', () => {
     expect(document.body.style.overflow).toBe('');
   });
 
+  // The owner's decision for the phone-width web (2026-10-28, "Hide it while creating"): the
+  // creators hide the bottom navigation, their bar holds the bottom edge, and the top bar's menu
+  // reaches every page. The stylesheet's half: app-shell-bottom-nav-while-creating.test.ts.
+  describe('while creating', () => {
+    const drawerLinks = () => within(screen.getByRole('dialog', { name: 'Navigation' })).getAllByRole('link')
+      .map((link) => [link.textContent, link.getAttribute('href'), link.getAttribute('aria-current')]);
+
+    it('marks the image, video and motion creators, and only them, as holding the bottom edge', () => {
+      for (const [pathname, hidden] of [
+        ['/create-image', true], ['/create-video', true], ['/create-motion', true],
+        ['/', false], ['/showcase', false], ['/create', false], ['/create-workflow', false], ['/post/new', false],
+      ] as const) {
+        mockedPathname = pathname;
+        const { container, unmount } = render(
+          <AppShellClient>
+            <div>Page content</div>
+          </AppShellClient>
+        );
+        const root = container.querySelector('.app-shell-root');
+        expect(root?.getAttribute('data-bottom-nav') ?? null, pathname).toBe(hidden ? 'hidden' : null);
+        unmount();
+      }
+    });
+
+    it('draws the mark on the server, so a phone never sees the navigation come and go', () => {
+      const { container, onRecoverableError, attributeWarnings } = hydrateShell({ server: '/create-video', browser: '/create-video' });
+      expect(container.querySelector('.app-shell-root')).toHaveAttribute('data-bottom-nav', 'hidden');
+      expect(onRecoverableError).not.toHaveBeenCalled();
+      expect(attributeWarnings).toEqual([]);
+    });
+
+    it("names the navigation's places in the top bar's menu where it hides, the Create menu's two among them", () => {
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+      // Search stays the top bar's own.
+      expect(within(screen.getByRole('banner')).getByRole('link', { name: 'Search creators, posts, and recipes' })).toHaveAttribute('href', '/search');
+      fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+      expect(drawerLinks()).toEqual([
+        ['magicbooklet', '/', null],
+        ['Home', '/', null],
+        ['Explore', '/showcase', null],
+        ['Marketplace', '/marketplace', null],
+        ['Create', '/create', 'page'],
+        ['Post', '/post/new', null],
+        ['Studio', '/creations', null],
+        ['Workflow Canvas', '/create-workflow', null],
+        ['Alerts', '/notifications', null],
+        ['Profile', '/profile', null],
+        ['Help & feedback', '/contact', null],
+      ]);
+    });
+
+    it('leaves the menu as it was where the navigation shows', () => {
+      mockedPathname = '/showcase';
+      render(
+        <AppShellClient>
+          <div>Explore</div>
+        </AppShellClient>
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+      expect(drawerLinks().map(([label]) => label)).toEqual([
+        'magicbooklet', 'Home', 'Explore', 'Marketplace', 'Studio', 'Workflow Canvas', 'Profile', 'Help & feedback',
+      ]);
+    });
+  });
+
   it('keeps sign-in focused by omitting workspace navigation', () => {
     mockedPathname = '/login';
 

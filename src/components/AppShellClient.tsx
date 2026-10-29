@@ -2,6 +2,7 @@
 
 import {
   Bell,
+  FilePlus2,
   HelpCircle,
   Menu,
   Plus,
@@ -26,8 +27,11 @@ import {
 
 import {
   APP_NAV_ITEMS,
+  CREATE_MENU_ITEMS,
   getActiveAppNavItem,
   getAppShellTitle,
+  getCreateMenuHref,
+  hidesBottomNav,
   isMinimalAppChromePath,
   isNotFoundRouteSegment,
   type AppNavItem,
@@ -46,7 +50,28 @@ const NAV_GROUPS = [
   { label: 'Account', ids: ['profile'] },
 ] as const;
 
+// Where a page hides the bottom navigation (the creators: `hidesBottomNav`), the phone layout's
+// menu also names the places only that navigation held on a phone, whose top bar shows no bell
+// below 640px and no Create below 768px: the Create menu's two choices and Alerts. The top bar's
+// menu then reaches every page.
+const NAV_GROUPS_WITHOUT_BOTTOM_NAV = [
+  { label: 'Discover', ids: ['home', 'showcase', 'marketplace'] },
+  { label: 'Create', ids: ['create', 'post', 'studio', 'workflow'] },
+  { label: 'Account', ids: ['alerts', 'profile'] },
+] as const;
+
 const ALERTS_NAV_ITEM = APP_NAV_ITEMS.find((item) => item.id === 'alerts')!;
+const POST_MENU_ITEM = CREATE_MENU_ITEMS.find((item) => item.id === 'post')!;
+
+/** A place the drawer links to: one of the shell's places, or the Create menu's Post. */
+type DrawerPlace = Pick<AppNavItem, 'label' | 'href' | 'icon'> & { id: AppNavItem['id'] | 'post' };
+
+function drawerPlace(id: DrawerPlace['id'], pathname: string): DrawerPlace | null {
+  if (id === 'post') {
+    return { id, label: POST_MENU_ITEM.label, href: getCreateMenuHref('post', pathname), icon: FilePlus2 };
+  }
+  return APP_NAV_ITEMS.find((item) => item.id === id) ?? null;
+}
 
 const subscribeToHydration = () => () => undefined;
 const getHydratedSnapshot = () => true;
@@ -67,7 +92,7 @@ const RESELECT_TO_TOP_TAB_IDS = new Set<AppNavItem['id']>([
 
 type AppNavClickHandler = (
   event: ReactMouseEvent<HTMLAnchorElement>,
-  item: AppNavItem
+  item: Pick<DrawerPlace, 'id'>
 ) => void;
 
 function getReselectableTabId(pathname: string) {
@@ -163,7 +188,7 @@ function DrawerNavItem({
   onClick,
   onNavigate,
 }: {
-  item: AppNavItem;
+  item: DrawerPlace;
   active: boolean;
   onClick: () => void;
   onNavigate: AppNavClickHandler;
@@ -187,6 +212,7 @@ function DrawerNavItem({
     >
       <Icon className={`h-[18px] w-[18px] ${active ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-faint)]'}`} aria-hidden />
       <span>{item.label}</span>
+      {item.id === 'alerts' ? <AlertsBadge className="ml-auto" /> : null}
     </Link>
   );
 }
@@ -296,6 +322,9 @@ const AppShellFrame = memo(function AppShellFrame({
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
   const title = useMemo(() => getAppShellTitle(pathname), [pathname]);
+  const bottomNavHidden = hidesBottomNav(pathname);
+  const drawerGroups: ReadonlyArray<{ label: string; ids: ReadonlyArray<DrawerPlace['id']> }> =
+    bottomNavHidden ? NAV_GROUPS_WITHOUT_BOTTOM_NAV : NAV_GROUPS;
   const visibleBottomItems = useMemo(() => {
     const ids = ['home', 'showcase', 'create', 'alerts', 'profile'] as const;
     return ids
@@ -410,7 +439,9 @@ const AppShellFrame = memo(function AppShellFrame({
   }
 
   return (
-    <div className="app-shell-root">
+    // The stylesheet hides the bottom navigation, and the room kept for it, on a page that holds
+    // the bottom edge itself (`.app-shell-root[data-bottom-nav='hidden']` in globals.css).
+    <div className="app-shell-root" data-bottom-nav={bottomNavHidden ? 'hidden' : undefined}>
       <aside className="app-shell-sidebar" aria-label="Primary navigation">
         <div className="px-4 pt-5">
           <Brand />
@@ -597,14 +628,14 @@ const AppShellFrame = memo(function AppShellFrame({
             </div>
 
             <nav className="mt-8 flex flex-col gap-6">
-              {NAV_GROUPS.map((group) => (
+              {drawerGroups.map((group) => (
                 <div key={group.label}>
                   <div className="mb-1.5 px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--ui-text-faint)]">
                     {group.label}
                   </div>
                   <div className="flex flex-col gap-1">
                     {group.ids.map((id) => {
-                      const item = APP_NAV_ITEMS.find((candidate) => candidate.id === id);
+                      const item = drawerPlace(id, pathname);
                       return item ? (
                         <DrawerNavItem
                           key={item.id}

@@ -491,14 +491,20 @@ export function CreatorColumnBar({
   };
 
   return (
+    // Below 768px the creators hide the shell's bottom navigation (`hidesBottomNav`), and the bar
+    // holds the window's bottom edge in its place, the safe area inside it; wider, it floats just
+    // above the edge. Both still clear the navigation's room, should a page ever keep it.
     <div
       ref={barRef}
       data-creator-bar
-      className={clsx('sticky bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-30 mt-1', !holdsFootUnderColumn && 'max-[1119px]:static')}
+      className={clsx(
+        'sticky bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-30 mt-1 max-md:bottom-[var(--app-shell-bottom-nav-space,0px)]',
+        !holdsFootUnderColumn && 'max-[1119px]:static',
+      )}
     >
       {/* One surface for the line and the bar, so nothing scrolling under the
           bar shows between them, and opaque, so nothing needs blurring behind it. */}
-      <div className={clsx(FLOATING_SURFACE_CLASS, 'overflow-hidden')}>
+      <div className={clsx(FLOATING_SURFACE_CLASS, 'overflow-hidden', holdsFootUnderColumn && 'max-md:pb-[env(safe-area-inset-bottom)]')}>
         {status ? (
           <div data-creator-bar-status className="border-b border-[var(--ui-border-subtle)] px-4 py-3 text-sm">
             {status}
