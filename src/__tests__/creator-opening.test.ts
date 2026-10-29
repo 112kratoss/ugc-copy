@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { catalogVideoEntryFields } from '@/lib/catalog-video-entry';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
-import { creatorOpeningFromCatalog, drawableLink, openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-opening';
+import { creatorOpeningFromCatalog, openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-opening';
 import { loadCreatorOpening } from '@/lib/creator-page-server';
 import type { VideoRunMedia } from '@/lib/creator-run-inputs';
 import { getCatalogDescriptorDefaultSettings } from '@/lib/generation-model-client';
@@ -19,16 +19,8 @@ import {
 } from '@/lib/generation-model-catalog';
 
 const logBackendErrorMock = vi.hoisted(() => vi.fn());
-const cacheCalls = vi.hoisted(() => [] as unknown[][]);
 // What the catalog store does in place of answering: a failed read, or a price it refuses or fails to give.
-const store = vi.hoisted(() => ({ readFails: false, quote: null as 'refused' | 'failed' | null, reads: 0 }));
-
-vi.mock('next/cache', () => ({
-  unstable_cache: (fn: (...args: unknown[]) => unknown) => (...args: unknown[]) => {
-    cacheCalls.push(args);
-    return fn(...args);
-  },
-}));
+const store = vi.hoisted(() => ({ readFails: false, quote: null as 'refused' | 'failed' | null }));
 
 vi.mock('@/lib/backend-logger', () => ({ logBackendError: logBackendErrorMock }));
 
@@ -38,10 +30,9 @@ vi.mock('@/lib/generation-model-catalog-store', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/generation-model-catalog-store')>();
   return {
     ...actual,
-    loadPublishedGenerationModelCatalog: (...args: Parameters<typeof actual.loadPublishedGenerationModelCatalog>) => {
-      store.reads += 1;
-      return store.readFails ? Promise.reject(new Error('catalog read failed')) : actual.loadPublishedGenerationModelCatalog(...args);
-    },
+    loadPublishedGenerationModelCatalog: (...args: Parameters<typeof actual.loadPublishedGenerationModelCatalog>) => (
+      store.readFails ? Promise.reject(new Error('catalog read failed')) : actual.loadPublishedGenerationModelCatalog(...args)
+    ),
   };
 });
 
@@ -183,31 +174,9 @@ describe('openingSetting', () => {
   });
 });
 
-describe('drawableLink', () => {
-  it('keeps a link\'s model, ratio and length as the page\'s tables list them', () => {
-    expect(drawableLink('video', {})).toEqual({ model: '', aspectRatio: '', duration: '' });
-    expect(drawableLink('video', { model: 'kling-3.0-video', aspectRatio: '9:16', duration: '7' }))
-      .toEqual({ model: 'kling-3.0-video', aspectRatio: '9:16', duration: '7' });
-    expect(drawableLink('image', { model: 'nano-banana-2', aspectRatio: '4:5' }))
-      .toEqual({ model: 'nano-banana-2', aspectRatio: '4:5', duration: '' });
-    // Without a model, any of the tool's models may list it.
-    expect(drawableLink('video', { aspectRatio: '21:9' })).toEqual({ model: '', aspectRatio: '21:9', duration: '' });
-  });
-
-  it('drops a ratio or a length no model it can mean lists, and has nothing for a model the page cannot draw', () => {
-    expect(drawableLink('video', { model: 'kling-3.0-video', aspectRatio: 'cinema', duration: '99' }))
-      .toEqual({ model: 'kling-3.0-video', aspectRatio: '', duration: '' });
-    expect(drawableLink('video', { duration: '5.5' })).toEqual({ model: '', aspectRatio: '', duration: '' });
-    expect(drawableLink('motion', { model: 'kling-2.6', aspectRatio: '16:9' })).toEqual({ model: 'kling-2.6', aspectRatio: '', duration: '' });
-    expect(drawableLink('video', { model: 'video-from-a-later-release' })).toBeNull();
-    expect(drawableLink('video', { model: 'nano-banana-2' })).toBeNull();
-  });
-});
-
 describe('loadCreatorOpening', () => {
   beforeEach(() => {
     logBackendErrorMock.mockReset();
-    cacheCalls.length = 0;
     store.readFails = false;
     store.quote = null;
   });
@@ -246,20 +215,6 @@ describe('loadCreatorOpening', () => {
     expect(await loadCreatorOpening('image')).toMatchObject({ modelId: 'nano-banana-2', costCredits: 8 });
     expect(await loadCreatorOpening('motion')).toMatchObject({ modelId: 'kling-2.6', costCredits: null });
   });
-
-  it('reads every opening through the data cache, under the link as the page\'s tables read it', async () => {
-    expect(await loadCreatorOpening('video', { model: 'kling-3.0-video', aspectRatio: '9:16' }))
-      .toMatchObject({ modelId: 'kling-3.0-video', settings: { aspectRatio: '9:16' }, costCredits: 70 });
-    await loadCreatorOpening('video', { model: null, aspectRatio: undefined });
-    // A made-up ratio is no key of its own.
-    await loadCreatorOpening('video', { aspectRatio: 'cinema' });
-    expect(cacheCalls).toEqual([['video', 'kling-3.0-video', '9:16', ''], ['video', '', '', ''], ['video', '', '', '']]);
-    // A model the page cannot draw reads nothing at all.
-    const reads = store.reads;
-    expect(await loadCreatorOpening('video', { model: 'video-from-a-later-release' })).toBeNull();
-    expect(store.reads).toBe(reads);
-  });
-
 
   it('answers no opening when the catalog cannot be read, and the page draws its own stand-in', async () => {
     store.readFails = true;

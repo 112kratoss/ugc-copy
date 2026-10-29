@@ -7,7 +7,7 @@ import type { CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { requestHasAuthHint } from '@/components/RouteAuthBoundary';
 import { CREATOR_HANDOVER_PARAM, CREATOR_WELCOME_PARAM } from '@/lib/auth-onboarding';
 import { logBackendError } from '@/lib/backend-logger';
-import { creatorOpeningFromCatalog, drawableLink, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
+import { creatorOpeningFromCatalog, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { loadCreatorStartPosts } from '@/lib/creator-start-posts-server';
 import {
@@ -89,6 +89,8 @@ export async function loadCreatorStartPostsForRequest(): Promise<CreatorStartPos
 }
 
 async function readCreatorOpening(kind: GenerationModelKind, link: CreatorOpeningLink): Promise<CreatorOpening | null> {
+  // The store's own copy of the release, at most a minute old on this instance, as the quote route reads it.
+  // A data cache over it outlived publishes and rollbacks, and deployments, which no key here could name.
   const snapshot = await loadPublishedGenerationModelCatalog({
     platform: 'web',
     schemaVersion: GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
@@ -116,17 +118,6 @@ async function readCreatorOpening(kind: GenerationModelKind, link: CreatorOpenin
   }
 }
 
-// An opening is everyone's, and changes only with a catalog release: one read a minute serves the
-// creators' traffic, as the catalog store's own cache does. It is cached under the link as the page's
-// tables read it (`drawableLink`), so a made-up value in an address adds no entry.
-const readCachedOpening = unstable_cache(
-  (kind: GenerationModelKind, model: string, aspectRatio: string, duration: string) => (
-    readCreatorOpening(kind, { model, aspectRatio, duration })
-  ),
-  ['creator-opening-v2'],
-  { revalidate: 60 },
-);
-
 /**
  * The run a creator page opens on (`CreatorOpening`), from the published web catalog: a link's
  * model, or the default, at its published settings and price. Null when the catalog cannot be
@@ -134,10 +125,8 @@ const readCachedOpening = unstable_cache(
  * draws its own stand-in until its first pick. Never throws.
  */
 export async function loadCreatorOpening(kind: GenerationModelKind, link: CreatorOpeningLink = {}): Promise<CreatorOpening | null> {
-  const drawable = drawableLink(kind, link);
-  if (!drawable) return null;
   try {
-    return await readCachedOpening(kind, drawable.model, drawable.aspectRatio, drawable.duration);
+    return await readCreatorOpening(kind, link);
   } catch (error) {
     logBackendError('creator_opening_load_failed', { error, kind });
     return null;

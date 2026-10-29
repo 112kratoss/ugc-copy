@@ -246,7 +246,7 @@ same piece of work (an app OTA).
 The catalog's default model is also the one each creator opens on when nothing else chose one. The web
 creators draw it from their first paint: each page's server reads the published default, or a link's model,
 with its control defaults and the run's price (`loadCreatorOpening` in `src/lib/creator-page-server.ts`,
-through the data cache, refreshed each minute), and the page opens on that run (motion unpriced: its price
+from the catalog store's own copy, at most a minute old), and the page opens on that run (motion unpriced: its price
 waits for a clip). So a changed default reaches the web's first paint with the release and no code change.
 Each web creator's first pick then waits for the revision the network confirms; on a later revision the video
 creator moves to the new default with its published control defaults (`CreateVideoClient.tsx`'s first pick),

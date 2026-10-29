@@ -52,37 +52,6 @@ const DRAWABLE: Record<GenerationModelKind, Readonly<Record<string, unknown>>> =
   motion: MOTION_MODELS,
 };
 
-type DrawableEntry = {
-  aspectRatios?: readonly string[];
-  durations?: readonly number[];
-  singleShotDurationRange?: { min: number; max: number };
-};
-
-/**
- * A link as far as the page's own tables say it can change the opening: what an opening is read
- * and cached under. Null for a model the page cannot draw, which has no opening. A ratio or a
- * length that no model the link can mean lists is dropped, so a made-up value reads nothing new.
- */
-export function drawableLink(
-  kind: GenerationModelKind,
-  link: CreatorOpeningLink,
-): { model: string; aspectRatio: string; duration: string } | null {
-  const table = DRAWABLE[kind] as Readonly<Record<string, DrawableEntry>>;
-  const model = link.model ?? '';
-  if (model && !Object.hasOwn(table, model)) return null;
-  const entries = model ? [table[model]] : Object.values(table);
-  const ratio = link.aspectRatio ?? '';
-  const length = Number(link.duration);
-  return {
-    model,
-    aspectRatio: entries.some((entry) => entry.aspectRatios?.includes(ratio)) ? ratio : '',
-    duration: link.duration && Number.isInteger(length) && entries.some((entry) => (
-      entry.durations?.includes(length)
-      || (entry.singleShotDurationRange && length >= entry.singleShotDurationRange.min && length <= entry.singleShotDurationRange.max)
-    )) ? String(length) : '',
-  };
-}
-
 /** A link's value as the control takes it, or undefined when the model does not offer it. */
 function offeredValue(control: CatalogControl | undefined, raw: string | null | undefined): CatalogPrimitive | undefined {
   if (!control || !raw) return undefined;
