@@ -302,7 +302,8 @@ describe('the unlocked contents (B-F17, B-F18)', () => {
   it('shows saved settings as keys and values, not a block of text', () => {
     renderUnlocked();
 
-    const setup = screen.getByText('Generation setup').parentElement as HTMLElement;
+    // A card left under the form name "Model settings" reads as what it holds.
+    const setup = screen.getByRole('region', { name: 'Generation setup' });
     expect(within(setup).getByText('Aspect ratio')).toBeInTheDocument();
     expect(within(setup).getByText('9:16')).toBeInTheDocument();
     expect(screen.queryByText(/Saved generation setup/)).toBeNull();
@@ -317,12 +318,14 @@ describe('the unlocked contents (B-F17, B-F18)', () => {
       .toContain('https://example.com/board');
   });
 
-  it("keeps the creator's order, with what has no section last", () => {
+  // The creator's cards in their order; the picture they put in no card
+  // comes straight after the card holding the prompt, which names it.
+  it("keeps the creator's order, with their references after the prompt", () => {
     renderUnlocked();
 
     const headings = screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent);
-    expect(headings).toEqual(['The look', 'Model settings', 'Links', 'More from this post']);
-    expect(screen.queryByText('Full post resources')).toBeNull();
+    expect(headings).toEqual(['The look', 'References', 'Generation setup', 'Links']);
+    expect(screen.queryByText('More from this post')).toBeNull();
   });
 
   it('says Copied on the button that copied', async () => {

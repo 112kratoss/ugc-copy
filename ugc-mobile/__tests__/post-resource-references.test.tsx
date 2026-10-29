@@ -23,9 +23,11 @@ vi.mock('react-native', () => ({
 }));
 
 vi.mock('lucide-react-native', () => ({
+  AudioLines: (props: MockProps) => React.createElement('audio-lines-icon', props),
   ExternalLink: (props: MockProps) => React.createElement('external-link-icon', props),
   FileText: (props: MockProps) => React.createElement('file-text-icon', props),
   ImageIcon: (props: MockProps) => React.createElement('image-icon', props),
+  Play: (props: MockProps) => React.createElement('play-icon', props),
 }));
 
 vi.mock('@/components/feed-media-frame', () => ({

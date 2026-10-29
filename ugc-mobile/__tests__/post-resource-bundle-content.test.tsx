@@ -27,10 +27,15 @@ vi.mock('lucide-react-native', () => ({
   Download: (props: MockProps) => React.createElement('download-icon', props),
   ExternalLink: (props: MockProps) => React.createElement('external-link-icon', props),
   FileText: (props: MockProps) => React.createElement('file-icon', props),
+  Images: (props: MockProps) => React.createElement('images-icon', props),
   Link2: (props: MockProps) => React.createElement('link-icon', props),
   Lock: (props: MockProps) => React.createElement('lock-icon', props),
+  NotebookText: (props: MockProps) => React.createElement('notes-icon', props),
+  Paperclip: (props: MockProps) => React.createElement('files-icon', props),
   Repeat2: (props: MockProps) => React.createElement('repeat-icon', props),
-  Settings2: (props: MockProps) => React.createElement('settings-icon', props),
+  SlidersHorizontal: (props: MockProps) => React.createElement('settings-icon', props),
+  TextQuote: (props: MockProps) => React.createElement('prompt-icon', props),
+  Workflow: (props: MockProps) => React.createElement('workflow-icon', props),
 }));
 
 vi.mock('@/components/feed-media-frame', () => ({
@@ -38,15 +43,9 @@ vi.mock('@/components/feed-media-frame', () => ({
 }));
 
 vi.mock('@/components/post-resource-references', () => ({
-  getReferenceResourceItems: (items: PostResourceItem[] | undefined) => (items ?? []).filter((item) => (
-    item.type === 'reference_image'
-    || item.type === 'reference_video'
-    || item.type === 'reference_audio'
-    || (item.type === 'source_file' && Boolean(item.contentType?.match(/^(image|video|audio)\//)))
-  )),
-  PostResourceReferences: ({ items }: { items: PostResourceItem[] }) => React.createElement(
+  PostResourceReferences: ({ items, label }: { items: PostResourceItem[]; label?: string | null }) => React.createElement(
     'references',
-    {},
+    { label },
     items.map((item) => React.createElement('text', { key: item.id ?? item.title }, item.title))
   ),
 }));
@@ -117,11 +116,14 @@ describe('the locked item previews (recipe audit B-F16)', () => {
     );
   }
 
-  it('says a card\'s type only where its title does not, and its count only past one', () => {
+  it('says a card\'s kind only where its title does not, and its count only past one', () => {
     // "Prompt or script" over "Prompt or script · 1 item" said one word three times.
     expect(textValues(lockedCard('Prompt or script', 'prompt', 1))).toEqual(['Prompt or script']);
-    expect(textValues(lockedCard('The exact prompt', 'prompt', 1))).toEqual(['The exact prompt', 'Prompt or script']);
+    expect(textValues(lockedCard('The exact prompt', 'prompt', 1))).toEqual(['The exact prompt']);
+    // The buyer's word for the kind, the web's too (the shared reading rule).
+    expect(textValues(lockedCard('Hook', 'prompt', 1))).toEqual(['Hook', 'Prompt']);
     expect(textValues(lockedCard('Reference media', 'reference_image', 3))).toEqual(['Reference media', '3 items']);
+    expect(textValues(lockedCard('The look', 'reference_image', 2))).toEqual(['The look', 'References · 2 items']);
   });
 
   it('says what stays private in recipe words, and names items, not resources', () => {
@@ -495,8 +497,83 @@ describe('PostResourceBundleContent', () => {
     const tree = renderContent(<PostResourceBundleContent resources={resources} />);
 
     const values = textValues(tree);
-    expect(values).toEqual(expect.arrayContaining(['Why this works', 'Guide or notes', 'Open with tension, then pay it off.']));
+    expect(values).toEqual(expect.arrayContaining(['Why this works', 'Notes', 'Open with tension, then pay it off.']));
+    expect(values).not.toContain('Guide or notes');
     expect(values).not.toContain('Generation setup');
+  });
+
+  // A live creation recipe (2026-10-29): the "Exact generation prompt"
+  // card, then the creation's three pictures and its clip, which the server
+  // adds when the recipe is read. An app talking to a server from before the
+  // clip was typed a reference still receives it as a source file: it gave the
+  // clip a card of its own, "Source assets", under a document icon.
+  it('reads the prompt, then every picture and clip it names in one References card', () => {
+    const resources: PostResourceBundleResources = {
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      workflowSnapshot: null,
+      attachments: [],
+      allowRemix: true,
+      sections: [
+        { id: 'creation-prompt', title: 'Exact generation prompt', kind: 'global', description: null, sortOrder: 0, resourceType: 'prompt', scope: { kind: 'all' } },
+      ],
+      items: [
+        item({ id: 'prompt', type: 'prompt', title: 'Exact generation prompt', sectionId: 'creation-prompt', textContent: 'Change the first person to @ali', sortOrder: 0 }),
+        item({ id: 'ali', type: 'reference_image', title: '@ali', storagePath: 'generation_inputs/u/g/00.png', contentType: 'image/png', sortOrder: 1 }),
+        item({ id: 'pic', type: 'reference_image', title: '@pic', storagePath: 'generation_inputs/u/g/01.jpg', contentType: 'image/jpeg', sortOrder: 2 }),
+        item({ id: 'third', type: 'reference_image', title: '@third', storagePath: 'generation_inputs/u/g/02.jpg', contentType: 'image/jpeg', sortOrder: 3 }),
+        item({ id: 'clip', type: 'source_file', title: 'Video reference 1', storagePath: 'generation_inputs/u/g/03.mp4', contentType: 'video/mp4', sortOrder: 4 }),
+      ],
+    };
+    const tree = renderContent(
+      <PostResourceBundleContent
+        onCopy={vi.fn()}
+        onOpenUrl={vi.fn()}
+        resolveFileUrl={async () => 'https://signed.example.com/reference'}
+        resources={resources}
+      />
+    );
+
+    const values = textValues(tree);
+    // The card's name, its Copy, then the prompt: no second heading over it.
+    expect(values.slice(0, values.indexOf('Change the first person to @ali'))).toEqual(['Exact generation prompt', 'Copy prompt']);
+    expect(values).toEqual(expect.arrayContaining(['References', '3 images · 1 video']));
+    expect(values).not.toContain('Source assets');
+    expect(values).not.toContain('Reference media');
+    const galleries = tree.root.findAll((node) => String(node.type) === 'references');
+    expect(galleries).toHaveLength(1);
+    // The card is the references, so the row under its name needs none of its own.
+    expect(galleries[0].props.label).toBeNull();
+    expect(textValues(tree).slice(-4)).toEqual(['@ali', '@pic', '@third', 'Video reference 1']);
+    expect(tree.root.findAll((node) => String(node.type) === 'images-icon')).toHaveLength(1);
+    expect(tree.root.findAll((node) => String(node.type) === 'prompt-icon')).toHaveLength(1);
+  });
+
+  it('marks where the pictures start in a card that mixes text and pictures', () => {
+    const resources: PostResourceBundleResources = {
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      workflowSnapshot: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [
+        { id: 'pack', title: 'Character pack', kind: 'asset_group', description: null, sortOrder: 0, resourceType: 'prompt', scope: { kind: 'all' } },
+      ],
+      items: [
+        item({ id: 'style', type: 'reference_image', title: 'Style frame', sectionId: 'pack', storagePath: 'u/style.png', contentType: 'image/png', sortOrder: 0 }),
+        item({ id: 'prompt', type: 'prompt', title: 'Character prompt', sectionId: 'pack', textContent: 'A knight in rain.', sortOrder: 1 }),
+      ],
+    };
+    const tree = renderContent(
+      <PostResourceBundleContent onOpenUrl={vi.fn()} resolveFileUrl={async () => 'https://signed.example.com/style'} resources={resources} />
+    );
+
+    const values = textValues(tree);
+    // The text first, then the gallery, whatever order the creator added them in.
+    expect(values.indexOf('A knight in rain.')).toBeLessThan(values.indexOf('Style frame'));
+    expect(tree.root.findAll((node) => String(node.type) === 'references')[0].props.label).toBe('References');
   });
 
   it('prints a lone generic item title once, not over its own group', () => {
