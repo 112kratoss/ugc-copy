@@ -4173,7 +4173,14 @@ export default function CreateVideoClient({
             setIsMultiShot(false);
         }
 
-        if (['grok-imagine-video', 'grok-imagine-video-1.5', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video'].includes(modelId) && endImageUrl) {
+        // A model that takes no end frame drops the one the form holds: its catalog descriptor
+        // says so once the catalog has reached the registry, the fallback tables before. A list
+        // kept here went stale when Grok Imagine Video 1.5 gained an end frame (2026-10-29).
+        const takesEndFrame = getVideoInputAffordances(
+            (nextModel as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
+            modelId,
+        ).frames.end;
+        if (!takesEndFrame && endImageUrl) {
             void clearImage('end');
         }
     };
@@ -5634,7 +5641,7 @@ export default function CreateVideoClient({
                                         </div>
                                         {isGrokVideoModel ? (
                                             <p className={`rounded-ui-lg border px-3 py-2 text-sm leading-6 ${noticeClasses.badge}`}>
-                                                Grok image-to-video accepts one image reference per run.
+                                                Grok Imagine Video takes a start image here, or up to 7 pictures as references.
                                             </p>
                                         ) : null}
                                     </>

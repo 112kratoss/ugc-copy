@@ -191,11 +191,27 @@ export interface GenerationModelQuote {
 
 type ModelStatus = 'active' | 'retired';
 
+/**
+ * Models kept for their old runs, recipes and prices but offered on no platform, because the
+ * provider no longer runs them. Kie retired Seedance 1.5 Pro upstream: its pages were gone by
+ * 2026-10-20, and on 2026-10-29 every createTask answered code 410 "has been retired upstream"
+ * (docs/model-api-references/kie-catalog-inputs-2026-10-29.md). A retired model's descriptor
+ * publishes both platforms off, as release imagen-family-disable-20260824 published the
+ * Imagen 4 family, so its price and routing stay ready for a provider that brings it back; no
+ * catalog build lists it unless a release is being emitted, and no start holds credits for it.
+ */
+const RETIRED_MODEL_IDS: ReadonlySet<string> = new Set(['seedance-1.5-pro']);
+
 const MODEL_STATUS: Record<string, ModelStatus> = Object.fromEntries([
   ...Object.keys(IMAGE_MODELS),
   ...Object.keys(VIDEO_MODELS),
   ...Object.keys(MOTION_MODELS),
-].map((id) => [id, 'active'])) as Record<string, ModelStatus>;
+].map((id) => [id, RETIRED_MODEL_IDS.has(id) ? 'retired' : 'active'])) as Record<string, ModelStatus>;
+
+/** A model the provider no longer runs: offered nowhere, and refused before a start holds credits. */
+export function isRetiredGenerationModel(modelId: string): boolean {
+  return MODEL_STATUS[modelId] === 'retired';
+}
 
 // Video opens on Seedance 2 Mini at 480p for 5 s without sound, 19 credits, so a new
 // account's 25 welcome credits cover one run (owner, 2026-10-28; Kling 3.0's 5 s was 70).
@@ -386,16 +402,6 @@ const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
   // pair, reference-to-video up to 7 named image_references.
   'pixverse-v6': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: true },
 };
-
-/**
- * Video models kept for their old runs, recipes and prices but offered on no platform,
- * because the provider no longer runs them. Kie retired Seedance 1.5 Pro upstream: its pages
- * were gone by 2026-10-20, and on 2026-10-29 every createTask answered code 410 "has been
- * retired upstream" (docs/model-api-references/kie-catalog-inputs-2026-10-29.md). A release
- * publishes them with both platforms off, as imagen-family-disable-20260824 did the Imagen 4
- * family, so their price and routing stay ready for a provider that brings one back.
- */
-const RETIRED_VIDEO_MODEL_IDS: ReadonlySet<VideoModelId> = new Set(['seedance-1.5-pro']);
 
 /**
  * Exported so the start service reads the same clip/audio caps the descriptor
@@ -749,10 +755,7 @@ function videoDescriptors(): GenerationModelDescriptor[] {
       // an app update that names it is in users' hands on both platforms. PixVerse V6's
       // update shipped in code on 2026-10-08; release pixverse-mobile-20261008, which turns
       // it on for mobile, is held until then (docs/model-api-references/pixverse-v6.md).
-      // A model its provider retired stays here for its old runs, offered nowhere.
-      availability: RETIRED_VIDEO_MODEL_IDS.has(model.id)
-        ? { web: false, mobile: false }
-        : { web: true, mobile: true },
+      availability: { web: true, mobile: true },
       inputModes: videoInputModes(model.id, limits),
       inputConstraints: videoInputConstraints(model.id),
     };
@@ -835,7 +838,10 @@ const ALL_PUBLIC_MODELS: GenerationModelDescriptor[] = [
   ...imageDescriptors(),
   ...videoDescriptors(),
   ...motionDescriptors(),
-];
+  // A retired model is offered on no platform, of whatever kind (RETIRED_MODEL_IDS).
+].map((model) => (MODEL_STATUS[model.id] === 'retired'
+  ? { ...model, availability: { web: false, mobile: false } }
+  : model));
 
 const PRIVATE_GENERATION_MODEL_ALIASES = [
   ...Object.values(IMAGE_MODELS),
@@ -894,24 +900,24 @@ export function buildGenerationModelCatalog({
   includeUnavailable?: boolean;
 }): GenerationModelCatalog {
   const projectedSchemaVersion = schemaVersion >= 3 ? 3 : schemaVersion >= 2 ? 2 : 1;
+  // Read before projecting: a v1 projection drops `availability`. A retired model is offered
+  // nowhere (RETIRED_MODEL_IDS), so this leaves it out too.
   const offered = (model: GenerationModelDescriptor) => model.availability?.[platform] ?? true;
-  const models = ALL_PUBLIC_MODELS
-    .filter((model) => (
-      MODEL_STATUS[model.id] === 'active'
-      && model.minClientSchemaVersion <= schemaVersion
-      && (includeUnavailable || offered(model))
-    ))
+  const listed = ALL_PUBLIC_MODELS.filter((model) => (
+    model.minClientSchemaVersion <= schemaVersion
+    && (includeUnavailable || offered(model))
+  ));
+  const offeredIds = new Set(listed.filter(offered).map((model) => model.id));
+  const models = listed
     .map((model) => projectGenerationModelDescriptor(model, projectedSchemaVersion))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.displayName.localeCompare(b.displayName));
-  const modelIds = new Set(models.filter(offered).map((model) => model.id));
+  const defaultFor = (kind: GenerationModelKind) => (offeredIds.has(DEFAULT_MODEL_IDS[kind])
+    ? DEFAULT_MODEL_IDS[kind]
+    : models.find((model) => model.kind === kind && offeredIds.has(model.id))?.id ?? null);
   return {
     schemaVersion: projectedSchemaVersion,
     revision: buildRevision(ALL_PUBLIC_MODELS),
-    defaults: {
-      image: modelIds.has(DEFAULT_MODEL_IDS.image) ? DEFAULT_MODEL_IDS.image : models.find((model) => model.kind === 'image' && modelIds.has(model.id))?.id ?? null,
-      video: modelIds.has(DEFAULT_MODEL_IDS.video) ? DEFAULT_MODEL_IDS.video : models.find((model) => model.kind === 'video' && modelIds.has(model.id))?.id ?? null,
-      motion: modelIds.has(DEFAULT_MODEL_IDS.motion) ? DEFAULT_MODEL_IDS.motion : models.find((model) => model.kind === 'motion' && modelIds.has(model.id))?.id ?? null,
-    },
+    defaults: { image: defaultFor('image'), video: defaultFor('video'), motion: defaultFor('motion') },
     models,
   };
 }

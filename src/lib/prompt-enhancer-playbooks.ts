@@ -110,8 +110,10 @@ export const MODEL_ALIASES: Record<string, string> = {
   'gemini-omni-1.1-flash': 'gemini-omni-video',
   // docs/model-api-references/wan-3-0.md: the Prime tier takes the identical body.
   'wan-3.0-prime': 'wan-3.0',
-  // docs/model-api-references/grok-imagine-video-1-5.md: Grok Imagine's prompt, image_urls,
-  // aspect_ratio, resolution and duration body without the mode field; the same audio rule.
+  // docs/model-api-references/kie-catalog-inputs-2026-10-29.md: Grok Imagine's prompt, image_urls,
+  // aspect_ratio, resolution and duration body without the mode field, plus a frame pair
+  // (first_frame_url, last_frame_url), as Gemini Omni 1.1 Flash's body adds one to its target's;
+  // the same prompt grammar and audio rule.
   'grok-imagine-video-1.5': 'grok-imagine-video',
 };
 

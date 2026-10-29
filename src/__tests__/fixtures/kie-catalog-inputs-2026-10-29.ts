@@ -49,29 +49,40 @@ export function descriptorBeforeKieCatalogInputs<T extends GenerationModelDescri
   return descriptor;
 }
 
-function isEndFrameNeedsStart(rule: Rule): boolean {
-  return rule.type === 'min-slot-count' && rule.slotKey === 'startFrame';
+/** The reference-picture cap a references run is held to: the max-slot-count rule gated on `referenceMode: elements`. */
+function isReferencesCap(rule: Rule, slotKey: string): boolean {
+  return rule.type === 'max-slot-count'
+    && rule.slotKey === slotKey
+    && Array.isArray(rule.conditions)
+    && (rule.conditions as Rule[]).some((condition) => condition.key === 'referenceMode' && condition.value === 'elements');
+}
+
+function withRules(operation: GenerationModelOperationalConfig, rewrite: (rules: Rule[]) => Rule[]) {
+  operation.validationConfig = { ...operation.validationConfig, rules: rewrite(operation.validationConfig.rules as Rule[]) };
 }
 
 /** A model's operational config from today's build, as the build before this release made it. */
 export function operationBeforeKieCatalogInputs<T extends GenerationModelOperationalConfig>(current: T): T {
   const operation = clone(current);
-  if (operation.modelId !== 'grok-imagine-video' && operation.modelId !== 'grok-imagine-video-1.5') return operation;
-  const rules = operation.validationConfig.rules as Rule[];
-  operation.validationConfig = {
-    ...operation.validationConfig,
-    rules: rules
-      .filter((rule) => operation.modelId !== 'grok-imagine-video-1.5' || !isEndFrameNeedsStart(rule))
-      .map((rule) => {
-        if (rule.type !== 'max-slot-count' || (rule.slotKey !== 'images' && rule.slotKey !== 'imageReferences')) return rule;
-        const elements = (rule.conditions as Rule[] | undefined)?.some((condition) => condition.value === 'elements');
-        if (!elements) return rule;
-        if (operation.modelId === 'grok-imagine-video') return { ...rule, max: 1 };
-        const cap: Rule = { ...rule, slotKey: 'images' };
-        delete cap.field;
-        delete cap.message;
-        return cap;
-      }),
-  };
+  switch (operation.modelId) {
+    case 'grok-imagine-video':
+      withRules(operation, (rules) => rules.map((rule) => (isReferencesCap(rule, 'images') ? { ...rule, max: 1 } : rule)));
+      break;
+    case 'grok-imagine-video-1.5':
+      withRules(operation, (rules) => rules
+        // The end frame, and the rule that it needs the start frame, are this release's.
+        .filter((rule) => !(rule.type === 'min-slot-count' && rule.slotKey === 'startFrame'))
+        // The cap counted every picture before the start frame rode beside the references.
+        .map((rule) => {
+          if (!isReferencesCap(rule, 'imageReferences')) return rule;
+          const cap: Rule = { ...rule, slotKey: 'images' };
+          delete cap.field;
+          delete cap.message;
+          return cap;
+        }));
+      break;
+    default:
+      break;
+  }
   return operation;
 }

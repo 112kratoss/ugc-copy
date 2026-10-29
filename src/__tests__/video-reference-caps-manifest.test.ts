@@ -200,7 +200,9 @@ describe('video reference caps track Kie', () => {
     const operations = new Map(
       buildCodeGenerationModelOperations().map((operation) => [operation.modelId, operation]),
     );
-    for (const model of catalog.models.filter((entry) => entry.kind === 'video')) {
+    // Models offered nowhere too: a retired model keeps its caps for a release that brings it back.
+    const everyModel = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true });
+    for (const model of everyModel.models.filter((entry) => entry.kind === 'video')) {
       const published = model.inputs.imageReferences?.max ?? 0;
       const rules = (operations.get(model.id)?.validationConfig.rules ?? []) as Array<{
         type: string;

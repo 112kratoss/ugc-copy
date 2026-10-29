@@ -68,5 +68,7 @@ Delisted by 2026-10-20 (pages 404, gone from `llms.txt`; the API still took the 
 `input: {}` included, answers code 410: "Seedance 1.5 Pro has been retired upstream and is no longer available on
 Kie.ai. Please consider other models in the Seedance series — the latest is Seedance 2.5".
 
-Shipped: offered on no platform (`RETIRED_VIDEO_MODEL_IDS`), as the Imagen 4 family was on 2026-08-24; its entry, prices
-and routing stay for its old runs. The workflow builders propose Seedance 2 Mini where they proposed it.
+Shipped: retired (`RETIRED_MODEL_IDS`, the `retired` status): offered on no platform, as the Imagen 4 family was on
+2026-08-24, and refused before a start holds credits (a template quotes at its own pinned revision). Its entry, prices
+and routing stay for its old runs. The workflow builders send a before/after workflow to Kling 3.0 instead, whose start
+and end frames the workflow wires (they wire a Seedance 2 model's frames as references).

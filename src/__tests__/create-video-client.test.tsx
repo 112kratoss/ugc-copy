@@ -1701,7 +1701,8 @@ describe('CreateVideoClient Kling video elements', () => {
      * publishes. Kling 3.0's clips are named video elements, a slot of their own
      * with a panel of their own, so they are not counted here.
      */
-    const publishedCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+    // Models offered nowhere too, so a retired one is read off its own entry, not its absence.
+    const publishedCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true });
     function publishedLimit(modelId: string, slotKey: 'videoReferences' | 'audioReferences') {
       const entry = publishedCatalog.models.find((model) => model.id === modelId);
       return (entry?.inputModes ?? [])
@@ -3919,6 +3920,36 @@ describe('CreateVideoClient Kling video elements', () => {
       // Hailuo's start frame is already there, so the canvas asks only for the prompt.
       expect(canvasAsksFor()).toBe(modelId === 'hailuo-2.3' ? ASKS_FOR_PROMPT : ASKS_FOR_FRAMES);
       expect(slotCount(request, 'startFrame')).toBe(1);
+    });
+
+    it.each([
+      // Kie's grok-imagine-video-1-5-preview takes a last_frame_url (2026-10-29); the switch
+      // kept its own list of models without an end frame and cleared this one's.
+      ['Grok Imagine Video 1.5', 'grok-imagine-video-1.5', 1],
+      // grok-imagine/image-to-video takes no end frame.
+      ['Grok Imagine Video', 'grok-imagine-video', 0],
+    ] as const)('switching to %s keeps the end image exactly when the model takes one', async (displayName, modelId, endFrames) => {
+      saveInTheBrowser({});
+      getPersistedFileMock.mockImplementation(async (key: string) => (
+        key === 'create-video:start-image:user-1' ? picture('start')
+          : key === 'create-video:end-image:user-1' ? picture('end')
+            : null
+      ));
+      modelCatalogState.summaries = [
+        { id: 'seedance-2-5', kind: 'video', displayName: 'Seedance 2.5', description: 'Test multimodal video model' },
+        { id: modelId, kind: 'video', displayName, description: 'Test Grok video model' },
+      ];
+      modelCatalogState.extraModels = publishedCatalog.models
+        .filter((model) => model.id === modelId) as unknown as Array<Record<string, unknown>>;
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await restored();
+      await waitFor(() => expect(slotCount(lastQuoteRequest(), 'endFrame')).toBe(1));
+
+      chooseModel(view.container, `^${displayName}`);
+
+      await waitFor(() => expect(lastQuoteRequest().modelId).toBe(modelId));
+      expect(slotCount(lastQuoteRequest(), 'startFrame')).toBe(1);
+      expect(slotCount(lastQuoteRequest(), 'endFrame')).toBe(endFrames);
     });
 
     it('leaves the frames of Seedance 1.5 Pro free while a saved clip and track are on standby', async () => {

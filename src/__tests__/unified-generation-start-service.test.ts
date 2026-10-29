@@ -1181,7 +1181,9 @@ describe('a page run with a named reference picture', () => {
     expect((request as { input: Record<string, unknown> }).input).not.toHaveProperty('aspect_ratio');
   });
 
-  it('refuses a page run on Seedance 1.5 Pro, which Kie retired, before anything is held', async () => {
+  it('refuses a page run on Seedance 1.5 Pro, which Kie retired, at its quote, so nothing reaches Kie', async () => {
+    // The catalog no longer offers it; the start's own guard before the hold is in
+    // generation-services.test.ts ("refuses a model Kie retired before anything is held").
     await expect(startFromPage('seedance-1.5-pro', { duration: 4, resolution: '720p' }))
       .rejects.toThrow('This model is no longer available.');
     expect(fetch).not.toHaveBeenCalled();

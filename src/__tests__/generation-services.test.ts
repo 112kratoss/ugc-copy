@@ -3454,6 +3454,78 @@ describe('generation services', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    // The catalog publishes no end frame for either; a workflow or template run's quote counts
+    // no frames, so the start is where a frame pair is refused, before anything is held.
+    ['kling-o3', { resolution: '720p', duration: 5 }],
+    ['happyhorse-1.1', { resolution: '720p', duration: 5 }],
+  ] as const)('refuses %s a frame pair, as its catalog entry takes a start frame only', async (model, settings) => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Move between these images.',
+      model,
+      aspectRatio: '16:9',
+      ...settings,
+      startImageUrl: 'https://cdn.example.com/start.jpg',
+      endImageUrl: 'https://cdn.example.com/end.jpg',
+    })).rejects.toThrow('supports a start frame only.');
+
+    expect(rpcCalls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['wan-2.7', { resolution: '1080p', duration: 5 }],
+    ['grok-imagine-video-1.5', { resolution: '480p', duration: 5 }],
+  ] as const)('refuses %s an end frame beside references, where only the start frame rides', async (model, settings) => {
+    // It was left out after the hold; the creators never send one, but a count-only quote passes it.
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Keep the product consistent.',
+      model,
+      aspectRatio: '16:9',
+      ...settings,
+      referenceMode: 'elements',
+      startImageUrl: 'https://cdn.example.com/start.jpg',
+      endImageUrl: 'https://cdn.example.com/end.jpg',
+      imageUrls: ['https://cdn.example.com/product.jpg'],
+    })).rejects.toThrow('keeps only a start frame beside references');
+
+    expect(rpcCalls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a model Kie retired before anything is held, whatever revision the run quoted at', async () => {
+    // A template run quotes at the revision it was published with, where Seedance 1.5 Pro is
+    // still offered; Kie answers every createTask for it with code 410 (2026-10-29).
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A slow push-in over the harbour.',
+      model: 'seedance-1.5-pro',
+      aspectRatio: '16:9',
+      resolution: '480p',
+      duration: 4,
+    })).rejects.toThrow('This model is no longer available.');
+
+    expect(rpcCalls.filter((call) => call.fn === 'start_generation' || call.fn === 'start_template_generation')).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('keeps Kling 2.6 image-oriented motion to the ten seconds Kie allows', async () => {
     // kling-2.6/motion-control: `character_orientation: image` is "(max 10s video)";
     // video orientation reaches 30. Kling 3.0 motion carries no such limit.
@@ -4677,12 +4749,6 @@ describe('generation services', () => {
       request: ProviderRequest;
     }> = [
       {
-        label: 'Seedance 1.5 Pro',
-        model: 'seedance-1.5-pro',
-        settings: { duration: 4, resolution: '720p' },
-        request: { model: 'bytedance/seedance-1.5-pro', input: { input_urls: [REFERENCE] } },
-      },
-      {
         label: 'Seedance 2',
         model: 'seedance-2',
         settings: { duration: 5, resolution: '720p' },
@@ -4809,7 +4875,10 @@ describe('generation services', () => {
 
     it('has a route for every model that takes reference pictures', async () => {
       const { VIDEO_MODELS, getVideoElementSupport } = await import('@/lib/models');
+      const { isRetiredGenerationModel } = await import('@/lib/generation-model-catalog');
+      // A retired model starts nothing (Seedance 1.5 Pro since 2026-10-29).
       const taking = (Object.keys(VIDEO_MODELS) as Array<VideoStart['model']>).filter((model) => {
+        if (isRetiredGenerationModel(model)) return false;
         const modes = VIDEO_MODELS[model].modeOptions.map((option) => option.value);
         return (modes.length > 0 ? modes : [undefined])
           .some((mode) => getVideoElementSupport(model, { mode }).enabled);
@@ -6583,7 +6652,6 @@ describe('generation services', () => {
         { model: 'kling-3.0-turbo', limit: 2500, message: 'Kling 3 Turbo prompts support up to 2,500 characters.', settings: { resolution: '720p' } },
         { model: 'kling-3.0-video', limit: 2500, message: 'Kling 3.0 Cinematic prompts support up to 2,500 characters.', settings: { mode: 'std' } },
         { model: 'kling-o3', limit: 3072, message: 'Kling O3 prompts support up to 3,072 characters.', settings: { resolution: '720p' } },
-        { model: 'seedance-1.5-pro', limit: 2500, message: 'Seedance 1.5 Pro prompts support up to 2,500 characters.', settings: { duration: 4, resolution: '720p' } },
         { model: 'grok-imagine-video-1.5', limit: 4096, message: 'Grok Imagine Video 1.5 prompts support up to 4,096 characters.', settings: { resolution: '720p' } },
         { model: 'pixverse-v6', limit: 5000, message: 'PixVerse V6 prompts support up to 5,000 characters.', settings: { resolution: '720p' } },
         { model: 'wan-2.7', limit: 5000, message: 'Wan 2.7 prompts support up to 5,000 characters.', settings: { resolution: '720p' } },
