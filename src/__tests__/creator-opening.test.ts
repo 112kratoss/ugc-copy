@@ -5,6 +5,7 @@ import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import { creatorOpeningFromCatalog, drawableLink, openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-opening';
 import { loadCreatorOpening } from '@/lib/creator-page-server';
 import type { VideoRunMedia } from '@/lib/creator-run-inputs';
+import { getCatalogDescriptorDefaultSettings } from '@/lib/generation-model-client';
 import {
   videoRunOnModel,
   type VideoFormHeld,
@@ -92,6 +93,16 @@ describe('creatorOpeningFromCatalog', () => {
     // A ratio alone applies to the default.
     expect(creatorOpeningFromCatalog(catalog, 'video', { aspectRatio: '9:16' }))
       .toMatchObject({ modelId: 'seedance-2-mini', settings: { ...MINI_SETTINGS, aspectRatio: '9:16' } });
+  });
+
+  it('opens every model on the settings the page\'s first pick gives it', () => {
+    // The first pick sets a model's controls to `getCatalogDescriptorDefaultSettings` (a client module the
+    // server cannot call): the opening must agree for every model, or the first pick changes the drawn form.
+    for (const model of catalog.models) {
+      const opening = creatorOpeningFromCatalog(catalog, model.kind, { model: model.id });
+      if (!opening) continue;
+      expect(opening.settings, model.id).toEqual(getCatalogDescriptorDefaultSettings(model));
+    }
   });
 
   it('draws no opening for a link to a model the catalog does not offer the tool', () => {

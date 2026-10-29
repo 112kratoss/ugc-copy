@@ -49,6 +49,15 @@ test.describe('scripts off: the server’s HTML', () => {
     await expect(settingsChip(page)).toHaveAccessibleName('Generation settings: 720P · Add motion');
   });
 
+  test('a link with a ratio opens the image creator on it, priced', async ({ page }) => {
+    // The /create image starter's link.
+    await page.goto('/create-image?model=nano-banana-2&aspectRatio=4:5', COLD_PAGE);
+
+    await expect(modelChip(page)).toHaveText('Nano Banana 2.0Recommended');
+    await expect(settingsChip(page)).toHaveAccessibleName('Generation settings: 1K · 4:5 · JPG');
+    await expect(barNote(page)).toHaveText(/^New accounts get 25 free creditsThis run \d+ · leaves \d+$/);
+  });
+
   test('the image creator opens on the catalog default, priced', async ({ page }) => {
     await page.goto('/create-image', COLD_PAGE);
 
