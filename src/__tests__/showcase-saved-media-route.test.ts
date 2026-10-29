@@ -136,10 +136,11 @@ vi.mock('@/lib/showcase-feed', () => ({
       canRemix: false,
     }))
   ),
-}));
-
-vi.mock('@/lib/moderation-service', () => ({
-  loadBlockedCreatorIds: vi.fn(async () => new Set<string>()),
+  // Pricing, viewer state and blocking are the feed's own; they run for real
+  // in showcase-saved-media-service.test.ts and
+  // showcase-saved-media-recipe-redaction.test.ts.
+  attachLocalizedAssetPrices: vi.fn(async (feed: unknown) => feed),
+  attachViewerStateToFeed: vi.fn(async (feed: unknown) => feed),
 }));
 
 describe('/api/showcase/saved-media route', () => {

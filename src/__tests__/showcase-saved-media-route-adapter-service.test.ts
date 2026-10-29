@@ -42,7 +42,7 @@ describe('showcase saved media route adapter service', () => {
   it('authenticates, clamps query params, and delegates saved-media loading with private headers', async () => {
     const response = await getShowcaseSavedMediaRouteResponse({
       request: new Request('http://localhost/api/showcase/saved-media?limit=999&offset=12', {
-        headers: { 'x-request-id': 'saved-media-route-1' },
+        headers: { 'x-request-id': 'saved-media-route-1', 'x-vercel-ip-country': 'IN' },
       }),
       dependencies: {
         createServiceClient,
@@ -62,8 +62,10 @@ describe('showcase saved media route adapter service', () => {
         offset: 12,
       },
     });
+    // Recipe prices are quoted in the viewer's currency, as on the feed.
     expect(getSavedMediaFeedForRoute).toHaveBeenCalledWith({
       createAdminSupabase: createServiceClient,
+      countryCode: 'IN',
       limit: 48,
       offset: 12,
       userId: user.id,
@@ -120,6 +122,7 @@ describe('showcase saved media route adapter service', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Failed to fetch saved media' });
     expect(getSavedMediaFeedForRoute).toHaveBeenCalledWith({
       createAdminSupabase: createServiceClient,
+      countryCode: null,
       limit: 24,
       offset: 0,
       userId: user.id,

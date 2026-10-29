@@ -4,12 +4,16 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { loadBlockedCreatorIds as defaultLoadBlockedCreatorIds } from '@/lib/moderation-service';
 import { isMissingPostsSchemaError } from '@/lib/posts-server';
-import { resolvePostRowsToFeedItems as defaultResolvePostRowsToFeedItems } from '@/lib/showcase-feed';
-import type {
-  ShowcaseFeedItem,
-  ShowcaseFeedPage,
+import {
+  attachLocalizedAssetPrices,
+  attachViewerStateToFeed,
+  resolvePostRowsToFeedItems as defaultResolvePostRowsToFeedItems,
+} from '@/lib/showcase-feed';
+import {
+  sanitizeShowcaseFeedPage,
+  type ShowcaseFeedItem,
+  type ShowcaseFeedPage,
 } from '@/lib/showcase';
 
 export const DEFAULT_SAVED_MEDIA_LIMIT = 24;
@@ -36,8 +40,9 @@ export type SavedMediaRouteResult =
 
 type GetSavedMediaFeedParams = {
   createAdminSupabase: () => SupabaseClient;
+  /** The viewer's country, which recipe prices are quoted in, as on the feed. */
+  countryCode?: string | null;
   limit: number;
-  loadBlockedCreatorIds?: typeof defaultLoadBlockedCreatorIds;
   offset: number;
   pagination?: string;
   cursor?: string | null;
@@ -61,8 +66,8 @@ function emptySavedMediaPage(limit: number, offset: number, cursorMode = false):
 
 export async function getSavedMediaFeedForRoute({
   createAdminSupabase,
+  countryCode = null,
   limit,
-  loadBlockedCreatorIds = defaultLoadBlockedCreatorIds,
   offset,
   pagination,
   cursor,
@@ -182,22 +187,18 @@ export async function getSavedMediaFeedForRoute({
     (postRows ?? []) as Parameters<typeof resolvePostRowsToFeedItems>[0],
     adminSupabase
   );
-  let viewerSafeItems = hydratedItems;
-  try {
-    const blockedCreatorIds = await loadBlockedCreatorIds({
-      adminSupabase,
-      creatorIds: hydratedItems
-        .map((item) => item.creator?.id)
-        .filter((id): id is string => Boolean(id)),
-      viewerUserId: userId,
-    });
-    viewerSafeItems = hydratedItems.filter((item) => (
-      !item.creator?.id || !blockedCreatorIds.has(item.creator.id)
-    ));
-  } catch (error) {
-    logBackendError('error_filtering_blocked_creators_from_saved_media', { error: error });
-    viewerSafeItems = [];
-  }
+  // Hydration carries each recipe's full locked preview (item titles, cards,
+  // file names and sizes). A saved post goes out the way the feed's reads by
+  // id send it to this viewer: priced in their currency, with the recipes and
+  // Remix they own, without a creator either of them blocked (none at all if
+  // that cannot be read), and redacted to the public teaser.
+  const pricedFeed = await attachLocalizedAssetPrices(
+    { items: hydratedItems, pageInfo: { hasMore: false, nextOffset: null, limit, offset } },
+    countryCode,
+  );
+  const viewerSafeItems = sanitizeShowcaseFeedPage(
+    await attachViewerStateToFeed(pricedFeed, userId, adminSupabase),
+  ).items;
 
   const hydratedMap = new Map<string, ShowcaseFeedItem>();
   for (const item of viewerSafeItems) {

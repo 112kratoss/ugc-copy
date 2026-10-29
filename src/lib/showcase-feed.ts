@@ -1778,7 +1778,8 @@ export async function getShowcaseFeedItemsByPostIds(options: {
   return sanitizeShowcaseFeedPage(viewerFeed).items;
 }
 
-async function attachLocalizedAssetPrices(
+/** Each recipe's price in the viewer's currency; saved media prices its page with it too. */
+export async function attachLocalizedAssetPrices(
   feed: ShowcaseFeedPage,
   countryCode?: string | null
 ): Promise<ShowcaseFeedPage> {
