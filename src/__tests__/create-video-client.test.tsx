@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { resetFeedbackState } from '@/components/feedback-state';
+import { creatorOpeningFromCatalog, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import { buildGenerationModelCatalog, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
@@ -72,6 +74,8 @@ const modelCatalogState = vi.hoisted(() => ({
   honestDetails: false,
   // The network has not yet confirmed the revision: the catalog is the browser's stored copy.
   checkingRevision: false,
+  // No catalog yet, as on the first paint: the server's HTML and the render that hydrates it.
+  withoutCatalog: false,
 }));
 // What the result's player was last given; it still plays as it does on the page.
 const resultVideoPropsMock = vi.hoisted(() => vi.fn());
@@ -339,6 +343,12 @@ vi.mock('@/lib/generation-model-client', async () => {
           // A test's own entry stands in for the hook's of the same id.
           && all.map((other) => other.id).lastIndexOf(model.id) === index),
       };
+      if (modelCatalogState.withoutCatalog) {
+        return {
+          summaries: [], missingIds: [], isLoadingModels: false, detailsReady: false, catalog: null, error: modelCatalogState.error,
+          isLoading: true, isCheckingRevision: false, revision: null, refetch: generationCatalogRefetchMock,
+        };
+      }
       return {
         summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds, isLoadingModels: false,
         detailsReady: !modelCatalogState.honestDetails
@@ -512,6 +522,7 @@ describe('CreateVideoClient Kling video elements', () => {
     modelCatalogState.withoutModels = [];
     modelCatalogState.honestDetails = false;
     modelCatalogState.checkingRevision = false;
+    modelCatalogState.withoutCatalog = false;
     resultVideoPropsMock.mockClear();
     temporaryUploadMock.mockReset();
     temporaryUploadMock.mockImplementation(async (file: File) => ({
@@ -3666,6 +3677,244 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
       expect(quoteStandIn.lastRequest()!.settings).toMatchObject({ aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false });
       expect(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/)).toHaveValue('A lighthouse in a storm');
+    });
+
+    /**
+     * The server's opening (`loadCreatorOpening`): the published catalog's run for this address, which
+     * the page draws from its first paint (2026-10-29). Until then the page drew Kling 3.0's stand-in,
+     * and Seedance 2 Mini took over only once the catalog came back from the network.
+     */
+    describe('the server\'s opening', () => {
+      function openingFor(link: CreatorOpeningLink = {}, costCredits: number | null = 19): CreatorOpening {
+        const opening = creatorOpeningFromCatalog({ ...publishedCatalog, revision: modelCatalogState.revision }, 'video', link)!;
+        return { ...opening, costCredits };
+      }
+      const modelChipName = () => document.querySelector('button[aria-haspopup="listbox"]')?.textContent?.trim();
+      const barNote = () => document.querySelector('[data-creator-bar-note]');
+      /** Every model the chip names from here on, in order. */
+      function watchChip(container: HTMLElement) {
+        const names = [modelChipName()];
+        const observer = new MutationObserver(() => {
+          const name = modelChipName();
+          if (name !== names.at(-1)) names.push(name);
+        });
+        observer.observe(container, { childList: true, subtree: true, characterData: true });
+        return { names, stop: () => observer.disconnect() };
+      }
+
+      /** The page as its server renders it: what a browser paints before any script runs. */
+      function serverRendered(element: React.ReactElement) {
+        const html = document.createElement('div');
+        html.innerHTML = renderToString(element);
+        return {
+          chip: html.querySelector('button[aria-haspopup="listbox"]')?.textContent?.trim(),
+          settings: html.querySelector('[data-testid="creator-settings-summary"]')?.textContent,
+          note: html.querySelector('[data-creator-bar-note]')?.textContent,
+        };
+      }
+
+      it('draws the default, its settings and its price before the catalog is in', () => {
+        authState.signedIn = false;
+        modelCatalogState.withoutCatalog = true;
+        expect(serverRendered(<CreateVideoClient prefill={{}} visitorWelcomeCredits={25} opening={openingFor()} />)).toEqual({
+          chip: 'Seedance 2 Mini',
+          settings: '480P · 16:9 · 5s · Sound off',
+          note: 'New accounts get 25 free creditsThis run 19 · leaves 6',
+        });
+        render(<CreateVideoClient prefill={{}} visitorWelcomeCredits={25} opening={openingFor()} />);
+
+        expect(modelChipName()).toBe('Seedance 2 Mini');
+        expect(screen.getByRole('button', { name: /^Generation settings: / }))
+          .toHaveAccessibleName('Generation settings: 480P · 16:9 · 5s · Sound off');
+        expect(barNote()).toHaveTextContent('New accounts get 25 free creditsThis run 19 · leaves 6');
+        // Its own price waits for its catalog; Generate is not priced by the server's.
+        expect(quoteStandIn.requests.every((request) => request === null)).toBe(true);
+      });
+
+      it('changes nothing at its first pick, and gives way to the page\'s own price', async () => {
+        modelCatalogState.withoutCatalog = true;
+        const opening = openingFor();
+        const view = render(<CreateVideoClient prefill={{}} opening={opening} />);
+        const chip = watchChip(view.container);
+        expect(barNote()).toHaveTextContent('Balance 10000Leaves 9981');
+
+        // The catalog comes back at the server's revision, and the page asks its own price.
+        quoteStandIn.reset(19);
+        quoteStandIn.answers = ['pending'];
+        modelCatalogState.withoutCatalog = false;
+        modelCatalogState.videoDefault = 'seedance-2-mini';
+        modelCatalogState.extraModels = [miniWithDefaults({})];
+        view.rerender(<CreateVideoClient prefill={{}} opening={opening} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()).toMatchObject({
+          modelId: 'seedance-2-mini',
+          settings: { aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false },
+        }));
+        expect(barNote()).toHaveTextContent('Balance 10000Leaves 9981');
+
+        quoteStandIn.answers = [21];
+        view.rerender(<CreateVideoClient prefill={{}} opening={opening} />);
+        await waitFor(() => expect(barNote()).toHaveTextContent('Balance 10000Leaves 9979'));
+        expect(chip.names).toEqual(['Seedance 2 Mini']);
+        chip.stop();
+      });
+
+      it('drops the server\'s price for a run it did not price, or a revision the network says is not its own', async () => {
+        modelCatalogState.withoutCatalog = true;
+        modelCatalogState.summaries = videoModelSummaries;
+        const view = render(<CreateVideoClient prefill={{}} opening={openingFor()} />);
+        expect(barNote()).toHaveTextContent('Leaves 9981');
+        chooseAspectRatio('9:16');
+        expect(barNote()).not.toHaveTextContent('Leaves');
+        view.unmount();
+
+        quoteStandIn.reset(19);
+        quoteStandIn.answers = ['pending'];
+        modelCatalogState.withoutCatalog = false;
+        modelCatalogState.videoDefault = 'seedance-2-mini';
+        modelCatalogState.extraModels = [miniWithDefaults({})];
+        const view2 = render(<CreateVideoClient prefill={{}} opening={{ ...openingFor(), revision: 'an-earlier-release' }} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+        expect(barNote()).not.toHaveTextContent('Leaves');
+        view2.unmount();
+
+        // A catalog that will not load: the page cannot price the run, so no price stands for it.
+        modelCatalogState.withoutCatalog = true;
+        modelCatalogState.error = new Error('Could not load model settings.');
+        render(<CreateVideoClient prefill={{}} opening={openingFor()} />);
+        expect(barNote()).not.toHaveTextContent('Leaves');
+      });
+
+      it('opens a draft saved before the first pick on the default\'s published settings, keeping what the creator changed', async () => {
+        // What the page saved for a visit that ended before its first pick: the form as drawn, and no
+        // model. Until 2026-10-29 the page drew the stand-in, Kling 3.0's, and kept no record of it.
+        const savedBeforeAnyPick = {
+          prompt: '', modelId: '', mode: 'std', aspectRatio: '16:9', sound: false, resolution: '720p',
+          fixedLens: false, isMultiShot: false, shots: [{ id: '1', prompt: '', duration: 5 }], duration: 5,
+        };
+        for (const [change, saved, settings] of [
+          ['as drawn', {}, { aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false }],
+          ['the creator\'s ratio', { aspectRatio: '9:16' }, { aspectRatio: '9:16', resolution: '480p', duration: 5 }],
+          // Saved by this page on a link's Kling 3.0 at 9:16, then a plain visit.
+          ['drawn for a link', {
+            aspectRatio: '9:16',
+            drawn: { mode: 'std', aspectRatio: '9:16', sound: false, resolution: '720p', fixedLens: false, isMultiShot: false, duration: 5 },
+          }, { aspectRatio: '16:9', resolution: '480p', duration: 5 }],
+        ] as const) {
+          quoteStandIn.reset(12);
+          loadCreatorDraftMock.mockResolvedValue({ ...savedBeforeAnyPick, ...saved });
+          modelCatalogState.videoDefault = 'seedance-2-mini';
+          modelCatalogState.extraModels = [miniWithDefaults({})];
+          const view = render(<CreateVideoClient prefill={{}} opening={openingFor()} />);
+          await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+          await settle();
+
+          expect(quoteStandIn.lastRequest()!.settings, change).toMatchObject(settings);
+          view.unmount();
+        }
+      });
+
+      it('restores no emptied choice from a draft saved before the first pick', async () => {
+        // Saved on Seedance 2 Mini, which offers no quality mode: the page's settings check emptied it.
+        loadCreatorDraftMock.mockResolvedValue({
+          prompt: '', modelId: '', mode: '', aspectRatio: '16:9', sound: false, resolution: '480p',
+          fixedLens: false, isMultiShot: false, shots: [{ id: '1', prompt: '', duration: 5 }], duration: 5,
+          drawn: { mode: 'std', aspectRatio: '16:9', sound: false, resolution: '480p', fixedLens: false, isMultiShot: false, duration: 5 },
+        });
+        // The next visit is a link to Kling 3.0, which does offer one.
+        publishKlingBesideMini();
+        const prefill = { model: 'kling-3.0-video' };
+        render(<CreateVideoClient prefill={prefill} opening={openingFor(prefill, 70)} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('kling-3.0-video'));
+        await settle();
+
+        expect(quoteStandIn.lastRequest()!.settings).toMatchObject({ mode: 'std' });
+        expect(screen.queryByText(/Model settings changed/)).toBeNull();
+      });
+
+      it('saves what it drew with a draft that has no model yet', async () => {
+        modelCatalogState.checkingRevision = true;
+        render(<CreateVideoClient prefill={{}} opening={openingFor()} />);
+        await waitFor(() => expect(saveCreatorDraftMock).toHaveBeenCalled());
+        expect(saveCreatorDraftMock.mock.calls.at(-1)?.[2]).toMatchObject({
+          modelId: '',
+          drawn: { resolution: '480p', aspectRatio: '16:9', duration: 5, sound: false },
+        });
+      });
+
+      it('draws a length a model offers as a choice, as the link asked for it', () => {
+        // Gemini Omni Video publishes its lengths as a choice of strings ("4", "8").
+        const opening = openingFor({ model: 'gemini-omni-video', duration: '8' }, null);
+        expect(opening.settings.duration).toBe('8');
+        modelCatalogState.withoutCatalog = true;
+        expect(serverRendered(<CreateVideoClient prefill={{ model: 'gemini-omni-video', duration: '8' }} opening={opening} />))
+          .toMatchObject({ chip: 'Gemini Omni Video', settings: expect.stringContaining('8s') });
+      });
+
+      it('takes a later release\'s defaults over the opening\'s, for every setting still as drawn', async () => {
+        modelCatalogState.withoutCatalog = true;
+        const opening = { ...openingFor(), revision: 'the-release-the-server-read' };
+        const view = render(<CreateVideoClient prefill={{}} opening={opening} />);
+
+        // The network confirms a later release, whose Mini opens on 720p, 21:9 and 6 s.
+        modelCatalogState.withoutCatalog = false;
+        modelCatalogState.videoDefault = 'seedance-2-mini';
+        modelCatalogState.extraModels = [miniWithDefaults({ resolution: '720p', aspectRatio: '21:9', duration: 6 })];
+        view.rerender(<CreateVideoClient prefill={{}} opening={opening} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()).toMatchObject({
+          modelId: 'seedance-2-mini',
+          settings: { resolution: '720p', aspectRatio: '21:9', duration: 6 },
+        }));
+      });
+
+      it('opens a link\'s model at the link\'s ratio from its first paint, and keeps it', async () => {
+        modelCatalogState.withoutCatalog = true;
+        const opening = openingFor({ model: 'wan-2.7', aspectRatio: '9:16' }, null);
+        const prefill = { model: 'wan-2.7', aspectRatio: '9:16' };
+        expect(serverRendered(<CreateVideoClient prefill={prefill} opening={opening} />))
+          .toMatchObject({ chip: 'Wan 2.7', settings: '720P · 9:16 · 5s' });
+        const view = render(<CreateVideoClient prefill={prefill} opening={opening} />);
+        const chip = watchChip(view.container);
+
+        // The catalog comes back with Seedance 2 Mini the default: the link's model stays.
+        modelCatalogState.withoutCatalog = false;
+        modelCatalogState.videoDefault = 'seedance-2-mini';
+        modelCatalogState.extraModels = [miniWithDefaults({})];
+        view.rerender(<CreateVideoClient prefill={prefill} opening={opening} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()).toMatchObject({
+          modelId: 'wan-2.7',
+          settings: { aspectRatio: '9:16', resolution: '720p', duration: 5 },
+        }));
+        await settle();
+        expect(chip.names).toEqual(['Wan 2.7']);
+        chip.stop();
+      });
+
+      it('still moves an untouched saved draft to the default, and keeps one the creator set', async () => {
+        for (const [change, saved, model] of [
+          ['nothing', {}, 'seedance-2-mini'],
+          ['another ratio', { aspectRatio: '9:16' }, 'kling-3.0-video'],
+          ['words', { prompt: 'A harbour at dusk' }, 'kling-3.0-video'],
+        ] as const) {
+          quoteStandIn.reset(12);
+          saveCreatorDraftMock.mockClear();
+          loadCreatorDraftMock.mockResolvedValue({ ...untouchedKlingDraft, ...saved });
+          publishKlingBesideMini();
+          const view = render(<CreateVideoClient prefill={{}} opening={openingFor()} />);
+          await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBeTruthy());
+          await settle();
+
+          expect(quoteStandIn.lastRequest()?.modelId, change).toBe(model);
+          if (model === 'seedance-2-mini') {
+            expect(quoteStandIn.lastRequest()!.settings, change)
+              .toMatchObject({ aspectRatio: '16:9', resolution: '480p', duration: 5, sound: false });
+            await waitFor(() => expect(saveCreatorDraftMock.mock.calls.at(-1)?.[2]).toMatchObject({ modelId: 'seedance-2-mini', resolution: '480p' }));
+          } else {
+            // The draft's own run is not the one the server priced.
+            expect(barNote(), change).toHaveTextContent('Leaves 9988');
+          }
+          view.unmount();
+        }
+      });
     });
   });
 

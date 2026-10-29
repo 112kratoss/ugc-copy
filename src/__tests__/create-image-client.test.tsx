@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateImageClient from '@/app/create-image/CreateImageClient';
+import type { CreatorOpening } from '@/lib/creator-opening';
 import { GenerationStatusRequestError } from '@/lib/generation-status-client';
 import type { PersistedImageElementRecord } from '@/lib/persisted-media';
 import type { RemixSourceBundle } from '@/lib/remix-source';
@@ -55,6 +56,8 @@ const modelCatalogState = vi.hoisted(() => ({
   models: null as Array<Record<string, unknown>> | null,
   /** False while the catalog has not arrived. */
   catalogReady: true,
+  /** The network has not yet confirmed the revision: the catalog is the browser's stored copy. */
+  checkingRevision: false,
 }));
 // Text drafts as the page saves and reads them, per tool and account.
 const creatorDraftStore = vi.hoisted(() => new Map<string, unknown>());
@@ -188,6 +191,7 @@ vi.mock('@/lib/generation-model-client', async () => {
       } : null,
       error: modelCatalogState.error,
       isLoading: !modelCatalogState.catalogReady,
+      isCheckingRevision: modelCatalogState.checkingRevision,
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
     }),
@@ -218,6 +222,7 @@ beforeEach(() => {
   getSessionMock.mockResolvedValue(SIGNED_IN_SESSION);
   modelCatalogState.models = null;
   modelCatalogState.catalogReady = true;
+  modelCatalogState.checkingRevision = false;
   window.sessionStorage.clear();
 });
 
@@ -2009,5 +2014,58 @@ describe('CreateImageClient prices', () => {
     expect(settings).toHaveTextContent('This run 8 credits · leaves 2');
     // What "+8" means, as the video creator says it.
     expect(settings).toHaveTextContent('“+8” means 8 credits more than your balance of 10.');
+  });
+});
+
+/**
+ * The server's opening (`loadCreatorOpening`), drawn from the first paint (2026-10-29): the model the page
+ * opens on, its published settings and the run's price, until the first pick and the page's own price.
+ */
+describe('CreateImageClient opening', () => {
+  const opening: CreatorOpening = {
+    revision: 'test-catalog-rev',
+    modelId: 'gpt-image-2',
+    settings: { aspectRatio: '4:5', resolution: '2K' },
+    costCredits: 14,
+  };
+  const modelChip = (container: HTMLElement) => container.querySelector('button[aria-haspopup="listbox"]');
+
+  it('draws the opening\'s model, settings and price before its catalog is in', () => {
+    modelCatalogState.catalogReady = false;
+    const view = render(<CreateImageClient prefill={{}} opening={opening} />);
+
+    expect(modelChip(view.container)).toHaveTextContent('GPT Image 2');
+    expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 2K · 4:5');
+    expect(view.container.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 10000Leaves 9986');
+  });
+
+  it('waits for the revision the network confirms before its first pick', async () => {
+    // The browser's stored catalog names Nano Banana 2 its default: until the network confirms it,
+    // the page keeps the run it was drawn on.
+    modelCatalogState.checkingRevision = true;
+    const view = render(<CreateImageClient prefill={{}} opening={opening} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(modelChip(view.container)).toHaveTextContent('GPT Image 2');
+
+    modelCatalogState.checkingRevision = false;
+    view.rerender(<CreateImageClient prefill={{}} opening={opening} />);
+    await waitFor(() => expect(modelChip(view.container)).toHaveTextContent('Nano Banana 2'));
+  });
+
+  it('keeps a model the creator picks while the page waits for the revision', async () => {
+    modelCatalogState.checkingRevision = true;
+    modelCatalogState.summaries = imageModelSummaries;
+    const view = render(<CreateImageClient prefill={{}} opening={opening} />);
+    chooseModel(view.container, 'Imagen 4');
+    expect(modelChip(view.container)).toHaveTextContent('Imagen 4');
+
+    modelCatalogState.checkingRevision = false;
+    view.rerender(<CreateImageClient prefill={{}} opening={opening} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(modelChip(view.container)).toHaveTextContent('Imagen 4');
   });
 });
