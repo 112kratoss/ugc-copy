@@ -81,8 +81,13 @@ function inferReferenceContentType(storagePath: string | null | undefined, media
   return 'video/mp4';
 }
 
+// A clip or a sound is a reference like a picture, as the copy a recipe stores
+// at publish types it (`post-resource-bundles-server.ts`): typed a source file,
+// the app gave the reference video its own "Source assets" card.
 function mapGenerationInputResourceType(item: GenerationInputMediaItem): PostResourceItemType {
-  return item.mediaType === 'image' ? 'reference_image' : 'source_file';
+  if (item.mediaType === 'image') return 'reference_image';
+  if (item.mediaType === 'audio') return 'reference_audio';
+  return 'reference_video';
 }
 
 function mapGenerationInputResourceRole(role: string): PostResourceItemRole {

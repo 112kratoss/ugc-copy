@@ -4,10 +4,8 @@ import {
   formatLockedBundleFacts,
   formatPostResourceBundleCountSummary,
   formatUnlockCountLabel,
-  getResourceGroupSubtitle,
   parseGenerationSetupNotes,
   resourceKindLabel,
-  shouldShowResourceItemTitle,
 } from '@/lib/post-resource-bundle-view-model';
 import type { PostResourceBundleLockedPreview } from '@/lib/types';
 import { formatUnlockDate } from '@/lib/unlock-library-view-model';
@@ -56,40 +54,6 @@ describe('parseGenerationSetupNotes', () => {
   });
 });
 
-describe('getResourceGroupSubtitle', () => {
-  it('says nothing when the title already names the type and there is one item', () => {
-    expect(getResourceGroupSubtitle({ title: 'Prompt or script', resourceType: 'prompt', itemCount: 1 })).toBe('');
-  });
-
-  it('adds the type when the creator named the group', () => {
-    expect(getResourceGroupSubtitle({ title: 'Hero prompt', resourceType: 'prompt', itemCount: 1 })).toBe('Prompt or script');
-  });
-
-  it('counts only past one', () => {
-    expect(getResourceGroupSubtitle({ title: 'Source assets', resourceType: 'source_file', itemCount: 3 })).toBe('3 items');
-    expect(getResourceGroupSubtitle({ title: 'Campaign kit', resourceType: 'source_file', itemCount: 3 })).toBe('Source assets · 3 items');
-  });
-});
-
-describe('shouldShowResourceItemTitle', () => {
-  const promptGroup = { title: 'Prompt or script', resourceType: 'prompt' as const, itemCount: 1 };
-
-  it('hides a lone generic title under the group it repeats', () => {
-    expect(shouldShowResourceItemTitle(promptGroup, { title: 'Prompt', type: 'prompt' })).toBe(false);
-    expect(shouldShowResourceItemTitle({ ...promptGroup, title: 'Guide or notes', resourceType: 'note' }, { title: 'Notes', type: 'note' })).toBe(false);
-    expect(shouldShowResourceItemTitle(promptGroup, { title: 'Prompt or script', type: 'prompt' })).toBe(false);
-  });
-
-  it('keeps a title that carries its own meaning', () => {
-    expect(shouldShowResourceItemTitle(promptGroup, { title: 'Negative prompt', type: 'prompt' })).toBe(true);
-    expect(shouldShowResourceItemTitle({ ...promptGroup, title: 'Hero prompt' }, { title: 'Prompt', type: 'prompt' })).toBe(true);
-  });
-
-  it('keeps every title once a group lists more than one item', () => {
-    expect(shouldShowResourceItemTitle({ ...promptGroup, itemCount: 2 }, { title: 'Prompt', type: 'prompt' })).toBe(true);
-  });
-});
-
 describe('resourceKindLabel', () => {
   it("names each kind in the web's words, and drops one this build does not know", () => {
     expect(['prompt', 'workflow', 'files', 'notes', 'remix'].map(resourceKindLabel))
@@ -107,11 +71,14 @@ describe('formatPostResourceBundleCountSummary', () => {
     { sectionCount, itemCounts }
   );
 
-  it('counts what a buyer gets in plain words, in the web\'s order, without sections', () => {
+  // In the order the unlocked recipe reads on both clients (the shared
+  // `RECIPE_ITEM_COUNT_ORDER`): the prompt, its references, its settings, then
+  // notes, workflow, files and links.
+  it('counts what a buyer gets in plain words, in reading order, without sections', () => {
     expect(formatPostResourceBundleCountSummary(preview(3, { settings: 1, reference_audio: 2, prompt: 1, reference_image: 3 })))
       .toBe('1 prompt, 3 reference images, 2 reference audio files, settings');
-    expect(formatPostResourceBundleCountSummary(preview(4, { prompt: 1, source_file: 2, settings: 2, external_link: 1 })))
-      .toBe('1 prompt, 2 files, settings, 1 link');
+    expect(formatPostResourceBundleCountSummary(preview(4, { prompt: 1, source_file: 2, settings: 2, external_link: 1, workflow: 1 })))
+      .toBe('1 prompt, settings, 1 workflow, 2 files, 1 link');
     expect(formatPostResourceBundleCountSummary({ itemCounts: { source_file: 1 } })).toBe('1 file');
   });
 

@@ -3,6 +3,7 @@ import { normalizePostMediaKey } from '@/lib/post-media-key';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import { resolveRemixTool } from '@/lib/remix-tools';
 import { getCanonicalStoredMediaLocation, parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
+import { RECIPE_ITEM_COUNT_ORDER } from '../../ugc-mobile/lib/recipe-reading/recipe-reading';
 
 export const POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS = 10;
 export const POST_RESOURCE_PRICE_INCREMENT_USD_CENTS = 10;
@@ -269,21 +270,6 @@ const POST_RESOURCE_SECTION_KINDS: PostResourceSectionKind[] = [
   'asset_group',
   'chapter',
   'other',
-];
-
-const RESOURCE_ITEM_COUNT_ORDER: PostResourceItemType[] = [
-  'prompt',
-  'workflow',
-  'reference_image',
-  'reference_video',
-  'reference_audio',
-  'source_file',
-  'preset',
-  'settings',
-  'note',
-  'external_link',
-  'remix_link',
-  'remix_access',
 ];
 
 const POST_RESOURCE_KIND_ORDER: PostResourceKind[] = ['prompt', 'workflow', 'files', 'notes', 'remix'];
@@ -1513,8 +1499,9 @@ export function getPostResourceItemTypeLabel(type: PostResourceItemType, count =
 // "2 settings".
 const UNCOUNTED_RESOURCE_ITEM_TYPES = new Set<PostResourceItemType>(['settings']);
 
+// Counted in the order an unlocked recipe reads, the rule both clients share.
 export function formatPostResourceItemCountSummary(counts: PostResourceItemCounts | null | undefined): string {
-  const parts = RESOURCE_ITEM_COUNT_ORDER.flatMap((type) => {
+  const parts = RECIPE_ITEM_COUNT_ORDER.flatMap((type) => {
     const count = counts?.[type] ?? 0;
     if (count <= 0) return [];
     const label = getPostResourceItemTypeLabel(type, count);

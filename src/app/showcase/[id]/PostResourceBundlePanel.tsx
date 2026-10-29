@@ -1,9 +1,9 @@
 'use client';
 
-import ResourceMediaPreview, { createBatchedUrlResolver } from '@/components/ResourceMediaPreview';
+import { createBatchedUrlResolver } from '@/components/ResourceMediaPreview';
 import { requestConfirmation } from '@/components/feedback-state';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -12,11 +12,19 @@ import {
   Download,
   ExternalLink,
   EyeOff,
+  Images,
+  Link2,
   Loader2,
+  NotebookText,
+  Paperclip,
   Play,
   Repeat2,
   ShoppingCart,
+  SlidersHorizontal,
   Sparkles,
+  TextQuote,
+  Workflow,
+  type LucideIcon,
 } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
@@ -31,6 +39,7 @@ import {
   formatUsdCents,
   getPostResourceKinds,
   getPostResourceKindLabel,
+  normalizePostResourceItems,
   type PostResourceAttachment,
   type PostResourceBundleLockedPreview,
   type PostResourceFileDisposition,
@@ -48,11 +57,17 @@ import {
   UNLOCKED_RECIPES_PATH,
   buildRecipeTopUpHref,
   describeRecipeCardPreview,
-  getRecipeItemLinkLabel,
-  groupRecipeItemsForReading,
+  describeRecipeFile,
+  describeRecipeGroup,
+  groupRecipeForReading,
   parseGenerationSetupNotes,
+  recipeItemKind,
+  recipeLinkLabel,
   shouldShowRecipeItemTitle,
+  type RecipeGroupKind,
+  type RecipeReadingGroup,
 } from '@/app/showcase/recipe-reading';
+import RecipeMediaGallery from './RecipeMediaGallery';
 import {
   RECIPE_PAYMENT_RECEIVED_MESSAGE,
   clearRazorpayCheckoutIntentKey,
@@ -76,6 +91,19 @@ const RAZORPAY_CHECKOUT_SCRIPT_ID = 'post-resource-bundle-razorpay-checkout';
 
 /** The credit unlock spends neither, though both count in the balance. */
 const UNSPENDABLE_CREDITS_NOTE = "Welcome and referral credits can't be spent on recipes.";
+
+/** One icon per kind of group, the app's set: a prompt, its references and a file no longer look alike. */
+const RECIPE_GROUP_ICONS: Record<RecipeGroupKind, LucideIcon> = {
+  prompt: TextQuote,
+  references: Images,
+  settings: SlidersHorizontal,
+  notes: NotebookText,
+  workflow: Workflow,
+  files: Paperclip,
+  links: Link2,
+};
+
+type RecipeGroup = RecipeReadingGroup<PostResourceItem, PostResourceSection>;
 
 /**
  * checkout.js is fetched when a buyer presses Pay, not on every view of a
@@ -368,24 +396,29 @@ export default function PostResourceBundlePanel({
     () => formatPostResourceBundleCountSummary(preview),
     [preview]
   );
-  // The creator's sections in their order, then what has no section of its own.
-  const readingGroups = useMemo(
-    () => groupRecipeItemsForReading(activeResources?.items ?? [], activeResources?.sections ?? []),
-    [activeResources?.items, activeResources?.sections]
-  );
+  // The recipe in the order both clients read it (the shared rule): the
+  // creator's cards, then the rest by kind, its references after the prompt.
+  // An older recipe's loose fields read as the items they stand for.
+  const readingGroups = useMemo<RecipeGroup[]>(() => {
+    if (!activeResources) return [];
+    const items = activeResources.items?.length
+      ? activeResources.items
+      : normalizePostResourceItems(undefined, activeResources);
+    return groupRecipeForReading(items, activeResources.sections ?? []);
+  }, [activeResources]);
   const visibleReadingGroups = useMemo(
     () => readingGroups
       // The section's own scope gates the whole card first; an item only
       // narrows further, and falls back to its section when it has no scope.
-      .filter((group) => scopeMatchesMediaKey(group.scope, selectedScopeMediaKey))
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => scopeMatchesMediaKey(item.scope ?? group.scope, selectedScopeMediaKey)),
-      }))
-      .filter((group) => group.items.length > 0),
+      .filter((group) => scopeMatchesMediaKey(group.section?.scope, selectedScopeMediaKey))
+      .map((group) => {
+        const inScope = (item: PostResourceItem) => scopeMatchesMediaKey(item.scope ?? group.section?.scope, selectedScopeMediaKey);
+        return { ...group, items: group.items.filter(inScope), media: group.media.filter(inScope) };
+      })
+      .filter((group) => group.items.length + group.media.length > 0),
     [readingGroups, selectedScopeMediaKey]
   );
-  const hasStructuredResourceItems = (activeResources?.items?.length ?? 0) > 0;
+  const groupHeadingId = useId();
   const isRecipeVisible = hasAccess || viewerIsOwner;
   const basePriceCredits = Math.max(0, Math.round(priceUsdCents));
   const creditCost = priceChange && priceChange.fromPriceCredits === basePriceCredits
@@ -960,41 +993,6 @@ export default function PostResourceBundlePanel({
         year: 'numeric',
       })
     : null;
-  const formatFileSize = (sizeBytes: number | null | undefined) => {
-    if (!sizeBytes) {
-      return null;
-    }
-
-    if (sizeBytes < 1024) {
-      return `${sizeBytes} B`;
-    }
-
-    if (sizeBytes < 1024 * 1024) {
-      return `${Math.round(sizeBytes / 102.4) / 10} KB`;
-    }
-
-    return `${Math.round(sizeBytes / 1024 / 102.4) / 10} MB`;
-  };
-
-  const renderResourceItemMediaPreview = (item: PostResourceItem) => {
-    const { contentType, storagePath } = item;
-    const mediaType = contentType?.startsWith('image/') ? 'image'
-      : contentType?.startsWith('video/') ? 'video'
-      : contentType?.startsWith('audio/') ? 'audio'
-      : null;
-    if (!storagePath || !mediaType) return null;
-    // Not mounted while covered: ResourceMediaPreview signs and loads its file as it mounts.
-    if (mediaCovered) return <MatureMediaPlate onShow={() => setMatureMediaShown(true)} />;
-
-    return <ResourceMediaPreview
-      key={`${postId}:${storagePath}`}
-      mediaType={mediaType}
-      label={item.title}
-      resolveUrl={signal => signPreviewUrl(storagePath, signal)}
-      className="mb-3 max-w-full"
-    />;
-  };
-
   // A Copy button that says "Copied" itself, for a moment, once it has.
   const renderCopyButton = (value: string, key: string, what: string) => {
     const copied = copiedKey === key;
@@ -1011,49 +1009,66 @@ export default function PostResourceBundlePanel({
     );
   };
 
-  // One renderer for every unlocked item: media preview, title, description,
-  // file facts, a scope line only when narrowed, then the actions. No role or
-  // remix-use enums — those are composer vocabulary. `showTitle` is false for
-  // a lone item named after its card ("Prompt" under "Prompt or script").
-  // Saved settings read as keys and values, as in the app (B-F17).
-  const renderResourceItem = (item: PostResourceItem, key: string, showTitle = true) => {
+  // One renderer for every item a group reads: its title, description, file
+  // facts and a scope line only when narrowed, then its text and actions. No
+  // role or remix-use enums: those are composer vocabulary. `showTitle` is
+  // false for a lone item named after its card ("Prompt" under "Prompt or
+  // script"); `copyInHeader` when the card's own name carries its Copy. Saved
+  // settings read as keys and values, a prompt in a box of its own, as in
+  // the app. Pictures and clips are not items here: the card's gallery holds
+  // them.
+  const renderResourceItem = (
+    item: PostResourceItem,
+    key: string,
+    { showTitle, copyInHeader }: { showTitle: boolean; copyInHeader: boolean },
+  ) => {
     const scopeLabel = formatResourceScopeLabel(item.scope);
-    const fileMeta = item.storagePath
-      ? [item.contentType, formatFileSize(item.sizeBytes)].filter(Boolean).join(' · ')
+    const fileMeta = item.storagePath ? describeRecipeFile(item.contentType, item.sizeBytes) || null : null;
+    const generationSetup = item.type === 'settings' || item.type === 'note'
+      ? parseGenerationSetupNotes(item.textContent)
       : null;
-    const generationSetup = item.type === 'settings' ? parseGenerationSetupNotes(item.textContent) : null;
+    const copyButton = item.textContent && !copyInHeader
+      ? renderCopyButton(item.textContent, key, item.title)
+      : null;
+    const hasHeading = showTitle || Boolean(item.description) || Boolean(fileMeta) || Boolean(scopeLabel);
+    // No empty row above the text when there is nothing to put in it: a lone
+    // prompt's Copy used to sit alone at the far edge of one (the owner's
+    // screenshot, 2026-10-29).
+    const bodyGap = hasHeading || copyButton ? 'mt-3' : '';
 
     return (
-      <div key={key} className="border-t border-white/8 pt-4">
-        {renderResourceItemMediaPreview(item)}
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            {showTitle ? (
-              <div className="text-sm font-semibold text-white">{item.title}</div>
-            ) : null}
-            {item.description ? (
-              <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
-            ) : null}
-            {fileMeta ? <p className="mt-1 text-xs text-zinc-500">{fileMeta}</p> : null}
-            {scopeLabel ? <p className="mt-1 text-xs text-emerald-100/70">{scopeLabel}</p> : null}
+      <div key={key} className="min-w-0 py-4 first:pt-0 last:pb-0">
+        {hasHeading || copyButton ? (
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              {showTitle ? (
+                <div className="text-sm font-semibold text-white">{item.title}</div>
+              ) : null}
+              {item.description ? (
+                <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
+              ) : null}
+              {fileMeta ? <p className="mt-1 text-xs text-zinc-500">{fileMeta}</p> : null}
+              {scopeLabel ? <p className="mt-1 text-xs text-emerald-100/70">{scopeLabel}</p> : null}
+            </div>
+            {copyButton}
           </div>
-          {item.textContent ? renderCopyButton(item.textContent, key, item.title) : null}
-        </div>
+        ) : null}
 
         {generationSetup ? (
-          <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">{generationSetup.title}</div>
-            <dl className="mt-2 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
-              {generationSetup.entries.map((entry, index) => (
-                <div key={`${entry.key}:${index}`} className="contents">
-                  <dt className="text-zinc-400">{entry.key}</dt>
-                  <dd className="min-w-0 text-zinc-100 [overflow-wrap:anywhere]">{entry.value}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
+          <dl className={`${bodyGap} grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-6 gap-y-2 rounded-xl border border-white/8 bg-black/25 px-4 py-3 text-sm`}>
+            {generationSetup.entries.map((entry, index) => (
+              <div key={`${entry.key}:${index}`} className="contents">
+                <dt className="text-zinc-400">{entry.key}</dt>
+                <dd className="min-w-0 font-medium text-zinc-100 [overflow-wrap:anywhere]">{entry.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : item.textContent && item.type === 'prompt' ? (
+          <p className={`${bodyGap} whitespace-pre-wrap rounded-xl border border-white/8 bg-black/25 px-4 py-3 text-[15px] leading-7 text-zinc-100 [overflow-wrap:anywhere]`}>
+            {item.textContent}
+          </p>
         ) : item.textContent ? (
-          <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">{item.textContent}</pre>
+          <p className={`${bodyGap} whitespace-pre-wrap text-sm leading-7 text-zinc-200 [overflow-wrap:anywhere]`}>{item.textContent}</p>
         ) : null}
 
         {item.externalUrl || item.storagePath ? (
@@ -1066,7 +1081,7 @@ export default function PostResourceBundlePanel({
                 className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
               >
                 <ExternalLink className="h-4 w-4" />
-                {getRecipeItemLinkLabel(item.type)}
+                {recipeLinkLabel(item.type)}
               </a>
             ) : null}
             {item.storagePath ? (
@@ -1092,6 +1107,75 @@ export default function PostResourceBundlePanel({
           </div>
         ) : null}
       </div>
+    );
+  };
+
+  // One card per group, as the app draws them: an icon for what it holds, its
+  // name and how much is in it, then its text, then its pictures and clips.
+  const renderRecipeGroup = (group: RecipeGroup) => {
+    const Icon = RECIPE_GROUP_ICONS[group.kind];
+    const itemCount = group.items.length + group.media.length;
+    const subtitle = describeRecipeGroup(group);
+    const description = group.section?.description?.trim() || null;
+    const sectionScopeLabel = formatResourceScopeLabel(group.section?.scope);
+    const headingId = `${groupHeadingId}-${group.id}`;
+    // A card of one text and nothing else carries its Copy by its name.
+    const lone = group.items.length === 1 && group.media.length === 0 ? group.items[0] : null;
+    const loneShowsTitle = lone ? shouldShowRecipeItemTitle({ title: group.title, itemCount }, lone) : true;
+    const headerCopy = lone?.textContent && !loneShowsTitle && !lone.description
+      ? renderCopyButton(lone.textContent, `${group.id}:copy`, group.title)
+      : null;
+
+    return (
+      <section
+        key={group.id}
+        aria-labelledby={headingId}
+        className="min-w-0 rounded-2xl border border-white/8 bg-white/[0.025] p-4 sm:p-5"
+      >
+        <div className="flex items-start gap-3">
+          <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-400/10 text-emerald-200">
+            <Icon className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1 pt-0.5">
+            <h3 id={headingId} className="text-base font-semibold leading-6 text-white [overflow-wrap:anywhere]">{group.title}</h3>
+            {subtitle ? <p className="text-xs leading-5 text-zinc-500">{subtitle}</p> : null}
+            {description ? <p className="mt-1 text-sm leading-6 text-zinc-400">{description}</p> : null}
+            {sectionScopeLabel ? <p className="mt-1 text-xs text-emerald-100/70">{sectionScopeLabel}</p> : null}
+          </div>
+          {headerCopy ? <div className="shrink-0">{headerCopy}</div> : null}
+        </div>
+
+        {group.items.length > 0 ? (
+          <div className="mt-4 divide-y divide-white/8">
+            {group.items.map((item, index) => renderResourceItem(
+              item,
+              `${group.id}:${item.id ?? `${item.type}:${item.title}`}:${index}`,
+              {
+                showTitle: shouldShowRecipeItemTitle({ title: group.title, itemCount }, item),
+                copyInHeader: item === lone && headerCopy !== null,
+              },
+            ))}
+          </div>
+        ) : null}
+
+        {group.media.length > 0 ? (
+          <RecipeMediaGallery
+            key={`${postId}:${group.id}`}
+            items={group.media}
+            title={group.title}
+            signUrl={signPreviewUrl}
+            onOpenFile={(storagePath) => void openResourceFile(storagePath)}
+            onDownload={(item) => void downloadResourceFile(
+              item.storagePath ?? '',
+              formatPostResourceDownloadName(item.title, item.contentType),
+            )}
+            // Under the cover nothing is signed or loaded; names and downloads stay.
+            coverPlate={mediaCovered ? <MatureMediaPlate onShow={() => setMatureMediaShown(true)} /> : null}
+            scopeLabelFor={(item) => formatResourceScopeLabel(item.scope)}
+            className={group.items.length > 0 ? 'mt-5' : 'mt-4'}
+          />
+        ) : null}
+      </section>
     );
   };
 
@@ -1158,24 +1242,27 @@ export default function PostResourceBundlePanel({
           {publicCardPreviews.length > 0 ? (
             <div className="space-y-2">
               {publicCardPreviews.map((card) => {
-                // The type only where the title does not already say it, the
+                // The kind only where the title does not already say it, the
                 // count only past one ("Prompt or script · prompt · 1 item", B-F16).
-                const { typeLabel, countLabel } = describeRecipeCardPreview({
+                const { kindLabel, countLabel } = describeRecipeCardPreview({
                   title: card.publicTitle,
                   resourceType: card.resourceType,
                   itemCount: card.itemCount,
                 });
+                const Icon = RECIPE_GROUP_ICONS[recipeItemKind({ type: card.resourceType, contentType: null, textContent: null })];
                 const scopeLabel = formatResourceScopeLabel(card.scope);
+                const facts = [kindLabel, countLabel, scopeLabel].filter(Boolean).join(' · ');
 
                 return (
-                  <div key={card.sectionId} className="rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
-                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                      <span className="text-sm font-semibold text-white">{card.publicTitle}</span>
-                      {typeLabel ? <span className="text-xs text-zinc-500">{typeLabel}</span> : null}
-                      {countLabel ? <span className="text-xs text-zinc-500">{countLabel}</span> : null}
-                      {scopeLabel ? <span className="text-xs text-zinc-500">{scopeLabel}</span> : null}
-                      {card.hasRemix ? <span className="text-xs font-medium text-emerald-200">Remix included</span> : null}
+                  <div key={card.sectionId} className="flex items-center gap-3 rounded-xl border border-white/8 bg-white/[0.02] px-4 py-3">
+                    <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-400/10 text-emerald-200">
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-white [overflow-wrap:anywhere]">{card.publicTitle}</div>
+                      {facts ? <div className="text-xs text-zinc-500">{facts}</div> : null}
                     </div>
+                    {card.hasRemix ? <span className="shrink-0 text-xs font-medium text-emerald-200">Remix included</span> : null}
                   </div>
                 );
               })}
@@ -1185,11 +1272,9 @@ export default function PostResourceBundlePanel({
           {preview.attachmentPreviews.length > 0 ? (
             <div className="space-y-2">
               {preview.attachmentPreviews.map((attachment, index) => {
-                const meta = [
-                  attachment.kind === 'file' ? 'File' : 'Link',
-                  attachment.contentType,
-                  formatFileSize(attachment.sizeBytes),
-                ].filter(Boolean).join(' · ');
+                const meta = attachment.kind === 'file'
+                  ? describeRecipeFile(attachment.contentType, attachment.sizeBytes) || 'File'
+                  : 'Link';
 
                 return (
                   <div
@@ -1361,106 +1446,20 @@ export default function PostResourceBundlePanel({
             <p className="text-sm text-zinc-400">No items apply to this output.</p>
           ) : null}
 
-          {/* The creator's sections in their order, each item where they put
-              it, then whatever has no section under "More from this post"
-              (B-F17). A recipe with no sections reads as one list. */}
-          {visibleReadingGroups.map((group) => (
-            <div key={group.id}>
-              {group.title ? (
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <h3 className="text-base font-semibold text-white">{group.title}</h3>
-                  {group.items.length > 1 ? (
-                    <span className="text-xs text-zinc-500">{`${group.items.length} items`}</span>
-                  ) : null}
-                </div>
-              ) : null}
-              {group.description ? (
-                <p className="mt-1 text-sm leading-6 text-zinc-400">{group.description}</p>
-              ) : null}
-              <div className={`${group.title ? 'mt-3 ' : ''}space-y-4`}>
-                {group.items.map((item, index) => renderResourceItem(
-                  item,
-                  `${group.id}:${item.id ?? `${item.type}:${item.title}`}:${index}`,
-                  shouldShowRecipeItemTitle({ title: group.title, itemCount: group.items.length }, item),
-                ))}
-              </div>
-            </div>
-          ))}
-
-          {!hasStructuredResourceItems && activeResources?.promptText ? (
-            <div className="border-t border-white/8 pt-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Prompt</div>
-                {renderCopyButton(activeResources.promptText, 'legacy:prompt', 'the prompt')}
-              </div>
-              <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
-                {activeResources.promptText}
-              </pre>
-            </div>
-          ) : null}
-
-          {!hasStructuredResourceItems && activeResources?.notesMarkdown ? (
-            <div className="border-t border-white/8 pt-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Notes</div>
-                {renderCopyButton(activeResources.notesMarkdown, 'legacy:notes', 'the notes')}
-              </div>
-              <article className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
-                {activeResources.notesMarkdown}
-              </article>
-            </div>
-          ) : null}
-
-          {!hasStructuredResourceItems && activeResources?.workflowShareUrl ? (
-            <div className="border-t border-white/8 pt-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Workflow</div>
-              <a
-                href={activeResources.workflowShareUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
-              >
-                <ExternalLink className="h-4 w-4" />
-                Open workflow link
-              </a>
-            </div>
-          ) : null}
-
-          {!hasStructuredResourceItems && activeResources?.attachments.length ? (
-            <div className="border-t border-white/8 pt-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Files and links</div>
-              <div className="mt-3 flex flex-wrap gap-3">
-                {activeResources.attachments.map((attachment) => (
-                  attachment.kind === 'file' && attachment.storagePath ? (
-                    <button
-                      key={`${attachment.label}:${attachment.storagePath}`}
-                      type="button"
-                      onClick={() => void openResourceFile(attachment.storagePath ?? '')}
-                      className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/15"
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                      {attachment.label}
-                    </button>
-                  ) : (
-                    <a
-                      key={`${attachment.label}:${attachment.url}`}
-                      href={attachment.url ?? '#'}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                      {attachment.label}
-                    </a>
-                  )
-                ))}
-              </div>
+          {/* The order both clients read: the creator's cards as they
+              arranged them, then the rest by kind, Prompt → References →
+              Settings → Notes → Workflow → Files → Links, the creation's own
+              references straight after the prompt that names them. An older
+              recipe's loose fields read as the same cards. */}
+          {visibleReadingGroups.length > 0 ? (
+            <div className="space-y-3">
+              {visibleReadingGroups.map((group) => renderRecipeGroup(group))}
             </div>
           ) : null}
 
           {remixIncluded ? (
             // Remix came with it (S1); the post's Remix button is where it is used.
-            <p className="flex items-center gap-2 border-t border-white/8 pt-4 text-sm leading-7 text-zinc-300">
+            <p className="flex items-center gap-2 text-sm leading-7 text-zinc-300">
               <Repeat2 className="h-4 w-4 text-emerald-300" aria-hidden="true" />
               Remix included — use Remix on this post
             </p>

@@ -3,10 +3,15 @@ import {
   Download,
   ExternalLink,
   FileText,
+  Images,
   Link2,
   Lock,
+  NotebookText,
+  Paperclip,
   Repeat2,
-  Settings2,
+  SlidersHorizontal,
+  TextQuote,
+  Workflow,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
@@ -14,15 +19,21 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-nati
 import { ResourceAction } from '@/components/resource-action';
 import { ResourcePrompt } from '@/components/resource-prompt';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
-import { PostResourceReferences, getReferenceResourceItems } from '@/components/post-resource-references';
+import { PostResourceReferences } from '@/components/post-resource-references';
+import { creatorAuthoredDescription } from '@/lib/post-resource-bundle-view-model';
 import {
-  creatorAuthoredDescription,
-  getResourceGroupSubtitle,
+  describeRecipeCardPreview,
+  describeRecipeFile,
+  describeRecipeGroup,
+  groupRecipeForReading,
   parseGenerationSetupNotes,
-  resourceTypeLabel,
-  shouldShowResourceItemTitle,
+  recipeItemKind,
+  recipeLinkLabel,
+  shouldShowRecipeItemTitle,
   type GenerationSetup,
-} from '@/lib/post-resource-bundle-view-model';
+  type RecipeGroupKind,
+  type RecipeReadingGroup,
+} from '@/lib/recipe-reading/recipe-reading';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { appTheme, mediaColors } from '@/lib/theme';
@@ -34,7 +45,6 @@ import type {
   PostResourceCardPreview,
   PostResourceItem,
   PostResourceItemScope,
-  PostResourceItemType,
   PostResourceSection,
   ShowcaseMediaItem,
 } from '@/lib/types';
@@ -57,21 +67,16 @@ type PostResourceBundleContentProps = {
   resources: PostResourceBundleResources | null;
 };
 
-type ResourceCard = {
-  id: string;
-  items: PostResourceItem[];
-  resourceType: PostResourceItemType;
+/**
+ * A group as the shared reading rule makes it (the web reads by the same
+ * one), with the outputs it applies to: its card's own, or, for a group
+ * gathered by kind, those all of its items share.
+ */
+type ResourceCard = RecipeReadingGroup<PostResourceItem, PostResourceSection> & {
   scope: PostResourceItemScope;
-  title: string;
-  /** The author's own line about the section. The web panel renders it too. */
-  description?: string | null;
 };
 
 const ALL_SCOPE: PostResourceItemScope = { kind: 'all' };
-
-function normalizeTitle(value: string) {
-  return value.replace(/\s+/g, ' ').trim().toLowerCase();
-}
 
 export function PostResourceBundleContent({
   fileLoadingPath = null,
@@ -90,7 +95,7 @@ export function PostResourceBundleContent({
   const cardPreviews = lockedPreview?.cardPreviews ?? [];
   const redactedAttachments = lockedPreview?.attachmentPreviews ?? [];
   const hasScopedContent = resources
-    ? cards.some((card) => isMediaScope(card.scope) || card.items.some((item) => isMediaScope(item.scope)))
+    ? cards.some((card) => isMediaScope(card.scope) || [...card.items, ...card.media].some((item) => isMediaScope(item.scope)))
     : cardPreviews.some((card) => isMediaScope(card.scope));
   const selectableMedia = useMemo(
     () => mediaItems.filter((item) => Boolean(resourceMediaKey(item))),
@@ -182,10 +187,11 @@ export function PostResourceBundleContent({
 
   const visibleCards = cards.flatMap((card) => {
     if (!scopeMatches(card.scope, activeSelectedMediaKey)) return [];
-    const items = activeSelectedMediaKey
-      ? card.items.filter((item) => scopeMatches(item.scope ?? card.scope, activeSelectedMediaKey))
-      : card.items;
-    return items.length > 0 ? [{ ...card, items }] : [];
+    if (!activeSelectedMediaKey) return [card];
+    const inScope = (item: PostResourceItem) => scopeMatches(item.scope ?? card.scope, activeSelectedMediaKey);
+    const items = card.items.filter(inScope);
+    const media = card.media.filter(inScope);
+    return items.length + media.length > 0 ? [{ ...card, items, media }] : [];
   });
 
   return (
@@ -347,14 +353,15 @@ function LockedResourceCard({
   mediaItems: ShowcaseMediaItem[];
 }) {
   const theme = useAppTheme();
-  // The type only where the title does not say it, and the count only past
-  // one, as the unlocked group's subtitle reads (audit B-F16): a card titled
+  // The kind only where the title does not say it, and the count only past
+  // one, as the web's locked card reads (audit B-F16): a card titled
   // "Prompt or script" read "Prompt or script · 1 item" under it.
-  const subtitle = getResourceGroupSubtitle({ title: card.publicTitle, resourceType: card.resourceType, itemCount: card.itemCount });
+  const { kindLabel, countLabel } = describeRecipeCardPreview({ title: card.publicTitle, resourceType: card.resourceType, itemCount: card.itemCount });
+  const subtitle = [kindLabel, countLabel].filter(Boolean).join(' · ');
   return (
     <View style={{ borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface, padding: appTheme.spacing.gap, gap: 9 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 11 }}>
-        <ResourceTypeIcon type={card.resourceType} />
+        <RecipeGroupIcon kind={recipeItemKind({ type: card.resourceType, contentType: null, textContent: null })} />
         <View style={{ flex: 1, gap: 4 }}>
           <Text selectable style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
             {card.publicTitle}
@@ -394,30 +401,20 @@ function UnlockedResourceGroup({
   resolveFileUrl?: (storagePath: string) => Promise<string>;
 }) {
   const theme = useAppTheme();
-  const references = getReferenceResourceItems(card.items);
-  const referenceIds = new Set(references.map(resourceItemKey));
-  const standardItems = card.items.filter((item) => !referenceIds.has(resourceItemKey(item)));
-  const group = { title: card.title, resourceType: card.resourceType, itemCount: card.items.length };
-  // A creator's saved setup arrives as a note titled like any other note. When
-  // it is the only thing in a generically named group, the group takes the
-  // setup's name — "Generation setup" says more than "Guide or notes".
-  const loneSetup = standardItems.length === 1 && references.length === 0
-    ? parseGenerationSetupNotes(standardItems[0].textContent)
-    : null;
-  const title = loneSetup && normalizeTitle(card.title) === normalizeTitle(resourceTypeLabel(card.resourceType))
-    ? loneSetup.title
-    : card.title;
-  // Settings are not "Guide or notes" to the reader, whatever type stored them.
-  const subtitle = loneSetup || card.resourceType === 'prompt' ? '' : getResourceGroupSubtitle(group);
-  const description = creatorAuthoredDescription(card.resourceType, card.description);
+  // The card's name, its line and its order come from the shared reading
+  // rule: a saved setup alone in a card named by a form label is "Generation
+  // setup", and a gallery says what it holds ("3 images · 1 video").
+  const itemCount = card.items.length + card.media.length;
+  const subtitle = describeRecipeGroup(card);
+  const description = creatorAuthoredDescription(card.kind === 'prompt' ? 'prompt' : undefined, card.section?.description);
 
   return (
     <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.surface, padding: appTheme.spacing.card, gap: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 11 }}>
-        <ResourceTypeIcon type={card.resourceType} />
+        <RecipeGroupIcon kind={card.kind} />
         <View style={{ flex: 1, gap: 3 }}>
           <Text selectable style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
-            {title}
+            {card.title}
           </Text>
           {subtitle ? (
             <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>
@@ -432,21 +429,25 @@ function UnlockedResourceGroup({
         </View>
       </View>
       <ScopeSummary mediaItems={mediaItems} scope={card.scope} />
-      {standardItems.map((item, index) => (
+      {card.items.map((item, index) => (
         <ResourceItemRow
           divided={index > 0}
           fileLoadingPath={fileLoadingPath}
-          group={group}
+          groupItemCount={itemCount}
           item={item}
           key={resourceItemKey(item)}
           onCopy={onCopy}
           onOpenFile={onOpenFile}
           onOpenUrl={onOpenUrl}
+          showTitle={shouldShowRecipeItemTitle({ title: card.title, itemCount }, item)}
         />
       ))}
-      {references.length > 0 && resolveFileUrl && onOpenUrl ? (
+      {card.media.length > 0 && resolveFileUrl && onOpenUrl ? (
         <PostResourceReferences
-          items={references}
+          items={card.media}
+          // A card of references already says so in its name; a card that
+          // mixes text and pictures marks where the pictures start.
+          label={card.items.length > 0 ? 'References' : null}
           onError={onError}
           onOpenUrl={async (url) => {
             await onOpenUrl(url);
@@ -466,19 +467,21 @@ function UnlockedResourceGroup({
 function ResourceItemRow({
   divided,
   fileLoadingPath,
-  group,
+  groupItemCount,
   item,
   onCopy,
   onOpenFile,
   onOpenUrl,
+  showTitle: showOwnTitle,
 }: {
   divided: boolean;
   fileLoadingPath: string | null;
-  group: { title: string; resourceType: PostResourceItemType; itemCount: number };
+  groupItemCount: number;
   item: PostResourceItem;
   onCopy?: (text: string) => Promise<void> | void;
   onOpenFile?: (file: ResourceFileInput) => Promise<void> | void;
   onOpenUrl?: (url: string) => Promise<void> | void;
+  showTitle: boolean;
 }) {
   const theme = useAppTheme();
   const textContent = item.textContent?.trim() ?? '';
@@ -486,8 +489,9 @@ function ResourceItemRow({
   const storagePath = item.storagePath?.trim() ?? '';
   const fileLoading = Boolean(storagePath && storagePath === fileLoadingPath);
   const setup = item.type === 'note' || item.type === 'settings' ? parseGenerationSetupNotes(textContent) : null;
-  const showTitle = shouldShowResourceItemTitle(group, item) && !(setup && group.itemCount === 1);
-  const meta = resourceItemMeta(item);
+  // A setup alone in its card is the card, whatever the note was titled.
+  const showTitle = showOwnTitle && !(setup && groupItemCount === 1);
+  const meta = item.storagePath ? describeRecipeFile(item.contentType, item.sizeBytes) : '';
   const hasHeading = showTitle || Boolean(item.description) || Boolean(meta);
   const hasActions = Boolean((textContent && onCopy) || (externalUrl && onOpenUrl) || (storagePath && onOpenFile));
 
@@ -540,7 +544,7 @@ function ResourceItemRow({
               icon={item.type === 'remix_link'
                 ? <Repeat2 size={14} color={theme.colors.primary} />
                 : <ExternalLink size={14} color={theme.colors.primary} />}
-              label={item.type === 'remix_link' ? 'Open remix' : item.type === 'workflow' ? 'Open workflow' : 'Open link'}
+              label={recipeLinkLabel(item.type)}
               onPress={() => onOpenUrl(externalUrl)}
             />
           ) : null}
@@ -629,62 +633,40 @@ function MediaScopeThumbnail({ item }: { item: ShowcaseMediaItem }) {
   );
 }
 
-function ResourceTypeIcon({ type }: { type: PostResourceItemType }) {
+/** One icon per kind of group, the web's set: a prompt, its references and a file no longer look alike. */
+const RECIPE_GROUP_ICONS: Record<RecipeGroupKind, typeof FileText> = {
+  prompt: TextQuote,
+  references: Images,
+  settings: SlidersHorizontal,
+  notes: NotebookText,
+  workflow: Workflow,
+  files: Paperclip,
+  links: Link2,
+};
+
+function RecipeGroupIcon({ kind }: { kind: RecipeGroupKind }) {
   const theme = useAppTheme();
-  const icon = type === 'remix_link' || type === 'remix_access'
-    ? <Repeat2 size={18} color={theme.colors.primary} />
-    : type === 'workflow'
-      ? <Link2 size={18} color={theme.colors.primary} />
-      : type === 'settings' || type === 'preset'
-        ? <Settings2 size={18} color={theme.colors.primary} />
-        : <FileText size={18} color={theme.colors.primary} />;
+  const Icon = RECIPE_GROUP_ICONS[kind];
   return (
     <View style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.primary}18` }}>
-      {icon}
+      <Icon size={18} color={theme.colors.primary} />
     </View>
   );
 }
 
+/**
+ * The recipe in the order both clients read it: the creator's cards as they
+ * arranged them, then the rest by kind (Prompt, References, Settings, Notes,
+ * Workflow, Files, Links), the creation's own references straight after the
+ * prompt that names them. Each card keeps the outputs it applies to.
+ */
 function buildUnlockedResourceCards(resources: PostResourceBundleResources | null): ResourceCard[] {
   if (!resources) return [];
-  const items = resources.items?.length ? [...resources.items].sort(bySortOrder) : buildLegacyItems(resources);
-  const sections = [...(resources.sections ?? [])].sort(bySortOrder);
-  const assignedIds = new Set<string>();
-  const cards = sections.flatMap((section) => {
-    const sectionItems = items.filter((item) => item.sectionId === section.id);
-    if (sectionItems.length === 0) return [];
-    sectionItems.forEach((item) => assignedIds.add(resourceItemKey(item)));
-    return [cardFromSection(section, sectionItems)];
-  });
-
-  const unsectioned = items.filter((item) => !assignedIds.has(resourceItemKey(item)));
-  const grouped = new Map<PostResourceItemType, PostResourceItem[]>();
-  for (const item of unsectioned) {
-    const list = grouped.get(item.type) ?? [];
-    list.push(item);
-    grouped.set(item.type, list);
-  }
-  for (const [type, groupedItems] of grouped) {
-    cards.push({
-      id: `global:${type}`,
-      items: groupedItems,
-      resourceType: type,
-      scope: sharedScope(groupedItems),
-      title: resourceTypeLabel(type),
-    });
-  }
-  return cards;
-}
-
-function cardFromSection(section: PostResourceSection, items: PostResourceItem[]): ResourceCard {
-  return {
-    id: section.id,
-    items,
-    resourceType: section.resourceType ?? items[0]?.type ?? 'source_file',
-    scope: normalizeScope(section.scope),
-    title: section.title,
-    description: section.description ?? null,
-  };
+  const items = resources.items?.length ? resources.items : buildLegacyItems(resources);
+  return groupRecipeForReading(items, resources.sections ?? []).map((group) => ({
+    ...group,
+    scope: group.section ? normalizeScope(group.section.scope) : sharedScope([...group.items, ...group.media]),
+  }));
 }
 
 function buildLegacyItems(resources: PostResourceBundleResources): PostResourceItem[] {
@@ -768,20 +750,4 @@ function resourceMediaKey(item: ShowcaseMediaItem) {
 
 function resourceItemKey(item: PostResourceItem) {
   return item.id?.trim() || `${item.sectionId ?? 'global'}:${item.type}:${item.sortOrder}:${item.title}`;
-}
-
-function bySortOrder(left: { sortOrder: number }, right: { sortOrder: number }) {
-  return left.sortOrder - right.sortOrder;
-}
-
-function resourceItemMeta(item: PostResourceItem) {
-  const values = [item.contentType, formatFileSize(item.sizeBytes)].filter(Boolean);
-  return values.join(' · ');
-}
-
-function formatFileSize(sizeBytes: number | null) {
-  if (!sizeBytes) return '';
-  if (sizeBytes < 1024) return `${sizeBytes} B`;
-  if (sizeBytes < 1024 * 1024) return `${Math.round(sizeBytes / 102.4) / 10} KB`;
-  return `${Math.round(sizeBytes / 1024 / 102.4) / 10} MB`;
 }

@@ -1,4 +1,4 @@
-import { ExternalLink, FileText, ImageIcon } from 'lucide-react-native';
+import { AudioLines, ExternalLink, FileText, ImageIcon, Play } from 'lucide-react-native';
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
@@ -16,6 +16,11 @@ type PostResourceReferencesProps = {
    */
   coverMedia?: boolean;
   items: PostResourceItem[] | undefined;
+  /**
+   * The row's heading. A card that is itself the references passes null: its
+   * name already says it, and "References" under "Reference media" said it twice.
+   */
+  label?: string | null;
   onError?: (message: string) => void;
   onOpenUrl: (url: string) => Promise<void>;
   resolveFileUrl: (storagePath: string) => Promise<string>;
@@ -24,6 +29,7 @@ type PostResourceReferencesProps = {
 export function PostResourceReferences({
   coverMedia,
   items,
+  label = 'References',
   onError,
   onOpenUrl,
   resolveFileUrl,
@@ -155,9 +161,11 @@ export function PostResourceReferences({
 
   return (
     <View style={{ gap: 10 }}>
-      <Text selectable style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
-        References
-      </Text>
+      {label ? (
+        <Text selectable style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
+          {label}
+        </Text>
+      ) : null}
       <ScrollView
         horizontal
         keyboardShouldPersistTaps="handled"
@@ -215,6 +223,13 @@ export function PostResourceReferences({
                   <ActivityIndicator color={theme.colors.primary} />
                 ) : isImage ? (
                   <ImageIcon size={appTheme.icon.hero} color={theme.colors.faint} />
+                ) : referenceMediaKind(item) === 'video' ? (
+                  // A clip reads as one: a play mark, where a document icon read as a file.
+                  <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+                    <Play size={appTheme.icon.compact} color={theme.colors.text} fill={theme.colors.text} />
+                  </View>
+                ) : item.contentType?.startsWith('audio/') || item.type === 'reference_audio' ? (
+                  <AudioLines size={appTheme.icon.hero} color={theme.colors.faint} />
                 ) : (
                   <FileText size={appTheme.icon.hero} color={theme.colors.faint} />
                 )}

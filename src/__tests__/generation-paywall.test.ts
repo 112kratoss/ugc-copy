@@ -354,4 +354,39 @@ describe('generation paywall helpers', () => {
       textContent: 'Saved generation setup\nModel: Nano Banana 2.0',
     });
   });
+
+  // A creation's clip came to buyers as a "source file", so the app gave the
+  // reference video its prompt names a card of its own, "Source assets", apart
+  // from the pictures (recipe reading review, 2026-10-29). The copy a recipe
+  // stores at publish already typed it as a reference.
+  it('types a creation\'s video and audio inputs as references, like its pictures', () => {
+    const input = (id: string, mediaType: 'image' | 'video' | 'audio', storagePath: string) => ({
+      id,
+      generationId: 'gen-1',
+      mediaType,
+      role: mediaType === 'image' ? 'reference_image' as const : mediaType === 'video' ? 'reference_video' as const : 'reference_audio' as const,
+      label: id,
+      url: null,
+      storagePath,
+      sourceGenerationId: null,
+      sortOrder: 0,
+      metadata: {},
+    });
+    const items = buildGenerationRecipeResourceItems({
+      promptText: null,
+      notesMarkdown: null,
+      allowRemix: false,
+      inputMedia: [
+        input('Ali', 'image', 'generation_inputs/user-1/gen-1/00-reference_image.png'),
+        input('Video reference 1', 'video', 'generation_inputs/user-1/gen-1/03-reference_video.mp4'),
+        input('Voice', 'audio', 'generation_inputs/user-1/gen-1/04-reference_audio.mp3'),
+      ],
+    });
+
+    expect(items.map((item) => [item.title, item.type, item.contentType])).toEqual([
+      ['Ali', 'reference_image', 'image/png'],
+      ['Video reference 1', 'reference_video', 'video/mp4'],
+      ['Voice', 'reference_audio', 'audio/mpeg'],
+    ]);
+  });
 });

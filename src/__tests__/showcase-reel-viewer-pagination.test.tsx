@@ -1297,8 +1297,12 @@ describe('ShowcaseReelViewer pagination', () => {
     await waitFor(() => {
       expect(document.querySelector('img[src="https://signed.example.com/reference.png"]')).not.toBeNull();
     });
-    expect(screen.getByRole('button', { name: /open file/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument();
+    // In the order both clients read: the prompt, the picture it uses, then the notes;
+    // the picture as a gallery tile that opens full screen and downloads.
+    const recipe = document.getElementById('recipe') as HTMLElement;
+    expect(within(recipe).getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['Prompt', 'References', 'Notes']);
+    expect(screen.getByRole('button', { name: 'View @alisa' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download @alisa' })).toBeInTheDocument();
   });
 
   // As the post page's panel does: the previews one render draws leave as one
@@ -1335,6 +1339,7 @@ describe('ShowcaseReelViewer pagination', () => {
             items: [
               reference('generated_images/user-1/frame.png', 'image/png'),
               reference('generated_videos/user-1/motion.mp4', 'video/mp4'),
+              reference('user-1/resources/guide.pdf', 'application/pdf'),
             ],
           },
         },
@@ -1362,18 +1367,19 @@ describe('ShowcaseReelViewer pagination', () => {
       await waitFor(() => {
         expect(document.querySelector('img[src="https://signed.example.com/generated_images/user-1/frame.png"]')).not.toBeNull();
       });
-      expect(document.querySelector('video')).toHaveAttribute('src', 'https://signed.example.com/generated_videos/user-1/motion.mp4');
+      // A clip's first frame stands in for its poster.
+      expect(document.querySelector('video')).toHaveAttribute('src', 'https://signed.example.com/generated_videos/user-1/motion.mp4#t=0.1');
       expect(fileUrlBodies()).toEqual([{
         storagePaths: ['generated_images/user-1/frame.png', 'generated_videos/user-1/motion.mp4'],
         disposition: 'inline',
       }]);
 
-      // Open asks for the one file, to be shown, and opens it.
-      fireEvent.click(screen.getAllByRole('button', { name: /open file/i })[0]);
+      // A file read rather than looked at keeps its row: Open asks for the one file, to be shown, and opens it.
+      fireEvent.click(screen.getByRole('button', { name: /open file/i }));
       await waitFor(() => {
-        expect(open).toHaveBeenCalledWith('https://signed.example.com/generated_images/user-1/frame.png', '_blank', 'noopener,noreferrer');
+        expect(open).toHaveBeenCalledWith('https://signed.example.com/user-1/resources/guide.pdf', '_blank', 'noopener,noreferrer');
       });
-      expect(fileUrlBodies().at(-1)).toEqual({ storagePath: 'generated_images/user-1/frame.png', disposition: 'inline' });
+      expect(fileUrlBodies().at(-1)).toEqual({ storagePath: 'user-1/resources/guide.pdf', disposition: 'inline' });
     } finally {
       open.mockRestore();
     }
