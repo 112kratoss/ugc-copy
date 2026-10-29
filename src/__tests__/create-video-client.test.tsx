@@ -3,7 +3,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
-import { creatorOpeningFromCatalog, type CreatorOpening } from '@/lib/creator-opening';
+import { creatorOpeningFromCatalog, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import { buildGenerationModelCatalog, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
@@ -3012,7 +3012,7 @@ describe('CreateVideoClient Kling video elements', () => {
      * and Seedance 2 Mini took over only once the catalog came back from the network.
      */
     describe('the server\'s opening', () => {
-      function openingFor(link: { model?: string; aspectRatio?: string } = {}, costCredits: number | null = 19): CreatorOpening {
+      function openingFor(link: CreatorOpeningLink = {}, costCredits: number | null = 19): CreatorOpening {
         const opening = creatorOpeningFromCatalog({ ...publishedCatalog, revision: modelCatalogState.revision }, 'video', link)!;
         return { ...opening, costCredits };
       }
@@ -3138,6 +3138,24 @@ describe('CreateVideoClient Kling video elements', () => {
           expect(quoteStandIn.lastRequest()!.settings, change).toMatchObject(settings);
           view.unmount();
         }
+      });
+
+      it('restores no emptied choice from a draft saved before the first pick', async () => {
+        // Saved on Seedance 2 Mini, which offers no quality mode: the page's settings check emptied it.
+        loadCreatorDraftMock.mockResolvedValue({
+          prompt: '', modelId: '', mode: '', aspectRatio: '16:9', sound: false, resolution: '480p',
+          fixedLens: false, isMultiShot: false, shots: [{ id: '1', prompt: '', duration: 5 }], duration: 5,
+          drawn: { mode: 'std', aspectRatio: '16:9', sound: false, resolution: '480p', fixedLens: false, isMultiShot: false, duration: 5 },
+        });
+        // The next visit is a link to Kling 3.0, which does offer one.
+        publishKlingBesideMini();
+        const prefill = { model: 'kling-3.0-video' };
+        render(<CreateVideoClient prefill={prefill} opening={openingFor(prefill, 70)} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('kling-3.0-video'));
+        await settle();
+
+        expect(quoteStandIn.lastRequest()!.settings).toMatchObject({ mode: 'std' });
+        expect(screen.queryByText(/Model settings changed/)).toBeNull();
       });
 
       it('saves what it drew with a draft that has no model yet', async () => {

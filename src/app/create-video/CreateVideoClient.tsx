@@ -2697,18 +2697,19 @@ export default function CreateVideoClient({
                 // A draft saved before any model was settled holds what the page drew then beside what the
                 // creator changed: only the changes come back, and the rest is this visit's to draw. One saved
                 // before the page drew the server's opening (2026-10-29) drew the stand-in.
-                const drawnThen: Partial<DrawnVideoSettings> = draft.modelId ? {} : { ...STAND_IN_FORM, ...draft.drawn };
+                const drawnThen: Partial<DrawnVideoSettings> | null = draft.modelId ? null : { ...STAND_IN_FORM, ...draft.drawn };
+                // The page itself empties a choice its model does not offer, so an empty one was never the creator's either.
                 const changed = <T,>(value: T | undefined, drawnValue: T | undefined): value is T => (
-                    value !== undefined && value !== drawnValue
+                    value !== undefined && (drawnThen === null || (value !== drawnValue && value !== ''))
                 );
-                if (changed(draft.mode, drawnThen.mode)) setMode(draft.mode);
-                if (draft.aspectRatio && !prefillAspectRatio && changed(draft.aspectRatio, drawnThen.aspectRatio)) setAspectRatio(draft.aspectRatio);
-                if (changed(draft.sound, drawnThen.sound)) setSound(draft.sound);
-                if (changed(draft.resolution, drawnThen.resolution)) setResolution(draft.resolution);
-                if (changed(draft.fixedLens, drawnThen.fixedLens)) setFixedLens(draft.fixedLens);
-                if (changed(draft.isMultiShot, drawnThen.isMultiShot)) setIsMultiShot(draft.isMultiShot);
+                if (changed(draft.mode, drawnThen?.mode)) setMode(draft.mode);
+                if (draft.aspectRatio && !prefillAspectRatio && changed(draft.aspectRatio, drawnThen?.aspectRatio)) setAspectRatio(draft.aspectRatio);
+                if (changed(draft.sound, drawnThen?.sound)) setSound(draft.sound);
+                if (changed(draft.resolution, drawnThen?.resolution)) setResolution(draft.resolution);
+                if (changed(draft.fixedLens, drawnThen?.fixedLens)) setFixedLens(draft.fixedLens);
+                if (changed(draft.isMultiShot, drawnThen?.isMultiShot)) setIsMultiShot(draft.isMultiShot);
                 if (draft.shots) setMultiPrompts(draft.shots);
-                if (changed(draft.duration, drawnThen.duration) && !prefillDuration) setSingleDuration(draft.duration);
+                if (changed(draft.duration, drawnThen?.duration) && !prefillDuration) setSingleDuration(draft.duration);
                 if (draft.additionalSettings) pendingAdditionalSettingsRef.current = draft.additionalSettings;
             })
             .catch((draftError) => {
