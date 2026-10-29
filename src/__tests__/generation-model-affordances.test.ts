@@ -315,6 +315,36 @@ describe('descriptor-driven affordances', () => {
     expect(multiOption?.showResolutionControl).toBe(true);
   });
 
+  it.each(videoModelIds)('%s: descriptor and fallback agree on the frames/references switch', (modelId) => {
+    // The creator draws the switch from these before the catalog arrives and from the
+    // descriptor after, so the two must offer the same choice or the card would change shape.
+    const fromDescriptor = getVideoInputAffordances(descriptorFor(modelId), modelId, {});
+    const fromFallback = getVideoInputAffordances(null, modelId, {});
+    expect(fromDescriptor.inputChoice.labels !== null, `${modelId} publishes the choice`).toBe(fromFallback.inputChoice.labels !== null);
+    expect(fromDescriptor.inputChoice.referencesKeep, `${modelId} references side keeps`).toEqual(fromFallback.inputChoice.referencesKeep);
+    expect(fromDescriptor.frames.start, `${modelId} frames.start`).toBe(fromFallback.frames.start);
+  });
+
+  it.each(videoModelIds)('%s: the switch is offered exactly where the catalog publishes its referenceMode control', (modelId) => {
+    const descriptor = descriptorFor(modelId);
+    const published = Boolean(descriptor?.controls.some((control) => control.key === 'referenceMode'));
+    const affordances = getVideoInputAffordances(descriptor, modelId, { mode: modelId === 'veo-3.1' ? 'veo3_fast' : undefined });
+    const bothSides = (affordances.frames.start || affordances.frames.end) && affordances.elements.enabled;
+    expect(affordances.inputChoice.labels !== null, `${modelId} labels`).toBe(published);
+    expect(bothSides, `${modelId} has both sides`).toBe(published);
+  });
+
+  it('names the switch’s options in the control’s own words', () => {
+    expect(getVideoInputAffordances(descriptorFor('seedance-2-5'), 'seedance-2-5', {}).inputChoice.labels)
+      .toEqual({ frames: 'Frames', references: 'References' });
+    expect(getVideoInputAffordances(descriptorFor('kling-3.0-video'), 'kling-3.0-video', {}).inputChoice.labels).toBeNull();
+  });
+
+  it('keeps the start image on Wan 2.7’s references side alone, read off its references mode', () => {
+    const keeping = videoModelIds.filter((modelId) => getVideoInputAffordances(descriptorFor(modelId), modelId, {}).inputChoice.referencesKeep.start);
+    expect(keeping).toEqual(['wan-2.7']);
+  });
+
   it('reports the required character reference on ideogram-character', () => {
     const affordances = getImageInputAffordances(descriptorFor('ideogram-character'));
     // Kie's ideogram/character endpoint uses only the first reference image

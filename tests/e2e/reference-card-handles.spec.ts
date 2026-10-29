@@ -147,11 +147,12 @@ type CardHandles = {
 async function readCardHandles(page: Page, title: string): Promise<CardHandles | null> {
   try {
     return await page.evaluate((panelTitle) => {
-      const heading = Array.from(document.querySelectorAll<HTMLElement>('h2'))
+      const heading = Array.from(document.querySelectorAll<HTMLElement>('h2, h3'))
         .find((candidate) => candidate.textContent === panelTitle);
-      // The panel is the heading's nearest ancestor that holds a card's Insert button.
+      // The panel is the heading's nearest ancestor that holds a card's Insert button (on the
+      // video creator's pictures the handle itself, since PR 4).
       let panel = heading?.parentElement ?? null;
-      while (panel && !Array.from(panel.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Insert')) {
+      while (panel && !Array.from(panel.querySelectorAll('button')).some((button) => /^Insert @/.test(button.getAttribute('aria-label') ?? ''))) {
         panel = panel.parentElement;
       }
       if (!panel) return null;
@@ -235,7 +236,7 @@ test.describe('reference card handles', () => {
 
     await page.goto(`/create-video?remix=${GENERATION_ID}&remixPost=${POST_ID}`);
 
-    await expectWholeHandles(page, 'Reusable image references', REFERENCES.map((reference) => reference.handle));
+    await expectWholeHandles(page, 'Reference images', REFERENCES.map((reference) => reference.handle));
   });
 
   test('the video creator shows each Kling video element handle whole', async ({ page }) => {

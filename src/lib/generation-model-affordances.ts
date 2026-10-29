@@ -1,6 +1,7 @@
 import {
   getVideoElementSupport,
   getVideoReferenceSupport,
+  VIDEO_MODELS,
   type VideoModelId,
 } from '@/lib/client-generation-models';
 import type {
@@ -78,6 +79,16 @@ export type VideoInputAffordances = {
     imagesPerSubject: { min: number; max: number };
   };
   preparedAssets: { voices: number; characters: number } | null;
+  /**
+   * The creator's frames/references switch (the artboard Inputs): the words of the two
+   * options as the catalog's `referenceMode` control publishes them (null where it publishes
+   * none), and the frames the references side keeps beside the references, which is Wan 2.7's
+   * start image: its reference endpoint takes `first_frame` beside them.
+   */
+  inputChoice: {
+    labels: { frames: string; references: string } | null;
+    referencesKeep: { start: boolean; end: boolean };
+  };
   /** Condition-filtered constraints; their `message` is the copy the UI should show. */
   activeConstraints: CatalogInputConstraint[];
   /** True when these values came from the descriptor rather than the fallback tables. */
@@ -188,7 +199,9 @@ function legacyFallbackAffordances(
     },
     referenceAudios: { max: references.audios },
     frames: {
-      start: true,
+      // Gemini Omni video takes references only: its descriptor declares no frame slot, and a
+      // start frame here drew a frames side the page dropped once the catalog arrived.
+      start: modelId !== 'gemini-omni-video',
       // kling-o3 takes a single start image and no end frame; it was missing from this
       // list, so the surface offered an end-frame slot the model cannot use.
       end: !['grok-imagine-video', 'grok-imagine-video-1.5', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video', 'kling-o3'].includes(modelId),
@@ -200,6 +213,17 @@ function legacyFallbackAffordances(
       ? { enabled: true, maxImages: 12, maxNamed: 3, imagesPerSubject: SUBJECT_IMAGES_PER_NAME }
       : NO_SUBJECTS,
     preparedAssets: modelId === 'gemini-omni-video' ? { voices: 3, characters: 3 } : null,
+    inputChoice: {
+      // The code catalog publishes the choice for a model that takes reference pictures and a
+      // frame (buildGenerationModelCatalog). Veo 3.1 takes its pictures only in its Lite and
+      // Fast modes, so any of its modes is asked.
+      labels: modelId !== 'gemini-omni-video'
+        && [undefined, ...VIDEO_MODELS[modelId].modeOptions.map((option) => option.value)]
+          .some((mode) => getVideoElementSupport(modelId, { mode }).enabled)
+        ? { frames: 'Frames', references: 'References' }
+        : null,
+      referencesKeep: { start: modelId === 'wan-2.7', end: false },
+    },
     activeConstraints: [],
     descriptorDriven: false,
   };
@@ -286,6 +310,15 @@ export function getVideoInputAffordances(
   const activeConstraints = (descriptor.inputConstraints ?? [])
     .filter((constraint) => conditionsMatch(constraint.conditions, conditionSettings));
 
+  // The switch's words are the control's own options; it is read only where it offers both.
+  const referenceModeControl = descriptor.controls.find((control) => control.key === 'referenceMode');
+  const referenceModeOptions = referenceModeControl?.type === 'choice' ? referenceModeControl.options : [];
+  const optionLabel = (value: string) => referenceModeOptions.find((option) => option.value === value)?.label;
+  const framesLabel = optionLabel('frames');
+  const referencesLabel = optionLabel('elements');
+  // The frame slots the references side holds beside its references (Wan 2.7's start image).
+  const reachableRoles = new Set([...reachable.values()].map((slot) => slot.role));
+
   return {
     activeMode,
     framesExcludeReferences: frameSlotsDeclared
@@ -328,6 +361,10 @@ export function getVideoInputAffordances(
           characters: active.get('characters')?.max ?? 0,
         }
       : null,
+    inputChoice: {
+      labels: framesLabel && referencesLabel ? { frames: framesLabel, references: referencesLabel } : null,
+      referencesKeep: { start: reachableRoles.has('startFrame'), end: reachableRoles.has('endFrame') },
+    },
     activeConstraints,
     descriptorDriven: true,
   };

@@ -270,6 +270,9 @@ test.describe('handles typed after "@"', () => {
     await page.goto('/create-video?model=seedance-2');
     const prompt = page.getByPlaceholder(/^Describe the .* scene/);
     await expect(prompt).toBeVisible();
+    // "@" is offered while the inputs show their references (the artboard Inputs, PR 4).
+    await page.getByRole('group', { name: 'Inputs' }).getByText('References', { exact: true }).click();
+    await expect(page.getByRole('radio', { name: 'References' })).toBeChecked();
 
     await expectTypedHandlesInTheirCard(page, prompt, 'Insert reference', { unknown: true, resolve: false });
   });

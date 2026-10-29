@@ -943,10 +943,48 @@ export function CreatorMentionPanel<T extends CreatorMentionSuggestion>({
 export const CREATOR_REFERENCE_CHIP_CLASS =
   'ui-focus-ring inline-flex min-h-9 shrink-0 items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-semibold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)] disabled:cursor-not-allowed disabled:opacity-50';
 
+/** The @handle as the button that inserts it, where a creator's hint says "tap a handle". */
+const CREATOR_HANDLE_INSERT_CLASS =
+  'ui-focus-ring inline-flex min-h-9 min-w-0 max-w-full items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-left transition-colors hover:bg-[var(--ui-surface-3)]';
+
+/**
+ * Replace on a reference a remix brought back (the artboard Remix): a file of the creator's
+ * own takes its place, and keeps its name and @handle, so the prompt still reads.
+ */
+export function CreatorReplaceButton({ label, accept, onFile }: {
+  /** Named for what it replaces: "Replace @reference_1 with your own photo". */
+  label: string;
+  accept: string;
+  onFile: (file: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <button type="button" onClick={() => inputRef.current?.click()} aria-label={label} className={CREATOR_REFERENCE_CHIP_CLASS}>
+        Replace
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        tabIndex={-1}
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = '';
+          if (file) onFile(file);
+        }}
+      />
+    </>
+  );
+}
+
 /**
  * A reference in a creator's column, as a row: its picture or clip (which
  * opens a preview), its name to rename it by, Remove, and its @handle with
  * Insert (and Copy for a Kling clip), each named for the handle it acts on.
+ * With `insertByHandle` the handle itself is the Insert button, and a remix's
+ * reference takes `replace`.
  */
 export function CreatorReferenceRow({
   accent,
@@ -963,6 +1001,8 @@ export function CreatorReferenceRow({
   onInsert,
   onCopy,
   note,
+  insertByHandle = false,
+  replace,
 }: {
   accent: UiAccent;
   /** The picture or clip at the row's start. */
@@ -981,6 +1021,10 @@ export function CreatorReferenceRow({
   onInsert: () => void;
   onCopy?: () => void;
   note?: ReactNode;
+  /** The handle is the Insert button (the video creator's hint: "tap a handle"). */
+  insertByHandle?: boolean;
+  /** A remix's reference: a file of the creator's own takes its place. */
+  replace?: { label: string; accept: string; onFile: (file: File) => void };
 }) {
   return (
     <li className="flex items-start gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-2.5">
@@ -1013,16 +1057,25 @@ export function CreatorReferenceRow({
           <IconButton label={`Remove ${displayName}`} icon={X} onClick={onRemove} className="shrink-0" />
         </div>
         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
-          <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
+          {insertByHandle ? (
+            <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_HANDLE_INSERT_CLASS}>
+              <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
+            </button>
+          ) : (
+            <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
+          )}
           <div className="flex flex-wrap items-center gap-1.5">
+            {replace ? <CreatorReplaceButton {...replace} /> : null}
             {onCopy ? (
               <button type="button" onClick={onCopy} aria-label={`Copy ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
                 Copy
               </button>
             ) : null}
-            <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
-              Insert
-            </button>
+            {insertByHandle ? null : (
+              <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
+                Insert
+              </button>
+            )}
           </div>
         </div>
         {note ? <p className="px-2 text-xs text-[var(--ui-text-faint)]">{note}</p> : null}
