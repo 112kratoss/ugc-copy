@@ -71,6 +71,7 @@ export interface RemixSourceBundle {
       referenceVideo: RemixResolvedAsset | null;
     };
   };
+  /** The owner's remix only: the kept rows, with where each input was staged. */
   inputMedia?: GenerationInputMediaItem[];
   workflowSettings: Record<string, unknown>;
   restoreIssues: string[];

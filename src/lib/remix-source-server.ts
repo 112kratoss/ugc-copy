@@ -321,7 +321,7 @@ export async function loadRemixSourceBundle(
     workflowSettings,
   });
   const includeInputMedia = isOwner || access.includeSharedInputMedia;
-  const effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(workflowSettings, includeInputMedia);
+  const effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(workflowSettings, isOwner);
   const durableInputMediaMap = includeInputMedia
     ? await loadGenerationInputMediaMap({
         supabase: adminSupabase,
@@ -476,7 +476,11 @@ export async function loadRemixSourceBundle(
     },
     result,
     inputs: {},
-    inputMedia: accessibleInputMedia,
+    // The rows themselves go to the owner only. Beside each kept copy they hold
+    // the path the creator's upload was staged under and the link the run read
+    // it from, both naming the file. Anyone else restores from `inputs`, which
+    // is built below from the same rows and leaves those two out.
+    ...(isOwner ? { inputMedia: accessibleInputMedia } : {}),
     workflowSettings: effectiveWorkflowSettings,
     restoreIssues,
   };

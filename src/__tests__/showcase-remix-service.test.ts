@@ -563,6 +563,31 @@ describe('remixShowcasePostForRoute', () => {
     expect(result.ok ? result.body.prefill.settings : null).toEqual({ model: 'nano-banana-2' });
   });
 
+  // Owner, 2026-10-29: only the owner's remix is given the settings that say
+  // where the inputs were staged.
+  it('strips input-media settings for remixers the creator shared the inputs with', async () => {
+    const serviceClient = createServiceClientMock({
+      generation: {
+        ...PUBLIC_CREATOR_GENERATION,
+        share_input_media_for_remix: true,
+        workflow_settings: {
+          model: 'nano-banana-2',
+          elements: [{ id: 'el-1', displayName: 'me', handle: '@me', storagePath: 'uploads/creator-1/1730000000000-passport-scan.jpg' }],
+          inputs: [{ slot: 'imageReferences', kind: 'image', storagePath: 'uploads/creator-1/1730000000000-passport-scan.jpg' }],
+        },
+      },
+    });
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    });
+
+    expect(result.ok ? result.body.prefill.settings : null).toEqual({ model: 'nano-banana-2' });
+  });
+
   it('keeps input-media settings when the owner remixes their own generation', async () => {
     const settings = {
       model: 'nano-banana-2',

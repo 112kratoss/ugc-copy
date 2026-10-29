@@ -504,7 +504,7 @@ describe('/api/remix-source route', () => {
       url: 'https://signed.example.com/generated_images%2Fcreator-1%2Fsource-1.png',
     });
     expect(data.inputs.image).toBeUndefined();
-    expect(data.inputMedia).toEqual([]);
+    expect(data.inputMedia).toBeUndefined();
     expect(data.workflowSettings.elements).toBeUndefined();
     expect(data.restoreIssues).toEqual([]);
   });
@@ -584,7 +584,7 @@ describe('/api/remix-source route', () => {
     const data = await response.json();
     expect(response.status).toBe(200);
     expect(data.inputs.image).toBeUndefined();
-    expect(data.inputMedia).toEqual([]);
+    expect(data.inputMedia).toBeUndefined();
     expect(data.workflowSettings.elements).toBeUndefined();
     expect(data.restoreIssues).toEqual([]);
   });
@@ -632,22 +632,15 @@ describe('/api/remix-source route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
-    expect(data.inputMedia).toEqual([
-      expect.objectContaining({
-        id: 'input-start-1',
-        label: 'Shared start frame',
-        url: 'https://signed.example.com/generation-inputs/creator-1/video-shared-1/00-start-frame.png',
-      }),
-    ]);
+    // The rows are the owner's; a remixer restores from `inputs`.
+    expect(data.inputMedia).toBeUndefined();
     expect(data.inputs.video.startFrame).toMatchObject({
       label: 'Shared start frame',
       url: 'https://signed.example.com/generation-inputs/creator-1/video-shared-1/00-start-frame.png',
     });
-    expect(data.workflowSettings.startFrame).toEqual({
-      kind: 'image',
-      label: 'Old start frame',
-      storagePath: 'uploads/creator-1/old-start.png',
-    });
+    // Where the creator's upload was staged stays theirs (owner, 2026-10-29).
+    expect(data.workflowSettings.startFrame).toBeUndefined();
+    expect(JSON.stringify(data)).not.toContain('old-start');
   });
 
   it('allows the owner to restore motion remix inputs from a private creation', async () => {

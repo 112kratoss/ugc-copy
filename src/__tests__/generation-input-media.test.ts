@@ -918,7 +918,7 @@ describe('the pictures of a Kling O3 named subject', () => {
     expect(findUncapturedInputMediaTypes(declared, [picture({}), picture({}), picture({})])).toEqual([]);
   });
 
-  it('takes the subjects out of the settings a remix is given when the run’s inputs are not shared', async () => {
+  it('takes the subjects out of the settings anyone but the owner is given', async () => {
     const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
     const settings = {
       model: 'kling-o3',
@@ -978,7 +978,7 @@ describe('the settings a remix is given', () => {
     primaryOutputIndex: 0,
   });
 
-  it('holds the input slots only with the inputs, and never where the pictures were kept', async () => {
+  it('holds the input slots for the owner only, and never where the pictures were kept', async () => {
     const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
     const restored = { model: 'nano-banana-2', aspectRatio: '3:4', settings: { aspectRatio: '3:4' } };
 

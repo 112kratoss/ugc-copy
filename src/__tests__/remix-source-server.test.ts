@@ -59,7 +59,11 @@ vi.mock('@/lib/post-resource-bundles-server', () => ({
 }));
 
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
-import { collectReferenceMediaCandidates, collectSubjectImageCandidates } from '@/lib/generation-input-media';
+import {
+  collectImageInputCandidates,
+  collectReferenceMediaCandidates,
+  collectSubjectImageCandidates,
+} from '@/lib/generation-input-media';
 import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-server';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
@@ -886,13 +890,95 @@ describe("a catalog picture run's own media in its settings", () => {
     expect(JSON.stringify(bundle)).not.toMatch(/passport-scan|gen-private-7/);
   });
 
-  it('gives the owner, and a remix the creator shared the inputs with, the inputs but not where the pictures were kept', async () => {
-    for (const access of [OWNER_ACCESS, { ...PUBLIC_ACCESS, includeSharedInputMedia: true }]) {
-      mocks.resolveRemixAccess.mockResolvedValue(access);
+  it('gives the owner the inputs but not where the pictures were kept', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(OWNER_ACCESS);
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.workflowSettings).toEqual({ ...RESTORED, ...OF_THE_INPUTS });
+  });
+
+  // Owner, 2026-10-29: such a remix restores the inputs from `inputs`, as a
+  // bought recipe's does, and is not told where they were staged.
+  it('gives a remix the creator shared the inputs with the settings a bought recipe gets', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, includeSharedInputMedia: true });
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.workflowSettings).toEqual(RESTORED);
+  });
+
+  describe('once the run kept a copy of its input', () => {
+    // Where the creator's upload was staged and the link the run read it from,
+    // as the start passed them on to be kept.
+    const UPLOAD_LINK = 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/1730000000000-passport-scan.jpg?token=original-run';
+    // The row keeping writes: the copy in the run's own folder, with both of
+    // those beside it (persistGenerationInputMedia).
+    const KEPT_INPUT = collectImageInputCandidates({
+      resolvedImageUrls: [UPLOAD_LINK],
+      elements: [{ id: 'element-me', ...OF_THE_INPUTS.elements[0] }],
+    }).map((candidate, sortOrder) => ({
+      id: `row-${sortOrder}`,
+      generationId: 'gen-1',
+      mediaType: candidate.mediaType,
+      role: candidate.role,
+      label: candidate.label ?? '',
+      url: `https://signed.example/kept-${sortOrder}.jpg`,
+      storagePath: `generation_inputs/creator-1/gen-1/0${sortOrder}-${candidate.role}.jpg`,
+      sourceGenerationId: candidate.sourceGenerationId ?? null,
+      sortOrder,
+      metadata: {
+        ...candidate.metadata,
+        sourceStoragePath: candidate.sourceStoragePath ?? null,
+        sourceUrl: candidate.sourceUrl ?? null,
+      },
+    }));
+    // The copy is what a remixer's run imports, reading the creator from its
+    // path, so it is the one folder of the creator's a remix may name.
+    const STAGED_IN_CREATOR_FOLDER = new RegExp(`(?:${[...USER_SCOPED_STORAGE_BUCKETS]
+      .filter((bucket) => bucket !== 'generation_inputs')
+      .join('|')})/creator-1/`);
+    const RESTORED_ELEMENT = {
+      id: 'element-me',
+      displayName: 'me',
+      handle: '@me',
+      storagePath: 'generation_inputs/creator-1/gen-1/00-reference_image.jpg',
+      sourceGenerationId: null,
+      url: 'https://signed.example/kept-0.jpg',
+    };
+
+    it("hands a bought recipe's remix the copy, never the creator's upload, its file name or the link it was read from", async () => {
+      mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, basis: 'unlocked', recipeEntitled: true });
+      mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue(KEPT_INPUT);
+
+      const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+      expect(bundle.inputs.image?.elements).toEqual([RESTORED_ELEMENT]);
+      expect(JSON.stringify(bundle)).not.toMatch(STAGED_IN_CREATOR_FOLDER);
+      expect(JSON.stringify(bundle)).not.toMatch(/passport-scan|original-run/);
+      expect(bundle).not.toHaveProperty('inputMedia');
+    });
+
+    it('hands a remix the creator shared the inputs with the copy, and nothing that names the upload', async () => {
+      mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, includeSharedInputMedia: true });
+      mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', KEPT_INPUT]]));
+
+      const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+      expect(bundle.inputs.image?.elements).toEqual([RESTORED_ELEMENT]);
+      expect(JSON.stringify(bundle)).not.toMatch(STAGED_IN_CREATOR_FOLDER);
+      expect(JSON.stringify(bundle)).not.toMatch(/passport-scan|original-run/);
+      expect(bundle).not.toHaveProperty('inputMedia');
+    });
+
+    it('still gives the owner the rows themselves', async () => {
+      mocks.resolveRemixAccess.mockResolvedValue(OWNER_ACCESS);
+      mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', KEPT_INPUT]]));
 
       const bundle = await loadRemixSourceBundle(request(), 'gen-1');
 
-      expect(bundle.workflowSettings).toEqual({ ...RESTORED, ...OF_THE_INPUTS });
-    }
+      expect(bundle.inputs.image?.elements).toEqual([RESTORED_ELEMENT]);
+      expect(bundle.inputMedia).toEqual(KEPT_INPUT);
+    });
   });
 });

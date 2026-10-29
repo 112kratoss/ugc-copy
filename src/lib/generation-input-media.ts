@@ -102,7 +102,9 @@ interface LegacyGenerationReference {
  * What a run's settings say about its inputs: each shape a start has recorded
  * them in (the catalog path's `inputs` slots among them), with the paths they
  * were staged under in the creator's folders, and the prompt compiled to name
- * them. A remix is given these only with the inputs themselves.
+ * them. Only the owner's remix is given these (owner, 2026-10-29): anyone
+ * else, a remix of shared inputs or of a bought recipe included, restores the
+ * inputs from the bundle's `inputs` instead.
  */
 const INPUT_MEDIA_WORKFLOW_KEYS = new Set([
   'elements',
@@ -1052,12 +1054,12 @@ export async function buildLegacyGenerationInputMedia(params: {
 
 export function sanitizeWorkflowSettingsForRemix(
   workflowSettings: Record<string, unknown>,
-  includeInputMedia: boolean
+  forOwner: boolean
 ): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(workflowSettings)) {
     if (OUTPUT_LIST_WORKFLOW_KEYS.has(key)) continue;
-    if (!includeInputMedia && INPUT_MEDIA_WORKFLOW_KEYS.has(key)) continue;
+    if (!forOwner && INPUT_MEDIA_WORKFLOW_KEYS.has(key)) continue;
     sanitized[key] = value;
   }
 
