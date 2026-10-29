@@ -27,6 +27,7 @@ import {
   type PendingConfirmation,
   type ToastRecord,
 } from './feedback-state';
+import { useInertPageBeneath } from './useInertPageBeneath';
 import { useModalQuestion } from './useModalQuestion';
 
 // Asked for only by an owner making a post public before their profile can
@@ -290,11 +291,16 @@ function Toast({ toast }: { toast: ToastRecord }) {
 
 function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) {
   const { id, request } = confirmation;
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   const isDanger = request.tone === 'danger';
 
+  // The page beneath takes no press, scroll or reader's attention while it is up. First: the
+  // focus useModalQuestion gives back as the question goes does nothing while the page is
+  // still inert, and effects are undone in the order they were declared.
+  useInertPageBeneath(backdropRef);
   useModalQuestion({
     questionId: id,
     dialogRef,
@@ -310,9 +316,12 @@ function ConfirmDialog({ confirmation }: { confirmation: PendingConfirmation }) 
 
   return (
     <div
+      ref={backdropRef}
       className="ui-confirm-backdrop"
       onClick={(event) => {
-        if (event.target === event.currentTarget) {
+        // Not the second click of a double-click: its first, on what asked (the video
+        // creator's frames/references switch), brought the question up under the pointer.
+        if (event.target === event.currentTarget && event.detail < 2) {
           resolveConfirmation(id, false);
         }
       }}

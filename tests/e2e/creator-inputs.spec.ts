@@ -232,7 +232,7 @@ test('on a phone the switch fits its card and the question is a sheet along the 
   await answerApi(page);
   await openCreator(page, 'model=seedance-2-5');
 
-  const switcher = inputs(page).getByRole('group', { name: 'Start from frames or references' });
+  const switcher = inputs(page).getByRole('radiogroup', { name: 'Start from frames or references' });
   await expect(switcher).toBeVisible();
   const box = await switcher.boundingBox();
   const card = await inputs(page).boundingBox();

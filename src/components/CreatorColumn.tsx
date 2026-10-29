@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode } from 'react';
+import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref } from 'react';
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
@@ -190,10 +190,17 @@ const CHOICE_COLUMNS = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4
 const FLOATING_SURFACE_CLASS =
   'rounded-ui-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] shadow-ui-panel';
 
+/** How a choice's options sit: a grid of equal cells, or a pill sized to their words. */
+type CreatorChoiceLayout =
+  | { appearance?: 'grid'; columns: keyof typeof CHOICE_COLUMNS }
+  /** Side by side in a pill: a choice in a card's heading (the video creator's frames or references). */
+  | { appearance: 'pill'; columns?: undefined };
+
 /**
  * One setting with a single value (aspect ratio, resolution, quality): a radio
  * group, so a screen reader hears which one is chosen, and the arrow keys move
- * the choice as they do in any radio group.
+ * the choice as they do in any radio group. The parent decides whether a pick
+ * takes effect: one that asks first leaves `value` where it was until it is answered.
  */
 export function CreatorSettingChoices<T extends string>({
   label,
@@ -203,10 +210,12 @@ export function CreatorSettingChoices<T extends string>({
   optionLabel,
   value,
   onChange,
+  appearance = 'grid',
   columns,
   accent = 'image',
   capitalize = false,
   optionPrice,
+  ref,
 }: {
   label: string;
   /** For a group whose options say what it is, as the shot mode's do. */
@@ -217,7 +226,6 @@ export function CreatorSettingChoices<T extends string>({
   optionLabel?: (option: T) => string;
   value: T;
   onChange: (value: T) => void;
-  columns: keyof typeof CHOICE_COLUMNS;
   accent?: UiAccent;
   capitalize?: boolean;
   /**
@@ -227,11 +235,14 @@ export function CreatorSettingChoices<T extends string>({
    * selectable: the bar offers a top-up in Generate's place.
    */
   optionPrice?: (option: T) => OptionPrice | null;
-}) {
+  /** The radio group, for a parent that gives the focus back to the chosen option. */
+  ref?: Ref<HTMLDivElement>;
+} & CreatorChoiceLayout) {
   const labelId = useId();
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedIndex = options.indexOf(value);
   const selectedClasses = getAccentClasses(accent).selected;
+  const pill = appearance === 'pill';
 
   const choose = (index: number) => {
     const next = (index + options.length) % options.length;
@@ -253,7 +264,7 @@ export function CreatorSettingChoices<T extends string>({
   };
 
   return (
-    <div>
+    <div className={clsx(pill && 'shrink-0')}>
       {labelHidden ? (
         <p id={labelId} className="sr-only">{label}</p>
       ) : (
@@ -262,7 +273,14 @@ export function CreatorSettingChoices<T extends string>({
           {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
         </div>
       )}
-      <div role="radiogroup" aria-labelledby={labelId} className={clsx('grid gap-1.5', CHOICE_COLUMNS[columns])}>
+      <div
+        ref={ref}
+        role="radiogroup"
+        aria-labelledby={labelId}
+        className={pill
+          ? 'inline-flex rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-1'
+          : clsx('grid gap-1.5', CHOICE_COLUMNS[columns ?? 1])}
+      >
         {options.map((option, index) => {
           const checked = index === selectedIndex;
           const price = optionPrice?.(option) ?? null;
@@ -284,12 +302,15 @@ export function CreatorSettingChoices<T extends string>({
               onClick={() => onChange(option)}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={clsx(
-                'ui-focus-ring min-h-10 rounded-ui-md border px-2 text-xs font-bold transition-colors duration-150',
+                'ui-focus-ring min-h-10 border text-xs font-bold transition-colors duration-150',
+                pill ? 'inline-flex items-center rounded-full px-3.5' : 'rounded-ui-md px-2',
                 optionPrice && 'flex min-h-12 flex-col items-center justify-center gap-0.5 py-1',
                 capitalize && 'capitalize',
                 checked
                   ? selectedClasses
-                  : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
+                  : pill
+                    ? 'border-transparent text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-secondary)]'
+                    : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
               <span>{text}</span>
@@ -1131,6 +1152,38 @@ export function CreatorAddTile({
 /** The same in the shape of a button, for one that adds something other than a file (a shot). */
 export function creatorAddButtonClass(accent: UiAccent) {
   return clsx('ui-focus-ring disabled:cursor-not-allowed disabled:opacity-50', addTileClass(accent, false));
+}
+
+/**
+ * The column's inputs as one card (the artboard Inputs, PR 4 of the creator redesign): its
+ * kicker, the switch between its sides where the model takes both, the line that says what the
+ * side shown does, a notice of what the run leaves out, and that side's slots.
+ */
+export function CreatorInputsCard({
+  switcher,
+  hint,
+  notice,
+  children,
+}: {
+  /** The switch, where the model takes both sides. */
+  switcher?: ReactNode;
+  hint?: string | null;
+  /** What the run leaves out, above the slots. */
+  notice?: ReactNode;
+  children: ReactNode;
+}) {
+  const titleId = useId();
+  return (
+    <div role="group" aria-labelledby={titleId} className="ui-card p-4">
+      <div className="flex min-h-10 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <h2 id={titleId} className="ui-kicker">Inputs</h2>
+        {switcher}
+      </div>
+      {hint ? <p className="mt-2 text-xs leading-5 text-[var(--ui-text-muted)]">{hint}</p> : null}
+      {notice}
+      <div className="mt-3 space-y-4">{children}</div>
+    </div>
+  );
 }
 
 /**

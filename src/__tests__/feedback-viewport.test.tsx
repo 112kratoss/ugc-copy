@@ -2,8 +2,11 @@ import React, { Activity } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createPortal } from 'react-dom';
+
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { useConfirmation } from '@/components/useConfirmation';
+import { useInertPageBeneath } from '@/components/useInertPageBeneath';
 import {
   dismissToast,
   pushToast,
@@ -116,6 +119,86 @@ describe('feedback viewport', () => {
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.click(dialog.parentElement as HTMLElement);
     await expect(second).resolves.toBe(false);
+  });
+
+  // A double-click on what asks (the video creator's frames/references switch) opened the
+  // question with its first click, and its second landed on the backdrop that had just come up
+  // under the pointer: the question went as it came.
+  it('stays up for the second click of a double-click on its backdrop', async () => {
+    render(<FeedbackViewport />);
+
+    let answer: Promise<boolean> | null = null;
+    act(() => {
+      answer = requestConfirmation({ title: 'Switch to references?', message: 'm', confirmLabel: 'Switch' });
+    });
+    const dialog = await screen.findByRole('alertdialog', { name: 'Switch to references?' });
+
+    fireEvent.click(dialog.parentElement as HTMLElement, { detail: 2 });
+    expect(screen.getByRole('alertdialog', { name: 'Switch to references?' })).toBeInTheDocument();
+
+    fireEvent.click(dialog.parentElement as HTMLElement, { detail: 1 });
+    await expect(answer).resolves.toBe(false);
+  });
+
+  it('makes the page beneath inert while it is up, and gives it back', async () => {
+    const view = render(
+      <>
+        <button type="button">Archive post</button>
+        <FeedbackViewport />
+      </>,
+    );
+    const opener = screen.getByRole('button', { name: 'Archive post' });
+    opener.focus();
+
+    act(() => {
+      void requestConfirmation({ title: 'Archive this post?', message: 'm', confirmLabel: 'Archive' });
+    });
+    await screen.findByRole('alertdialog', { name: 'Archive this post?' });
+    expect(view.container.inert).toBe(true);
+    expect(view.container).toHaveAttribute('aria-hidden', 'true');
+    expect(document.body.style.overflow).toBe('hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(view.container.inert).toBeFalsy();
+    expect(view.container).not.toHaveAttribute('aria-hidden');
+    expect(document.body.style.overflow).toBe('');
+    // The focus goes back once the page can take it again.
+    expect(opener).toHaveFocus();
+  });
+
+  // A modal that makes the page inert itself (the composer's resource editor) can go while the
+  // question it asked is still up: the question goes after it (useConfirmation answers it as its
+  // component unmounts). Each put back the state it found, so the question, going last, made
+  // the page inert again, for good.
+  it('gives the page back when a modal beneath the question goes first', async () => {
+    function Sheet() {
+      const overlayRef = React.useRef<HTMLDivElement | null>(null);
+      useInertPageBeneath(overlayRef);
+      return createPortal(<div ref={overlayRef} role="dialog" aria-label="Edit item" />, document.body);
+    }
+    const page = render(<button type="button">Archive post</button>);
+    render(<FeedbackViewport />);
+    const sheet = render(<Sheet />);
+    expect(page.container.inert).toBe(true);
+
+    let answer: Promise<boolean> | null = null;
+    act(() => {
+      answer = requestConfirmation({ title: 'Discard changes?', message: 'm', confirmLabel: 'Discard' });
+    });
+    await screen.findByRole('alertdialog', { name: 'Discard changes?' });
+
+    sheet.unmount();
+    // Still beneath the question.
+    expect(page.container.inert).toBe(true);
+    expect(document.body.style.overflow).toBe('hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await expect(answer).resolves.toBe(false);
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(page.container.inert).toBeFalsy();
+    expect(page.container).not.toHaveAttribute('aria-hidden');
+    expect(document.body.style.overflow).toBe('');
   });
 
   it('answers an open confirmation with cancel when another one arrives', async () => {
@@ -620,7 +703,8 @@ describe('the saver notice in the viewport', () => {
     act(() => {
       vi.advanceTimersByTime(60_000);
     });
-    expect(screen.getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+    // Still drawn, beneath the question, which hides the page from a reader while it is up.
+    expect(screen.getByRole('status', { hidden: true })).toHaveTextContent(SAVER_NOTICE_MESSAGE);
     expect(told()).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));

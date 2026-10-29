@@ -164,7 +164,10 @@ async function readCardHandles(page: Page, title: string): Promise<CardHandles |
       if (handles.length === 0) return null;
 
       const hidden = handles.flatMap((handle) => {
-        const row = handle.parentElement;
+        // On the video creator's pictures the handle is its own Insert button (PR 4): the
+        // button is the handle's box in the row, and the row is the button's.
+        const own = handle.closest<HTMLElement>('button[aria-label^="Insert @"]') ?? handle;
+        const row = own.parentElement;
         if (!row) return [`${handle.textContent}: has no row`];
         // An inline box reports no width, which would pass every check below.
         if (handle.clientWidth === 0) return [`${handle.textContent}: has no box of its own to measure`];
@@ -187,8 +190,9 @@ async function readCardHandles(page: Page, title: string): Promise<CardHandles |
         const lines = new Set(Array.from(text.getClientRects()).map((line) => Math.round(line.top))).size;
         const rowStyle = getComputedStyle(row);
         const rowWidth = row.clientWidth - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight);
-        if (lines > 1 && handle.clientWidth < rowWidth - 1) {
-          faults.push(`wraps onto ${lines} lines in ${handle.clientWidth}px of a ${Math.round(rowWidth)}px row`);
+        const ownWidth = own.getBoundingClientRect().width;
+        if (lines > 1 && ownWidth < rowWidth - 1) {
+          faults.push(`wraps onto ${lines} lines in ${Math.round(ownWidth)}px of a ${Math.round(rowWidth)}px row`);
         }
 
         return faults.map((fault) => `${handle.textContent}: ${fault}`);

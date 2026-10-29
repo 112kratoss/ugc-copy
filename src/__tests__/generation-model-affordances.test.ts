@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
+import { videoInputSides } from '@/lib/creator-video-inputs';
 import { getImageInputAffordances, getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import { VIDEO_MODELS, type VideoModelId } from '@/lib/models';
 
@@ -235,25 +236,48 @@ describe('descriptor-driven affordances', () => {
     expect(fresh.referenceVideos.maxDurationSeconds).toBe(30);
   });
 
-  it('marks frames and references exclusive only where the provider forks', () => {
+  it('keeps a start image beside the references only where the provider takes both, by the flag the run reads', () => {
     // Verified against Kie's live model docs. Seedance sends every field to one endpoint but
     // documents the two as mutually exclusive scenarios; minimax-h3 and kling-o3 route
     // references to an endpoint carrying no frame field; wan-2.7's r2v takes `first_frame`
-    // alongside `reference_image` and `reference_video`, so both groups stay live there.
-    const exclusive = (modelId: VideoModelId) => getVideoInputAffordances(
-      descriptorFor(modelId),
+    // alongside `reference_image` and `reference_video`. The creator's switch keeps that start
+    // image on its references side, read off `combineFramesWithReferences` as the run is.
+    // `null` asks the built-in tables (an `undefined` here would take the default, the descriptor).
+    const beside = (modelId: VideoModelId, descriptor: ReturnType<typeof descriptorFor> | null = descriptorFor(modelId)) => getVideoInputAffordances(
+      descriptor,
       modelId,
-      { referenceMode: 'frames', mode: modelId === 'veo-3.1' ? 'veo3_fast' : undefined },
-    ).framesExcludeReferences;
+      { mode: modelId === 'veo-3.1' ? 'veo3_fast' : undefined },
+    ).inputChoice.startBesideReferences;
 
-    expect(exclusive('seedance-2-5')).toBe(true);
-    expect(exclusive('minimax-h3')).toBe(true);
-    expect(exclusive('kling-o3')).toBe(true);
-    expect(exclusive('wan-2.7')).toBe(false);
-    // No frame slots at all, so there is nothing for references to exclude.
-    expect(exclusive('gemini-omni-video')).toBe(false);
-    // No reference slots, likewise.
-    expect(exclusive('hailuo-2.3')).toBe(false);
+    expect(videoModelIds.filter((modelId) => beside(modelId))).toEqual(['wan-2.7']);
+    expect(videoModelIds.filter((modelId) => beside(modelId, null))).toEqual(['wan-2.7']);
+    const wan = descriptorFor('wan-2.7')!;
+    expect(beside('wan-2.7', { ...wan, inputs: { ...wan.inputs, combineFramesWithReferences: false } })).toBe(false);
+  });
+
+  it('reads the count the references share off the descriptor, as the fallback does', () => {
+    // Wan 2.7 takes five references in all, of any kind; Gemini Omni seven slots, a clip
+    // taking two. The creator counts against these, as the run is checked.
+    const budget = (modelId: VideoModelId, descriptor: ReturnType<typeof descriptorFor> | null = descriptorFor(modelId)) => getVideoInputAffordances(
+      descriptor,
+      modelId,
+      {},
+    ).inputChoice.referencesBudget;
+
+    expect(budget('wan-2.7')).toEqual({ max: 5, weights: { pictures: 1, clips: 1, tracks: 1, characters: 0 } });
+    expect(budget('gemini-omni-video')).toEqual({ max: 7, weights: { pictures: 1, clips: 2, tracks: 0, characters: 1 } });
+    expect(budget('gemini-omni-1.1-flash')).toEqual({ max: 7, weights: { pictures: 1, clips: 2, tracks: 0, characters: 0 } });
+    expect(budget('seedance-2-5')).toBeNull();
+    for (const modelId of videoModelIds) {
+      expect(budget(modelId, null), modelId).toEqual(budget(modelId));
+    }
+  });
+
+  it('answers for a model the built-in tables do not know, before the catalog arrives', () => {
+    // A link can name any model (`/create-video?model=…`). Reading the switch off the tables
+    // threw for one they lack, and the creator drew nothing.
+    const affordances = getVideoInputAffordances(null, 'not-a-model' as VideoModelId, {});
+    expect(affordances.inputChoice).toEqual({ labels: null, startBesideReferences: false, referencesBudget: null });
   });
 
   it('caps Kling O3 named subjects below its total reference capacity', () => {
@@ -315,14 +339,34 @@ describe('descriptor-driven affordances', () => {
     expect(multiOption?.showResolutionControl).toBe(true);
   });
 
-  it.each(videoModelIds)('%s: descriptor and fallback agree on the frames/references switch', (modelId) => {
-    // The creator draws the switch from these before the catalog arrives and from the
-    // descriptor after, so the two must offer the same choice or the card would change shape.
-    const fromDescriptor = getVideoInputAffordances(descriptorFor(modelId), modelId, {});
-    const fromFallback = getVideoInputAffordances(null, modelId, {});
-    expect(fromDescriptor.inputChoice.labels !== null, `${modelId} publishes the choice`).toBe(fromFallback.inputChoice.labels !== null);
-    expect(fromDescriptor.inputChoice.referencesKeep, `${modelId} references side keeps`).toEqual(fromFallback.inputChoice.referencesKeep);
-    expect(fromDescriptor.frames.start, `${modelId} frames.start`).toBe(fromFallback.frames.start);
+  it.each(videoModelIds)('%s: descriptor and fallback draw the same inputs card in every mode', (modelId) => {
+    // The creator draws the card from the fallback before the catalog arrives and from the
+    // descriptor after, so the two must draw the same sides, or the card changes shape as the
+    // catalog lands. Every mode is asked: Veo 3.1 takes reference pictures in Lite and Fast only.
+    // (Production's release still offers them in Quality too, where the quote refuses them: a
+    // catalog fix, `archive/creator-page-build-2026-10-28/pr4/kie-audit.md`.) The page always
+    // asks with the mode chosen, so a model with modes is asked in each of them.
+    const options = VIDEO_MODELS[modelId].modeOptions.map((option) => option.value);
+    const modes = options.length > 0 ? options : [undefined];
+    for (const mode of modes) {
+      for (const isMultiShot of [false, true]) {
+        const sides = (descriptor: ReturnType<typeof descriptorFor>) => videoInputSides(
+          getVideoInputAffordances(descriptor, modelId, { mode, isMultiShot }),
+          { isMultiShot },
+        );
+        const fromFallback = sides(undefined);
+        const fromDescriptor = sides(descriptorFor(modelId));
+        if (modelId === 'veo-3.1' && mode === 'veo3' && !isMultiShot) {
+          // The one known gap, pinned so that its catalog fix shows here: the descriptor offers
+          // Quality the pictures Kie's REFERENCE_2_VIDEO takes in Lite and Fast only, which the
+          // quote refuses ("Reusable references require Veo Lite or Fast."). The tables do not.
+          expect(fromFallback.references).toBeNull();
+          expect(fromDescriptor.references?.pictures).toBe(3);
+          continue;
+        }
+        expect(fromFallback, `${modelId} ${mode ?? 'default mode'}${isMultiShot ? ', multi-shot' : ''}`).toEqual(fromDescriptor);
+      }
+    }
   });
 
   it.each(videoModelIds)('%s: the switch is offered exactly where the catalog publishes its referenceMode control', (modelId) => {
@@ -338,11 +382,6 @@ describe('descriptor-driven affordances', () => {
     expect(getVideoInputAffordances(descriptorFor('seedance-2-5'), 'seedance-2-5', {}).inputChoice.labels)
       .toEqual({ frames: 'Frames', references: 'References' });
     expect(getVideoInputAffordances(descriptorFor('kling-3.0-video'), 'kling-3.0-video', {}).inputChoice.labels).toBeNull();
-  });
-
-  it('keeps the start image on Wan 2.7’s references side alone, read off its references mode', () => {
-    const keeping = videoModelIds.filter((modelId) => getVideoInputAffordances(descriptorFor(modelId), modelId, {}).inputChoice.referencesKeep.start);
-    expect(keeping).toEqual(['wan-2.7']);
   });
 
   it('reports the required character reference on ideogram-character', () => {

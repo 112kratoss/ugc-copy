@@ -1,4 +1,4 @@
-import type { VideoInputAffordances } from '@/lib/generation-model-affordances';
+import type { VideoInputAffordances, VideoReferenceBudget } from '@/lib/generation-model-affordances';
 
 /**
  * The video creator's inputs as one choice, frames or references (the artboard Inputs; PR 4 of
@@ -28,7 +28,13 @@ export type VideoInputSides = {
    * What the references side holds; null where the model takes no reference with these
    * settings (Kling 3.0, Hailuo 2.3) and in a multi-shot run, which sends none.
    */
-  references: { pictures: number; clips: number; tracks: number; keepsStart: boolean } | null;
+  references: {
+    pictures: number;
+    /** The start image stays live beside the references (Wan 2.7), as the run sends it. */
+    keepsStart: boolean;
+    /** A count the kinds share (Wan 2.7's five in all), where the model publishes one. */
+    budget: VideoReferenceBudget | null;
+  } | null;
   /** The switch's words: the options of the catalog's `referenceMode` control. */
   labels: Record<VideoInputSide, string>;
 };
@@ -41,8 +47,11 @@ export type HeldVideoInputs = {
   pictures: number;
   clips: number;
   tracks: number;
+  /** Gemini Omni's prepared characters, which its count of seven takes in too. */
+  characters: number;
 };
 
+export const VIDEO_INPUT_SIDES: readonly VideoInputSide[] = ['frames', 'references'];
 export const DEFAULT_VIDEO_INPUT_LABELS: Record<VideoInputSide, string> = { frames: 'Frames', references: 'References' };
 
 /** The two sides of the selected model, as its descriptor (or the built-in tables before it arrives) says. */
@@ -57,9 +66,8 @@ export function videoInputSides(affordances: VideoInputAffordances, { isMultiSho
     references: takesReferences
       ? {
           pictures: elements.enabled ? elements.maxTotal : 0,
-          clips: referenceVideos.max,
-          tracks: referenceAudios.max,
-          keepsStart: inputChoice.referencesKeep.start,
+          keepsStart: inputChoice.startBesideReferences && frames.start,
+          budget: inputChoice.referencesBudget,
         }
       : null,
     labels: inputChoice.labels ?? DEFAULT_VIDEO_INPUT_LABELS,
@@ -116,8 +124,10 @@ export type VideoInputNames = {
   /** The start and end images' file names, where they came from a file. */
   start: string | null;
   end: string | null;
-  /** The carried pictures' @handles, in their order. */
-  pictures: readonly string[];
+  /** The carried pictures, in their order: each one's @handle and name. */
+  pictures: ReadonlyArray<{ handle: string; name: string }>;
+  /** The @handles the prompt mentions. */
+  promptHandles: readonly string[];
 };
 
 export type VideoInputQuestion = {
@@ -139,8 +149,11 @@ export type VideoInputSwitch = {
   framesCleared: VideoFrame[];
   /** Pictures (their place among the carried pictures) that come along as frames, and the frame each fills. */
   picturesToFrames: Array<{ index: number; frame: VideoFrame }>;
-  /** Every carried reference not brought along goes: pictures, clips and tracks. */
-  clearsReferences: boolean;
+  /**
+   * The @handles of the carried pictures the prompt mentions, each with the name it reads as
+   * once the pictures go: the server refuses a prompt that mentions a reference the run lacks.
+   */
+  promptNames: Array<[handle: string, name: string]>;
 };
 
 /**
@@ -167,12 +180,23 @@ function sidesSentence(names: VideoInputNames, sides: VideoInputSides): string {
     : `${names.model} takes ${frames} or ${references}, not both.`;
 }
 
+/** What the question says of the prompt's mentions of the pictures that go. */
+function promptNamesSentence(promptNames: ReadonlyArray<readonly [string, string]>): string | null {
+  if (promptNames.length === 0) return null;
+  if (promptNames.length === 1) return `In your prompt, ${promptNames[0][0]} becomes “${promptNames[0][1]}”.`;
+  if (promptNames.length === 2) {
+    const [[first, firstName], [second, secondName]] = promptNames;
+    return `In your prompt, ${first} and ${second} become “${firstName}” and “${secondName}”.`;
+  }
+  return `In your prompt, ${promptNames.length} handles become the names of their references.`;
+}
+
 /**
  * What switching to `to` does to what the draft holds. Switching to references brings the
  * frames along as pictures where the model has room for them; switching to frames brings the
  * first pictures along as the free frames (the start image first, then the end image where the
- * model takes one), and clears the clips, tracks and other pictures. Nothing that would be
- * lost goes without a question.
+ * model takes one), clears the clips, tracks and other pictures, and has the prompt's mentions
+ * of the pictures read as their names. Nothing that would be lost goes without a question.
  */
 export function planVideoInputSwitch(
   sides: VideoInputSides,
@@ -180,7 +204,7 @@ export function planVideoInputSwitch(
   to: VideoInputSide,
   names: VideoInputNames,
 ): VideoInputSwitch {
-  const none: VideoInputSwitch = { to, question: null, framesToReferences: [], framesCleared: [], picturesToFrames: [], clearsReferences: false };
+  const none: VideoInputSwitch = { to, question: null, framesToReferences: [], framesCleared: [], picturesToFrames: [], promptNames: [] };
   if (!sides.frames || !sides.references) return none;
   const label = (side: VideoInputSide) => sides.labels[side].toLowerCase();
 
@@ -222,8 +246,14 @@ export function planVideoInputSwitch(
     ...(sides.frames.end && !held.end ? ['end' as const] : []),
   ];
   const moving = freeFrames.slice(0, held.pictures).map((frame, index) => ({ index, frame }));
-  const handles = moving.map(({ index }) => names.pictures[index] ?? `picture ${index + 1}`);
+  const handles = moving.map(({ index }) => names.pictures[index]?.handle ?? `picture ${index + 1}`);
   const left = held.pictures - moving.length + held.clips + held.tracks;
+  // Every carried picture goes, as a frame or cleared, and a mention of one would leave the
+  // prompt naming a reference the run does not send.
+  const mentioned = new Set(names.promptHandles);
+  const promptNames = names.pictures
+    .filter((picture) => mentioned.has(picture.handle))
+    .map((picture): [string, string] => [picture.handle, picture.name]);
   const message = [
     sidesSentence(names, sides),
     moving.length === 1 ? `${handles[0]} can come with you as the ${moving[0].frame} image.` : null,
@@ -233,6 +263,7 @@ export function planVideoInputSwitch(
         ? left === 1 ? 'The other reference is cleared.' : `The other ${left} references are cleared.`
         : left === 1 ? 'Your reference is cleared.' : `Your ${left} references are cleared.`
       : null,
+    promptNamesSentence(promptNames),
   ].filter(Boolean).join(' ');
   return {
     ...none,
@@ -245,7 +276,7 @@ export function planVideoInputSwitch(
         : moving.length === 2 ? `Move both to ${label('frames')}` : `Switch to ${label('frames')}`,
     },
     picturesToFrames: moving,
-    clearsReferences: true,
+    promptNames,
   };
 }
 
@@ -255,6 +286,15 @@ export function framesLeftOutLine(frames: readonly VideoFrame[], labels: Record<
   return `Your ${frameWords(frames)} ${one ? 'is' : 'are'} kept for ${labels.frames}. This run uses your ${labels.references.toLowerCase()} and leaves ${one ? 'it' : 'them'} out.`;
 }
 
+/** How much of a shared count the held references take. */
+function budgetUsed(budget: VideoReferenceBudget, held: HeldVideoInputs): number {
+  const { weights } = budget;
+  return held.pictures * weights.pictures
+    + held.clips * weights.clips
+    + held.tracks * weights.tracks
+    + held.characters * weights.characters;
+}
+
 /** The line under the switch: what the side shown does, in the artboards' words. */
 export function videoInputsHint({
   view,
@@ -262,6 +302,7 @@ export function videoInputsHint({
   model,
   held,
   remixPictures,
+  subjectsHeld,
 }: {
   view: VideoInputView;
   sides: VideoInputSides;
@@ -269,10 +310,17 @@ export function videoInputsHint({
   held: HeldVideoInputs;
   /** Pictures a remix brought back from its original, which Replace makes the creator's own. */
   remixPictures: number;
+  /** Kling O3's named subjects make the run a subjects run, which sends neither side. */
+  subjectsHeld: boolean;
 }): string | null {
+  if (!view.side) return null;
+  if (subjectsHeld) {
+    return `Named subjects replace ${sides.labels.frames.toLowerCase()} and ${sides.labels.references.toLowerCase()} for this run.`;
+  }
   if (view.side === 'frames' && sides.frames) {
-    const { end, startRequired } = sides.frames;
-    if (held.start || held.end) {
+    const { start, end, startRequired } = sides.frames;
+    // Only a frame this side holds: an end image kept from a model that takes one is not set here.
+    if ((held.start && start) || (held.end && end)) {
       return end ? `${model} starts from the first image and ends on the last one you set.` : `${model} starts from the image you set.`;
     }
     if (startRequired) return `${model} needs a first image to start from.`;
@@ -282,9 +330,11 @@ export function videoInputsHint({
       : `${base}.`;
   }
   if (view.side === 'references' && sides.references) {
-    const { pictures } = sides.references;
+    const { pictures, budget } = sides.references;
     if (pictures === 0) return null;
-    const count = ` ${held.pictures} of ${pictures}.`;
+    const count = budget
+      ? ` ${budgetUsed(budget, held)} of ${budget.max} in all.${budget.weights.clips === 2 ? ' A clip counts as two.' : ''}`
+      : ` ${held.pictures} of ${pictures}.`;
     return remixPictures > 0
       ? `Replace the photos to make it yours. Each keeps its @handle, so the prompt still works.${count}`
       : `Type @ in the prompt, or tap a handle, to use a reference.${count}`;

@@ -31,16 +31,21 @@ const production = parseClientGenerationModelCatalog({
   models: productionVideo.models,
 });
 
-function sidesOf(models: { models: GenerationModelDescriptor[] }, id: string, settings: { isMultiShot?: boolean; mode?: string } = {}) {
+function descriptorOf(models: { models: GenerationModelDescriptor[] }, id: string) {
   const descriptor = models.models.find((model) => model.id === id);
   if (!descriptor) throw new Error(`${id} is not in the catalog`);
-  return videoInputSides(getVideoInputAffordances(descriptor, id as VideoModelId, settings), { isMultiShot: Boolean(settings.isMultiShot) });
+  return descriptor;
 }
 
-const NOTHING: HeldVideoInputs = { start: false, end: false, pictures: 0, clips: 0, tracks: 0 };
+function sidesOf(models: { models: GenerationModelDescriptor[] }, id: string, settings: { isMultiShot?: boolean; mode?: string } = {}) {
+  return videoInputSides(getVideoInputAffordances(descriptorOf(models, id), id as VideoModelId, settings), { isMultiShot: Boolean(settings.isMultiShot) });
+}
+
+const NOTHING: HeldVideoInputs = { start: false, end: false, pictures: 0, clips: 0, tracks: 0, characters: 0 };
 const names = (model: string, extra: Partial<VideoInputNames> = {}): VideoInputNames => ({
-  model, start: null, end: null, pictures: [], ...extra,
+  model, start: null, end: null, pictures: [], promptHandles: [], ...extra,
 });
+const pictures = (...handles: string[]) => handles.map((handle, index) => ({ handle, name: `Picture ${index + 1}` }));
 
 describe('the sides production publishes', () => {
   const switchable = productionVideo.models
@@ -73,12 +78,28 @@ describe('the sides production publishes', () => {
     }
     const omni = sidesOf(production, 'gemini-omni-video');
     expect(omni.frames).toBeNull();
-    expect(omni.references).toMatchObject({ pictures: 7, clips: 1 });
+    expect(omni.references).toMatchObject({ pictures: 7 });
   });
 
   it('keeps the start image on the references side of Wan 2.7 alone', () => {
     const keeping = productionVideo.models.map((model) => model.id).filter((id) => sidesOf(production, id).references?.keepsStart);
     expect(keeping).toEqual(['wan-2.7']);
+  });
+
+  it('reads the start image beside the references off the flag the run reads', () => {
+    // One source for the card and the run: a release that stopped combining Wan 2.7's frame
+    // with its references would take the start image off both.
+    const wan = descriptorOf(production, 'wan-2.7');
+    const apart = { ...wan, inputs: { ...wan.inputs, combineFramesWithReferences: false } };
+    expect(videoInputSides(getVideoInputAffordances(apart, 'wan-2.7', {}), { isMultiShot: false }).references?.keepsStart).toBe(false);
+  });
+
+  it('shares the count the release publishes across the references’ kinds', () => {
+    expect(sidesOf(production, 'wan-2.7').references?.budget)
+      .toEqual({ max: 5, weights: { pictures: 1, clips: 1, tracks: 1, characters: 0 } });
+    expect(sidesOf(production, 'gemini-omni-video').references?.budget)
+      .toEqual({ max: 7, weights: { pictures: 1, clips: 2, tracks: 0, characters: 1 } });
+    expect(sidesOf(production, 'seedance-2-5').references?.budget).toBeNull();
   });
 
   it('agrees with the code catalog on every model they share', () => {
@@ -88,6 +109,7 @@ describe('the sides production publishes', () => {
       const fromProduction = sidesOf(production, model.id);
       expect(Boolean(fromCode.frames && fromCode.references), model.id).toBe(Boolean(fromProduction.frames && fromProduction.references));
       expect(fromCode.references?.keepsStart ?? false, model.id).toBe(fromProduction.references?.keepsStart ?? false);
+      expect(fromCode.references?.budget ?? null, model.id).toEqual(fromProduction.references?.budget ?? null);
     }
   });
 
@@ -185,7 +207,7 @@ describe('switching back to frames (the mirror question)', () => {
   const seedance = sidesOf(production, 'seedance-2-5');
 
   it('brings the first picture along as the start image', () => {
-    const plan = planVideoInputSwitch(seedance, { ...NOTHING, pictures: 1 }, 'frames', names('Seedance 2.5', { pictures: ['@reference_1'] }));
+    const plan = planVideoInputSwitch(seedance, { ...NOTHING, pictures: 1 }, 'frames', names('Seedance 2.5', { pictures: pictures('@reference_1') }));
     expect(plan.question).toEqual({
       title: 'Switch to frames?',
       message: 'Seedance 2.5 takes frames or references, not both. @reference_1 can come with you as the start image.',
@@ -193,7 +215,7 @@ describe('switching back to frames (the mirror question)', () => {
       confirmLabel: 'Move @reference_1 to frames',
     });
     expect(plan.picturesToFrames).toEqual([{ index: 0, frame: 'start' }]);
-    expect(plan.clearsReferences).toBe(true);
+    expect(plan.promptNames).toEqual([]);
   });
 
   it('brings the second picture as the end image, and clears the clips, tracks and other pictures', () => {
@@ -201,15 +223,31 @@ describe('switching back to frames (the mirror question)', () => {
       seedance,
       { ...NOTHING, pictures: 3, clips: 1, tracks: 1 },
       'frames',
-      names('Seedance 2.5', { pictures: ['@lead', '@prop', '@extra'] }),
+      names('Seedance 2.5', { pictures: pictures('@lead', '@prop', '@extra') }),
     );
     expect(plan.question?.message).toBe('Seedance 2.5 takes frames or references, not both. @lead and @prop can come with you as the start and end images. The other 3 references are cleared.');
     expect(plan.question?.confirmLabel).toBe('Move both to frames');
     expect(plan.picturesToFrames).toEqual([{ index: 0, frame: 'start' }, { index: 1, frame: 'end' }]);
   });
 
+  it('says the prompt’s mentions of the pictures become their names, and plans it', () => {
+    // Every picture goes, as a frame or cleared, and the server refuses a prompt that mentions
+    // a reference the run does not send: Generate stopped on "@lead" after the move.
+    const held = { ...NOTHING, pictures: 3 };
+    const carried = [{ handle: '@lead', name: 'Hero shot' }, { handle: '@prop', name: 'Umbrella' }, { handle: '@extra', name: 'Extra' }];
+    const two = planVideoInputSwitch(seedance, held, 'frames', names('Seedance 2.5', { pictures: carried, promptHandles: ['@lead', '@prop', '@someone'] }));
+    expect(two.question?.message).toBe('Seedance 2.5 takes frames or references, not both. @lead and @prop can come with you as the start and end images. The other reference is cleared. In your prompt, @lead and @prop become “Hero shot” and “Umbrella”.');
+    expect(two.promptNames).toEqual([['@lead', 'Hero shot'], ['@prop', 'Umbrella']]);
+
+    const one = planVideoInputSwitch(seedance, held, 'frames', names('Seedance 2.5', { pictures: carried, promptHandles: ['@extra'] }));
+    expect(one.question?.message).toMatch(/ In your prompt, @extra becomes “Extra”\.$/);
+    const all = planVideoInputSwitch(seedance, held, 'frames', names('Seedance 2.5', { pictures: carried, promptHandles: ['@lead', '@prop', '@extra'] }));
+    expect(all.question?.message).toMatch(/ In your prompt, 3 handles become the names of their references\.$/);
+    expect(all.promptNames).toHaveLength(3);
+  });
+
   it('fills only the start image on a model with no end frame', () => {
-    const plan = planVideoInputSwitch(sidesOf(production, 'kling-o3'), { ...NOTHING, pictures: 2 }, 'frames', names('Kling O3', { pictures: ['@a', '@b'] }));
+    const plan = planVideoInputSwitch(sidesOf(production, 'kling-o3'), { ...NOTHING, pictures: 2 }, 'frames', names('Kling O3', { pictures: pictures('@a', '@b') }));
     expect(plan.question?.message).toBe('Kling O3 takes frames or references, not both. @a can come with you as the start image. The other reference is cleared.');
     expect(plan.picturesToFrames).toEqual([{ index: 0, frame: 'start' }]);
   });
@@ -223,7 +261,7 @@ describe('switching back to frames (the mirror question)', () => {
   });
 
   it('fills Wan 2.7’s end image where its start image is already set', () => {
-    const plan = planVideoInputSwitch(sidesOf(production, 'wan-2.7'), { ...NOTHING, start: true, pictures: 1 }, 'frames', names('Wan 2.7', { pictures: ['@hero'] }));
+    const plan = planVideoInputSwitch(sidesOf(production, 'wan-2.7'), { ...NOTHING, start: true, pictures: 1 }, 'frames', names('Wan 2.7', { pictures: pictures('@hero') }));
     expect(plan.question?.message).toBe('Wan 2.7 takes a start and end image, or references with a start image. @hero can come with you as the end image.');
     expect(plan.picturesToFrames).toEqual([{ index: 0, frame: 'end' }]);
   });
@@ -235,8 +273,8 @@ describe('switching back to frames (the mirror question)', () => {
 
 describe('the line under the switch', () => {
   const seedance = sidesOf(production, 'seedance-2-5');
-  const hint = (sides: VideoInputSides, held: HeldVideoInputs, picked: 'frames' | 'references', model: string, remixPictures = 0) => (
-    videoInputsHint({ view: videoInputView(sides, held, picked), sides, model, held, remixPictures })
+  const hint = (sides: VideoInputSides, held: HeldVideoInputs, picked: 'frames' | 'references', model: string, extra: { remixPictures?: number; subjectsHeld?: boolean } = {}) => (
+    videoInputsHint({ view: videoInputView(sides, held, picked), sides, model, held, remixPictures: extra.remixPictures ?? 0, subjectsHeld: extra.subjectsHeld ?? false })
   );
 
   it('invites on an empty frames side and explains a filled one (the artboards Main and Inputs)', () => {
@@ -247,6 +285,15 @@ describe('the line under the switch', () => {
     expect(hint(sidesOf(production, 'kling-o3'), { ...NOTHING, start: true }, 'frames', 'Kling O3')).toBe('Kling O3 starts from the image you set.');
   });
 
+  it('counts only a frame the side holds', () => {
+    // An end image kept from a model that takes one is not set on a model, or in a multi-shot
+    // run, without an end frame.
+    expect(hint(sidesOf(production, 'kling-o3'), { ...NOTHING, end: true }, 'frames', 'Kling O3'))
+      .toBe('Optional. Set a first image, or switch to References to bring in people and products by name.');
+    expect(hint(sidesOf(production, 'seedance-2-5', { isMultiShot: true }), { ...NOTHING, end: true }, 'frames', 'Seedance 2.5'))
+      .toBe('Optional. Set a first image.');
+  });
+
   it('offers no switch where there is none, and asks for Hailuo 2.3’s start image', () => {
     expect(hint(sidesOf(production, 'kling-3.0-video'), NOTHING, 'frames', 'Kling 3.0')).toBe('Optional. Set a first and last image.');
     expect(hint(sidesOf(production, 'hailuo-2.3'), NOTHING, 'frames', 'Hailuo 2.3')).toBe('Hailuo 2.3 needs a first image to start from.');
@@ -255,8 +302,20 @@ describe('the line under the switch', () => {
   it('counts the pictures on the references side, and asks a remix to make them its own', () => {
     expect(hint(seedance, { ...NOTHING, pictures: 3 }, 'references', 'Seedance 2.5'))
       .toBe('Type @ in the prompt, or tap a handle, to use a reference. 3 of 30.');
-    expect(hint(sidesOf(production, 'seedance-2-mini'), { ...NOTHING, pictures: 2 }, 'references', 'Seedance 2 Mini', 2))
+    expect(hint(sidesOf(production, 'seedance-2-mini'), { ...NOTHING, pictures: 2 }, 'references', 'Seedance 2 Mini', { remixPictures: 2 }))
       .toBe('Replace the photos to make it yours. Each keeps its @handle, so the prompt still works. 2 of 5.');
+  });
+
+  it('counts against a count the kinds share, as the run is checked', () => {
+    expect(hint(sidesOf(production, 'wan-2.7'), { ...NOTHING, pictures: 2, clips: 1 }, 'references', 'Wan 2.7'))
+      .toBe('Type @ in the prompt, or tap a handle, to use a reference. 3 of 5 in all.');
+    expect(hint(sidesOf(production, 'gemini-omni-video'), { ...NOTHING, pictures: 1, clips: 1, characters: 1 }, 'references', 'Gemini Omni'))
+      .toBe('Type @ in the prompt, or tap a handle, to use a reference. 4 of 7 in all. A clip counts as two.');
+  });
+
+  it('says named subjects replace both sides for the run', () => {
+    expect(hint(sidesOf(production, 'kling-o3'), { ...NOTHING, start: true }, 'frames', 'Kling O3', { subjectsHeld: true }))
+      .toBe('Named subjects replace frames and references for this run.');
   });
 });
 
