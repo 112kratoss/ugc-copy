@@ -44,6 +44,12 @@ async function notifyRemixedCreator(
  * ordinary generation — the overwhelming majority, no lineage at all — pays for
  * one empty read and nothing else.
  *
+ * Whether the remixer may be credited was settled when the run started: the
+ * start keeps its source only where Remix would hand them the recipe
+ * (`source-generation.ts`), so a pair blocked by then has no row here. A block
+ * made while the run is in flight is not asked again: the alert names nobody,
+ * like the grouped save alert written across a block.
+ *
  * The same row is v4's server-written `remix_complete` feed event: the remixer
  * finished a creation from the original. It is written beside the notification,
  * once per output (a retried settlement is a duplicate), never fails the

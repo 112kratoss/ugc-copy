@@ -150,7 +150,9 @@ async function hasPurchasedBundle(
  *   where the creator's stored switch offered them, as before.
  *
  * A read that fails throws instead of allowing. The routes turn that into a
- * 500, and a blocked-state check that fails counts as blocked.
+ * 500, and a blocked-state check that fails counts as blocked. A generation
+ * start asks here before crediting a remix (`source-generation.ts`), and counts
+ * a failure as no remix rather than failing the run.
  */
 export async function resolveRemixAccess({
   adminSupabase,
