@@ -14,11 +14,12 @@ import {
   Workflow,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { ResourceAction } from '@/components/resource-action';
 import { ResourcePrompt } from '@/components/resource-prompt';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { PagerRowScrollView } from '@/components/pager-row-scroll-view';
 import { PostResourceReferences } from '@/components/post-resource-references';
 import { creatorAuthoredDescription } from '@/lib/post-resource-bundle-view-model';
 import {
@@ -289,7 +290,7 @@ function ResourceMediaSelector({
       <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800', textTransform: 'uppercase' }}>
         Items for
       </Text>
-      <ScrollView horizontal keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8 }} showsHorizontalScrollIndicator={false}>
+      <PagerRowScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8 }} showsHorizontalScrollIndicator={false}>
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ selected: selectedMediaKey === null }}
@@ -340,7 +341,7 @@ function ResourceMediaSelector({
             </Pressable>
           );
         })}
-      </ScrollView>
+      </PagerRowScrollView>
     </View>
   );
 }

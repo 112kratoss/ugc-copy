@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { FileText, ImageIcon, Play } from 'lucide-react-native';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
+import { PagerRowScrollView } from '@/components/pager-row-scroll-view';
 import { SecondaryButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { getGenerationKind, getGenerationRenderableMediaKind } from '@/lib/generation-media';
@@ -99,7 +100,7 @@ export function GenerationReferences({ generationId }: { generationId: string })
           <SecondaryButton label="Retry references" onPress={() => void query.refetch()} />
         </View>
       ) : null}
-      <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
+      <PagerRowScrollView keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
         {references.map((item) => {
           const failed = !item.url || failedUrls[item.id] === item.url;
           return (
@@ -123,7 +124,7 @@ export function GenerationReferences({ generationId }: { generationId: string })
             </Pressable>
           );
         })}
-      </ScrollView>
+      </PagerRowScrollView>
       {openError ? <Text accessibilityRole="alert" style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>{openError}</Text> : null}
       <MediaLightbox items={preview?.items ?? []} activeIndex={preview?.index ?? null} onClose={closePreview}
         onNavigate={(index) => { const item = preview?.items[index]; if (item) void openReference(item.id); }}
@@ -203,7 +204,7 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
           <SecondaryButton label="Retry outputs" onPress={() => void query.refetch()} />
         </View>
       ) : (
-        <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
+        <PagerRowScrollView keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
           {record ? urls.map((url, index) => {
             const thumbnail = thumbnailUrl(url, index);
             const failed = Boolean(thumbnail) && failedUrls[index] === thumbnail;
@@ -228,7 +229,7 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
               <ActivityIndicator color={theme.colors.primary} />
             </OutputCard>
           ))}
-        </ScrollView>
+        </PagerRowScrollView>
       )}
       <MediaLightbox items={preview?.items ?? []} activeIndex={preview?.index ?? null} onClose={() => setPreview(null)}
         onNavigate={(index) => setPreview((current) => (current ? { ...current, index } : current))} />

@@ -1,10 +1,11 @@
 import { AudioLines, ExternalLink, FileText, ImageIcon, Play } from 'lucide-react-native';
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { MatureCover, MatureMediaCovered } from '@/components/mature-cover';
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
+import { PagerRowScrollView } from '@/components/pager-row-scroll-view';
 import { isRecipeMediaItem } from '@/lib/recipe-reading/recipe-reading';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -167,8 +168,7 @@ export function PostResourceReferences({
           {label}
         </Text>
       ) : null}
-      <ScrollView
-        horizontal
+      <PagerRowScrollView
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ gap: 10 }}
         showsHorizontalScrollIndicator={false}
@@ -254,7 +254,7 @@ export function PostResourceReferences({
             </Pressable>
           );
         })}
-      </ScrollView>
+      </PagerRowScrollView>
       <MediaLightbox
         items={lightboxItems}
         activeIndex={lightboxIndex >= 0 ? lightboxIndex : null}

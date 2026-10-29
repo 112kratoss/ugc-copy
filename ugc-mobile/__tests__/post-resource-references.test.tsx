@@ -14,6 +14,8 @@ function resolvePressableStyle(style: unknown) {
 
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
+  // Android draws the row through gesture handler's scroll view (its double is this one).
+  Platform: { OS: 'android' },
   Pressable: ({ children, style, ...props }: MockProps) =>
     React.createElement('pressable', { ...props, style: resolvePressableStyle(style) }, children),
   ScrollView: ({ children, ...props }: MockProps) =>
