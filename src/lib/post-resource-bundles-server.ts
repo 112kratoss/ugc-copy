@@ -89,7 +89,7 @@ import {
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
-import { readLinkedAccountIds, resolveLinkedAccountIds } from '@/lib/account-identity';
+import { isOwnOrLinkedAccountId, readLinkedAccountIds, resolveLinkedAccountIds } from '@/lib/account-identity';
 import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner, type GenerationInputOrigin } from '@/lib/generation-input-origin';
 import { loadPostMediaItemsMap, type PostMediaPersistInput } from '@/lib/post-media';
 import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
@@ -909,13 +909,18 @@ function isGenerationRecipeInputPost(
 
 /**
  * The second: a post must not surface a third party's inputs, so the linked
- * generation has to belong to the post creator.
+ * generation has to belong to the post creator: made under their own id, or as
+ * a guest since linked to them (publish files that creation under the account,
+ * while the generation keeps the guest's id). A lookup that fails reads as not
+ * linked, which withholds the inputs.
  */
-function isGenerationRecipeInputGeneration(
+async function isGenerationRecipeInputGeneration(
+  adminSupabase: SupabaseClient,
   post: Pick<GenerationRecipePostRow, 'user_id'>,
   generation: Pick<GenerationRecipeRow, 'user_id'>,
-): boolean {
-  return !generation.user_id || generation.user_id === post.user_id;
+): Promise<boolean> {
+  return !generation.user_id
+    || Boolean(post.user_id && await isOwnOrLinkedAccountId(adminSupabase, post.user_id, generation.user_id));
 }
 
 /**
@@ -937,12 +942,13 @@ function canViewGenerationRecipeInputs(
 
 /**
  * The generation's saved inputs, or for a generation made before inputs were
- * saved, the ones its settings name.
+ * saved, the ones its settings name, signed from the folder of whoever made
+ * it: a guest's creation keeps its files under the guest's id.
  */
 async function resolveGenerationRecipeInputMedia(params: {
   adminSupabase: SupabaseClient;
   post: Pick<GenerationRecipePostRow, 'user_id' | 'category'>;
-  generation: Pick<GenerationRecipeRow, 'id' | 'category' | 'workflow_settings'>;
+  generation: Pick<GenerationRecipeRow, 'id' | 'user_id' | 'category' | 'workflow_settings'>;
   durableInputMedia: GenerationInputMediaItem[];
   urlMode: 'signed' | 'none';
 }): Promise<GenerationInputMediaItem[]> {
@@ -953,7 +959,7 @@ async function resolveGenerationRecipeInputMedia(params: {
   return buildLegacyGenerationInputMedia({
     supabase: params.adminSupabase,
     generationId: params.generation.id,
-    ownerUserId: params.post.user_id,
+    ownerUserId: params.generation.user_id ?? params.post.user_id,
     category: params.generation.category ?? params.post.category,
     workflowSettings: normalizeWorkflowSettings(params.generation.workflow_settings) ?? {},
     urlMode: params.urlMode,
@@ -1007,7 +1013,7 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
   }
 
   const generation = await loadGenerationRecipeRow(adminSupabase, params.generationId);
-  if (!generation || !isGenerationRecipeInputGeneration(post, generation)) {
+  if (!generation || !(await isGenerationRecipeInputGeneration(adminSupabase, post, generation))) {
     return null;
   }
 
@@ -1080,7 +1086,7 @@ async function countLockedRecipeReferenceItems(params: {
       !post
       || !generation
       || !isGenerationRecipeInputPost(post, generation.id)
-      || !isGenerationRecipeInputGeneration(post, generation)
+      || !(await isGenerationRecipeInputGeneration(params.adminSupabase, post, generation))
       || !canViewGenerationRecipeInputs(generation, { isOwner: false, boughtTombstonedPost: false })
     ) {
       return null;

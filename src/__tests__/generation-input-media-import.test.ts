@@ -375,6 +375,89 @@ describe('importSharedGenerationInputMedia', () => {
     },
   );
 
+  // The block check asks about the account the creation is posted under. For
+  // one made under the account's own id that is the creator: their profile
+  // names no account they were linked to. The cases above answer "blocked"
+  // whoever is asked, so they cannot tell.
+  it('refuses a viewer the creator blocked, having asked about the creator', async () => {
+    const stub = createAdminStub({ profileRows: [{ id: CREATOR, merged_into_user_id: null }] });
+    const dependencies = {
+      ...createDependencies(stub),
+      isUserRelationshipBlocked: vi.fn(
+        async ({ secondUserId }: { secondUserId: string }) => secondUserId === CREATOR,
+      ) as never,
+    };
+
+    const result = await importSharedGenerationInputMedia({
+      source: SOURCE_PATH,
+      viewerUserId: VIEWER,
+      dependencies,
+    });
+
+    expect(result).toEqual({ outcome: 'not-eligible' });
+    expect(stub.copy).not.toHaveBeenCalled();
+  });
+
+  // Publish files a creation made as a guest under the account the guest was
+  // linked to, while its saved inputs keep the guest's id and folder. The
+  // account is whom a viewer sees on the post, and so whom they block.
+  describe('a creation made as a guest, posted by the account it was linked to', () => {
+    const accountGuestStub = (overrides: AdminStubOptions = {}) => createLinkedGuestStub({
+      generationRow: { ...SHARING_GENERATION, id: 'gen-4', user_id: GUEST },
+      postRows: [{ ...EXPOSED_POST, id: 'post-4', generation_id: 'gen-4' }],
+      profileRows: [{ id: GUEST, merged_into_user_id: CREATOR }],
+      ...overrides,
+    });
+
+    it('imports its freely shared input for a viewer the account has not blocked, having asked about the account', async () => {
+      const stub = accountGuestStub();
+      const dependencies = createDependencies(stub);
+
+      const result = await importSharedGenerationInputMedia({
+        source: GUEST_SIGNED_SOURCE,
+        viewerUserId: VIEWER,
+        dependencies,
+      });
+
+      expect(result.outcome).toBe('imported');
+      expect(dependencies.isUserRelationshipBlocked).toHaveBeenCalledWith(
+        expect.objectContaining({ firstUserId: VIEWER, secondUserId: CREATOR }),
+      );
+    });
+
+    it('refuses a viewer the account blocked', async () => {
+      const stub = accountGuestStub();
+      const dependencies = {
+        ...createDependencies(stub),
+        isUserRelationshipBlocked: vi.fn(
+          async ({ secondUserId }: { secondUserId: string }) => secondUserId === CREATOR,
+        ) as never,
+      };
+
+      const result = await importSharedGenerationInputMedia({
+        source: GUEST_SIGNED_SOURCE,
+        viewerUserId: VIEWER,
+        dependencies,
+      });
+
+      expect(result).toEqual({ outcome: 'not-eligible' });
+      expect(stub.copy).not.toHaveBeenCalled();
+    });
+
+    it('counts the block as unchecked, so refuses, when whom the guest was linked to cannot be read', async () => {
+      const stub = accountGuestStub({ readErrors: { profiles: { message: 'profiles unavailable' } } });
+
+      const result = await importSharedGenerationInputMedia({
+        source: GUEST_SIGNED_SOURCE,
+        viewerUserId: VIEWER,
+        dependencies: createDependencies(stub),
+      });
+
+      expect(result).toEqual({ outcome: 'not-eligible' });
+      expect(stub.copy).not.toHaveBeenCalled();
+    });
+  });
+
   it('authorizes through a purchased recipe when free sharing is off', async () => {
     const stub = createAdminStub({
       generationRow: { ...SHARING_GENERATION, share_input_media_for_remix: false },
