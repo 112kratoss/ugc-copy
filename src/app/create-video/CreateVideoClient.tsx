@@ -3445,7 +3445,8 @@ export default function CreateVideoClient({
         const replacements = createElementHandleReplacementMap(currentElements, nextElements);
 
         commitKlingVideoElements(nextElements);
-        await persistKlingVideoElements(nextElements);
+        // The prompts follow the new handle at once, with the card, as a picture's rename does: a
+        // Generate pressed while the write below runs reads the two together.
         if (replacements.size > 0) {
             setPrompt((currentPrompt) => {
                 const nextPrompt = replacePromptHandles(currentPrompt, replacements);
@@ -3457,10 +3458,10 @@ export default function CreateVideoClient({
                 prompt: replacePromptHandles(shot.prompt, replacements),
             })));
             setActiveShotMentionQuery(null);
-            return;
+        } else {
+            requestAnimationFrame(() => updateMentionState(prompt));
         }
-
-        requestAnimationFrame(() => updateMentionState(prompt));
+        await persistKlingVideoElements(nextElements);
     };
 
     const handleKlingSubjectRename = (subjectId: string, nextDisplayName: string) => {

@@ -1867,6 +1867,25 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     });
 
+    it('rewrites the prompt with a renamed Kling clip’s handle before the clip’s write is done', async () => {
+      // The rename takes its new handle at once. A Generate pressed while the clip's write ran (its
+      // press blurs the name field) read the new handle beside the old prompt, and refused
+      // "Unknown element mention: @video_element_1".
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+      fireEvent.change(promptBox(), { target: { value: 'A dancer follows @video_element_1.' } });
+      let finishWrite: (() => void) | null = null;
+      setPersistedMediaRecordsMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finishWrite = resolve; }));
+
+      renameCard(view.container, KLING_RENAME, 0, 'Red jacket');
+
+      await waitFor(() => expect(finishWrite).not.toBeNull());
+      expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@red_jacket']);
+      expect(promptBox()).toHaveValue('A dancer follows @red_jacket.');
+      await act(async () => finishWrite!());
+    });
+
     it('rewrites the mention in every shot prompt when a Kling clip is renamed', async () => {
       const view = render(<CreateVideoClient prefill={{}} />);
       addKlingClip(view.container, 'clip.mp4');
