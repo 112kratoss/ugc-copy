@@ -131,7 +131,8 @@ async function hasPurchasedBundle(
  * POST /api/showcase/remix and GET /api/remix-source both answer from here.
  * Each used to make its own call, and neither asked what the post surface asks,
  * so a viewer shown "unlock to remix" could read the recipe straight from
- * either endpoint.
+ * either endpoint. The generation start's copy of a creator's freely shared
+ * inputs (`generation-input-media-import.ts`) asks here too.
  *
  * - Nobody may restore a template result (`template-result.ts`): its recipe
  *   and model are the template author's. Its owner is told why; anyone else
