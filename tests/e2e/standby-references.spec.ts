@@ -112,6 +112,16 @@ function canvasAsksFor(page: Page) {
   return page.getByText(/^Write a prompt, (add (frames|references) if you like, )?then Generate\.$/);
 }
 
+/** The inputs' references side (the artboard Inputs, PR 4), and its pictures' heading. */
+async function openReferences(page: Page) {
+  const references = page.getByRole('radio', { name: 'References' });
+  if (!(await references.isChecked())) {
+    await page.getByRole('group', { name: 'Inputs' }).getByText('References', { exact: true }).click();
+  }
+  await expect(references).toBeChecked();
+  return page.getByRole('heading', { name: 'Reference images' });
+}
+
 async function attachStartFrame(page: Page) {
   await page.locator('#video-start-frame-input').setInputFiles({ name: 'start.png', mimeType: 'image/png', buffer: ONE_PIXEL_PNG });
 }
@@ -137,7 +147,7 @@ test.describe('references saved on another video model', () => {
       // upload starts this over, and what is already saved is not uploaded twice.
       await expect(async () => {
         await openModel(page, 'seedance-2');
-        const heading = page.getByRole('heading', { name: 'Reusable image references' });
+        const heading = await openReferences(page);
         await expect(heading).toBeVisible();
         if (await savedCount(page, 'create-video:elements:workflow-user') !== 2) {
           await heading.locator('xpath=ancestor::div[.//input[@type="file"]][1]').locator('input[type="file"]').first().setInputFiles([
@@ -177,7 +187,7 @@ test.describe('references saved on another video model', () => {
     // play still counts as a clip: its length reads as unknown.
     await expect(async () => {
       await openModel(page, 'seedance-2');
-      const heading = page.getByRole('heading', { name: 'Reusable image references' });
+      const heading = await openReferences(page);
       await expect(heading).toBeVisible();
       if (await savedCount(page, 'create-video:elements:workflow-user') !== 1) {
         await heading.locator('xpath=ancestor::div[.//input[@type="file"]][1]').locator('input[type="file"]').first().setInputFiles(
@@ -216,7 +226,7 @@ test.describe('references saved on another video model', () => {
     // on a phone.
     await expect(async () => {
       await openModel(page, 'seedance-2');
-      const heading = page.getByRole('heading', { name: 'Reusable image references' });
+      const heading = await openReferences(page);
       await expect(heading).toBeVisible();
       if (await savedCount(page, 'create-video:elements:workflow-user') !== 1) {
         await heading.locator('xpath=ancestor::div[.//input[@type="file"]][1]').locator('input[type="file"]').first().setInputFiles(

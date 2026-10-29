@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode } from 'react';
+import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref } from 'react';
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
@@ -190,10 +190,17 @@ const CHOICE_COLUMNS = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4
 const FLOATING_SURFACE_CLASS =
   'rounded-ui-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] shadow-ui-panel';
 
+/** How a choice's options sit: a grid of equal cells, or a pill sized to their words. */
+type CreatorChoiceLayout =
+  | { appearance?: 'grid'; columns: keyof typeof CHOICE_COLUMNS }
+  /** Side by side in a pill: a choice in a card's heading (the video creator's frames or references). */
+  | { appearance: 'pill'; columns?: undefined };
+
 /**
  * One setting with a single value (aspect ratio, resolution, quality): a radio
  * group, so a screen reader hears which one is chosen, and the arrow keys move
- * the choice as they do in any radio group.
+ * the choice as they do in any radio group. The parent decides whether a pick
+ * takes effect: one that asks first leaves `value` where it was until it is answered.
  */
 export function CreatorSettingChoices<T extends string>({
   label,
@@ -203,10 +210,12 @@ export function CreatorSettingChoices<T extends string>({
   optionLabel,
   value,
   onChange,
+  appearance = 'grid',
   columns,
   accent = 'image',
   capitalize = false,
   optionPrice,
+  ref,
 }: {
   label: string;
   /** For a group whose options say what it is, as the shot mode's do. */
@@ -217,7 +226,6 @@ export function CreatorSettingChoices<T extends string>({
   optionLabel?: (option: T) => string;
   value: T;
   onChange: (value: T) => void;
-  columns: keyof typeof CHOICE_COLUMNS;
   accent?: UiAccent;
   capitalize?: boolean;
   /**
@@ -227,11 +235,14 @@ export function CreatorSettingChoices<T extends string>({
    * selectable: the bar offers a top-up in Generate's place.
    */
   optionPrice?: (option: T) => OptionPrice | null;
-}) {
+  /** The radio group, for a parent that gives the focus back to the chosen option. */
+  ref?: Ref<HTMLDivElement>;
+} & CreatorChoiceLayout) {
   const labelId = useId();
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedIndex = options.indexOf(value);
   const selectedClasses = getAccentClasses(accent).selected;
+  const pill = appearance === 'pill';
 
   const choose = (index: number) => {
     const next = (index + options.length) % options.length;
@@ -253,7 +264,7 @@ export function CreatorSettingChoices<T extends string>({
   };
 
   return (
-    <div>
+    <div className={clsx(pill && 'shrink-0')}>
       {labelHidden ? (
         <p id={labelId} className="sr-only">{label}</p>
       ) : (
@@ -262,7 +273,14 @@ export function CreatorSettingChoices<T extends string>({
           {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
         </div>
       )}
-      <div role="radiogroup" aria-labelledby={labelId} className={clsx('grid gap-1.5', CHOICE_COLUMNS[columns])}>
+      <div
+        ref={ref}
+        role="radiogroup"
+        aria-labelledby={labelId}
+        className={pill
+          ? 'inline-flex rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-1'
+          : clsx('grid gap-1.5', CHOICE_COLUMNS[columns ?? 1])}
+      >
         {options.map((option, index) => {
           const checked = index === selectedIndex;
           const price = optionPrice?.(option) ?? null;
@@ -284,12 +302,15 @@ export function CreatorSettingChoices<T extends string>({
               onClick={() => onChange(option)}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={clsx(
-                'ui-focus-ring min-h-10 rounded-ui-md border px-2 text-xs font-bold transition-colors duration-150',
+                'ui-focus-ring min-h-10 border text-xs font-bold transition-colors duration-150',
+                pill ? 'inline-flex items-center rounded-full px-3.5' : 'rounded-ui-md px-2',
                 optionPrice && 'flex min-h-12 flex-col items-center justify-center gap-0.5 py-1',
                 capitalize && 'capitalize',
                 checked
                   ? selectedClasses
-                  : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
+                  : pill
+                    ? 'border-transparent text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-secondary)]'
+                    : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
               <span>{text}</span>
@@ -943,10 +964,48 @@ export function CreatorMentionPanel<T extends CreatorMentionSuggestion>({
 export const CREATOR_REFERENCE_CHIP_CLASS =
   'ui-focus-ring inline-flex min-h-9 shrink-0 items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-semibold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)] disabled:cursor-not-allowed disabled:opacity-50';
 
+/** The @handle as the button that inserts it, where a creator's hint says "tap a handle". */
+const CREATOR_HANDLE_INSERT_CLASS =
+  'ui-focus-ring inline-flex min-h-9 min-w-0 max-w-full items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-left transition-colors hover:bg-[var(--ui-surface-3)]';
+
+/**
+ * Replace on a reference a remix brought back (the artboard Remix): a file of the creator's
+ * own takes its place, and keeps its name and @handle, so the prompt still reads.
+ */
+export function CreatorReplaceButton({ label, accept, onFile }: {
+  /** Named for what it replaces: "Replace @reference_1 with your own photo". */
+  label: string;
+  accept: string;
+  onFile: (file: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <button type="button" onClick={() => inputRef.current?.click()} aria-label={label} className={CREATOR_REFERENCE_CHIP_CLASS}>
+        Replace
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        tabIndex={-1}
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = '';
+          if (file) onFile(file);
+        }}
+      />
+    </>
+  );
+}
+
 /**
  * A reference in a creator's column, as a row: its picture or clip (which
  * opens a preview), its name to rename it by, Remove, and its @handle with
  * Insert (and Copy for a Kling clip), each named for the handle it acts on.
+ * With `insertByHandle` the handle itself is the Insert button, and a remix's
+ * reference takes `replace`.
  */
 export function CreatorReferenceRow({
   accent,
@@ -963,6 +1022,8 @@ export function CreatorReferenceRow({
   onInsert,
   onCopy,
   note,
+  insertByHandle = false,
+  replace,
 }: {
   accent: UiAccent;
   /** The picture or clip at the row's start. */
@@ -981,6 +1042,10 @@ export function CreatorReferenceRow({
   onInsert: () => void;
   onCopy?: () => void;
   note?: ReactNode;
+  /** The handle is the Insert button (the video creator's hint: "tap a handle"). */
+  insertByHandle?: boolean;
+  /** A remix's reference: a file of the creator's own takes its place. */
+  replace?: { label: string; accept: string; onFile: (file: File) => void };
 }) {
   return (
     <li className="flex items-start gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-2.5">
@@ -1013,16 +1078,25 @@ export function CreatorReferenceRow({
           <IconButton label={`Remove ${displayName}`} icon={X} onClick={onRemove} className="shrink-0" />
         </div>
         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
-          <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
+          {insertByHandle ? (
+            <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_HANDLE_INSERT_CLASS}>
+              <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
+            </button>
+          ) : (
+            <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
+          )}
           <div className="flex flex-wrap items-center gap-1.5">
+            {replace ? <CreatorReplaceButton {...replace} /> : null}
             {onCopy ? (
               <button type="button" onClick={onCopy} aria-label={`Copy ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
                 Copy
               </button>
             ) : null}
-            <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
-              Insert
-            </button>
+            {insertByHandle ? null : (
+              <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
+                Insert
+              </button>
+            )}
           </div>
         </div>
         {note ? <p className="px-2 text-xs text-[var(--ui-text-faint)]">{note}</p> : null}
@@ -1078,6 +1152,38 @@ export function CreatorAddTile({
 /** The same in the shape of a button, for one that adds something other than a file (a shot). */
 export function creatorAddButtonClass(accent: UiAccent) {
   return clsx('ui-focus-ring disabled:cursor-not-allowed disabled:opacity-50', addTileClass(accent, false));
+}
+
+/**
+ * The column's inputs as one card (the artboard Inputs, PR 4 of the creator redesign): its
+ * kicker, the switch between its sides where the model takes both, the line that says what the
+ * side shown does, a notice of what the run leaves out, and that side's slots.
+ */
+export function CreatorInputsCard({
+  switcher,
+  hint,
+  notice,
+  children,
+}: {
+  /** The switch, where the model takes both sides. */
+  switcher?: ReactNode;
+  hint?: string | null;
+  /** What the run leaves out, above the slots. */
+  notice?: ReactNode;
+  children: ReactNode;
+}) {
+  const titleId = useId();
+  return (
+    <div role="group" aria-labelledby={titleId} className="ui-card p-4">
+      <div className="flex min-h-10 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <h2 id={titleId} className="ui-kicker">Inputs</h2>
+        {switcher}
+      </div>
+      {hint ? <p className="mt-2 text-xs leading-5 text-[var(--ui-text-muted)]">{hint}</p> : null}
+      {notice}
+      <div className="mt-3 space-y-4">{children}</div>
+    </div>
+  );
 }
 
 /**

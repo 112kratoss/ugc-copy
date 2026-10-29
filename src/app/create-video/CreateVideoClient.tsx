@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
-import { Sparkles, Loader2, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, Play } from 'lucide-react';
+import { Sparkles, Loader2, X, ImagePlus, Video, Plus, Trash2, Volume2, Play } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -24,6 +24,7 @@ import {
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorFitNotice,
+    CreatorInputsCard,
     CreatorLowBalanceNote,
     CreatorLowBalanceNotice,
     CreatorMakeImageInstead,
@@ -32,6 +33,7 @@ import {
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorReferenceRow,
+    CreatorReplaceButton,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -53,6 +55,7 @@ import {
     smallestCreditPackLabel,
 } from '@/components/CreatorColumn';
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
+import { useConfirmation } from '@/components/useConfirmation';
 import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
@@ -109,6 +112,18 @@ import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import { planVideoRunInputs, type VideoRunInput } from '@/lib/creator-run-inputs';
+import {
+    framesLeftOutLine,
+    planVideoInputSwitch,
+    VIDEO_INPUT_SIDES,
+    videoInputSides,
+    videoInputsHint,
+    videoInputView,
+    type HeldVideoInputs,
+    type VideoFrame,
+    type VideoInputSide,
+    type VideoInputSwitch,
+} from '@/lib/creator-video-inputs';
 import type { CatalogGenerationInputAsset, CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import type { CatalogPrimitive, GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
@@ -404,6 +419,8 @@ type VideoCreatorDraft = {
     shots: MultiShot[];
     duration: number;
     additionalSettings: { modelId: string; values: Record<string, CatalogPrimitive> };
+    /** The inputs' side last picked: frames or references (the artboard Inputs). */
+    inputSide: VideoInputSide;
     /** What the page drew, saved with a draft that has no model yet (`modelId: ''`). */
     drawn?: Partial<DrawnVideoSettings>;
 };
@@ -449,6 +466,7 @@ function readVideoCreatorDraft(value: unknown): Partial<VideoCreatorDraft> {
         additionalSettings: additionalValues && typeof additional?.modelId === 'string'
             ? { modelId: additional.modelId, values: additionalValues }
             : undefined,
+        inputSide: stored.inputSide === 'frames' || stored.inputSide === 'references' ? stored.inputSide : undefined,
         drawn,
     };
 }
@@ -621,6 +639,36 @@ function revokeObjectUrl(url: string | null) {
     }
 }
 
+/** What a Seedance asset step changes on a card: its upload and its asset. */
+type AssetStepCard = {
+    id: string;
+    file: File | null;
+    providerUrl: string | null;
+    storagePath?: string | null;
+    staged: StagedUpload | null;
+    seedanceAsset: SeedanceAssetMetadata;
+};
+
+/**
+ * A Seedance asset step's result laid on its card as the cards are once the step ends, or null
+ * when the card is gone or holds another file: Replace keeps a card's id, and the original's
+ * upload or asset is not the new file's. Only what the step changes is taken from it, so a
+ * rename made meanwhile stays.
+ */
+function landAssetStep<T extends AssetStepCard>(current: readonly T[], before: T, after: T): T[] | null {
+    const index = current.findIndex((card) => card.id === before.id && card.file === before.file);
+    if (index === -1) return null;
+    const next = [...current];
+    next[index] = {
+        ...current[index],
+        providerUrl: after.providerUrl,
+        storagePath: after.storagePath,
+        staged: after.staged,
+        seedanceAsset: after.seedanceAsset,
+    };
+    return next;
+}
+
 type VideoElementDraft = ImageElementDescriptor & {
     file: File | null;
     previewUrl: string;
@@ -630,6 +678,11 @@ type VideoElementDraft = ImageElementDescriptor & {
     seedanceAsset: SeedanceAssetMetadata;
     /** The upload of `file` an earlier run or preparation made, sent again while it lasts. */
     staged: StagedUpload | null;
+    /**
+     * Brought back by a remix from its original. Replace makes it the creator's own and it stays
+     * replaceable (the artboard Remix: "Replace the photos to make it yours").
+     */
+    restoredFromRemix: boolean;
 };
 
 type VideoElementSeed = {
@@ -644,6 +697,8 @@ type VideoElementSeed = {
     sourceGenerationId?: string | null;
     seedanceAsset?: Partial<SeedanceAssetMetadata>;
     staged?: StagedUpload | null;
+    /** Defaults to whether it came from a remix (`source`). */
+    restoredFromRemix?: boolean;
 };
 
 type SeedanceMediaReferenceDraft = {
@@ -658,6 +713,8 @@ type SeedanceMediaReferenceDraft = {
     durationSeconds?: number | null;
     seedanceAsset: SeedanceAssetMetadata;
     staged: StagedUpload | null;
+    /** Brought back by a remix from its original, and replaceable (as a picture's is). */
+    restoredFromRemix: boolean;
 };
 
 type SeedanceMediaReferenceSeed = {
@@ -672,6 +729,7 @@ type SeedanceMediaReferenceSeed = {
     durationSeconds?: number | null;
     seedanceAsset?: Partial<SeedanceAssetMetadata>;
     staged?: StagedUpload | null;
+    restoredFromRemix?: boolean;
 };
 
 type KlingVideoElementDescriptor = {
@@ -997,6 +1055,7 @@ function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
             ...seed.seedanceAsset,
         }),
         staged: seed.staged ?? null,
+        restoredFromRemix: seed.restoredFromRemix ?? seed.source === 'remix',
     }));
 }
 
@@ -1020,6 +1079,7 @@ function hydrateSeedanceMediaReferences(
             ...seed.seedanceAsset,
         }),
         staged: seed.staged ?? null,
+        restoredFromRemix: seed.restoredFromRemix ?? seed.source === 'remix',
     }));
 }
 
@@ -1195,6 +1255,15 @@ export default function CreateVideoClient({
     const [sound, setSound] = useState<boolean>(drawnForm.sound);
     const [resolution, setResolution] = useState<string>(drawnForm.resolution);
     const [fixedLens, setFixedLens] = useState<boolean>(drawnForm.fixedLens);
+    // The inputs' side last picked, frames or references (the artboard Inputs), saved with the
+    // draft. What is attached holds the card to its own side (`videoInputView`).
+    const [pickedInputSide, setPickedInputSide] = useState<VideoInputSide>('frames');
+    const inputSwitchRef = useRef<HTMLDivElement>(null);
+    // The file a Replace last picked for each clip or track: a pick measured later than a newer
+    // one for the same reference does not take its place.
+    const latestReplacePicksRef = useRef(new Map<string, File>());
+    // The last switch's writes, which the next switch's wait for (`writeAfterEarlierSwitches`).
+    const inputSwitchWritesRef = useRef<Promise<void>>(Promise.resolve());
 
     const [isDraggingStart, setIsDraggingStart] = useState(false);
     const [isDraggingEnd, setIsDraggingEnd] = useState(false);
@@ -1597,11 +1666,9 @@ export default function CreateVideoClient({
     // Capabilities come from the model's catalog descriptor, so what the picker offers
     // and what the server accepts cannot drift apart. Before the catalog loads the
     // module falls back to the previous hardcoded tables, keeping first paint identical.
-    // Every input the model can take is on screen at once; which shape the run uses is
-    // read back off what is attached rather than chosen from a mode toggle. Kie's own
-    // playground lays the fields out flat this way, and a derived mode cannot disagree
-    // with the attachments the way a separately persisted one could.
-    const hasFrameAttachment = Boolean(startImageUrl || startImageFile || endImageUrl || endImageFile);
+    // Which shape the run uses is read back off what is attached, never off the inputs'
+    // switch (which only decides what the card shows): a derived mode cannot disagree with
+    // the attachments the way a separately persisted one could.
     // The browser keeps a creator's references when the model changes, so the draft can
     // hold an image, a clip or a track that the selected model has no slot for. Those
     // are on standby: saved for a model that takes them, and no part of this run. Only
@@ -1628,14 +1695,34 @@ export default function CreateVideoClient({
     const hasReferenceAttachment = runElements.length > 0
         || runReferenceVideos.length > 0
         || runReferenceAudios.length > 0;
-    // Providers that cannot take both shapes in one request get a live mutual lock instead
-    // of a hidden mode: the other group stays visible, greyed, with the reason on it.
-    // Only ever lock the empty side. A draft can hold both — the previous surface kept the
-    // frames while you worked in references — and locking each against the other leaves a
-    // panel where nothing can be removed, so nothing can be unlocked either.
-    const framesLockedByReferences = affordances.framesExcludeReferences && hasReferenceAttachment && !hasFrameAttachment;
-    const referencesLockedByFrames = affordances.framesExcludeReferences && hasFrameAttachment && !hasReferenceAttachment;
-    const framesAndReferencesConflict = affordances.framesExcludeReferences && hasFrameAttachment && hasReferenceAttachment;
+    // The inputs, frames or references, one side at a time (the artboard Inputs; the owner's
+    // answers of 2026-10-29). The side shown is the one what is attached belongs to, or the one
+    // last picked while nothing is; the run's own shape is still read off what it carries.
+    const inputSides = videoInputSides(affordances, { isMultiShot: currentIsMultiShot });
+    const heldInputs: HeldVideoInputs = {
+        start: Boolean(startImageUrl || startImageFile),
+        end: Boolean(endImageUrl || endImageFile),
+        pictures: runElements.length,
+        clips: runReferenceVideos.length,
+        tracks: runReferenceAudios.length,
+        characters: isGeminiOmniVideoModel ? characterIds.length : 0,
+    };
+    const inputView = videoInputView(inputSides, heldInputs, pickedInputSide);
+    // A side held by what is attached is the one picked, so taking the last of it off leaves
+    // the card where it is, whichever came back first, the attachments or a saved pick.
+    if (inputView.heldSide && inputView.heldSide !== pickedInputSide) setPickedInputSide(inputView.heldSide);
+    // A question about what is attached is moot once that changes while it is up (a remix or
+    // a saved draft coming back): it is answered "keep", so its yes never acts on what has gone.
+    const confirmInputSwitch = useConfirmation([
+        selectedModel,
+        currentMode,
+        currentIsMultiShot,
+        startImageUrl,
+        endImageUrl,
+        ...elements.map((element) => element.id),
+        ...referenceVideos.map((reference) => reference.id),
+        ...referenceAudios.map((reference) => reference.id),
+    ].join('|'));
     const videoElementSupport = {
         enabled: affordances.elements.enabled,
         maxElements: affordances.elements.maxTotal,
@@ -1645,7 +1732,6 @@ export default function CreateVideoClient({
     const canUseVideoElements = affordances.elements.enabled;
     const activeReferenceMode = affordances.activeMode;
     const combinesFrameWithReferences = affordances.combineFramesWithReferences;
-    const supportsStartFrame = affordances.frames.start;
     const supportsEndFrame = affordances.frames.end;
     const activeSupportsEndFrame = supportsEndFrame && !combinesFrameWithReferences;
     const referenceVideoLimit = affordances.referenceVideos.max;
@@ -1671,6 +1757,8 @@ export default function CreateVideoClient({
         && (multiShotMaxTotalSeconds === null || totalDuration < multiShotMaxTotalSeconds);
     const multiShotOverLength = multiShotMaxTotalSeconds !== null && totalDuration > multiShotMaxTotalSeconds;
     const videoAccent = getAccentClasses('video');
+    // What the run leaves out, and the Grok note: the amber of a caution.
+    const noticeClasses = getAccentClasses('commerce');
     // The mode control's own name from the model's descriptor ("Grok mode"), as the app shows it.
     const modeControlLabel = catalogDescriptor?.controls.find((control) => control.key === 'mode')?.label
         ?? (selectedModel === 'veo-3.1' ? 'Model variant' : 'Quality mode');
@@ -1993,6 +2081,10 @@ export default function CreateVideoClient({
         })),
         ...shotMentionCandidates,
     ];
+    // "@" opens the panel only where the prompt can mention something: the references while the
+    // inputs show their side (the artboard Inputs), and Kling's video elements and named
+    // subjects, which stand beside either side.
+    const offersPromptMentions = inputView.side === 'references' || shotMentionCandidates.length > 0 || supportsNamedSubjects || isKlingVideoModel;
     const mentionSuggestions = activeMentionQuery
         ? promptMentionCandidates.filter((candidate) => {
             const normalizedQuery = activeMentionQuery.query.toLowerCase();
@@ -2020,7 +2112,6 @@ export default function CreateVideoClient({
         : { title: 'Insert video element', pick: 'Pick a Kling video handle for this shot.', none: 'No matching video elements yet.' };
     const showKlingVideoElementEditor = isKlingVideoModel;
     const showElementEditor = !currentIsMultiShot && canUseVideoElements;
-    const showFramesEditor = supportsStartFrame || supportsEndFrame;
     const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && elements.length > 0;
     const savedClipAndTrackNotice = standbyClipAndTrackNotice(
         videoModel.displayName,
@@ -2289,6 +2380,8 @@ export default function CreateVideoClient({
 
                 const restoredVideoInputs = bundle.inputs.video;
                 const restoredSeedanceAssets = settings?.seedanceAssets ?? null;
+                // The inputs open on the original's side; what comes back holds them there too.
+                setPickedInputSide(restoredVideoInputs?.referenceMode === 'elements' ? 'references' : 'frames');
 
                 // Kling O3's named subjects come back under the handles the prompt
                 // was written with. A picture is sent again as the file the run
@@ -2325,6 +2418,11 @@ export default function CreateVideoClient({
                 );
                 if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
 
+                // The run's frames come back as its frames, but where the Seedance 2 family's
+                // restore below takes them for its pictures or leaves them out.
+                const restoredStartFrame = createRestoredRemixAssetState(restoredVideoInputs?.startFrame ?? null);
+                const restoredEndFrame = createRestoredRemixAssetState(restoredVideoInputs?.endFrame ?? null);
+                let restoresFrames = true;
                 if (isSeedance2VideoModelId(nextModelId)) {
                     const restoredElements = restoredVideoInputs?.elements ?? [];
                     const restoredSeeds = createRemixElementSeeds(
@@ -2340,11 +2438,16 @@ export default function CreateVideoClient({
                         ] ?? undefined,
                     }));
 
-                    const legacyFrameSeeds = restoredSeeds.length === 0
-                        ? [
-                            createRestoredRemixAssetState(restoredVideoInputs?.startFrame ?? null),
-                            createRestoredRemixAssetState(restoredVideoInputs?.endFrame ?? null),
-                        ]
+                    // A references run of the family kept its pictures as frames before the
+                    // family took frames (2026-04-04): those come back as its references. A
+                    // frames run gets its frames back as frames, and runs as one again. A run
+                    // that brings pictures back is a references run, and frames recorded beside
+                    // them (an old run's prepared assets come back as pictures) stay out.
+                    const framesWereReferences = restoredSeeds.length === 0
+                        && restoredVideoInputs?.referenceMode === 'elements';
+                    restoresFrames = restoredSeeds.length === 0 && !framesWereReferences;
+                    const legacyFrameSeeds = framesWereReferences
+                        ? [restoredStartFrame, restoredEndFrame]
                             .filter((item): item is NonNullable<typeof item> => Boolean(item))
                             .map((item, index) => ({
                                 displayName: `Image reference ${index + 1}`,
@@ -2426,13 +2529,6 @@ export default function CreateVideoClient({
 	                        // Said beside a cap notice too, and once if the bundle already said it.
 	                        setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, REMIX_RESTORE_WARNING));
 	                    }
-
-	                    setStartImageFile(null);
-                    setStartImageUrl(null);
-                    setStartFrameDescriptor(null);
-                    setEndImageFile(null);
-                    setEndImageUrl(null);
-                    setEndFrameDescriptor(null);
                 } else {
                     // A run on any other model gets its references back too. Its
                     // image references come back under the handles the prompt
@@ -2487,21 +2583,16 @@ export default function CreateVideoClient({
 	                            }] : []))
 	                        : [];
 	                    commitKlingVideoElements(hydrateKlingVideoElements(klingVideoSeeds));
-
-	                    const restoredStartFrame = createRestoredRemixAssetState(
-                        restoredVideoInputs?.startFrame ?? null
-                    );
-                    const restoredEndFrame = createRestoredRemixAssetState(
-                        restoredVideoInputs?.endFrame ?? null
-                    );
-
-                    setStartImageFile(null);
-                    setStartImageUrl(restoredStartFrame?.url ?? null);
-                    setStartFrameDescriptor(restoredStartFrame?.descriptor ?? null);
-                    setEndImageFile(null);
-                    setEndImageUrl(restoredEndFrame?.url ?? null);
-                    setEndFrameDescriptor(restoredEndFrame?.descriptor ?? null);
                 }
+
+                const keptStartFrame = restoresFrames ? restoredStartFrame : null;
+                const keptEndFrame = restoresFrames ? restoredEndFrame : null;
+                setStartImageFile(null);
+                setStartImageUrl(keptStartFrame?.url ?? null);
+                setStartFrameDescriptor(keptStartFrame?.descriptor ?? null);
+                setEndImageFile(null);
+                setEndImageUrl(keptEndFrame?.url ?? null);
+                setEndFrameDescriptor(keptEndFrame?.descriptor ?? null);
             } catch (fetchError) {
                 console.error('Error fetching remix:', fetchError);
                 if (!isCancelled) {
@@ -2711,6 +2802,7 @@ export default function CreateVideoClient({
                 if (draft.shots) setMultiPrompts(draft.shots);
                 if (changed(draft.duration, drawnThen?.duration) && !prefillDuration) setSingleDuration(draft.duration);
                 if (draft.additionalSettings) pendingAdditionalSettingsRef.current = draft.additionalSettings;
+                if (draft.inputSide) setPickedInputSide(draft.inputSide);
             })
             .catch((draftError) => {
                 console.error('Error loading the saved video draft:', draftError);
@@ -2754,9 +2846,10 @@ export default function CreateVideoClient({
         shots: multiPrompts,
         duration: singleDuration,
         additionalSettings: { modelId: selectedModel, values: additionalSettings.settings },
+        inputSide: pickedInputSide,
         // Until a model is settled, what the page drew, so the next visit tells it from the creator's own.
         drawn: modelSettled ? undefined : savedVideoFormValues(drawnForm),
-    }), [prompt, modelSettled, selectedModel, mode, aspectRatio, sound, resolution, fixedLens, isMultiShot, multiPrompts, singleDuration, additionalSettings.settings, drawnForm]);
+    }), [prompt, modelSettled, selectedModel, mode, aspectRatio, sound, resolution, fixedLens, isMultiShot, multiPrompts, singleDuration, additionalSettings.settings, drawnForm, pickedInputSide]);
 
     const flushTextDraft = useCallback(async () => {
         const unsaved = unsavedDraftRef.current;
@@ -2854,32 +2947,25 @@ export default function CreateVideoClient({
         updateShotMentionState(shot.id, shot.prompt);
     };
 
-    const persistFrame = async (file: File, type: 'start' | 'end') => {
+    const persistFrame = async (file: File, frame: VideoFrame) => {
         const { refusal } = screenPickedFiles([file], 'image');
         setPickNotice(refusal);
         if (refusal) return;
 
-        if (type === 'start') {
-            revokeObjectUrl(startImageUrl);
-            setStartImageFile(file);
-            setStartImageUrl(URL.createObjectURL(file));
-            setStartFrameDescriptor(null);
-            const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoStartImage);
-            if (key) {
-                await setPersistedFile(key, file);
-            }
-            return;
-        }
-
-        revokeObjectUrl(endImageUrl);
-        setEndImageFile(file);
-        setEndImageUrl(URL.createObjectURL(file));
-        setEndFrameDescriptor(null);
-        const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoEndImage);
+        setFrame(frame, { file, url: URL.createObjectURL(file), descriptor: null, staged: null });
+        const key = savedFrameKey(frame);
         if (key) {
             await setPersistedFile(key, file);
         }
     };
+
+    /** A picture from the creator's own file, as an add and a Replace make it. */
+    const uploadedPictureSeed = (file: File, displayName: string) => ({
+        displayName,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        source: 'upload' as const,
+    });
 
     const processElementFiles = async (files: FileList | File[]) => {
         const { accepted: validFiles, refusal } = screenPickedFiles(Array.from(files), 'image');
@@ -2892,12 +2978,9 @@ export default function CreateVideoClient({
         ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
 
-        const newElements = hydrateVideoElements(filesToAdd.map((file, index) => ({
-            displayName: `Element ${currentElements.length + index + 1}`,
-            file,
-            previewUrl: URL.createObjectURL(file),
-            source: 'upload',
-        })));
+        const newElements = hydrateVideoElements(filesToAdd.map((file, index) => (
+            uploadedPictureSeed(file, `Element ${currentElements.length + index + 1}`)
+        )));
 
         const nextElements = hydrateVideoElements([...currentElements, ...newElements]);
         commitElements(nextElements);
@@ -2950,6 +3033,20 @@ export default function CreateVideoClient({
         }
     };
 
+    /**
+     * A clip or track from the creator's own file, as an add and a Replace make it. Kie caps
+     * the combined length of reference clips and audio, and some models price by it, so the
+     * quote is told each one's length (a media element reads a track's as it reads a clip's).
+     * A track draws no preview of its own: its row plays the file.
+     */
+    const uploadedMediaSeed = (kind: 'video' | 'audio', file: File, displayName: string, durationSeconds: number | null) => ({
+        displayName,
+        file,
+        previewUrl: kind === 'video' ? URL.createObjectURL(file) : '',
+        source: 'upload' as const,
+        durationSeconds,
+    });
+
     const processReferenceVideoFiles = async (files: FileList | File[]) => {
         const { accepted: validFiles, refusal } = screenPickedFiles(Array.from(files), 'video');
         const availableSlots = Math.max(0, referenceVideoLimit - referenceVideosRef.current.length);
@@ -2960,13 +3057,12 @@ export default function CreateVideoClient({
         ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
 
-        const seeds = await Promise.all(filesToAdd.map(async (file, index) => ({
-            displayName: `Video reference ${referenceVideosRef.current.length + index + 1}`,
+        const seeds = await Promise.all(filesToAdd.map(async (file, index) => uploadedMediaSeed(
+            'video',
             file,
-            previewUrl: URL.createObjectURL(file),
-            source: 'upload' as const,
-            durationSeconds: await readVideoDurationSeconds(file),
-        })));
+            `Video reference ${referenceVideosRef.current.length + index + 1}`,
+            await readVideoDurationSeconds(file),
+        )));
 
         const nextReferences = [...referenceVideosRef.current, ...hydrateSeedanceMediaReferences('Video', seeds)];
         commitReferenceVideos(nextReferences);
@@ -3014,16 +3110,12 @@ export default function CreateVideoClient({
         ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
 
-        const seeds = await Promise.all(filesToAdd.map(async (file, index) => ({
-            displayName: `Audio reference ${referenceAudiosRef.current.length + index + 1}`,
+        const seeds = await Promise.all(filesToAdd.map(async (file, index) => uploadedMediaSeed(
+            'audio',
             file,
-            previewUrl: '',
-            source: 'upload' as const,
-            // Kie caps the combined length of reference audio as it caps clips, and some
-            // models price by it, so the quote is told each track's length. A media
-            // element reads an audio file's length as it reads a clip's.
-            durationSeconds: await readVideoDurationSeconds(file),
-        })));
+            `Audio reference ${referenceAudiosRef.current.length + index + 1}`,
+            await readVideoDurationSeconds(file),
+        )));
 
         const nextReferences = [...referenceAudiosRef.current, ...hydrateSeedanceMediaReferences('Audio', seeds)];
         commitReferenceAudios(nextReferences);
@@ -3052,25 +3144,38 @@ export default function CreateVideoClient({
         }
     };
 
-    const clearImage = async (type: 'start' | 'end') => {
-        if (type === 'start') {
-            revokeObjectUrl(startImageUrl);
-            setStartImageFile(null);
-            setStartImageUrl(null);
-            setStartFrameDescriptor(null);
-            const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoStartImage);
-            if (key) {
-                await removePersistedMedia(key);
-            }
+    /** Where a frame's file is saved for the creator, or null where nothing is saved (a remix). */
+    const savedFrameKey = (frame: VideoFrame) => mediaKey(
+        frame === 'start' ? PERSISTED_MEDIA_KEYS.createVideoStartImage : PERSISTED_MEDIA_KEYS.createVideoEndImage,
+    );
+
+    /** Sets a frame, or takes it off with null. Its old preview goes with it, unless it is the new one. */
+    const setFrame = (frame: VideoFrame, next: {
+        file: File | null;
+        url: string;
+        descriptor: RemixMediaAssetDescriptor | null;
+        staged: { file: File; staged: StagedUpload } | null;
+    } | null) => {
+        const previous = frame === 'start' ? startImageUrl : endImageUrl;
+        if (previous !== next?.url) revokeObjectUrl(previous);
+        if (frame === 'start') {
+            setStartImageFile(next?.file ?? null);
+            setStartImageUrl(next?.url ?? null);
+            setStartFrameDescriptor(next?.descriptor ?? null);
+            setStartFrameStaged(next?.staged ?? null);
         } else {
-            revokeObjectUrl(endImageUrl);
-            setEndImageFile(null);
-            setEndImageUrl(null);
-            setEndFrameDescriptor(null);
-            const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoEndImage);
-            if (key) {
-                await removePersistedMedia(key);
-            }
+            setEndImageFile(next?.file ?? null);
+            setEndImageUrl(next?.url ?? null);
+            setEndFrameDescriptor(next?.descriptor ?? null);
+            setEndFrameStaged(next?.staged ?? null);
+        }
+    };
+
+    const clearImage = async (frame: VideoFrame) => {
+        setFrame(frame, null);
+        const key = savedFrameKey(frame);
+        if (key) {
+            await removePersistedMedia(key);
         }
     };
 
@@ -3126,6 +3231,213 @@ export default function CreateVideoClient({
         await persistSeedanceAssets(elementsRef.current, referenceVideosRef.current, nextReferences);
     };
 
+    // The inputs' switch (the artboard Inputs). A pick that would clear something asks first,
+    // and its yes brings along what the other side can take: frames become references, the
+    // first pictures become the free frames. The focus goes back to the side shown.
+    const focusInputSwitch = () => {
+        requestAnimationFrame(() => {
+            inputSwitchRef.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus();
+        });
+    };
+
+    const requestInputSide = async (to: VideoInputSide) => {
+        if (to === inputView.side) return;
+        const plan = planVideoInputSwitch(inputSides, heldInputs, to, {
+            model: videoModel.displayName,
+            start: startImageFile?.name ?? null,
+            end: endImageFile?.name ?? null,
+            pictures: runElements.map((element) => ({ handle: element.handle, name: element.displayName })),
+            promptHandles: extractPromptHandles(prompt),
+        });
+        if (!plan.question) {
+            setPickedInputSide(to);
+            return;
+        }
+        // The safe answer comes first and takes the focus, so Enter never clears by accident.
+        const confirmed = await confirmInputSwitch({
+            title: plan.question.title,
+            message: plan.question.message,
+            cancelLabel: plan.question.keepLabel,
+            confirmLabel: plan.question.confirmLabel,
+            // A yes that clears something cannot be taken back.
+            tone: plan.question.clears ? 'danger' : undefined,
+        });
+        focusInputSwitch();
+        if (!confirmed) return;
+        await (plan.to === 'references' ? moveFramesToReferences(plan) : movePicturesToFrames(plan));
+    };
+
+    /**
+     * A switch's writes, run once the switch before it is written: each writes its new copy
+     * before it takes the old one off, and a switch back answered while the earlier one was still
+     * writing had its start image taken off by the earlier one's removal.
+     */
+    const writeAfterEarlierSwitches = (side: VideoInputSide, writes: () => Promise<void>) => {
+        const written = inputSwitchWritesRef.current.then(writes).catch((saveError) => {
+            console.error(`Failed to save the inputs moved to ${side}:`, saveError);
+        });
+        inputSwitchWritesRef.current = written;
+        return written;
+    };
+
+    const moveFramesToReferences = async (plan: VideoInputSwitch) => {
+        const seeds = plan.framesToReferences.flatMap((frame): VideoElementSeed[] => {
+            const file = frame === 'start' ? startImageFile : endImageFile;
+            const url = frame === 'start' ? startImageUrl : endImageUrl;
+            const descriptor = frame === 'start' ? startFrameDescriptor : endFrameDescriptor;
+            const staged = frame === 'start' ? startFrameStaged : endFrameStaged;
+            if (!url && !file) return [];
+            return [{
+                file,
+                // A preview of its own: the frame's is revoked as the frame goes.
+                previewUrl: file ? URL.createObjectURL(file) : url ?? '',
+                // A frame with no file of the creator's is a remix's, sent again by its path.
+                providerUrl: file ? null : url,
+                storagePath: descriptor?.storagePath ?? null,
+                source: file ? 'upload' : 'remix',
+                sourceGenerationId: descriptor?.sourceGenerationId ?? null,
+                staged: file && staged?.file === file ? staged.staged : null,
+            }];
+        });
+        const nextElements = hydrateVideoElements([...elementsRef.current, ...seeds]);
+        commitElements(nextElements);
+        const frames = [...plan.framesToReferences, ...plan.framesCleared];
+        frames.forEach((frame) => setFrame(frame, null));
+        setPickedInputSide('references');
+        // The new copy is written before the old one goes, so a write that fails loses nothing.
+        await writeAfterEarlierSwitches('references', async () => {
+            await persistVideoElements(nextElements);
+            await persistSeedanceAssets(nextElements, referenceVideosRef.current, referenceAudiosRef.current);
+            await Promise.all(frames.map((frame) => {
+                const key = savedFrameKey(frame);
+                return key ? removePersistedMedia(key) : undefined;
+            }));
+        });
+    };
+
+    const movePicturesToFrames = async (plan: VideoInputSwitch) => {
+        const { carries } = affordances;
+        const pictures = runElements;
+        const moved = new Set<string>();
+        const savedFrames: Array<{ frame: VideoFrame; file: File }> = [];
+        for (const { index, frame } of plan.picturesToFrames) {
+            const element = pictures[index];
+            if (!element) continue;
+            moved.add(element.id);
+            setFrame(frame, {
+                file: element.file,
+                // An upload's preview moves with its file; a remix's picture is sent again by its path.
+                url: element.file ? element.previewUrl : (element.providerUrl ?? element.previewUrl),
+                descriptor: element.file ? null : {
+                    kind: 'image',
+                    label: element.displayName,
+                    storagePath: element.storagePath ?? null,
+                    sourceGenerationId: element.sourceGenerationId ?? null,
+                },
+                staged: element.file && element.staged ? { file: element.file, staged: element.staged } : null,
+            });
+            if (element.file) savedFrames.push({ frame, file: element.file });
+        }
+        // The prompt's mentions of the pictures read as their names: the run sends none of them.
+        if (plan.promptNames.length > 0) {
+            const names = new Map(plan.promptNames);
+            setPrompt((current) => replacePromptHandles(current, names));
+        }
+        // Every reference the run carried and the frames did not take goes: pictures, clips
+        // and tracks. A kind the model has no slot for stays on standby.
+        const nextElements = carries.images ? [] : elementsRef.current;
+        if (carries.images) {
+            for (const element of elementsRef.current) {
+                if (!moved.has(element.id)) revokeObjectUrl(element.previewUrl);
+                elementNames.dropDraft(element.id);
+            }
+            commitElements(nextElements);
+        }
+        const nextVideos = carries.videos ? [] : referenceVideosRef.current;
+        if (carries.videos) {
+            referenceVideosRef.current.forEach((reference) => revokeObjectUrl(reference.previewUrl));
+            commitReferenceVideos(nextVideos);
+        }
+        const nextAudios = carries.audios ? [] : referenceAudiosRef.current;
+        if (carries.audios) commitReferenceAudios(nextAudios);
+        setPickedInputSide('frames');
+        // The frames are written before the lists that held them, so a write that fails loses
+        // nothing; only the lists that changed are written.
+        await writeAfterEarlierSwitches('frames', async () => {
+            await Promise.all(savedFrames.map(({ frame, file }) => {
+                const key = savedFrameKey(frame);
+                return key ? setPersistedFile(key, file) : undefined;
+            }));
+            await Promise.all([
+                carries.images ? persistVideoElements(nextElements) : undefined,
+                carries.videos ? persistReferenceVideos(nextVideos) : undefined,
+                carries.audios ? persistReferenceAudios(nextAudios) : undefined,
+            ]);
+            await persistSeedanceAssets(nextElements, nextVideos, nextAudios);
+        });
+    };
+
+    /** The frames a draft holds beside its references, which the run leaves out, taken off. */
+    const removeLeftOutFrames = async () => {
+        // The notice goes with them, and the focus it held goes to the switch.
+        focusInputSwitch();
+        await Promise.all(inputView.framesLeftOut.map((frame) => clearImage(frame)));
+    };
+
+    // Replace on a remix's reference (the artboard Remix): a file of the creator's own takes
+    // its place, with its name and @handle, so the prompt still reads. It is an upload now,
+    // sent as one, and stays replaceable.
+    const replaceElement = async (elementId: string, file: File) => {
+        const { refusal } = screenPickedFiles([file], 'image');
+        setPickNotice(refusal);
+        if (refusal) return;
+        const current = elementsRef.current;
+        const target = current.find((element) => element.id === elementId);
+        if (!target) return;
+        revokeObjectUrl(target.previewUrl);
+        const nextElements = hydrateVideoElements(current.map((element): VideoElementSeed => (element.id === elementId ? {
+            ...uploadedPictureSeed(file, element.displayName),
+            id: element.id,
+            handle: element.handle,
+            restoredFromRemix: element.restoredFromRemix,
+        } : element)));
+        commitElements(nextElements);
+        await persistVideoElements(nextElements);
+        await persistSeedanceAssets(nextElements, referenceVideosRef.current, referenceAudiosRef.current);
+    };
+
+    const replaceMediaReference = async (kind: 'video' | 'audio', referenceId: string, file: File) => {
+        const { refusal } = screenPickedFiles([file], kind);
+        setPickNotice(refusal);
+        if (refusal) return;
+        const latestPicks = latestReplacePicksRef.current;
+        latestPicks.set(referenceId, file);
+        const durationSeconds = await readVideoDurationSeconds(file);
+        // A newer pick for the same reference won while this one was measured.
+        if (latestPicks.get(referenceId) !== file) return;
+        latestPicks.delete(referenceId);
+        // Read now, not before the measuring: the list may have changed meanwhile.
+        const current = kind === 'video' ? referenceVideosRef.current : referenceAudiosRef.current;
+        const target = current.find((reference) => reference.id === referenceId);
+        if (!target) return;
+        const [replaced] = hydrateSeedanceMediaReferences(kind === 'video' ? 'Video' : 'Audio', [{
+            ...uploadedMediaSeed(kind, file, target.displayName, durationSeconds),
+            id: target.id,
+            restoredFromRemix: target.restoredFromRemix,
+        }]);
+        revokeObjectUrl(target.previewUrl);
+        const nextReferences = current.map((reference) => (reference.id === referenceId ? replaced : reference));
+        if (kind === 'video') {
+            commitReferenceVideos(nextReferences);
+            await persistReferenceVideos(nextReferences);
+            await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
+        } else {
+            commitReferenceAudios(nextReferences);
+            await persistReferenceAudios(nextReferences);
+            await persistSeedanceAssets(elementsRef.current, referenceVideosRef.current, nextReferences);
+        }
+    };
+
     const addPreparedReferenceId = (kind: 'audio' | 'character') => {
         const draft = (kind === 'audio' ? preparedAudioIdDraft : characterIdDraft).trim();
         if (!draft || !/^[A-Za-z0-9._:-]{3,256}$/.test(draft)) {
@@ -3164,17 +3476,19 @@ export default function CreateVideoClient({
         const replacements = createElementHandleReplacementMap(currentElements, nextElements);
 
         commitElements(nextElements);
-        await persistVideoElements(nextElements);
+        // The prompt follows the new handle at once, with the card: a switch or Generate pressed
+        // while the write below runs reads the two together (a tap on Frames blurs the name
+        // field, and the switch's question read the old handle in the prompt).
         if (replacements.size > 0) {
             setPrompt((currentPrompt) => {
                 const nextPrompt = replacePromptHandles(currentPrompt, replacements);
                 requestAnimationFrame(() => updateMentionState(nextPrompt));
                 return nextPrompt;
             });
-            return;
+        } else {
+            requestAnimationFrame(() => updateMentionState(prompt));
         }
-
-        requestAnimationFrame(() => updateMentionState(prompt));
+        await persistVideoElements(nextElements);
     };
 
     const handleKlingVideoElementRename = async (elementId: string, nextDisplayName: string) => {
@@ -3190,7 +3504,8 @@ export default function CreateVideoClient({
         const replacements = createElementHandleReplacementMap(currentElements, nextElements);
 
         commitKlingVideoElements(nextElements);
-        await persistKlingVideoElements(nextElements);
+        // The prompts follow the new handle at once, with the card, as a picture's rename does: a
+        // Generate pressed while the write below runs reads the two together.
         if (replacements.size > 0) {
             setPrompt((currentPrompt) => {
                 const nextPrompt = replacePromptHandles(currentPrompt, replacements);
@@ -3202,10 +3517,10 @@ export default function CreateVideoClient({
                 prompt: replacePromptHandles(shot.prompt, replacements),
             })));
             setActiveShotMentionQuery(null);
-            return;
+        } else {
+            requestAnimationFrame(() => updateMentionState(prompt));
         }
-
-        requestAnimationFrame(() => updateMentionState(prompt));
+        await persistKlingVideoElements(nextElements);
     };
 
     const handleKlingSubjectRename = (subjectId: string, nextDisplayName: string) => {
@@ -3470,46 +3785,49 @@ export default function CreateVideoClient({
             : item;
     });
 
+    // One Seedance asset step on a card: `updater` makes it from the card as the step starts
+    // (null when the card is no longer the one the step was for), and it lands on the card as
+    // it is once the step ends (`landAssetStep`). Null when it did not land.
     const updateElementAsset = async (
         elementId: string,
-        updater: (element: VideoElementDraft) => Promise<VideoElementDraft> | VideoElementDraft
+        updater: (element: VideoElementDraft) => Promise<VideoElementDraft | null> | VideoElementDraft | null
     ) => {
-        const currentElements = elementsRef.current;
-        const nextElements = await Promise.all(currentElements.map(async (element) => (
-            element.id === elementId ? await updater(element) : element
-        )));
+        const before = elementsRef.current.find((element) => element.id === elementId);
+        const after = before ? await updater(before) : null;
+        const nextElements = before && after ? landAssetStep(elementsRef.current, before, after) : null;
+        if (!nextElements) return null;
         commitElements(nextElements);
         await persistVideoElements(nextElements);
         await persistSeedanceAssets(nextElements, referenceVideosRef.current, referenceAudiosRef.current);
-        return nextElements.find((element) => element.id === elementId) || null;
+        return nextElements.find((element) => element.id === elementId) ?? null;
     };
 
     const updateReferenceVideoAsset = async (
         referenceId: string,
-        updater: (reference: SeedanceMediaReferenceDraft) => Promise<SeedanceMediaReferenceDraft> | SeedanceMediaReferenceDraft
+        updater: (reference: SeedanceMediaReferenceDraft) => Promise<SeedanceMediaReferenceDraft | null> | SeedanceMediaReferenceDraft | null
     ) => {
-        const currentReferences = referenceVideosRef.current;
-        const nextReferences = await Promise.all(currentReferences.map(async (reference) => (
-            reference.id === referenceId ? await updater(reference) : reference
-        )));
+        const before = referenceVideosRef.current.find((reference) => reference.id === referenceId);
+        const after = before ? await updater(before) : null;
+        const nextReferences = before && after ? landAssetStep(referenceVideosRef.current, before, after) : null;
+        if (!nextReferences) return null;
         commitReferenceVideos(nextReferences);
         await persistReferenceVideos(nextReferences);
         await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
-        return nextReferences.find((reference) => reference.id === referenceId) || null;
+        return nextReferences.find((reference) => reference.id === referenceId) ?? null;
     };
 
     const updateReferenceAudioAsset = async (
         referenceId: string,
-        updater: (reference: SeedanceMediaReferenceDraft) => Promise<SeedanceMediaReferenceDraft> | SeedanceMediaReferenceDraft
+        updater: (reference: SeedanceMediaReferenceDraft) => Promise<SeedanceMediaReferenceDraft | null> | SeedanceMediaReferenceDraft | null
     ) => {
-        const currentReferences = referenceAudiosRef.current;
-        const nextReferences = await Promise.all(currentReferences.map(async (reference) => (
-            reference.id === referenceId ? await updater(reference) : reference
-        )));
+        const before = referenceAudiosRef.current.find((reference) => reference.id === referenceId);
+        const after = before ? await updater(before) : null;
+        const nextReferences = before && after ? landAssetStep(referenceAudiosRef.current, before, after) : null;
+        if (!nextReferences) return null;
         commitReferenceAudios(nextReferences);
         await persistReferenceAudios(nextReferences);
         await persistSeedanceAssets(elementsRef.current, referenceVideosRef.current, nextReferences);
-        return nextReferences.find((reference) => reference.id === referenceId) || null;
+        return nextReferences.find((reference) => reference.id === referenceId) ?? null;
     };
 
     const prepareElementSeedanceAsset = async (elementId: string) => {
@@ -3523,9 +3841,8 @@ export default function CreateVideoClient({
 
         try {
             const uploadedElement = await updateElementAsset(elementId, (element) => ensureUploadedElement(element));
-            if (!uploadedElement) {
-                throw new Error('Missing image reference.');
-            }
+            // Gone, or replaced while it uploaded: the card has nothing of its own to prepare yet.
+            if (!uploadedElement) return;
 
             const sourceUrl = uploadedElement.storagePath || uploadedElement.providerUrl;
             if (!sourceUrl) {
@@ -3533,10 +3850,10 @@ export default function CreateVideoClient({
             }
 
             const asset = await requestSeedanceAsset(sourceUrl, 'Image');
-            await updateElementAsset(elementId, (element) => ({
-                ...element,
-                seedanceAsset: asset,
-            }));
+            // Not on a file that replaced the prepared one meanwhile (Replace keeps the card's id).
+            await updateElementAsset(elementId, (element) => (
+                element.file === uploadedElement.file ? { ...element, seedanceAsset: asset } : null
+            ));
         } finally {
             setActiveSeedanceAssetKey((current) => current === activeKey ? null : current);
         }
@@ -3550,10 +3867,10 @@ export default function CreateVideoClient({
             const currentElement = elementsRef.current.find((element) => element.id === elementId);
             const sourceUrl = currentElement?.seedanceAsset.sourceUrl || currentElement?.storagePath || currentElement?.providerUrl || '';
             const asset = await requestSeedanceAsset(sourceUrl, 'Image', assetId);
-            await updateElementAsset(elementId, (element) => ({
-                ...element,
-                seedanceAsset: asset,
-            }));
+            // Only while the card still holds the asset refreshed: a Replace meanwhile dropped it.
+            await updateElementAsset(elementId, (element) => (
+                element.seedanceAsset.assetId === assetId ? { ...element, seedanceAsset: asset } : null
+            ));
         } finally {
             setActiveSeedanceAssetKey((current) => current === activeKey ? null : current);
         }
@@ -3573,9 +3890,8 @@ export default function CreateVideoClient({
         try {
             if (kind === 'video') {
                 const uploadedReference = await updateReferenceVideoAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Video'));
-                if (!uploadedReference) {
-                    throw new Error('Missing video reference.');
-                }
+                // Gone, or replaced while it uploaded.
+                if (!uploadedReference) return;
 
                 const sourceUrl = uploadedReference.storagePath || uploadedReference.providerUrl;
                 if (!sourceUrl) {
@@ -3583,17 +3899,14 @@ export default function CreateVideoClient({
                 }
 
                 const asset = await requestSeedanceAsset(sourceUrl, 'Video');
-                await updateReferenceVideoAsset(referenceId, (reference) => ({
-                    ...reference,
-                    seedanceAsset: asset,
-                }));
+                await updateReferenceVideoAsset(referenceId, (reference) => (
+                    reference.file === uploadedReference.file ? { ...reference, seedanceAsset: asset } : null
+                ));
                 return;
             }
 
             const uploadedReference = await updateReferenceAudioAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Audio'));
-            if (!uploadedReference) {
-                throw new Error('Missing audio reference.');
-            }
+            if (!uploadedReference) return;
 
             const sourceUrl = uploadedReference.storagePath || uploadedReference.providerUrl;
             if (!sourceUrl) {
@@ -3601,10 +3914,9 @@ export default function CreateVideoClient({
             }
 
             const asset = await requestSeedanceAsset(sourceUrl, 'Audio');
-            await updateReferenceAudioAsset(referenceId, (reference) => ({
-                ...reference,
-                seedanceAsset: asset,
-            }));
+            await updateReferenceAudioAsset(referenceId, (reference) => (
+                reference.file === uploadedReference.file ? { ...reference, seedanceAsset: asset } : null
+            ));
         } finally {
             setActiveSeedanceAssetKey((current) => current === activeKey ? null : current);
         }
@@ -3623,19 +3935,17 @@ export default function CreateVideoClient({
                 .find((reference) => reference.id === referenceId);
             const sourceUrl = currentReference?.seedanceAsset.sourceUrl || currentReference?.storagePath || currentReference?.providerUrl || '';
             const asset = await requestSeedanceAsset(sourceUrl, kind === 'video' ? 'Video' : 'Audio', assetId);
+            // Only while the card still holds the asset refreshed: a Replace meanwhile dropped it.
+            const refreshed = (reference: SeedanceMediaReferenceDraft) => (
+                reference.seedanceAsset.assetId === assetId ? { ...reference, seedanceAsset: asset } : null
+            );
 
             if (kind === 'video') {
-                await updateReferenceVideoAsset(referenceId, (reference) => ({
-                    ...reference,
-                    seedanceAsset: asset,
-                }));
+                await updateReferenceVideoAsset(referenceId, refreshed);
                 return;
             }
 
-            await updateReferenceAudioAsset(referenceId, (reference) => ({
-                ...reference,
-                seedanceAsset: asset,
-            }));
+            await updateReferenceAudioAsset(referenceId, refreshed);
         } finally {
             setActiveSeedanceAssetKey((current) => current === activeKey ? null : current);
         }
@@ -4638,6 +4948,52 @@ export default function CreateVideoClient({
             : referenceAudios.map((reference) => ({ kind: 'audio' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void handleRemoveReferenceAudio(reference.id) }))),
     ];
 
+    // The line under the inputs' switch, and a frame's slot: the start image's shows on either
+    // side of Wan 2.7 (its reference endpoint takes a first frame beside the references).
+    const inputsHint = videoInputsHint({
+        view: inputView,
+        sides: inputSides,
+        model: videoModel.displayName,
+        held: heldInputs,
+        remixPictures: runElements.filter((element) => element.restoredFromRemix).length,
+        subjectsHeld: klingSubjectsActive,
+    });
+    const renderFrameSlot = (frame: VideoFrame, hint?: string) => {
+        const title = frame === 'start' ? 'Start image' : 'End image';
+        const src = frame === 'start' ? startImageUrl : endImageUrl;
+        const setDragging = frame === 'start' ? setIsDraggingStart : setIsDraggingEnd;
+        return (
+            <CreatorUploadSlot
+                accent="video"
+                title={title}
+                hint={hint}
+                status={frame === 'start' && startFrameRequired ? 'required' : 'optional'}
+                height="frame"
+                mediaType="image"
+                src={src}
+                alt={title}
+                previewHint="Preview"
+                icon={ImagePlus}
+                emptyLabel="Add"
+                input={{
+                    id: `video-${frame}-frame-input`,
+                    accept: 'image/*',
+                    // The tile reads "Add" beside its heading; the field says which frame it adds.
+                    'aria-label': frame === 'start' ? 'Add a start image' : 'Add an end image',
+                    onChange: (event) => handleImageUpload(event, frame),
+                }}
+                onPreview={() => {
+                    if (src) setUploadPreview({ type: 'image', src, alt: title, title });
+                }}
+                onRemove={() => void clearImage(frame)}
+                dragging={frame === 'start' ? isDraggingStart : isDraggingEnd}
+                onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+                onDragLeave={(event) => { event.preventDefault(); setDragging(false); }}
+                onDrop={(event) => handleImageDrop(event, frame)}
+            />
+        );
+    };
+
     if (isLoadingUser) {
         return (
             <div className="ui-page min-h-screen text-[var(--ui-text-primary)] flex items-center justify-center">
@@ -4664,7 +5020,7 @@ export default function CreateVideoClient({
         ? 'Write each shot, then Generate.'
         : klingSubjectsActive
             ? 'Write a prompt that names your subjects, then Generate.'
-            : activeReferenceMode === 'elements'
+            : inputView.side === 'references'
                 ? 'Write a prompt, add references if you like, then Generate.'
                 : startFrameRequired
                     ? startImageUrl || startImageFile
@@ -5158,7 +5514,7 @@ export default function CreateVideoClient({
                                     </div>
                                 </div>
 
-                                {activeMentionQuery ? (
+                                {activeMentionQuery && offersPromptMentions ? (
                                     <CreatorMentionPanel
                                         title="Insert reference"
                                         hint={mentionSuggestions.length > 0 ? 'Pick a reference to insert its @mention.' : 'No matching references yet.'}
@@ -5299,23 +5655,273 @@ export default function CreateVideoClient({
                             </p>
                         ) : null}
 
-                        {!currentIsMultiShot && canUseVideoElements && affordances.framesExcludeReferences && (
-                            <div className="rounded-ui-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-4">
-                                <div className="flex items-start justify-between gap-3">
-                                    <h2 className="text-sm font-semibold text-[var(--ui-text-primary)]">Frames or references</h2>
-                                    <span className={cardCountClass}>{videoElementSupport.maxElements} references max</span>
-                                </div>
-                                <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
-                                    {framesAndReferencesConflict
-                                        ? `${videoModel.displayName} cannot combine frames with references, and this draft holds both. Clear one — as it stands the run will use your references and ignore the frames.`
-                                        : framesLockedByReferences
-                                            ? `${videoModel.displayName} cannot combine frames with references. Clear your references to define a start or end frame instead.`
-                                            : referencesLockedByFrames
-                                                ? `${videoModel.displayName} cannot combine references with frames. Clear your frames to use reusable references instead.`
-                                                : `${videoModel.displayName} takes either frames or references in a single run. Attach one and the other locks until you clear it.`}
-                                </p>
-                            </div>
-                        )}
+                        {inputView.side ? (
+                            <CreatorInputsCard
+                                switcher={inputView.switchable ? (
+                                    <CreatorSettingChoices
+                                        ref={inputSwitchRef}
+                                        label={`Start from ${inputSides.labels.frames.toLowerCase()} or ${inputSides.labels.references.toLowerCase()}`}
+                                        labelHidden
+                                        options={VIDEO_INPUT_SIDES}
+                                        optionLabel={(side) => inputSides.labels[side]}
+                                        value={inputView.side}
+                                        onChange={(side) => void requestInputSide(side)}
+                                        appearance="pill"
+                                        accent="video"
+                                    />
+                                ) : null}
+                                hint={inputsHint}
+                                notice={inputView.framesLeftOut.length > 0 ? (
+                                    <div className={`mt-3 flex flex-wrap items-center justify-between gap-2 rounded-ui-lg border py-1.5 pl-3 pr-1.5 text-xs leading-5 ${noticeClasses.badge}`}>
+                                        <span className="min-w-0 flex-1">{framesLeftOutLine(inputView.framesLeftOut, inputSides.labels)}</span>
+                                        <button
+                                            type="button"
+                                            onClick={() => void removeLeftOutFrames()}
+                                            aria-label={inputView.framesLeftOut.length === 2 ? 'Remove the start and end images' : `Remove the ${inputView.framesLeftOut[0]} image`}
+                                            className={CREATOR_REFERENCE_CHIP_CLASS}
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                ) : null}
+                            >
+                                {inputView.side === 'frames' ? (
+                                    <>
+                                        <div className={`grid gap-3 ${inputSides.frames?.start && inputSides.frames.end ? 'grid-cols-2' : ''}`}>
+                                            {inputSides.frames?.start ? renderFrameSlot('start') : null}
+                                            {inputSides.frames?.end ? renderFrameSlot('end') : null}
+                                        </div>
+                                        {isGrokVideoModel ? (
+                                            <p className={`rounded-ui-lg border px-3 py-2 text-sm leading-6 ${noticeClasses.badge}`}>
+                                                Grok image-to-video accepts one image reference per run.
+                                            </p>
+                                        ) : null}
+                                    </>
+                                ) : (
+                                    <>
+                                        {showElementEditor ? (
+                                            <div className="space-y-3">
+                                                {supportsMultimodalReferences ? (
+                                                    <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference images</h3>
+                                                ) : null}
+                                                {elements.length > 0 ? (
+                                                    <ul aria-label="Reference images" className="space-y-2">
+                                                        {elements.map((element) => (
+                                                            <CreatorReferenceRow
+                                                                key={element.id}
+                                                                accent="video"
+                                                                preview={
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setUploadPreview({
+                                                                            type: 'image',
+                                                                            src: element.previewUrl,
+                                                                            alt: element.displayName,
+                                                                            title: element.displayName,
+                                                                        })}
+                                                                        aria-label={`Preview ${element.displayName}`}
+                                                                        className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
+                                                                    >
+                                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                                        <img
+                                                                            src={element.previewUrl}
+                                                                            alt={element.displayName}
+                                                                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
+                                                                        />
+                                                                    </button>
+                                                                }
+                                                                displayName={element.displayName}
+                                                                nameDraft={elementNames.drafts[element.id]}
+                                                                placeholder="Rename element"
+                                                                onNameChange={(value) => handleElementDraftChange(element.id, value)}
+                                                                onNameCommit={() => void commitElementDraft(element.id)}
+                                                                onNameCancel={() => elementNames.dropDraft(element.id)}
+                                                                onRemove={() => void handleRemoveElement(element.id)}
+                                                                handle={element.handle}
+                                                                handleClassName="text-sky-300"
+                                                                onInsert={() => handleInsertElementHandle(element.handle)}
+                                                                insertByHandle
+                                                                replace={element.restoredFromRemix ? {
+                                                                    label: `Replace ${element.handle} with your own photo`,
+                                                                    accept: 'image/*',
+                                                                    onFile: (file) => void replaceElement(element.id, file),
+                                                                } : undefined}
+                                                            />
+                                                        ))}
+                                                    </ul>
+                                                ) : null}
+                                                {elements.length < videoElementSupport.maxElements && (
+                                                    <CreatorAddTile
+                                                        accent="video"
+                                                        icon={Plus}
+                                                        label={isDraggingElements ? 'Drop reference images here' : 'Add reference images'}
+                                                        input={{
+                                                            ref: elementInputRef,
+                                                            accept: 'image/*',
+                                                            multiple: true,
+                                                            onChange: handleElementUpload,
+                                                        }}
+                                                        dragging={isDraggingElements}
+                                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingElements(true); }}
+                                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingElements(false); }}
+                                                        onDrop={handleElementDrop}
+                                                    />
+                                                )}
+                                            </div>
+                                        ) : null}
+                                        {supportsMultimodalReferences ? (
+                                            <div className="space-y-4">
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference videos</h3>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => referenceVideoInputRef.current?.click()}
+                                                    disabled={referenceVideos.length >= referenceVideoLimit}
+                                                    className={CREATOR_REFERENCE_CHIP_CLASS}
+                                                >
+                                                    Add video
+                                                </button>
+                                            </div>
+                                            <input
+                                                ref={referenceVideoInputRef}
+                                                type="file"
+                                                accept="video/*"
+                                                multiple
+                                                onChange={handleReferenceVideoUpload}
+                                                className="hidden"
+                                            />
+                                            {referenceVideos.length > 0 ? (
+                                                <ul className="space-y-2">
+                                                    {referenceVideos.map((reference) => (
+                                                        <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
+                                                            <div className="flex items-start justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
+                                                                    <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
+                                                                        {typeof reference.durationSeconds === 'number'
+                                                                            ? `${reference.durationSeconds.toFixed(1)}s clip`
+                                                                            : 'Duration unavailable'}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="-my-1 -mr-1 flex shrink-0 items-center gap-1.5">
+                                                                    {reference.restoredFromRemix ? (
+                                                                        <CreatorReplaceButton
+                                                                            label={`Replace ${reference.displayName} with your own clip`}
+                                                                            accept="video/*"
+                                                                            onFile={(file) => void replaceMediaReference('video', reference.id, file)}
+                                                                        />
+                                                                    ) : null}
+                                                                    <IconButton
+                                                                        label={`Remove ${reference.displayName}`}
+                                                                        icon={X}
+                                                                        onClick={() => void handleRemoveReferenceVideo(reference.id)}
+                                                                        className="shrink-0"
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                            {reference.previewUrl || reference.providerUrl ? (
+                                                                <InlineMediaVideo
+                                                                    src={reference.previewUrl || reference.providerUrl || undefined}
+                                                                    className="mt-3 h-40 w-full rounded-ui-md border border-[var(--ui-border-subtle)] bg-black object-cover"
+                                                                    controls
+                                                                    muted
+                                                                    playsInline
+                                                                />
+                                                            ) : null}
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            ) : (
+                                                <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
+                                                    Add up to {referenceVideoLimit} short clips as motion and framing guidance.
+                                                </p>
+                                            )}
+                                        </div>
+
+                                        {supportsReferenceAudio ? (
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference audio</h3>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => referenceAudioInputRef.current?.click()}
+                                                        disabled={referenceAudios.length >= referenceAudioLimit}
+                                                        className={CREATOR_REFERENCE_CHIP_CLASS}
+                                                    >
+                                                        Add audio
+                                                    </button>
+                                                </div>
+                                                <input
+                                                    ref={referenceAudioInputRef}
+                                                    type="file"
+                                                    accept="audio/*"
+                                                    multiple
+                                                    onChange={handleReferenceAudioUpload}
+                                                    className="hidden"
+                                                />
+                                                {referenceAudios.length > 0 ? (
+                                                    <ul className="space-y-2">
+                                                        {referenceAudios.map((reference) => (
+                                                            <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
+                                                                <div className="flex items-start justify-between gap-3">
+                                                                    <div className="min-w-0">
+                                                                        <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
+                                                                        {/* Only the Seedance 2 family prepares assets. On any other model the row says how long the track is. */}
+                                                                        {isSeedance2Family ? (
+                                                                            <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
+                                                                                {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
+                                                                            </div>
+                                                                        ) : typeof reference.durationSeconds === 'number' ? (
+                                                                            <div className="mt-1 text-xs text-[var(--ui-text-faint)]">{`${reference.durationSeconds.toFixed(1)}s track`}</div>
+                                                                        ) : null}
+                                                                    </div>
+                                                                    <div className="-my-1 -mr-1 flex shrink-0 items-center gap-1.5">
+                                                                        {reference.restoredFromRemix ? (
+                                                                            <CreatorReplaceButton
+                                                                                label={`Replace ${reference.displayName} with your own track`}
+                                                                                accept="audio/*"
+                                                                                onFile={(file) => void replaceMediaReference('audio', reference.id, file)}
+                                                                            />
+                                                                        ) : null}
+                                                                        <IconButton
+                                                                            label={`Remove ${reference.displayName}`}
+                                                                            icon={X}
+                                                                            onClick={() => void handleRemoveReferenceAudio(reference.id)}
+                                                                            className="shrink-0"
+                                                                        />
+                                                                    </div>
+                                                                </div>
+                                                                {reference.providerUrl ? (
+                                                                    <RecoverableMediaAudio
+                                                                        src={reference.providerUrl}
+                                                                        className="mt-3 w-full"
+                                                                    />
+                                                                ) : reference.previewUrl ? (
+                                                                    <RecoverableMediaAudio
+                                                                        src={reference.previewUrl}
+                                                                        className="mt-3 w-full"
+                                                                    />
+                                                                ) : null}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
+                                                        Add up to {referenceAudioLimit} audio clip{referenceAudioLimit === 1 ? '' : 's'} for beat, voice, or dialogue timing guidance.
+                                                    </p>
+                                                )}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                        ) : null}
+                                        {inputSides.references?.keepsStart
+                                            ? renderFrameSlot('start', `${videoModel.displayName} can start from it, with your references.`)
+                                            : null}
+                                    </>
+                                )}
+                            </CreatorInputsCard>
+                        ) : null}
 
                         {supportsNamedSubjects && (
                             <div className="ui-card p-4">
@@ -5452,305 +6058,8 @@ export default function CreateVideoClient({
                             </div>
                         )}
 
-                        {showFramesEditor && (
-                            <div role="group" aria-labelledby="create-video-frames" className="ui-card p-4">
-                                <h2 id="create-video-frames" className={`mb-3 ${cardHeadingClass}`}>Frames</h2>
-                                {/* Locked while references hold the run: greyed, and its fields take no file
-                                    from the keyboard either. */}
-                                <div
-                                    aria-disabled={framesLockedByReferences}
-                                    className={`grid gap-3 ${!currentIsMultiShot && activeSupportsEndFrame ? 'grid-cols-2' : ''} ${framesLockedByReferences ? 'pointer-events-none opacity-40' : ''}`}
-                                >
-                                    <CreatorUploadSlot
-                                        accent="video"
-                                        title="Start frame"
-                                        status={startFrameRequired ? 'required' : 'optional'}
-                                        height="frame"
-                                        mediaType="image"
-                                        src={startImageUrl}
-                                        alt="Start frame"
-                                        previewHint="Preview frame"
-                                        icon={ImageIcon}
-                                        emptyLabel="Upload Start Frame"
-                                        input={{
-                                            id: 'video-start-frame-input',
-                                            accept: 'image/*',
-                                            disabled: framesLockedByReferences,
-                                            onChange: (event) => handleImageUpload(event, 'start'),
-                                        }}
-                                        onPreview={() => {
-                                            if (startImageUrl) setUploadPreview({ type: 'image', src: startImageUrl, alt: 'Start frame', title: 'Start Frame' });
-                                        }}
-                                        onRemove={() => void clearImage('start')}
-                                        dragging={isDraggingStart}
-                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingStart(true); }}
-                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingStart(false); }}
-                                        onDrop={(event) => handleImageDrop(event, 'start')}
-                                    />
-
-                                    {!currentIsMultiShot && activeSupportsEndFrame && (
-                                        <CreatorUploadSlot
-                                            accent="video"
-                                            title="End frame"
-                                            status="optional"
-                                            height="frame"
-                                            mediaType="image"
-                                            src={endImageUrl}
-                                            alt="End frame"
-                                            previewHint="Preview frame"
-                                            icon={ImageIcon}
-                                            emptyLabel="Upload End Frame"
-                                            input={{
-                                                id: 'video-end-frame-input',
-                                                accept: 'image/*',
-                                                disabled: framesLockedByReferences,
-                                                onChange: (event) => handleImageUpload(event, 'end'),
-                                            }}
-                                            onPreview={() => {
-                                                if (endImageUrl) setUploadPreview({ type: 'image', src: endImageUrl, alt: 'End frame', title: 'End Frame' });
-                                            }}
-                                            onRemove={() => void clearImage('end')}
-                                            dragging={isDraggingEnd}
-                                            onDragOver={(event) => { event.preventDefault(); setIsDraggingEnd(true); }}
-                                            onDragLeave={(event) => { event.preventDefault(); setIsDraggingEnd(false); }}
-                                            onDrop={(event) => handleImageDrop(event, 'end')}
-                                        />
-                                    )}
-                                </div>
-                                {isGrokVideoModel ? (
-                                    <p className="mt-3 rounded-ui-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm leading-6 text-amber-100">
-                                        Grok image-to-video accepts one image reference per run.
-                                    </p>
-                                ) : null}
-                                {combinesFrameWithReferences ? (
-                                    <p className="mt-3 text-sm leading-6 text-[var(--ui-text-muted)]">
-                                        Wan Reference-to-Video can use this first frame together with your reusable images, clips, and voice reference.
-                                    </p>
-                                ) : null}
-                            </div>
-                        )}
-
-                        {showElementEditor && (
-                            <div
-                                role="group"
-                                aria-labelledby="create-video-references"
-                                aria-disabled={referencesLockedByFrames}
-                                className={`ui-card p-4 ${referencesLockedByFrames ? 'pointer-events-none opacity-40' : ''}`}
-                            >
-                                <div className="mb-1 flex items-center justify-between gap-3">
-                                    <h2 id="create-video-references" className={cardHeadingClass}>Reusable image references</h2>
-                                    <span className={cardCountClass}>{elements.length}/{videoElementSupport.maxElements}</span>
-                                </div>
-                                <p className="mb-3 text-xs text-[var(--ui-text-faint)]">Type @ in the prompt to use one by its name.</p>
-
-                                {elements.length > 0 ? (
-                                    <ul className="mb-3 space-y-2">
-                                        {elements.map((element) => (
-                                            <CreatorReferenceRow
-                                                key={element.id}
-                                                accent="video"
-                                                preview={
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setUploadPreview({
-                                                            type: 'image',
-                                                            src: element.previewUrl,
-                                                            alt: element.displayName,
-                                                            title: element.displayName,
-                                                        })}
-                                                        aria-label={`Preview ${element.displayName}`}
-                                                        className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
-                                                    >
-                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                        <img
-                                                            src={element.previewUrl}
-                                                            alt={element.displayName}
-                                                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
-                                                        />
-                                                    </button>
-                                                }
-                                                displayName={element.displayName}
-                                                nameDraft={elementNames.drafts[element.id]}
-                                                placeholder="Rename element"
-                                                onNameChange={(value) => handleElementDraftChange(element.id, value)}
-                                                onNameCommit={() => void commitElementDraft(element.id)}
-                                                onNameCancel={() => elementNames.dropDraft(element.id)}
-                                                onRemove={() => void handleRemoveElement(element.id)}
-                                                handle={element.handle}
-                                                handleClassName="text-sky-300"
-                                                onInsert={() => handleInsertElementHandle(element.handle)}
-                                            />
-                                        ))}
-                                    </ul>
-                                ) : null}
-
-                                {elements.length < videoElementSupport.maxElements && (
-                                    <CreatorAddTile
-                                        accent="video"
-                                        icon={Plus}
-                                        label={isDraggingElements ? 'Drop reference images here' : 'Add reference images'}
-                                        input={{
-                                            ref: elementInputRef,
-                                            accept: 'image/*',
-                                            multiple: true,
-                                            // Locked while frames hold the run: no file from the keyboard either.
-                                            disabled: referencesLockedByFrames,
-                                            onChange: handleElementUpload,
-                                        }}
-                                        dragging={isDraggingElements}
-                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingElements(true); }}
-                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingElements(false); }}
-                                        onDrop={handleElementDrop}
-                                    />
-                                )}
-                            </div>
-                        )}
-
                         {supportsMultimodalReferences && !currentIsMultiShot && (
                             <>
-                                <div role="group"
-                                    aria-labelledby="create-video-clips"
-                                    aria-disabled={referencesLockedByFrames}
-                                    className={`ui-card p-4 ${referencesLockedByFrames ? 'pointer-events-none opacity-40' : ''}`}
-                                >
-                                    <div className="mb-1 flex items-start justify-between gap-3">
-                                        <h2 id="create-video-clips" className={cardHeadingClass}>{supportsReferenceAudio ? 'Video and audio references' : 'Video references'}</h2>
-                                        <span className={cardCountClass}>{isWanVideoModel ? '5 total references max' : `${referenceVideoLimit} video refs max`}</span>
-                                    </div>
-                                    <p className="mb-3 text-xs text-[var(--ui-text-faint)]">
-                                        {supportsReferenceAudio
-                                            ? 'Add motion clips or timing and voice guidance alongside your reusable image references.'
-                                            : 'Add one motion clip alongside your reusable image references.'}
-                                    </p>
-
-                                    <div className="space-y-4">
-                                        <div className="space-y-2">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference videos</h3>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => referenceVideoInputRef.current?.click()}
-                                                    disabled={referenceVideos.length >= referenceVideoLimit || referencesLockedByFrames}
-                                                    className={CREATOR_REFERENCE_CHIP_CLASS}
-                                                >
-                                                    Add video
-                                                </button>
-                                            </div>
-                                            <input
-                                                ref={referenceVideoInputRef}
-                                                type="file"
-                                                accept="video/*"
-                                                multiple
-                                                onChange={handleReferenceVideoUpload}
-                                                className="hidden"
-                                            />
-                                            {referenceVideos.length > 0 ? (
-                                                <ul className="space-y-2">
-                                                    {referenceVideos.map((reference) => (
-                                                        <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
-                                                            <div className="flex items-start justify-between gap-3">
-                                                                <div className="min-w-0">
-                                                                    <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
-                                                                    <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
-                                                                        {typeof reference.durationSeconds === 'number'
-                                                                            ? `${reference.durationSeconds.toFixed(1)}s clip`
-                                                                            : 'Duration unavailable'}
-                                                                    </div>
-                                                                </div>
-                                                                <IconButton
-                                                                    label={`Remove ${reference.displayName}`}
-                                                                    icon={X}
-                                                                    onClick={() => void handleRemoveReferenceVideo(reference.id)}
-                                                                    className="-my-1 -mr-1 shrink-0"
-                                                                />
-                                                            </div>
-                                                            {reference.previewUrl || reference.providerUrl ? (
-                                                                <InlineMediaVideo
-                                                                    src={reference.previewUrl || reference.providerUrl || undefined}
-                                                                    className="mt-3 h-40 w-full rounded-ui-md border border-[var(--ui-border-subtle)] bg-black object-cover"
-                                                                    controls
-                                                                    muted
-                                                                    playsInline
-                                                                />
-                                                            ) : null}
-                                                        </li>
-                                                    ))}
-                                                </ul>
-                                            ) : (
-                                                <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
-                                                    Add up to {referenceVideoLimit} short clips as motion and framing guidance.
-                                                </p>
-                                            )}
-                                        </div>
-
-                                        {supportsReferenceAudio ? (
-                                            <div className="space-y-2">
-                                                <div className="flex items-center justify-between gap-3">
-                                                    <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference audio</h3>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => referenceAudioInputRef.current?.click()}
-                                                        disabled={referenceAudios.length >= referenceAudioLimit || referencesLockedByFrames}
-                                                        className={CREATOR_REFERENCE_CHIP_CLASS}
-                                                    >
-                                                        Add audio
-                                                    </button>
-                                                </div>
-                                                <input
-                                                    ref={referenceAudioInputRef}
-                                                    type="file"
-                                                    accept="audio/*"
-                                                    multiple
-                                                    onChange={handleReferenceAudioUpload}
-                                                    className="hidden"
-                                                />
-                                                {referenceAudios.length > 0 ? (
-                                                    <ul className="space-y-2">
-                                                        {referenceAudios.map((reference) => (
-                                                            <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
-                                                                <div className="flex items-start justify-between gap-3">
-                                                                    <div className="min-w-0">
-                                                                        <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
-                                                                        {/* Only the Seedance 2 family prepares assets. On any other model the row says how long the track is. */}
-                                                                        {isSeedance2Family ? (
-                                                                            <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
-                                                                                {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
-                                                                            </div>
-                                                                        ) : typeof reference.durationSeconds === 'number' ? (
-                                                                            <div className="mt-1 text-xs text-[var(--ui-text-faint)]">{`${reference.durationSeconds.toFixed(1)}s track`}</div>
-                                                                        ) : null}
-                                                                    </div>
-                                                                    <IconButton
-                                                                        label={`Remove ${reference.displayName}`}
-                                                                        icon={X}
-                                                                        onClick={() => void handleRemoveReferenceAudio(reference.id)}
-                                                                        className="-my-1 -mr-1 shrink-0"
-                                                                    />
-                                                                </div>
-                                                                {reference.providerUrl ? (
-                                                                    <RecoverableMediaAudio
-                                                                        src={reference.providerUrl}
-                                                                        className="mt-3 w-full"
-                                                                    />
-                                                                ) : reference.previewUrl ? (
-                                                                    <RecoverableMediaAudio
-                                                                        src={reference.previewUrl}
-                                                                        className="mt-3 w-full"
-                                                                    />
-                                                                ) : null}
-                                                            </li>
-                                                        ))}
-                                                    </ul>
-                                                ) : (
-                                                    <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
-                                                        Add up to {referenceAudioLimit} audio clip{referenceAudioLimit === 1 ? '' : 's'} for beat, voice, or dialogue timing guidance.
-                                                    </p>
-                                                )}
-                                            </div>
-                                        ) : null}
-                                    </div>
-                                </div>
-
                                 {isGeminiOmniVideoModel ? (
                                     <div role="group" aria-labelledby="create-video-omni" className="ui-card p-4">
                                         <h2 id="create-video-omni" className={cardHeadingClass}>Prepared Omni references</h2>
@@ -5809,7 +6118,7 @@ export default function CreateVideoClient({
                                     </div>
                                 ) : null}
 
-                                {isSeedance2Family ? (
+                                {isSeedance2Family && inputView.side === 'references' ? (
                                     <div role="group" aria-labelledby="create-video-seedance" className="ui-card p-4">
                                         <div className="mb-1 flex items-start justify-between gap-3">
                                             <h2 id="create-video-seedance" className={cardHeadingClass}>Seedance Assets</h2>

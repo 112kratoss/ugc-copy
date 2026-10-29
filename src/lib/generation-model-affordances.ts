@@ -34,20 +34,19 @@ export type AffordanceSettings = {
   isMultiShot?: boolean;
 };
 
+/**
+ * A count the references' kinds share, as the catalog's input constraint publishes it: Wan
+ * 2.7's five references in all, Gemini Omni's seven slots, a clip taking two.
+ */
+export type VideoReferenceBudget = {
+  max: number;
+  /** What one of each kind counts against `max`; 0 for a kind it leaves out. */
+  weights: { pictures: number; clips: number; tracks: number; characters: number };
+};
+
 export type VideoInputAffordances = {
   /** Which reference mode the descriptor actually honours for these settings. */
   activeMode: 'frames' | 'elements';
-  /**
-   * True when the provider cannot take frames and references in the same request, so the
-   * two groups must disable each other rather than both accept attachments.
-   *
-   * Kie splits three ways here. Seedance sends every field to one endpoint but documents
-   * frames and references as mutually exclusive scenarios; minimax-h3 and kling-o3 pick a
-   * different endpoint per shape, so their reference endpoints have no frame field at all;
-   * wan-2.7's r2v endpoint genuinely takes `first_frame` alongside `reference_image` and
-   * `reference_video`. Only the last of those may show both groups live at once.
-   */
-  framesExcludeReferences: boolean;
   elements: {
     enabled: boolean;
     /** Total reference images that may be attached. */
@@ -78,6 +77,25 @@ export type VideoInputAffordances = {
     imagesPerSubject: { min: number; max: number };
   };
   preparedAssets: { voices: number; characters: number } | null;
+  /**
+   * The creator's frames/references switch (the artboard Inputs): the words of the two
+   * options as the catalog's `referenceMode` control publishes them (null where it publishes
+   * none, and the creator's own words apply), whether a start image stays live beside the
+   * references, and the count the references' kinds share.
+   */
+  inputChoice: {
+    labels: { frames: string; references: string } | null;
+    /**
+     * Kie splits three ways here. Seedance sends every field to one endpoint but documents
+     * frames and references as mutually exclusive scenarios; minimax-h3 and kling-o3 pick a
+     * different endpoint per shape, so their reference endpoints have no frame field at all;
+     * wan-2.7's r2v endpoint genuinely takes `first_frame` alongside `reference_image` and
+     * `reference_video`. Only that start image stays live beside references, and it is read
+     * off the flag the run reads (`combineFramesWithReferences`), so the card and the run agree.
+     */
+    startBesideReferences: boolean;
+    referencesBudget: VideoReferenceBudget | null;
+  };
   /** Condition-filtered constraints; their `message` is the copy the UI should show. */
   activeConstraints: CatalogInputConstraint[];
   /** True when these values came from the descriptor rather than the fallback tables. */
@@ -172,7 +190,6 @@ function legacyFallbackAffordances(
     : 'frames';
   return {
     activeMode,
-    framesExcludeReferences: support.enabled && modelId !== 'gemini-omni-video' && modelId !== 'wan-2.7',
     elements: {
       enabled: support.enabled,
       maxTotal: support.maxElements,
@@ -188,7 +205,9 @@ function legacyFallbackAffordances(
     },
     referenceAudios: { max: references.audios },
     frames: {
-      start: true,
+      // Gemini Omni video takes references only: its descriptor declares no frame slot, and a
+      // start frame here drew a frames side the page dropped once the catalog arrived.
+      start: modelId !== 'gemini-omni-video',
       // kling-o3 takes a single start image and no end frame; it was missing from this
       // list, so the surface offered an end-frame slot the model cannot use.
       end: !['grok-imagine-video', 'grok-imagine-video-1.5', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video', 'kling-o3'].includes(modelId),
@@ -200,8 +219,52 @@ function legacyFallbackAffordances(
       ? { enabled: true, maxImages: 12, maxNamed: 3, imagesPerSubject: SUBJECT_IMAGES_PER_NAME }
       : NO_SUBJECTS,
     preparedAssets: modelId === 'gemini-omni-video' ? { voices: 3, characters: 3 } : null,
+    inputChoice: {
+      // The creator's own words until the descriptor brings the control's. Whether there is a
+      // switch at all is read off the two sides, which the tables above give.
+      labels: null,
+      startBesideReferences: modelId === 'wan-2.7',
+      referencesBudget: FALLBACK_REFERENCE_BUDGETS[modelId] ?? null,
+    },
     activeConstraints: [],
     descriptorDriven: false,
+  };
+}
+
+/** Mirrors videoInputConstraints in generation-model-catalog (its count constraints). */
+const FALLBACK_REFERENCE_BUDGETS: Partial<Record<VideoModelId, VideoReferenceBudget>> = {
+  'wan-2.7': { max: 5, weights: { pictures: 1, clips: 1, tracks: 1, characters: 0 } },
+  'gemini-omni-video': { max: 7, weights: { pictures: 1, clips: 2, tracks: 0, characters: 1 } },
+  'gemini-omni-1.1-flash': { max: 7, weights: { pictures: 1, clips: 2, tracks: 0, characters: 0 } },
+};
+
+/**
+ * The count the references side's kinds share: a total or weighted count over its pictures
+ * that holds with the references side's settings.
+ */
+function referencesBudgetOf(
+  descriptor: GenerationModelDescriptor,
+  referencesSettings: Record<string, ConditionValue>,
+): VideoReferenceBudget | null {
+  const constraint = (descriptor.inputConstraints ?? []).find((candidate) => (
+    (candidate.type === 'total-count' || candidate.type === 'weighted-count')
+    && candidate.slotKeys.includes('imageReferences')
+    && conditionsMatch(candidate.conditions, referencesSettings)
+  ));
+  if (!constraint) return null;
+  const weight = (slotKey: string) => {
+    if (!constraint.slotKeys.includes(slotKey)) return 0;
+    // As the server's check counts it: a weighted slot without a weight counts nothing.
+    return constraint.type === 'weighted-count' ? constraint.weights?.[slotKey] ?? 0 : 1;
+  };
+  return {
+    max: constraint.max,
+    weights: {
+      pictures: weight('imageReferences'),
+      clips: weight('videoReferences'),
+      tracks: weight('audioReferences'),
+      characters: weight('characters'),
+    },
   };
 }
 
@@ -237,7 +300,8 @@ export function getVideoInputAffordances(
   // until you were already in it, so every model with a frames/references split reported
   // zero reference capacity forever. Everything else here still keys off `active`, so
   // Veo's mode gating and the multi-shot block continue to apply.
-  const reachable = activeSlots(descriptor, { ...conditionSettings, referenceMode: 'elements' });
+  const referencesSettings = { ...conditionSettings, referenceMode: 'elements' };
+  const reachable = activeSlots(descriptor, referencesSettings);
   const imageSlot = reachable.get('imageReferences');
   const declaredImageSlot = declared.get('imageReferences');
   const videoSlot = reachable.get('videoReferences');
@@ -286,11 +350,15 @@ export function getVideoInputAffordances(
   const activeConstraints = (descriptor.inputConstraints ?? [])
     .filter((constraint) => conditionsMatch(constraint.conditions, conditionSettings));
 
+  // The switch's words are the control's own options; it is read only where it offers both.
+  const referenceModeControl = descriptor.controls.find((control) => control.key === 'referenceMode');
+  const referenceModeOptions = referenceModeControl?.type === 'choice' ? referenceModeControl.options : [];
+  const optionLabel = (value: string) => referenceModeOptions.find((option) => option.value === value)?.label;
+  const framesLabel = optionLabel('frames');
+  const referencesLabel = optionLabel('elements');
+
   return {
     activeMode,
-    framesExcludeReferences: frameSlotsDeclared
-      && referenceSlotDeclared
-      && descriptor.inputs.combineFramesWithReferences !== true,
     elements: {
       enabled: elementsEnabled,
       maxTotal,
@@ -328,6 +396,11 @@ export function getVideoInputAffordances(
           characters: active.get('characters')?.max ?? 0,
         }
       : null,
+    inputChoice: {
+      labels: framesLabel && referencesLabel ? { frames: framesLabel, references: referencesLabel } : null,
+      startBesideReferences: descriptor.inputs.combineFramesWithReferences === true,
+      referencesBudget: referencesBudgetOf(descriptor, referencesSettings),
+    },
     activeConstraints,
     descriptorDriven: true,
   };

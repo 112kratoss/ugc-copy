@@ -375,7 +375,7 @@ test.describe('reference chips', () => {
     const handles = REFERENCES.map((reference) => reference.handle);
 
     await page.goto(`/create-video?remix=${GENERATION_ID}&remixPost=${POST_ID}`);
-    await expect(page.getByRole('heading', { name: 'Reusable image references', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Reference images', exact: true })).toBeVisible();
 
     // The row of chips over the prompt went with the column layout (2026-10-26), as on the
     // image creator: each reference's row has its own Insert, so the chips left are the "@"
