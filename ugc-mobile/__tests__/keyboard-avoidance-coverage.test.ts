@@ -118,8 +118,12 @@ function sweep(name: string, source: string) {
   };
   /** On in every state: the reading for a prop the check relies on. */
   const on = (element: ts.JsxElement | ts.JsxSelfClosingElement, wanted: string) => literal(element, wanted) === true;
-  /** A scroll view that may scroll vertically: anything not written `horizontal`. */
-  const vertical = (element: ts.JsxElement | ts.JsxSelfClosingElement) => SCROLLER.test(tagOf(element)) && !on(element, 'horizontal');
+  /**
+   * A scroll view that may scroll vertically: anything not written `horizontal`. A pager's row
+   * (`components/pager-row-scroll-view.tsx`) is horizontal by itself and takes no such prop.
+   */
+  const vertical = (element: ts.JsxElement | ts.JsxSelfClosingElement) =>
+    SCROLLER.test(tagOf(element)) && tagOf(element) !== 'PagerRowScrollView' && !on(element, 'horizontal');
   /** `<Screen>` draws a scroll view unless told `scroll={false}`, and reads `keyboardAware` only then. */
   const screenScrolls = (element: ts.JsxElement | ts.JsxSelfClosingElement, certainly: boolean) => {
     const scroll = attributesOf(element).properties.some((property) => ts.isJsxAttribute(property) && property.name.getText(file) === 'scroll')
@@ -451,6 +455,7 @@ describe('keyboard avoidance coverage', () => {
       // iOS: a field below the list that makes room stays under the keys; a horizontal row makes none.
       'function Sheet() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><FlatList automaticallyAdjustKeyboardInsets /><TextInput /></KeyboardAvoidingArea>; }',
       'function Page() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><ScrollView horizontal automaticallyAdjustKeyboardInsets><TextInput /></ScrollView></KeyboardAvoidingArea>; }',
+      'function Page() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><PagerRowScrollView automaticallyAdjustKeyboardInsets><TextInput /></PagerRowScrollView></KeyboardAvoidingArea>; }',
       // One use covered and one not.
       'function Field() { return <TextInput />; }\nfunction Page() { return <View><KeyboardLift><Field /></KeyboardLift><Field /></View>; }',
       // A component that puts its children outside its area.
@@ -464,6 +469,7 @@ describe('keyboard avoidance coverage', () => {
       'function Page() { return <KeyboardAvoidingArea><ScrollView><TextInput /></ScrollView></KeyboardAvoidingArea>; }',
       'function Page() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><ScrollView automaticallyAdjustKeyboardInsets><TextInput /></ScrollView></KeyboardAvoidingArea>; }',
       'function Page() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><ScrollView automaticallyAdjustKeyboardInsets><ScrollView horizontal><TextInput /></ScrollView></ScrollView></KeyboardAvoidingArea>; }',
+      'function Page() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><ScrollView automaticallyAdjustKeyboardInsets><PagerRowScrollView><TextInput /></PagerRowScrollView></ScrollView></KeyboardAvoidingArea>; }',
       // Outside any scroll view a field stays where its layout puts it on iOS (the model picker's search
       // field, above its list): that is not read here.
       'function Sheet() { return <KeyboardAvoidingArea iosScrollViewAdjustsInsets><TextInput /><ScrollView automaticallyAdjustKeyboardInsets /></KeyboardAvoidingArea>; }',
