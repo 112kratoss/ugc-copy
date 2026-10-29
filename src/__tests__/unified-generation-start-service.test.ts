@@ -5,6 +5,8 @@ import {
   GENERATION_PROMPT_MAX_LENGTH,
   MOTION_PROMPT_MAX_LENGTH,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { remixSourceTables } from '@/__tests__/fixtures/remix-source-rows';
+import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { GenerationModelCatalogSchemaUnavailableError } from '@/lib/generation-model-catalog-store';
@@ -1730,5 +1732,122 @@ describe('a page run the provider is sent', () => {
       expect((request as { input?: { prompt?: string } } | undefined)?.input?.prompt).toBe(atLimit);
       expect(reservation?.p_prompt).toBe(atLimit);
     });
+  });
+});
+
+// The source a start keeps credits the post with a remix and tells its creator,
+// so this start asks Remix's own question (`source-generation.ts`). Every other
+// start in this file stubs `resolveSource`: a start that stopped asking would
+// pass them all.
+describe('a run started from someone else’s post', () => {
+  const SOURCE = {
+    id: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
+    user_id: 'creator-1',
+    is_public: true,
+    template_run_id: null,
+    template_run_step_id: null,
+    // What the start's own replay lookup selects.
+    prediction_id: 'creator-task',
+    status: 'succeeded',
+    cost: 10,
+  };
+  let records: BackendLogRecord[] = [];
+  let restoreSink: () => void = () => undefined;
+
+  beforeEach(() => {
+    records = [];
+    restoreSink = setBackendLogSink((record) => {
+      records.push(record);
+    });
+  });
+
+  afterEach(() => {
+    restoreSink();
+  });
+
+  async function startFromSource(blocks: Array<{ blocker_user_id: string; blocked_user_id: string }> = []) {
+    // The service client: the source, the tables Remix reads, and the start's claim and lock.
+    const stored = createStoredRows({ generations: [SOURCE], ...remixSourceTables(SOURCE, { blocks }) }, {
+      claim_generation_start_request: () => 'claimed',
+      try_acquire_backend_job_lock: () => true,
+      release_backend_job_lock: () => true,
+    });
+    const startCatalog = vi.fn(async () => ({
+      predictionId: 'provider-task',
+      generationId: 'generation-1',
+      remainingCredits: 50,
+      cost: 10,
+    }));
+    const outcome = await startUnifiedGenerationForRoute(
+      {
+        request: new Request('http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'remix-start-1' },
+        }),
+        body: {
+          kind: 'video',
+          modelId: 'catalog-only-video',
+          catalogRevision: 'catalog-v2',
+          prompt: 'A lighthouse in a storm',
+          settings: { duration: 5 },
+          sourceGenerationId: SOURCE.id,
+        },
+        userId: 'user-1',
+        supabase: { label: 'user-client' } as never,
+        adminSupabase: stored.client as never,
+      },
+      {
+        loadCatalog: vi.fn(async () => ({
+          catalog: {
+            schemaVersion: 2,
+            revision: 'catalog-v2',
+            defaults: { image: null, video: 'catalog-only-video', motion: null },
+            models: [],
+          },
+          operations: new Map([['catalog-only-video', {
+            modelId: 'catalog-only-video',
+            kind: 'video',
+            adapterKey: 'kie-task-v1',
+            providerModelMap: { default: 'provider/catalog-only-video' },
+            adapterConfig: {},
+            pricingStrategy: 'flat',
+            pricingConfig: { credits: 10 },
+            validationStrategy: 'descriptor-rules-v1',
+            validationConfig: {},
+            verificationConfig: {},
+          }]]),
+          source: 'database' as const,
+          releaseId: 'release-v2',
+          releaseSchemaVersion: 2,
+        })) as never,
+        quoteModel: vi.fn(() => ({
+          modelId: 'catalog-only-video',
+          catalogRevision: 'catalog-v2',
+          normalizedSettings: { duration: 5 },
+          costCredits: 10,
+        })) as never,
+        enforceRateLimit: vi.fn(async () => undefined) as never,
+        startCatalog: startCatalog as never,
+      },
+    );
+    return { outcome, startCatalog };
+  }
+
+  it('starts it as a remix of that post when Remix would hand the caller its recipe', async () => {
+    const { outcome, startCatalog } = await startFromSource();
+
+    expect(outcome).toMatchObject({ success: true, predictionId: 'provider-task' });
+    expect(startCatalog).toHaveBeenCalledWith(expect.objectContaining({ sourceGenerationId: SOURCE.id }));
+  });
+
+  it('starts a run from a creator who blocked the caller as an ordinary one', async () => {
+    const { outcome, startCatalog } = await startFromSource([
+      { blocker_user_id: SOURCE.user_id, blocked_user_id: 'user-1' },
+    ]);
+
+    expect(outcome).toMatchObject({ success: true, predictionId: 'provider-task' });
+    expect(startCatalog).toHaveBeenCalledWith(expect.objectContaining({ sourceGenerationId: null }));
+    // Refused by the rule: a read that failed on the way would have been logged.
+    expect(records.filter((record) => record.level === 'error')).toEqual([]);
   });
 });

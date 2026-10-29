@@ -533,6 +533,34 @@ describe('remixShowcasePostForRoute', () => {
     });
   });
 
+  // Publish files a creation made as a guest under the account the guest was
+  // linked to; the generation keeps the guest's id.
+  it('opens the editor on a creation made as a guest, posted by the account it was linked to', async () => {
+    const serviceClient = createServiceClientMock({
+      generation: { ...PUBLIC_CREATOR_GENERATION, user_id: 'guest-1' },
+      profiles: [{ id: 'guest-1', merged_into_user_id: 'creator-1' }],
+    });
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: {
+        success: true,
+        redirectTo: '/create-image?remix=gen-1&remixPost=post-1',
+        prefill: {
+          prompt: 'Create a clean UGC product reveal.',
+          settings: { model: 'nano-banana-2' },
+        },
+      },
+    });
+  });
+
   it('strips input-media settings for remixers when the creator has not shared them', async () => {
     const serviceClient = createServiceClientMock({
       generation: {

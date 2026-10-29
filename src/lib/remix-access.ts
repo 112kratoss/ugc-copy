@@ -66,6 +66,7 @@ export type RemixAccessDecision =
     };
 
 export type RemixAccessDependencies = {
+  /** Asks only whether the viewer owns the generation, never the post check. */
   isOwnOrLinkedAccountId: typeof isOwnOrLinkedAccountId;
   isUserRelationshipBlocked: typeof isUserRelationshipBlocked;
 };
@@ -141,7 +142,10 @@ async function hasPurchasedBundle(
  * - Anyone else needs the generation to be public and its post to be exposed
  *   right now: public, not archived, visible to moderation, and the creator's
  *   own. The generation flag alone is not trusted, because it is a copy of the
- *   post's state and a copy can lag behind the post.
+ *   post's state and a copy can lag behind the post. A creation made as a
+ *   guest is the creator's own too: publish files it under the account the
+ *   guest was linked to, while the generation keeps the guest's id. The block
+ *   check asks about that account, the one a viewer sees on the post.
  * - A published recipe on the post includes its Remix, free or paid, whatever
  *   its stored `allow_remix` says (2026-10-27): the unlock protects the
  *   creation's prompt and settings as well as the items attached to it, so a
@@ -151,7 +155,9 @@ async function hasPurchasedBundle(
  *   where the creator's stored switch offered them, as before.
  *
  * A read that fails throws instead of allowing. The routes turn that into a
- * 500, and a blocked-state check that fails counts as blocked.
+ * 500, and a blocked-state check that fails counts as blocked. A generation
+ * start asks here before crediting a remix (`source-generation.ts`), and counts
+ * a failure as no remix rather than failing the run.
  */
 export async function resolveRemixAccess({
   adminSupabase,
@@ -187,8 +193,7 @@ export async function resolveRemixAccess({
     };
   }
 
-  const creatorUserId = generation.user_id;
-  if (generation.is_public !== true || !creatorUserId) {
+  if (generation.is_public !== true || !generation.user_id) {
     return NOT_FOUND;
   }
 
@@ -204,13 +209,21 @@ export async function resolveRemixAccess({
 
   const post = postData as RemixAccessPost | null;
   if (
-    !post
-    || post.user_id !== creatorUserId
+    !post?.user_id
     || post.visibility !== 'public'
     || post.archived_at
     || post.review_status !== 'visible'
     || (requestedPostId && requestedPostId !== post.id)
   ) {
+    return NOT_FOUND;
+  }
+
+  // The post must be the creator's: its owner made the generation under their
+  // own id or as a guest since linked to them (an id match needs no read).
+  // Asked directly, not through `dependencies`, which answer for the viewer.
+  // A lookup that fails reads as not linked.
+  const creatorUserId = post.user_id;
+  if (!(await isOwnOrLinkedAccountId(adminSupabase, creatorUserId, generation.user_id))) {
     return NOT_FOUND;
   }
 

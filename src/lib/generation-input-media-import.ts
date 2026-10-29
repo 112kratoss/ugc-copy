@@ -1,3 +1,5 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import { isGuestUser, isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
@@ -33,6 +35,22 @@ function isAlreadyExistsStorageError(error: { statusCode?: string | number; mess
   return String(error.statusCode ?? '') === '409'
     || error.error === 'Duplicate'
     || /already exists/i.test(error.message ?? '');
+}
+
+/**
+ * The account a creation is posted under: its owner, or for one made as a
+ * guest, the account the guest was linked to (`showcase-publish-service.ts`).
+ * That is who a viewer sees on the post, and so who they block or are blocked
+ * by. Throws when the owner's profile cannot be read.
+ */
+async function loadCreatorAccountId(adminSupabase: SupabaseClient, ownerUserId: string): Promise<string> {
+  const { data, error } = await adminSupabase
+    .from('profiles')
+    .select('merged_into_user_id')
+    .eq('id', ownerUserId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { merged_into_user_id: string | null } | null)?.merged_into_user_id || ownerUserId;
 }
 
 /**
@@ -109,13 +127,15 @@ export async function importSharedGenerationInputMedia(params: {
   // which keeps those checks in force.
   const ownedByViewer = await isOwnOrLinkedAccountId(adminSupabase, params.viewerUserId, ownerUserId);
   if (!ownedByViewer) {
-    // Mirrors the remix-source block gate: a check that errors open is not a gate.
+    // Mirrors the remix gate's block check, which asks about the post's owner
+    // (for a guest's creation, the account, not the guest id in the path): a
+    // check that errors open is not a gate.
     let blocked = true;
     try {
       blocked = await (params.dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked)({
         adminSupabase,
         firstUserId: params.viewerUserId,
-        secondUserId: ownerUserId,
+        secondUserId: await loadCreatorAccountId(adminSupabase, ownerUserId),
       });
     } catch (error) {
       logBackendError('failed_to_verify_block_state_before_shared_input_import', { error });
