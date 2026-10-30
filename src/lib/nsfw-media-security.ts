@@ -6,9 +6,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * The durable ledger makes every step retryable without breaking live media. */
 export async function secureNsfwPostMedia(client: SupabaseClient, postId: string, ownerId: string) {
   const { data: post, error } = await client.from('posts')
-    .select('id, user_id, generation_id, showcase_asset_path').eq('id', postId).eq('user_id', ownerId).maybeSingle();
+    .select('id, user_id, generation_id, deleted_generation_id, showcase_asset_path').eq('id', postId).eq('user_id', ownerId).maybeSingle();
   if (error) throw error;
   if (!post) throw new Error('Post not found.');
+  // A post whose creation was deleted keeps that creation's copy, in the folder
+  // the database recorded when the delete unlinked it.
+  const creationId = post.generation_id ?? post.deleted_generation_id;
   const media = await client.from('post_media').select('storage_path, preview_storage_path, display_storage_path, rendition_storage_path, teaser_storage_path, external_url').eq('post_id', postId);
   if (media.error) throw media.error;
   const columns = ['storage_path', 'preview_storage_path', 'display_storage_path', 'rendition_storage_path', 'teaser_storage_path'] as const;
@@ -18,7 +21,7 @@ export async function secureNsfwPostMedia(client: SupabaseClient, postId: string
     .filter((value): value is string => typeof value === 'string' && !value.startsWith('private-posts/')));
   const replacements = new Map<string, string>();
   for (const path of paths) {
-    if (!path.startsWith(`posts/${postId}/`) && !(post.generation_id && path.startsWith(`showcase/${post.generation_id}/`))) throw new Error('Unsupported post media location.');
+    if (!path.startsWith(`posts/${postId}/`) && !(creationId && path.startsWith(`showcase/${creationId}/`))) throw new Error('Unsupported post media location.');
     const target = path.startsWith('posts/') ? `private-${path}`
       : `private-posts/${postId}/${createHash('sha256').update(path).digest('hex').slice(0, 16)}-${path.split('/').pop()}`;
     const copy = await client.storage.from('showcase_media').copy(path, target, { destinationBucket: 'post_media' });

@@ -340,14 +340,17 @@ async function resolvePostMediaRepairPath(
 
   // Only a path under the showcase namespace can legitimately sit outside the
   // post's own prefix, so this lookup is paid by generation-backed rows alone.
+  // A post whose creation was deleted keeps the creation's copy under its
+  // prefix, and the database recorded that creation on the post.
   let generationId: string | null = null;
   if (parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 })?.startsWith('showcase/')) {
     const { data: linkedPost } = await supabase
       .from('posts')
-      .select('generation_id')
+      .select('generation_id, deleted_generation_id')
       .eq('id', postId)
       .maybeSingle();
-    const linkedGenerationId = (linkedPost as { generation_id?: unknown } | null)?.generation_id;
+    const post = linkedPost as { generation_id?: unknown; deleted_generation_id?: unknown } | null;
+    const linkedGenerationId = post?.generation_id ?? post?.deleted_generation_id;
     generationId = typeof linkedGenerationId === 'string' && linkedGenerationId.length > 0
       ? linkedGenerationId
       : null;

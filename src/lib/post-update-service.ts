@@ -87,6 +87,7 @@ import {
   type UploadConsumptionClaim,
 } from '@/lib/upload-byte-admission';
 import {
+  getCanonicalStoredMediaLocation,
   parseCanonicalStorageLocation,
   parseCanonicalStorageObjectPath,
 } from '@/lib/storage-ownership';
@@ -134,6 +135,8 @@ type MutablePostRow = {
   id: string;
   user_id: string;
   generation_id: string | null;
+  /** The creation whose delete unlinked the post; the database writes it. */
+  deleted_generation_id?: string | null;
   visibility: ShowcaseVisibility;
   title: string | null;
   description: string | null;
@@ -489,6 +492,44 @@ async function loadOwnedGenerationForPost(
   return owned ? generation : null;
 }
 
+const GENERATED_MEDIA_BUCKETS = ['generated_images', 'generated_videos', 'generated_audio'];
+
+/**
+ * What a post whose creation was deleted still has of it, in the shape the
+ * media work below reads. The delete keeps the copy in the creation's folder
+ * (the post's `showcase_asset_path`) and the private original (its
+ * `output_url`), and the database recorded the creation on the post when the
+ * delete unlinked it. Its maker is read off the original's folder: the post's
+ * owner or a guest linked to them, as for a live creation. With no original
+ * of theirs in storage, the owner's folder holds the private copy.
+ */
+async function loadDeletedCreationForPost(
+  adminSupabase: SupabaseClient,
+  post: MutablePostRow,
+  deletedGenerationId: string,
+  ownerUserId: string,
+): Promise<OwnedGenerationExposureRow> {
+  const original = post.output_url
+    ? getCanonicalStoredMediaLocation(post.output_url, { allowedBuckets: GENERATED_MEDIA_BUCKETS })
+    : null;
+  const folderOwnerId = original?.filePath.split('/')[0] ?? null;
+  const owned = folderOwnerId
+    ? await readIsOwnOrLinkedAccountId(adminSupabase, ownerUserId, folderOwnerId)
+    : false;
+  if (owned === null) {
+    throw new Error('The accounts linked to the post owner could not be read.');
+  }
+  return {
+    id: deletedGenerationId,
+    user_id: owned && folderOwnerId ? folderOwnerId : ownerUserId,
+    // The post keeps no model; its category says what kind of media it is.
+    model: '',
+    category: post.category,
+    output_url: post.output_url,
+    showcase_asset_path: post.showcase_asset_path,
+  };
+}
+
 /**
  * What a post's creation gives the recipe title rule: its prompt, and what
  * names its kind. Read by the post's link, as a creation an account's guest
@@ -546,7 +587,7 @@ async function loadOwnedPost(
   const { data, error } = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, tombstoned_at, showcase_asset_path, output_url, review_status, is_nsfw',
+      'id, user_id, generation_id, deleted_generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, tombstoned_at, showcase_asset_path, output_url, review_status, is_nsfw',
     )
     .eq('id', postId)
     .eq('user_id', ownerUserId)
@@ -1230,7 +1271,10 @@ export async function updateOwnerPostForRoute({
     // no proof media.
     const liveBundle = existingBundle && !existingBundle.retired_at ? existingBundle : null;
 
-    const isGenerationBacked = Boolean(post.generation_id);
+    // The creation the post's media is filed under: the one it links, or the
+    // one whose delete unlinked it, which keeps the post's copy in its folder.
+    const creationId = post.generation_id ?? post.deleted_generation_id ?? null;
+    const isGenerationBacked = Boolean(creationId);
     // A post made from a creation keeps that creation's media; the only way to
     // change it is to publish a different creation.
     if (isGenerationBacked && Object.prototype.hasOwnProperty.call(requestBody, 'mediaItems')) {
@@ -1635,10 +1679,12 @@ export async function updateOwnerPostForRoute({
     // route is not a rare path for that: going private removes the row, so
     // publish -> private -> public through the editor lands right back there.
     let coverMediaToRecord: { showcaseAssetPath: string; category: GenerationShowcaseCategory } | null = null;
-    if (isGenerationBacked && post.generation_id) {
+    if (creationId) {
       let generation: OwnedGenerationExposureRow | null = null;
       try {
-        generation = await loadOwnedGenerationForPost(adminSupabase, post.generation_id, ownerUserId);
+        generation = post.generation_id
+          ? await loadOwnedGenerationForPost(adminSupabase, post.generation_id, ownerUserId)
+          : await loadDeletedCreationForPost(adminSupabase, post, creationId, ownerUserId);
       } catch (error) {
         logBackendError('failed_to_load_generation_for_post_update', { error });
         return { ok: false, status: 500, body: { error: 'Failed to update post.' } };
@@ -1726,7 +1772,7 @@ export async function updateOwnerPostForRoute({
           generationUpdate.description = nextDescription;
         }
       } else {
-        logBackendWarning('post_update_generation_missing', { postId, generationId: post.generation_id });
+        logBackendWarning('post_update_generation_missing', { postId, generationId: creationId });
       }
     }
 
@@ -1818,7 +1864,7 @@ export async function updateOwnerPostForRoute({
       throw error;
     }
 
-    if (post.generation_id && coverMediaToRecord) {
+    if (creationId && coverMediaToRecord) {
       // Best-effort for the same reason as the publish route: the post is
       // already committed, so a failure here must not report the edit as
       // failed. The post serves the legacy way until a later exposure change.
@@ -1826,7 +1872,7 @@ export async function updateOwnerPostForRoute({
         const coverMedia = await resolvedDependencies.ensureGenerationPostCoverMedia({
           adminSupabase,
           postId,
-          generationId: post.generation_id,
+          generationId: creationId,
           category: coverMediaToRecord.category,
           showcaseAssetPath: coverMediaToRecord.showcaseAssetPath,
         });
@@ -1839,7 +1885,8 @@ export async function updateOwnerPostForRoute({
     }
 
     // Presentation and the durable media location only. Nothing written here
-    // can expose the generation, so a failure is cosmetic, not a leak.
+    // can expose the generation, so a failure is cosmetic, not a leak. A
+    // deleted creation has no row to keep in step.
     if (post.generation_id && generationOwnerUserId && Object.keys(generationUpdate).length > 0) {
       const { error: generationError } = await adminSupabase
         .from('generations')
@@ -1854,10 +1901,10 @@ export async function updateOwnerPostForRoute({
     // The fast path. The posts trigger queued this derivative when the post
     // dropped it, so a delete that fails here is retried by the
     // showcase-media-revocations job instead of leaving the copy public.
-    if (post.generation_id && removableDerivativePath) {
+    if (creationId && removableDerivativePath) {
       const removal = await resolvedDependencies.removeGenerationShowcaseDerivative({
         adminSupabase,
-        generationId: post.generation_id,
+        generationId: creationId,
         showcaseAssetPath: removableDerivativePath,
         postId,
       });

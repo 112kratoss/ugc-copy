@@ -119,6 +119,21 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     await assertRemoved();
   });
 
+  it("removes a deleted creation's copy once its post is made private",async()=>{
+    // Public again, then its creation deleted, as generation-delete-service leaves a posted creation: the post keeps
+    // serving the copy and records the creation, and nothing is queued.
+    await db.query("update public.posts set visibility='public',showcase_asset_path=$2 where id=$1",[postId,paths[0]]);
+    await db.query('delete from public.showcase_media_revocations where generation_id=$1',[generationId]);
+    await db.query('delete from public.generations where id=$1',[generationId]);
+    expect((await db.query('select generation_id,deleted_generation_id from public.posts where id=$1',[postId])).rows[0]).toEqual({generation_id:null,deleted_generation_id:generationId});
+    expect((await db.query('select id from public.showcase_media_revocations where generation_id=$1',[generationId])).rows).toEqual([]);
+    await db.query("update public.posts set visibility='private',showcase_asset_path=null where id=$1",[postId]);
+    await db.query("update public.showcase_media_revocations set next_attempt_at=now()-interval '1 minute' where generation_id=$1",[generationId]);
+    expect((await db.query('select reason from public.showcase_media_revocations where generation_id=$1',[generationId])).rows).toEqual([{reason:'post_unexposed'}]);
+    expect(await processShowcaseMediaRevocations(admin,{now:new Date()})).toMatchObject({due:1,removed:1,rescheduled:0});
+    await assertRemoved();
+  });
+
   it('preserves a copy republished before the worker reads exposure',async()=>{
     await db.query("update public.posts set visibility='public',showcase_asset_path=$2 where id=$1",[postId,paths[0]]);
     expect(await processShowcaseMediaRevocations(admin,{now:new Date()})).toMatchObject({due:1,removed:0,stillServing:1});

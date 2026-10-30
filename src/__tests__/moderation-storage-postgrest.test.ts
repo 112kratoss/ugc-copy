@@ -222,29 +222,19 @@ describe.skipIf(!configPath || !connectionString)('moderation take-down through 
     expect(await stableDecision(fixture.id)).toEqual(decision);
   });
 
-  it('revokes a deleted creation\'s copy once nothing else names its folder',async()=>{
-    const fixture=await makePost(flows[0],false); const other=await makePost(flows[0],false);
+  it('revokes a deleted creation\'s copy from the folder its post recorded',async()=>{
+    const fixture=await makePost(flows[0],false);
     const generationId=randomUUID(); generationIds.push(generationId);
     await db.query("insert into public.generations(id,user_id,status,model,category,cost,is_public) values($1,$2,'succeeded','audit-inert','image',0,true)",[generationId,reviewerId]);
     const copy=await upload('showcase_media',`showcase/${generationId}/source.png`); const preview=await upload('showcase_media',`showcase/${generationId}/source.preview.png`);
     await db.query('update public.posts set generation_id=$2,showcase_asset_path=$3,output_url=$4 where id=$1',[fixture.id,generationId,copy,`generated_images/${reviewerId}/source.png`]);
     await db.query("insert into public.post_media(post_id,media_kind,storage_path,preview_storage_path) values($1,'image',$2,$3)",[fixture.id,copy,preview]);
-    // As deleting a posted creation leaves it: the post kept and unlinked. It still serves the copy, so nothing may queue it.
+    // As deleting a posted creation leaves it: the post kept, unlinked, and naming the creation. It still serves the copy, so nothing may queue it.
     await db.query('delete from public.generations where id=$1',[generationId]);
-    expect((await db.query('select generation_id from public.posts where id=$1',[fixture.id])).rows[0]).toEqual({generation_id:null});
+    expect((await db.query('select generation_id,deleted_generation_id from public.posts where id=$1',[fixture.id])).rows[0]).toEqual({generation_id:null,deleted_generation_id:generationId});
     expect((await db.query('select count(*)::int as queued from public.showcase_media_revocations where generation_id=$1',[generationId])).rows[0]).toEqual({queued:0});
-    const refusedWhile=async(sql:string,values:unknown[])=>{
-      await db.query(sql,values); const response=await fixture.invoke(); expect(response.status).toBe(400);
-      expect((await response.json()).error).toContain('outside the reported post scope');
-      for(const item of objects) expect((await admin.storage.from(item.bucket).download(item.path)).error).toBeNull();
-    };
-    await refusedWhile("insert into public.post_media(post_id,media_kind,storage_path) values($1,'image',$2)",[other.id,`showcase/${generationId}/other.png`]);
-    const decision=await stableDecision(fixture.id);
-    await db.query('delete from public.post_media where post_id=$1',[other.id]);
-    await refusedWhile('update public.posts set showcase_asset_path=$2 where id=$1',[other.id,copy]);
-    await db.query('update public.posts set showcase_asset_path=null where id=$1',[other.id]);
     const response=await fixture.invoke(); expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({revokedMediaCount:2,mediaRevocationVerified:true});
-    await assertRemoved(); expect(await stableDecision(fixture.id)).toEqual(decision);
+    await assertRemoved(); expect(await stableDecision(fixture.id)).toMatchObject({review_status:'hidden',reviewed_by:reviewerId});
   });
 });

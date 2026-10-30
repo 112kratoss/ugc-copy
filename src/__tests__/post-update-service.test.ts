@@ -143,7 +143,11 @@ function createSupabaseMock({
         },
         maybeSingle() {
           if (table === 'posts') {
-            return Promise.resolve({ data: post, error: null });
+            // Only the columns the read asked for, as PostgREST answers.
+            return Promise.resolve({
+              data: post && selected ? Object.fromEntries(selected.map((column) => [column, post[column]])) : post,
+              error: null,
+            });
           }
 
           if (table === 'post_resource_bundles') {
@@ -1615,6 +1619,200 @@ describe('updateOwnerPostForRoute', () => {
         expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
         expect(dependencies.removeGenerationShowcaseDerivative).not.toHaveBeenCalled();
         expect(generationUpdates).toEqual([]);
+      });
+    });
+
+    // Deleting a creation keeps its post, the copy in the creation's folder and
+    // the private original, and unlinks the post (`generation_id` is ON DELETE
+    // SET NULL); the post records the creation in `deleted_generation_id`.
+    describe('whose creation was deleted', () => {
+      const unlinkedPost = { ...generatedPost, generation_id: null, deleted_generation_id: 'generation-1' };
+      const privateUnlinkedPost = { ...unlinkedPost, visibility: 'private', showcase_asset_path: null };
+
+      function update(
+        body: Record<string, unknown>,
+        options: {
+          post?: Record<string, unknown>;
+          profiles?: Array<Record<string, unknown>>;
+          profilesError?: { message: string };
+        } = {},
+      ) {
+        const mock = createSupabaseMock({
+          post: options.post ?? unlinkedPost,
+          bundle: null,
+          // The creation's row is gone.
+          generation: null,
+          profiles: options.profiles ?? [],
+          profilesError: options.profilesError ?? null,
+        });
+        const dependencies = createDependencies({
+          // As the helper answers: an original already in the maker's folder
+          // stays where it is, anything else is copied there.
+          ensureDurableGenerationMedia: vi.fn(async ({ generation }: { generation: { userId: string; outputUrl: string | null } }) => ({
+            outputUrl: generation.outputUrl?.startsWith(`generated_images/${generation.userId}/`)
+              ? generation.outputUrl
+              : `generated_images/${generation.userId}/durable/example.jpg`,
+            createdLocation: null,
+          })),
+        });
+        const result = updateOwnerPostForRoute({
+          adminSupabase: mock.client,
+          ownerUserId: 'user-1',
+          postId: 'post-1',
+          body,
+          dependencies,
+        });
+        return { result, dependencies, generationUpdates: mock.generationUpdates };
+      }
+
+      it('drops the public copy when going private, keeping the private original', async () => {
+        const { result, dependencies, generationUpdates } = update({ visibility: 'private' });
+
+        await expect(result).resolves.toMatchObject({ ok: true, body: { visibility: 'private' } });
+        expect(dependencies.ensureDurableGenerationMedia).toHaveBeenCalledWith(expect.objectContaining({
+          generation: expect.objectContaining({
+            id: 'generation-1',
+            userId: 'user-1',
+            outputUrl: 'generated_images/user-1/example.jpg',
+            showcaseAssetPath: 'showcase/generation-1/example.abc123.jpg',
+          }),
+        }));
+        const patch = vi.mocked(dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].patch;
+        expect(patch).toMatchObject({ visibility: 'private', showcase_asset_path: null });
+        expect(patch).not.toHaveProperty('output_url');
+        // Removed once the post no longer points at it, with the media rows
+        // made from it, as for a live creation.
+        expect(dependencies.removeGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+          generationId: 'generation-1',
+          showcaseAssetPath: 'showcase/generation-1/example.abc123.jpg',
+          postId: 'post-1',
+        }));
+        // There is no creation left to keep in step.
+        expect(generationUpdates).toEqual([]);
+      });
+
+      it('makes the public copy again from the private original when going public', async () => {
+        const { result, dependencies, generationUpdates } = update({ visibility: 'public', title: 'Back on show' }, {
+          post: privateUnlinkedPost,
+        });
+
+        await expect(result).resolves.toMatchObject({ ok: true });
+        expect(dependencies.createGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+          generationId: 'generation-1',
+          ownerUserId: 'user-1',
+          outputUrl: 'generated_images/user-1/example.jpg',
+          category: 'image',
+        }));
+        expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+          patch: expect.objectContaining({
+            visibility: 'public',
+            showcase_asset_path: 'showcase/generation-1/example.abc123.jpg',
+          }),
+        }));
+        expect(generationUpdates).toEqual([]);
+      });
+
+      it('refuses to replace its media', async () => {
+        const { result, dependencies } = update({ mediaItems: [] });
+
+        await expect(result).resolves.toEqual({
+          ok: false,
+          status: 400,
+          body: { error: 'A post made from a creation keeps its generated media. Publish a different creation to change it.' },
+        });
+        expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      });
+
+      describe('made as a guest', () => {
+        const guestOriginal = 'generated_images/guest-1/example.jpg';
+        const linkedGuest = [{ id: 'guest-1', merged_into_user_id: 'user-1' }];
+
+        it("drops the public copy when going private, keeping the original in the guest's folder", async () => {
+          const { result, dependencies } = update({ visibility: 'private' }, {
+            post: { ...unlinkedPost, output_url: guestOriginal },
+            profiles: linkedGuest,
+          });
+
+          await expect(result).resolves.toMatchObject({ ok: true, body: { visibility: 'private' } });
+          expect(dependencies.ensureDurableGenerationMedia).toHaveBeenCalledWith(expect.objectContaining({
+            generation: expect.objectContaining({ id: 'generation-1', userId: 'guest-1', outputUrl: guestOriginal }),
+          }));
+          expect(dependencies.removeGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+            generationId: 'generation-1',
+            showcaseAssetPath: 'showcase/generation-1/example.abc123.jpg',
+          }));
+        });
+
+        it("makes the public copy from the guest's folder when going public", async () => {
+          const { result, dependencies } = update({ visibility: 'public' }, {
+            post: { ...privateUnlinkedPost, output_url: guestOriginal },
+            profiles: linkedGuest,
+          });
+
+          await expect(result).resolves.toMatchObject({ ok: true });
+          expect(dependencies.createGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+            generationId: 'generation-1',
+            ownerUserId: 'guest-1',
+            outputUrl: guestOriginal,
+          }));
+        });
+
+        it('keeps the current visibility when the link cannot be read', async () => {
+          const { result, dependencies } = update({ visibility: 'private' }, {
+            post: { ...unlinkedPost, output_url: guestOriginal },
+            profilesError: { message: 'profiles unavailable' },
+          });
+
+          await expect(result).resolves.toEqual({ ok: false, status: 500, body: { error: 'Failed to update post.' } });
+          expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+          expect(dependencies.removeGenerationShowcaseDerivative).not.toHaveBeenCalled();
+        });
+      });
+
+      // The folder is the post's (the database recorded it from the post's own
+      // link), so its copy still goes; only the private copy needs a home, and
+      // a stranger's folder, or none, is not one.
+      it.each([
+        ['sits in a stranger\'s folder', 'generated_images/user-9/example.jpg'],
+        ['was never stored', null],
+      ])("keeps a private copy in the owner's folder when the original %s", async (_case, outputUrl) => {
+        const { result, dependencies } = update({ visibility: 'private' }, {
+          post: { ...unlinkedPost, output_url: outputUrl },
+          profiles: [{ id: 'user-9', merged_into_user_id: null }],
+        });
+
+        await expect(result).resolves.toMatchObject({ ok: true, body: { visibility: 'private' } });
+        expect(dependencies.ensureDurableGenerationMedia).toHaveBeenCalledWith(expect.objectContaining({
+          generation: expect.objectContaining({
+            userId: 'user-1',
+            outputUrl,
+            showcaseAssetPath: 'showcase/generation-1/example.abc123.jpg',
+          }),
+        }));
+        expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+          patch: expect.objectContaining({
+            showcase_asset_path: null,
+            output_url: 'generated_images/user-1/durable/example.jpg',
+          }),
+        }));
+        expect(dependencies.removeGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+          generationId: 'generation-1',
+          showcaseAssetPath: 'showcase/generation-1/example.abc123.jpg',
+        }));
+      });
+
+      it("lets the copier read only from the owner's folder when the original is a stranger's", async () => {
+        const { result, dependencies } = update({ visibility: 'public' }, {
+          post: { ...privateUnlinkedPost, output_url: 'generated_images/user-9/example.jpg' },
+          profiles: [{ id: 'user-9', merged_into_user_id: null }],
+        });
+
+        await expect(result).resolves.toMatchObject({ ok: true });
+        // The copier reads only from the folder of the maker it is given.
+        expect(dependencies.createGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+          ownerUserId: 'user-1',
+          outputUrl: 'generated_images/user-9/example.jpg',
+        }));
       });
     });
   });

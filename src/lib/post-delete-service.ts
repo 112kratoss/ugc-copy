@@ -48,6 +48,8 @@ type DeletablePostRow = {
   id: string;
   user_id: string;
   generation_id: string | null;
+  /** The creation whose delete unlinked the post; the database writes it. */
+  deleted_generation_id: string | null;
   visibility: ShowcaseVisibility;
   title: string | null;
   source_kind: RawShowcaseSourceKind;
@@ -117,7 +119,7 @@ async function loadOwnedPost(
 ): Promise<DeletablePostRow | null> {
   const { data, error } = await adminSupabase
     .from('posts')
-    .select('id, user_id, generation_id, visibility, title, source_kind, showcase_asset_path')
+    .select('id, user_id, generation_id, deleted_generation_id, visibility, title, source_kind, showcase_asset_path')
     .eq('id', postId)
     .eq('user_id', ownerUserId)
     .maybeSingle();
@@ -354,10 +356,13 @@ export async function deleteOwnerPostForRoute({
     }
   }
 
+  // A post whose creation was deleted keeps the creation's copy, and the
+  // database recorded that creation when its delete unlinked the post. The
+  // delete below queues that copy too.
   const removableShowcasePath = getCanonicalPostShowcaseAssetPath(
     post.showcase_asset_path,
     post.id,
-    verifiedLinkedGenerationId,
+    verifiedLinkedGenerationId ?? post.deleted_generation_id,
   );
 
   // A post with buyers or a still-payable cash order is tombstoned, never

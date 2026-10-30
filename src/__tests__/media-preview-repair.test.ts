@@ -687,6 +687,43 @@ describe('media preview repair retries', () => {
     expect(download).toHaveBeenCalledWith('showcase/gen-1/creation.abcdef123456.png');
   });
 
+  // Deleting a creation keeps its post and the copy under the creation's prefix,
+  // and the post records the creation in `deleted_generation_id`: a cover made
+  // there before or after the delete still needs its preview.
+  it('repairs a post whose creation was deleted, under the prefix the post recorded', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const download = vi.fn(async () => ({ data: new Blob(['image'], { type: 'image/png' }), error: null }));
+    const post: Record<string, unknown> = { id: 'post-1', generation_id: null, deleted_generation_id: 'gen-1' };
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn((columns?: string) => createSelectChain({
+          data: table === 'post_media'
+            ? [{
+                id: 'media-1',
+                post_id: 'post-1',
+                storage_path: 'showcase/gen-1/creation.abcdef123456.png',
+                media_kind: 'image',
+                content_type: 'image/png',
+                preview_attempt_count: 0,
+              }]
+            : table === 'posts'
+              // Only the columns the read asked for, as PostgREST answers.
+              ? [Object.fromEntries((columns ?? '').split(',').map((column) => column.trim()).map((column) => [column, post[column]]))]
+              : [],
+          error: null,
+        })),
+        update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+      })),
+      storage: { from: vi.fn(() => ({ download })) },
+    };
+
+    await expect(repairMediaPreviews(withAdmissionFallback(supabase) as never, {
+      batchSize: 10,
+    })).resolves.toEqual({ attempted: 1, completed: 1, failed: 0 });
+
+    expect(download).toHaveBeenCalledWith('showcase/gen-1/creation.abcdef123456.png');
+  });
+
   it('refuses a showcase path belonging to a generation the post is not linked to', async () => {
     const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
     const storageFrom = vi.fn();
