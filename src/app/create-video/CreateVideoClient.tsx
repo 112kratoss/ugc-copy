@@ -1117,8 +1117,16 @@ function keptReferenceSeeds(kept: RemixResolvedAsset[] | undefined): SeedanceMed
     }] : []);
 }
 
-function hydrateKlingVideoElements(seeds: KlingVideoElementSeed[]): KlingVideoElementDraft[] {
-    return assignElementHandles(seeds).map((seed) => ({
+/**
+ * Kling 3.0's clip cards, each under its handle. `mentionedHandles` are the handles a
+ * remix's words mention: a clip handed back without a handle is named past them (see
+ * `assignElementHandles`).
+ */
+function hydrateKlingVideoElements(
+    seeds: KlingVideoElementSeed[],
+    mentionedHandles: Iterable<string> = [],
+): KlingVideoElementDraft[] {
+    return assignElementHandles(seeds, undefined, mentionedHandles).map((seed) => ({
         id: typeof seed.id === 'string' && seed.id.trim() ? seed.id : createElementId(),
         displayName: seed.displayName,
         handle: seed.handle,
@@ -2597,7 +2605,16 @@ export default function CreateVideoClient({
 	                                sourceGenerationId: item.sourceGenerationId ?? null,
 	                            }] : []))
 	                        : [];
-	                    commitKlingVideoElements(hydrateKlingVideoElements(klingVideoSeeds));
+	                    // A run kept before clips had handles hands its clips back with none,
+	                    // while its words still name the source's. The words the page may show
+	                    // (the source's, or the creator's own if they typed during the load)
+	                    // keep those names, so no clip is given one meant for another.
+	                    const restoredMentions = [
+	                        bundle.generation.prompt,
+	                        promptRef.current,
+	                        ...(settings?.multiPrompts ?? []).map((shot) => shot.prompt),
+	                    ].flatMap((words) => extractPromptHandles(typeof words === 'string' ? words : ''));
+	                    commitKlingVideoElements(hydrateKlingVideoElements(klingVideoSeeds, restoredMentions));
                 }
 
                 const keptStartFrame = restoresFrames ? restoredStartFrame : null;

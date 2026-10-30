@@ -2161,6 +2161,78 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     });
 
+    // The same remix of a run kept before clips had handles: its bundle hands the clips
+    // with none, while its words still name the handles the source's clips had. A handle
+    // made from a clip's name and place took "@reference_video_2" for the second clip, so
+    // the first clip's mention went to the second without a word.
+    it('names a Kling clip handed without a handle past every handle the restored words mention', async () => {
+      stubRemix({
+        generation: { id: 'gen-1', title: 'Harbour', prompt: '@reference_video_2 walks in, @reference_video_3 waves', category: 'video', model: 'kling-3.0-video' },
+        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+        inputs: {
+          video: {
+            referenceMode: 'elements',
+            startFrame: null,
+            endFrame: null,
+            elements: [],
+            referenceVideos: ['00', '01'].map((index) => ({
+              kind: 'video' as const,
+              label: 'Reference Video',
+              storagePath: `generation_inputs/owner-1/gen-1/${index}-reference_video.mp4`,
+              sourceGenerationId: null,
+              url: `https://signed.example.com/generation_inputs/owner-1/gen-1/${index}-reference_video.mp4`,
+            })),
+            referenceAudios: [],
+          },
+        },
+        workflowSettings: { model: 'kling-3.0-video' },
+        restoreIssues: [],
+      });
+
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@reference_video', '@reference_video_4']));
+      expect(promptBox()).toHaveValue('@reference_video_2 walks in, @reference_video_3 waves');
+      // Held on the mentions no clip answers, for the creator to point them at the right clips.
+      const notice = screen.getByText(/Unknown element mentions/);
+      expect(notice.textContent).toContain('@reference_video_2');
+      expect(notice.textContent).toContain('@reference_video_3');
+    });
+
+    it('names a Kling clip handed without a handle past the handles the restored shots mention', async () => {
+      stubRemix({
+        generation: { id: 'gen-1', title: 'Harbour', prompt: '', category: 'video', model: 'kling-3.0-video' },
+        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+        inputs: {
+          video: {
+            referenceMode: 'elements',
+            startFrame: null,
+            endFrame: null,
+            elements: [],
+            referenceVideos: ['00', '01'].map((index) => ({
+              kind: 'video' as const,
+              label: 'Reference Video',
+              storagePath: `generation_inputs/owner-1/gen-1/${index}-reference_video.mp4`,
+              sourceGenerationId: null,
+              url: `https://signed.example.com/generation_inputs/owner-1/gen-1/${index}-reference_video.mp4`,
+            })),
+            referenceAudios: [],
+          },
+        },
+        workflowSettings: {
+          model: 'kling-3.0-video',
+          isMultiShot: true,
+          multiPrompts: [
+            { id: 'shot-1', prompt: 'Open on the harbour.', duration: 3 },
+            { id: 'shot-2', prompt: '@reference_video_2 walks in.', duration: 2 },
+          ],
+        },
+        restoreIssues: [],
+      });
+
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@reference_video', '@reference_video_3']));
+    });
+
     it('gives a renamed image reference the handle of its new name, and the prompt follows', async () => {
       getPersistedImageElementRecordsMock.mockResolvedValue([
         { id: 'saved-1', displayName: 'Saved product', file: new File(['image'], 'saved.png', { type: 'image/png' }) },

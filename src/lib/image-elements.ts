@@ -95,10 +95,17 @@ const SUBJECT_STAND_INS: HandleStandIns = {
  *
  * `standIns` is for a card whose elements go by another word: see
  * `assignSubjectHandles`.
+ *
+ * `reservedHandles` are handles no new handle may take, though an element may
+ * keep one. A remix restore passes the handles its words mention: a reference
+ * the source handed back without a handle is not the one those words meant, and
+ * a handle made from its name and place could otherwise answer a mention meant
+ * for another, with nothing on the page to say so.
  */
 export function assignElementHandles<T extends { displayName?: string | null; handle?: string | null }>(
   elements: T[],
-  standIns: HandleStandIns = ELEMENT_STAND_INS
+  standIns: HandleStandIns = ELEMENT_STAND_INS,
+  reservedHandles: Iterable<string> = []
 ): Array<T & { displayName: string; handle: string }> {
   const usedHandles = new Set<string>();
   const keptHandles = elements.map((element) => {
@@ -110,6 +117,9 @@ export function assignElementHandles<T extends { displayName?: string | null; ha
     usedHandles.add(handle);
     return handle;
   });
+  for (const handle of reservedHandles) {
+    usedHandles.add(handle);
+  }
 
   return elements.map((element, index) => {
     const place = index + 1;
