@@ -136,9 +136,9 @@ vi.mock('@/lib/showcase-feed', () => ({
       canRemix: false,
     }))
   ),
-  // Pricing, viewer state and blocking are the feed's own; they run for real
-  // in showcase-saved-media-service.test.ts and
-  // showcase-saved-media-recipe-redaction.test.ts.
+  // Pricing, viewer state and blocking are the feed's own: pricing and viewer
+  // state run for real in showcase-saved-media-recipe-redaction.test.ts,
+  // blocking in showcase-saved-media-service.test.ts.
   attachLocalizedAssetPrices: vi.fn(async (feed: unknown) => feed),
   attachViewerStateToFeed: vi.fn(async (feed: unknown) => feed),
 }));

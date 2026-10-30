@@ -3,14 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { ShowcaseFeedPage } from '@/lib/showcase';
 
-// Saved media hydrates posts through the feed's own `resolvePostRowsToFeedItems`,
-// which builds every recipe's full locked preview. These cases run the real
-// hydration for both reads against one in-memory database, so what a viewer
-// saved is compared with what the feed hands the same viewer.
-
-vi.mock('next/cache', () => ({
-  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
-}));
+// Saved media hydrates posts through the feed's own `resolvePostRowsToFeedItems`.
+// These cases run the real hydration and the real feed read against one
+// in-memory database: what a viewer saved is compared with what the feed hands
+// the same viewer, and checked whole for anything a locked recipe holds. That
+// saved media sanitizes on its own, whatever hydration builds, is pinned in
+// showcase-saved-media-service.test.ts.
 
 type Row = Record<string, unknown>;
 
@@ -39,6 +37,9 @@ function createFakeSupabase(): SupabaseClient {
       const predicates: Array<(row: Row) => boolean> = [];
       const sorts: Array<{ column: string; ascending: boolean }> = [];
       let countOnly = false;
+      // A read answers with the columns it asked for, as PostgREST does, so the
+      // two reads compared below differ wherever their selects do.
+      let columns: string[] | null = null;
       let window: [number, number] | null = null;
       const run = () => {
         const matched = rows
@@ -51,11 +52,20 @@ function createFakeSupabase(): SupabaseClient {
             return 0;
           });
         if (countOnly) return { data: null, count: matched.length, error: null };
-        return { data: window ? matched.slice(window[0], window[1] + 1) : matched, error: null };
+        const page = window ? matched.slice(window[0], window[1] + 1) : matched;
+        return {
+          data: columns
+            ? page.map((row) => Object.fromEntries(columns!.map((column) => [column, row[column] ?? null])))
+            : page,
+          error: null,
+        };
       };
       const query = {
-        select(_columns?: string, options?: { head?: boolean }) {
+        select(selected?: string, options?: { head?: boolean }) {
           countOnly = options?.head === true;
+          columns = selected && selected.trim() !== '*'
+            ? selected.split(',').map((column) => column.trim())
+            : null;
           return query;
         },
         eq(column: string, value: unknown) {
@@ -107,6 +117,8 @@ const LOCKED_RECIPE_TEXT = [
   'Lighting setup',
   'Two softboxes at forty-five degrees',
   'lighting-diagram.pdf',
+  'creator-1/files/',
+  'creator-1/references/hero.png',
   'application/pdf',
   'image/png',
   'Retouch checklist',
@@ -115,7 +127,7 @@ const LOCKED_RECIPE_TEXT = [
   '7340032',
 ];
 
-function createPost(id: string, generationId: string, prompt: string): Row {
+function createPost(id: string, generationId: string, prompt: string, overrides: Row = {}): Row {
   return {
     id,
     user_id: CREATOR,
@@ -130,7 +142,7 @@ function createPost(id: string, generationId: string, prompt: string): Row {
     post_format: 'media',
     save_count: 4,
     remix_count: 1,
-    comment_count: 0,
+    comment_count: 5,
     created_at: '2026-10-28T08:00:00.000Z',
     source_kind: 'magicbooklet',
     source_tool: null,
@@ -138,6 +150,7 @@ function createPost(id: string, generationId: string, prompt: string): Row {
     review_status: 'visible',
     visibility: 'public',
     archived_at: null,
+    ...overrides,
   };
 }
 
@@ -145,7 +158,12 @@ function seedDatabase() {
   db.tables = {
     posts: [
       createPost('post-paid', 'gen-paid', 'SECRET_PAID_PROMPT'),
-      createPost('post-free', 'gen-free', 'SECRET_FREE_PROMPT'),
+      // A motion run is stored as a video with its own creation mode.
+      createPost('post-free', 'gen-free', 'SECRET_FREE_PROMPT', {
+        category: 'video',
+        creation_mode: 'motion',
+        comment_count: 3,
+      }),
     ],
     profiles: [{ id: CREATOR, username: 'lightsmith', display_name: 'Light Smith', avatar_url: null }],
     post_media: [],
@@ -154,7 +172,7 @@ function seedDatabase() {
       id,
       user_id: CREATOR,
       model: 'nano-banana-2',
-      category: 'image',
+      category: id === 'gen-free' ? 'video' : 'image',
       preview_url: null,
       preview_width: null,
       preview_height: null,
@@ -222,7 +240,8 @@ function seedDatabase() {
         workflow_share_url: null,
         workflow_snapshot: null,
         attachments: [],
-        allow_remix: false,
+        // The summaries RPC answers true for any recipe on a creation.
+        allow_remix: true,
         resource_sections: [],
         resource_items: [{
           id: 'item-note',

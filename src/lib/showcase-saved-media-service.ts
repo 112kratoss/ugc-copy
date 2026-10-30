@@ -171,7 +171,7 @@ export async function getSavedMediaFeedForRoute({
   const { data: postRows, error: postError } = await adminSupabase
     .from('posts')
     .select(
-      'id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility'
+      'id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility'
     )
     .in(saveSource === 'post' ? 'id' : 'generation_id', lookupIds)
     .in('visibility', ['public', 'unlisted'])
@@ -187,11 +187,10 @@ export async function getSavedMediaFeedForRoute({
     (postRows ?? []) as Parameters<typeof resolvePostRowsToFeedItems>[0],
     adminSupabase
   );
-  // Hydration carries each recipe's full locked preview (item titles, cards,
-  // file names and sizes). A saved post goes out the way the feed's reads by
-  // id send it to this viewer: priced in their currency, with the recipes and
-  // Remix they own, without a creator either of them blocked (none at all if
-  // that cannot be read), and redacted to the public teaser.
+  // A saved post goes out the way the feed's reads by id send it to this
+  // viewer: priced in their currency, with the recipes and Remix they own,
+  // without a creator either of them blocked (none at all if that cannot be
+  // read), and through the sanitizer every public read of a post ends with.
   const pricedFeed = await attachLocalizedAssetPrices(
     { items: hydratedItems, pageInfo: { hasMore: false, nextOffset: null, limit, offset } },
     countryCode,

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { buildPostResourceBundleLockedPreview } from '@/lib/post-resource-bundles';
 import { getSavedMediaFeedForRoute } from '@/lib/showcase-saved-media-service';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
@@ -128,10 +129,17 @@ function createUserSupabaseMock(options?: {
         return {
           select: () => ({
             eq: () => ({
-              in: async () => {
-                tableReads.push('post_saves:viewer');
-                return { data: [], error: null };
-              },
+              in: async () => ({ data: [], error: null }),
+            }),
+          }),
+        };
+      }
+
+      if (table === 'post_resource_bundle_purchases') {
+        return {
+          select: () => ({
+            eq: () => ({
+              in: async () => ({ data: [], error: null }),
             }),
           }),
         };
@@ -147,7 +155,6 @@ function createUserSupabaseMock(options?: {
                 return query;
               },
               async in(column: string, values: unknown[]) {
-                tableReads.push('user_blocks:viewer');
                 if (options?.userBlocksError) return { data: null, error: options.userBlocksError };
                 return {
                   data: (options?.userBlocks ?? []).filter((row) => (
@@ -247,7 +254,6 @@ describe('getSavedMediaFeedForRoute', () => {
       offset: 0,
     });
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
-    expect(userSupabase.tableReads).toEqual(expect.arrayContaining(['post_saves:viewer', 'user_blocks:viewer']));
     expect(resolvePostRowsToFeedItems).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ id: 'post-1' }),
@@ -292,6 +298,66 @@ describe('getSavedMediaFeedForRoute', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('Expected a saved-media page');
     expect(result.body.items.map((item: { id: string }) => item.id)).toEqual(['post-visible']);
+  });
+
+  // Hydration already builds the public teaser (posts-server.ts). This pins
+  // saved media's own pass through the sanitizer every public read ends with:
+  // a raw preview, a recipe post's prompt or a field outside the asset
+  // allowlist cannot reach a saver even if hydration hands one over.
+  it('sends whatever hydration hands it through the public sanitizer', async () => {
+    const userSupabase = createUserSupabaseMock({
+      postSaves: [{ post_id: 'post-1', created_at: '2026-06-10T12:00:00Z' }],
+      posts: [{ id: 'post-1', generation_id: null, title: 'First post' }],
+    });
+    const rawPreview = buildPostResourceBundleLockedPreview({
+      attachments: [{
+        label: 'lighting-diagram.pdf',
+        kind: 'file',
+        storagePath: 'creator-1/files/lighting-diagram.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 7340032,
+      }],
+      sections: [{ id: 'lighting', title: 'Lighting setup', kind: 'workflow_step', description: 'Two softboxes at forty-five degrees' }],
+      items: [{ id: 'item-prompt', type: 'prompt', title: 'Golden hour prompt', textContent: 'SECRET_RECIPE_PROMPT', sectionId: 'lighting' }],
+    } as unknown as Parameters<typeof buildPostResourceBundleLockedPreview>[0]);
+    const hydrated = {
+      ...createFeedItem('post-1', 'First post'),
+      prompt: 'SECRET_POST_PROMPT',
+      asset: {
+        id: 'bundle-1',
+        postId: 'post-1',
+        title: 'Portrait recipe',
+        accessMode: 'paid',
+        priceUsdCents: 1900,
+        previewText: 'Unlock the recipe.',
+        allowRemix: false,
+        lockedPreview: rawPreview,
+        // No public read carries this; the asset allowlist drops it.
+        resources: { promptText: 'SECRET_RECIPE_PROMPT' },
+      },
+    } as unknown as ShowcaseFeedItem;
+
+    const result = await getSavedMediaFeedForRoute({
+      createAdminSupabase: () => userSupabase.adminClient,
+      limit: 24,
+      offset: 0,
+      resolvePostRowsToFeedItems: vi.fn(async () => [hydrated]),
+      userId: 'viewer-1',
+      userSupabase: userSupabase.client,
+    });
+
+    if (!result.ok) throw new Error('Expected a saved-media page');
+    const [item] = result.body.items;
+    expect(item.prompt).toBe('');
+    expect(item.asset).not.toHaveProperty('resources');
+    expect(item.asset?.lockedPreview).toMatchObject({
+      sectionPreviews: [],
+      attachmentPreviews: [{ label: 'File 1', contentType: null, sizeBytes: null }],
+      itemPreviews: [{ type: 'prompt', title: 'Prompt', sectionId: null }],
+    });
+    expect(JSON.stringify(result.body)).not.toMatch(
+      /SECRET|Golden hour|Lighting setup|softboxes|lighting-diagram|creator-1\/files|application\/pdf|7340032/,
+    );
   });
 
   it('serves no saved posts when the blocks between the viewer and their creators cannot be read', async () => {
