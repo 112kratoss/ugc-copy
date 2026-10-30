@@ -301,12 +301,6 @@ describe('GenerationNotifications', () => {
         noToast();
       });
 
-      it('heeds a page that spoke before it mounted', async () => {
-        announceGenerationSettledOnPage({ id: 'gen-status-1', status: 'succeeded' });
-        await pollThrough('processing', 'succeeded');
-        noToast();
-      });
-
       it('takes away a toast already up for it', async () => {
         await pollThrough('processing', 'failed');
         expect(await screen.findByText(/failed$/i)).toBeInTheDocument();

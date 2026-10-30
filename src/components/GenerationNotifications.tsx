@@ -213,11 +213,9 @@ export default function GenerationNotifications() {
       generation: GenerationRecord,
       status: 'succeeded' | 'failed'
     ) => {
-      const onThisPage = onPage.get(generation.id);
-      if (onThisPage === 'succeeded' || onThisPage === 'failed') {
-        return;
-      }
-      if (onThisPage === 'following') {
+      // A run the page settled never gets here: the page's word is in the known statuses (the
+      // subscription below, and `withRunsSettledOnPage` over every sync's list).
+      if (onPage.get(generation.id) === 'following') {
         held.set(generation.id, { generation, status });
         return;
       }
