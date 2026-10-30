@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 import type { GenerationTiming } from '@/lib/generation-timing';
 
 const GENERATION_STATUSES = new Set([
@@ -274,6 +276,46 @@ export function subscribeToGenerationStatusSynced(
   return () => {
     window.removeEventListener(GENERATION_STATUS_SYNC_EVENT, handleEvent);
   };
+}
+
+const GENERATION_SETTLED_ON_PAGE_EVENT = 'magicbooklet:generation-settled-on-page';
+
+export type GenerationSettledOnPage = { id: string; status: 'succeeded' | 'failed' };
+
+/**
+ * Same-tab word from a page that showed a run end (a creator's canvas: Done, or It didn't
+ * finish). The app-wide poller (`GenerationNotifications`) then has nothing to announce for that
+ * run: its toast would only say again what the page says, over the creator's Publish. A run the
+ * page lost sight of (left, or still processing in the background) is never said here, so its
+ * toast still comes. Cross-tab delivery is unnecessary: each tab shows its own pages.
+ */
+export function announceGenerationSettledOnPage(settled: GenerationSettledOnPage) {
+  if (typeof window === 'undefined') return;
+
+  window.dispatchEvent(new CustomEvent(GENERATION_SETTLED_ON_PAGE_EVENT, { detail: settled }));
+}
+
+export function subscribeToGenerationSettledOnPage(callback: (settled: GenerationSettledOnPage) => void) {
+  if (typeof window === 'undefined') return () => undefined;
+
+  const handleEvent = (event: Event) => {
+    const detail = (event as CustomEvent<unknown>).detail;
+    if (isRecord(detail) && typeof detail.id === 'string' && (detail.status === 'succeeded' || detail.status === 'failed')) {
+      callback({ id: detail.id, status: detail.status });
+    }
+  };
+
+  window.addEventListener(GENERATION_SETTLED_ON_PAGE_EVENT, handleEvent);
+  return () => {
+    window.removeEventListener(GENERATION_SETTLED_ON_PAGE_EVENT, handleEvent);
+  };
+}
+
+/** A creator's half of the above: says how the run it shows ended, once its canvas shows it. */
+export function useAnnounceRunSettledOnPage(generationId: string | null, status: GenerationSettledOnPage['status'] | null) {
+  useEffect(() => {
+    if (generationId && status) announceGenerationSettledOnPage({ id: generationId, status });
+  }, [generationId, status]);
 }
 
 function createAbortError() {

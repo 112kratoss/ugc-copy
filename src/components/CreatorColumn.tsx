@@ -56,7 +56,7 @@ export function CreatorColumnLayout({
     <div
       className={clsx(
         'relative z-10 mx-auto grid w-full max-w-[680px] grid-cols-1 gap-4 px-[clamp(1rem,1.9vw,2.25rem)] min-[1120px]:max-w-[1860px] min-[1120px]:grid-cols-[minmax(340px,400px)_minmax(0,1fr)] min-[1120px]:items-start min-[1120px]:gap-5 min-[1440px]:grid-cols-[minmax(380px,440px)_minmax(0,1fr)]',
-        resultFirst && 'max-[1119px]:[&>section]:order-first',
+        resultFirst && 'max-[1120px]:[&>section]:order-first',
       )}
     >
       <h1 className="sr-only">{title}</h1>
@@ -373,8 +373,9 @@ export function CreatorSettingSwitch({
 }
 
 /**
- * The foot of the column, kept in reach while the column scrolls: above the
- * bottom navigation on a phone, at the window's foot on a laptop. As in the
+ * The foot of the column, kept in reach while the column scrolls: on a phone
+ * on the window's bottom edge (the creators hide the shell's bottom navigation
+ * there), just above it from 768px. As in the
  * app, the run's settings fold into one chip that reads them back ("1K · AUTO
  * · JPG") and opens them above the bar, and the action beside it says what a
  * run costs. Anything that stops or explains a run (a price that could not be
@@ -491,20 +492,21 @@ export function CreatorColumnBar({
   };
 
   return (
-    // Below 768px the creators hide the shell's bottom navigation (`hidesBottomNav`), and the bar
-    // holds the window's bottom edge in its place, the safe area inside it; wider, it floats just
-    // above the edge. Both still clear the navigation's room, should a page ever keep it.
+    // Below 768px (in px, as the shell's own breakpoint) the creators hide the shell's bottom
+    // navigation (`hidesBottomNav`), so the bar holds the window's bottom edge in its place, the
+    // safe area inside it; wider, it floats just above the edge. Under the column's width it waits
+    // at the column's end while a done run's Publish bar holds the foot.
     <div
       ref={barRef}
       data-creator-bar
       className={clsx(
-        'sticky bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-30 mt-1 max-md:bottom-[var(--app-shell-bottom-nav-space,0px)]',
-        !holdsFootUnderColumn && 'max-[1119px]:static',
+        'sticky bottom-3 z-30 mt-1 max-[768px]:bottom-0',
+        !holdsFootUnderColumn && 'max-[1120px]:static',
       )}
     >
       {/* One surface for the line and the bar, so nothing scrolling under the
           bar shows between them, and opaque, so nothing needs blurring behind it. */}
-      <div className={clsx(FLOATING_SURFACE_CLASS, 'overflow-hidden', holdsFootUnderColumn && 'max-md:pb-[env(safe-area-inset-bottom)]')}>
+      <div className={clsx(FLOATING_SURFACE_CLASS, 'overflow-hidden', holdsFootUnderColumn && 'max-[768px]:pb-[env(safe-area-inset-bottom)]')}>
         {status ? (
           <div data-creator-bar-status className="border-b border-[var(--ui-border-subtle)] px-4 py-3 text-sm">
             {status}

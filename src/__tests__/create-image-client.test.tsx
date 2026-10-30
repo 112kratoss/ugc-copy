@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateImageClient from '@/app/create-image/CreateImageClient';
 import type { CreatorOpening } from '@/lib/creator-opening';
-import { GenerationStatusRequestError } from '@/lib/generation-status-client';
+import { GenerationStatusRequestError, subscribeToGenerationSettledOnPage } from '@/lib/generation-status-client';
 import type { PersistedImageElementRecord } from '@/lib/persisted-media';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
@@ -1647,6 +1647,26 @@ describe('CreateImageClient generation pipeline', () => {
       const canvas = screen.getByRole('region', { name: 'Result' });
       expect(await within(canvas).findByText('8 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
       expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 8 credits$/);
+    });
+
+    // The shell's run toast would only say again what the canvas says, over Publish (2026-10-30).
+    it('tells the shell\'s run toasts how its run ended once the canvas shows it', async () => {
+      const heard = vi.fn();
+      const unsubscribe = subscribeToGenerationSettledOnPage(heard);
+      try {
+        fetchGenerationStatusWithRetryMock.mockResolvedValue({ status: 'failed', error: 'Unknown error' });
+        installFetch({ starts: [startedReply()] });
+        render(<CreateImageClient prefill={{}} />);
+        typePrompt('A lighthouse at dawn');
+        pressGenerate();
+
+        const canvas = screen.getByRole('region', { name: 'Result' });
+        expect(await within(canvas).findByRole('heading', { name: 'It didn’t finish' })).toBeInTheDocument();
+        await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'gen-new', status: 'failed' }));
+        expect(heard).toHaveBeenCalledTimes(1);
+      } finally {
+        unsubscribe();
+      }
     });
 
     // The artboards Generating and Result (owner, 2026-10-28), and the build notes' focus on "Done".

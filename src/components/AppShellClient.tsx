@@ -2,7 +2,6 @@
 
 import {
   Bell,
-  FilePlus2,
   HelpCircle,
   Menu,
   Plus,
@@ -36,7 +35,11 @@ import {
   isNotFoundRouteSegment,
   type AppNavItem,
 } from './app-shell-nav';
-import AppShellCreateMenu, { APP_SHELL_CREATE_MENU_ID, openCreateMenuWithoutPopovers } from './AppShellCreateMenu';
+import AppShellCreateMenu, {
+  APP_SHELL_CREATE_MENU_ID,
+  CREATE_MENU_ICONS,
+  openCreateMenuWithoutPopovers,
+} from './AppShellCreateMenu';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
 import AlertsBadge from '@/components/AlertsBadge';
 import { holdForLeaveGuard } from '@/lib/use-leave-guard';
@@ -52,13 +55,16 @@ const NAV_GROUPS = [
 
 // Where a page hides the bottom navigation (the creators: `hidesBottomNav`), the phone layout's
 // menu also names the places only that navigation held on a phone, whose top bar shows no bell
-// below 640px and no Create below 768px: the Create menu's two choices and Alerts. The top bar's
-// menu then reaches every page.
-const NAV_GROUPS_WITHOUT_BOTTOM_NAV = [
-  { label: 'Discover', ids: ['home', 'showcase', 'marketplace'] },
-  { label: 'Create', ids: ['create', 'post', 'studio', 'workflow'] },
-  { label: 'Account', ids: ['alerts', 'profile'] },
-] as const;
+// below 640px and no Create below 768px: the Create menu's two choices and Alerts, each at the
+// head of its group. The top bar's menu then reaches every page.
+const BOTTOM_NAV_ONLY_PLACES: Partial<Record<(typeof NAV_GROUPS)[number]['label'], ReadonlyArray<DrawerPlace['id']>>> = {
+  Create: ['create', 'post'],
+  Account: ['alerts'],
+};
+const NAV_GROUPS_WITHOUT_BOTTOM_NAV = NAV_GROUPS.map((group) => ({
+  label: group.label,
+  ids: [...(BOTTOM_NAV_ONLY_PLACES[group.label] ?? []), ...group.ids],
+}));
 
 const ALERTS_NAV_ITEM = APP_NAV_ITEMS.find((item) => item.id === 'alerts')!;
 const POST_MENU_ITEM = CREATE_MENU_ITEMS.find((item) => item.id === 'post')!;
@@ -68,7 +74,7 @@ type DrawerPlace = Pick<AppNavItem, 'label' | 'href' | 'icon'> & { id: AppNavIte
 
 function drawerPlace(id: DrawerPlace['id'], pathname: string): DrawerPlace | null {
   if (id === 'post') {
-    return { id, label: POST_MENU_ITEM.label, href: getCreateMenuHref('post', pathname), icon: FilePlus2 };
+    return { id, label: POST_MENU_ITEM.label, href: getCreateMenuHref('post', pathname), icon: CREATE_MENU_ICONS.post };
   }
   return APP_NAV_ITEMS.find((item) => item.id === id) ?? null;
 }
@@ -485,14 +491,19 @@ const AppShellFrame = memo(function AppShellFrame({
       <div className="app-shell-main" aria-hidden={mobileOpen ? true : undefined}>
         <header className="app-shell-header">
           <div className="flex min-w-0 items-center gap-3">
+            {/* Hidden from 768px in px, as the side navigation shows (globals.css): a
+                rem breakpoint moved with the browser's text size and, on a creator, left a
+                small-text window with no navigation at all. */}
             <button
               type="button"
-              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] md:hidden"
+              className="ui-focus-ring relative inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] min-[768px]:hidden"
               onClick={() => setMobileOpen(true)}
               aria-label="Open navigation"
               aria-expanded={mobileOpen}
             >
               <Menu className="h-5 w-5" aria-hidden />
+              {/* Where the bottom navigation hides, its Alerts count shows here. */}
+              {bottomNavHidden ? <AlertsBadge className="absolute -right-1 -top-1" /> : null}
             </button>
             {title !== null ? (
               <div className="min-w-0">
@@ -601,7 +612,7 @@ const AppShellFrame = memo(function AppShellFrame({
 
       {mobileOpen ? (
         <div
-          className="fixed inset-0 z-[80] bg-black/[0.72] backdrop-blur-sm md:hidden"
+          className="fixed inset-0 z-[80] bg-black/[0.72] backdrop-blur-sm min-[768px]:hidden"
           role="presentation"
           onClick={(event) => {
             if (event.target === event.currentTarget) setMobileOpen(false);
@@ -640,7 +651,9 @@ const AppShellFrame = memo(function AppShellFrame({
                         <DrawerNavItem
                           key={item.id}
                           item={item}
-                          active={activeItem?.id === item.id}
+                          // Create opens the launchpad: a way in, as the bottom bar's + was,
+                          // never the page open, though its section claims the creators.
+                          active={item.id !== 'create' && activeItem?.id === item.id}
                           onClick={() => setMobileOpen(false)}
                           onNavigate={handleAppNavClick}
                         />

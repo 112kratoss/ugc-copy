@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
+import { CREATOR_PAGE_PATHS } from '@/lib/creator-pages';
+
 export interface AppNavItem {
   id: 'home' | 'create' | 'studio' | 'showcase' | 'search' | 'marketplace' | 'workflow' | 'profile' | 'alerts' | 'invite';
   label: string;
@@ -69,9 +71,7 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     icon: Sparkles,
     match: (pathname) =>
       isExactOrChild(pathname, '/create') ||
-      pathname.startsWith('/create-image') ||
-      pathname.startsWith('/create-video') ||
-      pathname.startsWith('/create-motion') ||
+      CREATOR_PAGE_PATHS.some((path) => pathname.startsWith(path)) ||
       isExactOrChild(pathname, '/templates') ||
       isExactOrChild(pathname, '/template-runs'),
   },
@@ -206,20 +206,14 @@ export function getAppShellTitle(pathname: string): string | null {
 }
 
 /**
- * The image, video and motion creators (`getCreatorTool(...).href`; a test holds the two to one
- * list). Their own bar, with the settings and Generate, holds the window's bottom edge.
- */
-const CREATOR_PATHS = ['/create-image', '/create-video', '/create-motion'] as const;
-
-/**
  * Whether the page hides the bottom navigation while creating (the owner's decision, 2026-10-28:
- * "Hide it while creating"). Below 768px the creators' bar then holds the bottom edge where the
- * navigation floated, and the top bar's menu reaches every page the navigation did. From 768px no
- * page has the bottom navigation, so this changes nothing there; the app's own creator is not the
- * web's.
+ * "Hide it while creating"): the image, video and motion creators (`CREATOR_PAGE_PATHS`) and pages
+ * under them. Below 768px the creators' bar then holds the bottom edge where the navigation
+ * floated, and the top bar's menu reaches every page the navigation did. From 768px no page has
+ * the bottom navigation, so this changes nothing there; the app's own creator is not the web's.
  */
 export function hidesBottomNav(pathname: string) {
-  return CREATOR_PATHS.some((path) => isExactOrChild(pathname, path));
+  return CREATOR_PAGE_PATHS.some((path) => isExactOrChild(pathname, path));
 }
 
 export function isMinimalAppChromePath(pathname: string) {

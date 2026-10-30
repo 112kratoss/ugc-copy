@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
 import type { CreatorOpening } from '@/lib/creator-opening';
-import { GenerationStatusRequestError } from '@/lib/generation-status-client';
+import { GenerationStatusRequestError, subscribeToGenerationSettledOnPage } from '@/lib/generation-status-client';
 import { loadPendingWebStart, savePendingWebStart, type PendingWebStart } from '@/lib/generation-model-client';
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import type { CatalogInputMode } from '@/lib/generation-model-catalog';
@@ -1323,6 +1323,24 @@ describe('CreateMotionClient on the column', () => {
     const heading = await within(canvas).findByRole('heading', { name: 'Done' });
     await waitFor(() => expect(heading).toHaveFocus());
     expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 20 credits$/);
+  });
+
+  // The shell's run toast would only say again what the canvas says, over Publish (2026-10-30).
+  it('tells the shell\'s run toasts how its run ended once the canvas shows it', async () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationSettledOnPage(heard);
+    try {
+      const view = render(<CreateMotionClient prefill={{}} />);
+      await attachBothInputs(view.container);
+      await pressGenerate();
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(await within(canvas).findByRole('heading', { name: 'Done' })).toBeInTheDocument();
+      await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'generation-1', status: 'succeeded' }));
+      expect(heard).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('plays the finished clip once: beside the column it never leaves the window to be paused', async () => {

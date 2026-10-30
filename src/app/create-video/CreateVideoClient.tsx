@@ -107,7 +107,7 @@ import {
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
-import { creatorCanvasPhase, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
+import { creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
@@ -184,6 +184,7 @@ import {
     isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
     type GenerationStatusResponse,
+    useAnnounceRunSettledOnPage,
 } from '@/lib/generation-status-client';
 import {
     assignElementHandles,
@@ -5004,6 +5005,11 @@ export default function CreateVideoClient({
         );
     };
 
+    // Where the run is, as the canvas says it (read before the sign-in check below returns early,
+    // as every hook is): how it ended goes to the shell's run toasts, which would only say it again.
+    const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputVideo), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
+    useAnnounceRunSettledOnPage(latestGenerationId, creatorCanvasSettledStatus(canvasPhase));
+
     if (isLoadingUser) {
         return (
             <div className="ui-page min-h-screen text-[var(--ui-text-primary)] flex items-center justify-center">
@@ -5020,7 +5026,6 @@ export default function CreateVideoClient({
 
     // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
     // and its chip what the run is and holds.
-    const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputVideo), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
     const canvasTitle = creatorCanvasTitle(canvasPhase, { making: 'Making your video', waiting: 'Your video' });
     const canvasChip = creatorCanvasChip(canvasPhase, runShape?.label, runShape?.cost);
     const showsEmptyCanvas = canvasPhase === 'empty';

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { resetFeedbackState } from '@/components/feedback-state';
+import { subscribeToGenerationSettledOnPage } from '@/lib/generation-status-client';
 import { creatorOpeningFromCatalog, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
@@ -5026,6 +5027,24 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 12 credits$/);
       // The prompt the run was sent with stays with its clip.
       expect(within(canvas).getByText(PROMPT)).toBeInTheDocument();
+    });
+
+    // The shell's run toast would only say again what the canvas says, over Publish (2026-10-30).
+    it('tells the shell\'s run toasts how its run ended once the canvas shows it', async () => {
+      const heard = vi.fn();
+      const unsubscribe = subscribeToGenerationSettledOnPage(heard);
+      try {
+        render(<CreateVideoClient prefill={{}} />);
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+
+        const canvas = screen.getByRole('region', { name: 'Result' });
+        expect(await within(canvas).findByRole('heading', { name: 'Done' })).toBeInTheDocument();
+        await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'gen-run-1', status: 'succeeded' }));
+        expect(heard).toHaveBeenCalledTimes(1);
+      } finally {
+        unsubscribe();
+      }
     });
 
     it('leaves the focus with a creator already typing the next prompt when the run ends', async () => {

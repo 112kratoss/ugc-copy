@@ -1,13 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertCircle, CheckCircle2, Clock3, X } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 
-import { hidesBottomNav } from '@/components/app-shell-nav';
 import {
   getGenerationKind,
   getGenerationNotificationCopy,
@@ -15,11 +13,11 @@ import {
 } from '@/lib/generation-feedback';
 import {
   announceGenerationStatusSynced,
+  subscribeToGenerationSettledOnPage,
   subscribeToGenerationStarted,
 } from '@/lib/generation-status-client';
 import { HOME_WORKSPACE_ACTIVE_STATUSES } from '@/lib/home-dashboard';
 import { supabase } from '@/lib/supabase';
-import { useMediaQuery } from '@/lib/use-media-query';
 
 const STATUS_CACHE_STORAGE_KEY = 'magicbooklet:generation-status-cache:v1';
 const LEGACY_STATUS_CACHE_STORAGE_KEYS = [
@@ -29,13 +27,6 @@ const LEGACY_STATUS_CACHE_STORAGE_KEYS = [
 const GENERATION_STATUS_POLL_URL = '/api/generations?detail=status&limit=80';
 const TOAST_LIFETIME_MS = 8000;
 const POLL_INTERVAL_MS = 30000;
-/**
- * Where a creator draws one column (its two panes need 1120px), its bars hold the window's foot:
- * the column's settings and Generate, and once a run is done the Publish bar. A toast rising from
- * the bottom there covered them (on a phone, Publish whole), so on the creators it comes down from
- * under the top bar instead, as the page's other toasts do.
- */
-const CREATOR_ONE_COLUMN_QUERY = '(max-width: 1119px)';
 
 interface GenerationRecord {
   id: string;
@@ -125,9 +116,6 @@ export default function GenerationNotifications() {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const knownStatusesRef = useRef<Record<string, string>>({});
   const timeoutMapRef = useRef<Record<string, number>>({});
-  const pathname = usePathname() ?? '';
-  const oneColumn = useMediaQuery(CREATOR_ONE_COLUMN_QUERY);
-  const fromTop = oneColumn && hidesBottomNav(pathname);
 
   useEffect(() => {
     let isActive = true;
@@ -201,6 +189,16 @@ export default function GenerationNotifications() {
         delete timeoutMapRef.current[notificationId];
       }
     };
+
+    // A run whose own page showed it end (a creator's canvas says Done or It didn't finish):
+    // the next sync finds nothing new to say of it, and a toast already up for it goes. A toast
+    // rising from the bottom there covered the creator's Publish just as the page offered it.
+    const unsubscribeSettledOnPage = subscribeToGenerationSettledOnPage(({ id, status }) => {
+      knownStatusesRef.current = { ...knownStatusesRef.current, [id]: status };
+      writeStatusCache(knownStatusesRef.current);
+      dismissNotification(`${id}:succeeded`);
+      dismissNotification(`${id}:failed`);
+    });
 
     const enqueueNotification = (
       generation: GenerationRecord,
@@ -352,6 +350,7 @@ export default function GenerationNotifications() {
       isActive = false;
       clearScheduledPoll();
       unsubscribeGenerationStarted();
+      unsubscribeSettledOnPage();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       Object.values(timeoutMapRef.current).forEach((timeoutId) => {
         window.clearTimeout(timeoutId);
@@ -364,10 +363,7 @@ export default function GenerationNotifications() {
   }
 
   return (
-    <div
-      data-testid="generation-notifications"
-      className={`pointer-events-none fixed inset-x-4 z-[70] flex flex-col items-end gap-3 sm:inset-x-auto sm:right-6 sm:w-full sm:max-w-sm ${fromTop ? 'top-[calc(var(--app-shell-topbar-height)+0.75rem)]' : 'bottom-4'}`}
-    >
+    <div data-testid="generation-notifications" className="pointer-events-none fixed inset-x-4 bottom-4 z-[70] flex flex-col items-end gap-3 sm:inset-x-auto sm:right-6 sm:w-full sm:max-w-sm">
       <AnimatePresence initial={false}>
         {notifications.map((notification) => {
           const isSuccess = notification.status === 'succeeded';
@@ -375,9 +371,9 @@ export default function GenerationNotifications() {
           return (
             <motion.div
               key={notification.id}
-              initial={{ opacity: 0, y: fromTop ? -20 : 20, scale: 0.96 }}
+              initial={{ opacity: 0, y: 20, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: fromTop ? -12 : 12, scale: 0.98 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
               transition={{ duration: 0.2 }}
               className="pointer-events-auto w-full overflow-hidden rounded-[24px] border border-white/10 bg-zinc-950/92 p-4 shadow-[0_22px_80px_-28px_rgba(0,0,0,0.8)] backdrop-blur-xl"
             >

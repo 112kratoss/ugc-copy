@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AppShellClient from '@/components/AppShellClient';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import type { ConfirmationRequest } from '@/components/feedback-state';
+import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
 
 let mockedPathname = '/';
@@ -772,10 +773,11 @@ describe('AppShellClient', () => {
     const drawerLinks = () => within(screen.getByRole('dialog', { name: 'Navigation' })).getAllByRole('link')
       .map((link) => [link.textContent, link.getAttribute('href'), link.getAttribute('aria-current')]);
 
-    it('marks the image, video and motion creators, and only them, as holding the bottom edge', () => {
+    // Which paths hide it is the rule's own test (app-shell-bottom-nav-while-creating.test.ts):
+    // here, that the shell draws the rule's answer.
+    it('marks the image, video and motion creators as holding the bottom edge, and no other page', () => {
       for (const [pathname, hidden] of [
-        ['/create-image', true], ['/create-video', true], ['/create-motion', true],
-        ['/', false], ['/showcase', false], ['/create', false], ['/create-workflow', false], ['/post/new', false],
+        ['/create-image', true], ['/create-video', true], ['/create-motion', true], ['/showcase', false],
       ] as const) {
         mockedPathname = pathname;
         const { container, unmount } = render(
@@ -812,7 +814,8 @@ describe('AppShellClient', () => {
         ['Home', '/', null],
         ['Explore', '/showcase', null],
         ['Marketplace', '/marketplace', null],
-        ['Create', '/create', 'page'],
+        // A way in, as the bottom bar's + was: the launchpad, never the page open.
+        ['Create', '/create', null],
         ['Post', '/post/new', null],
         ['Studio', '/creations', null],
         ['Workflow Canvas', '/create-workflow', null],
@@ -820,6 +823,43 @@ describe('AppShellClient', () => {
         ['Profile', '/profile', null],
         ['Help & feedback', '/contact', null],
       ]);
+    });
+
+    it("shows the Alerts count on the top bar's menu button where the navigation hides, and only there", () => {
+      publishUnreadAlertsCount(3);
+      try {
+        for (const [pathname, shown] of [['/create-video', true], ['/showcase', false]] as const) {
+          mockedPathname = pathname;
+          const { unmount } = render(
+            <AppShellClient>
+              <div>Page content</div>
+            </AppShellClient>
+          );
+          const menuButton = screen.getByRole('button', { name: 'Open navigation' });
+          expect(Boolean(within(menuButton).queryByLabelText('3 unread alerts')), pathname).toBe(shown);
+          unmount();
+        }
+      } finally {
+        publishUnreadAlertsCount(0);
+      }
+    });
+
+    // The side navigation shows from 768px in px (globals.css). The menu button hid at md, 48rem,
+    // which moves with the browser's text size: at a small one a creator between 48rem and 768px,
+    // with no bottom navigation, had no way to the other pages at all.
+    it("hides the menu button and its drawer from 768px in px, where the side navigation shows", () => {
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+      const menuButton = screen.getByRole('button', { name: 'Open navigation' });
+      expect(menuButton.className.split(' ')).toContain('min-[768px]:hidden');
+      expect(menuButton.className.split(' ')).not.toContain('md:hidden');
+      fireEvent.click(menuButton);
+      const drawerLayer = screen.getByRole('dialog', { name: 'Navigation' }).parentElement!;
+      expect(drawerLayer.className.split(' ')).toContain('min-[768px]:hidden');
     });
 
     it('leaves the menu as it was where the navigation shows', () => {

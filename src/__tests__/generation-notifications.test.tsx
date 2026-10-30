@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import GenerationNotifications from '@/components/GenerationNotifications';
+import { announceGenerationSettledOnPage } from '@/lib/generation-status-client';
 
 vi.mock('framer-motion', async () => {
   const React = await import('react');
@@ -13,9 +14,6 @@ vi.mock('framer-motion', async () => {
     AnimatePresence: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
   };
 });
-
-let mockedPathname = '/';
-vi.mock('next/navigation', () => ({ usePathname: () => mockedPathname }));
 
 const getSessionMock = vi.fn();
 const onAuthStateChangeMock = vi.fn();
@@ -201,46 +199,48 @@ describe('GenerationNotifications', () => {
       expect(creditsUpdated).toHaveBeenCalledTimes(1);
     });
 
-    // Below 1120px a creator is one column and its bars hold the window's foot (on a phone, with
-    // no bottom navigation under them): a toast rising there covered Generate, and Publish whole.
-    describe('where it comes in', () => {
-      let oneColumn = false;
-      beforeEach(() => {
-        mockedPathname = '/';
-        oneColumn = false;
-        vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
-          matches: query === '(max-width: 1119px)' && oneColumn,
-          addEventListener: vi.fn(),
-          removeEventListener: vi.fn(),
-        })));
-      });
-      afterEach(() => {
-        mockedPathname = '/';
+    // A creator that showed its run end (Done, It didn't finish) says so: its toast would only say
+    // it again, rising over the creator's Publish just as the page offered it (2026-10-30).
+    describe('a run its own page showed ending', () => {
+      it('says nothing of it at the next sync', async () => {
+        vi.mocked(fetch)
+          .mockResolvedValueOnce({ ok: true, json: async () => ({ generations: [statusRecord('processing')] }) } as Response)
+          .mockResolvedValueOnce({ ok: true, json: async () => ({ generations: [statusRecord('succeeded')] }) } as Response);
+        const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+        render(<GenerationNotifications />);
+        await waitFor(() => {
+          expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30000);
+        });
+
+        act(() => announceGenerationSettledOnPage({ id: 'gen-status-1', status: 'succeeded' }));
+        const scheduledPoll = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 30000)?.[0];
+        await act(async () => {
+          (scheduledPoll as () => void)();
+        });
+        await waitFor(() => {
+          expect(fetch).toHaveBeenCalledTimes(2);
+        });
+
+        expect(screen.queryByText(/ready$/i)).not.toBeInTheDocument();
+        expect(screen.queryByTestId('generation-notifications')).not.toBeInTheDocument();
       });
 
-      const placement = async () => {
+      it('takes away a toast already up for it', async () => {
+        await pollThrough('processing', 'failed');
+        expect(await screen.findByText(/failed$/i)).toBeInTheDocument();
+
+        act(() => announceGenerationSettledOnPage({ id: 'gen-status-1', status: 'failed' }));
+
+        expect(screen.queryByText(/failed$/i)).not.toBeInTheDocument();
+      });
+
+      it('leaves the toasts of other runs alone', async () => {
         await pollThrough('processing', 'succeeded');
         expect(await screen.findByText(/ready$/i)).toBeInTheDocument();
-        const container = screen.getByTestId('generation-notifications');
-        return container.className.includes('top-[calc(var(--app-shell-topbar-height)+0.75rem)]') ? 'under the top bar'
-          : container.className.split(' ').includes('bottom-4') ? 'over the bottom edge' : 'nowhere';
-      };
 
-      it.each(['/create-image', '/create-video', '/create-motion'])('comes down from under the top bar on %s in one column', async (pathname) => {
-        mockedPathname = pathname;
-        oneColumn = true;
-        expect(await placement()).toBe('under the top bar');
-      });
+        act(() => announceGenerationSettledOnPage({ id: 'gen-another', status: 'succeeded' }));
 
-      it('rises over the bottom edge beside a creator\'s two panes', async () => {
-        mockedPathname = '/create-video';
-        expect(await placement()).toBe('over the bottom edge');
-      });
-
-      it('rises over the bottom edge on every other page, a phone\'s included', async () => {
-        mockedPathname = '/showcase';
-        oneColumn = true;
-        expect(await placement()).toBe('over the bottom edge');
+        expect(screen.getByText(/ready$/i)).toBeInTheDocument();
       });
     });
   });

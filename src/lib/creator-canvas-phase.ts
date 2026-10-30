@@ -23,6 +23,12 @@ export function creatorCanvasPhase(run: {
   return run.hasFailure ? 'failed' : 'empty';
 }
 
+/** How the run ended, where the canvas shows it end: what the page tells the shell's run toasts. */
+export function creatorCanvasSettledStatus(phase: CreatorCanvasPhase): 'succeeded' | 'failed' | null {
+  if (phase === 'done') return 'succeeded';
+  return phase === 'failed' ? 'failed' : null;
+}
+
 /**
  * The canvas's heading: "Done", the tool's words for a run at work ("Making your video") and
  * for its place before a result ("Your video"), and "It didn’t finish".

@@ -15,6 +15,9 @@ import {
 /** The id the top bar's Create button and the bottom bar's + open the menu by. */
 export const APP_SHELL_CREATE_MENU_ID = 'app-shell-create-menu';
 
+/** Each choice's icon, here and in the drawer that names the two where the bottom bar hides. */
+export const CREATE_MENU_ICONS = { create: Sparkles, post: FilePlus2 } as const;
+
 const TITLE_ID = `${APP_SHELL_CREATE_MENU_ID}-title`;
 // How a browser without popovers asks the menu to open: its buttons cannot.
 const OPEN_WITHOUT_POPOVERS_EVENT = 'app-shell-create-menu:open';
@@ -226,7 +229,7 @@ function CreateMenuChoice({
   onCurrentPage: () => void;
 }) {
   const isCreate = item.id === 'create';
-  const Icon = isCreate ? Sparkles : FilePlus2;
+  const Icon = CREATE_MENU_ICONS[item.id];
   const bodyId = `${APP_SHELL_CREATE_MENU_ID}-${item.id}`;
   const className = `ui-focus-ring flex min-h-36 flex-col justify-between gap-4 rounded-[20px] border p-4 text-left transition active:scale-[0.985] ${
     isCreate

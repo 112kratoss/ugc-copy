@@ -5,6 +5,8 @@ import postcss, { type AtRule, type Rule } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
 import { hidesBottomNav } from '@/components/app-shell-nav';
+import { MEDIA_TOOL_IDS } from '@/components/CreatorStudio';
+import { CREATOR_PAGE_PATHS } from '@/lib/creator-pages';
 import { getCreatorTool } from '@/lib/creator-tools';
 
 // The owner's decision for the phone-width web (2026-10-28, "Hide it while creating"): on the
@@ -30,8 +32,12 @@ function rulesFor(selector: string) {
 }
 
 describe('the bottom navigation while creating', () => {
+  it('names the media creators the tools name, no more and no fewer', () => {
+    expect([...CREATOR_PAGE_PATHS].sort()).toEqual(MEDIA_TOOL_IDS.map((tool) => getCreatorTool(tool).href).sort());
+  });
+
   it('hides on the three creators, a page under one included, and nowhere else', () => {
-    for (const tool of ['image', 'video', 'motion'] as const) {
+    for (const tool of MEDIA_TOOL_IDS) {
       const { href } = getCreatorTool(tool);
       expect(hidesBottomNav(href), href).toBe(true);
       expect(hidesBottomNav(`${href}/probe`), `${href}/probe`).toBe(true);

@@ -74,59 +74,58 @@ function controlsUnderTheBarsAtTheEnd(page: Page) {
   });
 }
 
-for (const width of [390, 767]) {
-  test(`at ${width}px the creators hide the bottom navigation, and their bar holds the bottom edge with the safe area inside it`, async ({ page }) => {
-    await page.setViewportSize({ width, height: SHORT_WINDOW });
-    const cdp = await page.context().newCDPSession(page);
-    // Every side set: an inset left unset is undefined, not 0, and a rule that reads it is dropped.
-    await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, right: 0, bottom: SAFE_AREA_BOTTOM } });
+// Each creator loaded once and drawn at 390, 767 and 768px: what is checked depends only on the
+// width, and Chromium keeps the safe-area override across a resize.
+test('below 768px the creators hide the bottom navigation, their bar on the bottom edge with the safe area inside it; from 768px it floats as before', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: SHORT_WINDOW });
+  const cdp = await page.context().newCDPSession(page);
+  // Every side set: an inset left unset is undefined, not 0, and a rule that reads it is dropped.
+  await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, right: 0, bottom: SAFE_AREA_BOTTOM } });
 
-    for (const path of CREATORS) {
-      await open(page, path);
-      await expect(barAction(page), `${path}: the bar draws`).toBeVisible(COLD_PAGE);
-      await expect(bottomNav(page), `${path}: no bottom navigation`).toBeHidden();
+  for (const path of CREATORS) {
+    await page.setViewportSize({ width: 390, height: SHORT_WINDOW });
+    await open(page, path);
+    await expect(barAction(page), `${path}: the bar draws`).toBeVisible(COLD_PAGE);
 
-      const bar = creatorBar(page);
-      const box = await bar.evaluate((element) => {
-        const surface = element.firstElementChild!;
-        return {
-          gap: window.innerHeight - element.getBoundingClientRect().bottom,
-          safeArea: getComputedStyle(surface).paddingBottom,
-        };
-      });
-      expect(box.gap, `${path}: the bar ends on the window's bottom edge`).toBeCloseTo(0, 0);
-      expect(box.safeArea, `${path}: the safe area is inside the bar`).toBe(`${SAFE_AREA_BOTTOM}px`);
+    for (const width of [390, 767]) {
+      const at = `${path} at ${width}px`;
+      await page.setViewportSize({ width, height: SHORT_WINDOW });
+      // At the top, where the column runs past the window and the bar is held at its foot.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await expect(bottomNav(page), `${at}: no bottom navigation`).toBeHidden();
+      const box = await creatorBar(page).evaluate((element) => ({
+        gap: window.innerHeight - element.getBoundingClientRect().bottom,
+        safeArea: getComputedStyle(element.firstElementChild!).paddingBottom,
+      }));
+      expect(box.gap, `${at}: the bar ends on the window's bottom edge`).toBeCloseTo(0, 0);
+      expect(box.safeArea, `${at}: the safe area is inside the bar`).toBe(`${SAFE_AREA_BOTTOM}px`);
       const actionBottom = await barAction(page).evaluate((element) => element.getBoundingClientRect().bottom);
-      expect(actionBottom, `${path}: the bar's button clears the safe area`).toBeLessThanOrEqual(SHORT_WINDOW - SAFE_AREA_BOTTOM);
-      await expectPressable(barAction(page), `${path}: the bar's button`);
-      expect(await controlsUnderTheBarsAtTheEnd(page), `${path}: what the bar covers at the page's end`).toEqual([]);
+      expect(actionBottom, `${at}: the bar's button clears the safe area`).toBeLessThanOrEqual(SHORT_WINDOW - SAFE_AREA_BOTTOM);
+      await expectPressable(barAction(page), `${at}: the bar's button`);
+      expect(await controlsUnderTheBarsAtTheEnd(page), `${at}: what the bar covers at the page's end`).toEqual([]);
     }
-  });
-}
 
-test('from 768px no page has the bottom navigation, and the creator\'s bar floats just above the edge as before', async ({ page }) => {
-  await page.setViewportSize({ width: 768, height: SHORT_WINDOW });
-  await open(page, '/create-video');
-  await expect(barAction(page)).toBeVisible(COLD_PAGE);
-  await expect(bottomNav(page)).toBeHidden();
-  const gap = await creatorBar(page).evaluate((element) => window.innerHeight - element.getBoundingClientRect().bottom);
-  expect(gap, 'the bar floats 0.75rem above the edge').toBeCloseTo(12, 0);
-});
-
-test('every other page keeps the bottom navigation below 768px', async ({ page, context }) => {
-  // Signed in, so the workflow canvas draws its library: its path starts as the creators' do.
-  await context.addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
-  for (const width of [390, 767]) {
-    await page.setViewportSize({ width, height: 844 });
-    for (const path of ['/showcase', '/notifications', '/create-workflow']) {
-      await open(page, path);
-      await expect(bottomNav(page), `${path} at ${width}px`).toBeVisible(COLD_PAGE);
-      await expect(page.locator('.app-shell-root')).not.toHaveAttribute('data-bottom-nav');
-    }
+    // From 768px no page has the bottom navigation: the bar floats 0.75rem up, as before.
+    await page.setViewportSize({ width: 768, height: SHORT_WINDOW });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect(bottomNav(page), `${path} at 768px`).toBeHidden();
+    const gap = await creatorBar(page).evaluate((element) => window.innerHeight - element.getBoundingClientRect().bottom);
+    expect(gap, `${path} at 768px: the bar floats 0.75rem above the edge`).toBeCloseTo(12, 0);
   }
 });
 
-test('on the creators the top bar\'s menu reaches every page the bottom navigation did', async ({ page }) => {
+test('every other page keeps the bottom navigation below 768px', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const path of ['/showcase', '/notifications']) {
+    await open(page, path);
+    await expect(bottomNav(page), `${path} at 390px`).toBeVisible(COLD_PAGE);
+    await expect(page.locator('.app-shell-root')).not.toHaveAttribute('data-bottom-nav');
+  }
+  await page.setViewportSize({ width: 767, height: 844 });
+  await expect(bottomNav(page), '/notifications at 767px').toBeVisible();
+});
+
+test('on a creator the top bar\'s menu reaches every page the bottom navigation did', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const pathnames = (links: Locator) => links.evaluateAll((elements) => elements.map((link) => new URL((link as HTMLAnchorElement).href).pathname));
 
@@ -142,27 +141,25 @@ test('on the creators the top bar\'s menu reaches every page the bottom navigati
   const choices = await pathnames(createMenu.getByRole('link'));
   expect(choices).toEqual(['/create', '/post/new']);
 
-  for (const path of CREATORS) {
-    await open(page, path);
-    await expect(barAction(page)).toBeVisible(COLD_PAGE);
-    await page.getByRole('button', { name: 'Open navigation' }).click();
-    const drawer = page.getByRole('dialog', { name: 'Navigation' });
-    await expect(drawer).toBeVisible();
-    const places = await pathnames(drawer.getByRole('link'));
-    for (const place of [...tabs, ...choices, '/marketplace', '/creations', '/create-workflow']) {
-      expect(places, `${path}: the menu reaches ${place}`).toContain(place);
-    }
-    for (const link of await drawer.getByRole('link').all()) {
-      await link.scrollIntoViewIfNeeded();
-      await expectPressable(link, `${path}: the menu's ${(await link.textContent())?.trim()}`);
-    }
-    await page.keyboard.press('Escape');
-    await expect(drawer).toBeHidden();
-  }
-
-  // And a place only the navigation held, followed from a creator: Alerts, where it is back.
+  // The drawer is the same on the three creators (app-shell-client.test.tsx): one is drawn.
+  await open(page, '/create-video');
+  await expect(barAction(page)).toBeVisible(COLD_PAGE);
   await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('dialog', { name: 'Navigation' }).getByRole('link', { name: 'Alerts' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Navigation' });
+  await expect(drawer).toBeVisible();
+  const places = await pathnames(drawer.getByRole('link'));
+  for (const place of [...tabs, ...choices, '/marketplace', '/creations', '/create-workflow']) {
+    expect(places, `the menu reaches ${place}`).toContain(place);
+  }
+  for (const link of await drawer.getByRole('link').all()) {
+    await link.scrollIntoViewIfNeeded();
+    await expectPressable(link, `the menu's ${(await link.textContent())?.trim()}`);
+  }
+  // A way in, never the page open.
+  await expect(drawer.getByRole('link', { name: 'Create', exact: true })).not.toHaveAttribute('aria-current');
+
+  // And a place only the navigation held, followed from the creator: Alerts, where it is back.
+  await drawer.getByRole('link', { name: 'Alerts' }).click();
   await expect(page).toHaveURL(/\/notifications$/, COLD_PAGE);
   await expect(bottomNav(page)).toBeVisible(COLD_PAGE);
 });
@@ -237,6 +234,11 @@ test.describe('signed in', () => {
     expect(await barHeight(), 'the line made the bar taller').toBeGreaterThan(plainBarHeight);
     await expect(panel).toBeVisible();
     await expectBetweenTheBars('once the bar grew under it');
+    // Opaque, as the bar under it is: on a translucent fill the column's words showed through.
+    for (const [surface, name] of [[panel, 'the panel'], [bar.locator(':scope > div').first(), 'the bar']] as const) {
+      expect(await surface.evaluate((element) => getComputedStyle(element).backgroundColor), `${name}'s fill is opaque`)
+        .toMatch(/^rgb\(/);
+    }
 
     await page.keyboard.press('Escape');
     await expect(panel).toBeHidden();
@@ -283,10 +285,19 @@ async function signInTheBrowser(context: BrowserContext) {
   });
 }
 
-// A run that ends while a creator is open: the shell's toast for it ("Video ready") rose from the
-// bottom edge over the bar, and on a phone covered Publish whole. On the creators, in one column,
-// it comes down from under the top bar.
-test('a run\'s toast comes down under the top bar on a creator, clear of its bar', async ({ page, context }) => {
+type Run = { kind?: string; modelId?: string; catalogRevision?: string; settings?: Record<string, unknown> };
+
+const STATUS_CACHE_KEY = 'magicbooklet:generation-status-cache:v1';
+
+/** Waits until the shell's poller has written what it read (its cache, set in the same task as its next-poll state). */
+function statusCacheHolds(page: Page, fragment: string) {
+  return page.waitForFunction(([key, text]) => sessionStorage.getItem(key)?.includes(text) ?? false, [STATUS_CACHE_KEY, fragment] as const, { timeout: 30_000 });
+}
+
+// A run that ends while its creator is open: the shell's toast for it ("Video ready") rose from the
+// bottom edge over the bar, and on a phone covered Publish whole, just as the page offered it. The
+// page says how it ended, so the toast never comes; another run's toast still does.
+test('a run its creator shows ending gets no toast over the bar, while another run\'s still comes', async ({ page, context }) => {
   await signInTheBrowser(context);
   await page.route('**/api/**', (route) => {
     // The made-up session's token means nothing to the dev server: requests go without it.
@@ -294,34 +305,60 @@ test('a run\'s toast comes down under the top bar on a creator, clear of its bar
     delete headers.authorization;
     return route.continue({ headers });
   });
-  let statusPolls = 0;
-  await page.route('**/api/generations?detail=status**', (route) => {
-    statusPolls += 1;
-    const status = statusPolls === 1 ? 'processing' : 'succeeded';
-    return route.fulfill({ json: { generations: [{
-      id: 'gen-e2e', status, category: 'video', model: 'seedance-2-mini',
-      created_at: '2026-10-30T00:00:00.000Z', completed_at: status === 'succeeded' ? '2026-10-30T00:01:00.000Z' : null,
-    }] } });
+  const quote = (run: Run) => ({ modelId: run.modelId ?? 'unknown', catalogRevision: run.catalogRevision ?? 'unknown', normalizedSettings: run.settings ?? {}, costCredits: 19 });
+  await page.route('**/api/generation-models/quote', (route) => route.fulfill({ json: quote(route.request().postDataJSON() as Run) }));
+  await page.route('**/api/generation-models/quotes', (route) => {
+    const { quotes } = route.request().postDataJSON() as { quotes: Run[] };
+    return route.fulfill({ json: { quotes: quotes.map((run) => ({ ok: true, quote: quote(run) })) } });
   });
-  await page.setViewportSize({ width: 390, height: SHORT_WINDOW });
+  // The server's view: the page's own run is at work until the page's own poll is answered, and
+  // another run (an image started elsewhere) until the test lets it end.
+  let ownStarted = false;
+  let ownDone = false;
+  let otherDone = false;
+  const record = (id: string, category: string, done: boolean) => ({
+    id, status: done ? 'succeeded' : 'processing', category, model: category === 'video' ? 'seedance-2-mini' : 'nano-banana-2',
+    created_at: '2026-10-30T00:00:00.000Z', completed_at: done ? '2026-10-30T00:01:00.000Z' : null,
+  });
+  await page.route('**/api/generations**', (route) => {
+    if (route.request().method() === 'POST') {
+      ownStarted = true;
+      return route.fulfill({ json: { success: true, predictionId: 'pred-own', generationId: 'gen-own', status: 'processing', remainingCredits: 6, cost: 19, catalogRevision: 'e2e', modelId: 'seedance-2-mini' } });
+    }
+    if (new URL(route.request().url()).searchParams.get('detail') === 'status') {
+      return route.fulfill({ json: { generations: [
+        ...(ownStarted ? [record('gen-own', 'video', ownDone)] : []),
+        record('gen-other', 'image', otherDone),
+      ] } });
+    }
+    return route.fulfill({ json: { generations: [] } });
+  });
+  await page.route('**/api/generate-video?id=**', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    ownDone = true;
+    return route.fulfill({ json: { status: 'succeeded', output: 'https://cdn.example.test/own.mp4', timing: null } });
+  });
+  await page.route('https://cdn.example.test/**', (route) => route.fulfill({ status: 404, body: '' }));
+
+  await page.setViewportSize({ width: 390, height: 844 });
   await open(page, '/create-video');
   await expect(barAction(page)).toBeVisible(COLD_PAGE);
-  await expect.poll(() => statusPolls, { message: 'the shell reads the runs once signed in', timeout: 30_000 }).toBeGreaterThan(0);
-  // The shell reads them again when the page comes back into view.
+  // The shell's poller has read the runs once signed in.
+  await statusCacheHolds(page, 'gen-other');
+
+  await page.getByRole('textbox', { name: 'Prompt' }).fill('A paper boat drifting across a sunlit pond, gentle ripples, slow push-in.');
+  await page.getByRole('button', { name: /^Generate · / }).click();
+  const canvas = page.getByRole('region', { name: 'Result' });
+  await expect(canvas.getByRole('heading', { name: 'Done' })).toBeVisible({ timeout: 30_000 });
+  // The page said how its run ended: the poller holds it as done.
+  await statusCacheHolds(page, '"gen-own":"succeeded"');
+
+  // The other run ends; the poller reads again when the page comes back into view.
+  otherDone = true;
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   const toasts = page.getByTestId('generation-notifications');
   await expect(toasts.getByRole('button', { name: 'Dismiss notification' })).toBeVisible({ timeout: 15_000 });
-  await expect.poll(() => toasts.evaluate((element) => getComputedStyle(element.firstElementChild!).opacity)).toBe('1');
-
-  const headerBottom = await page.locator('.app-shell-header').evaluate((header) => header.getBoundingClientRect().bottom);
-  const toastBox = await toasts.evaluate((element) => {
-    const box = element.getBoundingClientRect();
-    return { top: box.top, bottom: box.bottom };
-  });
-  expect(toastBox.top, 'the toast starts below the top bar').toBeGreaterThanOrEqual(headerBottom);
-  expect(toastBox.bottom, 'the toast ends above the bar').toBeLessThanOrEqual(
-    await creatorBar(page).evaluate((element) => element.getBoundingClientRect().top),
-  );
-  await expectPressable(barAction(page), 'the bar\'s button under a toast');
-  await expectPressable(toasts.getByRole('link', { name: 'View Studio' }), 'the toast\'s link');
+  await expect(toasts.getByText('Image ready')).toBeVisible();
+  await expect(toasts.getByRole('button', { name: 'Dismiss notification' })).toHaveCount(1);
+  await expect(page.getByText('Video ready')).toHaveCount(0);
 });

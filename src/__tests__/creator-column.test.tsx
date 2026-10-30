@@ -159,18 +159,21 @@ describe('the creator column bar', () => {
   });
 
   // The creators hide the shell's bottom navigation below 768px (`hidesBottomNav`), where the bar
-  // holds the window's bottom edge, the safe area inside it; wider it floats 0.75rem above the edge.
-  // Both offsets add the navigation's room (0px on the creators): without it the nav took Generate's taps.
+  // holds the window's bottom edge, the safe area inside it; wider it floats 0.75rem above the
+  // edge. In px, as the shell's own breakpoint: `max-md` is 48rem, which moves with the browser's
+  // text size (at 20px the bar sat flush up to 960px, where the shell floats it).
   it('holds the bottom edge on a phone, the safe area inside it, and floats just above it wider', () => {
     const { container } = renderBar();
     const bar = container.querySelector('[data-creator-bar]');
-    expect(bar?.className).toContain('sticky');
-    expect(bar?.className).toContain('bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)]');
-    expect(bar?.className).toContain('max-md:bottom-[var(--app-shell-bottom-nav-space,0px)]');
-    expect(bar?.firstElementChild?.className).toContain('max-md:pb-[env(safe-area-inset-bottom)]');
+    const classes = bar?.className.split(' ') ?? [];
+    expect(classes).toEqual(expect.arrayContaining(['sticky', 'bottom-3', 'max-[768px]:bottom-0']));
+    expect(bar?.firstElementChild?.className.split(' ')).toContain('max-[768px]:pb-[env(safe-area-inset-bottom)]');
+    expect(bar?.className).not.toMatch(/max-md:/);
   });
 
-  it('keeps no safe area where it waits at the column\'s end rather than at the foot', () => {
+  // `max-[1119px]` is `width < 1119px`: at 1119px, one column, the bar stayed stuck and the Publish
+  // bar never showed. `max-[1120px]` is the exact complement of the two panes' `min-[1120px]`.
+  it('waits at the column\'s end under the two panes\' width, with no safe area', () => {
     const { container } = render(
       <CreatorColumnBar
         settingsSummary="1K · AUTO · JPG"
@@ -180,7 +183,7 @@ describe('the creator column bar', () => {
       />
     );
     const bar = container.querySelector('[data-creator-bar]');
-    expect(bar?.className).toContain('max-[1119px]:static');
+    expect(bar?.className.split(' ')).toContain('max-[1120px]:static');
     expect(bar?.firstElementChild?.className).not.toContain('safe-area-inset-bottom');
   });
 });

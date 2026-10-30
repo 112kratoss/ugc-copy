@@ -1,10 +1,14 @@
+import { renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  announceGenerationSettledOnPage,
   fetchGenerationStatus,
   fetchGenerationStatusWithRetry,
   GenerationStatusRequestError,
   getGenerationStatusRetryDelayMs,
+  subscribeToGenerationSettledOnPage,
+  useAnnounceRunSettledOnPage,
   waitForNextGenerationStatusPoll,
 } from '@/lib/generation-status-client';
 
@@ -266,5 +270,37 @@ describe('fetchGenerationStatusWithRetry', () => {
     await expect(outcome).resolves.toMatchObject({ name: 'AbortError' });
     await vi.advanceTimersByTimeAsync(20_000);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A creator that showed its run end tells the shell's run toasts (GenerationNotifications), so the
+// toast does not say it again over the creator's Publish.
+describe('a run settled on its own page', () => {
+  it('reaches a subscriber with the run and how it ended, until it unsubscribes', () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationSettledOnPage(heard);
+    announceGenerationSettledOnPage({ id: 'gen-1', status: 'succeeded' });
+    expect(heard).toHaveBeenCalledWith({ id: 'gen-1', status: 'succeeded' });
+    unsubscribe();
+    announceGenerationSettledOnPage({ id: 'gen-2', status: 'failed' });
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+
+  it('is said by a creator once its canvas shows the end, and only then', () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationSettledOnPage(heard);
+    type Props = { id: string | null; status: 'succeeded' | 'failed' | null };
+    const { rerender } = renderHook<void, Props>(
+      ({ id, status }) => useAnnounceRunSettledOnPage(id, status),
+      { initialProps: { id: 'gen-1', status: null } },
+    );
+    expect(heard).not.toHaveBeenCalled();
+    rerender({ id: 'gen-1', status: 'succeeded' });
+    expect(heard).toHaveBeenCalledWith({ id: 'gen-1', status: 'succeeded' });
+    // The same end again says nothing more; a start with no answer yet names no run.
+    rerender({ id: 'gen-1', status: 'succeeded' });
+    rerender({ id: null, status: 'failed' });
+    expect(heard).toHaveBeenCalledTimes(1);
+    unsubscribe();
   });
 });
