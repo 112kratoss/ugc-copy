@@ -4,9 +4,9 @@
 -- place for the post (generation-delete-service), and posts.generation_id is
 -- ON DELETE SET NULL. Every rule that decides which folder is a post's asked
 -- generation_id, so once it was NULL:
---   - making the post private or deleting it queued nothing, and the copy
---     stayed public: sync_generation_exposure_with_post returned at the NULL
---     link (the app's own deletes skipped it for the same reason);
+--   - making the post private or deleting it left the copy public:
+--     sync_generation_exposure_with_post returned at the NULL link without
+--     queueing it, and the post routes skipped it for the same reason;
 --   - account erasure's manifest skipped the copy;
 --   - marking the post NSFW, and reading its private copy, were refused;
 --   - the teaser sweep never admitted its rendition.
