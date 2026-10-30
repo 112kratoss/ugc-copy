@@ -68,8 +68,9 @@ afterEach(() => {
 });
 
 // sudo runs what follows -n. sysctl knows the two keys the step names: as procps does on the kernel's EINVAL or on a
-// missing key, it fails on a list the kernel's parser refuses (anything but ports and ranges joined by single commas)
-// and on any other key, and it prints a written list back as the kernel holds it. ss prints $SOCKETS.
+// missing key, it fails on a list the kernel's parser refuses (anything but ports and ranges joined by single commas,
+// one trailing comma allowed) and on any other argument, and it holds a written list as the kernel prints back one
+// already in order. ss prints $SOCKETS.
 const STUBS: Record<string, string> = {
   sudo: `echo "$*" >> "$STUB_DIR/sudo-calls"
 [ "$1" = -n ] && shift
@@ -78,11 +79,12 @@ exec "$@"`,
   case "$arg" in
     -*) ;;
     net.ipv4.ip_local_reserved_ports=*)
-      if ! printf '%s' "\${arg#*=}" | grep -Eqx '[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*'; then
+      value="\${arg#*=}"
+      if ! printf '%s' "$value" | grep -Eqx '[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*,?'; then
         echo 'sysctl: setting key "net.ipv4.ip_local_reserved_ports": Invalid argument' >&2
         exit 1
       fi
-      printf '%s\\n' "\${arg#*=}" > "$STUB_DIR/reserved" ;;
+      printf '%s\\n' "\${value%,}" > "$STUB_DIR/reserved" ;;
     net.ipv4.ip_local_reserved_ports) echo "$arg = $(cat "$STUB_DIR/reserved" 2> /dev/null)" ;;
     net.ipv4.ip_local_port_range) printf '%s = 32768\\t60999\\n' "$arg" ;;
     *)
@@ -158,18 +160,33 @@ describe("the Supabase stack's port reservation", () => {
     expect(reserve(runBlock(stackJobs[0].steps[0]), '').stdout).toContain('which the reservation cannot move:\nnone\n');
   });
 
-  // The stand-in's half of the comparison: a step it passes must be one the runner's kernel takes.
-  it.each([
-    ['a leading comma', 'ip_local_reserved_ports=', 'ip_local_reserved_ports=,'],
-    ['a space after a comma', '54320-54324,', '54320-54324, '],
-    ['an empty item', '54320-54324,', '54320-54324,,'],
-  ])('fails the step, as the runner does, on a list with %s', (_, from, to) => {
+  // The stand-in's half of the comparison: a step it passes must be one the runner's kernel takes, and the other way
+  // round. Each edited list is quoted, so it reaches sysctl as one argument.
+  const withList = (edit: (list: string) => string) => {
     const script = runBlock(stackJobs[0].steps[0]);
-    expect(script.replace(from, to)).not.toBe(script);
-    const result = reserve(script.replace(from, to));
+    const list = /ip_local_reserved_ports=(\S+)/.exec(script)?.[1] ?? '';
+    expect(edit(list)).not.toBe(list);
+    return script.replace(`ip_local_reserved_ports=${list}`, `ip_local_reserved_ports="${edit(list)}"`);
+  };
+
+  it.each([
+    ['a leading comma', (list: string) => `,${list}`],
+    ['a space after a comma', (list: string) => list.replace(',', ', ')],
+    ['an empty item', (list: string) => list.replace(',', ',,')],
+  ])('fails the step, as the runner does, on a list with %s', (_, edit) => {
+    const result = reserve(withList(edit));
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('"net.ipv4.ip_local_reserved_ports": Invalid argument');
+  });
+
+  it('takes a list with a trailing comma, as the kernel does, and holds it without one', () => {
+    const result = reserve(withList((list) => `${list},`));
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(ports(result.written)).toEqual(stackPorts);
+    expect(result.stdout).toContain(`net.ipv4.ip_local_reserved_ports = ${result.written}\n`);
+    expect(result.written.endsWith(',')).toBe(false);
   });
 
   it('fails the step, as the runner does, on a key that does not exist', () => {
