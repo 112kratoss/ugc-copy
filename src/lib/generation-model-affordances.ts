@@ -98,6 +98,12 @@ export type VideoInputAffordances = {
   };
   /** Condition-filtered constraints; their `message` is the copy the UI should show. */
   activeConstraints: CatalogInputConstraint[];
+  /**
+   * The shortest clip or track each slot the run fills takes, by slot key, where the descriptor
+   * publishes one (`minDurationSeconds`; Kling 3.0's video elements, 3 s), with the slot's label
+   * for the words the page holds the run in. None before the descriptor arrives.
+   */
+  minimumLengths: ReadonlyMap<string, { label: string; minDurationSeconds: number }>;
   /** True when these values came from the descriptor rather than the fallback tables. */
   descriptorDriven: boolean;
 };
@@ -227,6 +233,7 @@ function legacyFallbackAffordances(
       referencesBudget: FALLBACK_REFERENCE_BUDGETS[modelId] ?? null,
     },
     activeConstraints: [],
+    minimumLengths: new Map(),
     descriptorDriven: false,
   };
 }
@@ -405,6 +412,11 @@ export function getVideoInputAffordances(
       referencesBudget: referencesBudgetOf(descriptor, referencesSettings),
     },
     activeConstraints,
+    minimumLengths: new Map([...active.values()].flatMap((slot) => (
+      slot.minDurationSeconds === undefined
+        ? []
+        : [[slot.key, { label: slot.label, minDurationSeconds: slot.minDurationSeconds }] as const]
+    ))),
     descriptorDriven: true,
   };
 }

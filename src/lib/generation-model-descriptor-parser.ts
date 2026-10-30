@@ -224,6 +224,14 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
       Number(value.maxDurationSeconds) <= 0)
   )
     return null;
+  // The shortest clip or track the slot takes (Kling 3.0's video elements, 3 s). Read back
+  // like maxNamed below: a key this parser leaves out never reaches either creator.
+  if (
+    value.minDurationSeconds !== undefined &&
+    (!Number.isFinite(value.minDurationSeconds) ||
+      Number(value.minDurationSeconds) <= 0)
+  )
+    return null;
   // How many of the slot's assets may carry a name. Kling O3's subjects slot has carried
   // maxNamed: 3 in the published row since 2026-08-24, and this parser dropped it on every
   // read, so /api/model-catalog/v1/details served the slot without it and both creators
@@ -252,6 +260,9 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
     ...(value.maxDurationSeconds === undefined
       ? {}
       : { maxDurationSeconds: Number(value.maxDurationSeconds) }),
+    ...(value.minDurationSeconds === undefined
+      ? {}
+      : { minDurationSeconds: Number(value.minDurationSeconds) }),
     ...(conditions ? { conditions } : {}),
   };
 }

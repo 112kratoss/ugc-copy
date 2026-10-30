@@ -485,6 +485,19 @@ function assertInputModes(value: unknown, context: string): Set<string> {
           );
         }
       }
+      if (slot.minDurationSeconds !== undefined) {
+        const field = `${context}[${modeIndex}].slots[${slotIndex}].minDurationSeconds`;
+        const minimumDuration = requireNonNegativeNumber(slot.minDurationSeconds, field);
+        if (minimumDuration <= 0) throw new Error(`${field} must be positive.`);
+        // Only a length can be held to it, and the start measures the files of a slot that
+        // declares duration metadata (durationBoundInputSlots).
+        if ((kind !== 'video' && kind !== 'audio') || slot.durationMetadata === undefined) {
+          throw new Error(`${field} needs a video or audio slot with durationMetadata.`);
+        }
+        if (slot.maxDurationSeconds !== undefined && minimumDuration > Number(slot.maxDurationSeconds)) {
+          throw new Error(`${field} cannot exceed maxDurationSeconds.`);
+        }
+      }
       assertConditions(
         slot.conditions,
         `${context}[${modeIndex}].slots[${slotIndex}].conditions`,

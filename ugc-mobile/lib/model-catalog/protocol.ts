@@ -325,6 +325,56 @@ export function catalogMotionInputSlots(
     video: slotFor('video') ?? MOTION_INPUTS_FALLBACK_SLOTS.video,
   };
 }
+/** "1 second", "2.1 seconds". */
+function secondsLong(value: number): string {
+  return `${value} second${value === 1 ? '' : 's'}`;
+}
+/**
+ * The words a clip or track too short for its provider is refused in: what it is and the
+ * shortest the provider takes, then which one and how long it runs, rounded down so a clip
+ * refused for being short never reads as long enough. The server's starts refuse a run in
+ * them (`referenceMediaLengthViolation` in src/lib/provider-input-limits.ts), and both
+ * creators hold a run in them before Generate (`catalogInputTooShort`).
+ */
+export function mediaTooShortMessage(
+  what: string,
+  minimumSeconds: number,
+  item?: { label: string; durationSeconds: number },
+): string {
+  const refusal = `${what} must be at least ${secondsLong(minimumSeconds)} long.`;
+  return item
+    ? `${refusal} ${item.label} runs ${secondsLong(Math.floor(item.durationSeconds * 10) / 10)}.`
+    : refusal;
+}
+/**
+ * Why a run cannot send this clip or track in this slot, or null: its length against the
+ * slot's shortest (`minDurationSeconds`, published where the provider refuses shorter, as Kie
+ * does a Kling 3.0 video element under 3 seconds). A length the creator does not know is not
+ * judged here; the start measures the file. Said as the start says it, so the creator reads
+ * before Generate what pressing it would have brought back.
+ */
+export function catalogInputTooShort(
+  modelName: string,
+  slot: { label: string; minDurationSeconds?: number },
+  input: { label: string; durationSeconds?: number | null },
+): string | null {
+  const minimum = slot.minDurationSeconds;
+  const length = input.durationSeconds;
+  if (
+    minimum === undefined ||
+    typeof length !== 'number' ||
+    !Number.isFinite(length) ||
+    length <= 0 ||
+    length >= minimum
+  ) {
+    return null;
+  }
+  const what = `${modelName} ${slot.label.toLowerCase()}`;
+  const label = input.label.trim();
+  return label
+    ? mediaTooShortMessage(what, minimum, { label, durationSeconds: length })
+    : mediaTooShortMessage(what, minimum);
+}
 /** One input a run sends, as far as its price reads it. */
 export type CatalogRunInputFact = {
   slot: string;

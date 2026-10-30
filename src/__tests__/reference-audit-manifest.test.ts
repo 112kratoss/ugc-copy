@@ -13,6 +13,7 @@ import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runti
 
 import { descriptorBeforeKieCatalogInputs, operationBeforeKieCatalogInputs } from './fixtures/kie-catalog-inputs-2026-10-29';
 import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+import { descriptorBeforeKlingElementMinimum } from './fixtures/kling-element-min-duration-2026-10-30';
 import { descriptorBeforeMiniDefault } from './fixtures/mini-default-video-2026-10-28';
 import { descriptorBeforeVeoQualityReferences } from './fixtures/veo-quality-references-2026-10-30';
 
@@ -122,7 +123,7 @@ describe('reference-audit release', () => {
       const { schemaVersion, ...publicDescriptor } = entry.publicDescriptor;
       expect(schemaVersion).toBe(2);
       expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptorBeforeMiniDefault(descriptorBeforeKieCatalogInputs(
-        descriptorBeforeVeoQualityReferences(descriptor(modelId)),
+        descriptorBeforeVeoQualityReferences(descriptorBeforeKlingElementMinimum(descriptor(modelId))),
       ))));
       const operation = operationBeforeKieCheckup(operationBeforeKieCatalogInputs(operations.get(modelId)!));
       expect(entry.pricingStrategy).toBe(operation.pricingStrategy);

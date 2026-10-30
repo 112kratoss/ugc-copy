@@ -21,6 +21,8 @@ import type { RemixResolvedSubject, RemixSourceBundle } from '@/lib/remix-source
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { inspectPromptQuality } from '@/lib/prompt-quality';
 import { describeProviderFailure } from '@/lib/provider-failure-messages';
+// What the start refuses a clip that is too short with, which the page says before Generate.
+import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { supabase } from '@/lib/supabase';
 import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 // What the server quotes when it starts a run: for "the price of the run the page sends".
@@ -4045,7 +4047,7 @@ describe('CreateVideoClient Kling video elements', () => {
     const picture = (name: string) => new File(['image'], `${name}.png`, { type: 'image/png' });
 
     /** What the browser holds when the page opens. */
-    function saveInTheBrowser(saved: { images?: number; clip?: boolean; clips?: number; track?: boolean; klingClip?: boolean; startFrame?: boolean }) {
+    function saveInTheBrowser(saved: { images?: number; clip?: boolean; clips?: number; track?: boolean; klingClip?: boolean; klingClipSeconds?: number; startFrame?: boolean }) {
       getPersistedImageElementRecordsMock.mockResolvedValue(Array.from({ length: saved.images ?? 0 }, (_, index) => ({
         id: `saved-image-${index + 1}`,
         displayName: `Saved image ${index + 1}`,
@@ -4064,7 +4066,7 @@ describe('CreateVideoClient Kling video elements', () => {
           return [{ id: 'saved-track', displayName: 'Saved track', file: new File(['track'], 'saved-track.mp3', { type: 'audio/mpeg' }), durationSeconds: 6 }];
         }
         if (key === 'create-video:kling-video-elements:user-1' && saved.klingClip) {
-          return [{ id: 'saved-kling-clip', displayName: 'Saved Kling clip', handle: '@saved_kling_clip', file: new File(['clip'], 'saved-kling-clip.mp4', { type: 'video/mp4' }), durationSeconds: 4 }];
+          return [{ id: 'saved-kling-clip', displayName: 'Saved Kling clip', handle: '@saved_kling_clip', file: new File(['clip'], 'saved-kling-clip.mp4', { type: 'video/mp4' }), durationSeconds: saved.klingClipSeconds ?? 4 }];
         }
         return [];
       });
@@ -4232,6 +4234,70 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(runInputs('imageReferences')).toHaveLength(0);
       expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
       expect(temporaryUploadMock.mock.calls[0][0]).toMatchObject({ name: 'start.png' });
+    });
+
+    /**
+     * Kie's kling-3.0/video refuses a video element shorter than 3 seconds. The server's start
+     * refused such a run before any hold, but only once Generate was pressed. The descriptor
+     * publishes the slot's shortest clip (`minDurationSeconds`, release
+     * kling-element-min-duration-20261030), and the page holds the run with the start's words.
+     */
+    describe('a Kling 3.0 clip shorter than its slot takes', () => {
+      const SHORT_CLIP = 'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Saved Kling clip runs 2.1 seconds.';
+
+      function writePrompt() {
+        fireEvent.change(screen.getByPlaceholderText(/^Describe the Kling 3\.0 Cinematic scene/), {
+          target: { value: '@saved_kling_clip turns towards the harbour as the lamps come on along the quay.' },
+        });
+      }
+
+      it('says so beside Generate and sends nothing, in the start’s own words', async () => {
+        saveInTheBrowser({ klingClip: true, klingClipSeconds: 2.16 });
+        render(<CreateVideoClient prefill={{}} />);
+        await restored();
+        writePrompt();
+
+        expect(await screen.findByText(SHORT_CLIP)).toBeInTheDocument();
+        // The run's price is still shown; the run waits on the clip.
+        await waitFor(() => expect(costShown()).toMatch(/credits$/));
+        expect(generateButton()).toBeDisabled();
+        fireEvent.click(generateButton());
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(postedRun()).toBeUndefined();
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+
+        // What the start answers for the same clip.
+        expect(referenceMediaLengthViolation('kling-3.0-video', [
+          { role: 'element', durationSeconds: 2.16, label: 'Saved Kling clip' },
+        ])).toBe(SHORT_CLIP);
+      });
+
+      it('runs a clip of 3 seconds', async () => {
+        saveInTheBrowser({ klingClip: true, klingClipSeconds: 3 });
+        render(<CreateVideoClient prefill={{}} />);
+        await restored();
+        writePrompt();
+
+        await waitFor(() => expect(generateButton()).not.toBeDisabled());
+        expect(screen.queryByText(/must be at least 3 seconds long/)).toBeNull();
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(runInputs('videoElements')).toEqual([expect.objectContaining({ handle: '@saved_kling_clip' })]);
+      });
+
+      it('leaves the clip alone on a model that sends none', async () => {
+        saveInTheBrowser({ klingClip: true, klingClipSeconds: 2.16 });
+        render(<CreateVideoClient prefill={{ model: 'seedance-2-mini' }} />);
+        await restored();
+        fireEvent.change(screen.getByPlaceholderText(/^Describe the /), {
+          target: { value: 'A harbour at dusk, a slow push in over the water as the lamps come on along the quay.' },
+        });
+
+        await waitFor(() => expect(generateButton()).not.toBeDisabled());
+        expect(screen.queryByText(/must be at least 3 seconds long/)).toBeNull();
+      });
     });
 
     it('asks for the start frame Hailuo 2.3 cannot run without, until one is added', async () => {

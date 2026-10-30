@@ -19,6 +19,7 @@ import {
   type GenerationModelRuntimeInputs,
   type GenerationModelValidationRuleType,
 } from '@/lib/generation-model-runtime';
+import { referenceMediaMinSeconds } from '@/lib/provider-input-limits';
 
 export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 3;
 // Stored releases still use schema-v2 descriptors. Schema v3 is a compact
@@ -96,6 +97,14 @@ export type CatalogInputSlot = {
   maxNamed?: number;
   durationMetadata?: 'optional' | 'required';
   maxDurationSeconds?: number;
+  /**
+   * The shortest clip or track the provider takes in this slot, in seconds: Kie refuses a Kling
+   * 3.0 video element under 3. The start refuses a shorter one before any hold
+   * (`referenceMediaLengthViolation`, whose table this is read from), and both creators hold
+   * the run to it before Generate. Optional like `maxNamed`: the apps' parsers have always
+   * rebuilt a slot from the keys they know, so installed builds read the descriptor without it.
+   */
+  minDurationSeconds?: number;
   conditions?: CatalogCondition[];
 };
 
@@ -502,6 +511,7 @@ function videoInputModes(
   }
   if (limits.videos > 0) {
     const isNamedVideoElementSlot = modelId === 'kling-3.0-video';
+    const elementMinSeconds = isNamedVideoElementSlot ? referenceMediaMinSeconds(modelId, 'element') : undefined;
     const videoSlot: CatalogInputSlot = {
       key: isNamedVideoElementSlot ? 'videoElements' : 'videoReferences',
       kind: 'video',
@@ -517,6 +527,7 @@ function videoInputModes(
       // prices on reference-video seconds and could not quote without them.
       durationMetadata: videoCapSeconds !== undefined ? 'required' : 'optional',
       ...(videoCapSeconds !== undefined ? { maxDurationSeconds: videoCapSeconds } : {}),
+      ...(elementMinSeconds !== undefined ? { minDurationSeconds: elementMinSeconds } : {}),
     };
     if (isNamedVideoElementSlot) {
       videoElementSlots.push(videoSlot);

@@ -321,6 +321,23 @@ describe('generation-model catalog release CLI', () => {
       },
       message: /videoReferences\.durationMetadata to be required/,
     },
+    // A slot's shortest clip (Kling 3.0's video elements take 3 seconds and up) is held on the
+    // lengths the start measures, so it needs a slot whose lengths are measured, and room to run.
+    ...([
+      ['a shortest clip of no length', 'videoReferences', 0, /slots\[1\]\.minDurationSeconds must be positive/],
+      ['a shortest clip that is not a number', 'videoReferences', '3', /minDurationSeconds must be a finite number/],
+      ['a shortest clip past the longest', 'videoReferences', 20, /minDurationSeconds cannot exceed maxDurationSeconds/],
+      ['a shortest length on a slot whose files are not measured', 'imageReferences', 1, /minDurationSeconds needs a video or audio slot with durationMetadata/],
+    ] as const).map(([name, slotKey, minDurationSeconds, message]) => ({
+      name,
+      change: (manifest: Record<string, unknown>) => {
+        const descriptor = changedSeedance(manifest).publicDescriptor as Record<string, unknown>;
+        const modes = descriptor.inputModes as Array<Record<string, unknown>>;
+        const slot = (modes[1].slots as Array<Record<string, unknown>>).find((candidate) => candidate.key === slotKey)!;
+        slot.minDurationSeconds = minDurationSeconds;
+      },
+      message,
+    })),
     {
       name: 'unknown adapter',
       change: (manifest: Record<string, unknown>) => {

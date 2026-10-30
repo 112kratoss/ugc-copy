@@ -39,6 +39,7 @@ import {
   type VideoShotDraft,
 } from './media-creation-view-model';
 import {
+  catalogInputTooShort,
   catalogMotionInputSlots,
   catalogRunQuoteInput,
   catalogRunWithShownCost,
@@ -935,6 +936,14 @@ function validateCatalogV2Inputs(
       ) {
         errors.push(`${slot.label} inputs must be ${slot.maxDurationSeconds} seconds or shorter.`);
       }
+      // Shorter than the provider takes (a Kling 3.0 video element under 3 seconds): the start
+      // refused it, before any hold, only once Generate was pressed. Said in the start's words,
+      // under the name the run sends the clip by.
+      const tooShort = catalogInputTooShort(model.displayName, slot, {
+        label: asset.displayName ?? asset.fileName ?? '',
+        durationSeconds: asset.durationSeconds,
+      });
+      if (tooShort) errors.push(tooShort);
     }
   }
   for (const constraint of model.inputConstraints ?? []) {

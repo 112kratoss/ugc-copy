@@ -959,6 +959,52 @@ describe('references kept across a model change', () => {
   });
 });
 
+// Kie's kling-3.0/video refuses a video element shorter than 3 seconds, and the server's start
+// refused such a run (before any hold) only once Generate was pressed. The catalog publishes the
+// slot's shortest clip (`minDurationSeconds`, release kling-element-min-duration-20261030), and the
+// run waits on it in the start's own words, so the creator learns it before Generate.
+describe('a clip shorter than its slot takes', () => {
+  const clip = (seconds: number | undefined, name = 'wave') => ({
+    ...upload(`${name}.mp4`, 'video', seconds === undefined ? {} : { durationSeconds: seconds }),
+    handle: `@${name}`,
+  });
+
+  it('holds a Kling 3.0 run whose video element is under 3 seconds, naming the clip and its length', () => {
+    const draft = videoDraft(kling30, { prompt: 'Open on @wave, then @spin.', referenceVideos: [clip(4, 'spin'), clip(2.16)] });
+
+    expect(validateCatalogCreationDraft(draft, kling30, ready)).toMatchObject({
+      // The start's refusal for this clip: referenceMediaLengthViolation in src/lib/provider-input-limits.ts.
+      errors: ['Kling 3.0 Cinematic video elements must be at least 3 seconds long. wave runs 2.1 seconds.'],
+      canGenerate: false,
+    });
+  });
+
+  it('lets a clip of 3 seconds or more go, and one whose length the app does not know', () => {
+    for (const seconds of [3, 3.4, undefined]) {
+      const draft = videoDraft(kling30, { prompt: 'Open on @wave.', referenceVideos: [clip(seconds)] });
+      expect(validateCatalogCreationDraft(draft, kling30, ready), String(seconds)).toMatchObject({ errors: [], canGenerate: true });
+    }
+  });
+
+  it('says nothing on a descriptor that publishes no minimum, as production did before the release', () => {
+    const unpublished = klingVideoModel();
+    for (const mode of unpublished.inputModes ?? []) {
+      for (const slot of mode.slots) delete slot.minDurationSeconds;
+    }
+    const draft = videoDraft(unpublished, { prompt: 'Open on @wave.', referenceVideos: [clip(2.16)] });
+
+    expect(validateCatalogCreationDraft(draft, unpublished, ready)).toMatchObject({ errors: [], canGenerate: true });
+  });
+
+  it('holds only the clips the run sends to the minimum', () => {
+    // A fourth clip waits past the slot's three, and the line about the excess is the one that holds the run.
+    const clips = [clip(4, 'one'), clip(5, 'two'), clip(6, 'three'), clip(1.2, 'four')];
+    const draft = videoDraft(kling30, { prompt: 'Open on @one.', referenceVideos: clips });
+
+    expect(validateCatalogCreationDraft(draft, kling30, ready).errors).toEqual(['Video elements supports up to 3 inputs.']);
+  });
+});
+
 describe('why references a draft holds wait out of its run', () => {
   // As the native parser reads it from the catalog: the reason reads its `in` condition and the labels.
   const veo = parseModelCatalogDetail(veo31Model);

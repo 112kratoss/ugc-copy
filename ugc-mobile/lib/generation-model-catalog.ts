@@ -83,6 +83,8 @@ export interface CatalogInputSlot {
   maxNamed?: number;
   durationMetadata?: 'optional' | 'required';
   maxDurationSeconds?: number;
+  /** The shortest clip or track the slot takes, in seconds (Kling 3.0's video elements, 3). */
+  minDurationSeconds?: number;
   conditions?: CatalogCondition[];
 }
 
@@ -392,6 +394,10 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
       value.maxDurationSeconds !== undefined
       && (typeof value.maxDurationSeconds !== 'number' || value.maxDurationSeconds <= 0)
     )
+    || (
+      value.minDurationSeconds !== undefined
+      && (typeof value.minDurationSeconds !== 'number' || !(value.minDurationSeconds > 0))
+    )
   ) return null;
   const conditions = parseConditions(value.conditions);
   if (conditions === null) return null;
@@ -409,6 +415,9 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
       : {}),
     ...(typeof value.maxDurationSeconds === 'number'
       ? { maxDurationSeconds: value.maxDurationSeconds }
+      : {}),
+    ...(typeof value.minDurationSeconds === 'number'
+      ? { minDurationSeconds: value.minDurationSeconds }
       : {}),
     ...(conditions ? { conditions } : {}),
   };

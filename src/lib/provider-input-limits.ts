@@ -1,4 +1,5 @@
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
+import { mediaTooShortMessage } from '../../ugc-mobile/lib/model-catalog/protocol';
 import {
   promptLimitViolation,
   providerPromptMaxLength,
@@ -74,6 +75,15 @@ const REFERENCE_MEDIA_MIN_SECONDS: Readonly<Record<string, Partial<Record<Refere
   'kling-3.0': { motion: 3 },
 };
 
+/**
+ * The shortest file the model's provider takes in that role, in seconds, or undefined where it
+ * states none. The catalog publishes it on the slot the role travels in (`minDurationSeconds`),
+ * so both creators hold a run to the minimum this module refuses it by.
+ */
+export function referenceMediaMinSeconds(modelId: string, role: ReferenceMediaRole): number | undefined {
+  return hasRule(REFERENCE_MEDIA_MIN_SECONDS, modelId) ? REFERENCE_MEDIA_MIN_SECONDS[modelId][role] : undefined;
+}
+
 const REFERENCE_MEDIA_NOUNS: Readonly<Record<ReferenceMediaRole, { group: string; one: string }>> = {
   video: { group: 'reference videos', one: 'Reference video' },
   audio: { group: 'reference audio', one: 'Reference audio' },
@@ -94,13 +104,10 @@ export type ReferenceMediaLength = {
   label?: string | null;
 };
 
-function seconds(value: number): string {
-  return `${value} second${value === 1 ? '' : 's'}`;
-}
-
 /**
  * Why the provider would refuse a run's reference media for being too short, in words
- * for the creator, or null when every length it knows is long enough.
+ * for the creator, or null when every length it knows is long enough. The words are
+ * `mediaTooShortMessage`'s, which both creators say before Generate too.
  */
 export function referenceMediaLengthViolation(
   modelId: string,
@@ -118,12 +125,11 @@ export function referenceMediaLengthViolation(
     if (length >= minimum) continue;
 
     const nouns = REFERENCE_MEDIA_NOUNS[item.role];
-    const refusal = `${modelDisplayName(modelId)} ${nouns.group} must be at least ${seconds(minimum)} long.`;
-    if (item.exact === false) return refusal;
+    const what = `${modelDisplayName(modelId)} ${nouns.group}`;
+    if (item.exact === false) return mediaTooShortMessage(what, minimum);
     const label = item.label?.trim()
       || (item.role === 'motion' ? nouns.one : `${nouns.one} ${place}`);
-    // Rounded down, so a clip refused for being short never reads as long enough.
-    return `${refusal} ${label} runs ${seconds(Math.floor(length * 10) / 10)}.`;
+    return mediaTooShortMessage(what, minimum, { label, durationSeconds: length });
   }
   return null;
 }
