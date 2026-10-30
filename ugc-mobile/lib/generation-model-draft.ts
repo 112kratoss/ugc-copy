@@ -423,8 +423,14 @@ export function catalogRunInputSlots(draft: CreationDraft, model: GenerationMode
   return Object.fromEntries(catalogRunSlots(draft, model).map(({ slot, assets }) => [slot.key, assets]));
 }
 
-/** Each kind of reference a video draft holds, as a sentence names it (the composer's own nouns). */
-const STANDBY_REFERENCE_NOUNS = { image: 'reference pictures', video: 'reference clips', audio: 'reference tracks' } as const;
+/**
+ * The controls the settings sheet keeps off a video draft's sheet: the input mode follows what is
+ * attached, and a multi-shot run's duration is its shots' total. The reason pictures wait names
+ * only options the sheet shows, so both read this one list.
+ */
+export function videoSettingsHiddenControlKeys(draft: Pick<VideoCreationDraft, 'isMultiShot'>): string[] {
+  return draft.isMultiShot ? ['isMultiShot', 'referenceMode', 'duration'] : ['isMultiShot', 'referenceMode'];
+}
 
 /** Choices as a sentence offers them: "Lite or Fast", "Plus, Pro or Max". */
 function choicesInSentence(labels: readonly string[]): string {
@@ -435,46 +441,49 @@ function choicesInSentence(labels: readonly string[]): string {
  * Why references a video draft holds wait out of its run, when a setting the creator can change is
  * what keeps them out: Veo 3.1 takes reference pictures on Lite and Fast only, so on Quality its
  * references open no slot and the pictures wait under "Not sent with this run". Read off the
- * descriptor, never a model id: the shape the composer's references rail asks about
- * (referenceRailShape) opens no slot for a kind the draft holds, and does on some option of a choice
- * control the settings sheet offers, which the line names by that control's own labels. Null when
- * nothing of a kind waits, when its slot is open (what waits is past the slot's max, which the
- * validator says), and when no one option opens it, as on a model with no slot for that kind.
+ * descriptor, never a model id: `railShape`, the shape the composer's references rail asks about
+ * (its referenceRailShape), opens no slot for a kind the draft holds, and some option of a choice
+ * control the settings sheet shows does, which the line names by that control's own labels, in its
+ * order. Null when nothing of a kind waits, when its slot is open (what waits is past the slot's
+ * max, which the validator says), and when no one option opens it, as on a model with no slot for
+ * that kind.
  */
 export function catalogStandbyReferencesReason(
   draft: VideoCreationDraft,
   model: GenerationModelDescriptor,
+  railShape: ReferenceMode,
 ): string | null {
   if (!model.inputModes) return null;
   const sent = new Set(catalogRunSlots(draft, model).flatMap(({ assets }) => assets).map((asset) => asset.id));
   const draftSettings = getCatalogDraftSettings(draft, model);
-  const railSettings: Record<string, CatalogPrimitive> = {
-    ...draftSettings,
-    referenceMode: draft.isMultiShot ? catalogVideoRunReferenceMode(draft, model) : 'elements',
-    isMultiShot: draft.isMultiShot,
-  };
+  const railSettings: Record<string, CatalogPrimitive> = { ...draftSettings, referenceMode: railShape, isMultiShot: draft.isMultiShot };
   const counts = catalogDraftInputCounts(draft, model);
-  const opens = (kind: keyof typeof STANDBY_REFERENCE_NOUNS, settings: Record<string, CatalogPrimitive>) => (
+  const opens = (kind: 'image' | 'video' | 'audio', settings: Record<string, CatalogPrimitive>) => (
     getActiveCatalogInputSlots(model, settings, counts).some((slot) => (
       slot.role === 'reference' && slot.kind === kind && slot.key !== SUBJECT_IMAGES_SLOT_KEY && slot.max > 0
     ))
   );
-  // The choices the settings sheet offers: the input mode follows what is attached, and a control
-  // shows while its own conditions hold, read as the sheet reads them.
+  // Each kind the run leaves out with no slot open for it, in the composer's own words.
+  const closed = ([
+    { kind: 'image', noun: 'reference pictures', held: draft.references },
+    { kind: 'video', noun: 'reference clips', held: draft.referenceVideos },
+    { kind: 'audio', noun: 'reference tracks', held: draft.referenceAudios },
+  ] as const).filter(({ kind, held }) => held.some((media) => !sent.has(media.id)) && !opens(kind, railSettings));
+  if (closed.length === 0) return null;
+  // The choices the sheet shows, its own conditions read as it reads them.
+  const hidden = videoSettingsHiddenControlKeys(draft);
   const controlCounts = buildCatalogQuoteRequest(draft, model, 'conditions').inputCounts ?? {};
   const offered = model.controls.filter((control): control is CatalogChoiceControl => (
     control.type === 'choice'
-    && control.key !== 'referenceMode'
+    && !hidden.includes(control.key)
     && catalogConditionsMatch(control.conditions, draftSettings, controlCounts)
   ));
-  const held = { image: draft.references, video: draft.referenceVideos, audio: draft.referenceAudios };
-  const reasons = (Object.keys(held) as Array<keyof typeof held>).flatMap((kind) => {
-    if (!held[kind].some((media) => !sent.has(media.id)) || opens(kind, railSettings)) return [];
+  const reasons = closed.flatMap(({ kind, noun }) => {
     for (const control of offered) {
       const labels = control.options
         .filter((option) => opens(kind, { ...railSettings, [control.key]: option.value }))
         .map((option) => option.label);
-      if (labels.length > 0) return [`${model.displayName} takes ${STANDBY_REFERENCE_NOUNS[kind]} on ${choicesInSentence(labels)}.`];
+      if (labels.length > 0) return [`${model.displayName} takes ${noun} on ${choicesInSentence(labels)}.`];
     }
     return [];
   });

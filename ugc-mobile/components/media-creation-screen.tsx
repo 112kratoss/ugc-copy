@@ -96,6 +96,7 @@ import {
   readVerifiedInputDurations,
   REFERENCE_DURATION_CHANGED_CODE,
   validateCatalogCreationDraft,
+  videoSettingsHiddenControlKeys,
   type RefusedRunPrice,
 } from '@/lib/generation-model-draft';
 import { guidedCreationStarter, guidedCreationStarters } from '@/lib/guided-creation-starter';
@@ -3095,11 +3096,7 @@ function IdentityCreationScreen({
           catalog={catalog}
           model={selectedCreatorModel}
           draft={currentDraft}
-          hiddenControlKeys={activeTool === 'video'
-            ? videoDraft.isMultiShot
-              ? ['isMultiShot', 'referenceMode', 'duration']
-              : ['isMultiShot', 'referenceMode']
-            : ['duration']}
+          hiddenControlKeys={activeTool === 'video' ? videoSettingsHiddenControlKeys(videoDraft) : ['duration']}
           sourceDurationSeconds={activeTool === 'motion' && motionDraft.referenceVideo ? getMotionDuration(motionDraft) : null}
           quoteStatus={creatorQuoteStatus}
           awaitingInputs={motionInputsMissing}
@@ -3991,7 +3988,7 @@ function ImagePromptComposer({
           )}
           {standbyReferences.length > 0 ? (
             <View style={{ paddingHorizontal: 16 }}>
-              <StandbyReferences references={standbyReferences} message={referenceLimitMessage} onRemove={(media) => onRemoveReference(media.id)} />
+              <StandbyReferences references={standbyReferences} message={referenceLimitMessage} reason={null} onRemove={(media) => onRemoveReference(media.id)} />
             </View>
           ) : null}
         </View>
@@ -4429,7 +4426,10 @@ function VideoCreatorComposer({
   const isSent = (media: MediaDraft) => !standbyIds.has(media.id);
   const referenceLimitMessage = validationErrors.find(isReferenceLimitError) ?? null;
   // Why they wait, when a setting the creator can change keeps them out (Veo 3.1 takes pictures on Lite and Fast only).
-  const standbyReason = model && standbyReferences.length > 0 ? catalogStandbyReferencesReason(draft, model) : null;
+  // Asked only while a reference, clip or track waits: a frame or subject apart has no such reason.
+  const standbyReason = model && [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios].some((media) => standbyIds.has(media.id))
+    ? catalogStandbyReferencesReason(draft, model, railShape)
+    : null;
   // The handles a run on this model may name: those it sends, as the server refuses the rest.
   const runHandles = new Set(model
     ? catalogDraftRunHandles({ ...draft, referenceMode }, model)
@@ -4979,23 +4979,22 @@ function UploadCancelButton({ onPress }: { onPress: () => void }) {
 function StandbyReferences({
   references,
   message,
-  reason = null,
+  reason,
   onRemove,
 }: {
   references: MediaDraft[];
   message: string | null;
-  /** Why they wait when a setting the creator can change keeps them out; nothing blocks the run. */
-  reason?: string | null;
+  /** Why they wait when a setting the creator can change keeps them out; it holds nothing, so it is no alert. */
+  reason: string | null;
   onRemove: (media: MediaDraft) => void;
 }) {
-  const theme = useAppTheme();
   if (references.length === 0) return null;
   return (
     <View testID="standby-references" style={{ gap: 8 }}>
       <View style={{ gap: 2 }}>
-        <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Not sent with this run</Text>
-        {reason ? <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>{reason}</Text> : null}
-        {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{message}</Text> : null}
+        <AppText variant="label" color="muted">Not sent with this run</AppText>
+        {reason ? <AppText variant="caption" color="muted">{reason}</AppText> : null}
+        {message ? <AppText variant="caption" color="amber" accessibilityRole="alert">{message}</AppText> : null}
       </View>
       <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
         {references.map((media) => (
@@ -5009,7 +5008,8 @@ function StandbyReferences({
               onPress={() => onRemove(media)}
               style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
-              <Text style={{ color: theme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
+              {/* Capped as a control's label is: uncapped, the largest text size broke it mid-word in the 72pt column. */}
+              <AppText variant="caption" color="danger">Remove</AppText>
             </Pressable>
           </View>
         ))}

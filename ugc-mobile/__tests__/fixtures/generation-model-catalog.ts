@@ -171,11 +171,15 @@ export const seedance2MiniAtRelease: GenerationModelDescriptor = {
 };
 
 /**
- * Veo 3.1 as release veo-quality-references-20261030 publishes it: its reference pictures open on Lite and
- * Fast only, the variants Kie's REFERENCE_2_VIDEO takes, through an `in` condition on `mode` beside
- * `referenceMode`. On Quality a run goes as frames, and pictures a draft holds wait apart.
+ * Veo 3.1 as release veo-quality-references-20261030 publishes it: production's descriptor field for field
+ * (src/__tests__/fixtures/production-video-descriptors-2026-10-29.json), with the one change that release
+ * makes. Its reference pictures open on Lite and Fast only, the variants Kie's REFERENCE_2_VIDEO takes,
+ * through an `in` condition on `mode` beside `referenceMode`; on Quality a run goes as frames, and pictures a
+ * draft holds wait apart.
  */
 export const veo31Model = model('veo-3.1', 'video', 'Veo 3.1', {
+  description: 'Google-class video generation with fast and quality variants',
+  sortOrder: 100,
   controls: [
     choiceControl('aspectRatio', 'Aspect ratio', '16:9', ['16:9', '9:16', 'Auto']),
     {
@@ -188,8 +192,17 @@ export const veo31Model = model('veo-3.1', 'video', 'Veo 3.1', {
     },
     choiceControl('resolution', 'Resolution', '720p', ['720p', '1080p', '4k']),
     choiceControl('duration', 'Duration', '8', ['8'], 'chips', 'number'),
-    choiceControl('referenceMode', 'Input mode', 'frames', ['frames', 'elements']),
+    {
+      key: 'referenceMode',
+      label: 'Input mode',
+      type: 'choice',
+      presentation: 'chips',
+      defaultValue: 'frames',
+      options: [{ value: 'frames', label: 'Frames' }, { value: 'elements', label: 'References' }],
+      minClientSchemaVersion: 2,
+    },
   ],
+  capabilities: { multiShot: false, sound: false, fixedLens: false, googleSearch: false, outputFormat: false },
   inputs: { imageReferences: { max: 3, supportsNaming: true }, videoReferences: null, audioReferences: null, startFrame: true, endFrame: true, combineFramesWithReferences: false },
   availability: { web: true, mobile: true },
   inputModes: [
@@ -197,7 +210,7 @@ export const veo31Model = model('veo-3.1', 'video', 'Veo 3.1', {
       key: 'frames',
       label: 'Frames',
       default: true,
-      conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
+      conditions: seedanceReferenceModeIs('frames'),
       slots: [
         { key: 'startFrame', kind: 'image', role: 'startFrame', label: 'Start frame', min: 0, max: 1 },
         { key: 'endFrame', kind: 'image', role: 'endFrame', label: 'End frame', min: 0, max: 1 },
@@ -208,7 +221,7 @@ export const veo31Model = model('veo-3.1', 'video', 'Veo 3.1', {
       label: 'Reusable references',
       default: false,
       conditions: [
-        { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
+        ...seedanceReferenceModeIs('elements'),
         { source: 'setting', key: 'mode', operator: 'in', value: ['veo3_lite', 'veo3_fast'] },
       ],
       slots: [{ key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference images', min: 0, max: 3, supportsNaming: true }],
