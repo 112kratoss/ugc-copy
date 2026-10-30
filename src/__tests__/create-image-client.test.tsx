@@ -752,11 +752,13 @@ function jsonResponse(status: number, body: unknown) {
  * Answers the start POSTs in order, the creation read the publish modal makes, and the look
  * for a run already at work as the page opens (`activeRun`, none by default).
  */
-function installFetch({ starts = [], publishDetails = null, remixBundle = null, activeRun = null }: {
+function installFetch({ starts = [], publishDetails = null, remixBundle = null, activeRun = null, activeRunAnswer = null }: {
   starts?: StartReply[];
   publishDetails?: unknown;
   remixBundle?: RemixSourceBundle | null;
   activeRun?: Record<string, unknown> | null;
+  /** Answers the look in place of `activeRun`, when the test resolves it. */
+  activeRunAnswer?: Promise<Response> | null;
 } = {}) {
   const replies = [...starts];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -769,7 +771,7 @@ function installFetch({ starts = [], publishDetails = null, remixBundle = null, 
       return jsonResponse(reply.status, reply.body);
     }
     if (url.startsWith('/api/generations?')) return jsonResponse(200, publishDetails ?? { generations: [] });
-    if (url === '/api/generations/active?tool=image') return jsonResponse(200, { run: activeRun });
+    if (url === '/api/generations/active?tool=image') return activeRunAnswer ?? jsonResponse(200, { run: activeRun });
     if (url.startsWith('/api/remix-source?') && remixBundle) return jsonResponse(200, remixBundle);
     throw new Error(`Unexpected fetch: ${url}`);
   });
@@ -783,6 +785,13 @@ function startCalls(fetchMock: ReturnType<typeof installFetch>) {
 
 function activeRunReads(fetchMock: ReturnType<typeof installFetch>) {
   return fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/generations/active'));
+}
+
+/** An answer the test gives when it chooses. */
+function heldAnswer() {
+  let answer: (response: Response) => void = () => undefined;
+  const promise = new Promise<Response>((resolve) => { answer = resolve; });
+  return { promise, answer: (response: Response) => answer(response) };
 }
 
 /** A run of this page's tool at work in another tab, as the API describes it. */
@@ -1657,7 +1666,7 @@ describe('CreateImageClient generation pipeline', () => {
       expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 8 credits$/);
       // Asked of the API with the session's token, then followed by its prediction.
       expect(activeRunReads(fetchMock)).toEqual([
-        ['/api/generations/active?tool=image', { headers: { Authorization: 'Bearer test-token' } }],
+        ['/api/generations/active?tool=image', { headers: { Authorization: 'Bearer test-token' }, signal: expect.any(AbortSignal) }],
       ]);
       expect(fetchGenerationStatusWithRetryMock).toHaveBeenCalledWith(expect.objectContaining({ url: '/api/generate-image?id=pred-old' }));
     });
@@ -1682,6 +1691,44 @@ describe('CreateImageClient generation pipeline', () => {
 
       expect(fetchGenerationStatusWithRetryMock).toHaveBeenCalledTimes(1);
       expect(within(canvas).getByText('8 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+    });
+
+    // The page's unmount aborts only a poll that exists: a look still out then would start
+    // one nothing stops.
+    it('drops a look that answers after the page has gone', async () => {
+      const look = heldAnswer();
+      const fetchMock = installFetch({ activeRunAnswer: look.promise });
+      const view = render(<CreateImageClient prefill={{}} />);
+      await waitFor(() => expect(activeRunReads(fetchMock)).toHaveLength(1));
+
+      view.unmount();
+      await act(async () => {
+        look.answer(jsonResponse(200, { run: runAtWork() }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(fetchGenerationStatusWithRetryMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps the creator\'s own press, refusal and all, when the look answers after it', async () => {
+      const look = heldAnswer();
+      const fetchMock = installFetch({
+        starts: [{ status: 402, body: { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 8 credits.' } }],
+        activeRunAnswer: look.promise,
+      });
+      render(<CreateImageClient prefill={{}} />);
+      await waitFor(() => expect(activeRunReads(fetchMock)).toHaveLength(1));
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+      expect(await screen.findByText('Insufficient credits. This action costs 8 credits.')).toBeInTheDocument();
+
+      await act(async () => {
+        look.answer(jsonResponse(200, { run: runAtWork() }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(screen.getByText('Insufficient credits. This action costs 8 credits.')).toBeInTheDocument();
+      expect(fetchGenerationStatusWithRetryMock).not.toHaveBeenCalled();
     });
 
     // A look that fails says nothing: the run still reaches Studio and its alert.

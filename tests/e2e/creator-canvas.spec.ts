@@ -277,8 +277,11 @@ for (const run of RUNS_AT_WORK) {
     await expect(canvas(page)).toContainText(`${run.cost} credits are held for this run. If it fails, they come back.`);
     await expect(canvas(page).getByTestId('creator-canvas-chip')).toContainText(run.name);
     await expect.poll(() => checks[0]).toBe('?id=pred-earlier');
-    // Development mounts the page twice (Strict Mode) and each mount looks; one follows the run,
-    // and it is still shown once both looks have answered.
+    // One follower, though development mounts the page twice (Strict Mode): a run at work is
+    // checked again only some 15 s later, so a second check now would be a second follower's.
+    await page.waitForTimeout(3_000);
+    expect(checks).toHaveLength(1);
+    expect(looks.length).toBeGreaterThan(0);
     expect([...new Set(looks)]).toEqual([`?tool=${run.tool}`]);
     await expect(canvas(page).getByRole('heading', { name: run.making })).toBeVisible();
   });

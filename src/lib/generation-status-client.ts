@@ -134,21 +134,25 @@ function parseCreatorActiveRun(value: unknown): CreatorActiveRun | null {
 /**
  * The caller's run of this creator still at work, for the page to pick up as it
  * opens: one started before a reload, in another tab or on another device. Null
- * when there is none, and when the server cannot say: the page then opens as it
- * would with none, and the run still reaches Studio and its alert.
+ * when there is none, when the server cannot say, and once `signal` aborts: the
+ * page then opens as it would with none, and the run still reaches Studio and its
+ * alert.
  */
 export async function fetchCreatorActiveRun({
   tool,
   accessToken,
+  signal,
   fetchImpl = fetch,
 }: {
   tool: CreatorActiveRunTool;
   accessToken: string;
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }): Promise<CreatorActiveRun | null> {
   try {
     const response = await fetchImpl(`/api/generations/active?tool=${tool}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
+      ...(signal ? { signal } : {}),
     });
     if (!response.ok) return null;
     const payload: unknown = await response.json();

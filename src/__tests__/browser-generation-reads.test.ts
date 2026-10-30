@@ -18,11 +18,14 @@ const SRC_ROOT = path.join(process.cwd(), 'src');
 const SOURCE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx'];
 
 /** A table read of `generations` through any supabase-js client. */
-const GENERATIONS_READ = /\.from\(\s*['"]generations['"]\s*\)/;
-const CLIENT_DIRECTIVE = /^\s*(['"])use client\1/;
+const GENERATIONS_READ = /\.from\(\s*['"`]generations['"`]\s*\)/;
+// The directive opens the file; only comments may come before it.
+const CLIENT_DIRECTIVE = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*(['"])use client\1/;
 // What loads a module with its importer: a value import or re-export, a bare import, an
-// import(). `import type` and `export type` are erased and load nothing.
-const LOADING_IMPORT = /(?:^\s*import\s+(?!type\b)[^'"]*?from\s*|^\s*export\s+(?!type\b)[^'"]*?from\s*|^\s*import\s*|\bimport\s*\(\s*)['"]([^'"]+)['"]/gm;
+// import(), a require(). `import type` and `export type` are erased and load nothing.
+const LOADING_IMPORT = /(?:^\s*import\s+(?!type\b)[^'"]*?from\s*|^\s*export\s+(?!type\b)[^'"]*?from\s*|^\s*import\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/gm;
+/** What the browser loads without a directive of its own. */
+const BROWSER_ENTRIES = ['instrumentation-client.ts'];
 
 function walkFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -52,9 +55,11 @@ function resolveLocalImport(specifier: string, importer: string): string | null 
 
 function listClientComponents(): string[] {
   const testsRoot = path.join(SRC_ROOT, '__tests__') + path.sep;
+  const entries = BROWSER_ENTRIES.map((entry) => path.join(SRC_ROOT, entry)).filter((entry) => existsSync(entry));
   return walkFiles(SRC_ROOT)
     .filter((file) => !file.startsWith(testsRoot) && /\.(?:ts|tsx|js|jsx)$/.test(file))
-    .filter((file) => CLIENT_DIRECTIVE.test(readFileSync(file, 'utf8')));
+    .filter((file) => CLIENT_DIRECTIVE.test(readFileSync(file, 'utf8')))
+    .concat(entries);
 }
 
 /** Every file of src a client component loads, and what those load. */
@@ -84,6 +89,7 @@ describe('generation reads in the browser', () => {
       'app/create-motion/CreateMotionClient.tsx',
       // Loaded with each creator, by a value import.
       'lib/generation-status-client.ts',
+      'instrumentation-client.ts',
     ]));
     // Only a type comes from the route's service; nothing of it reaches the browser.
     expect(relative).not.toContain('lib/creator-active-run-service.ts');
@@ -92,7 +98,17 @@ describe('generation reads in the browser', () => {
   it('would see a read of the table, whatever its quotes and spacing', () => {
     expect(GENERATIONS_READ.test(`supabase\n  .from('generations')\n  .select('id, prompt')`)).toBe(true);
     expect(GENERATIONS_READ.test('supabase.from( "generations" )')).toBe(true);
+    expect(GENERATIONS_READ.test('supabase.from(`generations`)')).toBe(true);
     expect(GENERATIONS_READ.test("supabase.from('generation_jobs')")).toBe(false);
+  });
+
+  it('would see a client component behind comments, and what it requires', () => {
+    expect(CLIENT_DIRECTIVE.test("// The image creator.\n/* Its page. */\n'use client';\n")).toBe(true);
+    expect(CLIENT_DIRECTIVE.test("import x from 'y';\n'use client';\n")).toBe(false);
+    const required = [..."const sdk = require('@/lib/supabase');".matchAll(LOADING_IMPORT)].map((match) => match[1]);
+    expect(required).toEqual(['@/lib/supabase']);
+    const typeOnly = [..."import type { Run } from '@/lib/creator-active-run-service';".matchAll(LOADING_IMPORT)];
+    expect(typeOnly).toEqual([]);
   });
 
   it('are never made by a module a client component loads', () => {

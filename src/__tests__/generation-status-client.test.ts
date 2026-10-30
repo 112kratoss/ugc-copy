@@ -176,13 +176,8 @@ describe('fetchCreatorActiveRun', () => {
     model: 'nano-banana-2',
     duration: null,
   };
-  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-
   it('asks the server for the tool\'s run with the session\'s token, and answers it', async () => {
-    const fetchImpl = vi.fn(async () => json({ run }));
+    const fetchImpl = vi.fn(async () => statusResponse({ run }));
 
     await expect(fetchCreatorActiveRun({ tool: 'motion', accessToken: 'token-1', fetchImpl })).resolves.toEqual(run);
     expect(fetchImpl).toHaveBeenCalledWith('/api/generations/active?tool=motion', {
@@ -191,17 +186,17 @@ describe('fetchCreatorActiveRun', () => {
   });
 
   it('answers null when there is no run', async () => {
-    const fetchImpl = vi.fn(async () => json({ run: null }));
+    const fetchImpl = vi.fn(async () => statusResponse({ run: null }));
 
     await expect(fetchCreatorActiveRun({ tool: 'image', accessToken: 'token', fetchImpl })).resolves.toBeNull();
   });
 
   it.each([
-    ['a refusal', () => json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401)],
-    ['a server fault', () => json({ error: 'Could not check for a run in progress.' }, 500)],
+    ['a refusal', () => statusResponse({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401)],
+    ['a server fault', () => statusResponse({ error: 'Could not check for a run in progress.' }, 500)],
     ['a body that is not JSON', () => new Response('<html>', { status: 200 })],
-    ['a run without its prediction', () => json({ run: { ...run, predictionId: '' } })],
-    ['a run that is over', () => json({ run: { ...run, status: 'succeeded' } })],
+    ['a run without its prediction', () => statusResponse({ run: { ...run, predictionId: '' } })],
+    ['a run that is over', () => statusResponse({ run: { ...run, status: 'succeeded' } })],
     ['a dropped connection', () => { throw new TypeError('Failed to fetch'); }],
   ])('answers null for %s, as for no run', async (_label, reply) => {
     const fetchImpl = vi.fn(async () => reply());
@@ -210,7 +205,7 @@ describe('fetchCreatorActiveRun', () => {
   });
 
   it('reads a missing or mistyped detail as unknown, not as a reason to drop the run', async () => {
-    const fetchImpl = vi.fn(async () => json({ run: { ...run, status: 'waiting', prompt: 42, cost: '8', model: undefined, duration: 8 } }));
+    const fetchImpl = vi.fn(async () => statusResponse({ run: { ...run, status: 'waiting', prompt: 42, cost: '8', model: undefined, duration: 8 } }));
 
     await expect(fetchCreatorActiveRun({ tool: 'motion', accessToken: 'token', fetchImpl })).resolves.toEqual({
       ...run,
@@ -220,6 +215,22 @@ describe('fetchCreatorActiveRun', () => {
       model: null,
       duration: 8,
     });
+  });
+  it('hands the page\'s signal to the request, and answers null once it aborts', async () => {
+    const page = new AbortController();
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.signal?.aborted) throw Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+      return statusResponse({ run });
+    });
+
+    await expect(fetchCreatorActiveRun({ tool: 'image', accessToken: 'token', signal: page.signal, fetchImpl })).resolves.toEqual(run);
+    expect(fetchImpl).toHaveBeenLastCalledWith('/api/generations/active?tool=image', {
+      headers: { Authorization: 'Bearer token' },
+      signal: page.signal,
+    });
+
+    page.abort();
+    await expect(fetchCreatorActiveRun({ tool: 'image', accessToken: 'token', signal: page.signal, fetchImpl })).resolves.toBeNull();
   });
 });
 

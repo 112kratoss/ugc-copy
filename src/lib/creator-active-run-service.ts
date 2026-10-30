@@ -13,7 +13,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * prompt, cost and model were added to that read later: Postgres refused the
  * whole query (42501, a 403 from PostgREST) and the page opened idle on every
  * load. The read is the server's now, on the service client, scoped here to
- * the owner's ids.
+ * the owner's ids. Runs a template or a workflow canvas started are their own
+ * pages' to follow, and are left out.
  */
 
 export const CREATOR_ACTIVE_RUN_TOOLS = ['image', 'video', 'motion'] as const;
@@ -36,6 +37,8 @@ export type CreatorActiveRun = {
 };
 
 const ACTIVE_RUN_STATUSES = ['processing', 'waiting'] as const;
+/** Runs at work read at once: enough to pass the few a workflow canvas holds. */
+export const ACTIVE_RUN_CANDIDATES = 10;
 
 export function parseCreatorActiveRunTool(value: string | null): CreatorActiveRunTool | null {
   return CREATOR_ACTIVE_RUN_TOOLS.find((tool) => tool === value) ?? null;
@@ -44,7 +47,7 @@ export function parseCreatorActiveRunTool(value: string | null): CreatorActiveRu
 type ActiveRunRow = {
   id: string;
   prediction_id: string;
-  status: string;
+  status: (typeof ACTIVE_RUN_STATUSES)[number];
   created_at: string;
   prompt: string | null;
   cost: number | null;
@@ -82,20 +85,30 @@ export async function findCreatorActiveRun({
 
   const { data, error } = await query
     .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(ACTIVE_RUN_CANDIDATES);
   if (error) throw error;
-  const row = data as ActiveRunRow | null;
+  const rows = (data ?? []) as ActiveRunRow[];
+  if (rows.length === 0) return null;
+
+  // A workflow canvas starts its nodes' runs as ordinary generations and follows them on
+  // its own page; only the steps that hold them say so.
+  const { data: steps, error: stepsError } = await client
+    .from('workflow_canvas_run_steps')
+    .select('generation_id')
+    .in('generation_id', rows.map((row) => row.id));
+  if (stepsError) throw stepsError;
+  const canvasRuns = new Set((steps ?? []).map((step) => (step as { generation_id: string }).generation_id));
+  const row = rows.find((candidate) => !canvasRuns.has(candidate.id));
   if (!row) return null;
 
   return {
     id: row.id,
     predictionId: row.prediction_id,
-    status: row.status === 'waiting' ? 'waiting' : 'processing',
+    status: row.status,
     createdAt: row.created_at,
-    prompt: typeof row.prompt === 'string' ? row.prompt : null,
-    cost: typeof row.cost === 'number' ? row.cost : null,
-    model: typeof row.model === 'string' ? row.model : null,
-    duration: typeof row.duration === 'number' ? row.duration : null,
+    prompt: row.prompt,
+    cost: row.cost,
+    model: row.model,
+    duration: row.duration,
   };
 }

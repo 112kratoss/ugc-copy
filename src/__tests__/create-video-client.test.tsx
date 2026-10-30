@@ -596,7 +596,7 @@ describe('CreateVideoClient Kling video elements', () => {
     render(<CreateVideoClient prefill={{}} />);
 
     await waitFor(() => expect(activeRunReads()).toEqual([
-      ['/api/generations/active?tool=video', { headers: { Authorization: 'Bearer test-token' } }],
+      ['/api/generations/active?tool=video', { headers: { Authorization: 'Bearer test-token' }, signal: expect.any(AbortSignal) }],
     ]));
   });
 
@@ -5270,6 +5270,28 @@ describe('CreateVideoClient Kling video elements', () => {
 
       expect(statusChecks()).toHaveLength(1);
       expect(within(canvas).getByText('19 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+    });
+
+    // The page's unmount aborts only a poll that exists: a look still out then would start
+    // one nothing stops.
+    it('drops a look that answers after the page has gone', async () => {
+      const run = { id: 'gen-old', predictionId: 'pred-old', status: 'processing', createdAt: new Date().toISOString(), cost: 19, prompt: 'An earlier run', model: 'kling-3.0-video', duration: 5 };
+      let answerLook: (response: Response) => void = () => undefined;
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input) === '/api/generations/active?tool=video'
+          ? new Promise<Response>((resolve) => { answerLook = resolve; })
+          : defaultResponse(input, init)
+      ));
+      const view = render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(activeRunReads()).toHaveLength(1));
+
+      view.unmount();
+      await act(async () => {
+        answerLook({ ok: true, status: 200, json: async () => ({ run }) } as Response);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(statusChecks()).toHaveLength(0);
     });
 
     // The artboard Generating (owner, 2026-10-28): the run's line with what it holds, that

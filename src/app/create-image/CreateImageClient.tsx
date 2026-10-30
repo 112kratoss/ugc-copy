@@ -415,6 +415,8 @@ export default function CreateImageClient({
     const restoredPersistedMediaForUserRef = useRef<string | null>(null);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
+    // The look, as the page opens, for a run already at work.
+    const activeRunLookupRef = useRef<AbortController | null>(null);
     const elementRefs = useRef<ImageElementDraft[]>([]);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
     // Bumped once a run the creator started is under way: the canvas then comes into view.
@@ -1459,6 +1461,11 @@ export default function CreateImageClient({
     };
 
     useEffect(() => {
+        // Dropped when the page goes (development's Strict Mode mounts it twice) and at a
+        // press: a run it found then would get a follower nothing stops, or take the page
+        // from the creator's own run.
+        const lookup = new AbortController();
+        activeRunLookupRef.current = lookup;
         const resumePendingGeneration = async () => {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) return;
@@ -1472,11 +1479,9 @@ export default function CreateImageClient({
             }
 
             // Asked of the server: the browser may not read a run's prompt, cost or model.
-            const run = await fetchCreatorActiveRun({ tool: 'image', accessToken: session.access_token });
-            // One run on the page at a time, held as a press holds it: a press may have come
-            // first, and in development Strict Mode mounts the page twice, so the other
-            // mount's look may already follow this run. Two followers abort each other's poll.
-            if (!run || activeGenerationRequestKeyRef.current) return;
+            const run = await fetchCreatorActiveRun({ tool: 'image', accessToken: session.access_token, signal: lookup.signal });
+            // One run on the page at a time, held as a press holds it.
+            if (!run || lookup.signal.aborted || activeGenerationRequestKeyRef.current) return;
             activeGenerationRequestKeyRef.current = `resume:${run.predictionId}`;
 
             const startedAtMs = Number.isNaN(Date.parse(run.createdAt)) ? Date.now() : Date.parse(run.createdAt);
@@ -1508,6 +1513,7 @@ export default function CreateImageClient({
         };
 
         void resumePendingGeneration();
+        return () => lookup.abort();
         // Recovery is intentionally a mount-only lookup; changing form settings must not restart it.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -1615,6 +1621,7 @@ export default function CreateImageClient({
 
         const idempotencyKey = createGenerationIdempotencyKey('image');
         activeGenerationRequestKeyRef.current = idempotencyKey;
+        activeRunLookupRef.current?.abort();
         setIsGenerating(true);
         setError(null);
         setRunFailure(null);

@@ -1,122 +1,161 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
+  ACTIVE_RUN_CANDIDATES,
   findCreatorActiveRun,
   parseCreatorActiveRunTool,
-  type CreatorActiveRunTool,
 } from '@/lib/creator-active-run-service';
+import { createStoredRows, databaseError } from './fixtures/stored-rows';
 
-type Call = [string, ...unknown[]];
+type Row = Record<string, unknown>;
 
-/** A service client whose one query records each step and answers `result`. */
-function recordingClient(result: { data: unknown; error: unknown }) {
-  const calls: Call[] = [];
-  const builder: Record<string, unknown> = {};
-  for (const method of ['select', 'in', 'eq', 'is', 'not', 'order', 'limit']) {
-    builder[method] = (...args: unknown[]) => {
-      calls.push([method, ...args]);
-      return builder;
-    };
-  }
-  builder.maybeSingle = async () => {
-    calls.push(['maybeSingle']);
-    return result;
+/**
+ * A generations row as the starts write one, newest first in each table below: the
+ * fixture applies filters but keeps the stored order, as `created_at desc` would.
+ */
+function run(id: string, overrides: Row = {}): Row {
+  return {
+    id,
+    user_id: 'account-1',
+    prediction_id: `pred-${id}`,
+    status: 'processing',
+    created_at: '2026-10-31T09:00:00.000+00:00',
+    prompt: `Prompt of ${id}`,
+    cost: 8,
+    model: 'nano-banana-2',
+    duration: null,
+    category: 'image',
+    creation_mode: null,
+    template_run_id: null,
+    template_run_step_id: null,
+    archived_at: null,
+    ...overrides,
   };
-  const client = {
-    from: vi.fn((table: string) => {
-      calls.push(['from', table]);
-      return builder;
-    }),
-  } as unknown as SupabaseClient;
-  return { client, calls };
 }
 
-const ROW = {
-  id: 'gen-1',
-  prediction_id: 'pred-1',
-  status: 'waiting',
-  created_at: '2026-10-31T09:10:02.087+00:00',
-  prompt: 'A lighthouse at dawn',
-  cost: 8,
-  model: 'nano-banana-2',
-  duration: null,
-};
+function stored(generations: Row[], canvasSteps: Row[] = []) {
+  return createStoredRows({ generations, workflow_canvas_run_steps: canvasSteps });
+}
 
-const SHARED_FILTERS: Call[] = [
-  ['from', 'generations'],
-  ['select', 'id, prediction_id, status, created_at, prompt, cost, model, duration'],
-  ['in', 'user_id', ['account-1', 'guest-1']],
-];
-
-const TAIL_FILTERS: Call[] = [
-  ['in', 'status', ['processing', 'waiting']],
-  ['not', 'prediction_id', 'is', null],
-  ['is', 'template_run_id', null],
-  ['is', 'template_run_step_id', null],
-  ['is', 'archived_at', null],
-];
-
-const NEWEST_ONE: Call[] = [
-  ['order', 'created_at', { ascending: false }],
-  ['limit', 1],
-  ['maybeSingle'],
-];
+/** The `order` and `limit` each read asks for, which the fixture does not apply. */
+function recordOrdering(client: SupabaseClient) {
+  const asked: unknown[][] = [];
+  const from = client.from.bind(client);
+  Object.assign(client, {
+    from(table: string) {
+      const reads = from(table);
+      return {
+        ...reads,
+        select(columns: string) {
+          const query = reads.select(columns) as unknown as Record<string, (...args: unknown[]) => unknown>;
+          for (const method of ['order', 'limit']) {
+            const original = query[method];
+            query[method] = (...args: unknown[]) => {
+              asked.push([table, method, ...args]);
+              return original.apply(query, args);
+            };
+          }
+          return query;
+        },
+      };
+    },
+  });
+  return asked;
+}
 
 describe('findCreatorActiveRun', () => {
-  it.each([
-    ['image', [['eq', 'category', 'image']], []],
-    ['video', [['eq', 'category', 'video']], [['is', 'creation_mode', null]]],
-    ['motion', [['eq', 'category', 'video']], [['eq', 'creation_mode', 'motion']]],
-  ] as Array<[CreatorActiveRunTool, Call[], Call[]]>)('asks for the newest %s run at work that its creator can follow', async (tool, category, mode) => {
-    const { client, calls } = recordingClient({ data: null, error: null });
-
-    await findCreatorActiveRun({ client, userIds: ['account-1', 'guest-1'], tool });
-
-    expect(calls).toEqual([...SHARED_FILTERS, ...category, ...TAIL_FILTERS, ...mode, ...NEWEST_ONE]);
-  });
-
-  it('answers the run as the creators read it', async () => {
-    const { client } = recordingClient({ data: ROW, error: null });
+  it('answers each creator with its own run at work, as the creators read it', async () => {
+    const { client } = stored([
+      run('motion-1', { category: 'video', creation_mode: 'motion', model: 'kling-3.0', duration: 8, cost: 30, status: 'waiting' }),
+      run('video-1', { category: 'video', model: 'seedance-2-mini', cost: 19 }),
+      run('image-1'),
+    ]);
 
     await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'image' })).resolves.toEqual({
-      id: 'gen-1',
-      predictionId: 'pred-1',
-      status: 'waiting',
-      createdAt: '2026-10-31T09:10:02.087+00:00',
-      prompt: 'A lighthouse at dawn',
+      id: 'image-1',
+      predictionId: 'pred-image-1',
+      status: 'processing',
+      createdAt: '2026-10-31T09:00:00.000+00:00',
+      prompt: 'Prompt of image-1',
       cost: 8,
       model: 'nano-banana-2',
       duration: null,
     });
-  });
-
-  it('keeps a motion run\'s duration and reads any other status as at work', async () => {
-    const { client } = recordingClient({
-      data: { ...ROW, status: 'processing', duration: 8, prompt: null, cost: null, model: null },
-      error: null,
-    });
-
+    await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'video' })).resolves.toMatchObject({ id: 'video-1', cost: 19 });
     await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'motion' })).resolves.toMatchObject({
-      status: 'processing',
+      id: 'motion-1',
+      status: 'waiting',
       duration: 8,
-      prompt: null,
-      cost: null,
-      model: null,
     });
   });
 
-  it('answers null when nothing of the tool is at work', async () => {
-    const { client } = recordingClient({ data: null, error: null });
+  it('reads the caller and the guests linked to it, and nobody else', async () => {
+    const { client } = stored([
+      run('someone-elses', { user_id: 'account-2' }),
+      run('made-as-a-guest', { user_id: 'guest-1' }),
+    ]);
 
-    await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'video' })).resolves.toBeNull();
+    await expect(findCreatorActiveRun({ client, userIds: ['account-1', 'guest-1'], tool: 'image' })).resolves.toMatchObject({ id: 'made-as-a-guest' });
+    await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'image' })).resolves.toBeNull();
+  });
+
+  it('passes over runs its creator cannot follow or should not show', async () => {
+    const { client } = stored([
+      run('finished', { status: 'succeeded' }),
+      run('failed', { status: 'failed' }),
+      run('not-submitted', { prediction_id: null }),
+      run('template-run', { template_run_id: 'template-run-1' }),
+      run('template-step', { template_run_step_id: 'template-step-1' }),
+      run('deleted', { archived_at: '2026-10-31T09:05:00.000+00:00' }),
+      run('at-work'),
+    ]);
+
+    await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'image' })).resolves.toMatchObject({ id: 'at-work' });
+  });
+
+  it('leaves a run a workflow canvas holds to the canvas', async () => {
+    const { client } = stored(
+      [run('canvas-node'), run('from-the-creator')],
+      [{ generation_id: 'canvas-node' }],
+    );
+
+    await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'image' })).resolves.toMatchObject({ id: 'from-the-creator' });
+  });
+
+  it('answers null when every run at work is a canvas\'s, or none is', async () => {
+    const canvasOnly = stored([run('canvas-node')], [{ generation_id: 'canvas-node' }]);
+    await expect(findCreatorActiveRun({ client: canvasOnly.client, userIds: ['account-1'], tool: 'image' })).resolves.toBeNull();
+
+    const idle = stored([run('finished', { status: 'succeeded' })]);
+    await expect(findCreatorActiveRun({ client: idle.client, userIds: ['account-1'], tool: 'image' })).resolves.toBeNull();
+    // With nothing at work the canvas steps are not read.
+    expect(idle.reads.map((read) => read.table)).toEqual(['generations']);
+  });
+
+  it('reads the newest runs first, a handful at a time', async () => {
+    const { client } = stored([run('image-1')]);
+    const asked = recordOrdering(client);
+
+    await findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'image' });
+
+    expect(asked).toEqual([
+      ['generations', 'order', 'created_at', { ascending: false }],
+      ['generations', 'limit', ACTIVE_RUN_CANDIDATES],
+    ]);
   });
 
   it('throws a failed read for the route to log', async () => {
-    const failure = { code: '42501', message: 'permission denied for table generations' };
-    const { client } = recordingClient({ data: null, error: failure });
+    const failedRuns = createStoredRows({ generations: databaseError('42501', 'permission denied for table generations') });
+    await expect(findCreatorActiveRun({ client: failedRuns.client, userIds: ['account-1'], tool: 'image' }))
+      .rejects.toEqual({ code: '42501', message: 'permission denied for table generations' });
 
-    await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'image' })).rejects.toBe(failure);
+    const failedSteps = createStoredRows({
+      generations: [run('image-1')],
+      workflow_canvas_run_steps: databaseError('57014', 'canceling statement due to statement timeout'),
+    });
+    await expect(findCreatorActiveRun({ client: failedSteps.client, userIds: ['account-1'], tool: 'image' }))
+      .rejects.toEqual({ code: '57014', message: 'canceling statement due to statement timeout' });
   });
 });
 

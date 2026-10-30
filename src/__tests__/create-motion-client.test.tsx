@@ -203,6 +203,8 @@ let generationLookupBody: unknown = { generations: [] };
 let remixSourceBody: unknown = null;
 /** The motion run already at work as the page opens, as the API describes it. */
 let activeRun: Record<string, unknown> | null = null;
+/** Answers the look in place of `activeRun`, when the test resolves it. */
+let activeRunAnswer: Promise<Response> | null = null;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -236,7 +238,7 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     return jsonResponse(generationLookupBody);
   }
   if (url === '/api/generations/active?tool=motion') {
-    return jsonResponse({ run: activeRun });
+    return activeRunAnswer ?? jsonResponse({ run: activeRun });
   }
   throw new Error(`Unexpected fetch ${url}`);
 });
@@ -356,6 +358,7 @@ beforeEach(() => {
   generationLookupBody = { generations: [] };
   remixSourceBody = null;
   activeRun = null;
+  activeRunAnswer = null;
   fetchMock.mockClear();
   vi.stubGlobal('fetch', fetchMock);
   window.sessionStorage.clear();
@@ -914,7 +917,7 @@ describe('CreateMotionClient start', () => {
     render(<CreateMotionClient prefill={{}} />);
 
     await waitFor(() => expect(activeRunReads()).toEqual([
-      ['/api/generations/active?tool=motion', { headers: { Authorization: 'Bearer test-token' } }],
+      ['/api/generations/active?tool=motion', { headers: { Authorization: 'Bearer test-token' }, signal: expect.any(AbortSignal) }],
     ]));
     expect(startPosts()).toHaveLength(0);
   });
@@ -1305,6 +1308,22 @@ describe('CreateMotionClient on the column', () => {
 
     expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 720P · Add motion');
+  });
+
+  it('keeps the length measured from the clip it holds when a run picked up on load gave another', async () => {
+    let answerLook: (response: Response) => void = () => undefined;
+    activeRunAnswer = new Promise<Response>((resolve) => { answerLook = resolve; });
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await waitFor(() => expect(activeRunReads()).toHaveLength(1));
+    await attachBothInputs(view.container);
+
+    await act(async () => {
+      answerLook(jsonResponse({ run: { id: 'gen-motion-1', predictionId: 'pred-motion-1', status: 'processing', createdAt: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: 30, model: 'kling-3.0' } }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(statusMocks.fetchGenerationStatusWithRetry).toHaveBeenCalled();
+    expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
   });
 
   it('keeps the prompt the run was sent with under its clip while the next one is written', async () => {
