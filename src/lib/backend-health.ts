@@ -1160,10 +1160,42 @@ function buildProviderDependencyHealth(
   };
 }
 
+/**
+ * The account each sampled source's guest owner was linked to, for public
+ * sources whose owner is not their post's. Publish files a creation made as a
+ * guest under that account while the generation keeps the guest's id, and the
+ * remix gate opens such a post (`resolveRemixAccess`). A failed read answers
+ * none linked, as the gate then refuses them.
+ */
+async function loadLinkedGuestAccounts(
+  client: SupabaseClient,
+  posts: RemixablePostRow[],
+  sources: RemixSourceProjectionRow[],
+): Promise<Map<string, string>> {
+  const sourcesById = new Map(sources.map((source) => [source.id, source]));
+  const guestIds = new Set<string>();
+  for (const post of posts) {
+    const source = post.generation_id ? sourcesById.get(post.generation_id) : undefined;
+    if (source?.is_public === true && source.user_id && source.user_id !== post.user_id) {
+      guestIds.add(source.user_id);
+    }
+  }
+  if (guestIds.size === 0) return new Map();
+
+  const { data, error } = await client
+    .from('profiles')
+    .select('id, merged_into_user_id')
+    .in('id', [...guestIds]);
+  if (error) return new Map();
+  return new Map(((data ?? []) as Array<{ id: string; merged_into_user_id: string | null }>)
+    .flatMap((row) => (row.merged_into_user_id ? [[row.id, row.merged_into_user_id] as const] : [])));
+}
+
 function buildDataAccessHealth(
   posts: RemixablePostRow[],
   sources: RemixSourceProjectionRow[],
   projectionError: { message?: string } | null,
+  linkedGuestAccounts: Map<string, string>,
 ): { health: BackendDataAccessHealth; issues: BackendHealthIssue[] } {
   const sampled = posts.length;
 
@@ -1209,9 +1241,10 @@ function buildDataAccessHealth(
   for (const post of posts) {
     const source = post.generation_id ? sourcesById.get(post.generation_id) : undefined;
     if (!source) continue;
-    // Mirrors the gate in showcase-remix-service: still public, and owned by
-    // the post's creator.
-    if (source.is_public === true && source.user_id && source.user_id === post.user_id) {
+    // Mirrors the remix gate (`resolveRemixAccess`): still public, and made by
+    // the post's creator under their own id or as a guest since linked to them.
+    const owner = source.user_id;
+    if (source.is_public === true && owner && (owner === post.user_id || linkedGuestAccounts.get(owner) === post.user_id)) {
       resolved += 1;
     } else {
       gateBlocked += 1;
@@ -1468,6 +1501,7 @@ export async function collectBackendHealth(
     remixablePosts,
     remixSources,
     remixProjectionError,
+    remixProjectionError ? new Map() : await loadLinkedGuestAccounts(client, remixablePosts, remixSources),
   );
 
   // Same tolerance as the remix projection above: a probe that cannot read must

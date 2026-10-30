@@ -2,6 +2,7 @@ import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media
 import 'server-only';
 import { secureNsfwPostMedia } from '@/lib/nsfw-media-security';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
+import { readIsOwnOrLinkedAccountId } from '@/lib/account-identity';
 
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -458,7 +459,10 @@ type OwnedGenerationExposureRow = {
 };
 
 // Read with the service client: the authenticated Data API grant on
-// `generations` is column-scoped and cannot see the media columns.
+// `generations` is column-scoped and cannot see the media columns. A creation
+// made as a guest keeps the guest's id, and publish files its post under the
+// account the guest was linked to, so the post's owner owns it through that
+// link.
 async function loadOwnedGenerationForPost(
   adminSupabase: SupabaseClient,
   generationId: string,
@@ -468,14 +472,21 @@ async function loadOwnedGenerationForPost(
     .from('generations')
     .select('id, user_id, model, category, output_url, showcase_asset_path')
     .eq('id', generationId)
-    .eq('user_id', ownerUserId)
     .maybeSingle();
 
   if (error) {
     throw error;
   }
 
-  return (data as OwnedGenerationExposureRow | null) ?? null;
+  const generation = (data as OwnedGenerationExposureRow | null) ?? null;
+  if (!generation) return null;
+  const owned = await readIsOwnOrLinkedAccountId(adminSupabase, ownerUserId, generation.user_id);
+  // Read as "not linked", a visibility edit would skip the creation's media and
+  // leave a post made private with its public copy.
+  if (owned === null) {
+    throw new Error('The accounts linked to the post owner could not be read.');
+  }
+  return owned ? generation : null;
 }
 
 /**
@@ -1615,6 +1626,8 @@ export async function updateOwnerPostForRoute({
     // post inside the update RPC's transaction, through the posts trigger;
     // only its title, caption and durable media location are copied here.
     const generationUpdate: Record<string, unknown> = {};
+    // Whose the creation is: the post owner's, or a guest's linked to it.
+    let generationOwnerUserId: string | null = null;
     let removableDerivativePath: string | null = null;
     // The derivative this route creates needs the same `post_media` cover row
     // the publish route writes; without it the post falls back to the legacy
@@ -1632,6 +1645,7 @@ export async function updateOwnerPostForRoute({
       }
 
       if (generation) {
+        generationOwnerUserId = generation.user_id;
         const exposureChanged = nextVisibility !== post.visibility;
         const isExposing = nextVisibility !== 'private';
         // A post that is public but lost its derivative (an older client's
@@ -1650,7 +1664,9 @@ export async function updateOwnerPostForRoute({
             const showcaseAssetPath = await resolvedDependencies.createGenerationShowcaseDerivative({
               adminSupabase,
               generationId: generation.id,
-              ownerUserId,
+              // Where the output is read from: the folder of the identity that
+              // made it, a linked guest's included, as publish reads it.
+              ownerUserId: generation.user_id,
               outputUrl,
               category: showcaseCategory,
               privateMedia: nextIsNsfw,
@@ -1824,12 +1840,12 @@ export async function updateOwnerPostForRoute({
 
     // Presentation and the durable media location only. Nothing written here
     // can expose the generation, so a failure is cosmetic, not a leak.
-    if (post.generation_id && Object.keys(generationUpdate).length > 0) {
+    if (post.generation_id && generationOwnerUserId && Object.keys(generationUpdate).length > 0) {
       const { error: generationError } = await adminSupabase
         .from('generations')
         .update(generationUpdate)
         .eq('id', post.generation_id)
-        .eq('user_id', ownerUserId);
+        .eq('user_id', generationOwnerUserId);
       if (generationError) {
         logBackendError('failed_to_sync_generation_after_post_update', { error: generationError });
       }

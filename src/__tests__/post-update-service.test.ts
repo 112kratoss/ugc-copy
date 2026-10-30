@@ -53,6 +53,8 @@ function createSupabaseMock({
   downloadedMedia = null as Blob | null,
   stagedInfo = { size: 1024, contentType: 'image/jpeg' } as Record<string, unknown> | null,
   generation = null as Record<string, unknown> | null,
+  profiles = [] as Array<Record<string, unknown>>,
+  profilesError = null as { message: string } | null,
 }: {
   post?: Record<string, unknown> | null;
   bundle?: Record<string, unknown> | null;
@@ -64,6 +66,9 @@ function createSupabaseMock({
   stagedInfo?: Record<string, unknown> | null;
   /** The linked generation row, for generation-backed posts. */
   generation?: Record<string, unknown> | null;
+  /** Guest identities and the account each was linked to (`merged_into_user_id`). */
+  profiles?: Array<Record<string, unknown>>;
+  profilesError?: { message: string } | null;
 } = {}) {
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const generationUpdates: Array<Record<string, unknown>> = [];
@@ -73,22 +78,41 @@ function createSupabaseMock({
   const removals: string[][] = [];
   const client = {
     from(table: string) {
+      const filters: Record<string, unknown> = {};
+      let generationUpdate: Record<string, unknown> | null = null;
+      // As in Postgres, a generation read or write filtered on an owner the
+      // row does not have finds nothing.
+      const matchesGenerationOwner = () => !('user_id' in filters)
+        || !generation?.user_id
+        || generation.user_id === filters.user_id;
       const query = {
         select() {
           return query;
         },
-        eq() {
+        eq(column: string, value: unknown) {
+          filters[column] = value;
           return query;
         },
         // media_upload_intents bookkeeping after a successful media replace,
         // and the linked generation's exposure flags after a post update.
         update(values?: Record<string, unknown>) {
           if (table === 'generations' && values) {
-            generationUpdates.push(values);
+            generationUpdate = values;
           }
           return query;
         },
-        then(resolve: (value: { error: null }) => unknown) {
+        then(resolve: (value: { data?: unknown; error: { message: string } | null }) => unknown) {
+          if (generationUpdate && matchesGenerationOwner()) {
+            generationUpdates.push(generationUpdate);
+          }
+          if (table === 'profiles') {
+            return Promise.resolve({
+              data: profilesError
+                ? null
+                : profiles.filter((row) => Object.entries(filters).every(([column, value]) => row[column] === value)),
+              error: profilesError,
+            }).then(resolve);
+          }
           return Promise.resolve({ error: null }).then(resolve);
         },
         in() {
@@ -122,7 +146,7 @@ function createSupabaseMock({
           }
 
           if (table === 'generations') {
-            return Promise.resolve({ data: generation, error: null });
+            return Promise.resolve({ data: matchesGenerationOwner() ? generation : null, error: null });
           }
 
           return Promise.resolve({ data: null, error: null });
@@ -1467,6 +1491,121 @@ describe('updateOwnerPostForRoute', () => {
         body: { error: 'A post made from a creation keeps its generated media. Publish a different creation to change it.' },
       });
       expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    // Publish files a creation made as a guest under the account the guest was
+    // linked to. The generation keeps the guest's id, and its media the guest's
+    // folder.
+    describe('a creation its owner made as a guest', () => {
+      const guestGeneration = {
+        ...generationRow,
+        user_id: 'guest-1',
+        output_url: 'generated_images/guest-1/example.jpg',
+      };
+      const linkedGuest = [{ id: 'guest-1', merged_into_user_id: 'user-1' }];
+
+      function update(
+        body: Record<string, unknown>,
+        options: {
+          post?: Record<string, unknown>;
+          generation?: Record<string, unknown>;
+          profiles?: Array<Record<string, unknown>>;
+          profilesError?: { message: string };
+        } = {},
+      ) {
+        const mock = createSupabaseMock({
+          post: options.post ?? generatedPost,
+          bundle: null,
+          generation: options.generation ?? guestGeneration,
+          profiles: options.profiles ?? linkedGuest,
+          profilesError: options.profilesError ?? null,
+        });
+        const dependencies = createDependencies({
+          ensureDurableGenerationMedia: vi.fn(async () => ({
+            outputUrl: 'generated_images/guest-1/durable/example.jpg',
+            createdLocation: null,
+          })),
+        });
+        const result = updateOwnerPostForRoute({
+          adminSupabase: mock.client,
+          ownerUserId: 'user-1',
+          postId: 'post-1',
+          body,
+          dependencies,
+        });
+        return { result, dependencies, generationUpdates: mock.generationUpdates };
+      }
+
+      it('secures the private copy and drops the public one when going private', async () => {
+        const { result, dependencies, generationUpdates } = update({ visibility: 'private' });
+
+        await expect(result).resolves.toMatchObject({ ok: true, body: { visibility: 'private' } });
+        expect(dependencies.ensureDurableGenerationMedia).toHaveBeenCalledWith(expect.objectContaining({
+          generation: expect.objectContaining({ id: 'generation-1', userId: 'guest-1' }),
+        }));
+        expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+          patch: expect.objectContaining({
+            visibility: 'private',
+            showcase_asset_path: null,
+            output_url: 'generated_images/guest-1/durable/example.jpg',
+          }),
+        }));
+        expect(generationUpdates).toEqual([{ output_url: 'generated_images/guest-1/durable/example.jpg' }]);
+        expect(dependencies.removeGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+          generationId: 'generation-1',
+          showcaseAssetPath: 'showcase/generation-1/example.abc123.jpg',
+          postId: 'post-1',
+        }));
+      });
+
+      it("makes the public copy from the guest's folder when going public", async () => {
+        const { result, dependencies } = update({ visibility: 'public' }, {
+          post: { ...generatedPost, visibility: 'private', showcase_asset_path: null },
+          generation: { ...guestGeneration, showcase_asset_path: null },
+        });
+
+        await expect(result).resolves.toMatchObject({ ok: true });
+        expect(dependencies.createGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+          generationId: 'generation-1',
+          ownerUserId: 'guest-1',
+          outputUrl: 'generated_images/guest-1/example.jpg',
+        }));
+        expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+          patch: expect.objectContaining({
+            visibility: 'public',
+            showcase_asset_path: 'showcase/generation-1/example.abc123.jpg',
+          }),
+        }));
+      });
+
+      it('mirrors a title and caption edit to the creation', async () => {
+        const { result, generationUpdates } = update({ title: 'Renamed', description: 'New caption.' });
+
+        await expect(result).resolves.toMatchObject({ ok: true });
+        expect(generationUpdates).toEqual([{ title: 'Renamed', description: 'New caption.' }]);
+      });
+
+      it('leaves alone a creation of a guest linked to another account', async () => {
+        const { result, dependencies, generationUpdates } = update({ visibility: 'private' }, {
+          profiles: [{ id: 'guest-1', merged_into_user_id: 'user-9' }],
+        });
+
+        await expect(result).resolves.toMatchObject({ ok: true });
+        expect(dependencies.ensureDurableGenerationMedia).not.toHaveBeenCalled();
+        expect(dependencies.removeGenerationShowcaseDerivative).not.toHaveBeenCalled();
+        expect(generationUpdates).toEqual([]);
+      });
+
+      it('keeps the current visibility when the link cannot be read', async () => {
+        const { result, dependencies, generationUpdates } = update({ visibility: 'private' }, {
+          profilesError: { message: 'profiles unavailable' },
+        });
+
+        await expect(result).resolves.toEqual({ ok: false, status: 500, body: { error: 'Failed to update post.' } });
+        expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+        expect(dependencies.removeGenerationShowcaseDerivative).not.toHaveBeenCalled();
+        expect(generationUpdates).toEqual([]);
+      });
     });
   });
 

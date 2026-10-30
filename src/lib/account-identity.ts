@@ -283,6 +283,22 @@ export async function isOwnOrLinkedAccountId(
 }
 
 /**
+ * The same answer, or null when the link could not be read: for a caller to
+ * whom "not linked" is not the safe answer, as where a post's creation made as
+ * a guest would then keep a public copy its account took down.
+ */
+export async function readIsOwnOrLinkedAccountId(
+  admin: SupabaseClient,
+  userId: string,
+  ownerUserId: string | null | undefined,
+): Promise<boolean | null> {
+  if (!ownerUserId) return false;
+  if (ownerUserId === userId) return true;
+  const linked = await readLinkedAccountIds(admin, userId);
+  return linked ? linked.includes(ownerUserId) : null;
+}
+
+/**
  * The identity for an optional-auth route.
  *
  * Public surfaces treat a guest as an unsigned viewer unless they are explicitly

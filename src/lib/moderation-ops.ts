@@ -318,6 +318,31 @@ function isExternalHttpMediaUrl(value: string): boolean {
   }
 }
 
+/**
+ * Whether a creation's owner is a guest identity linked to the post's owner.
+ * Publish files a creation made as a guest under the account the guest was
+ * linked to, and the creation keeps the guest's id: the rule
+ * `sync_generation_exposure_with_post` applies. Asked here rather than through
+ * `isOwnOrLinkedAccountId`, as `account-identity` imports `server-only`, which
+ * the moderation CLI (`scripts/ops/moderation-ops.ts`, tsx) cannot load.
+ */
+async function isGuestLinkedToAccount(
+  supabase: SupabaseClient,
+  guestUserId: string,
+  accountUserId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('id', guestUserId)
+    .eq('merged_into_user_id', accountUserId)
+    .maybeSingle();
+  if (error) {
+    throw databaseError('Failed to verify taken-down generation ownership', error);
+  }
+  return Boolean(data);
+}
+
 export async function revokePostPublicMedia(
   supabase: SupabaseClient,
   postId: string,
@@ -354,14 +379,19 @@ export async function revokePostPublicMedia(
   if (post.generation_id) {
     const generationResult = await supabase
       .from('generations')
-      .select('id')
+      .select('id, user_id')
       .eq('id', post.generation_id)
-      .eq('user_id', post.user_id)
       .maybeSingle();
     if (generationResult.error) {
       throw databaseError('Failed to verify taken-down generation ownership', generationResult.error);
     }
-    if (generationResult.data) verifiedGenerationId = post.generation_id;
+    const generationOwnerId = (generationResult.data as { user_id: string | null } | null)?.user_id ?? null;
+    if (generationOwnerId && (
+      generationOwnerId === post.user_id
+      || await isGuestLinkedToAccount(supabase, generationOwnerId, post.user_id)
+    )) {
+      verifiedGenerationId = post.generation_id;
+    }
   }
 
   const mediaRows = (mediaResult.data ?? []) as PostMediaModerationRow[];

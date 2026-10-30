@@ -9,6 +9,7 @@ import {
   resolvePostReport,
   resolveSubjectReport,
 } from '@/lib/moderation-ops';
+import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
 
 const REPORT_ID = '10000000-0000-4000-8000-000000000001';
 const POST_ID = '20000000-0000-4000-8000-000000000002';
@@ -156,6 +157,7 @@ describe('moderation operations', () => {
       if (table === 'post_media') return postMedia;
       if (table === 'generations') return queryResult({
         id: '80000000-0000-4000-8000-000000000008',
+        user_id: '70000000-0000-4000-8000-000000000007',
       });
       throw new Error(`Unexpected table ${table}`);
     });
@@ -361,6 +363,67 @@ describe('moderation operations', () => {
       'outside the reported post scope',
     );
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  describe('a creation the post owner made as a guest', () => {
+    // Publish files a creation made as a guest under the account the guest was
+    // linked to; the generation keeps the guest's id.
+    const ACCOUNT_ID = '70000000-0000-4000-8000-000000000007';
+    const GUEST_ID = '70000000-0000-4000-8000-00000000000b';
+    const GENERATION_ID = '80000000-0000-4000-8000-00000000000a';
+    const SHOWCASE_PATH = `showcase/${GENERATION_ID}/output.webp`;
+
+    function takenDownClient(profiles: Array<Record<string, unknown>>, options: { profilesError?: boolean } = {}) {
+      const stored = createStoredRows({
+        posts: [{
+          id: POST_ID,
+          user_id: ACCOUNT_ID,
+          generation_id: GENERATION_ID,
+          showcase_asset_path: SHOWCASE_PATH,
+          output_url: null,
+        }],
+        post_media: [],
+        generations: [{ id: GENERATION_ID, user_id: GUEST_ID }],
+        profiles,
+      });
+      const remove = vi.fn(async () => ({ data: [], error: null }));
+      const exists = vi.fn(async () => ({ data: false, error: { status: 404 } }));
+      const client = {
+        from: (table: string) => (table === 'profiles' && options.profilesError
+          ? queryResult(null, { message: 'profiles unavailable' })
+          : stored.client.from(table)),
+        storage: { from: vi.fn(() => ({ remove, exists })) },
+      } as unknown as SupabaseClient;
+      return { client, remove };
+    }
+
+    it('revokes its public copy', async () => {
+      const { client, remove } = takenDownClient([{ id: GUEST_ID, merged_into_user_id: ACCOUNT_ID }]);
+
+      await expect(revokePostPublicMedia(client, POST_ID)).resolves.toMatchObject({
+        revokedMediaCount: 1,
+        mediaRevocationVerified: true,
+      });
+      expect(remove).toHaveBeenCalledWith([SHOWCASE_PATH]);
+    });
+
+    it('still refuses the copy of a guest linked to another account', async () => {
+      const { client, remove } = takenDownClient([
+        { id: GUEST_ID, merged_into_user_id: '70000000-0000-4000-8000-00000000000c' },
+      ]);
+
+      await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow('outside the reported post scope');
+      expect(remove).not.toHaveBeenCalled();
+    });
+
+    it('fails as a read failure, not a scope refusal, when the link cannot be read', async () => {
+      const { client, remove } = takenDownClient([], { profilesError: true });
+
+      await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow(
+        'Failed to verify taken-down generation ownership: profiles unavailable',
+      );
+      expect(remove).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects malformed identifiers before touching the privileged client', async () => {
