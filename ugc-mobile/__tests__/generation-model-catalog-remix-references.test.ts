@@ -237,18 +237,50 @@ describe('catalog remix restore of Kling 3.0 clips', () => {
 
   // The server hands a clip's handle only when it is one a prompt can mention (toRemixAssetDescriptor),
   // so none of these arrives today: this holds the app to its own check of what it is handed. A clip
-  // handed none, as a row kept before handles were, still comes back without one.
-  it('keeps no handed handle a prompt could not mention', () => {
+  // handed none, as a row kept before handles were, is named as an upload is: Kling 3.0 takes no clip
+  // without a handle, and those clips were quoted and then left out of the remix's run.
+  it('keeps no handed handle a prompt could not mention, and names those clips as an upload is named', () => {
     const catalog = catalogV2([klingVideoModel()]);
+    const model = catalog.models[0];
 
     const restored = hydrateCatalogCreationDraftFromRemixSource(
       createDefaultCreationDraft('video'),
       klingClipsRemix([keptKlingClip(1, '@Reference Video'), keptKlingClip(2, ''), keptKlingClip(3)], 'Three moves'),
       catalog,
     );
+    const draft = restored.draft as VideoCreationDraft;
 
-    expect((restored.draft as VideoCreationDraft).referenceVideos.map((clip) => clip.handle))
-      .toEqual([undefined, undefined, undefined]);
+    // Made from the clips' names and marked so: a recovery never gives one back as the source's own.
+    expect(draft.referenceVideos.map((clip) => [clip.handle, clip.handleStandIn])).toEqual([
+      ['@reference_video', true],
+      ['@reference_video_2', true],
+      ['@reference_video_3', true],
+    ]);
+    expect(buildUnifiedCatalogGenerationRequest(draft, model, catalog.revision).inputs.map((input) => [input.slot, input.handle])).toEqual([
+      ['videoElements', '@reference_video'],
+      ['videoElements', '@reference_video_2'],
+      ['videoElements', '@reference_video_3'],
+    ]);
+  });
+
+  // A run kept before clip handles were still mentions its clips by theirs. Its clips come back under
+  // handles no words mention, so the run is held on those mentions, rather than sending
+  // @reference_video_2 to the clip after the one the source meant.
+  it('names a clip handed no handle past every handle its prompt mentions', () => {
+    const catalog = catalogV2([klingVideoModel()]);
+    const model = catalog.models[0];
+    const prompt = 'Open on @reference_video_2, then cut to @reference_video_3';
+
+    const restored = hydrateCatalogCreationDraftFromRemixSource(
+      createDefaultCreationDraft('video'),
+      klingClipsRemix([keptKlingClip(2), keptKlingClip(3)], prompt),
+      catalog,
+    );
+    const draft = restored.draft as VideoCreationDraft;
+
+    expect(draft.referenceVideos.map((clip) => clip.handle)).toEqual(['@reference_video', '@reference_video_4']);
+    expect(draft.prompt).toBe(prompt);
+    expect(validateCatalogCreationDraft(draft, model).errors).toEqual(['Unknown element mentions: @reference_video_2, @reference_video_3']);
   });
 
   // Only Kling 3.0 takes a clip under a handle (the server's videoElementInputs); Wan 2.7's slot names

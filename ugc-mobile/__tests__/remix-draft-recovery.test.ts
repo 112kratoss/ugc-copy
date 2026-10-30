@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultCreationDraft, type MediaDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
+import { applyCatalogModelDefaults } from '../lib/generation-model-draft';
+import { createDefaultCreationDraft, renameMediaDraft, type CreationDraft, type MediaDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
 import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '../lib/remix-draft-recovery';
 import type { RemixSourceBundle } from '../lib/types';
+import { klingVideoModel } from './generation-model-catalog-v2-fixtures';
 const reference = { id: 'girl', kind: 'image' as const, url: 'https://example.com/girl.jpg', fileName: 'girl.jpg', displayName: 'Girl', handle: '@girl' };
 function draft(overrides: Partial<VideoCreationDraft> = {}): VideoCreationDraft {
   return { ...createDefaultCreationDraft('video'), model: 'seedance-2', prompt: 'My edited scene with @girl', ...overrides };
@@ -155,6 +157,91 @@ describe('saved remix clips without the handles their words mention', () => {
 
     expect(recovered.references).toEqual([mine]);
     expect(recovered.referenceVideos).toEqual([clip(2, '@reference_video_2')]);
+  });
+
+  // Kling 3.0 takes a clip only under a handle, so the screen's catalog reconcile names each clip as the
+  // saved draft lands on it, before the source is back. Each such handle is marked a stand-in, and the
+  // mark is saved with the draft, so the recovery tells it from a handle the creator gave on any visit.
+  const landOnKling = (saved: VideoCreationDraft) => applyCatalogModelDefaults(saved, klingVideoModel()) as VideoCreationDraft;
+  const handles = (draft: CreationDraft) => (draft as VideoCreationDraft).referenceVideos.map((item) => item.handle);
+  const withSource = (...places: number[]) => kling({ referenceVideos: places.map((place) => clip(place, `@reference_video_${place}`)) });
+
+  it('gives a clip its source’s handle over the stand-in the catalog named it with', () => {
+    // Read back as saved: the mark is part of the draft a later visit loads.
+    const landed = JSON.parse(JSON.stringify(landOnKling(kling({ referenceVideos: [clip(2), clip(3)] })))) as VideoCreationDraft;
+    // Past the handles the words mention, and marked, so the session still reads its source again.
+    expect(landed.referenceVideos.map((item) => [item.handle, item.handleStandIn])).toEqual([['@reference_video', true], ['@reference_video_4', true]]);
+    expect(needsRemixReferenceRecovery(landed)).toBe(true);
+
+    const recovered = recoverRemixReferences(landed, keptHandles()) as VideoCreationDraft;
+
+    expect(recovered.referenceVideos).toEqual([clip(2, '@reference_video_2'), clip(3, '@reference_video_3')]);
+    expect(needsRemixReferenceRecovery(recovered)).toBe(false);
+  });
+
+  // A source read that cannot sign one of the clips this time leaves it out. That clip keeps its mark,
+  // so the next read can still give it its handle.
+  it('leaves the mark on a clip the source did not answer for', () => {
+    const landed = landOnKling(kling({ referenceVideos: [clip(2), clip(3)] }));
+
+    const partly = recoverRemixReferences(landed, withSource(2)) as VideoCreationDraft;
+    expect(partly.referenceVideos.map((item) => [item.handle, item.handleStandIn])).toEqual([['@reference_video_2', undefined], ['@reference_video_4', true]]);
+    expect(needsRemixReferenceRecovery(partly)).toBe(true);
+
+    expect(handles(recoverRemixReferences(partly, keptHandles()))).toEqual(['@reference_video_2', '@reference_video_3']);
+  });
+
+  it('keeps a stand-in no words mention its source by, and settles it', () => {
+    // The words mention only the second clip's handle. The first clip's stand-in stays, as the second's
+    // is the handle the source gave the first: taken back unmentioned, two clips could meet on it.
+    const landed = landOnKling(kling({ prompt: 'Cut to @reference_video_4', referenceVideos: [clip(2), clip(4)] }));
+    expect(handles(landed)).toEqual(['@reference_video', '@reference_video_2']);
+
+    const recovered = recoverRemixReferences(landed, withSource(2, 4)) as VideoCreationDraft;
+
+    expect(recovered.referenceVideos.map((item) => [item.handle, item.handleStandIn])).toEqual([['@reference_video', undefined], ['@reference_video_4', undefined]]);
+    // Settled: a later visit does not read the source again for the clip left as it was.
+    expect(needsRemixReferenceRecovery({ ...recovered, prompt: 'Cut to @reference_video_4 and @nobody' })).toBe(false);
+  });
+
+  it('keeps a handle the creator gave or mentioned while the source loaded, and gives no clip one another holds', () => {
+    // Source handles @reference_video to _3; the words mention the first. Named on landing: _2, _3, _4.
+    const source = kling({ referenceVideos: [clip(1, '@reference_video'), clip(2, '@reference_video_2'), clip(3, '@reference_video_3')] });
+    const landed = landOnKling(kling({ prompt: 'Start on @reference_video', referenceVideos: [clip(1), clip(2), clip(3)] }));
+    expect(handles(landed)).toEqual(['@reference_video_2', '@reference_video_3', '@reference_video_4']);
+    // Meanwhile the creator mentions the second clip's stand-in, then renames the first.
+    const edited = {
+      ...landed,
+      prompt: 'Start on @reference_video, then @reference_video_3',
+      referenceVideos: [renameMediaDraft(landed.referenceVideos[0], 'Spin', true), ...landed.referenceVideos.slice(1)],
+    };
+
+    // The renamed clip keeps @spin; the second keeps the stand-in its words now name; the third would
+    // take @reference_video_3 back, which the second holds, and keeps its own.
+    expect(handles(recoverRemixReferences(edited, source))).toEqual(['@spin', '@reference_video_3', '@reference_video_4']);
+  });
+
+  // Each rule on its own: a stand-in gives way only to a source handle the words mention, and never once
+  // the words mention the stand-in itself.
+  it('takes a source handle back only while the words mention it and not the stand-in', () => {
+    // The source's @reference_video_2 is free, but no words name it.
+    const unmentioned = landOnKling(kling({ prompt: 'Open on @someone', referenceVideos: [clip(2)] }));
+    expect(handles(recoverRemixReferences(unmentioned, withSource(2)))).toEqual(['@reference_video']);
+
+    // Both are named, the stand-in by the creator while the source loaded.
+    const landed = landOnKling(kling({ prompt: 'Open on @reference_video_2', referenceVideos: [clip(2)] }));
+    const mentioned = { ...landed, prompt: 'Open on @reference_video_2 with @reference_video' };
+    expect(handles(recoverRemixReferences(mentioned, withSource(2)))).toEqual(['@reference_video']);
+    expect(handles(recoverRemixReferences(landed, withSource(2)))).toEqual(['@reference_video_2']);
+  });
+
+  // A clip the source kept no handle for comes back from the restore under one the restore made up for
+  // it (withClipHandles), marked so. That one is no handle of the source's to give back.
+  it('gives back only a handle the source kept, never one the restore made up', () => {
+    const current = draft({ prompt: 'Open on @reference_video', referenceVideos: [clip(2)] });
+    const restored = draft({ referenceVideos: [{ ...clip(2, '@reference_video'), handleStandIn: true }] });
+
+    expect(handles(recoverRemixReferences(current, restored))).toEqual([undefined]);
   });
 });
 

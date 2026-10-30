@@ -95,8 +95,10 @@ import {
   normalizeCreationDraftForCatalog,
   readVerifiedInputDurations,
   REFERENCE_DURATION_CHANGED_CODE,
+  takesNamedClips,
   validateCatalogCreationDraft,
   videoSettingsHiddenControlKeys,
+  withNamedClips,
   type RefusedRunPrice,
 } from '@/lib/generation-model-draft';
 import { guidedCreationStarter, guidedCreationStarters } from '@/lib/guided-creation-starter';
@@ -136,6 +138,7 @@ import {
   videoDraftHandles,
   videoDraftReferenceMode,
   videoSubjects,
+  withCreatorClipHandle,
 } from '@/lib/media-creation-view-model';
 import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '@/lib/media';
 import { listFilesInSentence, readableFileName } from '@/lib/media-file-names';
@@ -485,13 +488,12 @@ function referenceVideoSlot(model: CreatorCatalogModel | null, draft: VideoCreat
 }
 
 /**
- * Whether a video draft's clips answer to an @handle on this model: where its clip slot names them, and
- * on Kling 3.0 when its descriptor has no input modes. An upload and a rename ask the same, so a clip
- * renamed has the handle an upload gives it.
+ * Whether a video draft's clips answer to an @handle on this model (`takesNamedClips`), and on Kling 3.0
+ * before its descriptor is in. A clip the creator adds or renames is named by one rule
+ * (`withCreatorClipHandle`); the catalog normalization names any other clip (`withClipHandles`).
  */
 function clipsTakeHandles(model: CreatorCatalogModel | null, draft: VideoCreationDraft) {
-  const clipSlot = model?.inputModes ? referenceVideoSlot(model, draft, referenceRailShape(draft, model)) : null;
-  return clipSlot ? Boolean(clipSlot.supportsNaming) : draft.model === 'kling-3.0-video';
+  return model ? takesNamedClips(model) : draft.model === 'kling-3.0-video';
 }
 
 /**
@@ -543,11 +545,14 @@ function withVideoReferenceRenamed(draft: VideoCreationDraft, id: string, displa
   const reference = [...draft.references, ...draft.referenceVideos].find((media) => media.id === id);
   if (reference) {
     const nextName = renameMediaDraft(reference, displayName, clipsTakeHandles(model, draft));
-    // Two references renamed alike would otherwise answer to one @mention.
-    const renamed = nextName.handle
-      ? withUniqueReferenceHandle(nextName, [...draft.references, ...draft.referenceVideos, ...subjects.map(subjectAsReference)]
-        .filter((media) => media.id !== id))
-      : nextName;
+    // Two references renamed alike would otherwise answer to one @mention. A clip is named as one the
+    // creator adds: past the handles a clip waiting for its own may still take back.
+    const renamed = !nextName.handle
+      ? nextName
+      : draft.referenceVideos.some((media) => media.id === id)
+        ? withCreatorClipHandle(draft, nextName)
+        : withUniqueReferenceHandle(nextName, [...draft.references, ...draft.referenceVideos, ...subjects.map(subjectAsReference)]
+          .filter((media) => media.id !== id));
     const withRenamed = (items: MediaDraft[]) => items.map((media) => (media.id === id ? renamed : media));
     const mention = withVideoMentionReplaced(draft, reference.handle, renamed.handle ?? '');
     return draft.references.some((media) => media.id === id)
@@ -1144,6 +1149,10 @@ function IdentityCreationScreen({
     pickerOpen: modelPickerVisible,
   });
   const catalog = catalogQuery.catalog;
+  // The newest catalog, for a change that lands after an await (an upload): the one it began with may not
+  // hold the details of a model picked while it ran, and could not name the clip for it.
+  const latestCatalog = useRef(catalog);
+  useEffect(() => { latestCatalog.current = catalog; }, [catalog]);
   const refetchCatalog = catalogQuery.refetch;
   const loadCatalogDetails = catalogQuery.loadDetails;
   // A catalog the phone stored stands in while the network is asked for the current revision. A new draft
@@ -1275,7 +1284,9 @@ function IdentityCreationScreen({
           : remixBaseline.current[tool];
         return [tool, Object.keys(saved[tool]).filter((key) => JSON.stringify((saved[tool] as unknown as Record<string, unknown>)[key]) !== JSON.stringify((baseline as unknown as Record<string, unknown>)[key]))];
       }));
-      await draftWriter.save({ ...saved, remixRestored: remixResolvedRef.current, remixEditedKeys });
+      // A session whose repair is still to come was restored already: saved so, the next visit repairs it
+      // again, rather than restoring it afresh over a draft the catalog has named meanwhile.
+      await draftWriter.save({ ...saved, remixRestored: remixResolvedRef.current || recoveringRemixReferences.current, remixEditedKeys });
       lastSavedFingerprint.current = fingerprint;
     } while (saved.image !== latestDrafts.current.image || saved.video !== latestDrafts.current.video || saved.motion !== latestDrafts.current.motion);
   };
@@ -1618,9 +1629,9 @@ function IdentityCreationScreen({
     }
   };
 
-  const normalizeCatalogDraft = <T extends CreationDraft>(draft: T): T => {
-    const model = catalog ? getCatalogModel(catalog, draft.model) : null;
-    return (model ? applyCatalogModelDefaults(draft, model, catalog?.revision ?? null) : draft) as T;
+  const normalizeCatalogDraft = <T extends CreationDraft>(draft: T, source: GenerationModelCatalog | null = catalog): T => {
+    const model = source ? getCatalogModel(source, draft.model) : null;
+    return (model ? applyCatalogModelDefaults(draft, model, source?.revision ?? null) : draft) as T;
   };
 
   /**
@@ -1739,11 +1750,15 @@ function IdentityCreationScreen({
         )));
         const restoredPrompt = savedRemixEdits.current[targetTool]?.includes('prompt') ? current.prompt : prompt;
         // A model chosen while loading keeps its compatible settings as a unit.
-        const merged = recoveringRemixReferences.current
+        const unnamed = recoveringRemixReferences.current
           ? recoverRemixReferences(current, restored.draft)
           : 'model' in edits
           ? { ...current, sourceGenerationId: restored.draft.sourceGenerationId }
           : { ...restored.draft, ...edits, prompt: restoredPrompt };
+        // Set as it is merged, without the catalog's normalization: a clip it brings without a handle (one
+        // added on another model while the source loaded) is named here, as the screen shows what the run sends.
+        const mergedModel = getCatalogModel(restoredCatalog, unnamed.model);
+        const merged = mergedModel ? withNamedClips(unnamed as CreationDraft, mergedModel) : unnamed;
         remixBaseline.current = { ...remixBaseline.current, [targetTool]: restored.draft };
         lastSavedFingerprint.current = JSON.stringify(remixBaseline.current);
         if (restored.draft.tool === 'image') setImageDraft(merged as ImageCreationDraft);
@@ -2076,8 +2091,6 @@ function IdentityCreationScreen({
     const maxVideos = target === 'video'
       ? selectedModel?.inputModes ? clipSlot?.max ?? 0 : selectedModel?.inputs.videoReferences?.max ?? 0
       : catalogInputLimit(selectedModel, selectedDraft, motionClipSlotKey, 1, 'elements');
-    // Named clips are mentioned in the prompt, so each needs a handle of its own.
-    const namesClips = target === 'video' && clipsTakeHandles(selectedModel, videoDraft);
     // A motion run takes one clip, so a new pick takes the place of the one attached, as Replace does.
     const replacesClip = target === 'motion' && maxVideos > 0;
     if (currentCount >= maxVideos && !replacesClip) {
@@ -2122,9 +2135,13 @@ function IdentityCreationScreen({
           duration: Math.ceil(media.durationSeconds ?? draft.duration),
         }));
       } else {
+        // Named for the model the draft is on by now, as a clip the creator adds (withCreatorClipHandle), and
+        // normalized against the newest catalog: the clip may land after a pick of another model.
+        const source = latestCatalog.current;
         setVideoDraft((draft) => {
-          const nextMedia = namesClips ? withUniqueReferenceHandle(media, draft.referenceVideos) : media;
-          return normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, nextMedia] });
+          const model = source ? getCatalogModel(source, draft.model) : null;
+          const added = clipsTakeHandles(model, draft) ? withCreatorClipHandle(draft, media) : media;
+          return normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, added] }, source);
         });
         revealInRail(media.id);
       }

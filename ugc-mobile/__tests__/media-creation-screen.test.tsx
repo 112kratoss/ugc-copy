@@ -5753,8 +5753,20 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         ]);
       });
 
-      // A session an earlier build saved so came back as saved, its links still good, and stayed held.
-      it('reads the source again for a saved remix whose clips lost the handles its prompt names', async () => {
+      const savedClip = (place: number, extra: Record<string, unknown> = {}) => ({
+        id: `video-saved-${place}`,
+        kind: 'video',
+        url: `https://cdn.example.com/clip-${place}.mp4`,
+        storagePath: clipPath(place),
+        mimeType: 'video/mp4',
+        fileName: `0${place}-reference_video.mp4`,
+        displayName: 'Reference Video',
+        durationSeconds: null,
+        sizeBytes: null,
+        sourceGenerationId: null,
+        ...extra,
+      });
+      const openSavedClipsSession = async (referenceVideos: Array<Record<string, unknown>>) => {
         catalogState.catalog = parityCatalog([parityKlingVideo()]);
         memory.set(creationDraftStorageKey(remixDraftScope('user-123', clipsRemix)!), JSON.stringify({
           image: createDefaultCreationDraft('image'),
@@ -5764,18 +5776,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
             catalogRevision: 'parity-rev',
             prompt: clipsPrompt,
             aspectRatio: '9:16',
-            referenceVideos: [2, 3].map((place) => ({
-              id: `video-saved-${place}`,
-              kind: 'video',
-              url: `https://cdn.example.com/clip-${place}.mp4`,
-              storagePath: clipPath(place),
-              mimeType: 'video/mp4',
-              fileName: `0${place}-reference_video.mp4`,
-              displayName: 'Reference Video',
-              durationSeconds: null,
-              sizeBytes: null,
-              sourceGenerationId: null,
-            })),
+            referenceVideos,
           },
           motion: createDefaultCreationDraft('motion'),
           updatedAt: new Date().toISOString(),
@@ -5786,7 +5787,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
         const tree = await open(<MediaCreationScreen initialTool="video" remixSource={clipsRemix} />);
         await settle();
-
+        return tree;
+      };
+      const expectSourceHandlesSent = async (tree: renderer.ReactTestRenderer) => {
         expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
         expect(text(tree)).not.toContain('Unknown element mention');
         await pressGenerate(tree);
@@ -5796,6 +5799,32 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_2', url: 'https://cdn.example.com/clip-2.mp4' }),
           expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_3', url: 'https://cdn.example.com/clip-3.mp4' }),
         ]);
+      };
+
+      // A session an earlier build saved so came back as saved, its links still good, and stayed held.
+      it('reads the source again for a saved remix whose clips lost the handles its prompt names', async () => {
+        await expectSourceHandlesSent(await openSavedClipsSession([2, 3].map((place) => savedClip(place))));
+      });
+
+      // The catalog names such clips as the draft lands on Kling 3.0, before the source is read. When the
+      // source fails, the session is saved under those stand-ins, as a session still to repair: the next
+      // visit repairs it, rather than restoring it afresh over the named draft.
+      it('repairs on the next visit a saved remix whose source failed after its clips were named', async () => {
+        authState.api.getRemixSourceBundle.mockRejectedValueOnce(new Error('Network request failed'));
+        const first = await openSavedClipsSession([2, 3].map((place) => savedClip(place)));
+        await settle();
+        const saved = JSON.parse(memory.get(creationDraftStorageKey(remixDraftScope('user-123', clipsRemix)!)) ?? 'null');
+        expect(saved).toMatchObject({ remixRestored: true });
+        expect(saved.video.referenceVideos.map((clip: { handle?: string; handleStandIn?: boolean }) => [clip.handle, clip.handleStandIn])).toEqual([
+          ['@reference_video', true],
+          ['@reference_video_4', true],
+        ]);
+        renderer.act(() => { first.unmount(); });
+        authState.api.getRemixSourceBundle.mockClear();
+
+        const tree = await open(<MediaCreationScreen initialTool="video" remixSource={clipsRemix} />);
+        await settle();
+        await expectSourceHandlesSent(tree);
       });
 
       it('keeps clips from Seedance 2 waiting on Seedance 1.5 Pro, without locking its frames or offering them to mention', async () => {
@@ -5843,6 +5872,60 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
         renderer.act(() => prompt.props.onSelectionChange({ nativeEvent: { selection: { start: 15, end: 15 } } }));
         expect(text(tree)).toContain('No named references match “@st”.');
+      });
+
+      // Seedance 2's clips take no handle, and the server sends a Kling 3.0 clip only under one
+      // (videoElementInputs): a clip uploaded on the first and carried onto the second was quoted and
+      // shown, and the run went without it.
+      it('names a clip uploaded on Seedance 2 when the draft moves to Kling 3.0, and sends it', async () => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo(), parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-2',
+          catalogRevision: 'parity-rev',
+          prompt: 'The dancer spins',
+          referenceVideos: [stagedMedia('dance', 'video', { displayName: 'Reference Video', handle: undefined })],
+        } }));
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await pickModel(tree, 'Kling 3.0 Cinematic');
+        await settle();
+        // The draft holds the handle, so the screen offers it to the prompt: not only the run sends it.
+        renderer.act(() => { labelled(tree.root, 'Open details for Reference Video').props.onPress(); });
+        expect(collectText(tree.root)).toContain('Insert @reference_video');
+        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
+        await settle();
+        await pressGenerate(tree);
+
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+        expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({
+          modelId: 'kling-3.0-video',
+          prompt: 'The dancer spins',
+          inputs: [expect.objectContaining({ slot: 'videoElements', handle: '@reference_video', url: 'https://cdn.example.com/dance.mp4' })],
+        });
+      });
+
+      // A clip the creator adds takes a handle their words mention that nothing answers to, as a picture
+      // does: the clip they mean, mentioned before it was picked (or re-added after a restore left it out).
+      it('gives a clip added on Kling 3.0 the handle its prompt already mentions', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: { model: 'kling-3.0-video', catalogRevision: 'parity-rev', prompt: '@reference_video spins' } }));
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 4000 } as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue({
+          signedUrl: 'https://cdn.example.com/move.mp4', storagePath: 'uploads/user-123/move.mp4', mimeType: 'video/mp4', fileName: 'move.mp4', kind: 'video', durationSeconds: 4, sizeBytes: 4096,
+        });
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add Video 0/3').props.onPress(); });
+        await settle();
+        expect(text(tree)).not.toContain('Unknown element mention');
+        await pressGenerate(tree);
+
+        expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({
+          prompt: '@reference_video spins',
+          inputs: [expect.objectContaining({ slot: 'videoElements', handle: '@reference_video', url: 'https://cdn.example.com/move.mp4' })],
+        });
       });
     });
 
