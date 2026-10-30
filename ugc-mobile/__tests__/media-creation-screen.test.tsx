@@ -5753,8 +5753,20 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         ]);
       });
 
-      // A session an earlier build saved so came back as saved, its links still good, and stayed held.
-      it('reads the source again for a saved remix whose clips lost the handles its prompt names', async () => {
+      const savedClip = (place: number, extra: Record<string, unknown> = {}) => ({
+        id: `video-saved-${place}`,
+        kind: 'video',
+        url: `https://cdn.example.com/clip-${place}.mp4`,
+        storagePath: clipPath(place),
+        mimeType: 'video/mp4',
+        fileName: `0${place}-reference_video.mp4`,
+        displayName: 'Reference Video',
+        durationSeconds: null,
+        sizeBytes: null,
+        sourceGenerationId: null,
+        ...extra,
+      });
+      const openSavedClipsSession = async (referenceVideos: Array<Record<string, unknown>>) => {
         catalogState.catalog = parityCatalog([parityKlingVideo()]);
         memory.set(creationDraftStorageKey(remixDraftScope('user-123', clipsRemix)!), JSON.stringify({
           image: createDefaultCreationDraft('image'),
@@ -5764,18 +5776,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
             catalogRevision: 'parity-rev',
             prompt: clipsPrompt,
             aspectRatio: '9:16',
-            referenceVideos: [2, 3].map((place) => ({
-              id: `video-saved-${place}`,
-              kind: 'video',
-              url: `https://cdn.example.com/clip-${place}.mp4`,
-              storagePath: clipPath(place),
-              mimeType: 'video/mp4',
-              fileName: `0${place}-reference_video.mp4`,
-              displayName: 'Reference Video',
-              durationSeconds: null,
-              sizeBytes: null,
-              sourceGenerationId: null,
-            })),
+            referenceVideos,
           },
           motion: createDefaultCreationDraft('motion'),
           updatedAt: new Date().toISOString(),
@@ -5786,7 +5787,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
         const tree = await open(<MediaCreationScreen initialTool="video" remixSource={clipsRemix} />);
         await settle();
-
+        return tree;
+      };
+      const expectSourceHandlesSent = async (tree: renderer.ReactTestRenderer) => {
         expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
         expect(text(tree)).not.toContain('Unknown element mention');
         await pressGenerate(tree);
@@ -5796,6 +5799,21 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_2', url: 'https://cdn.example.com/clip-2.mp4' }),
           expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_3', url: 'https://cdn.example.com/clip-3.mp4' }),
         ]);
+      };
+
+      // A session an earlier build saved so came back as saved, its links still good, and stayed held.
+      it('reads the source again for a saved remix whose clips lost the handles its prompt names', async () => {
+        await expectSourceHandlesSent(await openSavedClipsSession([2, 3].map((place) => savedClip(place))));
+      });
+
+      // The catalog names such clips as the draft lands on Kling 3.0, before the source is read. Saved so
+      // (the source failed, or the screen closed first), they come back under those stand-ins, and the
+      // repair still comes.
+      it('reads the source again for a saved remix whose clips hold the stand-ins they were named with', async () => {
+        await expectSourceHandlesSent(await openSavedClipsSession([
+          savedClip(2, { handle: '@reference_video', handleStandIn: true }),
+          savedClip(3, { handle: '@reference_video_4', handleStandIn: true }),
+        ]));
       });
 
       it('keeps clips from Seedance 2 waiting on Seedance 1.5 Pro, without locking its frames or offering them to mention', async () => {
@@ -5860,6 +5878,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(<MediaCreationScreen initialTool="video" />);
 
         await pickModel(tree, 'Kling 3.0 Cinematic');
+        await settle();
+        // The draft holds the handle, so the screen offers it to the prompt: not only the run sends it.
+        renderer.act(() => { labelled(tree.root, 'Open details for Reference Video').props.onPress(); });
+        expect(collectText(tree.root)).toContain('Insert @reference_video');
+        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
         await settle();
         await pressGenerate(tree);
 

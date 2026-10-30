@@ -1,4 +1,4 @@
-import { extractPromptHandles, videoDraftHandles, videoSubjects, type CreationDraft, type MediaDraft, type SubjectDraft, type VideoCreationDraft } from './media-creation-view-model';
+import { extractPromptHandles, videoDraftHandles, videoDraftMentionedHandles, videoSubjects, type CreationDraft, type MediaDraft, type SubjectDraft, type VideoCreationDraft } from './media-creation-view-model';
 import type { SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 import { signedStorageUrlExpiresAt } from './media-url-expiry';
 import type { RemixSourceBundle } from './types';
@@ -98,10 +98,12 @@ function hasExpiredLink(draft: CreationDraft, { now, storageBaseUrl }: Reference
  * the source too: reading it again is the only way to a fresh link for media
  * someone else owns.
  *
- * So does a video draft holding a clip without a handle while its words mention
- * one that nothing it holds answers to: until 2026-10-30 a restore gave every
- * clip none, though a Kling 3.0 run keeps the handle its prompt mentions each
- * clip by, and such a session was resumed as saved, held for good.
+ * So does a video draft holding a clip without a handle of its own while its
+ * words mention one that nothing it holds answers to: until 2026-10-30 a restore
+ * gave every clip none, though a Kling 3.0 run keeps the handle its prompt
+ * mentions each clip by, and such a session was resumed as saved, held for good.
+ * The catalog names such a clip as the draft lands on Kling 3.0, before its
+ * source is read, so a clip under a stand-in (`handleStandIn`) still counts.
  */
 export function needsRemixReferenceRecovery(draft: CreationDraft, clock?: ReferenceLinkClock): boolean {
   if (clock && hasExpiredLink(draft, clock)) return true;
@@ -116,16 +118,14 @@ function missesReferences(draft: CreationDraft): boolean {
   return extractPromptHandles(draft.prompt).length > 0;
 }
 
-/** The handles a video draft's words mention: its prompt's and its shots'. */
-function mentionedHandles(draft: VideoCreationDraft): Set<string> {
-  return new Set([draft.prompt, ...draft.multiPrompts.map((shot) => shot.prompt)].flatMap(extractPromptHandles));
-}
-
-/** A clip without a handle, beside words (the prompt or a shot) that mention one nothing in the draft answers to. */
+/**
+ * A clip without a handle of its own (none, or a stand-in the app made up for it), beside words (the
+ * prompt or a shot) that mention one nothing in the draft answers to.
+ */
 function missesClipHandles(draft: VideoCreationDraft): boolean {
-  if (!draft.referenceVideos.some((clip) => !clip.handle)) return false;
+  if (!draft.referenceVideos.some((clip) => !clip.handle || clip.handleStandIn)) return false;
   const held = new Set(videoDraftHandles(draft));
-  return [...mentionedHandles(draft)].some((handle) => !held.has(handle));
+  return [...videoDraftMentionedHandles(draft)].some((handle) => !held.has(handle));
 }
 
 /**
@@ -133,32 +133,32 @@ function missesClipHandles(draft: VideoCreationDraft): boolean {
  * settings stay, and so does every edit made since, removals included.
  *
  * Media still in the draft take the source's fresh link and nothing else, but
- * for a clip saved without the handle its source kept: it takes that handle
- * back, unless something else in the draft answers to it by now.
- * Missing images come back only while the prompt still mentions them.
- *
- * `saved` is the draft as it was read back. A model that takes clips only under
- * a handle has each clip named as the draft lands on it (`withClipHandles`),
- * before the source is back, so a clip saved without one may hold a stand-in by
- * now: it takes its source's handle over that where its words mention it, and
- * keeps the stand-in otherwise. A stand-in is made past every handle the words
- * mention, so it never holds one another clip takes back. A handle the clip was
- * saved with stays, as the creator gave it.
+ * for a clip without a handle of its own: it takes back the handle its source
+ * kept (never one the restore made up for it), unless something in the draft
+ * answers to it by now. A clip under a stand-in (`handleStandIn`: named by the
+ * catalog as the draft landed on Kling 3.0, before the source was read) takes it
+ * back over the stand-in only where the words mention it and not the stand-in.
+ * Either way the recovery settles a stand-in: one it leaves is the clip's own
+ * from then on, so no later visit reads the source again for it. A handle the
+ * creator gave stays. Missing images come back only while the prompt still
+ * mentions them.
  */
-export function recoverRemixReferences(current: CreationDraft, restored: CreationDraft, saved: CreationDraft = current): CreationDraft {
+export function recoverRemixReferences(current: CreationDraft, restored: CreationDraft): CreationDraft {
   const sourceMedia = heldDraftMedia(restored);
-  const savedWithoutHandle = new Set(saved.tool === 'video' ? saved.referenceVideos.filter((clip) => !clip.handle).map((clip) => clip.id) : []);
-  const standsIn = (media: MediaDraft) => media.kind === 'video' && Boolean(media.handle) && savedWithoutHandle.has(media.id);
-  const mentioned = current.tool === 'video' ? mentionedHandles(current) : new Set<string>();
-  const taken = new Set(heldDraftMedia(current).flatMap((media) => (media.handle && !standsIn(media) ? [media.handle] : [])));
+  const mentioned = current.tool === 'video' ? videoDraftMentionedHandles(current) : new Set<string>();
+  const taken = new Set(heldDraftMedia(current).flatMap((media) => (media.handle ? [media.handle] : [])));
   const renewed = mapDraftMedia(current, (media) => {
     const match = sourceMedia.find((candidate) => isSameMedia(media, candidate));
     const url = match?.url && match.url !== media.url ? match.url : media.url;
-    const waits = media.kind === 'video' && (!media.handle || (standsIn(media) && Boolean(match?.handle && mentioned.has(match.handle))));
-    const keptHandle = waits && match?.handle && !taken.has(match.handle) ? match.handle : null;
+    const sourceHandle = media.kind === 'video' && match?.handle && !match.handleStandIn ? match.handle : null;
+    const replaces = !media.handle
+      || (Boolean(media.handleStandIn) && !mentioned.has(media.handle) && Boolean(sourceHandle && mentioned.has(sourceHandle)));
+    const keptHandle = sourceHandle && replaces && !taken.has(sourceHandle) ? sourceHandle : null;
     if (keptHandle) taken.add(keptHandle);
-    if (url === media.url && !keptHandle) return media;
-    return keptHandle ? { ...media, url, handle: keptHandle } : { ...media, url };
+    if (url === media.url && !keptHandle && !media.handleStandIn) return media;
+    const next: MediaDraft = keptHandle ? { ...media, url, handle: keptHandle } : { ...media, url };
+    delete next.handleStandIn;
+    return next;
   });
   if (!missesReferences(renewed) || renewed.tool === 'motion' || restored.tool === 'motion'
     || renewed.tool !== restored.tool || renewed.model !== restored.model) return renewed;

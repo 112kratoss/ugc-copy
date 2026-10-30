@@ -36,6 +36,7 @@ import {
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   createSubjectDraft,
+  renameMediaDraft,
   videoDraftReferenceMode,
   type ImageCreationDraft,
   type MediaDraft,
@@ -901,7 +902,9 @@ describe('references kept across a model change', () => {
     expect(validateCatalogCreationDraft(onKling, kling30, ready)).toMatchObject({ errors: [], canGenerate: true });
   });
 
-  // As the web names a Kling clip (assignElementHandles) and as an upload is named.
+  // A valid handle is kept as the web keeps one (assignElementHandles). The rest are made by the app's own
+  // rule, which the web does not share: past every handle the draft holds and every one its words mention,
+  // and marked as made up, so a remix's recovery may still give the clip its source's in their place.
   it('keeps a clip a valid handle of its own, and makes the rest past every handle the draft holds or its words mention', () => {
     const clip = (name: string, displayName: string, handle?: string): MediaDraft => ({
       ...upload(`${name}.mp4`, 'video', { durationSeconds: 4 }), displayName, handle,
@@ -912,7 +915,11 @@ describe('references kept across a model change', () => {
 
     // A second @spin, and one no prompt could mention, are made from their names.
     const renamed = onKling({ prompt: 'Start on @spin.', referenceVideos: [clip('spin', 'Spin', '@spin'), clip('again', 'Spin', '@spin'), clip('loud', 'Loud Move', '@Loud Move')] });
-    expect(renamed.referenceVideos.map((item) => item.handle)).toEqual(['@spin', '@spin_2', '@loud_move']);
+    expect(renamed.referenceVideos.map((item) => [item.handle, item.handleStandIn])).toEqual([
+      ['@spin', undefined],
+      ['@spin_2', true],
+      ['@loud_move', true],
+    ]);
 
     // Past a picture's handle, a subject's and the ones the words mention, which stay as they are; a name
     // with nothing a handle can hold makes the generic one.
@@ -933,6 +940,25 @@ describe('references kept across a model change', () => {
     expect(onSeedance.referenceVideos).toBe(renamed.referenceVideos);
     expect((applyCatalogModelDefaults(onSeedance, kling30) as VideoCreationDraft).referenceVideos.map((item) => item.handle))
       .toEqual(['@spin', '@spin_2', '@loud_move']);
+    // A clip added beside them, as an upload is, is named by the same rule, past the handles mentioned.
+    const added = onKling({ ...renamed, prompt: 'Then @reference_video.', referenceVideos: [...renamed.referenceVideos, clip('new', 'Reference Video')] });
+    expect(added.referenceVideos.map((item) => item.handle)).toEqual(['@spin', '@spin_2', '@loud_move', '@reference_video_2']);
+    // Renamed, a made-up handle is the creator's.
+    expect(renameMediaDraft(added.referenceVideos[1], 'Jump', true)).toMatchObject({ handle: '@jump' });
+    expect(renameMediaDraft(added.referenceVideos[1], 'Jump', true).handleStandIn).toBeUndefined();
+  });
+
+  // Some paths put a clip in the draft past the normalization that names it: an upload landing through a
+  // catalog that has no details for the model it now runs on, or a remix restore merged as it came. Its
+  // run still sends it, under a handle made by the same rule.
+  it('sends a clip that reached the run without a handle under one made as the draft would name it', () => {
+    const clip: MediaDraft = { ...upload('late.mp4', 'video', { durationSeconds: 5 }), displayName: 'Reference Video' };
+    const unnamed: VideoCreationDraft = { ...videoDraft(kling30), prompt: 'Then @reference_video jumps.', referenceVideos: [clip] };
+
+    expect(buildUnifiedCatalogGenerationRequest(unnamed, kling30, 'revision-1').inputs).toEqual([
+      expect.objectContaining({ slot: 'videoElements', url: clip.url, handle: '@reference_video_2' }),
+    ]);
+    expect(buildCatalogQuoteRequest(unnamed, kling30, 'revision-1')).toMatchObject({ inputMetadata: { slots: { videoElements: { count: 1 } } } });
   });
 });
 

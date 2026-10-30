@@ -1083,9 +1083,6 @@ function IdentityCreationScreen({
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resumedRemixRef = useRef(false);
   const recoveringRemixReferences = useRef(false);
-  // The draft a recovery repairs, as it was read back: the catalog reconcile names its clips before the
-  // source is back, and the recovery tells those names from the ones a creator gave (recoverRemixReferences).
-  const recoveringRemixDraftAsSaved = useRef<CreationDraft | null>(null);
   const remixResolvedRef = useRef(false);
   const [remixRetry, setRemixRetry] = useState(0);
   const [remixRestoreFailed, setRemixRestoreFailed] = useState(false);
@@ -1199,7 +1196,6 @@ function IdentityCreationScreen({
     setDraftLoadError(false);
     resumedRemixRef.current = false;
     recoveringRemixReferences.current = false;
-    recoveringRemixDraftAsSaved.current = null;
     remixResolvedRef.current = false;
     // Read when the scope changes rather than tracked: the session object is
     // replaced on every token refresh, and reloading then would pull the drafts
@@ -1232,7 +1228,6 @@ function IdentityCreationScreen({
         // the creator's other saved fields.
         recoveringRemixReferences.current = Boolean(remixScope && persisted.remixRestored
           && needsRemixReferenceRecovery(persisted[initialTool], { now: Date.now(), storageBaseUrl: env.supabaseUrl }));
-        recoveringRemixDraftAsSaved.current = recoveringRemixReferences.current ? persisted[initialTool] : null;
         resumedRemixRef.current = Boolean(remixScope && persisted.remixRestored && !recoveringRemixReferences.current);
         remixResolvedRef.current = resumedRemixRef.current;
         savedRemixEdits.current = persisted.remixEditedKeys ?? {};
@@ -1745,7 +1740,7 @@ function IdentityCreationScreen({
         const restoredPrompt = savedRemixEdits.current[targetTool]?.includes('prompt') ? current.prompt : prompt;
         // A model chosen while loading keeps its compatible settings as a unit.
         const merged = recoveringRemixReferences.current
-          ? recoverRemixReferences(current, restored.draft, recoveringRemixDraftAsSaved.current ?? current)
+          ? recoverRemixReferences(current, restored.draft)
           : 'model' in edits
           ? { ...current, sourceGenerationId: restored.draft.sourceGenerationId }
           : { ...restored.draft, ...edits, prompt: restoredPrompt };
@@ -2081,8 +2076,6 @@ function IdentityCreationScreen({
     const maxVideos = target === 'video'
       ? selectedModel?.inputModes ? clipSlot?.max ?? 0 : selectedModel?.inputs.videoReferences?.max ?? 0
       : catalogInputLimit(selectedModel, selectedDraft, motionClipSlotKey, 1, 'elements');
-    // Named clips are mentioned in the prompt, so each needs a handle of its own.
-    const namesClips = target === 'video' && clipsTakeHandles(selectedModel, videoDraft);
     // A motion run takes one clip, so a new pick takes the place of the one attached, as Replace does.
     const replacesClip = target === 'motion' && maxVideos > 0;
     if (currentCount >= maxVideos && !replacesClip) {
@@ -2127,10 +2120,9 @@ function IdentityCreationScreen({
           duration: Math.ceil(media.durationSeconds ?? draft.duration),
         }));
       } else {
-        setVideoDraft((draft) => {
-          const nextMedia = namesClips ? withUniqueReferenceHandle(media, draft.referenceVideos) : media;
-          return normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, nextMedia] });
-        });
+        // A model that takes clips under handles names it as the draft is normalized (withClipHandles), by the
+        // one rule every clip the app names follows: past the handles the draft holds and its words mention.
+        setVideoDraft((draft) => normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, media] }));
         revealInRail(media.id);
       }
     } catch (error) {

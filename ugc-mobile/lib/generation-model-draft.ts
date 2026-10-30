@@ -566,7 +566,7 @@ export function applyCatalogModelDefaults(
       // (`videoElementInputs` in src/lib/unified-generation-start-service.ts), and Kling 3.0 reads no
       // plain clip link. One uploaded on a model whose clips take none (Seedance 2 Mini, the video
       // default) was quoted, shown and charged for, and left out of the run.
-      referenceVideos: takesNamedClips(model) ? withClipHandles(draft) : draft.referenceVideos,
+      referenceVideos: withNamedClips(draft, model).referenceVideos,
     } as VideoCreationDraft;
     const shaped = { ...normalized, referenceMode: catalogVideoRunReferenceMode(normalized, model) };
     return { ...shaped, catalogSettings: getCatalogDraftSettings(shaped, model) };
@@ -667,7 +667,19 @@ function namesReferences(slot: CatalogInputSlot): boolean {
 
 /** Whether a model takes clips under the handles a prompt mentions them by: a clip slot of its names them. */
 function takesNamedClips(model: GenerationModelDescriptor): boolean {
-  return (model.inputModes ?? []).some((mode) => mode.slots.some((slot) => slot.kind === 'video' && namesReferences(slot)));
+  // A descriptor without input modes names no slot: Kling 3.0's, as the screen and the run handles read it.
+  if (!model.inputModes) return model.id === 'kling-3.0-video';
+  return model.inputModes.some((mode) => mode.slots.some((slot) => slot.kind === 'video' && namesReferences(slot)));
+}
+
+/**
+ * The draft with every clip under a handle where this model takes clips only under one
+ * (`withClipHandles`), and the same draft elsewhere.
+ */
+function withNamedClips<T extends CreationDraft>(draft: T, model: GenerationModelDescriptor): T {
+  if (draft.tool !== 'video' || !takesNamedClips(model)) return draft;
+  const referenceVideos = withClipHandles(draft);
+  return referenceVideos === draft.referenceVideos ? draft : { ...draft, referenceVideos };
 }
 
 /**
@@ -1158,7 +1170,10 @@ export function buildUnifiedCatalogGenerationRequest(
   model: GenerationModelDescriptor,
   catalogRevision: string,
 ): CatalogGenerationRequest {
-  const runDraft = catalogRunDraft(draft, model);
+  // A clip that reached the run without a handle, past the normalization that names every clip (an
+  // upload that landed through a catalog without the model's details, a restore merged as it came),
+  // goes under one made the same way: the server leaves out a Kling 3.0 clip that has none.
+  const runDraft = catalogRunDraft(withNamedClips(draft, model), model);
   // The settings of the draft, as its quote is asked with them (buildCatalogQuoteRequest prices
   // this request), never the quote's answer read back: the server quotes the run again from
   // these and makes it with its own normalized result, so it runs the settings it priced. A
