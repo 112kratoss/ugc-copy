@@ -140,9 +140,33 @@ describe('unified generation route service', () => {
       request: expect.any(Request),
       body,
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient,
       adminSupabase: adminClient,
     });
+  });
+
+  // The start credits a guest with no remix of anyone else's post, as Remix
+  // serves it none (`source-generation.ts`), so it is told who is a guest.
+  it('tells the start that a guest identity is a guest', async () => {
+    startUnifiedGenerationForRouteMock.mockResolvedValue({ success: true });
+
+    await postUnifiedGenerationForRoute({
+      request: new Request('http://localhost/api/generations', { method: 'POST' }),
+      createUserSupabase: () => ({
+        auth: {
+          getUser: vi.fn(async () => ({ data: { user: { id: 'guest-1', is_anonymous: true } }, error: null })),
+        },
+      }),
+      createAdminSupabase: () => ({ kind: 'admin' }),
+      kieApiKey: 'configured',
+      readRequestBody: async () => ({ kind: 'image', modelId: 'remote-image' }),
+    });
+
+    expect(startUnifiedGenerationForRouteMock).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'guest-1',
+      callerIsGuest: true,
+    }));
   });
 
   it('fails before privileged work when the user is unauthenticated', async () => {

@@ -32,6 +32,8 @@ type StartMotionGenerationForRouteInput = {
   request: Request;
   body: Record<string, unknown>;
   userId: string;
+  /** The caller is a guest identity (`isGuestUser`): it is credited with no remix of anyone else's post. */
+  callerIsGuest: boolean;
   supabase: MotionGenerationStartRouteClient;
   adminSupabase: MotionGenerationStartRouteClient;
 };
@@ -94,6 +96,7 @@ export async function startMotionGenerationForRoute({
   request,
   body,
   userId,
+  callerIsGuest,
   supabase,
   adminSupabase,
 }: StartMotionGenerationForRouteInput): Promise<MotionGenerationStartRoutePayload> {
@@ -137,6 +140,7 @@ export async function startMotionGenerationForRoute({
     adminSupabase,
     userId,
     selectedSourceGenerationId,
+    { callerIsGuest },
   );
 
   await enforceBackendRateLimit(adminSupabase, {

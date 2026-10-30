@@ -1,4 +1,5 @@
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
+import { isGuestUser } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -41,13 +42,13 @@ export interface MotionGenerationRouteInput {
   runAfterResponse?: RunAfterResponse;
 }
 
-async function getAuthenticatedUserId(supabase: MotionRouteSupabaseClient) {
+async function getAuthenticatedUser(supabase: MotionRouteSupabaseClient) {
   const {
     data: { user },
     error: authError,
   } = await getVerifiedAuthUserResult(supabase);
 
-  return authError || !user ? null : user.id;
+  return authError || !user ? null : user;
 }
 
 async function readRequestBody(input: MotionGenerationRouteInput) {
@@ -74,8 +75,8 @@ export async function postMotionGenerationForRoute(
   input: MotionGenerationRouteInput,
 ): Promise<MotionGenerationRouteResult> {
   const supabase = input.createUserSupabase() as MotionRouteSupabaseClient;
-  const userId = await getAuthenticatedUserId(supabase);
-  if (!userId) {
+  const user = await getAuthenticatedUser(supabase);
+  if (!user) {
     return {
       ok: false,
       body: { code: 'UNAUTHORIZED', error: 'Unauthorized: Please log in to generate videos' },
@@ -100,7 +101,8 @@ export async function postMotionGenerationForRoute(
     const payload = await startMotionGenerationForRoute({
       request: input.request,
       body,
-      userId,
+      userId: user.id,
+      callerIsGuest: isGuestUser(user),
       supabase,
       adminSupabase: input.createAdminSupabase() as MotionRouteSupabaseClient,
     });
@@ -127,7 +129,7 @@ export async function getMotionGenerationForRoute(
 
   try {
     const supabase = input.createUserSupabase() as MotionRouteSupabaseClient;
-    const userId = await getAuthenticatedUserId(supabase);
+    const userId = (await getAuthenticatedUser(supabase))?.id;
     if (!userId) {
       return {
         ok: false,

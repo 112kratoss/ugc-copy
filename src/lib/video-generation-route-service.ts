@@ -1,4 +1,5 @@
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
+import { isGuestUser } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -40,13 +41,13 @@ export interface VideoGenerationRouteInput {
   runAfterResponse?: RunAfterResponse;
 }
 
-async function getAuthenticatedUserId(supabase: VideoRouteSupabaseClient) {
+async function getAuthenticatedUser(supabase: VideoRouteSupabaseClient) {
   const {
     data: { user },
     error: authError,
   } = await getVerifiedAuthUserResult(supabase);
 
-  return authError || !user ? null : user.id;
+  return authError || !user ? null : user;
 }
 
 async function readRequestBody(input: VideoGenerationRouteInput) {
@@ -65,8 +66,8 @@ export async function postVideoGenerationForRoute(
   input: VideoGenerationRouteInput,
 ): Promise<VideoGenerationRouteResult> {
   const supabase = input.createUserSupabase() as VideoRouteSupabaseClient;
-  const userId = await getAuthenticatedUserId(supabase);
-  if (!userId) {
+  const user = await getAuthenticatedUser(supabase);
+  if (!user) {
     return {
       ok: false,
       body: { code: 'UNAUTHORIZED', error: 'Unauthorized: Please log in to generate videos' },
@@ -91,7 +92,8 @@ export async function postVideoGenerationForRoute(
     const payload = await startVideoGenerationForRoute({
       request: input.request,
       body,
-      userId,
+      userId: user.id,
+      callerIsGuest: isGuestUser(user),
       supabase,
       adminSupabase: input.createAdminSupabase() as VideoRouteSupabaseClient,
     });
@@ -118,7 +120,7 @@ export async function getVideoGenerationForRoute(
 
   try {
     const supabase = input.createUserSupabase() as VideoRouteSupabaseClient;
-    const userId = await getAuthenticatedUserId(supabase);
+    const userId = (await getAuthenticatedUser(supabase))?.id;
     if (!userId) {
       return {
         ok: false,

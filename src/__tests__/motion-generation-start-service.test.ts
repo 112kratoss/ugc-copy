@@ -168,6 +168,7 @@ describe('startMotionGenerationForRoute', () => {
         catalogRevision: 'stale-revision',
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient.client,
       adminSupabase: adminClient.client,
     })).rejects.toBeInstanceOf(CatalogError);
@@ -221,6 +222,7 @@ describe('startMotionGenerationForRoute', () => {
         catalogRevision,
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient.client,
       adminSupabase: adminClient.client,
     });
@@ -280,6 +282,7 @@ describe('startMotionGenerationForRoute', () => {
       request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-2' } }),
       body: motionBody({ duration: 30 }),
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: createClientMock().client,
       adminSupabase: createClientMock().client,
     });
@@ -299,6 +302,7 @@ describe('startMotionGenerationForRoute', () => {
       request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-3' } }),
       body: motionBody({ model: 'kling-2.6', mode: '720p', duration: 1 }),
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: createClientMock().client,
       adminSupabase: createClientMock().client,
     }).catch((error: unknown) => error);
@@ -322,6 +326,7 @@ describe('startMotionGenerationForRoute', () => {
       request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-6' } }),
       body: motionBody({ model: 'kling-2.6', mode: '720p', duration: 3 }),
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: createClientMock().client,
       adminSupabase: createClientMock().client,
     }).catch((error: unknown) => error);
@@ -347,6 +352,7 @@ describe('startMotionGenerationForRoute', () => {
       request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-7' } }),
       body: motionBody({ model: 'kling-2.6', mode: '720p', duration: 3 }),
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: createClientMock().client,
       adminSupabase: createClientMock().client,
     });
@@ -368,6 +374,7 @@ describe('startMotionGenerationForRoute', () => {
       request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-4' } }),
       body: motionBody({ duration: 6 }),
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: createClientMock().client,
       adminSupabase: createClientMock().client,
     }).catch((error: unknown) => error);
@@ -390,6 +397,7 @@ describe('startMotionGenerationForRoute', () => {
       request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-5' } }),
       body: motionBody({ duration: 6 }),
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: createClientMock().client,
       adminSupabase: adminClient.client,
     });

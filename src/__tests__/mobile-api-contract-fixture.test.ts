@@ -1047,6 +1047,7 @@ describe('shared mobile API v1 contract fixture', () => {
         }),
         body,
         userId: 'user-1',
+        callerIsGuest: false,
         supabase: {} as SupabaseClient,
         // Just enough for the idempotent start: a claim, a lock, and no earlier attempt.
         adminSupabase: {

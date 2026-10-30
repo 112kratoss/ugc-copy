@@ -1,4 +1,5 @@
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
+import { isGuestUser } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -40,13 +41,13 @@ export interface ImageGenerationRouteInput {
   runAfterResponse?: RunAfterResponse;
 }
 
-async function getAuthenticatedUserId(supabase: ImageRouteSupabaseClient) {
+async function getAuthenticatedUser(supabase: ImageRouteSupabaseClient) {
   const {
     data: { user },
     error: authError,
   } = await getVerifiedAuthUserResult(supabase);
 
-  return authError || !user ? null : user.id;
+  return authError || !user ? null : user;
 }
 
 async function readRequestBody(input: ImageGenerationRouteInput) {
@@ -65,8 +66,8 @@ export async function postImageGenerationForRoute(
   input: ImageGenerationRouteInput,
 ): Promise<ImageGenerationRouteResult> {
   const supabase = input.createUserSupabase() as ImageRouteSupabaseClient;
-  const userId = await getAuthenticatedUserId(supabase);
-  if (!userId) {
+  const user = await getAuthenticatedUser(supabase);
+  if (!user) {
     return {
       ok: false,
       body: { code: 'UNAUTHORIZED', error: 'Unauthorized: Please log in to generate images' },
@@ -91,7 +92,8 @@ export async function postImageGenerationForRoute(
     const payload = await startImageGenerationForRoute({
       request: input.request,
       body,
-      userId,
+      userId: user.id,
+      callerIsGuest: isGuestUser(user),
       supabase,
       adminSupabase: input.createAdminSupabase() as ImageRouteSupabaseClient,
     });
@@ -118,7 +120,7 @@ export async function getImageGenerationForRoute(
 
   try {
     const supabase = input.createUserSupabase() as ImageRouteSupabaseClient;
-    const userId = await getAuthenticatedUserId(supabase);
+    const userId = (await getAuthenticatedUser(supabase))?.id;
     if (!userId) {
       return {
         ok: false,

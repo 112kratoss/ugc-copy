@@ -1,5 +1,6 @@
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isGuestUser } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
@@ -319,6 +320,7 @@ export async function postUnifiedGenerationForRoute(
       request: input.request,
       body,
       userId: user.id,
+      callerIsGuest: isGuestUser(user),
       supabase,
       adminSupabase: input.createAdminSupabase() as SupabaseClient,
     });

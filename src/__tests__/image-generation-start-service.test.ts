@@ -115,6 +115,7 @@ describe('startImageGenerationForRoute', () => {
         catalogRevision: 'stale-revision',
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient.client,
       adminSupabase: adminClient.client,
     })).rejects.toBeInstanceOf(CatalogError);
@@ -157,6 +158,7 @@ describe('startImageGenerationForRoute', () => {
         catalogRevision,
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient.client,
       adminSupabase: adminClient.client,
     });
@@ -223,6 +225,7 @@ describe('startImageGenerationForRoute', () => {
         catalogRevision,
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: createClientMock().client,
       adminSupabase: adminClient.client,
     });
@@ -258,6 +261,7 @@ describe('startImageGenerationForRoute', () => {
         persistInputMedia: true,
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient.client,
       adminSupabase: adminClient.client,
       persistInputMedia: false,

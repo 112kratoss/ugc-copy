@@ -35,6 +35,8 @@ type StartVideoGenerationForRouteInput = {
   request: Request;
   body: Record<string, unknown>;
   userId: string;
+  /** The caller is a guest identity (`isGuestUser`): it is credited with no remix of anyone else's post. */
+  callerIsGuest: boolean;
   supabase: VideoGenerationStartRouteClient;
   adminSupabase: VideoGenerationStartRouteClient;
   persistInputMedia?: boolean;
@@ -79,6 +81,7 @@ export async function startVideoGenerationForRoute({
   request,
   body,
   userId,
+  callerIsGuest,
   supabase,
   adminSupabase,
   persistInputMedia = true,
@@ -124,7 +127,8 @@ export async function startVideoGenerationForRoute({
   const sourceGenerationId = await resolveSourceGenerationId(
     adminSupabase,
     userId,
-    readOptionalString(body.sourceGenerationId)
+    readOptionalString(body.sourceGenerationId),
+    { callerIsGuest },
   );
 
   await enforceBackendRateLimit(adminSupabase, {
