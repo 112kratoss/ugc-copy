@@ -38,6 +38,15 @@ export type CatalogCurrentCheck = {
   error: Error | null;
 };
 const STORAGE_KEY = 'model-catalog:transport-v1';
+/**
+ * The descriptors are kept as the client's parser returned them, and a cached model is not
+ * fetched again for its revision. A parser that drops a key it does not know keeps that key out
+ * of the stored copy too, so an update that teaches the parser a key raises this, and entries
+ * stored under another value are fetched again: an app that read Kling 3.0's
+ * `minDurationSeconds` before its parser kept it would otherwise go on without it until the
+ * catalog's next revision.
+ */
+export const DESCRIPTOR_CACHE_VERSION = 2;
 const BASE = '/api/model-catalog/v1';
 const CACHE_LIMIT = 100;
 
@@ -104,7 +113,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
         if (raw) {
           const value = JSON.parse(raw);
           const current = parseModelCatalogCurrent(value.current);
-          if (Array.isArray(value.entries))
+          if (value.descriptorVersion === DESCRIPTOR_CACHE_VERSION && Array.isArray(value.entries))
             for (const entry of value.entries.slice(-CACHE_LIMIT)) {
               if (typeof entry.revision !== 'string') continue;
               try {
@@ -432,6 +441,7 @@ export class ModelCatalogSession<T extends CatalogDescriptorIdentity> {
     const value = JSON.stringify({
       current,
       etag: this.etag,
+      descriptorVersion: DESCRIPTOR_CACHE_VERSION,
       entries,
       page: {
         transportVersion: 1,

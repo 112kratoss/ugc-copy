@@ -132,8 +132,9 @@ export function remoteVideoModel(
 }
 
 /**
- * Kling 3.0 as published (config/generation-model-catalog/releases/2026-10-28-mini-default-video.json):
- * frames, and its clips in a mode of their own beside them, each under the handle its prompt mentions.
+ * Kling 3.0 as published (config/generation-model-catalog/releases/2026-10-30-kling-element-min-duration.json):
+ * frames, and its clips in a mode of their own beside them, each under the handle its prompt mentions
+ * and at least 3 seconds long.
  */
 export function klingVideoModel(): GenerationModelDescriptor {
   const choice = (key: string, label: string, values: string[]) => ({
@@ -175,7 +176,7 @@ export function klingVideoModel(): GenerationModelDescriptor {
         key: 'video-elements',
         label: 'Video elements',
         default: false,
-        slots: [{ key: 'videoElements', kind: 'video', role: 'reference', label: 'Video elements', min: 0, max: 3, supportsNaming: true, durationMetadata: 'optional' }],
+        slots: [{ key: 'videoElements', kind: 'video', role: 'reference', label: 'Video elements', min: 0, max: 3, supportsNaming: true, durationMetadata: 'optional', minDurationSeconds: 3 }],
       },
     ],
     inputConstraints: [],

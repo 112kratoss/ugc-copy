@@ -1,4 +1,5 @@
 import { measureModelCatalogRelease } from '../../src/lib/model-catalog-release-policy';
+import { referenceMediaMinSeconds, referenceMediaRole } from '../../src/lib/provider-input-limits';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -408,7 +409,11 @@ function assertControl(value: unknown, context: string): void {
   }
 }
 
-function assertInputModes(value: unknown, context: string): Set<string> {
+function assertInputModes(
+  value: unknown,
+  context: string,
+  owner: { modelId: string; kind: CatalogKind },
+): Set<string> {
   const modes = requireArray(value, context);
   if (modes.length === 0) throw new Error(`${context} cannot be empty.`);
   const keys: string[] = [];
@@ -482,6 +487,30 @@ function assertInputModes(value: unknown, context: string): Set<string> {
         if (maximumDuration <= 0) {
           throw new Error(
             `${context}[${modeIndex}].slots[${slotIndex}].maxDurationSeconds must be positive.`,
+          );
+        }
+      }
+      if (slot.minDurationSeconds !== undefined) {
+        const field = `${context}[${modeIndex}].slots[${slotIndex}].minDurationSeconds`;
+        const minimumDuration = requireNonNegativeNumber(slot.minDurationSeconds, field);
+        if (minimumDuration <= 0) throw new Error(`${field} must be positive.`);
+        // Only a length can be held to it, and the start measures the files of a slot that
+        // declares duration metadata (durationBoundInputSlots).
+        if ((kind !== 'video' && kind !== 'audio') || slot.durationMetadata === undefined) {
+          throw new Error(`${field} needs a video or audio slot with durationMetadata.`);
+        }
+        if (slot.maxDurationSeconds !== undefined && minimumDuration > Number(slot.maxDurationSeconds)) {
+          throw new Error(`${field} cannot exceed maxDurationSeconds.`);
+        }
+        // The creators hold a run to it, and the start refuses by its own table: a minimum the
+        // start does not hold would have them refuse runs it takes, in words it never says.
+        const startMinimum = referenceMediaMinSeconds(
+          owner.modelId,
+          referenceMediaRole(owner.kind, slotKey, kind as 'video' | 'audio'),
+        );
+        if (minimumDuration !== startMinimum) {
+          throw new Error(
+            `${field} must be the minimum the start holds ${owner.modelId}'s ${slotKey} to (${startMinimum ?? 'none'}).`,
           );
         }
       }
@@ -665,7 +694,7 @@ function assertDescriptor(
     if (webAvailability !== entry.webEnabled || mobileAvailability !== entry.mobileEnabled) {
       throw new Error(`${entry.modelId} public availability does not match private flags.`);
     }
-    const slotKeys = assertInputModes(descriptor.inputModes, `${entry.modelId} inputModes`);
+    const slotKeys = assertInputModes(descriptor.inputModes, `${entry.modelId} inputModes`, entry);
     const durationRequiredSlots = new Set(
       requireArray(descriptor.inputModes, `${entry.modelId} inputModes`)
         .flatMap((modeValue) => {

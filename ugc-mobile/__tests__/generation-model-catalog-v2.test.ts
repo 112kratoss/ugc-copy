@@ -9,8 +9,9 @@ import {
   loadCachedGenerationModelCatalogEnvelope,
   parseGenerationModelCatalog,
   saveCachedGenerationModelCatalog,
+  type GenerationModelDescriptor,
 } from '../lib/generation-model-catalog';
-import { catalogV2, remoteVideoModel } from './generation-model-catalog-v2-fixtures';
+import { catalogV2, klingVideoModel, remoteVideoModel } from './generation-model-catalog-v2-fixtures';
 
 describe('generation model catalog v2', () => {
   it('parses conditional slots and filters platform-unavailable models', () => {
@@ -70,6 +71,25 @@ describe('generation model catalog v2', () => {
         })),
       }],
     }, 2)).toThrow('Invalid model catalog');
+  });
+
+  it('keeps the shortest clip a slot takes, and leaves out one that is no length', () => {
+    // Kling 3.0's video elements run at least 3 seconds (release kling-element-min-duration-20261030),
+    // and the draft holds a run to it before Generate.
+    const elementsOf = (model: GenerationModelDescriptor) => model.inputModes?.flatMap((mode) => mode.slots)
+      .find((slot) => slot.key === 'videoElements');
+    const parsed = parseGenerationModelCatalog(catalogV2([klingVideoModel()]), 2);
+    expect(elementsOf(parsed.models[0])).toMatchObject({ minDurationSeconds: 3 });
+
+    // The model stays: a malformed minimum only loses the line before Generate, and the start
+    // still holds every clip to its own minimum.
+    for (const minDurationSeconds of [0, -1, '3', Number.NaN, Number.POSITIVE_INFINITY, null]) {
+      const model = klingVideoModel();
+      (elementsOf(model) as unknown as Record<string, unknown>).minDurationSeconds = minDurationSeconds;
+      const read = parseGenerationModelCatalog(catalogV2([model]), 2).models[0];
+      expect(read.id, String(minDurationSeconds)).toBe('kling-3.0-video');
+      expect(elementsOf(read), String(minDurationSeconds)).not.toHaveProperty('minDurationSeconds');
+    }
   });
 
   it('allows one logical slot in different modes but rejects duplicates inside a mode', () => {

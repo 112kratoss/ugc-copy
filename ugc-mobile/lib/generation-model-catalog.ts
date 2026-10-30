@@ -83,6 +83,8 @@ export interface CatalogInputSlot {
   maxNamed?: number;
   durationMetadata?: 'optional' | 'required';
   maxDurationSeconds?: number;
+  /** The shortest clip or track the slot takes, in seconds (Kling 3.0's video elements, 3). */
+  minDurationSeconds?: number;
   conditions?: CatalogCondition[];
 }
 
@@ -409,6 +411,13 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
       : {}),
     ...(typeof value.maxDurationSeconds === 'number'
       ? { maxDurationSeconds: value.maxDurationSeconds }
+      : {}),
+    // A minimum that is no length is left out rather than dropping the model: it only lets the
+    // draft say a clip is short before Generate, and the start holds every clip to its own.
+    ...(typeof value.minDurationSeconds === 'number'
+      && Number.isFinite(value.minDurationSeconds)
+      && value.minDurationSeconds > 0
+      ? { minDurationSeconds: value.minDurationSeconds }
       : {}),
     ...(conditions ? { conditions } : {}),
   };

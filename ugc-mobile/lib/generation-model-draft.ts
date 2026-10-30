@@ -39,6 +39,7 @@ import {
   type VideoShotDraft,
 } from './media-creation-view-model';
 import {
+  catalogInputTooShort,
   catalogMotionInputSlots,
   catalogRunQuoteInput,
   catalogRunWithShownCost,
@@ -935,6 +936,15 @@ function validateCatalogV2Inputs(
       ) {
         errors.push(`${slot.label} inputs must be ${slot.maxDurationSeconds} seconds or shorter.`);
       }
+      // Shorter than the provider takes (a Kling 3.0 video element under 3 seconds): the start
+      // refused it, before any hold, only once Generate was pressed. Said in the start's words,
+      // naming the clip by its handle where it has one: the app calls every clip it picks
+      // "Reference Video", and the handle is what tells two of them apart.
+      const tooShort = catalogInputTooShort(model.displayName, slot, {
+        label: asset.handle || asset.displayName || asset.fileName || '',
+        durationSeconds: asset.durationSeconds,
+      });
+      if (tooShort) errors.push(tooShort);
     }
   }
   for (const constraint of model.inputConstraints ?? []) {
