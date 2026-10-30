@@ -4258,6 +4258,8 @@ describe('CreateVideoClient Kling video elements', () => {
         writePrompt();
 
         expect(await screen.findByText(SHORT_CLIP)).toBeInTheDocument();
+        // The clip's card gives its length as the line does, rounded down: 2.16 s never reads as 2.2.
+        expect(screen.getByText('2.1s clip')).toBeInTheDocument();
         // The run's price is still shown; the run waits on the clip.
         await waitFor(() => expect(costShown()).toMatch(/credits$/));
         expect(generateButton()).toBeDisabled();

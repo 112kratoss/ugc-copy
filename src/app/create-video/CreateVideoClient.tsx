@@ -6053,7 +6053,9 @@ export default function CreateVideoClient({
                                                         void navigator.clipboard.writeText(element.handle);
                                                     }
                                                 }}
-                                                note={typeof element.durationSeconds === 'number' ? `${element.durationSeconds.toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
+                                                // Rounded down, as the line beside Generate and the start give a clip's
+                                                // length, so a clip named there as too short never reads as 3.0s here.
+                                                note={typeof element.durationSeconds === 'number' ? `${(Math.floor(element.durationSeconds * 10) / 10).toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
                                             />
                                         ))}
                                     </ul>
