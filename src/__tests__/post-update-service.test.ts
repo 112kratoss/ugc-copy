@@ -1633,6 +1633,7 @@ describe('updateOwnerPostForRoute', () => {
         body: Record<string, unknown>,
         options: {
           post?: Record<string, unknown>;
+          postMedia?: Array<Record<string, unknown>>;
           profiles?: Array<Record<string, unknown>>;
           profilesError?: { message: string };
         } = {},
@@ -1640,6 +1641,7 @@ describe('updateOwnerPostForRoute', () => {
         const mock = createSupabaseMock({
           post: options.post ?? unlinkedPost,
           bundle: null,
+          postMedia: options.postMedia ?? [],
           // The creation's row is gone.
           generation: null,
           profiles: options.profiles ?? [],
@@ -1654,6 +1656,14 @@ describe('updateOwnerPostForRoute', () => {
               : `generated_images/${generation.userId}/durable/example.jpg`,
             createdLocation: null,
           })),
+          // As the copier answers: it reads an original only from the folder of
+          // the maker it is given (or a provider's address).
+          createGenerationShowcaseDerivative: vi.fn(async ({ ownerUserId, outputUrl }: { ownerUserId: string; outputUrl: string }) => {
+            if (!outputUrl.startsWith(`generated_images/${ownerUserId}/`)) {
+              throw new Error('Unsupported media source for showcase publishing');
+            }
+            return 'showcase/generation-1/example.abc123.jpg';
+          }),
         });
         const result = updateOwnerPostForRoute({
           adminSupabase: mock.client,
@@ -1801,18 +1811,95 @@ describe('updateOwnerPostForRoute', () => {
         }));
       });
 
-      it("lets the copier read only from the owner's folder when the original is a stranger's", async () => {
+      it("never makes a public copy from a stranger's original, and keeps the post private", async () => {
         const { result, dependencies } = update({ visibility: 'public' }, {
           post: { ...privateUnlinkedPost, output_url: 'generated_images/user-9/example.jpg' },
           profiles: [{ id: 'user-9', merged_into_user_id: null }],
         });
 
-        await expect(result).resolves.toMatchObject({ ok: true });
-        // The copier reads only from the folder of the maker it is given.
+        await expect(result).resolves.toEqual({
+          ok: false,
+          status: 500,
+          body: { error: 'The public copy of this creation could not be prepared. The current visibility was kept.' },
+        });
+        // Asked to read from the owner's folder, which does not hold it.
         expect(dependencies.createGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
           ownerUserId: 'user-1',
           outputUrl: 'generated_images/user-9/example.jpg',
         }));
+        expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      });
+
+      // An older creation post kept its copy's path on the creation only, which
+      // went with it; its gallery rows under the creation's folder still serve.
+      it('drops the gallery rows of an older post whose copy was recorded on the creation only', async () => {
+        const { result, dependencies } = update({ visibility: 'private' }, {
+          post: { ...unlinkedPost, showcase_asset_path: null },
+        });
+
+        await expect(result).resolves.toMatchObject({ ok: true, body: { visibility: 'private' } });
+        expect(dependencies.removeGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+          generationId: 'generation-1',
+          showcaseAssetPath: null,
+          postId: 'post-1',
+        }));
+      });
+
+      // Both editors read such a post as an uploaded one (their read names no
+      // creation) and send its stored media back on every save.
+      describe('saved from an editor', () => {
+        const coverRow = {
+          id: 'media-1',
+          media_key: 'media-0',
+          sort_order: 0,
+          storage_path: 'showcase/generation-1/example.abc123.jpg',
+          media_kind: 'image',
+          content_type: 'image/jpeg',
+        };
+
+        it('takes a save that restates its media, here a new title and a move to private', async () => {
+          const { result, dependencies } = update(
+            { title: 'Renamed', visibility: 'private', mediaItems: [{ existingId: 'media-1' }] },
+            { postMedia: [coverRow] },
+          );
+
+          await expect(result).resolves.toMatchObject({ ok: true, body: { visibility: 'private' } });
+          const saved = vi.mocked(dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0];
+          expect(saved?.patch).toMatchObject({ title: 'Renamed', visibility: 'private', showcase_asset_path: null });
+          expect(saved).not.toHaveProperty('mediaItems');
+          expect(dependencies.removeGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+            generationId: 'generation-1',
+            postId: 'post-1',
+          }));
+        });
+
+        it('takes the cover both editors make up for a post with no media rows', async () => {
+          const { result, dependencies } = update(
+            { title: 'Renamed', mediaItems: [{ existingId: 'post-1:cover', mediaKey: 'post-1:cover' }] },
+            { post: privateUnlinkedPost },
+          );
+
+          await expect(result).resolves.toMatchObject({ ok: true });
+          expect(vi.mocked(dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0])
+            .not.toHaveProperty('mediaItems');
+        });
+
+        it.each([
+          ['adds an upload', [{ existingId: 'media-1' }, { mediaKey: 'new-1', storagePath: 'uploads/user-1/new.jpg', contentType: 'image/jpeg' }]],
+          ['replaces its media', [{ mediaKey: 'new-1', storagePath: 'uploads/user-1/new.jpg', contentType: 'image/jpeg' }]],
+          ['names a row the post does not have', [{ existingId: 'media-9' }]],
+          ['moves a stored key', [{ existingId: 'media-1', mediaKey: 'other-key' }]],
+          ['empties it', []],
+        ])('still refuses a save that %s', async (_case, mediaItems) => {
+          const { result, dependencies } = update({ mediaItems }, { postMedia: [coverRow] });
+
+          await expect(result).resolves.toEqual({
+            ok: false,
+            status: 400,
+            body: { error: 'A post made from a creation keeps its generated media. Publish a different creation to change it.' },
+          });
+          expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+        });
       });
     });
   });

@@ -9,7 +9,8 @@
 --     queueing it, and the post routes skipped it for the same reason;
 --   - account erasure's manifest skipped the copy;
 --   - marking the post NSFW, and reading its private copy, were refused;
---   - the teaser sweep never admitted its rendition.
+--   - the teaser sweep never admitted its rendition;
+--   - replace_post_media took it for an uploaded post, whose media may change.
 -- PR #598 let a take-down prove such a folder by searching every post for it.
 --
 -- 1. posts.deleted_generation_id records the creation whose delete unlinked the
@@ -17,6 +18,8 @@
 -- 2. Each of those rules keys on coalesce(generation_id, deleted_generation_id).
 -- 3. Posts unlinked before this migration are backfilled where #598's proof
 --    holds. Production had none (read-only count, 2026-10-30).
+
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE public.posts
   ADD COLUMN deleted_generation_id uuid;
@@ -34,10 +37,12 @@ CREATE INDEX posts_deleted_generation_id_idx
 COMMENT ON COLUMN public.posts.deleted_generation_id IS
   'The creation whose delete unlinked this post (generation_id is ON DELETE SET NULL). The post keeps serving that creation''s copy from showcase/<id>/ or private-posts/<id>/, and the rules deciding which folder is the post''s key on coalesce(generation_id, deleted_generation_id). Written only by posts_record_deleted_generation.';
 
--- Posts unlinked before this migration, where PR #598's proof holds
--- (readDeletedGenerationId, src/lib/moderation-ops.ts): exactly one creation
--- folder among the post's own paths, no creation by that id, and no other post
--- or media row naming a path in it. A post left out keeps today's behaviour.
+-- Posts unlinked before this migration, where the proof PR #598's take-down
+-- searched for holds: exactly one creation folder among the post's own
+-- paths, no creation by that id, and no other post or media row naming a
+-- path in it. A post left out keeps today's behaviour, and so does one whose
+-- owner's account deletion is pending: that erasure owns its media, and the
+-- content freeze refuses the write.
 WITH named AS (
   SELECT
     posts.id AS post_id,
@@ -72,6 +77,7 @@ UPDATE public.posts AS posts
 SET deleted_generation_id = proven.folder_id
 FROM proven
 WHERE posts.id = proven.post_id
+  AND NOT public.is_account_deletion_requested(posts.user_id)
   AND NOT EXISTS (
     SELECT 1
     FROM public.generations AS generations
@@ -587,3 +593,140 @@ end;
 $function$;
 revoke all on function public.claim_post_media_teaser_repair(text, bigint) from public, anon, authenticated;
 grant execute on function public.claim_post_media_teaser_repair(text, bigint) to service_role;
+
+-- 20260813120000's body: a post whose creation was deleted keeps that
+-- creation's media, as a linked one does, so its media is not replaced here
+-- either (post-update-service refuses it first).
+CREATE OR REPLACE FUNCTION public.replace_post_media(
+  p_post_id uuid,
+  p_owner_user_id uuid,
+  p_media_items jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_item jsonb;
+  v_item_count integer;
+  v_cover jsonb;
+  v_sort_order integer;
+  v_media_key text;
+  v_seen_media_keys text[] := ARRAY[]::text[];
+  v_existing_media_keys jsonb := '{}'::jsonb;
+  v_normalized_media_items jsonb := '[]'::jsonb;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.posts
+    WHERE id = p_post_id AND user_id = p_owner_user_id AND generation_id IS NULL
+      AND deleted_generation_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Manual post not found or media is not editable.';
+  END IF;
+
+  IF jsonb_typeof(coalesce(p_media_items, '[]'::jsonb)) <> 'array' THEN
+    RAISE EXCEPTION 'Post media must be an array.';
+  END IF;
+
+  v_item_count := jsonb_array_length(coalesce(p_media_items, '[]'::jsonb));
+  IF v_item_count > 5 THEN
+    RAISE EXCEPTION 'Posts support up to 5 media items.';
+  END IF;
+
+  -- Old clients do not send mediaKey. Keep the key already occupying that sort
+  -- position when possible, then fall back to the deterministic legacy key.
+  SELECT coalesce(jsonb_object_agg(sort_order::text, media_key), '{}'::jsonb)
+  INTO v_existing_media_keys
+  FROM public.post_media
+  WHERE post_id = p_post_id;
+
+  FOR v_item IN
+    SELECT value
+    FROM jsonb_array_elements(coalesce(p_media_items, '[]'::jsonb))
+  LOOP
+    v_sort_order := (v_item->>'sortOrder')::integer;
+    v_media_key := coalesce(
+      nullif(btrim(coalesce(v_item->>'mediaKey', '')), ''),
+      nullif(v_existing_media_keys->>v_sort_order::text, ''),
+      'media-' || (v_sort_order + 1)::text
+    );
+
+    IF length(v_media_key) > 80
+      OR v_media_key !~ '^[A-Za-z0-9][A-Za-z0-9_-]*$' THEN
+      RAISE EXCEPTION 'Post media keys may only use letters, numbers, hyphens, and underscores.';
+    END IF;
+
+    IF v_media_key = ANY(v_seen_media_keys) THEN
+      RAISE EXCEPTION 'Post media keys must be unique within a post.';
+    END IF;
+
+    v_seen_media_keys := array_append(v_seen_media_keys, v_media_key);
+    v_normalized_media_items := v_normalized_media_items
+      || jsonb_build_array(v_item || jsonb_build_object('mediaKey', v_media_key));
+  END LOOP;
+
+  DELETE FROM public.post_media WHERE post_id = p_post_id;
+
+  FOR v_item IN
+    SELECT value
+    FROM jsonb_array_elements(v_normalized_media_items)
+  LOOP
+    INSERT INTO public.post_media (
+      post_id, media_key, storage_path, preview_storage_path, preview_thumbhash, preview_status,
+      preview_attempt_count, preview_error, preview_generated_at, external_url,
+      media_kind, content_type, original_name, width, height, duration_seconds, sort_order,
+      rendition_storage_path, rendition_status, rendition_attempt_count,
+      rendition_error, rendition_generated_at, rendition_bytes,
+      teaser_storage_path, teaser_bytes, teaser_generated_at, teaser_error
+    ) VALUES (
+      p_post_id,
+      v_item->>'mediaKey',
+      nullif(btrim(coalesce(v_item->>'storagePath', '')), ''),
+      nullif(btrim(coalesce(v_item->>'previewStoragePath', '')), ''),
+      nullif(btrim(coalesce(v_item->>'previewThumbhash', '')), ''),
+      coalesce(nullif(v_item->>'previewStatus', ''), 'pending'),
+      coalesce((v_item->>'previewAttemptCount')::integer, 0),
+      nullif(btrim(coalesce(v_item->>'previewError', '')), ''),
+      CASE WHEN nullif(v_item->>'previewGeneratedAt', '') IS NULL THEN NULL ELSE (v_item->>'previewGeneratedAt')::timestamptz END,
+      nullif(btrim(coalesce(v_item->>'externalUrl', '')), ''),
+      v_item->>'mediaKind',
+      nullif(btrim(coalesce(v_item->>'contentType', '')), ''),
+      nullif(btrim(coalesce(v_item->>'originalName', '')), ''),
+      CASE WHEN v_item ? 'width' THEN (v_item->>'width')::integer ELSE NULL END,
+      CASE WHEN v_item ? 'height' THEN (v_item->>'height')::integer ELSE NULL END,
+      CASE WHEN v_item ? 'durationSeconds' THEN (v_item->>'durationSeconds')::numeric ELSE NULL END,
+      (v_item->>'sortOrder')::integer,
+      nullif(btrim(coalesce(v_item->>'renditionStoragePath', '')), ''),
+      coalesce(
+        nullif(v_item->>'renditionStatus', ''),
+        CASE WHEN v_item->>'mediaKind' = 'video' THEN 'pending' ELSE 'skipped' END
+      ),
+      coalesce((v_item->>'renditionAttemptCount')::integer, 0),
+      nullif(btrim(coalesce(v_item->>'renditionError', '')), ''),
+      CASE WHEN nullif(v_item->>'renditionGeneratedAt', '') IS NULL THEN NULL ELSE (v_item->>'renditionGeneratedAt')::timestamptz END,
+      CASE WHEN v_item ? 'renditionBytes' THEN (v_item->>'renditionBytes')::bigint ELSE NULL END,
+      nullif(btrim(coalesce(v_item->>'teaserStoragePath', '')), ''),
+      CASE WHEN v_item ? 'teaserBytes' THEN (v_item->>'teaserBytes')::bigint ELSE NULL END,
+      CASE WHEN nullif(v_item->>'teaserGeneratedAt', '') IS NULL THEN NULL ELSE (v_item->>'teaserGeneratedAt')::timestamptz END,
+      nullif(btrim(coalesce(v_item->>'teaserError', '')), '')
+    );
+  END LOOP;
+
+  v_cover := v_normalized_media_items->0;
+  UPDATE public.posts
+  SET
+    showcase_asset_path = nullif(btrim(coalesce(v_cover->>'storagePath', '')), ''),
+    output_url = CASE
+      WHEN nullif(btrim(coalesce(v_cover->>'storagePath', '')), '') IS NULL
+        THEN nullif(btrim(coalesce(v_cover->>'externalUrl', '')), '')
+      ELSE NULL
+    END,
+    category = CASE WHEN v_item_count = 0 THEN category WHEN v_cover->>'mediaKind' = 'video' THEN 'video' ELSE 'image' END,
+    updated_at = timezone('utc'::text, now())
+  WHERE id = p_post_id AND user_id = p_owner_user_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.replace_post_media(uuid, uuid, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.replace_post_media(uuid, uuid, jsonb) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.replace_post_media(uuid, uuid, jsonb) TO service_role;

@@ -87,10 +87,10 @@ import {
   type UploadConsumptionClaim,
 } from '@/lib/upload-byte-admission';
 import {
-  getCanonicalStoredMediaLocation,
   parseCanonicalStorageLocation,
   parseCanonicalStorageObjectPath,
 } from '@/lib/storage-ownership';
+import { storedMediaOwnerId } from '@/lib/generation-input-origin';
 
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
 
@@ -442,7 +442,8 @@ function parseBundleInput(
   };
 }
 
-const GENERATION_DERIVED_FIELDS = ['category', 'sourceTool', 'sourceToolSlug', 'sourceTools'] as const;
+// `mediaItems` reaches here only as a restatement of the stored media.
+const GENERATION_DERIVED_FIELDS = ['category', 'sourceTool', 'sourceToolSlug', 'sourceTools', 'mediaItems'] as const;
 
 function stripGenerationDerivedFields(body: PostUpdateRequestBody): PostUpdateRequestBody {
   const stripped: Record<string, unknown> = { ...body };
@@ -492,8 +493,6 @@ async function loadOwnedGenerationForPost(
   return owned ? generation : null;
 }
 
-const GENERATED_MEDIA_BUCKETS = ['generated_images', 'generated_videos', 'generated_audio'];
-
 /**
  * What a post whose creation was deleted still has of it, in the shape the
  * media work below reads. The delete keeps the copy in the creation's folder
@@ -509,10 +508,7 @@ async function loadDeletedCreationForPost(
   deletedGenerationId: string,
   ownerUserId: string,
 ): Promise<OwnedGenerationExposureRow> {
-  const original = post.output_url
-    ? getCanonicalStoredMediaLocation(post.output_url, { allowedBuckets: GENERATED_MEDIA_BUCKETS })
-    : null;
-  const folderOwnerId = original?.filePath.split('/')[0] ?? null;
+  const folderOwnerId = storedMediaOwnerId(post.output_url);
   const owned = folderOwnerId
     ? await readIsOwnOrLinkedAccountId(adminSupabase, ownerUserId, folderOwnerId)
     : false;
@@ -694,6 +690,31 @@ async function loadOwnedPostMedia(
   }
 
   return data ?? [];
+}
+
+/**
+ * Whether a save's media list only restates what the post already has: every
+ * stored row by id, in its stored order, under its stored key when a key is
+ * sent; or, for a post with no rows, the one cover both editors make up for it
+ * (`<postId>:cover`). Anything else is a change.
+ */
+async function restatesStoredPostMedia(
+  adminSupabase: SupabaseClient,
+  postId: string,
+  value: unknown,
+): Promise<boolean> {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const items = value.map((item) => (item && typeof item === 'object' ? item as Record<string, unknown> : {}));
+  const rows = await loadOwnedPostMedia(adminSupabase, postId);
+  if (rows.length === 0) {
+    return items.length === 1 && items[0].existingId === `${postId}:cover`;
+  }
+  return items.length === rows.length && items.every((item, index) => {
+    const row = rows[index];
+    const storedKey = normalizePostMediaKey(row.media_key) ?? defaultPostMediaKey(row.sort_order);
+    return item.existingId === row.id
+      && (item.mediaKey == null || normalizePostMediaKey(item.mediaKey) === storedKey);
+  });
 }
 
 async function parseSubmittedEditMediaItems(params: {
@@ -1276,8 +1297,14 @@ export async function updateOwnerPostForRoute({
     const creationId = post.generation_id ?? post.deleted_generation_id ?? null;
     const isGenerationBacked = Boolean(creationId);
     // A post made from a creation keeps that creation's media; the only way to
-    // change it is to publish a different creation.
-    if (isGenerationBacked && Object.prototype.hasOwnProperty.call(requestBody, 'mediaItems')) {
+    // change it is to publish a different creation. Both editors read a post
+    // whose creation was deleted as an uploaded one and send its stored media
+    // back on every save, so a list that only restates it is dropped below.
+    if (
+      isGenerationBacked
+      && Object.prototype.hasOwnProperty.call(requestBody, 'mediaItems')
+      && !await restatesStoredPostMedia(adminSupabase, postId, requestBody.mediaItems)
+    ) {
       return {
         ok: false,
         status: 400,
@@ -1672,6 +1699,10 @@ export async function updateOwnerPostForRoute({
     const generationUpdate: Record<string, unknown> = {};
     // Whose the creation is: the post owner's, or a guest's linked to it.
     let generationOwnerUserId: string | null = null;
+    // Going private drops the creation's public media: its copy, and the gallery
+    // rows under its folder that older posts serve it from (with no copy path
+    // left when only the creation recorded it, and the creation is gone).
+    let dropsCreationMedia = false;
     let removableDerivativePath: string | null = null;
     // The derivative this route creates needs the same `post_media` cover row
     // the publish route writes; without it the post falls back to the legacy
@@ -1759,6 +1790,7 @@ export async function updateOwnerPostForRoute({
           }
           updatePayload.showcase_asset_path = null;
           removableDerivativePath = generation.showcase_asset_path ?? post.showcase_asset_path ?? null;
+          dropsCreationMedia = true;
         }
 
         // The creation card shows the generation's own title and caption, so
@@ -1901,7 +1933,7 @@ export async function updateOwnerPostForRoute({
     // The fast path. The posts trigger queued this derivative when the post
     // dropped it, so a delete that fails here is retried by the
     // showcase-media-revocations job instead of leaving the copy public.
-    if (creationId && removableDerivativePath) {
+    if (creationId && dropsCreationMedia) {
       const removal = await resolvedDependencies.removeGenerationShowcaseDerivative({
         adminSupabase,
         generationId: creationId,

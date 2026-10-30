@@ -25,7 +25,7 @@ type MediaRow = {
   height: number | null;
   source_unavailable_at: string | null;
 };
-type PostRow = { id: string; user_id: string | null; generation_id: string | null };
+type PostRow = { id: string; user_id: string | null; generation_id: string | null; deleted_generation_id?: string | null };
 type GenerationRow = { id: string; preview_width: number | null; preview_height: number | null };
 type Location = { bucket: string; path: string };
 
@@ -117,7 +117,7 @@ function createFakeClient(state: { media: MediaRow[]; posts: PostRow[]; generati
         if (head) return Promise.resolve(resolve({ data: null, count: matching().length, error: null }));
         const rows = matching().slice(0, limit).map((row) => {
           const post = state.posts.find((candidate) => candidate.id === row.post_id);
-          return { ...row, posts: post ? { user_id: post.user_id, generation_id: post.generation_id } : null };
+          return { ...row, posts: post ? { user_id: post.user_id, generation_id: post.generation_id, deleted_generation_id: post.deleted_generation_id ?? null } : null };
         });
         return Promise.resolve(resolve({ data: rows, error: null }));
       },
@@ -263,6 +263,14 @@ describe('backfill-post-media-dimensions', () => {
       .toEqual({ sources: [], reason: 'video-without-poster' });
     expect(planRow({ ...video, source_unavailable_at: '2026-09-08T00:00:00Z', posts: generationPost }, sized))
       .toEqual({ sources: [], reason: 'source-unavailable' });
+
+    // A post whose creation was deleted keeps its cover under the creation's
+    // folder, and records that creation.
+    const deletedCreationPost = { user_id: 'user-1', generation_id: null, deleted_generation_id: 'gen-1' };
+    expect(planRow({ ...mediaRow({ id: 'i', post_id: 'p1', storage_path: 'showcase/gen-1/cover.png' }), posts: deletedCreationPost }, null))
+      .toMatchObject({ sources: [{ type: 'file', location: { bucket: 'showcase_media', path: 'showcase/gen-1/cover.png' } }] });
+    expect(planRow({ ...mediaRow({ id: 'j', post_id: 'p1', storage_path: 'showcase/gen-2/cover.png' }), posts: deletedCreationPost }, null))
+      .toEqual({ sources: [], reason: 'path-outside-post-prefix' });
   });
 
   it('a dry run reports and leaves every row as it was', async () => {

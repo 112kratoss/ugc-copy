@@ -28,6 +28,11 @@ const MIGRATION = '20261030151942_post_keeps_its_deleted_creation_folder.sql';
 describe("a post keeps its deleted creation's folder", () => {
   const sql = readMigration(MIGRATION);
 
+  it('waits at most five seconds for the posts lock', () => {
+    expect(sql.indexOf("SET LOCAL lock_timeout = '5s';")).toBeGreaterThan(-1);
+    expect(sql.indexOf("SET LOCAL lock_timeout = '5s';")).toBeLessThan(sql.indexOf('ALTER TABLE public.posts'));
+  });
+
   it('records the deleted creation on the post, never alongside a live link', () => {
     expect(sql).toMatch(/ALTER TABLE public\.posts\s+ADD COLUMN deleted_generation_id uuid;/);
     expect(sql).toMatch(
@@ -71,6 +76,8 @@ describe("a post keeps its deleted creation's folder", () => {
       expect(backfill).toContain(column);
     }
     expect(backfill).toContain('named.folder_id <> named.post_id');
+    // An owner's pending erasure owns the post's media, and its freeze refuses the write.
+    expect(backfill).toContain('AND NOT public.is_account_deletion_requested(posts.user_id)');
     expect(backfill).toContain('HAVING count(DISTINCT named.folder_id) = 1');
     // No creation by that id, and no other post or media row naming the folder.
     expect(code(backfill)).toContain('AND NOT EXISTS ( SELECT 1 FROM public.generations AS generations WHERE generations.id = proven.folder_id )');
@@ -161,6 +168,20 @@ describe("a post keeps its deleted creation's folder", () => {
     expect(restored).toBe(code(previous));
     expect(sql).toContain('revoke all on function public.claim_post_media_teaser_repair(text, bigint) from public, anon, authenticated;');
     expect(sql).toContain('grant execute on function public.claim_post_media_teaser_repair(text, bigint) to service_role;');
+  });
+
+  it("keeps a deleted creation's media out of replace_post_media, and changes nothing else in it", () => {
+    const replaced = functionText(sql, 'CREATE OR REPLACE FUNCTION public.replace_post_media(');
+    const previous = functionText(
+      readMigration('20260813120000_post_media_teaser_renditions.sql'),
+      'CREATE OR REPLACE FUNCTION public.replace_post_media(',
+    );
+    const before = 'WHERE id = p_post_id AND user_id = p_owner_user_id AND generation_id IS NULL )';
+    const after = 'WHERE id = p_post_id AND user_id = p_owner_user_id AND generation_id IS NULL AND deleted_generation_id IS NULL )';
+    expect(code(replaced)).toContain(after);
+    expect(code(replaced).replace(after, before)).toBe(code(previous));
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.replace_post_media(uuid, uuid, jsonb) FROM anon, authenticated;');
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.replace_post_media(uuid, uuid, jsonb) TO service_role;');
   });
 
   it("commits the NSFW copy of a deleted creation's public copy, and changes nothing else in the commit", () => {

@@ -11,7 +11,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(26);
+select plan(27);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at)
 values
@@ -273,6 +273,18 @@ select ok(
   and not has_function_privilege('authenticated', 'public.record_deleted_post_generation()', 'EXECUTE')
   and not has_function_privilege('service_role', 'public.record_deleted_post_generation()', 'EXECUTE'),
   'the trigger function is no API'
+);
+
+-- A deleted creation's post keeps that creation's media, as a linked one does.
+select throws_ok(
+  $$select public.replace_post_media(
+    'dc300000-0000-4000-8000-000000000001'::uuid,
+    'dc100000-0000-4000-8000-000000000001'::uuid,
+    '[]'::jsonb
+  )$$,
+  'P0001',
+  'Manual post not found or media is not editable.',
+  'its media cannot be replaced'
 );
 
 -- 8. The teaser sweep admits the rendition of a deleted creation's post.
