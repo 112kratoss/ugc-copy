@@ -43,6 +43,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      # Keeps the stack's ports out of the ephemeral range, as the first step of
+      # Quality's Supabase API job explains (quality.yml).
+      - name: Reserve the Supabase stack's ports
+        run: |
+          sudo -n sysctl -q -w net.ipv4.ip_local_reserved_ports=54320-54324,54327,54329
+          sysctl net.ipv4.ip_local_reserved_ports net.ipv4.ip_local_port_range
+          held="$(ss -Htan '( sport >= :54320 and sport <= :54329 )')"
+          printf 'Sockets already on 54320-54329, which the reservation cannot move:\n%s\n' "${held:-none}"
+
       - name: Check out repository
         uses: actions/checkout@v6
 

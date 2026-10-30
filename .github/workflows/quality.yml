@@ -279,6 +279,23 @@ jobs:
     env:
       SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
     steps:
+      # The stack's host ports sit inside Linux's ephemeral range (32768-60999),
+      # where the kernel picks the local port of every outbound connection, and
+      # a connection holding one, open or in the 60 s of TIME-WAIT after it
+      # closes, fails Docker's bind: start died on 0.0.0.0:54324 held by a
+      # TIME-WAIT HTTPS connection on 2026-10-29, and on 54322 on 2026-10-04.
+      # The kernel never picks a reserved port. This runs first, so nothing the
+      # job's steps download, install or pull can take one; a socket the runner
+      # opened before it keeps its port, so the step lists any. The list is every
+      # port the two config files set inside that range (the image reserves
+      # none), kept so by supabase-stack-port-reservation.test.ts.
+      - name: Reserve the Supabase stack's ports
+        run: |
+          sudo -n sysctl -q -w net.ipv4.ip_local_reserved_ports=54320-54324,54327,54329
+          sysctl net.ipv4.ip_local_reserved_ports net.ipv4.ip_local_port_range
+          held="$(ss -Htan '( sport >= :54320 and sport <= :54329 )')"
+          printf 'Sockets already on 54320-54329, which the reservation cannot move:\n%s\n' "${held:-none}"
+
       - name: Check out repository
         uses: actions/checkout@v6
 
@@ -469,6 +486,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Keeps the stack's ports out of the ephemeral range, as the API job's
+      # first step explains.
+      - name: Reserve the Supabase stack's ports
+        run: |
+          sudo -n sysctl -q -w net.ipv4.ip_local_reserved_ports=54320-54324,54327,54329
+          sysctl net.ipv4.ip_local_reserved_ports net.ipv4.ip_local_port_range
+          held="$(ss -Htan '( sport >= :54320 and sport <= :54329 )')"
+          printf 'Sockets already on 54320-54329, which the reservation cannot move:\n%s\n' "${held:-none}"
+
       - name: Check out repository
         uses: actions/checkout@v6
 
