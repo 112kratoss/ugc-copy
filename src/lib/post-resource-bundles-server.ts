@@ -1420,6 +1420,7 @@ async function loadLinkedPostMap(
   postIds: string[],
   scope: LinkedPostScope = 'public',
   includeMediaPreviews = false,
+  throwOnReadError = false,
 ) {
   const uniquePostIds = Array.from(new Set(postIds.filter(Boolean)));
   if (uniquePostIds.length === 0) {
@@ -1582,6 +1583,7 @@ async function loadLinkedPostMap(
     if (legacyResult.error) {
       if (!isMissingPostsSchemaError(legacyResult.error)) {
         logBackendError('post_resource_linked_posts_load_failed', { error: legacyResult.error });
+        if (throwOnReadError) throw legacyResult.error;
       }
       return new Map();
     }
@@ -1594,6 +1596,7 @@ async function loadLinkedPostMap(
   } else if (result.error) {
     if (!isMissingPostsSchemaError(result.error)) {
       logBackendError('post_resource_linked_posts_load_failed', { error: result.error });
+      if (throwOnReadError) throw result.error;
     }
     return new Map();
   } else {
@@ -1691,9 +1694,14 @@ async function hydrateBundleRows(
     // marketplace, its search) counts only what it serves, after filtering on
     // what recipes store; the single-post detail counts its own.
     creationReferencesFor?: { ownerUserId: string | null };
+    // The single-post detail for someone other than its creator: a post
+    // lookup that fails throws instead of reading as the post being hidden,
+    // which its callers would serve as a post without a recipe, its stored
+    // prompt included. A listing drops the row instead.
+    throwOnPostReadError?: boolean;
   } = {},
 ): Promise<MarketplaceResourceListItem[]> {
-  const { postScope = scope, allowNsfw = false, creationReferencesFor } = options;
+  const { postScope = scope, allowNsfw = false, creationReferencesFor, throwOnPostReadError = false } = options;
   if (scope === 'public' && !allowNsfw) {
     const nsfwIds = await loadNsfwPostIds(createServiceClient(), rows.map((row) => row.post_id));
     rows = rows.filter((row) => !nsfwIds.has(row.post_id));
@@ -1701,7 +1709,7 @@ async function hydrateBundleRows(
   const storedResourcesByBundleId = new Map(rows.map((row) => [row.id, normalizeResources(row)]));
   const [profilesMap, postMap, contentUpdatedAtMap, creationReferenceCounts] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
-    loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews),
+    loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews, throwOnPostReadError),
     loadLatestContentRevisionTimes(rows.map((row) => row.id)),
     creationReferencesFor
       ? countListedRecipeReferences(
@@ -2741,6 +2749,7 @@ export async function getPostResourceBundleDetailByPostId(
     hydrateBundleRows([row], countryCode, viewerIsOwner ? 'owner' : 'public', false, {
       postScope,
       allowNsfw: true, // The owner, reveal or purchase check above already authorized this single post.
+      throwOnPostReadError: !viewerIsOwner,
     }),
     readsCreationInputs
       ? loadGenerationRecipeInputSources({

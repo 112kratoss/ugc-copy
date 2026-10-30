@@ -1605,12 +1605,10 @@ export async function attachViewerStateToFeed(
     ...feed,
     items: viewerSafeItems.map((item) => {
       if (item.isNsfw && !item.nsfwRevealed) return { ...item, isSaved: savedIdSet.has(item.id) };
-      const viewerCanAccessBundle = Boolean(
-        item.asset && (
-          item.creator.id === viewerUserId
-          || purchasedBundleIdSet.has(item.asset.id)
-        )
-      );
+      // A creator opens their own recipe even when its summary could not be
+      // read (no asset, Remix locked); a buyer is known by the recipe's id.
+      const viewerCanAccessBundle = item.creator.id === viewerUserId
+        || Boolean(item.asset && purchasedBundleIdSet.has(item.asset.id));
       // The read without a viewer settled every rule but one: a recipe this
       // viewer may open (their own, or bought) no longer locks Remix. Only an
       // item read without that answer (a legacy generation row) is worked out

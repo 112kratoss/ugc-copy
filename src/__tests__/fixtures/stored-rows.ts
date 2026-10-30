@@ -9,11 +9,18 @@ const LIBRARY_FILTER = 'and(template_run_id.is.null,template_run_step_id.is.null
 const FAILURE = Symbol('database error');
 
 /**
- * What a function in `calls` returns to fail the way Postgres fails: the call
- * answers `{ data: null, error }`, as supabase-js reports it, and throws nothing.
+ * What a function in `calls` returns, or a table holds, to fail the way
+ * Postgres fails: the call, or every read of the table, answers
+ * `{ data: null, error }` as supabase-js reports it, and throws nothing.
  */
 export function databaseError(code: string, message: string) {
   return { [FAILURE]: { code, message } };
+}
+
+type Failure = ReturnType<typeof databaseError>;
+
+function isFailure(value: unknown): value is Failure {
+  return value !== null && typeof value === 'object' && FAILURE in value;
 }
 
 /**
@@ -28,7 +35,7 @@ export function databaseError(code: string, message: string) {
  * library route use, and nothing else. A filter it does not know throws, so
  * a query that changes shape is noticed rather than answered wrongly.
  */
-export function createStoredRows(tables: Record<string, Row[]>, calls: Record<string, Call> = {}) {
+export function createStoredRows(tables: Record<string, Row[] | Failure>, calls: Record<string, Call> = {}) {
   /** Every read, in order: the table and the columns it asked for. */
   const reads: Array<{ table: string; columns: string[] }> = [];
   /** Every database call, in order, by name. */
@@ -37,6 +44,7 @@ export function createStoredRows(tables: Record<string, Row[]>, calls: Record<st
   function rowsOf(table: string) {
     const rows = tables[table];
     if (!rows) throw new Error(`Unexpected table: ${table}`);
+    if (isFailure(rows)) throw new Error(`Table ${table} only fails reads`);
     return rows;
   }
 
@@ -106,6 +114,22 @@ export function createStoredRows(tables: Record<string, Row[]>, calls: Record<st
 
   function select(table: string, columns: string) {
     const asked = columns.split(',').map((column) => column.trim()).filter(Boolean);
+    const stored = tables[table];
+    if (isFailure(stored)) {
+      reads.push({ table, columns: asked });
+      const failed = { data: null, error: stored[FAILURE] };
+      return Object.assign(filtered(table).filters, {
+        async single() {
+          return failed;
+        },
+        async maybeSingle() {
+          return failed;
+        },
+        then<T>(resolve: (value: typeof failed) => T, reject?: (reason: unknown) => T) {
+          return Promise.resolve(failed).then(resolve, reject);
+        },
+      });
+    }
     const known = rowsOf(table)[0];
     const unknown = known ? asked.filter((column) => column !== '*' && !(column in known)) : [];
     if (unknown.length) throw new Error(`column ${table}.${unknown[0]} does not exist`);
@@ -154,9 +178,7 @@ export function createStoredRows(tables: Record<string, Row[]>, calls: Record<st
       if (!call) throw new Error(`Unexpected call: ${name}`);
       called.push(name);
       const answer = await call(args);
-      return answer !== null && typeof answer === 'object' && FAILURE in answer
-        ? { data: null, error: (answer as { [FAILURE]: unknown })[FAILURE] }
-        : { data: answer, error: null };
+      return isFailure(answer) ? { data: null, error: answer[FAILURE] } : { data: answer, error: null };
     },
   };
 

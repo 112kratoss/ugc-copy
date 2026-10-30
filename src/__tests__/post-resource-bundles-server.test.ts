@@ -53,6 +53,8 @@ let generationInputRows: Array<{
 let viewerHasPurchased: boolean;
 let bundlePresenceError: unknown;
 let postRow: Record<string, unknown> | null;
+// Fails every list read of posts (the recipe's own post lookup among them).
+let postListReadError: unknown;
 let purchasedRevisionRow: Record<string, unknown> | null;
 let purchasedMediaRows: Record<string, unknown>[];
 // The seller dashboard's reads: paid orders, deletion audits, buyer profiles.
@@ -406,11 +408,10 @@ vi.mock('@/lib/server-helpers', () => ({
           async maybeSingle() {
             return { data: eqId === 'post-1' && matchesFilters() ? postRow : null, error: null };
           },
-          then(resolve: (value: { data: unknown[]; error: null }) => void) {
-            resolve({
-              data: matchesFilters() && postRow ? [postRow] : [],
-              error: null,
-            });
+          then(resolve: (value: { data: unknown[] | null; error: unknown }) => void) {
+            resolve(postListReadError
+              ? { data: null, error: postListReadError }
+              : { data: matchesFilters() && postRow ? [postRow] : [], error: null });
           },
         };
 
@@ -598,6 +599,7 @@ describe('post resource bundle server access', () => {
     }];
     viewerHasPurchased = false;
     bundlePresenceError = null;
+    postListReadError = null;
     postRow = {
       id: 'post-1',
       user_id: 'owner-1',
@@ -667,6 +669,31 @@ describe('post resource bundle server access', () => {
 
     expect(detail?.viewerCanAccess).toBe(false);
     expect(detail?.resources).toBeNull();
+  });
+
+  // The post page reads "no recipe" from a null detail and then serves the
+  // post's stored prompt, so a post lookup that fails must not read as the
+  // post being hidden.
+  it('fails the public detail when its post cannot be read, rather than answer no recipe', async () => {
+    postListReadError = { code: 'XX000', message: 'temporary database failure' };
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    await expect(getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false }))
+      .rejects.toMatchObject({ message: 'temporary database failure' });
+  });
+
+  it('still opens the detail for its creator when the post cannot be read', async () => {
+    postListReadError = { code: 'XX000', message: 'temporary database failure' };
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', {
+      viewerUserId: (bundleRow as BundleRow).owner_user_id,
+      isNsfw: false,
+    });
+
+    expect(detail?.viewerCanAccess).toBe(true);
   });
 
   // Decision 6 (2026-10-17): free unlocks are not sales. Both counts are public

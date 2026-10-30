@@ -4,19 +4,22 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { createStoredRows, databaseError } from './fixtures/stored-rows';
 
-// Every surface that serves posts hydrates them through the feed's
+// Every surface below hydrates posts through the feed's
 // `resolvePostRowsToFeedItems`, which learns which posts carry a published
-// recipe from one database call. When that call fails, the posts it was asked
-// about cannot be told apart from posts without a recipe. A recipe's prompt is
-// what it sells, and a post can still store one in `posts.prompt` (written
-// before the recipe was added), so each such post must be served as a locked
-// recipe: no prompt, and Remix only after an unlock. The server's remix check
-// stands on its own and is not exercised here.
+// recipe from one database call. A recipe's prompt is what it sells, and a post
+// can still store one in `posts.prompt` (written before the recipe was added).
+// So when that call fails, each post with a published recipe is served as a
+// locked recipe (no prompt, Remix only after an unlock) and every other post as
+// it always is; when not even that can be read, nothing is served. The web
+// post page reads its recipe on its own (post-resource-bundles-server tests),
+// and the server's remix check stands on its own; neither is exercised here.
 
 type Row = Record<string, unknown>;
 
 const state = vi.hoisted(() => ({
   client: null as unknown as SupabaseClient,
+  userClient: null as unknown as SupabaseClient,
+  tables: {} as Record<string, unknown>,
   summariesFail: false,
 }));
 
@@ -35,6 +38,7 @@ vi.mock('@/lib/post-resource-bundles-server', async (importOriginal) => ({
 
 const CREATOR = 'creator-1';
 const SAVER = 'saver-1';
+const POST_IDS = ['post-paid', 'post-open', 'post-draft'];
 const STORED_PROMPT = 'SECRET_STORED_PROMPT';
 // The setup text an older composer wrote into a paid recipe post's body.
 const STORED_SETUP = 'Saved generation setup\nSECRET_STORED_SETUP';
@@ -107,7 +111,12 @@ function summaries(bundles: Row[], args: Row) {
 
 function seed() {
   const bundles = [bundle('post-paid', 'published'), bundle('post-draft', 'draft')];
-  const { client } = createStoredRows({
+  const saves = POST_IDS.map((postId, index) => ({
+    user_id: SAVER,
+    post_id: postId,
+    created_at: `2026-10-30T0${index}:00:00.000Z`,
+  }));
+  state.tables = {
     posts: [
       // Its prompt was stored before the paid recipe that now sells it.
       post('post-paid', STORED_PROMPT, '2026-10-29T10:00:00.000Z', STORED_SETUP),
@@ -129,7 +138,7 @@ function seed() {
       location: null,
       identity_state: 'active',
     }],
-    generations: ['post-paid', 'post-open', 'post-draft'].map((id) => ({
+    generations: POST_IDS.map((id) => ({
       id: `gen-${id}`,
       user_id: CREATOR,
       model: 'nano-banana-2',
@@ -140,42 +149,42 @@ function seed() {
       template_run_id: null,
       template_run_step_id: null,
     })),
+    post_resource_bundles: bundles,
     post_media: [],
     post_source_tools: [],
-    post_saves: ['post-paid', 'post-open', 'post-draft'].map((postId, index) => ({
-      user_id: SAVER,
-      post_id: postId,
-      created_at: `2026-10-30T0${index}:00:00.000Z`,
-    })),
+    post_saves: saves,
     showcase_saves: [],
     post_resource_bundle_purchases: [],
     user_blocks: [],
-  }, {
+  };
+  state.client = createStoredRows(state.tables as Parameters<typeof createStoredRows>[0], {
     get_public_post_resource_bundle_summaries: (args) => (
       state.summariesFail
-        ? databaseError('57014', 'canceling statement due to statement timeout')
+        ? databaseError('XX000', 'temporary database failure')
         : summaries(bundles, args)
     ),
     get_creator_profile_stats: () => null,
-  });
-  state.client = client;
+  }).client;
+  // Saved media reads the saves as the viewer and everything else with the
+  // service client; the viewer's client has nothing else to answer with.
+  state.userClient = createStoredRows({ post_saves: saves, showcase_saves: [] }).client;
 }
 
 /** Each surface that hydrates through `resolvePostRowsToFeedItems`, as it serves posts. */
 const SURFACES: Array<[string, () => Promise<ShowcaseFeedItem[]>]> = [
-  ['the feed', async () => {
+  ['the Recent feed', async () => {
     const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
     const page = await getShowcaseFeedPage({ category: 'all', sort: 'recent', offset: 0, limit: 24, bypassCache: true });
     return page.items;
   }],
-  ['the post read by id (post API, NSFW reveal)', async () => {
+  ['the post read by id (post API)', async () => {
     const { getShowcaseFeedItemById } = await import('@/lib/showcase-feed');
-    const items = await Promise.all(['post-paid', 'post-open', 'post-draft'].map((postId) => getShowcaseFeedItemById({ postId })));
+    const items = await Promise.all(POST_IDS.map((postId) => getShowcaseFeedItemById({ postId })));
     return items.filter((item): item is NonNullable<typeof item> => item !== null);
   }],
   ['the reads by ids (search, the home shelf)', async () => {
     const { getShowcaseFeedItemsByPostIds } = await import('@/lib/showcase-feed');
-    return getShowcaseFeedItemsByPostIds({ postIds: ['post-paid', 'post-open', 'post-draft'] });
+    return getShowcaseFeedItemsByPostIds({ postIds: POST_IDS });
   }],
   ['the creator page', async () => {
     const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
@@ -188,7 +197,7 @@ const SURFACES: Array<[string, () => Promise<ShowcaseFeedItem[]>]> = [
       limit: 24,
       offset: 0,
       userId: SAVER,
-      userSupabase: state.client,
+      userSupabase: state.userClient,
     });
     if (!result.ok) throw new Error(`Expected a saved-media page, got ${result.status}`);
     return result.body.items;
@@ -201,6 +210,10 @@ function byId(items: ShowcaseFeedItem[], postId: string) {
   return item;
 }
 
+const LOCKED = { prompt: '', body: '', canRemix: false, remixCapability: 'unlock_required', asset: null };
+// No recipe, or one still a draft: the prompt and Remix are everyone's.
+const OPEN = { prompt: OPEN_PROMPT, canRemix: true, remixCapability: 'public', asset: null };
+
 describe('recipe summaries that cannot be read', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -209,63 +222,70 @@ describe('recipe summaries that cannot be read', () => {
     seed();
   });
 
-  it.each(SURFACES)('serve a recipe post\'s stored prompt to no one on %s', async (_surface, serve) => {
-    state.summariesFail = true;
-
-    const items = await serve();
-
-    expect(JSON.stringify(items)).not.toContain(STORED_PROMPT);
-    expect(JSON.stringify(items)).not.toContain('SECRET_STORED_SETUP');
-    expect(byId(items, 'post-paid')).toMatchObject({
-      prompt: '',
-      body: '',
-      canRemix: false,
-      remixCapability: 'unlock_required',
-    });
-  });
-
   it.each(SURFACES)('serve a read recipe as before on %s', async (_surface, serve) => {
     const items = await serve();
 
     expect(JSON.stringify(items)).not.toContain(STORED_PROMPT);
     expect(JSON.stringify(items)).not.toContain('SECRET_STORED_SETUP');
     expect(byId(items, 'post-paid')).toMatchObject({
-      prompt: '',
-      body: '',
-      canRemix: false,
-      remixCapability: 'unlock_required',
+      ...LOCKED,
       asset: expect.objectContaining({ id: 'bundle-post-paid', accessMode: 'paid' }),
     });
-    // No recipe, or one still a draft: the prompt and Remix are everyone's.
-    for (const postId of ['post-open', 'post-draft']) {
-      expect(byId(items, postId)).toMatchObject({
-        prompt: OPEN_PROMPT,
-        canRemix: true,
-        remixCapability: 'public',
-        asset: null,
-      });
-    }
+    expect(byId(items, 'post-open')).toMatchObject(OPEN);
+    expect(byId(items, 'post-draft')).toMatchObject(OPEN);
   });
 
-  it('locks every post the failed read was asked about, since none of them can be told apart', async () => {
+  it.each(SURFACES)('lock only the posts with a published recipe on %s', async (_surface, serve) => {
+    state.summariesFail = true;
+
+    const items = await serve();
+
+    expect(JSON.stringify(items)).not.toContain(STORED_PROMPT);
+    expect(JSON.stringify(items)).not.toContain('SECRET_STORED_SETUP');
+    expect(byId(items, 'post-paid')).toMatchObject(LOCKED);
+    expect(byId(items, 'post-open')).toMatchObject(OPEN);
+    expect(byId(items, 'post-draft')).toMatchObject(OPEN);
+  });
+
+  it.each(SURFACES)('serve nothing on %s when not even which recipes are published can be read', async (_surface, serve) => {
+    state.summariesFail = true;
+    state.tables.post_resource_bundles = databaseError('XX000', 'temporary presence query failure');
+
+    await expect(serve()).rejects.toThrow();
+  });
+
+  it('keeps a locked post locked when a hydration cache serves it again, as For you does', async () => {
     state.summariesFail = true;
     const { resolvePostRowsToFeedItems } = await import('@/lib/showcase-feed');
-    const { data: rows } = await state.client
-      .from('posts')
-      .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id');
+    const { data: rows } = await state.client.from('posts').select('*');
+    type PostRows = Parameters<typeof resolvePostRowsToFeedItems>[0];
+    const rowsById = new Map(((rows ?? []) as PostRows).map((row) => [row.id, row]));
+    const hydrationCache: Parameters<typeof resolvePostRowsToFeedItems>[2] = new Map();
 
-    const items = await resolvePostRowsToFeedItems(
-      rows as unknown as Parameters<typeof resolvePostRowsToFeedItems>[0],
+    const first = await resolvePostRowsToFeedItems(
+      ['post-paid', 'post-open'].map((id) => rowsById.get(id)!),
       state.client as Parameters<typeof resolvePostRowsToFeedItems>[1],
+      hydrationCache,
+    );
+    const second = await resolvePostRowsToFeedItems(
+      ['post-paid', 'post-draft'].map((id) => rowsById.get(id)!),
+      state.client as Parameters<typeof resolvePostRowsToFeedItems>[1],
+      hydrationCache,
     );
 
-    expect(items.map(({ id, prompt, asset, canRemix, remixCapability }) => ({ id, prompt, asset, canRemix, remixCapability })))
-      .toEqual(['post-paid', 'post-open', 'post-draft'].map((id) => ({
-        id,
-        prompt: '',
-        asset: null,
-        canRemix: false,
-        remixCapability: 'unlock_required',
-      })));
+    expect(byId(first, 'post-paid')).toMatchObject(LOCKED);
+    expect(byId(second, 'post-paid')).toMatchObject(LOCKED);
+    expect(byId(second, 'post-draft')).toMatchObject(OPEN);
+  });
+
+  it('lets a creator remix their own post whose recipe could not be read, and no one else', async () => {
+    state.summariesFail = true;
+    const { getShowcaseFeedItemById } = await import('@/lib/showcase-feed');
+
+    const forCreator = await getShowcaseFeedItemById({ postId: 'post-paid', viewerUserId: CREATOR });
+    const forSaver = await getShowcaseFeedItemById({ postId: 'post-paid', viewerUserId: SAVER });
+
+    expect(forCreator).toMatchObject({ prompt: '', canRemix: true, remixCapability: 'public' });
+    expect(forSaver).toMatchObject(LOCKED);
   });
 });

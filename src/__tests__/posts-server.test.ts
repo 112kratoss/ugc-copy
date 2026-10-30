@@ -171,8 +171,8 @@ describe('posts-server marketplace summaries', () => {
   });
 
   it('only returns active asset summaries for public post surfaces', async () => {
-    const { getMarketplaceAssetSummaryMap } = await import('@/lib/posts-server');
-    const assetMap = await getMarketplaceAssetSummaryMap(['post-1']);
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
+    const { assetMap } = await getMarketplaceAssetSummaryHydration(['post-1']);
 
     expect(assetMap.get('post-1')).toEqual(expect.objectContaining({
       id: 'asset-active',
@@ -200,9 +200,9 @@ describe('posts-server marketplace summaries', () => {
       ...resourceBundlesState[0],
       resource_items: [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'A neon portrait.' }],
     };
-    const { getMarketplaceAssetSummaryMap } = await import('@/lib/posts-server');
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
 
-    const assetMap = await getMarketplaceAssetSummaryMap(['post-1']);
+    const { assetMap } = await getMarketplaceAssetSummaryHydration(['post-1']);
 
     expect(assetMap.get('post-1')).toMatchObject({ allowRemix: true, resourceKinds: ['prompt', 'remix'] });
     expect(assetMap.get('post-1')?.lockedPreview?.hasRemix).toBe(true);
@@ -240,9 +240,9 @@ describe('posts-server marketplace summaries', () => {
         },
       ],
     };
-    const { getMarketplaceAssetSummaryMap } = await import('@/lib/posts-server');
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
 
-    const asset = (await getMarketplaceAssetSummaryMap(['post-1'])).get('post-1');
+    const asset = (await getMarketplaceAssetSummaryHydration(['post-1'])).assetMap.get('post-1');
 
     expect(asset?.itemCounts).toEqual({ prompt: 1, reference_image: 1 });
     expect(asset?.lockedPreview).toMatchObject({
@@ -274,15 +274,16 @@ describe('posts-server marketplace summaries', () => {
     expect(uncounted.assetMap.get('post-1')).not.toHaveProperty('freeUnlockCount');
   });
 
-  it('fails closed when the RPC hands out a draft bundle\'s free unlock count', async () => {
+  it('serves no summary when the RPC hands out a draft bundle\'s free unlock count, and locks the published recipes', async () => {
     draftFreeUnlockCountState = 3;
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
     const hydration = await getMarketplaceAssetSummaryHydration(['post-1', 'post-2']);
 
     expect(hydration.assetMap.size).toBe(0);
-    expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
-    expect(Array.from(hydration.unreadRecipePostIds).sort()).toEqual(['post-1', 'post-2']);
+    // Read apart from the answer it cannot trust: only post-1's recipe is published.
+    expect(Array.from(hydration.unreadRecipePostIds)).toEqual(['post-1']);
+    expect(selectedColumnsState).toEqual(['post_id, status']);
     expect(JSON.parse(consoleError.mock.calls[0][0] as string).msg)
       .toBe('public_bundle_summary_rpc_returned_details_for_a_non_published_bundle');
   });
@@ -292,7 +293,6 @@ describe('posts-server marketplace summaries', () => {
     const hydration = await getMarketplaceAssetSummaryHydration(['post-1', 'post-2']);
 
     expect(Array.from(hydration.assetMap.keys())).toEqual(['post-1']);
-    expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
     // A draft sells nothing yet, so its post is not a recipe left unread.
     expect(Array.from(hydration.unreadRecipePostIds)).toEqual([]);
     expect(rpcCallsState).toEqual(['get_public_post_resource_bundle_summaries']);
@@ -309,14 +309,13 @@ describe('posts-server marketplace summaries', () => {
     const hydration = await getMarketplaceAssetSummaryHydration(['post-1', 'post-2']);
 
     expect(Array.from(hydration.assetMap.keys())).toEqual(['post-1']);
-    expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
     expect(Array.from(hydration.unreadRecipePostIds)).toEqual([]);
     expect(tableAccessesState).toEqual(['post_resource_bundles', 'post_resource_bundles']);
     expect(selectedColumnsState[0]).toBe('post_id, status');
     expect(selectedColumnsState[1]).toContain('prompt_text');
   });
 
-  it('fails closed without table fallback on non-schema RPC errors', async () => {
+  it('locks only the published recipes, read on their own, when the RPC fails', async () => {
     rpcErrorState = {
       code: 'XX000',
       message: 'temporary database failure',
@@ -326,9 +325,11 @@ describe('posts-server marketplace summaries', () => {
     const hydration = await getMarketplaceAssetSummaryHydration(['post-1', 'post-2']);
 
     expect(hydration.assetMap.size).toBe(0);
-    expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
-    expect(Array.from(hydration.unreadRecipePostIds).sort()).toEqual(['post-1', 'post-2']);
-    expect(tableAccessesState).toEqual([]);
+    // post-2's recipe is a draft: it sells nothing, so its post is served as before.
+    expect(Array.from(hydration.unreadRecipePostIds)).toEqual(['post-1']);
+    // Only each recipe's status, never a detail column.
+    expect(tableAccessesState).toEqual(['post_resource_bundles']);
+    expect(selectedColumnsState).toEqual(['post_id, status']);
     // The failure is now reported through the structured logger, so assert the
     // stable event name and the surfaced error rather than a message string.
     const summaryLog = JSON.parse(consoleError.mock.calls[0][0] as string);
@@ -337,7 +338,7 @@ describe('posts-server marketplace summaries', () => {
     expect(summaryLog.errorMessage).toBe(rpcErrorState.message);
   });
 
-  it('fails closed when the missing-RPC presence fallback has a database error', async () => {
+  it('throws when the missing-RPC presence fallback has a database error', async () => {
     rpcErrorState = {
       code: 'PGRST202',
       message: 'Could not find the function public.get_public_post_resource_bundle_summaries(p_post_ids) in the schema cache',
@@ -348,11 +349,11 @@ describe('posts-server marketplace summaries', () => {
     };
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
-    const hydration = await getMarketplaceAssetSummaryHydration(['post-1', 'post-2']);
 
-    expect(hydration.assetMap.size).toBe(0);
-    expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
-    expect(Array.from(hydration.unreadRecipePostIds).sort()).toEqual(['post-1', 'post-2']);
+    // No post can be told apart from one that sells its prompt: the read fails
+    // rather than serve any of them.
+    await expect(getMarketplaceAssetSummaryHydration(['post-1', 'post-2']))
+      .rejects.toMatchObject({ message: 'temporary presence query failure' });
     expect(tableAccessesState).toEqual(['post_resource_bundles']);
     expect(selectedColumnsState).toEqual(['post_id, status']);
     const presenceLog = JSON.parse(consoleError.mock.calls[0][0] as string);
@@ -363,11 +364,34 @@ describe('posts-server marketplace summaries', () => {
 
   it('marks a published recipe it cannot read as unread, not as no recipe', async () => {
     resourceBundlesState[0] = { ...resourceBundlesState[0], title: null as unknown as string };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
     const hydration = await getMarketplaceAssetSummaryHydration(['post-1', 'post-2']);
 
     expect(hydration.assetMap.size).toBe(0);
     expect(Array.from(hydration.unreadRecipePostIds)).toEqual(['post-1']);
+    expect(JSON.parse(consoleError.mock.calls[0][0] as string))
+      .toMatchObject({ msg: 'published_post_resource_bundle_summary_unreadable', count: 1 });
+  });
+
+  it('throws when neither the summaries nor the recipes\' status can be read', async () => {
+    rpcErrorState = {
+      code: 'XX000',
+      message: 'temporary database failure',
+    };
+    tableQueryErrorState = {
+      code: 'XX000',
+      message: 'temporary presence query failure',
+    };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
+
+    await expect(getMarketplaceAssetSummaryHydration(['post-1', 'post-2']))
+      .rejects.toMatchObject({ message: 'temporary presence query failure' });
+    expect(consoleError.mock.calls.map(([line]) => JSON.parse(line as string).msg)).toEqual([
+      'failed_to_load_public_post_resource_bundle_summaries',
+      'failed_to_load_post_resource_bundle_presence',
+    ]);
   });
 
   it('marks the published recipes unread when the missing-RPC fallback cannot read their details', async () => {
