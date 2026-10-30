@@ -610,10 +610,14 @@ export const VIDEO_MODELS = {
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
 
+/** Mirrors `VEO_REFERENCE_MODES` in @/lib/models: the Veo 3.1 variants that take reference pictures. */
+export const VEO_REFERENCE_MODES = ['veo3_lite', 'veo3_fast'] as const;
+
 /**
  * Mirrors the server implementation in @/lib/models. This is the fallback used before
  * the catalog descriptor is available; descriptor-derived affordances are authoritative
- * once it loads. Keep the two in step — the registry parity suite compares behaviour.
+ * once it loads. Keep the two in step — the registry parity suite compares their answers
+ * for every video model, mode and shot setting.
  */
 export function getVideoElementSupport(
   modelId: VideoModelId,
@@ -635,7 +639,7 @@ export function getVideoElementSupport(
   if (modelId === 'happyhorse-1.1') return { enabled: true, maxElements: 9, maxNamed: 9, reason: null };
   if (modelId === 'gemini-omni-video') return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
   if (modelId === 'veo-3.1') {
-    return options.mode === 'veo3_fast' || options.mode === 'veo3_lite'
+    return (VEO_REFERENCE_MODES as readonly (string | undefined)[]).includes(options.mode)
       ? { enabled: true, maxElements: 3, maxNamed: 3, reason: null }
       : { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable references require Veo Lite or Fast.' };
   }

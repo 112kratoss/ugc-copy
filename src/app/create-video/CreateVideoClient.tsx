@@ -1950,10 +1950,21 @@ export default function CreateVideoClient({
         ['aspectRatio', videoModel.aspectRatios],
         ...(videoModel.supportsSound ? [['sound', [true, false]] as const] : []),
     ], [lengthPriced, lengthOptions, videoModel]);
-    const variants = useMemo(
-        () => (settingsOpen ? settingsVariants(quoteRequest, settingsAxes) : NO_SETTINGS_VARIANTS),
-        [settingsOpen, quoteRequest, settingsAxes],
-    );
+    const variants = useMemo(() => {
+        const revision = modelCatalog.catalog?.revision;
+        if (!settingsOpen) return NO_SETTINGS_VARIANTS;
+        // Each option is the run with that one setting changed, unless the setting changes which slots
+        // the run fills: pictures Veo 3.1 holds on Lite or Fast wait on Quality, which takes none, so
+        // its Quality option is priced as the run the page would make there. Only then: the planned
+        // run cuts pictures to the model's cap, which the page's own run leaves to Generate to refuse.
+        const slotsFilled = (inputs: ReadonlyArray<{ slot: string }>) => [...new Set(inputs.map((input) => input.slot))].sort().join(' ');
+        const filled = slotsFilled(runInputs);
+        return settingsVariants(quoteRequest, settingsAxes, undefined, (key, value) => {
+            if (key !== 'mode' || value === currentMode || !revision) return null;
+            const run = videoRunOnModel({ modelId: selectedModel, catalogRevision: revision, settings: { ...pageForm, mode: String(value) }, held: formHeld });
+            return run && slotsFilled(run.inputs) !== filled ? run.quoteInput : null;
+        });
+    }, [settingsOpen, quoteRequest, settingsAxes, modelCatalog.catalog?.revision, runInputs, currentMode, selectedModel, pageForm, formHeld]);
     // While the balance is short of this run, the image models too, for a balance short of every video.
     const imageRuns = useMemo(() => {
         const revision = modelCatalog.catalog?.revision;

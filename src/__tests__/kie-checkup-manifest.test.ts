@@ -18,6 +18,7 @@ import {
 } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 import { descriptorBeforeMiniDefault } from './fixtures/mini-default-video-2026-10-28';
+import { descriptorBeforeVeoQualityReferences } from './fixtures/veo-quality-references-2026-10-30';
 
 /**
  * Release 2026-10-20-kie-checkup: the Kie check-up of 2026-10-20
@@ -149,7 +150,9 @@ describe('kie-checkup release', () => {
     const operation = operations.find((candidate) => candidate.modelId === modelId)!;
     const { schemaVersion, ...publicDescriptor } = released.publicDescriptor;
     expect(schemaVersion).toBe(2);
-    expect(publicDescriptor).toEqual(descriptorBeforeMiniDefault(catalog.models.find((model) => model.id === modelId)!));
+    expect(publicDescriptor).toEqual(descriptorBeforeMiniDefault(descriptorBeforeVeoQualityReferences(
+      catalog.models.find((model) => model.id === modelId)!,
+    )));
     expect(released.webEnabled).toBe(true);
     expect(released.mobileEnabled).toBe(true);
     expect(released.adapterKey).toBe(operation.adapterKey);

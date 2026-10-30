@@ -1,6 +1,7 @@
 import {
   IMAGE_MODELS,
   MOTION_MODELS,
+  VEO_REFERENCE_MODES,
   VIDEO_MODELS,
   getImageResolutionOptions,
   isGptImage25ModelId,
@@ -995,7 +996,7 @@ function validationConfigForModel(
           max: 0,
           conditions: [
             { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
-            { source: 'setting', key: 'mode', operator: 'notIn', value: ['veo3_lite', 'veo3_fast'] },
+            { source: 'setting', key: 'mode', operator: 'notIn', value: [...VEO_REFERENCE_MODES] },
           ],
           message: 'Reusable references require Veo Lite or Fast.',
         },

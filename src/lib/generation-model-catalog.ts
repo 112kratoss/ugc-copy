@@ -5,6 +5,7 @@ import { modeGatedSettingValues } from '../../ugc-mobile/lib/model-catalog/proto
 import {
   IMAGE_MODELS,
   MOTION_MODELS,
+  VEO_REFERENCE_MODES,
   VIDEO_MODELS,
   getImageQualityModes,
   getVideoDurationRange,
@@ -546,13 +547,19 @@ function videoInputModes(
     });
   }
   if (referenceSlots.length > 0) {
+    const conditions: CatalogCondition[] = frameSlots.length > 0
+      ? [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }]
+      : [];
+    // Veo 3.1 takes reference pictures on its Lite and Fast variants only, as its quote says.
+    // Opened on every variant, the mode offered Quality a run the quote refused.
+    if (modelId === 'veo-3.1') {
+      conditions.push({ source: 'setting', key: 'mode', operator: 'in', value: [...VEO_REFERENCE_MODES] });
+    }
     modes.push({
       key: 'references',
       label: 'Reusable references',
       default: frameSlots.length === 0,
-      conditions: frameSlots.length > 0
-        ? [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }]
-        : undefined,
+      conditions: conditions.length > 0 ? conditions : undefined,
       slots: referenceSlots,
     });
   }

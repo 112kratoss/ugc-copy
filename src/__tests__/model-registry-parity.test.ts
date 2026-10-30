@@ -92,6 +92,24 @@ describe('server/client model registry parity', () => {
     expect(pick(clientEntry, VIDEO_SHARED_FIELDS)).toEqual(pick(serverEntry, VIDEO_SHARED_FIELDS));
   });
 
+  it.each(Object.keys(server.VIDEO_MODELS))('answers which references video model %s takes as the start path does, in every mode', (id) => {
+    // The start refuses pictures by the server copy (generation-services) and the create page
+    // offers them by the browser copy before the catalog is in, so the two answer alike for
+    // every mode and shot setting: Veo 3.1 takes pictures on Lite and Fast only.
+    const modelId = id as keyof typeof server.VIDEO_MODELS;
+    const modes = [undefined, ...server.VIDEO_MODELS[modelId].modeOptions.map((option) => option.value)];
+    for (const mode of modes) {
+      for (const isMultiShot of [false, true]) {
+        expect(client.getVideoElementSupport(modelId, { mode, isMultiShot }), `${id} ${mode ?? 'no mode'}${isMultiShot ? ', multi-shot' : ''}`)
+          .toEqual(server.getVideoElementSupport(modelId, { mode, isMultiShot }));
+      }
+    }
+  });
+
+  it('mirrors the Veo 3.1 variants that take reference pictures', () => {
+    expect(client.VEO_REFERENCE_MODES).toEqual(server.VEO_REFERENCE_MODES);
+  });
+
   it.each(Object.keys(server.MOTION_MODELS))('keeps motion model %s field-identical', (id) => {
     const serverEntry = server.MOTION_MODELS[id as keyof typeof server.MOTION_MODELS] as Record<string, unknown>;
     const clientEntry = client.MOTION_MODELS[id as keyof typeof client.MOTION_MODELS] as Record<string, unknown>;
