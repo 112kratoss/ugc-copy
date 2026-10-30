@@ -136,9 +136,11 @@ vi.mock('@/lib/showcase-feed', () => ({
       canRemix: false,
     }))
   ),
-  // Pricing, viewer state and blocking are the feed's own: pricing and viewer
-  // state run for real in showcase-saved-media-recipe-redaction.test.ts,
-  // blocking in showcase-saved-media-service.test.ts.
+  // Reference counts, pricing, viewer state and blocking are the feed's own:
+  // the first three run for real in
+  // showcase-saved-media-recipe-redaction.test.ts, blocking in
+  // showcase-saved-media-service.test.ts.
+  addCreationReferenceCountsToFeedItems: vi.fn(async (items: unknown) => items),
   attachLocalizedAssetPrices: vi.fn(async (feed: unknown) => feed),
   attachViewerStateToFeed: vi.fn(async (feed: unknown) => feed),
 }));

@@ -14,6 +14,16 @@ type Row = Record<string, unknown>;
 
 const db = vi.hoisted(() => ({ tables: {} as Record<string, Row[]> }));
 
+// What an unlock adds from a creation's saved inputs (#587) is counted by one
+// read the feed makes for every page it serves. Both reads here get the same
+// answer, so a read that skips the count step shows up as a difference.
+vi.mock('@/lib/post-resource-bundles-server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/post-resource-bundles-server')>()),
+  countGenerationRecipeReferenceItemsByPostId: vi.fn(async ({ postIds }: { postIds: readonly string[] }) => (
+    new Map(postIds.filter((postId) => postId === 'post-paid').map((postId) => [postId, { reference_image: 2 }]))
+  )),
+}));
+
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createFakeSupabase(),
   resolveOwnedStoredMediaUrl: async (_client: unknown, outputUrl: string) => `https://proxy.example.com/${outputUrl}`,
@@ -308,8 +318,10 @@ describe('saved media serves a recipe the way the feed does', () => {
       expect(served).not.toContain(text);
     }
     const paid = page.items.find((item) => item.id === 'post-paid');
+    // The stored reference and the two the creation's inputs add.
+    expect(paid?.asset?.itemCounts).toEqual({ prompt: 1, reference_image: 3 });
     expect(paid?.asset?.lockedPreview).toMatchObject({
-      itemCounts: { prompt: 1, reference_image: 1 },
+      itemCounts: { prompt: 1, reference_image: 3 },
       sectionCount: 1,
       sectionPreviews: [],
       attachmentPreviews: [{ label: 'File 1', kind: 'file', contentType: null, sizeBytes: null }],

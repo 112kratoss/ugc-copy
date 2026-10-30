@@ -6,6 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isMissingPostsSchemaError } from '@/lib/posts-server';
 import {
+  addCreationReferenceCountsToFeedItems,
   attachLocalizedAssetPrices,
   attachViewerStateToFeed,
   resolvePostRowsToFeedItems as defaultResolvePostRowsToFeedItems,
@@ -183,14 +184,18 @@ export async function getSavedMediaFeedForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to fetch saved media' } };
   }
 
-  const hydratedItems = await resolvePostRowsToFeedItems(
-    (postRows ?? []) as Parameters<typeof resolvePostRowsToFeedItems>[0],
-    adminSupabase
-  );
   // A saved post goes out the way the feed's reads by id send it to this
-  // viewer: priced in their currency, with the recipes and Remix they own,
-  // without a creator either of them blocked (none at all if that cannot be
-  // read), and through the sanitizer every public read of a post ends with.
+  // viewer: its recipe teaser counting what the unlock adds from the
+  // creation's inputs, priced in their currency, with the recipes and Remix
+  // they own, without a creator either of them blocked (none at all if that
+  // cannot be read), and through the sanitizer every public read ends with.
+  const hydratedItems = await addCreationReferenceCountsToFeedItems(
+    await resolvePostRowsToFeedItems(
+      (postRows ?? []) as Parameters<typeof resolvePostRowsToFeedItems>[0],
+      adminSupabase
+    ),
+    adminSupabase,
+  );
   const pricedFeed = await attachLocalizedAssetPrices(
     { items: hydratedItems, pageInfo: { hasMore: false, nextOffset: null, limit, offset } },
     countryCode,
