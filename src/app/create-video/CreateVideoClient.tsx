@@ -188,9 +188,11 @@ import {
 } from '@/lib/generation-status-client';
 import {
     assignElementHandles,
+    assignRemixElementHandles,
     assignSubjectHandles,
     createElementHandleReplacementMap,
     createElementId,
+    extractMentionedHandles,
     extractPromptHandles,
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
@@ -1119,14 +1121,13 @@ function keptReferenceSeeds(kept: RemixResolvedAsset[] | undefined): SeedanceMed
 
 /**
  * Kling 3.0's clip cards, each under its handle. `mentionedHandles` are the handles a
- * remix's words mention: a clip handed back without a handle is named past them (see
- * `assignElementHandles`).
+ * remix's words mention, for clips it hands back without one (`assignRemixElementHandles`).
  */
 function hydrateKlingVideoElements(
     seeds: KlingVideoElementSeed[],
     mentionedHandles: Iterable<string> = [],
 ): KlingVideoElementDraft[] {
-    return assignElementHandles(seeds, undefined, mentionedHandles).map((seed) => ({
+    return assignRemixElementHandles(seeds, mentionedHandles).map((seed) => ({
         id: typeof seed.id === 'string' && seed.id.trim() ? seed.id : createElementId(),
         displayName: seed.displayName,
         handle: seed.handle,
@@ -2606,14 +2607,13 @@ export default function CreateVideoClient({
 	                            }] : []))
 	                        : [];
 	                    // A run kept before clips had handles hands its clips back with none,
-	                    // while its words still name the source's. The words the page may show
-	                    // (the source's, or the creator's own if they typed during the load)
-	                    // keep those names, so no clip is given one meant for another.
-	                    const restoredMentions = [
+	                    // while its words still name the source's: the words the page may show
+	                    // (the source's, or the creator's own if they typed during the load).
+	                    const restoredMentions = extractMentionedHandles([
 	                        bundle.generation.prompt,
 	                        promptRef.current,
-	                        ...(settings?.multiPrompts ?? []).map((shot) => shot.prompt),
-	                    ].flatMap((words) => extractPromptHandles(typeof words === 'string' ? words : ''));
+	                        ...(Array.isArray(settings?.multiPrompts) ? settings.multiPrompts : []).map((shot) => shot?.prompt),
+	                    ]);
 	                    commitKlingVideoElements(hydrateKlingVideoElements(klingVideoSeeds, restoredMentions));
                 }
 

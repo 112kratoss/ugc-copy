@@ -1,10 +1,11 @@
 import { createReadStream } from 'node:fs';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
+  assignElementHandles,
   buildElementHandle,
   compileImagePromptWithElements,
   compilePromptWithElements,
-  extractPromptHandles,
+  extractMentionedHandles,
   findUnknownPromptHandles,
   isValidElementHandle,
   normalizeElementDisplayName,
@@ -1020,70 +1021,46 @@ function normalizeReferenceImageInputs(value: ReferenceImageInput[] | undefined)
 
 /**
  * Kling 3.0's clips, each under the handle Kie is sent it by (Kling reads no plain clip
- * link). A clip keeps a handle no clip before it holds. Every other clip, one that came
- * without a handle (an installed app sends a clip carried over from a model whose clips
- * take none as `handle: null`) or with one an earlier clip holds, gets a handle made from
- * its name, past every handle kept and every handle in `reservedHandles`: the run's other
- * references and the handles its words mention. A made handle that took a mentioned one
- * would bind that mention to a clip it never meant, as in a remix of a run kept before
- * clips had handles, whose words still name the source's.
+ * link), named as the creators name theirs (`assignElementHandles`): a clip keeps a handle
+ * no clip before it holds, and every other clip gets one made from its name. A clip may
+ * come without one: an installed app sends a clip carried over from a model whose clips
+ * take none as `handle: null`.
+ *
+ * A made handle is never one the run's words mention. In a remix of a run kept before
+ * clips had handles, the words still name the source's, and a made handle that took one
+ * would bind that mention to a clip it never meant; the start refuses the mention as
+ * unknown instead, before anything is held, as the app holds it (`withClipHandles`).
  */
 function normalizeKlingVideoElementInputs(
   value: KlingVideoElementInput[] | undefined,
-  reservedHandles: Iterable<string> = [],
+  mentionedHandles: Iterable<string>,
 ) {
-  const clips = (value || []).map((element) => (
+  const clips = (value || []).flatMap((element) => (
     element && typeof element === 'object' && typeof element.url === 'string' && element.url.trim()
-      ? element
-      : null
+      ? [{
+          element,
+          displayName: typeof element.displayName === 'string' ? element.displayName : null,
+          // Read leniently, as before: "@Lead" or "lead" is sent as "@lead".
+          handle: normalizeReferenceHandle(element.handle),
+        }]
+      : []
   ));
-  const keptHandles = new Set<string>();
-  const handleKept = clips.map((element) => {
-    const handle = element ? normalizeReferenceHandle(element.handle) : null;
-    if (!handle || keptHandles.has(handle)) return null;
-    keptHandles.add(handle);
-    return handle;
-  });
-  const usedHandles = new Set([...keptHandles, ...reservedHandles]);
 
-  return clips
-    .map((element, index) => {
-      if (!element) {
-        return null;
-      }
-
-      const url = element.url.trim();
-      const displayName = normalizeElementDisplayName(
-        typeof element.displayName === 'string' ? element.displayName : undefined,
-        index + 1
-      );
-      const handle = handleKept[index] ?? buildElementHandle(displayName, usedHandles, index + 1);
-
-      return {
-        id: typeof element.id === 'string' && element.id.trim() ? element.id : null,
-        url,
-        handle,
-        displayName,
-        storagePath: typeof element.storagePath === 'string' ? element.storagePath : null,
-        sourceGenerationId:
-          typeof element.sourceGenerationId === 'string'
-            ? element.sourceGenerationId
-            : null,
-        durationSeconds:
-          typeof element.durationSeconds === 'number' && Number.isFinite(element.durationSeconds)
-            ? element.durationSeconds
-            : null,
-      };
-    })
-    .filter((element): element is {
-      id: string | null;
-      url: string;
-      handle: string;
-      displayName: string;
-      storagePath: string | null;
-      sourceGenerationId: string | null;
-      durationSeconds: number | null;
-    } => Boolean(element));
+  return assignElementHandles(clips, mentionedHandles).map(({ element, displayName, handle }) => ({
+    id: typeof element.id === 'string' && element.id.trim() ? element.id : null,
+    url: element.url.trim(),
+    handle,
+    displayName,
+    storagePath: typeof element.storagePath === 'string' ? element.storagePath : null,
+    sourceGenerationId:
+      typeof element.sourceGenerationId === 'string'
+        ? element.sourceGenerationId
+        : null,
+    durationSeconds:
+      typeof element.durationSeconds === 'number' && Number.isFinite(element.durationSeconds)
+        ? element.durationSeconds
+        : null,
+  }));
 }
 
 const KLING_SUBJECT_MIN_IMAGES = 2;
@@ -2438,12 +2415,6 @@ export async function startVideoGeneration(params: {
         sourceGenerationId: reference.sourceGenerationId,
       }) satisfies ImageElementDescriptor)
     : normalizeSubmittedElementDescriptors(elements);
-  const normalizedKlingVideoElements = normalizeKlingVideoElementInputs(klingVideoElements, [
-    ...normalizedElements.map((element) => element.handle),
-    ...normalizedKlingSubjects.map((subject) => subject.handle),
-    ...[rawPrompt, ...(multiPrompts || []).map((shot) => shot.prompt)]
-      .flatMap((words) => extractPromptHandles(typeof words === 'string' ? words : '')),
-  ]);
   const normalizedReferenceMode = referenceMode === 'elements' ? 'elements' : 'frames';
   const normalizedStartFrame = normalizeRemixMediaAssetDescriptor(startFrame, 'image');
   const normalizedEndFrame = normalizeRemixMediaAssetDescriptor(endFrame, 'image');
@@ -2470,6 +2441,10 @@ export async function startVideoGeneration(params: {
         ? Math.max(1, Math.min(12, Math.round(shot.duration)))
         : 5,
   }));
+  const normalizedKlingVideoElements = normalizeKlingVideoElementInputs(
+    klingVideoElements,
+    extractMentionedHandles([trimmedPrompt, ...normalizedMultiPrompts.map((shot) => shot.prompt)]),
+  );
 
   if (isMultiShot) {
     assertGenerationRequest(

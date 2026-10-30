@@ -93,19 +93,16 @@ const SUBJECT_STAND_INS: HandleStandIns = {
  * The handles being kept are set aside first, so a new handle never takes one
  * that another element holds.
  *
+ * `reservedHandles` are handles no new handle may take, though an element may
+ * keep one: see `assignRemixElementHandles`.
+ *
  * `standIns` is for a card whose elements go by another word: see
  * `assignSubjectHandles`.
- *
- * `reservedHandles` are handles no new handle may take, though an element may
- * keep one. A remix restore passes the handles its words mention: a reference
- * the source handed back without a handle is not the one those words meant, and
- * a handle made from its name and place could otherwise answer a mention meant
- * for another, with nothing on the page to say so.
  */
 export function assignElementHandles<T extends { displayName?: string | null; handle?: string | null }>(
   elements: T[],
-  standIns: HandleStandIns = ELEMENT_STAND_INS,
-  reservedHandles: Iterable<string> = []
+  reservedHandles: Iterable<string> = [],
+  standIns: HandleStandIns = ELEMENT_STAND_INS
 ): Array<T & { displayName: string; handle: string }> {
   const usedHandles = new Set<string>();
   const keptHandles = elements.map((element) => {
@@ -134,6 +131,33 @@ export function assignElementHandles<T extends { displayName?: string | null; ha
 }
 
 /**
+ * Names the references a remix hands back when some come without a handle (a
+ * run kept before its references had handles), while the run's words still
+ * mention the handles its source gave them.
+ *
+ * The source named them as `assignElementHandles` does, from name and place, so
+ * that rebuild gives the source's handles back unless the source lost a
+ * reference before its run: three clips all called "Reference Video" with the
+ * first removed ran as `@reference_video_2` and `@reference_video_3`, and the
+ * rebuild would hand `@reference_video_2` to the clip after the one the words
+ * meant. A rebuild that answers every mention is kept; one that leaves a
+ * mention unanswered is taken as such a shift, and the references are named
+ * past every mentioned handle instead, so each of those mentions shows as
+ * unknown until the creator points it at the right reference.
+ */
+export function assignRemixElementHandles<T extends { displayName?: string | null; handle?: string | null }>(
+  elements: T[],
+  mentionedHandles: Iterable<string>
+): Array<T & { displayName: string; handle: string }> {
+  const rebuilt = assignElementHandles(elements);
+  const held = new Set(rebuilt.map((element) => element.handle));
+  const mentioned = Array.from(mentionedHandles);
+  return mentioned.every((handle) => held.has(handle))
+    ? rebuilt
+    : assignElementHandles(elements, mentioned);
+}
+
+/**
  * Gives each Kling O3 named subject its @handle, by the rule of the element
  * cards: built from the name when the subject is added and again when it is
  * renamed, and kept through everything else.
@@ -150,7 +174,12 @@ export function assignElementHandles<T extends { displayName?: string | null; ha
 export function assignSubjectHandles<T extends { displayName?: string | null; handle?: string | null }>(
   subjects: T[]
 ): Array<T & { displayName: string; handle: string }> {
-  return assignElementHandles(subjects, SUBJECT_STAND_INS);
+  return assignElementHandles(subjects, [], SUBJECT_STAND_INS);
+}
+
+/** Every handle any of a run's words mention (its prompt and each shot's), once each. */
+export function extractMentionedHandles(words: readonly unknown[]): string[] {
+  return Array.from(new Set(words.flatMap((text) => extractPromptHandles(typeof text === 'string' ? text : ''))));
 }
 
 export function extractPromptHandles(prompt: string): string[] {

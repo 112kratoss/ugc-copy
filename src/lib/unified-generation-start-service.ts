@@ -819,7 +819,7 @@ export async function dispatchCatalogGenerationAdapter({
       klingVideoElements: videoElementInputs.map((asset, index) => ({
         id: `${asset.slot}-${index + 1}`,
         url: asset.url!,
-        handle: asset.handle ?? null,
+        handle: asset.handle,
         displayName: asset.label ?? `Video ${index + 1}`,
         storagePath: asset.storagePath ?? null,
         sourceGenerationId: asset.sourceGenerationId ?? null,
