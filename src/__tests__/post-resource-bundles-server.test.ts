@@ -896,7 +896,12 @@ describe('post resource bundle server access', () => {
     ]));
   });
 
-  it('withholds live references from non-owners once the generation is no longer public', async () => {
+  // A live post whose generation is no longer public: an operator's removal,
+  // which changes the generation alone, or a creation archived and restored by
+  // its creator, which stays unpublished. The buyer's remix reads the inputs
+  // through its own loader, which a generation start also asks before it copies
+  // another creator's input, so it withholds what the unlock withholds.
+  it('withholds live references from non-owners, in the unlock and its remix, once the generation is no longer public', async () => {
     bundleRow = {
       ...(bundleRow as BundleRow),
       access_mode: 'paid',
@@ -908,16 +913,43 @@ describe('post resource bundle server access', () => {
       is_public: false,
     };
     viewerHasPurchased = true;
-    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+    const {
+      getPostResourceBundleDetailByPostId,
+      loadGenerationRecipeRemixInputMediaByPostId,
+    } = await import('@/lib/post-resource-bundles-server');
 
     const detail = await getPostResourceBundleDetailByPostId('post-1', {
       viewerUserId: 'viewer-1',
     });
+    const media = await loadGenerationRecipeRemixInputMediaByPostId({
+      postId: 'post-1',
+      generationId: 'gen-1',
+      viewerUserId: 'viewer-1',
+    });
 
+    // Unlocked, with the creator's switch on: only the generation's state holds them back.
     expect(detail?.viewerCanAccess).toBe(true);
+    expect(detail?.resources?.allowRemix).toBe(true);
     expect(detail?.resources?.items?.some(
       (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
     )).toBe(false);
+    expect(media).toEqual([]);
+  });
+
+  it('still hands the owner their own inputs through the remix loader', async () => {
+    bundleRow = { ...(bundleRow as BundleRow), allow_remix: true };
+    generationRow = { ...(generationRow as NonNullable<typeof generationRow>), is_public: false };
+    const { loadGenerationRecipeRemixInputMediaByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const media = await loadGenerationRecipeRemixInputMediaByPostId({
+      postId: 'post-1',
+      generationId: 'gen-1',
+      viewerUserId: 'owner-1',
+    });
+
+    expect(media).toEqual([expect.objectContaining({
+      storagePath: 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+    })]);
   });
 
   it('always shows the owner their own saved references', async () => {
@@ -2209,13 +2241,24 @@ describe('post resource bundle server access', () => {
       };
       viewerHasPurchased = true;
 
-      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const {
+        getPostResourceBundleDetailByPostId,
+        loadGenerationRecipeRemixInputMediaByPostId,
+      } = await import('@/lib/post-resource-bundles-server');
       const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1' });
+      const remixed = await loadGenerationRecipeRemixInputMediaByPostId({
+        postId: 'post-1',
+        generationId: 'gen-1',
+        viewerUserId: 'buyer-1',
+      });
 
       expect(detail?.viewerCanAccess).toBe(true);
       expect(detail?.resources?.items?.some(
         (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
       )).toBe(true);
+      // Entitlement to read is not entitlement to reuse: a remix of a deleted
+      // post restores none of them.
+      expect(remixed).toEqual([]);
     });
 
     it('hides a tombstoned post from everyone who did not buy it', async () => {
