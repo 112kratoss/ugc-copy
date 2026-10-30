@@ -3,7 +3,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Fragment } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ArrowRight, CheckCircle2, Clock3, Expand, Loader2, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Clock3, Expand, Loader2, Play, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -190,6 +190,7 @@ function StudioPanel({
 
 function StudioNoticeCard({
   icon: Icon,
+  lead,
   label,
   description,
   action,
@@ -197,6 +198,8 @@ function StudioNoticeCard({
   dismissLabel = 'Dismiss notice',
 }: {
   icon: LucideIcon;
+  /** Drawn in the icon's place: the remix notice's picture of the original. */
+  lead?: ReactNode;
   label: string;
   description: string;
   action?: ReactNode;
@@ -208,10 +211,12 @@ function StudioNoticeCard({
   return (
     <StudioPanel className="p-4">
       <div className="flex flex-col gap-3">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--ui-primary)]/25 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]">
-            <Icon className="h-4 w-4" />
-          </div>
+        <div className={clsx('flex min-w-0 flex-1 gap-3', lead ? 'items-center' : 'items-start')}>
+          {lead ?? (
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--ui-primary)]/25 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]">
+              <Icon className="h-4 w-4" />
+            </div>
+          )}
           <div className="min-w-0 flex-1">
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--ui-primary-strong)]">
               {label}
@@ -235,16 +240,80 @@ function StudioNoticeCard({
   );
 }
 
+/**
+ * The result a remix starts from. `onOpen` shows it in the creator's own
+ * preview; `href` opens the file in a new tab instead (the motion creator has
+ * no preview of its own).
+ */
+export interface StudioRemixOriginal {
+  mediaType: StudioMediaPreviewType;
+  src: string;
+  onOpen?: () => void;
+  href?: string;
+}
+
+/**
+ * "View original" drawn as the original itself, as the app's Remix screen
+ * shows the post's picture. A video shows a still from its first moment rather
+ * than a playing loop, so the notice stays calm and loads only the metadata.
+ */
+function StudioRemixOriginalThumb({ mediaType, src, onOpen, href }: StudioRemixOriginal) {
+  const className =
+    'ui-focus-ring relative block h-16 w-16 shrink-0 overflow-hidden rounded-ui-xl border border-[var(--ui-border-default)] bg-black transition hover:border-[var(--ui-border-strong)]';
+  const content = (
+    <>
+      {mediaType === 'image' ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" className="h-full w-full object-cover" />
+      ) : (
+        <video
+          src={`${src}#t=0.1`}
+          preload="metadata"
+          muted
+          playsInline
+          aria-hidden
+          tabIndex={-1}
+          className="h-full w-full object-cover"
+        />
+      )}
+      <span className="pointer-events-none absolute bottom-1 right-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-zinc-100 backdrop-blur-sm">
+        {mediaType === 'video' ? <Play className="h-3 w-3" aria-hidden /> : <Expand className="h-3 w-3" aria-hidden />}
+      </span>
+    </>
+  );
+
+  return href ? (
+    <a href={href} target="_blank" rel="noreferrer" aria-label="View original" className={className}>
+      {content}
+    </a>
+  ) : (
+    <button type="button" onClick={onOpen} aria-label="View original" className={className}>
+      {content}
+    </button>
+  );
+}
+
 export function StudioRemixNotice({
   label = 'Remixing Community Creation',
   description,
+  original,
   action,
 }: {
   label?: string;
   description: string;
+  /** The source result, when the remix restored one: it takes the icon's place and opens the original. */
+  original?: StudioRemixOriginal | null;
   action?: ReactNode;
 }) {
-  return <StudioNoticeCard icon={Sparkles} label={label} description={description} action={action} />;
+  return (
+    <StudioNoticeCard
+      icon={Sparkles}
+      lead={original ? <StudioRemixOriginalThumb {...original} /> : undefined}
+      label={label}
+      description={description}
+      action={action}
+    />
+  );
 }
 
 /**

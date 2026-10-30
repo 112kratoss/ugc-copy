@@ -197,6 +197,24 @@ type CreatorChoiceLayout =
   | { appearance: 'pill'; columns?: undefined };
 
 /**
+ * The box an option written as a ratio ("16:9") draws beside its words, as the
+ * app's parameter sheet does: the long side 16px and the short side to scale,
+ * never under 3px, so 1:8 still shows as a bar. Null for anything else ("auto",
+ * a resolution, a length), which draws no box.
+ */
+function ratioBoxSize(option: string): { width: number; height: number } | null {
+  const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(option);
+  if (!match) return null;
+  const across = Number(match[1]);
+  const down = Number(match[2]);
+  if (!(across > 0 && down > 0)) return null;
+  const toScale = (share: number) => Math.max(3, Math.round(16 * share));
+  return across >= down
+    ? { width: 16, height: toScale(down / across) }
+    : { width: toScale(across / down), height: 16 };
+}
+
+/**
  * One setting with a single value (aspect ratio, resolution, quality): a radio
  * group, so a screen reader hears which one is chosen, and the arrow keys move
  * the choice as they do in any radio group. The parent decides whether a pick
@@ -241,7 +259,7 @@ export function CreatorSettingChoices<T extends string>({
   const labelId = useId();
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedIndex = options.indexOf(value);
-  const selectedClasses = getAccentClasses(accent).selected;
+  const { selected: selectedClasses, mark: selectedMarkClass } = getAccentClasses(accent);
   const pill = appearance === 'pill';
 
   const choose = (index: number) => {
@@ -285,6 +303,7 @@ export function CreatorSettingChoices<T extends string>({
           const checked = index === selectedIndex;
           const price = optionPrice?.(option) ?? null;
           const text = optionLabel ? optionLabel(option) : option;
+          const box = ratioBoxSize(option);
           return (
             <button
               key={option}
@@ -313,7 +332,20 @@ export function CreatorSettingChoices<T extends string>({
                     : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
-              <span>{text}</span>
+              {box ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    aria-hidden
+                    data-testid="creator-option-ratio-box"
+                    // The box takes the option's colour, and the accent once chosen, as in the app.
+                    className={clsx('shrink-0 rounded-[2px] border-[1.5px] border-current', checked && selectedMarkClass)}
+                    style={{ width: box.width, height: box.height }}
+                  />
+                  {text}
+                </span>
+              ) : (
+                <span>{text}</span>
+              )}
               {price ? (
                 <span
                   data-testid="creator-option-price"
@@ -1009,13 +1041,30 @@ export function CreatorReplaceButton({ label, accept, onFile }: {
 }
 
 /**
- * A reference in a creator's column, as a row: its picture or clip (which
- * opens a preview), its name to rename it by, Remove, and its @handle with
- * Insert (and Copy for a Kling clip), each named for the handle it acts on.
- * With `insertByHandle` the handle itself is the Insert button, and a remix's
- * reference takes `replace`.
+ * A creator's references side by side in one row that scrolls sideways, as the
+ * app lists them, so ten references take one row of the column rather than ten.
+ * The track is the start posts' strip's (`CreatorStartPosts`), with narrower cells.
  */
-export function CreatorReferenceRow({
+export function CreatorReferenceStrip({ className, children, ...props }: ComponentPropsWithRef<'ul'>) {
+  return (
+    <ul
+      {...props}
+      className={clsx('app-scrollbar -mx-1 grid snap-x grid-flow-col auto-cols-[8rem] gap-2 overflow-x-auto px-1 pb-2', className)}
+    >
+      {children}
+    </ul>
+  );
+}
+
+/**
+ * A reference in a creator's column, as a tile in its strip: its picture or
+ * clip (which opens a preview) with Remove on it, its name to rename it by, and
+ * its @handle, which is the button that inserts it, each named for what it acts
+ * on. Copy (a Kling clip), Replace (a remix's reference) and a note sit under
+ * the handle. The handle has the tile's width to itself and breaks after an
+ * underscore, so it always shows whole (`reference-card-handles.spec.ts`).
+ */
+export function CreatorReferenceTile({
   accent,
   preview,
   displayName,
@@ -1030,11 +1079,10 @@ export function CreatorReferenceRow({
   onInsert,
   onCopy,
   note,
-  insertByHandle = false,
   replace,
 }: {
   accent: UiAccent;
-  /** The picture or clip at the row's start. */
+  /** The picture or clip at the tile's top, as wide as the tile. */
   preview: ReactNode;
   displayName: string;
   /** The name as it is being typed, if it is. */
@@ -1050,65 +1098,60 @@ export function CreatorReferenceRow({
   onInsert: () => void;
   onCopy?: () => void;
   note?: ReactNode;
-  /** The handle is the Insert button (the video creator's hint: "tap a handle"). */
-  insertByHandle?: boolean;
   /** A remix's reference: a file of the creator's own takes its place. */
   replace?: { label: string; accept: string; onFile: (file: File) => void };
 }) {
   return (
-    <li className="flex items-start gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-2.5">
-      {preview}
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex items-center gap-1">
-          <input
-            type="text"
-            value={nameDraft ?? displayName}
-            onChange={(event) => onNameChange(event.target.value)}
-            onBlur={onNameCommit}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                onNameCommit();
-                event.currentTarget.blur();
-              }
-              if (event.key === 'Escape') {
-                onNameCancel();
-                event.currentTarget.blur();
-              }
-            }}
-            aria-label={`Name of ${displayName}`}
-            placeholder={placeholder}
-            className={clsx(
-              'min-w-0 flex-1 rounded-ui-sm border border-transparent bg-transparent px-2 py-1.5 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:bg-[var(--ui-surface-2)]',
-              getAccentClasses(accent).fieldFocus
-            )}
-          />
-          <IconButton label={`Remove ${displayName}`} icon={X} onClick={onRemove} className="shrink-0" />
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
-          {insertByHandle ? (
-            <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_HANDLE_INSERT_CLASS}>
-              <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
-            </button>
-          ) : (
-            <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
-          )}
-          <div className="flex flex-wrap items-center gap-1.5">
-            {replace ? <CreatorReplaceButton {...replace} /> : null}
-            {onCopy ? (
-              <button type="button" onClick={onCopy} aria-label={`Copy ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
-                Copy
-              </button>
-            ) : null}
-            {insertByHandle ? null : (
-              <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
-                Insert
-              </button>
-            )}
-          </div>
-        </div>
-        {note ? <p className="px-2 text-xs text-[var(--ui-text-faint)]">{note}</p> : null}
+    <li className="flex min-w-0 snap-start flex-col gap-1.5 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-1.5">
+      <div className="relative">
+        {preview}
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`Remove ${displayName}`}
+          title={`Remove ${displayName}`}
+          className="ui-focus-ring absolute right-1 top-1 inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white transition hover:bg-rose-500/90"
+        >
+          <X className="h-4 w-4" aria-hidden />
+        </button>
       </div>
+      <input
+        type="text"
+        value={nameDraft ?? displayName}
+        onChange={(event) => onNameChange(event.target.value)}
+        onBlur={onNameCommit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            onNameCommit();
+            event.currentTarget.blur();
+          }
+          if (event.key === 'Escape') {
+            onNameCancel();
+            event.currentTarget.blur();
+          }
+        }}
+        aria-label={`Name of ${displayName}`}
+        placeholder={placeholder}
+        className={clsx(
+          'w-full min-w-0 rounded-ui-sm border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:bg-[var(--ui-surface-2)]',
+          getAccentClasses(accent).fieldFocus
+        )}
+      />
+      <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} title={`Insert ${handle}`} className={CREATOR_HANDLE_INSERT_CLASS}>
+        <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
+      </button>
+      {replace || onCopy ? (
+        <div className="flex flex-wrap gap-1.5">
+          {replace ? <CreatorReplaceButton {...replace} /> : null}
+          {onCopy ? (
+            <button type="button" onClick={onCopy} aria-label={`Copy ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
+              Copy
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {note ? <p className="px-1.5 text-xs text-[var(--ui-text-faint)]">{note}</p> : null}
     </li>
   );
 }

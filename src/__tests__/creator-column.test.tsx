@@ -15,7 +15,8 @@ import {
   CreatorColumnBar,
   CreatorColumnLayout,
   CreatorMentionPanel,
-  CreatorReferenceRow,
+  CreatorReferenceStrip,
+  CreatorReferenceTile,
   CreatorSettingChoices,
   CreatorSettingSwitch,
   CreatorTemplatesTile,
@@ -286,6 +287,33 @@ describe('the setting choices', () => {
     fireEvent.keyDown(screen.getByRole('radio', { name: '16:9' }), { key: 'ArrowRight' });
     expect(onChange).toHaveBeenLastCalledWith('auto');
     expect(screen.getByRole('radio', { name: 'auto' })).toHaveFocus();
+  });
+
+  it('draws each ratio as a box to scale beside its words, and none for anything else', () => {
+    const view = render(
+      <CreatorSettingChoices
+        label="Aspect ratio"
+        options={['auto', '1:1', '9:16', '21:9', '1:8']}
+        value="9:16"
+        onChange={() => {}}
+        columns={5}
+      />
+    );
+    const boxOf = (name: string) => within(screen.getByRole('radio', { name })).queryByTestId('creator-option-ratio-box');
+
+    expect(boxOf('auto')).toBeNull();
+    expect(boxOf('1:1')).toHaveStyle({ width: '16px', height: '16px' });
+    expect(boxOf('9:16')).toHaveStyle({ width: '9px', height: '16px' });
+    expect(boxOf('21:9')).toHaveStyle({ width: '16px', height: '7px' });
+    // To scale, 1:8 would be 2px wide: it keeps 3px, so it still shows as a bar.
+    expect(boxOf('1:8')).toHaveStyle({ width: '3px', height: '16px' });
+    // A picture of the words, so the option is still read by its ratio alone.
+    expect(boxOf('9:16')).toHaveAttribute('aria-hidden', 'true');
+
+    view.rerender(
+      <CreatorSettingChoices label="Resolution" options={['720p', '1080p']} value="720p" onChange={() => {}} columns={2} />
+    );
+    expect(screen.queryAllByTestId('creator-option-ratio-box')).toHaveLength(0);
   });
 });
 
@@ -709,7 +737,36 @@ describe('the top-up notice', () => {
   });
 });
 
-describe('a reference row', () => {
+describe('a reference tile', () => {
+  it('lays its references side by side in one row that scrolls sideways', () => {
+    render(
+      <CreatorReferenceStrip aria-label="Reference images">
+        {['Hero', 'Villain', 'Sidekick'].map((name) => (
+          <CreatorReferenceTile
+            key={name}
+            accent="image"
+            preview={<span />}
+            displayName={name}
+            nameDraft={undefined}
+            placeholder="Rename element"
+            onNameChange={() => {}}
+            onNameCommit={() => {}}
+            onNameCancel={() => {}}
+            onRemove={() => {}}
+            handle={`@${name.toLowerCase()}`}
+            handleClassName="text-sky-300"
+            onInsert={() => {}}
+          />
+        ))}
+      </CreatorReferenceStrip>
+    );
+    const strip = screen.getByRole('list', { name: 'Reference images' });
+
+    expect(within(strip).getAllByRole('listitem')).toHaveLength(3);
+    // One column of tiles that runs sideways, never a second line of them.
+    expect(strip).toHaveClass('grid-flow-col', 'overflow-x-auto');
+  });
+
   it('names its controls for the reference and the handle they act on', () => {
     const calls = {
       onNameChange: vi.fn(),
@@ -721,7 +778,7 @@ describe('a reference row', () => {
     };
     render(
       <ul>
-        <CreatorReferenceRow
+        <CreatorReferenceTile
           accent="video"
           preview={<span />}
           displayName="Hero"
@@ -735,6 +792,9 @@ describe('a reference row', () => {
       </ul>
     );
 
+    // The handle is the one Insert control: a tile has no room for a second.
+    expect(screen.getAllByRole('button', { name: /^Insert/ })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Insert @hero' })).toHaveTextContent('@hero');
     fireEvent.click(screen.getByRole('button', { name: 'Insert @hero' }));
     fireEvent.click(screen.getByRole('button', { name: 'Copy @hero' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove Hero' }));
@@ -755,7 +815,7 @@ describe('a reference row', () => {
   it('offers Copy only where the page gives one', () => {
     render(
       <ul>
-        <CreatorReferenceRow
+        <CreatorReferenceTile
           accent="image"
           preview={<span />}
           displayName="Hero"

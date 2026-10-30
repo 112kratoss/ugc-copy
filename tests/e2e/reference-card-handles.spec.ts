@@ -14,7 +14,9 @@ import { expect, test, type Page } from '@playwright/test';
  * of its own, and it breaks after an underscore when that line is too short too.
  * Since 2026-10-26 the creators list their references as rows in the column
  * (one to a line, the handle on the line under the name, with Insert), so the
- * cards above are rows there.
+ * cards above are rows there. Since 2026-10-31 they are tiles 128px wide in one
+ * row that scrolls sideways, as the app shows them: the handle is the tile's
+ * Insert button and has the tile's width to itself, so a long one wraps there.
  *
  * Vitest cannot reach this. The handle was always in the document, and only the
  * layout hid it.
@@ -251,8 +253,8 @@ test.describe('reference card handles', () => {
     await expectWholeHandles(page, 'Kling video elements', CLIPS.map((clip) => clip.handle));
   });
 
-  // Since 2026-10-26 the image creator lists its references as rows in its column
-  // (picture, name, then the handle beside Insert), 340 to 440px wide on a desktop.
+  // Since 2026-10-31 the image creator lists its references as tiles in a sideways
+  // row (picture, name, then the handle that inserts it), as the video creator does.
   test('the image creator shows each element handle whole', async ({ page }) => {
     await page.route('**/api/remix-source*', (route) => route.fulfill({ json: IMAGE_REMIX }));
 

@@ -20,6 +20,43 @@ describe('creator studio notices', () => {
     expect(modelNotice).not.toHaveTextContent('Remixing Community Creation');
   });
 
+  it('draws the original in the remix notice and opens it from the picture', () => {
+    const onOpen = vi.fn();
+    const description = 'Settings pre-filled from "Neon city".';
+    const view = render(
+      <StudioRemixNotice
+        description={description}
+        original={{ mediaType: 'image', src: 'https://example.com/result.png', onOpen }}
+      />
+    );
+
+    const picture = screen.getByRole('button', { name: 'View original' });
+    expect(picture.querySelector('img')).toHaveAttribute('src', 'https://example.com/result.png');
+    fireEvent.click(picture);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    // A video shows a still from its first moment, never a playing loop; the
+    // motion creator's opens the file in a new tab.
+    view.rerender(
+      <StudioRemixNotice
+        description={description}
+        original={{ mediaType: 'video', src: 'https://example.com/result.mp4', href: 'https://example.com/result.mp4' }}
+      />
+    );
+    const link = screen.getByRole('link', { name: 'View original' });
+    expect(link).toHaveAttribute('href', 'https://example.com/result.mp4');
+    expect(link).toHaveAttribute('target', '_blank');
+    const still = link.querySelector('video');
+    expect(still).toHaveAttribute('src', 'https://example.com/result.mp4#t=0.1');
+    expect(still).toHaveAttribute('preload', 'metadata');
+    expect(still).not.toHaveAttribute('autoplay');
+
+    // No restored result: nothing to open, and the notice keeps its icon.
+    view.rerender(<StudioRemixNotice description={description} original={null} />);
+    expect(screen.queryByRole('button', { name: 'View original' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'View original' })).not.toBeInTheDocument();
+  });
+
   it('offers a dismiss button only when the model notice can be dismissed', () => {
     const onDismiss = vi.fn();
     const view = render(<StudioModelNotice description="This model is no longer available." />);

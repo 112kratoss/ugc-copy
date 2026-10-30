@@ -32,7 +32,8 @@ import {
     CreatorModelChip,
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
-    CreatorReferenceRow,
+    CreatorReferenceStrip,
+    CreatorReferenceTile,
     CreatorReplaceButton,
     CreatorRunFailed,
     CreatorRunFailedLine,
@@ -5488,29 +5489,16 @@ export default function CreateVideoClient({
                                             : remixFit && onRemixOriginal
                                                 ? `On the original settings: ${originalName} at ${remixFit.original.durationSeconds}s.`
                                                 : `Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
+                                        original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={
-                                            onFittedRemix || remixVideoUrl ? (
-                                                <div className="flex flex-wrap gap-2">
-                                                    {remixFit && onFittedRemix ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => switchModel(remixFit.original.modelId, remixFit.original.settings)}
-                                                            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                        >
-                                                            Use the original · {remixFit.original.cost} credits
-                                                        </button>
-                                                    ) : null}
-                                                    {remixVideoUrl ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => setIsPreviewModalOpen(true)}
-                                                            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                        >
-                                                            <Play className="h-4 w-4" />
-                                                            View original
-                                                        </button>
-                                                    ) : null}
-                                                </div>
+                                            remixFit && onFittedRemix ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => switchModel(remixFit.original.modelId, remixFit.original.settings)}
+                                                    className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                                >
+                                                    Use the original · {remixFit.original.cost} credits
+                                                </button>
                                             ) : undefined
                                         }
                                     />
@@ -5774,9 +5762,9 @@ export default function CreateVideoClient({
                                                     <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference images</h3>
                                                 ) : null}
                                                 {elements.length > 0 ? (
-                                                    <ul aria-label="Reference images" className="space-y-2">
+                                                    <CreatorReferenceStrip aria-label="Reference images">
                                                         {elements.map((element) => (
-                                                            <CreatorReferenceRow
+                                                            <CreatorReferenceTile
                                                                 key={element.id}
                                                                 accent="video"
                                                                 preview={
@@ -5789,7 +5777,7 @@ export default function CreateVideoClient({
                                                                             title: element.displayName,
                                                                         })}
                                                                         aria-label={`Preview ${element.displayName}`}
-                                                                        className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
+                                                                        className="ui-focus-ring group relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
                                                                     >
                                                                         {/* eslint-disable-next-line @next/next/no-img-element */}
                                                                         <img
@@ -5809,7 +5797,6 @@ export default function CreateVideoClient({
                                                                 handle={element.handle}
                                                                 handleClassName="text-sky-300"
                                                                 onInsert={() => handleInsertElementHandle(element.handle)}
-                                                                insertByHandle
                                                                 replace={element.restoredFromRemix ? {
                                                                     label: `Replace ${element.handle} with your own photo`,
                                                                     accept: 'image/*',
@@ -5817,7 +5804,7 @@ export default function CreateVideoClient({
                                                                 } : undefined}
                                                             />
                                                         ))}
-                                                    </ul>
+                                                    </CreatorReferenceStrip>
                                                 ) : null}
                                                 {elements.length < videoElementSupport.maxElements && (
                                                     <CreatorAddTile
@@ -6018,9 +6005,9 @@ export default function CreateVideoClient({
                                 </p>
 
                                 {klingVideoElements.length > 0 ? (
-                                    <ul className="mb-3 space-y-2">
+                                    <CreatorReferenceStrip className="mb-3">
                                         {klingVideoElements.map((element) => (
-                                            <CreatorReferenceRow
+                                            <CreatorReferenceTile
                                                 key={element.id}
                                                 accent="video"
                                                 preview={
@@ -6031,7 +6018,7 @@ export default function CreateVideoClient({
                                                             if (src) setUploadPreview({ type: 'video', src, alt: element.displayName, title: element.displayName });
                                                         }}
                                                         aria-label={`Preview ${element.displayName}`}
-                                                        className="ui-focus-ring relative h-16 w-24 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black"
+                                                        className="ui-focus-ring relative block aspect-video w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black"
                                                     >
                                                         <InlineMediaVideo
                                                             src={element.previewUrl || element.providerUrl || undefined}
@@ -6063,7 +6050,7 @@ export default function CreateVideoClient({
                                                 note={typeof element.durationSeconds === 'number' ? `${lengthInTenthsRoundedDown(element.durationSeconds).toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
                                             />
                                         ))}
-                                    </ul>
+                                    </CreatorReferenceStrip>
                                 ) : null}
 
                                 {klingVideoElements.length < KLING_VIDEO_ELEMENT_LIMIT ? (

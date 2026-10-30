@@ -87,9 +87,10 @@ export const siteConfig = {
     title: 'magicbooklet',
     defaultTitle: 'magicbooklet: Create the magic. Sell the method.',
     // The same tagline as `defaultTitle`, addressable on its own so the hero can
-    // show it without the brand prefix reading as part of the sentence. Kept in
-    // sync with `defaultTitle` by hand — both are brand copy, not derived text.
-    tagline: 'Create the magic. Sell the method.',
+    // show it without the brand prefix reading as part of the sentence, and in
+    // its two sentences so the hero can draw the selling one apart. Kept in sync
+    // with `defaultTitle` by hand — both are brand copy, not derived text.
+    tagline: { create: 'Create the magic.', sell: 'Sell the method.' },
     description:
         'Create AI images, videos, motion-transfer UGC ads, and reusable content workflows in one production-ready studio.',
     siteUrl: resolveSiteUrl(),
