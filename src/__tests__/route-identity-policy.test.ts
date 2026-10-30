@@ -308,6 +308,8 @@ describe('route identity policy', () => {
       '/api/enhance-prompt',
       '/api/templates/[id]/runs',
       '/api/generations',
+      // A guest's creator picks up its own run at work as it opens.
+      '/api/generations/active',
       '/api/uploads/media/sign',
       '/api/showcase/preview',
     ]) {

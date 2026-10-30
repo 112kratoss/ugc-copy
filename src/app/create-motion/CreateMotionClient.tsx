@@ -85,6 +85,7 @@ import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     announceGenerationStarted,
+    fetchCreatorActiveRun,
     fetchGenerationStatusWithRetry,
     GenerationStatusRequestError,
     isGenerationStatusAbortError,
@@ -1215,40 +1216,32 @@ export default function CreateMotionClient({
     const resumeNewestMotionRun = async () => {
         const { data: { session: currentSession } } = await supabase.auth.getSession();
         if (!currentSession) return;
-        const { data } = await supabase
-            .from('generations')
-            .select('id, prediction_id, status, created_at, duration, prompt, cost, model')
-            .eq('user_id', currentSession.user.id)
-            .eq('category', 'video')
-            .eq('creation_mode', 'motion')
-            .in('status', ['processing', 'waiting'])
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
+        // Asked of the server: the browser may not read a run's prompt, cost or model.
+        const run = await fetchCreatorActiveRun({ tool: 'motion', accessToken: currentSession.access_token });
 
-        if (!data?.prediction_id || activeGenerationRequestKeyRef.current) return;
-        activeGenerationRequestKeyRef.current = `resume:${data.prediction_id}`;
-        const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
+        if (!run || activeGenerationRequestKeyRef.current) return;
+        activeGenerationRequestKeyRef.current = `resume:${run.predictionId}`;
+        const startedAtMs = Number.isNaN(Date.parse(run.createdAt)) ? Date.now() : Date.parse(run.createdAt);
         setIsGenerating(true);
         setError(null);
-        setLatestGenerationId(data.id ?? null);
-        setRunPrompt(typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null);
-        setRunLabel(motionModelName(data.model));
-        latestRunCostRef.current = typeof data.cost === 'number' ? data.cost : null;
+        setLatestGenerationId(run.id);
+        setRunPrompt(run.prompt?.trim() || null);
+        setRunLabel(motionModelName(run.model));
+        latestRunCostRef.current = run.cost;
         setRunCost(latestRunCostRef.current);
         setRunAnswered(true);
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'motion',
             phaseLabel: 'Resuming active run',
             startedAtMs,
-            appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+            appStatus: run.status,
         }));
-        if (typeof data.duration === 'number') {
-            setDuration(data.duration);
+        if (run.duration !== null) {
+            setDuration(run.duration);
         }
 
         try {
-            const result = await pollPrediction(data.prediction_id, startedAtMs, null);
+            const result = await pollPrediction(run.predictionId, startedAtMs, null);
             setOutputVideo(result.output);
             if (result.timing) {
                 setGenerationTiming(result.timing);

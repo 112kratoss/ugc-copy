@@ -6,6 +6,7 @@ import {
   announceGenerationLeftOnPage,
   announceGenerationSettledOnPage,
   clearGenerationsOnPage,
+  fetchCreatorActiveRun,
   fetchGenerationStatus,
   fetchGenerationStatusWithRetry,
   GenerationStatusRequestError,
@@ -163,6 +164,64 @@ describe('fetchGenerationStatus', () => {
 function statusResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
+
+describe('fetchCreatorActiveRun', () => {
+  const run = {
+    id: 'gen-1',
+    predictionId: 'pred-1',
+    status: 'processing',
+    createdAt: '2026-10-31T09:10:02.087Z',
+    prompt: 'A lighthouse at dawn',
+    cost: 8,
+    model: 'nano-banana-2',
+    duration: null,
+  };
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  it('asks the server for the tool\'s run with the session\'s token, and answers it', async () => {
+    const fetchImpl = vi.fn(async () => json({ run }));
+
+    await expect(fetchCreatorActiveRun({ tool: 'motion', accessToken: 'token-1', fetchImpl })).resolves.toEqual(run);
+    expect(fetchImpl).toHaveBeenCalledWith('/api/generations/active?tool=motion', {
+      headers: { Authorization: 'Bearer token-1' },
+    });
+  });
+
+  it('answers null when there is no run', async () => {
+    const fetchImpl = vi.fn(async () => json({ run: null }));
+
+    await expect(fetchCreatorActiveRun({ tool: 'image', accessToken: 'token', fetchImpl })).resolves.toBeNull();
+  });
+
+  it.each([
+    ['a refusal', () => json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401)],
+    ['a server fault', () => json({ error: 'Could not check for a run in progress.' }, 500)],
+    ['a body that is not JSON', () => new Response('<html>', { status: 200 })],
+    ['a run without its prediction', () => json({ run: { ...run, predictionId: '' } })],
+    ['a run that is over', () => json({ run: { ...run, status: 'succeeded' } })],
+    ['a dropped connection', () => { throw new TypeError('Failed to fetch'); }],
+  ])('answers null for %s, as for no run', async (_label, reply) => {
+    const fetchImpl = vi.fn(async () => reply());
+
+    await expect(fetchCreatorActiveRun({ tool: 'video', accessToken: 'token', fetchImpl })).resolves.toBeNull();
+  });
+
+  it('reads a missing or mistyped detail as unknown, not as a reason to drop the run', async () => {
+    const fetchImpl = vi.fn(async () => json({ run: { ...run, status: 'waiting', prompt: 42, cost: '8', model: undefined, duration: 8 } }));
+
+    await expect(fetchCreatorActiveRun({ tool: 'motion', accessToken: 'token', fetchImpl })).resolves.toEqual({
+      ...run,
+      status: 'waiting',
+      prompt: null,
+      cost: null,
+      model: null,
+      duration: 8,
+    });
+  });
+});
 
 describe('fetchGenerationStatusWithRetry', () => {
   const url = '/api/generate-video?id=prediction-9';

@@ -68,6 +68,8 @@ const GUEST_ROUTES = [
 
   // The output of those tools, and the media they need.
   '/api/generations',
+  // The run a creator page picks up when it opens.
+  '/api/generations/active',
   '/api/generations/[id]',
   '/api/generations/[id]/archive',
   '/api/generations/[id]/restore',

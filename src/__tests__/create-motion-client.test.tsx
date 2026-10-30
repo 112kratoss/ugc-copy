@@ -92,16 +92,6 @@ const deployState = vi.hoisted(() => ({ newBuildAvailable: false, enabled: [] as
 // What the result's player was last given.
 const resultVideoState = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 
-const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
-const queryBuilder = {
-  select: vi.fn(() => queryBuilder),
-  eq: vi.fn(() => queryBuilder),
-  in: vi.fn(() => queryBuilder),
-  order: vi.fn(() => queryBuilder),
-  limit: vi.fn(() => queryBuilder),
-  maybeSingle: maybeSingleMock,
-};
-
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
 }));
@@ -176,7 +166,10 @@ vi.mock('@/lib/supabase', () => ({
         },
       })),
     },
-    from: vi.fn(() => queryBuilder),
+    // Production refuses the browser a run's prompt, cost and model (42501): the page asks the API.
+    from: vi.fn((table: string) => {
+      throw new Error(`The page read ${table} from the browser.`);
+    }),
   },
 }));
 
@@ -208,6 +201,8 @@ type StartAnswer = Response | Error | (() => Response | Promise<Response>);
 let startAnswers: StartAnswer[] = [];
 let generationLookupBody: unknown = { generations: [] };
 let remixSourceBody: unknown = null;
+/** The motion run already at work as the page opens, as the API describes it. */
+let activeRun: Record<string, unknown> | null = null;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -240,8 +235,15 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   if (url.startsWith('/api/generations?')) {
     return jsonResponse(generationLookupBody);
   }
+  if (url === '/api/generations/active?tool=motion') {
+    return jsonResponse({ run: activeRun });
+  }
   throw new Error(`Unexpected fetch ${url}`);
 });
+
+function activeRunReads() {
+  return fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/generations/active'));
+}
 
 function startPosts() {
   return fetchMock.mock.calls.filter(([input, init]) => String(input) === '/api/generations' && init?.method === 'POST');
@@ -331,8 +333,6 @@ beforeEach(() => {
   priceListStandIn.reset();
   for (const model of motionCatalog.models) delete (model as { inputModes?: unknown }).inputModes;
   generationCatalogRefetchMock.mockClear();
-  maybeSingleMock.mockClear();
-  queryBuilder.select.mockClear();
   routerMock.push.mockClear();
   authState.credits = 10_000;
   authState.updateCredits.mockClear();
@@ -355,6 +355,7 @@ beforeEach(() => {
   startAnswers = [];
   generationLookupBody = { generations: [] };
   remixSourceBody = null;
+  activeRun = null;
   fetchMock.mockClear();
   vi.stubGlobal('fetch', fetchMock);
   window.sessionStorage.clear();
@@ -903,7 +904,7 @@ describe('CreateMotionClient start', () => {
     // Exactly as saved: a start saved before the price went with runs goes without one.
     expect(startBodies()[0]).toEqual({ schemaVersion: 3, ...pendingStart().body });
     expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
-    expect(queryBuilder.select).not.toHaveBeenCalled();
+    expect(activeRunReads()).toHaveLength(0);
     expect(loadPendingWebStart('motion', 'user-1')).toBeNull();
   });
 
@@ -912,7 +913,9 @@ describe('CreateMotionClient start', () => {
 
     render(<CreateMotionClient prefill={{}} />);
 
-    await waitFor(() => expect(queryBuilder.select).toHaveBeenCalled());
+    await waitFor(() => expect(activeRunReads()).toEqual([
+      ['/api/generations/active?tool=motion', { headers: { Authorization: 'Bearer test-token' } }],
+    ]));
     expect(startPosts()).toHaveLength(0);
   });
 
@@ -1040,10 +1043,7 @@ describe('CreateMotionClient start', () => {
   });
 
   it('says what a run picked up on load gave back when it fails', async () => {
-    maybeSingleMock.mockResolvedValueOnce({
-      data: { id: 'gen-motion-1', prediction_id: 'pred-motion-1', status: 'processing', created_at: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: 30, model: 'kling-3.0' },
-      error: null,
-    } as never);
+    activeRun = { id: 'gen-motion-1', predictionId: 'pred-motion-1', status: 'processing', createdAt: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: 30, model: 'kling-3.0' };
     statusMocks.fetchGenerationStatusWithRetry.mockResolvedValue({ status: 'failed', error: 'The provider could not render this clip' });
     render(<CreateMotionClient prefill={{}} />);
 
@@ -1300,10 +1300,7 @@ describe('CreateMotionClient on the column', () => {
 
   it('reads "Add motion" while the page holds no clip, though a run picked up on load gave a length', async () => {
     // The newest run, still under way, comes back with its length and without its clip.
-    maybeSingleMock.mockResolvedValueOnce({
-      data: { id: 'gen-motion-1', prediction_id: 'pred-motion-1', status: 'processing', created_at: new Date().toISOString(), duration: 10, prompt: 'Saved prompt' },
-      error: null,
-    } as never);
+    activeRun = { id: 'gen-motion-1', predictionId: 'pred-motion-1', status: 'processing', createdAt: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: null, model: null };
     render(<CreateMotionClient prefill={{}} />);
 
     expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();

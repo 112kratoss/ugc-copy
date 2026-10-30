@@ -182,6 +182,7 @@ import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     announceGenerationStarted,
+    fetchCreatorActiveRun,
     fetchGenerationStatusWithRetry,
     isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
@@ -4414,49 +4415,43 @@ export default function CreateVideoClient({
                 return;
             }
 
-            const { data, error: pendingError } = await supabase
-                .from('generations')
-                .select('id, prediction_id, status, created_at, cost, prompt, model')
-                .eq('user_id', session.user.id)
-                .eq('category', 'video')
-                .is('creation_mode', null)
-                .in('status', ['processing', 'waiting'])
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
+            // Asked of the server: the browser may not read a run's prompt, cost or model.
+            const run = await fetchCreatorActiveRun({ tool: 'video', accessToken: session.access_token });
+            // One run on the page at a time, held as a press holds it: a press may have come
+            // first, and in development Strict Mode mounts the page twice, so the other
+            // mount's look may already follow this run. Two followers abort each other's poll.
+            if (!run || activeGenerationRequestKeyRef.current) return;
+            activeGenerationRequestKeyRef.current = `resume:${run.predictionId}`;
 
-            if (pendingError || !data?.prediction_id) {
-                return;
-            }
-
-            const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
+            const startedAtMs = Number.isNaN(Date.parse(run.createdAt)) ? Date.now() : Date.parse(run.createdAt);
 
             setIsGenerating(true);
             setError(null);
-            setLatestGenerationId(data.id ?? null);
+            setLatestGenerationId(run.id);
             setRunShape({
                 aspectRatio: null,
-                label: videoModelName(data.model),
-                prompt: typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null,
-                cost: typeof data.cost === 'number' ? data.cost : null,
+                label: videoModelName(run.model),
+                prompt: run.prompt?.trim() || null,
+                cost: run.cost,
                 answered: true,
             });
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'video',
                 phaseLabel: 'Resuming active run',
                 startedAtMs,
-                appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+                appStatus: run.status,
             }));
 
             try {
-                const result = await pollPrediction(data.prediction_id, startedAtMs, null);
+                const result = await pollPrediction(run.predictionId, startedAtMs, null);
                 setOutputVideo(result.output);
                 if (result.timing) {
                     setGenerationTiming(result.timing);
                 }
             } catch (generationError) {
-                handleRunFailure(generationError, startedAtMs, typeof data.cost === 'number' ? data.cost : null, false);
+                handleRunFailure(generationError, startedAtMs, run.cost, false);
             } finally {
+                activeGenerationRequestKeyRef.current = null;
                 setIsGenerating(false);
             }
         };

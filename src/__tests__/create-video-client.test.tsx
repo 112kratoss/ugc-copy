@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -135,18 +136,6 @@ const createSignedUrlMock = vi.fn(async () => ({
   data: { signedUrl: 'https://signed.example.com/uploads/user-1/kling-ref.mp4' },
   error: null,
 }));
-const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
-
-const queryBuilder = {
-  select: vi.fn(() => queryBuilder),
-  eq: vi.fn(() => queryBuilder),
-  is: vi.fn(() => queryBuilder),
-  in: vi.fn(() => queryBuilder),
-  order: vi.fn(() => queryBuilder),
-  limit: vi.fn(() => queryBuilder),
-  maybeSingle: maybeSingleMock,
-};
-
 // next/image needs the Next runtime; a start post's poster is not under test here.
 vi.mock('@/components/OptimizedPreviewImage', () => ({
   OptimizedPreviewImage: ({ previewSrc }: { previewSrc: string }) => <span data-testid="poster" data-src={previewSrc} />,
@@ -266,7 +255,10 @@ vi.mock('@/lib/supabase', () => ({
         },
       })),
     },
-    from: vi.fn(() => queryBuilder),
+    // Production refuses the browser a run's prompt, cost and model (42501): the page asks the API.
+    from: vi.fn((table: string) => {
+      throw new Error(`The page read ${table} from the browser.`);
+    }),
     storage: {
       from: vi.fn(() => ({
         upload: uploadMock,
@@ -534,8 +526,6 @@ describe('CreateVideoClient Kling video elements', () => {
     }));
     uploadMock.mockClear();
     createSignedUrlMock.mockClear();
-    maybeSingleMock.mockClear();
-    queryBuilder.is.mockClear();
     getPersistedImageElementRecordsMock.mockReset();
     getPersistedImageElementRecordsMock.mockResolvedValue([]);
     getPersistedFileMock.mockReset();
@@ -579,6 +569,11 @@ describe('CreateVideoClient Kling video elements', () => {
     return call ? JSON.parse(String(call[1]?.body)) : undefined;
   }
 
+  /** The page's look, as it opens, for a run of its own already at work. */
+  function activeRunReads() {
+    return fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/generations/active'));
+  }
+
   /** Answers the page's remix request with this bundle, and every other request as the page's own answers do. */
   function stubRemix(bundle: RemixSourceBundle) {
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
@@ -596,12 +591,13 @@ describe('CreateVideoClient Kling video elements', () => {
       .at(-1);
   }
 
-  it('excludes motion generations when resuming a pending video run', async () => {
+  // The server keeps a motion run out of the video creator's (creator-active-run-service).
+  it('asks the API for a video run at work as it opens, with the session\'s token', async () => {
     render(<CreateVideoClient prefill={{}} />);
 
-    await waitFor(() => {
-      expect(queryBuilder.is).toHaveBeenCalledWith('creation_mode', null);
-    });
+    await waitFor(() => expect(activeRunReads()).toEqual([
+      ['/api/generations/active?tool=video', { headers: { Authorization: 'Bearer test-token' } }],
+    ]));
   });
 
   it('sends remixPost to the remix-source request so unlocked bundle media can restore', async () => {
@@ -5007,7 +5003,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
       expect(postedStarts()).toEqual([{ key: 'video:kept-key', body: { schemaVersion: 3, ...body } }]);
-      expect(maybeSingleMock).not.toHaveBeenCalled();
+      expect(activeRunReads()).toHaveLength(0);
       expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
     });
 
@@ -5024,7 +5020,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       render(<CreateVideoClient prefill={{}} />);
 
-      await waitFor(() => expect(maybeSingleMock).toHaveBeenCalled());
+      await waitFor(() => expect(activeRunReads()).toHaveLength(1));
       expect(postedStarts()).toEqual([]);
     });
 
@@ -5037,7 +5033,7 @@ describe('CreateVideoClient Kling video elements', () => {
       render(<CreateVideoClient prefill={{}} />);
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
       const getSession = vi.mocked(supabase.auth.getSession);
-      await waitFor(() => expect(maybeSingleMock).toHaveBeenCalled());
+      await waitFor(() => expect(activeRunReads()).toHaveLength(1));
 
       vi.useFakeTimers();
       try {
@@ -5071,7 +5067,7 @@ describe('CreateVideoClient Kling video elements', () => {
       });
       render(<CreateVideoClient prefill={{}} />);
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
-      await waitFor(() => expect(maybeSingleMock).toHaveBeenCalled());
+      await waitFor(() => expect(activeRunReads()).toHaveLength(1));
 
       vi.useFakeTimers();
       try {
@@ -5234,18 +5230,45 @@ describe('CreateVideoClient Kling video elements', () => {
     });
 
     it('names a run picked up on load by its own model, with what it holds', async () => {
-      maybeSingleMock.mockResolvedValueOnce({
-        data: { id: 'gen-old', prediction_id: 'pred-old', status: 'processing', created_at: new Date().toISOString(), cost: 19, prompt: 'An earlier run', model: 'kling-3.0-video' },
-        error: null,
-      } as never);
-      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
-        String(input).includes('/api/generate-video?id=') ? new Promise<Response>(() => {}) : defaultResponse(input, init)
-      ));
+      const run = { id: 'gen-old', predictionId: 'pred-old', status: 'processing', createdAt: new Date().toISOString(), cost: 19, prompt: 'An earlier run', model: 'kling-3.0-video', duration: 5 };
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/generations/active?tool=video') return { ok: true, status: 200, json: async () => ({ run }) } as Response;
+        return String(input).includes('/api/generate-video?id=') ? new Promise<Response>(() => {}) : defaultResponse(input, init);
+      });
       render(<CreateVideoClient prefill={{}} />);
 
       const canvas = screen.getByRole('region', { name: 'Result' });
       await waitFor(() => expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(`${VIDEO_MODELS['kling-3.0-video'].displayName} · 19 credits`));
       expect(within(canvas).getByTestId('creator-canvas-chip').textContent).toBe(`${VIDEO_MODELS['kling-3.0-video'].displayName} · 19 credits`);
+      expect(within(canvas).getByText('19 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+      expect(statusChecks()[0]?.[0]).toBe('/api/generate-video?id=pred-old');
+    });
+
+    // Development mounts the page twice (Strict Mode), and each mount looks. A second follower
+    // aborted the first one's poll, whose ending then set the page idle under the live run.
+    it('follows a run picked up on load once, though the page mounts twice', async () => {
+      const run = { id: 'gen-old', predictionId: 'pred-old', status: 'processing', createdAt: new Date().toISOString(), cost: 19, prompt: 'An earlier run', model: 'kling-3.0-video', duration: 5 };
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/generations/active?tool=video') return { ok: true, status: 200, json: async () => ({ run }) } as Response;
+        if (String(input).includes('/api/generate-video?id=')) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })));
+          });
+        }
+        return defaultResponse(input, init);
+      });
+      render(<StrictMode><CreateVideoClient prefill={{}} /></StrictMode>);
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(await within(canvas).findByText('19 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+      await waitFor(() => expect(activeRunReads()).toHaveLength(2));
+      // Both looks answered and every step after them ran.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(statusChecks()).toHaveLength(1);
       expect(within(canvas).getByText('19 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
     });
 
@@ -5403,7 +5426,7 @@ describe('CreateVideoClient Kling video elements', () => {
       window.history.replaceState({}, '', '/create-video?model=seedance-1.5-pro&prompt=harbour');
       try {
         render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
-        await waitFor(() => expect(maybeSingleMock).toHaveBeenCalled());
+        await waitFor(() => expect(activeRunReads()).toHaveLength(1));
         await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalled());
         vi.mocked(supabase.auth.getSession).mockResolvedValueOnce({ data: { session: null }, error: null } as never);
         fireEvent.change(promptBox(), { target: { value: PROMPT } });

@@ -119,6 +119,7 @@ import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     announceGenerationStarted,
+    fetchCreatorActiveRun,
     fetchGenerationStatusWithRetry,
     isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
@@ -1470,43 +1471,38 @@ export default function CreateImageClient({
                 return;
             }
 
-            const { data, error: pendingError } = await supabase
-                .from('generations')
-                .select('id, prediction_id, status, created_at, prompt, cost, model')
-                .eq('user_id', session.user.id)
-                .eq('category', 'image')
-                .in('status', ['processing', 'waiting'])
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
+            // Asked of the server: the browser may not read a run's prompt, cost or model.
+            const run = await fetchCreatorActiveRun({ tool: 'image', accessToken: session.access_token });
+            // One run on the page at a time, held as a press holds it: a press may have come
+            // first, and in development Strict Mode mounts the page twice, so the other
+            // mount's look may already follow this run. Two followers abort each other's poll.
+            if (!run || activeGenerationRequestKeyRef.current) return;
+            activeGenerationRequestKeyRef.current = `resume:${run.predictionId}`;
 
-            if (pendingError || !data?.prediction_id) {
-                return;
-            }
-
-            const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
+            const startedAtMs = Number.isNaN(Date.parse(run.createdAt)) ? Date.now() : Date.parse(run.createdAt);
 
             setIsGenerating(true);
             setError(null);
-            setLatestGenerationId(data.id ?? null);
-            setSubmittedPrompt(typeof data.prompt === 'string' ? data.prompt : '');
-            setRunShape({ aspectRatio: null, label: imageModelName(data.model), cost: typeof data.cost === 'number' ? data.cost : null, answered: true });
+            setLatestGenerationId(run.id);
+            setSubmittedPrompt(run.prompt ?? '');
+            setRunShape({ aspectRatio: null, label: imageModelName(run.model), cost: run.cost, answered: true });
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'image',
                 phaseLabel: 'Resuming active run',
                 startedAtMs,
-                appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+                appStatus: run.status,
             }));
 
             try {
-                await followRun(data.prediction_id, {
+                await followRun(run.predictionId, {
                     startedAtMs,
                     estimatedTotalMs: null,
-                    cost: typeof data.cost === 'number' ? data.cost : null,
-                    generationId: data.id ?? null,
+                    cost: run.cost,
+                    generationId: run.id,
                     followed: false,
                 });
             } finally {
+                activeGenerationRequestKeyRef.current = null;
                 setIsGenerating(false);
             }
         };
