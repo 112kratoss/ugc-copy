@@ -278,44 +278,101 @@ export function subscribeToGenerationStatusSynced(
   };
 }
 
-const GENERATION_SETTLED_ON_PAGE_EVENT = 'magicbooklet:generation-settled-on-page';
+const GENERATION_ON_PAGE_EVENT = 'magicbooklet:generation-on-page';
 
-export type GenerationSettledOnPage = { id: string; status: 'succeeded' | 'failed' };
+export type GenerationOnPageState = 'following' | 'succeeded' | 'failed';
+export type GenerationOnPageChange = { id: string; state: GenerationOnPageState | 'left' };
 
 /**
- * Same-tab word from a page that showed a run end (a creator's canvas: Done, or It didn't
- * finish). The app-wide poller (`GenerationNotifications`) then has nothing to announce for that
- * run: its toast would only say again what the page says, over the creator's Publish. A run the
- * page lost sight of (left, or still processing in the background) is never said here, so its
- * toast still comes. Cross-tab delivery is unnecessary: each tab shows its own pages.
+ * What this tab's pages say of the runs they show, for the app-wide poller
+ * (`GenerationNotifications`), whose toast for such a run would only say again what the page
+ * says, rising over the creator's Publish just as the page offered it:
+ * - `following`: a creator shows the run at work and will show its end, so a finish the poller
+ *   reads first (the two poll apart) waits, its toast held, until the page says how the run
+ *   ended or lets go of it;
+ * - `succeeded` / `failed`: the page showed the end (Done, It didn't finish), so the poller has
+ *   nothing to say of that run, now or later: a held toast goes, and so does one already up;
+ * - left: the page lost sight of the run (unmounted, or left it to the server), so a held toast
+ *   comes now and a later finish is said as for any run. A run the page showed ending stays said.
+ * The register answers a poller that mounts after a page spoke; the event reaches one already
+ * up. Cross-tab delivery is unnecessary: each tab shows its own pages.
  */
-export function announceGenerationSettledOnPage(settled: GenerationSettledOnPage) {
+const runsOnPage = new Map<string, GenerationOnPageState>();
+
+function dispatchGenerationOnPage(change: GenerationOnPageChange) {
   if (typeof window === 'undefined') return;
 
-  window.dispatchEvent(new CustomEvent(GENERATION_SETTLED_ON_PAGE_EVENT, { detail: settled }));
+  window.dispatchEvent(new CustomEvent(GENERATION_ON_PAGE_EVENT, { detail: change }));
 }
 
-export function subscribeToGenerationSettledOnPage(callback: (settled: GenerationSettledOnPage) => void) {
+export function announceGenerationFollowedOnPage(id: string) {
+  if (runsOnPage.has(id)) return;
+  runsOnPage.set(id, 'following');
+  dispatchGenerationOnPage({ id, state: 'following' });
+}
+
+export function announceGenerationLeftOnPage(id: string) {
+  if (runsOnPage.get(id) !== 'following') return;
+  runsOnPage.delete(id);
+  dispatchGenerationOnPage({ id, state: 'left' });
+}
+
+export function announceGenerationSettledOnPage(settled: { id: string; status: 'succeeded' | 'failed' }) {
+  runsOnPage.set(settled.id, settled.status);
+  dispatchGenerationOnPage({ id: settled.id, state: settled.status });
+}
+
+/** The register as it stands, for a poller that mounts after the pages spoke. */
+export function readGenerationsOnPage(): ReadonlyMap<string, GenerationOnPageState> {
+  return new Map(runsOnPage);
+}
+
+/**
+ * Forgets every run (tests). The poller never calls it: a run's id names one run for good, so a
+ * settled entry outliving a sign-out can only keep quiet about a run that is over.
+ */
+export function clearGenerationsOnPage() {
+  runsOnPage.clear();
+}
+
+export function subscribeToGenerationOnPage(callback: (change: GenerationOnPageChange) => void) {
   if (typeof window === 'undefined') return () => undefined;
 
   const handleEvent = (event: Event) => {
     const detail = (event as CustomEvent<unknown>).detail;
-    if (isRecord(detail) && typeof detail.id === 'string' && (detail.status === 'succeeded' || detail.status === 'failed')) {
-      callback({ id: detail.id, status: detail.status });
+    if (
+      isRecord(detail) && typeof detail.id === 'string'
+      && (detail.state === 'following' || detail.state === 'left' || detail.state === 'succeeded' || detail.state === 'failed')
+    ) {
+      callback({ id: detail.id, state: detail.state });
     }
   };
 
-  window.addEventListener(GENERATION_SETTLED_ON_PAGE_EVENT, handleEvent);
+  window.addEventListener(GENERATION_ON_PAGE_EVENT, handleEvent);
   return () => {
-    window.removeEventListener(GENERATION_SETTLED_ON_PAGE_EVENT, handleEvent);
+    window.removeEventListener(GENERATION_ON_PAGE_EVENT, handleEvent);
   };
 }
 
-/** A creator's half of the above: says how the run it shows ended, once its canvas shows it. */
-export function useAnnounceRunSettledOnPage(generationId: string | null, status: GenerationSettledOnPage['status'] | null) {
+/**
+ * A creator's half of the above: follows the run it shows while it shows it (`following`), lets
+ * go when it loses sight of the run or unmounts, and says how the run ended once its canvas
+ * shows it (`settled`), which outlives the letting go.
+ */
+export function useAnnounceRunOnPage(
+  generationId: string | null,
+  following: boolean,
+  settled: 'succeeded' | 'failed' | null,
+) {
   useEffect(() => {
-    if (generationId && status) announceGenerationSettledOnPage({ id: generationId, status });
-  }, [generationId, status]);
+    if (!generationId || !following) return;
+    announceGenerationFollowedOnPage(generationId);
+    return () => announceGenerationLeftOnPage(generationId);
+  }, [generationId, following]);
+
+  useEffect(() => {
+    if (generationId && settled) announceGenerationSettledOnPage({ id: generationId, status: settled });
+  }, [generationId, settled]);
 }
 
 function createAbortError() {

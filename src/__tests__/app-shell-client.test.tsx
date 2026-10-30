@@ -777,7 +777,9 @@ describe('AppShellClient', () => {
     // here, that the shell draws the rule's answer.
     it('marks the image, video and motion creators as holding the bottom edge, and no other page', () => {
       for (const [pathname, hidden] of [
-        ['/create-image', true], ['/create-video', true], ['/create-motion', true], ['/showcase', false],
+        ['/create-image', true], ['/create-video', true], ['/create-motion', true],
+        // Pages that start as the creators' paths do, and the rest, keep it.
+        ['/create', false], ['/create-workflow', false], ['/post/new', false], ['/showcase', false],
       ] as const) {
         mockedPathname = pathname;
         const { container, unmount } = render(
@@ -835,8 +837,13 @@ describe('AppShellClient', () => {
               <div>Page content</div>
             </AppShellClient>
           );
-          const menuButton = screen.getByRole('button', { name: 'Open navigation' });
-          expect(Boolean(within(menuButton).queryByLabelText('3 unread alerts')), pathname).toBe(shown);
+          const menuButton = screen.getByRole('button', { name: /^Open navigation/ });
+          // In the button's name too: a screen reader hears a button by its name, not its badge.
+          expect(menuButton.getAttribute('aria-label'), pathname).toBe(shown ? 'Open navigation, 3 unread alerts' : 'Open navigation');
+          const badge = within(menuButton).queryByLabelText('3 unread alerts');
+          expect(Boolean(badge), pathname).toBe(shown);
+          // From 640px the bell shows the count: one count on the top bar.
+          if (badge) expect(badge.className.split(' ')).toContain('sm:hidden');
           unmount();
         }
       } finally {

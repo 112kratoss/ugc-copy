@@ -107,7 +107,7 @@ import {
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
-import { creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
+import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
@@ -184,7 +184,7 @@ import {
     isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
     type GenerationStatusResponse,
-    useAnnounceRunSettledOnPage,
+    useAnnounceRunOnPage,
 } from '@/lib/generation-status-client';
 import {
     assignElementHandles,
@@ -5006,9 +5006,10 @@ export default function CreateVideoClient({
     };
 
     // Where the run is, as the canvas says it (read before the sign-in check below returns early,
-    // as every hook is): how it ended goes to the shell's run toasts, which would only say it again.
+    // as every hook is): what it shows of the run goes to the shell's run toasts, which would only
+    // say its end again, over Publish.
     const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputVideo), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
-    useAnnounceRunSettledOnPage(latestGenerationId, creatorCanvasSettledStatus(canvasPhase));
+    useAnnounceRunOnPage(latestGenerationId, creatorCanvasFollowsRun(canvasPhase), creatorCanvasSettledStatus(canvasPhase));
 
     if (isLoadingUser) {
         return (

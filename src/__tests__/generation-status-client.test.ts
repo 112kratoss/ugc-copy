@@ -1,14 +1,18 @@
 import { renderHook } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  announceGenerationFollowedOnPage,
+  announceGenerationLeftOnPage,
   announceGenerationSettledOnPage,
+  clearGenerationsOnPage,
   fetchGenerationStatus,
   fetchGenerationStatusWithRetry,
   GenerationStatusRequestError,
   getGenerationStatusRetryDelayMs,
-  subscribeToGenerationSettledOnPage,
-  useAnnounceRunSettledOnPage,
+  readGenerationsOnPage,
+  subscribeToGenerationOnPage,
+  useAnnounceRunOnPage,
   waitForNextGenerationStatusPoll,
 } from '@/lib/generation-status-client';
 
@@ -273,34 +277,90 @@ describe('fetchGenerationStatusWithRetry', () => {
   });
 });
 
-// A creator that showed its run end tells the shell's run toasts (GenerationNotifications), so the
-// toast does not say it again over the creator's Publish.
-describe('a run settled on its own page', () => {
-  it('reaches a subscriber with the run and how it ended, until it unsubscribes', () => {
-    const heard = vi.fn();
-    const unsubscribe = subscribeToGenerationSettledOnPage(heard);
-    announceGenerationSettledOnPage({ id: 'gen-1', status: 'succeeded' });
-    expect(heard).toHaveBeenCalledWith({ id: 'gen-1', status: 'succeeded' });
-    unsubscribe();
-    announceGenerationSettledOnPage({ id: 'gen-2', status: 'failed' });
-    expect(heard).toHaveBeenCalledTimes(1);
+// What a creator tells the shell's run toasts (GenerationNotifications) of the run it shows, so the
+// toast does not say its end again over the creator's Publish, whichever poll read the end first.
+describe('a run on its own page', () => {
+  type Props = { id: string | null; following: boolean; settled: 'succeeded' | 'failed' | null };
+  const said = (heard: ReturnType<typeof vi.fn>) => heard.mock.calls.map(([change]) => change);
+
+  beforeEach(() => {
+    clearGenerationsOnPage();
   });
 
-  it('is said by a creator once its canvas shows the end, and only then', () => {
+  it('is followed, then settled; settled outlives the page letting go, and a subscriber hears each once', () => {
     const heard = vi.fn();
-    const unsubscribe = subscribeToGenerationSettledOnPage(heard);
-    type Props = { id: string | null; status: 'succeeded' | 'failed' | null };
-    const { rerender } = renderHook<void, Props>(
-      ({ id, status }) => useAnnounceRunSettledOnPage(id, status),
-      { initialProps: { id: 'gen-1', status: null } },
+    const unsubscribe = subscribeToGenerationOnPage(heard);
+    announceGenerationFollowedOnPage('gen-1');
+    announceGenerationFollowedOnPage('gen-1');
+    expect(readGenerationsOnPage().get('gen-1')).toBe('following');
+    announceGenerationSettledOnPage({ id: 'gen-1', status: 'succeeded' });
+    announceGenerationLeftOnPage('gen-1');
+    expect(readGenerationsOnPage().get('gen-1')).toBe('succeeded');
+    expect(said(heard)).toEqual([
+      { id: 'gen-1', state: 'following' },
+      { id: 'gen-1', state: 'succeeded' },
+    ]);
+    unsubscribe();
+    announceGenerationFollowedOnPage('gen-2');
+    expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it('is forgotten when the page lets go of it at work, once', () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationOnPage(heard);
+    announceGenerationFollowedOnPage('gen-1');
+    announceGenerationLeftOnPage('gen-1');
+    announceGenerationLeftOnPage('gen-1');
+    expect(readGenerationsOnPage().has('gen-1')).toBe(false);
+    expect(said(heard)).toEqual([
+      { id: 'gen-1', state: 'following' },
+      { id: 'gen-1', state: 'left' },
+    ]);
+    unsubscribe();
+  });
+
+  it('is what a creator says of the run it shows: followed while shown, settled once the canvas shows the end', () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationOnPage(heard);
+    const { rerender, unmount } = renderHook<void, Props>(
+      ({ id, following, settled }) => useAnnounceRunOnPage(id, following, settled),
+      { initialProps: { id: null, following: false, settled: null } },
     );
+    // A start with no answer yet names no run.
     expect(heard).not.toHaveBeenCalled();
-    rerender({ id: 'gen-1', status: 'succeeded' });
-    expect(heard).toHaveBeenCalledWith({ id: 'gen-1', status: 'succeeded' });
-    // The same end again says nothing more; a start with no answer yet names no run.
-    rerender({ id: 'gen-1', status: 'succeeded' });
-    rerender({ id: null, status: 'failed' });
-    expect(heard).toHaveBeenCalledTimes(1);
+    rerender({ id: 'gen-1', following: true, settled: null });
+    rerender({ id: 'gen-1', following: true, settled: null });
+    expect(said(heard)).toEqual([{ id: 'gen-1', state: 'following' }]);
+    // The end shown, said once; the same end again says nothing more.
+    rerender({ id: 'gen-1', following: true, settled: 'succeeded' });
+    rerender({ id: 'gen-1', following: true, settled: 'succeeded' });
+    expect(said(heard)).toEqual([{ id: 'gen-1', state: 'following' }, { id: 'gen-1', state: 'succeeded' }]);
+    // Leaving the page after the end changes nothing: the end stays said.
+    unmount();
+    expect(heard).toHaveBeenCalledTimes(2);
+    expect(readGenerationsOnPage().get('gen-1')).toBe('succeeded');
+    unsubscribe();
+  });
+
+  it('lets go of a run the page loses sight of at work, and of one it leaves at work', () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationOnPage(heard);
+    const { rerender, unmount } = renderHook<void, Props>(
+      ({ id, following, settled }) => useAnnounceRunOnPage(id, following, settled),
+      { initialProps: { id: 'gen-1', following: true, settled: null } },
+    );
+    // Left to the server: out of the page's sight.
+    rerender({ id: 'gen-1', following: false, settled: null });
+    expect(readGenerationsOnPage().has('gen-1')).toBe(false);
+    // Shown again, then the page goes.
+    rerender({ id: 'gen-1', following: true, settled: null });
+    unmount();
+    expect(said(heard)).toEqual([
+      { id: 'gen-1', state: 'following' },
+      { id: 'gen-1', state: 'left' },
+      { id: 'gen-1', state: 'following' },
+      { id: 'gen-1', state: 'left' },
+    ]);
     unsubscribe();
   });
 });

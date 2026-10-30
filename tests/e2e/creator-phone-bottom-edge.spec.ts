@@ -296,8 +296,10 @@ function statusCacheHolds(page: Page, fragment: string) {
 
 // A run that ends while its creator is open: the shell's toast for it ("Video ready") rose from the
 // bottom edge over the bar, and on a phone covered Publish whole, just as the page offered it. The
-// page says how it ended, so the toast never comes; another run's toast still does.
-test('a run its creator shows ending gets no toast over the bar, while another run\'s still comes', async ({ page, context }) => {
+// page follows the run it shows and says how it ended, so the toast never comes, even when the
+// shell's poll reads the finish before the page's own does; another run's toast still does, over the
+// bar for its while, and Dismiss gives the bar back.
+test('a run its creator shows gets no toast, even when the shell reads its end first; another run\'s still comes', async ({ page, context }) => {
   await signInTheBrowser(context);
   await page.route('**/api/**', (route) => {
     // The made-up session's token means nothing to the dev server: requests go without it.
@@ -333,12 +335,16 @@ test('a run its creator shows ending gets no toast over the bar, while another r
     }
     return route.fulfill({ json: { generations: [] } });
   });
+  // The page's own poll of its run waits until the test lets it answer.
+  let answerOwnPoll: () => void = () => undefined;
+  const ownPollHeld = new Promise<void>((resolve) => { answerOwnPoll = resolve; });
   await page.route('**/api/generate-video?id=**', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    ownDone = true;
+    await ownPollHeld;
     return route.fulfill({ json: { status: 'succeeded', output: 'https://cdn.example.test/own.mp4', timing: null } });
   });
   await page.route('https://cdn.example.test/**', (route) => route.fulfill({ status: 404, body: '' }));
+  const toasts = page.getByTestId('generation-notifications');
+  const readsAgain = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
 
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, '/create-video');
@@ -349,16 +355,35 @@ test('a run its creator shows ending gets no toast over the bar, while another r
   await page.getByRole('textbox', { name: 'Prompt' }).fill('A paper boat drifting across a sunlit pond, gentle ripples, slow push-in.');
   await page.getByRole('button', { name: /^Generate · / }).click();
   const canvas = page.getByRole('region', { name: 'Result' });
-  await expect(canvas.getByRole('heading', { name: 'Done' })).toBeVisible({ timeout: 30_000 });
-  // The page said how its run ended: the poller holds it as done.
-  await statusCacheHolds(page, '"gen-own":"succeeded"');
+  await expect(canvas.getByRole('heading', { name: 'Making your video' })).toBeVisible({ timeout: 30_000 });
+  // The start had the shell read the runs: it holds the page's run as at work.
+  await statusCacheHolds(page, '"gen-own":"processing"');
 
-  // The other run ends; the poller reads again when the page comes back into view.
+  // The server finishes the run and the shell reads that first, the page's own poll still waiting:
+  // the page follows the run, so the shell holds its toast.
+  ownDone = true;
+  await readsAgain();
+  await statusCacheHolds(page, '"gen-own":"succeeded"');
+  await expect(canvas.getByRole('heading', { name: 'Making your video' })).toBeVisible();
+  await page.waitForTimeout(1_000);
+  await expect(toasts).toHaveCount(0);
+
+  // The page's own poll answers and the canvas shows Done: the held toast goes for good.
+  answerOwnPoll();
+  await expect(canvas.getByRole('heading', { name: 'Done' })).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(1_000);
+  await expect(toasts).toHaveCount(0);
+
+  // Another run ends: its toast comes, over the bar for its while; Dismiss gives the bar back.
   otherDone = true;
-  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-  const toasts = page.getByTestId('generation-notifications');
+  await readsAgain();
   await expect(toasts.getByRole('button', { name: 'Dismiss notification' })).toBeVisible({ timeout: 15_000 });
   await expect(toasts.getByText('Image ready')).toBeVisible();
   await expect(toasts.getByRole('button', { name: 'Dismiss notification' })).toHaveCount(1);
   await expect(page.getByText('Video ready')).toHaveCount(0);
+  await toasts.getByRole('button', { name: 'Dismiss notification' }).click();
+  await expect(toasts).toHaveCount(0);
+  const publishBar = page.getByTestId('creator-publish-bar');
+  await expect(publishBar).toBeVisible();
+  await expectPressable(publishBar.getByRole('button', { name: /^Publish/ }), 'Publish, once the toast is dismissed');
 });

@@ -13,8 +13,10 @@ import {
 } from '@/lib/generation-feedback';
 import {
   announceGenerationStatusSynced,
-  subscribeToGenerationSettledOnPage,
+  readGenerationsOnPage,
+  subscribeToGenerationOnPage,
   subscribeToGenerationStarted,
+  type GenerationOnPageState,
 } from '@/lib/generation-status-client';
 import { HOME_WORKSPACE_ACTIVE_STATUSES } from '@/lib/home-dashboard';
 import { supabase } from '@/lib/supabase';
@@ -190,20 +192,36 @@ export default function GenerationNotifications() {
       }
     };
 
-    // A run whose own page showed it end (a creator's canvas says Done or It didn't finish):
-    // the next sync finds nothing new to say of it, and a toast already up for it goes. A toast
-    // rising from the bottom there covered the creator's Publish just as the page offered it.
-    const unsubscribeSettledOnPage = subscribeToGenerationSettledOnPage(({ id, status }) => {
-      knownStatusesRef.current = { ...knownStatusesRef.current, [id]: status };
-      writeStatusCache(knownStatusesRef.current);
-      dismissNotification(`${id}:succeeded`);
-      dismissNotification(`${id}:failed`);
-    });
+    // What this tab's pages say of the runs they show (`generation-status-client.ts`): a run a
+    // creator follows has its toast held until the page says how it ended (then it goes, and so
+    // does one already up) or lets go of it (then it comes); a run the page showed ending is never
+    // said, whichever of the two polls read the finish first. A toast rising from the bottom for
+    // such a run covered the creator's Publish just as the page offered it. The register is read
+    // here for a page that spoke before this mount, then kept by its events.
+    const onPage = new Map<string, GenerationOnPageState>(readGenerationsOnPage());
+    const held = new Map<string, { generation: GenerationRecord; status: 'succeeded' | 'failed' }>();
+    // A sync's answer, read before a page's word and handled after, would put the run back to
+    // active and have the next sync say it: the page's word stays over any list.
+    const withRunsSettledOnPage = (statuses: Record<string, string>) => {
+      onPage.forEach((state, id) => {
+        if (state !== 'following') statuses[id] = state;
+      });
+      return statuses;
+    };
 
     const enqueueNotification = (
       generation: GenerationRecord,
       status: 'succeeded' | 'failed'
     ) => {
+      const onThisPage = onPage.get(generation.id);
+      if (onThisPage === 'succeeded' || onThisPage === 'failed') {
+        return;
+      }
+      if (onThisPage === 'following') {
+        held.set(generation.id, { generation, status });
+        return;
+      }
+
       const existingId = `${generation.id}:${status}`;
       if (timeoutMapRef.current[existingId]) {
         return;
@@ -225,6 +243,23 @@ export default function GenerationNotifications() {
         dismissNotification(existingId);
       }, TOAST_LIFETIME_MS);
     };
+
+    const unsubscribeOnPage = subscribeToGenerationOnPage(({ id, state }) => {
+      if (state === 'left') {
+        onPage.delete(id);
+        const waiting = held.get(id);
+        held.delete(id);
+        if (waiting) enqueueNotification(waiting.generation, waiting.status);
+        return;
+      }
+      onPage.set(id, state);
+      if (state === 'following') return;
+      held.delete(id);
+      knownStatusesRef.current = { ...knownStatusesRef.current, [id]: state };
+      writeStatusCache(knownStatusesRef.current);
+      dismissNotification(`${id}:succeeded`);
+      dismissNotification(`${id}:failed`);
+    });
 
     const syncGenerations = async () => {
       if (document.visibilityState === 'hidden') {
@@ -291,8 +326,8 @@ export default function GenerationNotifications() {
           }
         }
 
-        knownStatusesRef.current = nextStatuses;
-        writeStatusCache(nextStatuses);
+        knownStatusesRef.current = withRunsSettledOnPage(nextStatuses);
+        writeStatusCache(knownStatusesRef.current);
         // Let passive listeners (home workspace card) consume this poll
         // instead of running their own — this component stays the only
         // status poller in the app.
@@ -350,7 +385,7 @@ export default function GenerationNotifications() {
       isActive = false;
       clearScheduledPoll();
       unsubscribeGenerationStarted();
-      unsubscribeSettledOnPage();
+      unsubscribeOnPage();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       Object.values(timeoutMapRef.current).forEach((timeoutId) => {
         window.clearTimeout(timeoutId);

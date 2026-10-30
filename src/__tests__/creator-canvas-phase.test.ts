@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { creatorCanvasChip } from '@/components/CreatorColumn';
-import { creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle, type CreatorCanvasPhase } from '@/lib/creator-canvas-phase';
+import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle, type CreatorCanvasPhase } from '@/lib/creator-canvas-phase';
 
 const quiet = { hasResult: false, isGenerating: false, isBackgroundProcessing: false, hasFailure: false };
 const WORDS = { making: 'Making your video', waiting: 'Your video' };
@@ -44,5 +44,19 @@ describe('creatorCanvasSettledStatus', () => {
     ['empty', null],
   ])('%s → %s', (phase, status) => {
     expect(creatorCanvasSettledStatus(phase)).toBe(status);
+  });
+});
+
+// What a creator follows for the shell's run toasts: a run the canvas shows and will show the end
+// of. A run left to the server is out of the page's sight, so its toast comes as for any run.
+describe('creatorCanvasFollowsRun', () => {
+  it.each<[CreatorCanvasPhase, boolean]>([
+    ['generating', true],
+    ['done', true],
+    ['failed', true],
+    ['background', false],
+    ['empty', false],
+  ])('%s → %s', (phase, follows) => {
+    expect(creatorCanvasFollowsRun(phase)).toBe(follows);
   });
 });

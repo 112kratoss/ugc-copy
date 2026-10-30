@@ -857,3 +857,16 @@ describe('an upload slot', () => {
   });
 });
 
+// The layout's half of the one-column break: `max-[1120px]` (width < 1120px), the exact complement of
+// the two panes' `min-[1120px]`; `max-[1119px]` left 1119px in one column with the result not first.
+describe('the creator column layout', () => {
+  it('moves the result first under the two panes\' width when asked', () => {
+    const { container } = render(
+      <CreatorColumnLayout title="Video creator" column={<div>Column</div>} canvas={<section aria-label="Result" />} resultFirst />
+    );
+    const grid = container.querySelector('h1')?.parentElement;
+    expect(grid?.className.split(' ')).toContain('max-[1120px]:[&>section]:order-first');
+    expect(grid?.className).not.toMatch(/1119/);
+  });
+});
+

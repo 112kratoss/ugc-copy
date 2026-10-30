@@ -79,7 +79,7 @@ import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
-import { creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
+import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
@@ -121,7 +121,7 @@ import {
     isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
     type GenerationStatusResponse,
-    useAnnounceRunSettledOnPage,
+    useAnnounceRunOnPage,
 } from '@/lib/generation-status-client';
 import {
     createLocalGenerationTiming,
@@ -1734,9 +1734,10 @@ export default function CreateImageClient({
     const outputImageDownloadUrl = getOutputImageDownloadUrl(outputImage, 0);
 
     // Where the run is, as the canvas says it (read before the sign-in check below returns early,
-    // as every hook is): how it ended goes to the shell's run toasts, which would only say it again.
+    // as every hook is): what it shows of the run goes to the shell's run toasts, which would only
+    // say its end again, over Publish.
     const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputImage), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
-    useAnnounceRunSettledOnPage(latestGenerationId, creatorCanvasSettledStatus(canvasPhase));
+    useAnnounceRunOnPage(latestGenerationId, creatorCanvasFollowsRun(canvasPhase), creatorCanvasSettledStatus(canvasPhase));
 
     if (isLoadingUser) {
         return (

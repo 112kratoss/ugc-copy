@@ -42,6 +42,7 @@ import AppShellCreateMenu, {
 } from './AppShellCreateMenu';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
 import AlertsBadge from '@/components/AlertsBadge';
+import { useUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 import { holdForLeaveGuard } from '@/lib/use-leave-guard';
 
 // The places to go. Search, Alerts, Create and Invite & Earn are the top bar's
@@ -71,6 +72,32 @@ const POST_MENU_ITEM = CREATE_MENU_ITEMS.find((item) => item.id === 'post')!;
 
 /** A place the drawer links to: one of the shell's places, or the Create menu's Post. */
 type DrawerPlace = Pick<AppNavItem, 'label' | 'href' | 'icon'> & { id: AppNavItem['id'] | 'post' };
+
+/**
+ * The top bar's menu button, hidden from 768px in px, as the side navigation shows
+ * (globals.css): a rem breakpoint moved with the browser's text size and, on a creator, left a
+ * small-text window with no navigation at all. Where the page hides the bottom navigation (the
+ * creators), the Alerts count that only the navigation held below 640px shows here, in the
+ * button's name too; from 640px the bell shows it. Its own component, so the count's changes
+ * redraw this button and not the frame.
+ */
+function NavigationMenuButton({ open, onOpen, carriesAlerts }: { open: boolean; onOpen: () => void; carriesAlerts: boolean }) {
+  const unread = useUnreadAlertsCount();
+  const label = carriesAlerts && unread > 0 ? `Open navigation, ${unread} unread alerts` : 'Open navigation';
+
+  return (
+    <button
+      type="button"
+      className="ui-focus-ring relative inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] min-[768px]:hidden"
+      onClick={onOpen}
+      aria-label={label}
+      aria-expanded={open}
+    >
+      <Menu className="h-5 w-5" aria-hidden />
+      {carriesAlerts ? <AlertsBadge className="absolute -right-1 -top-1 sm:hidden" /> : null}
+    </button>
+  );
+}
 
 function drawerPlace(id: DrawerPlace['id'], pathname: string): DrawerPlace | null {
   if (id === 'post') {
@@ -491,20 +518,11 @@ const AppShellFrame = memo(function AppShellFrame({
       <div className="app-shell-main" aria-hidden={mobileOpen ? true : undefined}>
         <header className="app-shell-header">
           <div className="flex min-w-0 items-center gap-3">
-            {/* Hidden from 768px in px, as the side navigation shows (globals.css): a
-                rem breakpoint moved with the browser's text size and, on a creator, left a
-                small-text window with no navigation at all. */}
-            <button
-              type="button"
-              className="ui-focus-ring relative inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] min-[768px]:hidden"
-              onClick={() => setMobileOpen(true)}
-              aria-label="Open navigation"
-              aria-expanded={mobileOpen}
-            >
-              <Menu className="h-5 w-5" aria-hidden />
-              {/* Where the bottom navigation hides, its Alerts count shows here. */}
-              {bottomNavHidden ? <AlertsBadge className="absolute -right-1 -top-1" /> : null}
-            </button>
+            <NavigationMenuButton
+              open={mobileOpen}
+              onOpen={() => setMobileOpen(true)}
+              carriesAlerts={bottomNavHidden}
+            />
             {title !== null ? (
               <div className="min-w-0">
                 <div className="truncate text-[15px] font-extrabold text-[var(--ui-text-primary)]">{title}</div>

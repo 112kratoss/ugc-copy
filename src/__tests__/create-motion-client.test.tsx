@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
 import type { CreatorOpening } from '@/lib/creator-opening';
-import { GenerationStatusRequestError, subscribeToGenerationSettledOnPage } from '@/lib/generation-status-client';
+import { clearGenerationsOnPage, GenerationStatusRequestError, subscribeToGenerationOnPage } from '@/lib/generation-status-client';
 import { loadPendingWebStart, savePendingWebStart, type PendingWebStart } from '@/lib/generation-model-client';
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import type { CatalogInputMode } from '@/lib/generation-model-catalog';
@@ -1325,21 +1325,33 @@ describe('CreateMotionClient on the column', () => {
     expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 20 credits$/);
   });
 
-  // The shell's run toast would only say again what the canvas says, over Publish (2026-10-30).
-  it('tells the shell\'s run toasts how its run ended once the canvas shows it', async () => {
+  // The shell's run toast would only say again what the canvas says, over Publish (2026-10-30):
+  // the page follows the run it shows, and says how it ended once the canvas shows that.
+  it('tells the shell\'s run toasts it follows its run, then how it ended once the canvas shows it', async () => {
+    clearGenerationsOnPage();
     const heard = vi.fn();
-    const unsubscribe = subscribeToGenerationSettledOnPage(heard);
+    const unsubscribe = subscribeToGenerationOnPage(heard);
     try {
+      let finish: (value: unknown) => void = () => {};
+      statusMocks.fetchGenerationStatusWithRetry.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
       const view = render(<CreateMotionClient prefill={{}} />);
       await attachBothInputs(view.container);
       await pressGenerate();
 
       const canvas = screen.getByRole('region', { name: 'Result' });
-      expect(await within(canvas).findByRole('heading', { name: 'Done' })).toBeInTheDocument();
-      await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'generation-1', status: 'succeeded' }));
+      expect(await within(canvas).findByRole('heading', { name: 'Animating your character' })).toBeInTheDocument();
+      await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'generation-1', state: 'following' }));
       expect(heard).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        finish({ status: 'succeeded', output: 'https://cdn.example/motion-result.mp4' });
+      });
+      expect(await within(canvas).findByRole('heading', { name: 'Done' })).toBeInTheDocument();
+      await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'generation-1', state: 'succeeded' }));
+      expect(heard).toHaveBeenCalledTimes(2);
     } finally {
       unsubscribe();
+      clearGenerationsOnPage();
     }
   });
 
