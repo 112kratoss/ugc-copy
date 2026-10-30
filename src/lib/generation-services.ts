@@ -141,6 +141,7 @@ import {
 import {
   providerPromptViolation,
   referenceMediaLengthViolation,
+  referenceMediaRole,
   type ProviderPromptRun,
   type ReferenceMediaLength,
 } from '@/lib/provider-input-limits';
@@ -3933,9 +3934,7 @@ export async function startCatalogGeneration(params: {
   assertReferenceMediaLongEnough(operation.modelId, inputs.flatMap((asset): ReferenceMediaLength[] => (
     asset.kind === 'video' || asset.kind === 'audio'
       ? [{
-          role: asset.kind === 'audio'
-            ? 'audio'
-            : operation.kind === 'motion' ? 'motion' : asset.slot === 'videoElements' ? 'element' : 'video',
+          role: referenceMediaRole(operation.kind, asset.slot, asset.kind),
           durationSeconds: asset.durationSeconds ?? null,
           label: asset.label ?? null,
         }]

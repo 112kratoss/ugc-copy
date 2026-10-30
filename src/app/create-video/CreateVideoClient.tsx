@@ -141,7 +141,7 @@ import {
     type PendingWebStart,
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
-import { catalogInputTooShort, catalogRunQuoteInput, catalogSettingsAtControlDefaults, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogInputTooShort, catalogRunQuoteInput, catalogSettingsAtControlDefaults, GENERATION_PROMPT_MAX_LENGTH, lengthInTenthsRoundedDown } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import {
     creatorPromptViolation,
     promptLengthMeter,
@@ -2104,6 +2104,8 @@ export default function CreateVideoClient({
         }
         return null;
     })();
+    // The run waits, with its reason beside Generate: Generate, Start new and Try again are off.
+    const runHeld = Boolean(promptLimitMessage || shortInputMessage);
     const hasKnownElementMentions = knownElementMentions.length > 0;
     const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
     // The saved references the prompt mentions that this run leaves out. The row under
@@ -4488,7 +4490,7 @@ export default function CreateVideoClient({
         }
 
         // Said beside Generate for as long as it holds, so nothing is set here.
-        if (promptLimitMessage || shortInputMessage) return;
+        if (runHeld) return;
 
         if (!currentIsMultiShot && staleElementMentions.length > 0) {
             setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
@@ -5099,16 +5101,13 @@ export default function CreateVideoClient({
             message={START_UNCONFIRMED_MESSAGE}
             costLabel={quoteUi.costLabel}
             hasPrice={estimatedCost !== null}
-            disabled={quotePending || Boolean(promptLimitMessage) || Boolean(shortInputMessage)}
+            disabled={quotePending || runHeld}
             onStartNew={startNewRunInstead}
         />
     ) : pickNotice ? (
         <p className="text-amber-200 [overflow-wrap:anywhere]">{pickNotice}</p>
     ) : referenceLimitMessage ? (
         <p className="text-red-400">{referenceLimitMessage}</p>
-    ) : shortInputMessage ? (
-        // It names the clip as the creator named it, which can be a word no line holds.
-        <p className="text-red-400 [overflow-wrap:anywhere]">{shortInputMessage}</p>
     ) : promptLimitMessage ? (
         <p className="text-red-400">{promptLimitMessage}</p>
     ) : quoteState.pageOutOfDate ? (
@@ -5164,11 +5163,17 @@ export default function CreateVideoClient({
             fitted={{ name: fittedName, cost: remixFitted.cost, keeps: fittedKeeps }}
         />
     ) : null;
-    const barStatus = fitNotice || topUpNotice || runStatus ? (
+    // A line of its own, so no other status (a pick's notice, an unanswered start) hides why
+    // Generate is off. It names the clip as the creator named it, which can be a word no line holds.
+    const shortInputLine = shortInputMessage && !isGenerating ? (
+        <p className="text-red-400 [overflow-wrap:anywhere]">{shortInputMessage}</p>
+    ) : null;
+    const barStatus = fitNotice || topUpNotice || runStatus || shortInputLine ? (
         <div className="space-y-3">
             {fitNotice}
             {topUpNotice}
             {runStatus}
+            {shortInputLine}
         </div>
     ) : null;
 
@@ -5186,7 +5191,7 @@ export default function CreateVideoClient({
             onCheckAgain={() => void handleGenerate()}
             showTopUp={showTopUp}
             isGenerating={isGenerating}
-            disabled={(!isVisitor && quotePending) || Boolean(promptLimitMessage) || Boolean(shortInputMessage) || canvasPublish.inFlight}
+            disabled={(!isVisitor && quotePending) || runHeld || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
             hasPrice={estimatedCost !== null}
             onGenerate={() => void handleGenerate()}
@@ -6055,7 +6060,7 @@ export default function CreateVideoClient({
                                                 }}
                                                 // Rounded down, as the line beside Generate and the start give a clip's
                                                 // length, so a clip named there as too short never reads as 3.0s here.
-                                                note={typeof element.durationSeconds === 'number' ? `${(Math.floor(element.durationSeconds * 10) / 10).toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
+                                                note={typeof element.durationSeconds === 'number' ? `${lengthInTenthsRoundedDown(element.durationSeconds).toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
                                             />
                                         ))}
                                     </ul>
@@ -6361,7 +6366,7 @@ export default function CreateVideoClient({
                                 cause={describeRunFailure(runFailure.message, 'video')}
                                 returnedCredits={runFailure.cost}
                                 retryLabel={estimatedCost !== null ? `Try again · ${quoteUi.costLabel}` : 'Try again'}
-                                retryDisabled={quotePending || Boolean(promptLimitMessage) || Boolean(shortInputMessage) || showTopUp || offersFittedRemix || shortOfEveryVideoShown}
+                                retryDisabled={quotePending || runHeld || showTopUp || offersFittedRemix || shortOfEveryVideoShown}
                                 onRetry={() => void handleGenerate()}
                                 retryable={isRetryableProviderFailure(runFailure.message)}
                                 onPickModel={() => setIsModelDropdownOpen(true)}

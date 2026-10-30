@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import fixture from '../../contracts/model-catalog-transport-v1.json';
 import {
+  DESCRIPTOR_CACHE_VERSION,
   ModelCatalogSession,
   type CatalogTransport,
 } from '../lib/model-catalog/session';
@@ -77,6 +78,7 @@ describe('model catalog session', () => {
         JSON.stringify({
           current: fixture.current,
           etag: '"cached"',
+          descriptorVersion: DESCRIPTOR_CACHE_VERSION,
           entries: [
             {
               revision: fixture.current.revision,
@@ -112,6 +114,39 @@ describe('model catalog session', () => {
     await fresh.initialize();
     expect(fresh.getSnapshot().current).toEqual(fixture.current);
   });
+  it('fetches again the details an older build stored, so a key its parser dropped comes back', async () => {
+    // An app that read Kling 3.0 before its parser kept the slot's minDurationSeconds stored the
+    // descriptor without it, under the revision it still runs on. After the update, the stored copy
+    // would have stood for that revision until the catalog's next one.
+    const served = structuredClone(fixture.details.models[0]) as unknown as Record<string, unknown>;
+    // What the older build kept of it: here a description of its own, so the copy in use shows which it is.
+    const storedByOlderBuild = { ...structuredClone(served), description: 'As an older build stored it.' };
+    const storage = {
+      getItem: vi.fn(async () =>
+        JSON.stringify({
+          current: fixture.current,
+          etag: '"cached"',
+          entries: [{ revision: fixture.current.revision, descriptor: storedByOlderBuild }],
+        }),
+      ),
+      setItem: vi.fn(async (_key: string, _value: string) => {}),
+    };
+    const request = transport();
+    request.mockResolvedValueOnce({ body: null, etag: '"cached"', notModified: true });
+    const session = new ModelCatalogSession(request, parseModelCatalogDetail, storage, 'mobile');
+    await session.initialize();
+    expect(session.getSnapshot().details).toEqual([]);
+
+    await session.ensureDetails([String(served.id)]);
+    const detailCalls = request.mock.calls.filter(([path]) => path.includes('/details?'));
+    expect(detailCalls).toHaveLength(1);
+    expect(session.getSnapshot().details).toEqual([parseModelCatalogDetail(served)]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Stored again under this build's version, which the next launch restores without a read.
+    const written = JSON.parse(String(storage.setItem.mock.calls.at(-1)?.[1]));
+    expect(written.descriptorVersion).toBe(DESCRIPTOR_CACHE_VERSION);
+    expect(written.entries).toHaveLength(1);
+  });
   it('moves malformed model ids straight to missingIds instead of sending them with the batch', async () => {
     const request = transport();
     const session = new ModelCatalogSession(request, parseModelCatalogDetail);
@@ -135,6 +170,7 @@ describe('model catalog session', () => {
         JSON.stringify({
           current: fixture.current,
           etag: '"cached"',
+          descriptorVersion: DESCRIPTOR_CACHE_VERSION,
           entries: [
             {
               revision: fixture.current.revision,

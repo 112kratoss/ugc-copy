@@ -938,9 +938,10 @@ function validateCatalogV2Inputs(
       }
       // Shorter than the provider takes (a Kling 3.0 video element under 3 seconds): the start
       // refused it, before any hold, only once Generate was pressed. Said in the start's words,
-      // under the name the run sends the clip by.
+      // naming the clip by its handle where it has one: the app calls every clip it picks
+      // "Reference Video", and the handle is what tells two of them apart.
       const tooShort = catalogInputTooShort(model.displayName, slot, {
-        label: asset.displayName ?? asset.fileName ?? '',
+        label: asset.handle || asset.displayName || asset.fileName || '',
         durationSeconds: asset.durationSeconds,
       });
       if (tooShort) errors.push(tooShort);

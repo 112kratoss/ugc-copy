@@ -4276,6 +4276,22 @@ describe('CreateVideoClient Kling video elements', () => {
         ])).toBe(SHORT_CLIP);
       });
 
+      it('keeps saying why Generate is off while a pick’s notice is up', async () => {
+        // A pick's notice stays until the next pick or a Generate press, and the press is off.
+        saveInTheBrowser({ klingClip: true, klingClipSeconds: 2.16 });
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await restored();
+        writePrompt();
+        expect(await screen.findByText(SHORT_CLIP)).toBeInTheDocument();
+
+        const klingInput = view.container.querySelector<HTMLInputElement>('input[accept="video/mp4,video/quicktime,.mp4,.mov"]')!;
+        fireEvent.change(klingInput, { target: { files: [new File(['webm'], 'take.webm', { type: 'video/webm' })] } });
+
+        expect(await screen.findByText('take.webm can’t be used: Kling video elements are MP4 or MOV files up to 50 MB.')).toBeInTheDocument();
+        expect(screen.getByText(SHORT_CLIP)).toBeInTheDocument();
+        expect(generateButton()).toBeDisabled();
+      });
+
       it('runs a clip of 3 seconds', async () => {
         saveInTheBrowser({ klingClip: true, klingClipSeconds: 3 });
         render(<CreateVideoClient prefill={{}} />);

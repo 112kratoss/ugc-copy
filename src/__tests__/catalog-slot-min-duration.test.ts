@@ -10,9 +10,12 @@ import { parsePublishedModelDescriptor } from '@/lib/generation-model-descriptor
 import {
   referenceMediaLengthViolation,
   referenceMediaMinSeconds,
-  type ReferenceMediaRole,
+  referenceMediaRole,
 } from '@/lib/provider-input-limits';
-import { catalogInputTooShort } from '../../ugc-mobile/lib/model-catalog/protocol';
+import {
+  CREATOR_LENGTH_READING_SLACK_SECONDS,
+  catalogInputTooShort,
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
  * The shortest clip or track a slot takes (`minDurationSeconds`). Kie's kling-3.0/video refuses a
@@ -28,54 +31,75 @@ describe('the shortest clip a slot takes', () => {
   const elements = slotsOf(kling).find((slot) => slot.key === 'videoElements')!;
 
   /** What the catalog start calls a file in this slot when it holds the file to its provider's shortest. */
-  const roleOf = (model: GenerationModelDescriptor, slot: CatalogInputSlot): ReferenceMediaRole => (
-    slot.kind === 'audio' ? 'audio' : model.kind === 'motion' ? 'motion' : slot.key === 'videoElements' ? 'element' : 'video'
+  const roleOf = (model: GenerationModelDescriptor, slot: CatalogInputSlot) => (
+    referenceMediaRole(model.kind, slot.key, slot.kind as 'video' | 'audio')
   );
+  /** Every slot that publishes a shortest clip or track, with its model. */
+  const published = catalog.models.flatMap((model) => slotsOf(model)
+    .filter((slot) => slot.minDurationSeconds !== undefined)
+    .map((slot) => ({ model, slot, minimum: slot.minDurationSeconds! })));
 
   it('publishes Kling 3.0’s video elements at the start’s own 3 seconds, on a slot whose files the start measures', () => {
     expect(elements).toMatchObject({ kind: 'video', durationMetadata: 'optional', minDurationSeconds: 3 });
     expect(referenceMediaMinSeconds('kling-3.0-video', 'element')).toBe(3);
     // This release publishes that one; the start's other minimums (Seedance's 2 s clips and
     // tracks, a motion performance's 3 s) stay the start's alone until a release publishes them.
-    const published = catalog.models.flatMap((model) => slotsOf(model)
-      .filter((slot) => slot.minDurationSeconds !== undefined)
-      .map((slot) => [model.id, slot.key, slot.minDurationSeconds, referenceMediaMinSeconds(model.id, roleOf(model, slot))]));
-    expect(published).toEqual([['kling-3.0-video', 'videoElements', 3, 3]]);
+    expect(published.map(({ model, slot, minimum }) => [model.id, slot.key, minimum, referenceMediaMinSeconds(model.id, roleOf(model, slot))]))
+      .toEqual([['kling-3.0-video', 'videoElements', 3, 3]]);
   });
 
-  it('is read back from the published row, and a row whose minimum is no length is refused', () => {
+  it('is read back from the published row, and one that is no length is left out of it', () => {
     const row = { ...kling, schemaVersion: 2 };
     const read = (value: unknown) => parsePublishedModelDescriptor(value, 'kling-3.0-video', 2, { web: true, mobile: true });
 
     expect(slotsOf(read(row)).find((slot) => slot.key === 'videoElements')).toEqual(elements);
+    // Refusing the row would take every model's quotes and starts down with it; the minimum only
+    // lets the creators speak before Generate, and the start holds the clip to its own.
+    const withoutMinimum: CatalogInputSlot = { ...elements };
+    delete withoutMinimum.minDurationSeconds;
     for (const minDurationSeconds of [0, -3, '3', null, Number.NaN]) {
       const broken = structuredClone(row) as unknown as GenerationModelDescriptor;
       const slot = slotsOf(broken).find((candidate) => candidate.key === 'videoElements')!;
       (slot as unknown as Record<string, unknown>).minDurationSeconds = minDurationSeconds;
-      expect(() => read(broken), String(minDurationSeconds)).toThrow();
+      expect(slotsOf(read(broken)).find((candidate) => candidate.key === 'videoElements'), String(minDurationSeconds))
+        .toEqual(withoutMinimum);
     }
   });
 
-  it('says what the start says, for the clip the start would refuse', () => {
+  it('holds only a clip the start refuses, in the start’s words, for every slot that publishes a minimum', () => {
     // As the creators send a clip: its name, and the length they read off the file.
-    for (const [label, durationSeconds] of [['Video element 1', 2.96], ['Harbour wave', 1], ['beach.mov', 0.25]] as const) {
-      const words = catalogInputTooShort(kling.displayName, elements, { label, durationSeconds });
-      expect(words, label).toBe(referenceMediaLengthViolation('kling-3.0-video', [{ role: 'element', durationSeconds, label }]));
+    const start = (model: GenerationModelDescriptor, slot: CatalogInputSlot, label: string, durationSeconds: number | null | undefined) => (
+      referenceMediaLengthViolation(model.id, [{ role: roleOf(model, slot), durationSeconds, label }])
+    );
+    for (const { model, slot, minimum } of published) {
+      for (let tenths = 1; tenths <= minimum * 10 + 5; tenths += 1) {
+        for (const durationSeconds of [tenths / 10, tenths / 10 - 0.004, tenths / 10 + 0.04]) {
+          const label = 'Harbour wave';
+          const creators = catalogInputTooShort(model.displayName, slot, { label, durationSeconds });
+          const refused = start(model, slot, label, durationSeconds);
+          const context = `${model.id} ${slot.key} ${durationSeconds}`;
+          // Held only where the start refuses, and then in the same words.
+          if (creators !== null) expect(creators, context).toBe(refused);
+          // Past the slack the creators hold every clip the start refuses: no clip it would refuse goes unsaid.
+          if (durationSeconds < minimum - CREATOR_LENGTH_READING_SLACK_SECONDS) expect(creators, context).toBe(refused);
+          // A clip the start would take, or one just short of it that a reading a frame off could make
+          // long enough, goes: the start judges it before any hold.
+          if (durationSeconds >= minimum - CREATOR_LENGTH_READING_SLACK_SECONDS) expect(creators, context).toBeNull();
+        }
+      }
     }
     expect(catalogInputTooShort(kling.displayName, elements, { label: 'Harbour wave', durationSeconds: 1 }))
       .toBe('Kling 3.0 Cinematic video elements must be at least 3 seconds long. Harbour wave runs 1 second.');
-    // Long enough, or a length nobody read: the start measures the file and decides.
-    for (const durationSeconds of [3, 3.01, 12, null, undefined, 0, Number.NaN]) {
+    // A length nobody read: the start measures the file and decides.
+    for (const durationSeconds of [null, undefined, 0, -1, Number.NaN]) {
       expect(catalogInputTooShort(kling.displayName, elements, { label: 'Video element 1', durationSeconds }), String(durationSeconds)).toBeNull();
-      expect(referenceMediaLengthViolation('kling-3.0-video', [{ role: 'element', durationSeconds, label: 'Video element 1' }])).toBeNull();
     }
     // A slot that publishes no minimum holds nothing.
     expect(catalogInputTooShort('Seedance 2', { label: 'Reference videos' }, { label: 'Clip', durationSeconds: 0.5 })).toBeNull();
   });
 
   it('reaches the web page through its affordances once the descriptor is in, and not before', () => {
-    expect(getVideoInputAffordances(kling, 'kling-3.0-video').minimumLengths)
-      .toEqual(new Map([['videoElements', { label: 'Video elements', minDurationSeconds: 3 }]]));
+    expect(getVideoInputAffordances(kling, 'kling-3.0-video').minimumLengths).toEqual(new Map([['videoElements', elements]]));
     // Before the catalog arrives the page keeps its tables, which hold no minimum.
     expect(getVideoInputAffordances(null, 'kling-3.0-video').minimumLengths.size).toBe(0);
     const seedance = catalog.models.find((model) => model.id === 'seedance-2')!;

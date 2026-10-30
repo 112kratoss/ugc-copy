@@ -973,14 +973,17 @@ describe('a clip shorter than its slot takes', () => {
     const draft = videoDraft(kling30, { prompt: 'Open on @wave, then @spin.', referenceVideos: [clip(4, 'spin'), clip(2.16)] });
 
     expect(validateCatalogCreationDraft(draft, kling30, ready)).toMatchObject({
-      // The start's refusal for this clip: referenceMediaLengthViolation in src/lib/provider-input-limits.ts.
-      errors: ['Kling 3.0 Cinematic video elements must be at least 3 seconds long. wave runs 2.1 seconds.'],
+      // The start's words (referenceMediaLengthViolation in src/lib/provider-input-limits.ts), naming the
+      // clip by its handle: every clip the app picks is called "Reference Video".
+      errors: ['Kling 3.0 Cinematic video elements must be at least 3 seconds long. @wave runs 2.1 seconds.'],
       canGenerate: false,
     });
   });
 
-  it('lets a clip of 3 seconds or more go, and one whose length the app does not know', () => {
-    for (const seconds of [3, 3.4, undefined]) {
+  it('lets a clip of 3 seconds or more go, one just under that the start may still take, and one of no known length', () => {
+    // The start reads ffmpeg's length to the hundredth (2.996 s is 3 s to it), and the phone's reading of a
+    // trimmed clip can fall a frame short of it: the app holds only a clip short by more than that.
+    for (const seconds of [3, 3.4, 2.996, 2.95, undefined]) {
       const draft = videoDraft(kling30, { prompt: 'Open on @wave.', referenceVideos: [clip(seconds)] });
       expect(validateCatalogCreationDraft(draft, kling30, ready), String(seconds)).toMatchObject({ errors: [], canGenerate: true });
     }

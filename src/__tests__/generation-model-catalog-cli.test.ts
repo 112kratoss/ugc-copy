@@ -125,6 +125,17 @@ describe('generation-model catalog release CLI', () => {
     );
   });
 
+  it('takes the minimum the start holds a slot to', () => {
+    const manifest = cloneManifestValue();
+    const descriptor = changedSeedance(manifest).publicDescriptor as Record<string, unknown>;
+    const modes = descriptor.inputModes as Array<Record<string, unknown>>;
+    const slots = modes[1].slots as Array<Record<string, unknown>>;
+    slots.find((slot) => slot.key === 'videoReferences')!.minDurationSeconds = 2;
+    slots.find((slot) => slot.key === 'audioReferences')!.minDurationSeconds = 2;
+
+    expect(() => validateCatalogManifest(manifest)).not.toThrow();
+  });
+
   it('materializes a complete release from the guarded active inventory', () => {
     const manifest = validateCatalogManifest(loadManifestValue());
     const active = loadActiveSeed();
@@ -328,6 +339,8 @@ describe('generation-model catalog release CLI', () => {
       ['a shortest clip that is not a number', 'videoReferences', '3', /minDurationSeconds must be a finite number/],
       ['a shortest clip past the longest', 'videoReferences', 20, /minDurationSeconds cannot exceed maxDurationSeconds/],
       ['a shortest length on a slot whose files are not measured', 'imageReferences', 1, /minDurationSeconds needs a video or audio slot with durationMetadata/],
+      // Seedance 2's start refuses clips under 2 s (provider-input-limits): 3 would hold runs it takes.
+      ['a shortest clip the start does not hold', 'videoReferences', 3, /minDurationSeconds must be the minimum the start holds seedance-2's videoReferences to \(2\)/],
     ] as const).map(([name, slotKey, minDurationSeconds, message]) => ({
       name,
       change: (manifest: Record<string, unknown>) => {

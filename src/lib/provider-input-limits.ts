@@ -76,6 +76,22 @@ const REFERENCE_MEDIA_MIN_SECONDS: Readonly<Record<string, Partial<Record<Refere
 };
 
 /**
+ * What a file is to a run, as the start holds it to its provider's shortest: any track is
+ * reference audio, a clip of a motion run is its performance, a clip in Kling 3.0's
+ * `videoElements` slot is a named element, and any other clip a reference clip. The catalog
+ * start judges each input by it, and the release CLI holds a published minimum to the role's.
+ */
+export function referenceMediaRole(
+  runKind: 'image' | 'video' | 'motion',
+  slotKey: string,
+  mediaKind: 'video' | 'audio',
+): ReferenceMediaRole {
+  if (mediaKind === 'audio') return 'audio';
+  if (runKind === 'motion') return 'motion';
+  return slotKey === 'videoElements' ? 'element' : 'video';
+}
+
+/**
  * The shortest file the model's provider takes in that role, in seconds, or undefined where it
  * states none. The catalog publishes it on the slot the role travels in (`minDurationSeconds`),
  * so both creators hold a run to the minimum this module refuses it by.

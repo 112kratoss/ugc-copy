@@ -394,10 +394,6 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
       value.maxDurationSeconds !== undefined
       && (typeof value.maxDurationSeconds !== 'number' || value.maxDurationSeconds <= 0)
     )
-    || (
-      value.minDurationSeconds !== undefined
-      && (typeof value.minDurationSeconds !== 'number' || !(value.minDurationSeconds > 0))
-    )
   ) return null;
   const conditions = parseConditions(value.conditions);
   if (conditions === null) return null;
@@ -416,7 +412,11 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
     ...(typeof value.maxDurationSeconds === 'number'
       ? { maxDurationSeconds: value.maxDurationSeconds }
       : {}),
+    // A minimum that is no length is left out rather than dropping the model: it only lets the
+    // draft say a clip is short before Generate, and the start holds every clip to its own.
     ...(typeof value.minDurationSeconds === 'number'
+      && Number.isFinite(value.minDurationSeconds)
+      && value.minDurationSeconds > 0
       ? { minDurationSeconds: value.minDurationSeconds }
       : {}),
     ...(conditions ? { conditions } : {}),

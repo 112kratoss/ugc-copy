@@ -330,10 +330,17 @@ function secondsLong(value: number): string {
   return `${value} second${value === 1 ? '' : 's'}`;
 }
 /**
+ * A clip's length in tenths of a second, rounded down, as the words below give it: a clip
+ * refused for being short never reads as long enough. A creator's card for such a clip uses it
+ * too, so the card and the line beside Generate give one length.
+ */
+export function lengthInTenthsRoundedDown(seconds: number): number {
+  return Math.floor(seconds * 10) / 10;
+}
+/**
  * The words a clip or track too short for its provider is refused in: what it is and the
- * shortest the provider takes, then which one and how long it runs, rounded down so a clip
- * refused for being short never reads as long enough. The server's starts refuse a run in
- * them (`referenceMediaLengthViolation` in src/lib/provider-input-limits.ts), and both
+ * shortest the provider takes, then which one and how long it runs. The server's starts refuse
+ * a run in them (`referenceMediaLengthViolation` in src/lib/provider-input-limits.ts), and both
  * creators hold a run in them before Generate (`catalogInputTooShort`).
  */
 export function mediaTooShortMessage(
@@ -343,15 +350,24 @@ export function mediaTooShortMessage(
 ): string {
   const refusal = `${what} must be at least ${secondsLong(minimumSeconds)} long.`;
   return item
-    ? `${refusal} ${item.label} runs ${secondsLong(Math.floor(item.durationSeconds * 10) / 10)}.`
+    ? `${refusal} ${item.label} runs ${secondsLong(lengthInTenthsRoundedDown(item.durationSeconds))}.`
     : refusal;
 }
 /**
+ * How far a creator's reading of a file's length may fall short of the start's own. The browser
+ * and the phone read the container; the start reads ffmpeg's duration to the hundredth, which
+ * takes a 2.996 s file as 3 s. The two can also differ by a frame or an audio packet at a
+ * trimmed clip's end. A creator holds a run only for a clip short by more than this, so it never
+ * holds one the start would take; a clip just under the minimum goes, and the start judges it
+ * before any hold, as it judged every clip before the creators did.
+ */
+export const CREATOR_LENGTH_READING_SLACK_SECONDS = 0.1;
+/**
  * Why a run cannot send this clip or track in this slot, or null: its length against the
  * slot's shortest (`minDurationSeconds`, published where the provider refuses shorter, as Kie
- * does a Kling 3.0 video element under 3 seconds). A length the creator does not know is not
- * judged here; the start measures the file. Said as the start says it, so the creator reads
- * before Generate what pressing it would have brought back.
+ * does a Kling 3.0 video element under 3 seconds), less the slack above. A length the creator
+ * does not know is not judged here; the start measures the file. Said in the start's words, so
+ * the creator reads before Generate what pressing it would have brought back.
  */
 export function catalogInputTooShort(
   modelName: string,
@@ -365,7 +381,7 @@ export function catalogInputTooShort(
     typeof length !== 'number' ||
     !Number.isFinite(length) ||
     length <= 0 ||
-    length >= minimum
+    length >= minimum - CREATOR_LENGTH_READING_SLACK_SECONDS
   ) {
     return null;
   }
