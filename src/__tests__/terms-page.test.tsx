@@ -38,6 +38,23 @@ describe('Terms of Service', () => {
       'We convert your dollar balance to rupees at the exchange rate on the day we send the payout.',
       'PayPal and international transfers are not available yet.',
     ].join(' '));
-    expect(screen.getByText('Last updated: October 18, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Last updated: October 30, 2026')).toBeInTheDocument();
+  });
+
+  // 2026-10-30: the owner chose to keep AI fan art of well-known characters public ("its ai
+  // generated one and people will genarate photos like this") instead of hiding it, and asked
+  // for a policy explanation. Section 8 says what such art may be used for and how a rights
+  // holder complains, which is the takedown process the in-app "Stolen content" report feeds.
+  it('allows AI fan art for non-commercial sharing and says how a rights holder complains', () => {
+    render(<TermsOfService />);
+
+    const section = screen.getByRole('heading', { level: 2, name: '8. Intellectual Property' }).parentElement!;
+    const text = section.textContent!.replace(/\s+/g, ' ');
+    expect(text).toContain(`You may create and share this kind of fan art on ${siteConfig.name} as personal, non-commercial creative work.`);
+    expect(text).toContain('do not sell it: recipes, bundles and other paid items must not feature characters, brands or works you do not have the rights to.');
+    expect(text).toContain('report the post as “Stolen content” or email us at');
+    expect(text).toContain('We review every complaint, remove content that infringes, and tell the person who posted it.');
+    expect(text).toContain('We may close the accounts of people who repeatedly infringe.');
+    expect(section.querySelector(`a[href="mailto:${siteConfig.supportEmail}"]`)).not.toBeNull();
   });
 });

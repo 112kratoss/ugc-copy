@@ -15,7 +15,7 @@ export default function TermsOfService() {
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <h1 className="text-4xl font-bold mb-4">Terms of Service</h1>
-                <p className="text-zinc-400 mb-12">Last updated: October 18, 2026</p>
+                <p className="text-zinc-400 mb-12">Last updated: October 30, 2026</p>
 
                 <div className="space-y-8 text-zinc-300">
                     <section>
@@ -117,10 +117,37 @@ export default function TermsOfService() {
                             <strong>Your Content:</strong> You retain ownership of images and videos you upload.
                             By uploading content, you grant us a limited license to process it for providing the Service.
                         </p>
-                        <p>
-                            <strong>Generated Content:</strong> You own the videos generated through our Service,
+                        <p className="mb-4">
+                            <strong>Generated Content:</strong> You own the images and videos generated through our Service,
                             subject to compliance with these Terms. You are responsible for ensuring you have rights
                             to all input content.
+                        </p>
+                        <p className="mb-4">
+                            <strong>AI Fan Art:</strong> People use {siteConfig.name} to make AI images and videos inspired by
+                            films, series, games, anime and comics, including well-known characters. You may create and
+                            share this kind of fan art on {siteConfig.name} as personal, non-commercial creative work. It is
+                            not official and not endorsed by the owners of those characters, so do not present it as
+                            official, do not use their logos or names to suggest a connection, and do not sell it: recipes,
+                            bundles and other paid items must not feature characters, brands or works you do not have the
+                            rights to. Images of real people must also follow the Acceptable Use rules above.
+                        </p>
+                        <p className="mb-4">
+                            <strong>Copyright and Trademark Complaints:</strong> If you own a character, brand or other work
+                            and believe a post infringes it, report the post as &ldquo;Stolen content&rdquo; or email us at{" "}
+                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
+                                {siteConfig.supportEmail}
+                            </a>{" "}
+                            with:
+                        </p>
+                        <ul className="list-disc list-inside space-y-2 ml-4 mb-4">
+                            <li>Your name and contact details</li>
+                            <li>The work you own, and the link to each post you believe infringes it</li>
+                            <li>A statement that you believe in good faith the use is not authorized, and that your notice is accurate</li>
+                        </ul>
+                        <p>
+                            We review every complaint, remove content that infringes, and tell the person who posted it.
+                            If your post was removed and you believe that was a mistake, reply to our email and we will
+                            look at it again. We may close the accounts of people who repeatedly infringe.
                         </p>
                     </section>
 
