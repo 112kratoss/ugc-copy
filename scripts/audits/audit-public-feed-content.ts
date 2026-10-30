@@ -22,6 +22,16 @@
  * Until that changes, a periodic sweep is the control, and it should be run
  * before every store submission.
  *
+ * What it looks for changed on 2026-10-30. The owner kept AI fan art of
+ * well-known characters public (the seven posts hidden after that rejection
+ * were restored), and the Terms (section 8) say fan art stays personal and
+ * unsold and comes down when the rights owner asks. So the sweep is for what
+ * section 8 and Acceptable Use forbid: a paid recipe or bundle featuring
+ * someone else's characters or brands, a post presented as official or using a
+ * logo to suggest a connection, sexual or deceptive images of real people, and
+ * anything section 7 lists. A resemblance alone is not a reason to hide a post;
+ * whether to hide anything for a particular store review is the owner's call.
+ *
  * Nothing is mutated and nothing private is fetched. Covers come from the
  * public `showcase_media` bucket over unsigned URLs, so the sheet can only ever
  * contain bytes that are already served to anonymous visitors. Prompts are read
@@ -230,8 +240,9 @@ async function main() {
 
   console.log(`\nWrote ${sheetPath} — ${cells.length} cover(s), ${COLUMNS}x${rowCount}.`);
   if (missing > 0) console.log(`${missing} post(s) had no cover to render.`);
-  console.log('\nOpen it and look. Anything resembling a recognisable character comes down with:');
-  console.log("  update posts set review_status='hidden', reviewed_at=now() where id in (...);");
+  console.log('\nOpen it and look for what the Terms forbid (section 7, and section 8: a paid item featuring');
+  console.log("someone else's characters or brands, a post presented as official). Fan art alone stays up.");
+  console.log('Hide or take a post down from /admin → Content, which records who did it and why; never by SQL.');
 }
 
 main().catch((error) => {

@@ -13,7 +13,8 @@ import {
 import type { ShowcaseCreator } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
 
-const REPORT_REASONS = [
+/** The reasons a post can be reported for. The Terms (section 8) name "Stolen content". */
+export const REPORT_REASONS = [
   { value: 'spam', label: 'Spam' },
   { value: 'stolen_content', label: 'Stolen content' },
   { value: 'misleading_unlock', label: 'Misleading recipe' },

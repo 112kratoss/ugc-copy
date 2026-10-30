@@ -15,7 +15,7 @@ export default function TermsOfService() {
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <h1 className="text-4xl font-bold mb-4">Terms of Service</h1>
-                <p className="text-zinc-400 mb-12">Last updated: October 18, 2026</p>
+                <p className="text-zinc-400 mb-12">Last updated: October 30, 2026</p>
 
                 <div className="space-y-8 text-zinc-300">
                     <section>
@@ -117,10 +117,40 @@ export default function TermsOfService() {
                             <strong>Your Content:</strong> You retain ownership of images and videos you upload.
                             By uploading content, you grant us a limited license to process it for providing the Service.
                         </p>
-                        <p>
-                            <strong>Generated Content:</strong> You own the videos generated through our Service,
+                        <p className="mb-4">
+                            <strong>Generated Content:</strong> You own the images and videos generated through our Service,
                             subject to compliance with these Terms. You are responsible for ensuring you have rights
                             to all input content.
+                        </p>
+                        <p className="mb-4">
+                            <strong>AI Fan Art:</strong> Many people use {siteConfig.name} to make images and videos inspired
+                            by films, series, games, anime and comics. We do not own those characters and cannot give you
+                            any rights in them, and owning an image you make here does not give you rights in the
+                            characters, brands or works it shows. If you share fan art, keep it personal and
+                            non-commercial, do not present it as official or use logos or names to suggest a connection,
+                            and we will remove it if the owner asks. Recipes, bundles and other paid items must not feature
+                            characters, brands or works you do not have the rights to; if we remove a paid item for
+                            breaking this rule, we may withhold or cancel the earnings from its sales. Images of real
+                            people must also follow the Acceptable Use rules above.
+                        </p>
+                        <p className="mb-4">
+                            <strong>Copyright and Trademark Complaints:</strong> If you own a character, brand or other work,
+                            or act for its owner, and believe a post infringes it, open the post and report it as
+                            &ldquo;Stolen content&rdquo; (you need a {siteConfig.name} account), or email us at{" "}
+                            <a href={`mailto:${siteConfig.supportEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
+                                {siteConfig.supportEmail}
+                            </a>{" "}
+                            with:
+                        </p>
+                        <ul className="list-disc list-inside space-y-2 ml-4 mb-4">
+                            <li>Your name and contact details, and whether you act for the owner</li>
+                            <li>The work, and the link to each post you believe infringes it</li>
+                            <li>A statement that you believe in good faith the use is not authorized, and that your notice is accurate</li>
+                        </ul>
+                        <p>
+                            We review every complaint and remove content that infringes. If your post was removed and you
+                            believe that was a mistake, email us at the same address with the link to the post; if we
+                            agree, you can post it again. We may close the accounts of people who repeatedly infringe.
                         </p>
                     </section>
 
