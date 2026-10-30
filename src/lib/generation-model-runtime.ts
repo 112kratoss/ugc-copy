@@ -1,6 +1,7 @@
 import {
   IMAGE_MODELS,
   MOTION_MODELS,
+  VEO_REFERENCE_MODES,
   VIDEO_MODELS,
   getImageResolutionOptions,
   isGptImage25ModelId,
@@ -164,16 +165,6 @@ const VIDEO_REFERENCE_IMAGE_CAPS: Record<string, number> = {
   'grok-imagine-video-1.5': 7,
   'pixverse-v6': 7,
 };
-
-type VeoMode = (typeof VIDEO_MODELS)['veo-3.1']['modeOptions'][number]['value'];
-
-/**
- * The Veo 3.1 variants that take reference pictures: Kie's REFERENCE_2_VIDEO "supports veo3_fast
- * and veo3_lite" (docs/model-api-references/veo-3-1.md, Jobs API; re-read 2026-10-30). The quote
- * refuses references on any other variant, and the catalog's descriptor opens its references mode
- * on these alone, so no creator offers Quality a picture its quote refuses.
- */
-export const VEO_REFERENCE_MODES = ['veo3_lite', 'veo3_fast'] as const satisfies readonly VeoMode[];
 
 export const GENERATION_MODEL_VALIDATION_RULE_TYPES = [
   'control-options',

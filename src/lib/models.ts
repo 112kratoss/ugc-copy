@@ -1161,6 +1161,16 @@ export const VIDEO_MODELS = {
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
 
+/**
+ * The Veo 3.1 variants that take reference pictures: Kie's REFERENCE_2_VIDEO "supports veo3_fast
+ * and veo3_lite" (docs/model-api-references/veo-3-1.md, Jobs API; re-read 2026-10-30). The start
+ * (getVideoElementSupport), the quote rule and the catalog descriptor's references mode all read
+ * this, so none of them offers or takes a picture on another variant.
+ */
+export const VEO_REFERENCE_MODES = ['veo3_lite', 'veo3_fast'] as const satisfies readonly (
+    (typeof VIDEO_MODELS)['veo-3.1']['modeOptions'][number]['value']
+)[];
+
 export function getVideoElementSupport(
     modelId: VideoModelId,
     options: { mode?: string; isMultiShot?: boolean } = {}
@@ -1220,7 +1230,7 @@ export function getVideoElementSupport(
     }
 
     if (modelId === 'veo-3.1') {
-        if (options.mode === 'veo3_fast' || options.mode === 'veo3_lite') {
+        if ((VEO_REFERENCE_MODES as readonly (string | undefined)[]).includes(options.mode)) {
             return {
                 enabled: true,
                 maxElements: 3,

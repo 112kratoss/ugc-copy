@@ -11,6 +11,7 @@ import {
   type GenerationModelDescriptor,
   type GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
+import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 import {
   CLIENT_RENDERED_CONTROL_TYPES,
   CLIENT_RENDERED_INPUT_CONSTRAINT_TYPES,
@@ -21,6 +22,7 @@ import {
   SUBJECT_IMAGES_SLOT_KEY,
   catalogConditionsMatch,
   catalogRunQuoteInput,
+  modeGatedSettingValues,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
@@ -116,61 +118,69 @@ describe('the catalog publishes only what both creators render', () => {
     expect(refusals).toEqual([]);
   });
 
-  it('opens no input shape, on any tier, whose run its quote refuses', () => {
+  it('opens no input shape whose run its quote refuses, on any option of the tier control', () => {
     // Both creators draw the slots a descriptor opens, so a slot its own quote refuses is a run
     // that cannot start: Veo 3.1 opened its reference pictures on every variant while the quote
     // took them on Lite and Fast only ("Reusable references require Veo Lite or Fast."). Each
-    // shape is quoted on each option of the model's tier control, with an input in every slot
-    // it opens. They go together, as an end frame needs a start frame and Wan 2.7's and MiniMax
-    // H3's audio a picture or a clip beside it.
+    // shape is quoted on each option of the model's `mode` control, the one setting besides the
+    // shape that the web creator reads a descriptor's input modes with, the others at their
+    // defaults, with an input in every slot it opens. They go together, as an end frame needs a
+    // start frame and Wan 2.7's and MiniMax H3's audio a picture or a clip beside it. Rules on
+    // other settings (Veo's 16:9 or 9:16 for a run with pictures) refuse at the quote instead.
+    const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3, includeUnavailable: true });
+    const operations = new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]));
+    const offered = catalog.models.filter((model) => model.kind === 'video' && (model.availability?.web || model.availability?.mobile));
     const refusals: Offence[] = [];
-    for (const platform of ['web', 'mobile'] as const) {
-      const catalog = buildGenerationModelCatalog({ platform, schemaVersion: 3 });
-      for (const model of catalog.models) {
-        if (model.kind !== 'video') continue;
-        const defaults = Object.fromEntries(model.controls.map((control) => [control.key, control.defaultValue]));
-        const tierControl = model.controls.find((control) => control.key === 'mode');
-        const tiers = tierControl?.type === 'choice' ? tierControl.options.map((option) => option.value) : [undefined];
-        const shapes = [...new Set((model.inputModes ?? []).flatMap((mode) => (mode.conditions ?? [])
-          .filter((condition) => condition.source === 'setting' && condition.key === 'referenceMode' && condition.operator === 'equals')
-          .map((condition) => String(condition.value))))];
-        for (const tier of tiers) {
-          for (const referenceMode of shapes.length > 0 ? shapes : [undefined]) {
-            const settings = {
-              ...defaults,
-              ...(tier === undefined ? {} : { mode: tier }),
-              ...(referenceMode === undefined ? {} : { referenceMode }),
-            };
-            const open = (model.inputModes ?? [])
-              .filter((mode) => catalogConditionsMatch(mode.conditions, settings))
-              .flatMap((mode) => mode.slots)
-              .filter((slot) => slot.max > 0 && catalogConditionsMatch(slot.conditions, settings));
-            if (open.length === 0) continue;
-            const inputs = open.flatMap((slot) => Array.from({ length: Math.max(1, slot.min) }, () => ({
-              slot: slot.key,
-              kind: slot.kind,
-              ...(slot.kind === 'video' || slot.kind === 'audio' ? { durationSeconds: 4 } : {}),
-            })));
-            try {
-              quoteGenerationModel(catalogRunQuoteInput({
-                kind: 'video',
-                modelId: model.id,
-                catalogRevision: catalog.revision,
-                settings,
-                inputs,
-              }) as GenerationModelQuoteInput, { catalog });
-            } catch (error) {
-              const refusal = error instanceof CatalogError ? Object.values(error.fieldErrors).join(' ') : String(error);
-              refusals.push({
-                model: model.id,
-                what: `${platform}, ${tier ?? 'one tier'}, ${referenceMode ?? 'one shape'}, ${open.map((slot) => slot.key).join(' + ')}: ${refusal}`,
-              });
-            }
+    const quoted: string[] = [];
+    const quotedModels = new Set<string>();
+    for (const model of offered) {
+      const defaults = Object.fromEntries(model.controls.map((control) => [control.key, control.defaultValue]));
+      const tierControl = model.controls.find((control) => control.key === 'mode');
+      const tiers = tierControl?.type === 'choice' ? tierControl.options.map((option) => option.value) : [undefined];
+      const shapes = [...modeGatedSettingValues(model.inputModes).get('referenceMode') ?? [undefined]];
+      for (const tier of tiers) {
+        for (const referenceMode of shapes) {
+          const settings = {
+            ...defaults,
+            ...(tier === undefined ? {} : { mode: tier }),
+            ...(referenceMode === undefined ? {} : { referenceMode }),
+          };
+          const open = (model.inputModes ?? [])
+            .filter((mode) => catalogConditionsMatch(mode.conditions, settings))
+            .flatMap((mode) => mode.slots)
+            .filter((slot) => slot.max > 0 && catalogConditionsMatch(slot.conditions, settings));
+          if (open.length === 0) continue;
+          const inputs = open.flatMap((slot) => Array.from({ length: Math.max(1, slot.min) }, () => ({
+            slot: slot.key,
+            kind: slot.kind,
+            ...(slot.kind === 'video' || slot.kind === 'audio' ? { durationSeconds: 4 } : {}),
+          })));
+          const run = `${model.id}, ${tier ?? 'one tier'}, ${referenceMode ?? 'one shape'}, ${open.map((slot) => slot.key).join(' + ')}`;
+          try {
+            quoteGenerationModel(catalogRunQuoteInput({
+              kind: 'video',
+              modelId: model.id,
+              catalogRevision: catalog.revision,
+              settings,
+              inputs,
+            }) as GenerationModelQuoteInput, { catalog, operations });
+            quoted.push(run);
+            quotedModels.add(model.id);
+          } catch (error) {
+            const refusal = error instanceof CatalogError ? Object.values(error.fieldErrors).join(' ') : String(error);
+            refusals.push({ model: model.id, what: `${run}: ${refusal}` });
           }
         }
       }
     }
     expect(refusals).toEqual([]);
+    // A sweep that opened nothing would pass: it quoted a run on every offered video model, and
+    // Veo's pictures on the two variants that take them.
+    expect([...quotedModels].sort()).toEqual(offered.map((model) => model.id).sort());
+    expect(quoted).toEqual(expect.arrayContaining([
+      'veo-3.1, veo3_lite, elements, imageReferences',
+      'veo-3.1, veo3_fast, elements, imageReferences',
+    ]));
   });
 
   it('uses only the shared constraint types', () => {

@@ -148,9 +148,13 @@ Tests that name what is missing:
   with a word budget, and the alias table matches exactly.
 - `models.test.ts`: add the new model's prices and caps.
 - `model-catalog-client-parity.test.ts`: every input shape a video descriptor opens, on every option
-  of its `mode` control, quotes with an input in each slot it opens. A quote rule that refuses a slot
-  on some settings needs the descriptor's input mode gated on the same settings, as Veo 3.1's
-  references are on its Lite and Fast variants (`VEO_REFERENCE_MODES`).
+  of its `mode` control (the other settings at their defaults), quotes with an input in each slot it
+  opens. A quote rule that refuses a slot on some options of `mode` needs the descriptor's input mode
+  gated on the same options, as Veo 3.1's references are on its Lite and Fast variants
+  (`VEO_REFERENCE_MODES` in `src/lib/models.ts`, which the start reads too). The web creator reads
+  input-mode conditions with the run's `mode` and reference shape only, so a gate on another setting
+  needs `src/lib/generation-model-affordances.ts` to carry that setting first; until then, such a rule
+  refuses at the quote.
 - `npm run typecheck`: a new video model does not compile until `getVideoCost`,
   `videoPricingExpression`, `VIDEO_INPUT_LIMITS` and `VIDEO_PROVIDER_MODELS` handle it.
 

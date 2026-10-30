@@ -368,11 +368,13 @@ describe('named subjects on the native creator', () => {
  * evaluator. Read off the release file itself, as the catalog serves it.
  */
 describe('Veo 3.1 references gated on the variant', () => {
-  const entry = veoQualityReferencesRelease.entries.find((candidate) => candidate.modelId === 'veo-3.1');
-  const { schemaVersion: _schemaVersion, ...publicDescriptor } = entry!.publicDescriptor;
-  const veo = parseModelCatalogDetail(publicDescriptor);
+  /** The release's Veo entry as the native parser reads a model's details from the catalog. */
+  function releasedVeo(): GenerationModelDescriptor {
+    const entry = veoQualityReferencesRelease.entries.find((candidate) => candidate.modelId === 'veo-3.1');
+    return parseModelCatalogDetail(entry?.publicDescriptor);
+  }
 
-  function veoDraft(mode: string, pictures: number): VideoCreationDraft {
+  function veoDraft(veo: GenerationModelDescriptor, mode: string, pictures: number): VideoCreationDraft {
     return applyCatalogModelDefaults({
       ...createDefaultCreationDraft('video'),
       model: 'veo-3.1',
@@ -384,14 +386,15 @@ describe('Veo 3.1 references gated on the variant', () => {
   }
 
   it('is kept by the native parser, with its references mode gated on the variant', () => {
-    expect(veo.inputModes?.find((mode) => mode.key === 'references')?.conditions).toEqual([
+    expect(releasedVeo().inputModes?.find((mode) => mode.key === 'references')?.conditions).toEqual([
       { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
       { source: 'setting', key: 'mode', operator: 'in', value: ['veo3_lite', 'veo3_fast'] },
     ]);
   });
 
   it('keeps a Quality draft\'s pictures out of its run, which goes as frames', () => {
-    const draft = veoDraft('veo3', 2);
+    const veo = releasedVeo();
+    const draft = veoDraft(veo, 'veo3', 2);
     // The composer's references rail asks for the references shape, which Quality does not open.
     const rail = getActiveCatalogInputSlots(veo, { ...getCatalogDraftSettings(draft, veo), referenceMode: 'elements' }, catalogDraftInputCounts(draft, veo));
     expect(rail.map((slot) => slot.key)).toEqual([]);
@@ -406,11 +409,12 @@ describe('Veo 3.1 references gated on the variant', () => {
   });
 
   it.each(['veo3_lite', 'veo3_fast'])('sends a %s draft\'s pictures, up to three', (mode) => {
-    const draft = veoDraft(mode, 3);
+    const veo = releasedVeo();
+    const draft = veoDraft(veo, mode, 3);
     const request = buildCatalogQuoteRequest(draft, veo, 'veo-revision');
     expect(request.settings).toMatchObject({ mode, referenceMode: 'elements' });
     expect(request.inputMetadata?.slots).toEqual({ imageReferences: { count: 3 } });
-    expect(validateCatalogCreationDraft(veoDraft(mode, 4), veo, { credits: 1000, quotedCost: 60 }).errors)
+    expect(validateCatalogCreationDraft(veoDraft(veo, mode, 4), veo, { credits: 1000, quotedCost: 60 }).errors)
       .toEqual(['Reference images supports up to 3 inputs.']);
   });
 });

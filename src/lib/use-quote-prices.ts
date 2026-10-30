@@ -47,13 +47,19 @@ export function settingsVariants(
   axes: ReadonlyArray<readonly [key: string, values: readonly CatalogPrimitive[]]>,
   /** The page's clamp, where one setting moves others (an image ratio its resolution): the settings it would leave. */
   fit?: (settings: Record<string, unknown>) => Record<string, unknown>,
+  /**
+   * The run the page would make with an option that changes what the run sends, or null where it
+   * is the run with that one setting swapped in. Veo 3.1 takes pictures on Lite and Fast only, so
+   * a run holding pictures leaves them out on Quality: priced with them, Quality was refused.
+   */
+  rerun?: (key: string, value: CatalogPrimitive) => GenerationModelQuoteInput | null,
 ): SettingsVariants {
   const variants = new Map<string, GenerationModelQuoteInput>();
   if (!request) return variants;
   for (const [key, values] of axes) {
     for (const value of values) {
       const settings = { ...request.settings, [key]: value };
-      variants.set(variantKey(key, value), { ...request, settings: fit ? fit(settings) : settings });
+      variants.set(variantKey(key, value), rerun?.(key, value) ?? { ...request, settings: fit ? fit(settings) : settings });
     }
   }
   return variants;

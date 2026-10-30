@@ -369,9 +369,9 @@ describe('the Veo 3.1 price after the move', () => {
   }
 
   const codeConfig = buildCodeGenerationModelOperations().find((entry) => entry.modelId === 'veo-3.1');
-  // The newest catalog release in the tree, whose Veo entry is what production quotes from.
+  // The newest catalog release that carries Veo 3.1: production quotes from its entry once it is published.
   const releaseEntry = (JSON.parse(readFileSync(
-    path.join(process.cwd(), 'config/generation-model-catalog/releases/2026-10-20-kie-checkup.json'),
+    path.join(process.cwd(), 'config/generation-model-catalog/releases/2026-10-30-veo-quality-references.json'),
     'utf8',
   )) as { entries: Array<GenerationModelOperationalConfig> }).entries.find((entry) => entry.modelId === 'veo-3.1');
 

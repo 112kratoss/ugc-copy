@@ -8,7 +8,6 @@ import { resetFeedbackState } from '@/components/feedback-state';
 import { clearGenerationsOnPage, subscribeToGenerationOnPage } from '@/lib/generation-status-client';
 import { creatorOpeningFromCatalog, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
-import { catalogVideoEntryFields } from '@/lib/catalog-video-entry';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import { buildGenerationModelCatalog, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
@@ -28,7 +27,7 @@ import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
-import { chooseSetting as chooseAspectRatio, costShown, generateButton, queryGenerateButton } from './fixtures/creator-column-bar';
+import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings, queryGenerateButton } from './fixtures/creator-column-bar';
 
 // One router for every render: a new object per render restarts effects that read it.
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
@@ -3356,67 +3355,6 @@ describe('CreateVideoClient Kling video elements', () => {
   });
 
   /**
-   * Veo 3.1 takes reference pictures on Lite and Fast only (Kie's REFERENCE_2_VIDEO), and its quote
-   * refuses them on Quality. Its descriptor opened them on every variant, so a saved picture made a
-   * Quality run a references run the quote refused. With the descriptor as the catalog publishes it,
-   * the picture waits on Quality and comes back on Fast.
-   */
-  describe('a saved picture on Veo 3.1, by variant', () => {
-    const publishedCatalog = serverCatalog.buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
-    const veo = publishedCatalog.models.find((model) => model.id === 'veo-3.1')!;
-    const registry = VIDEO_MODELS as unknown as Record<string, unknown>;
-    const builtIn = registry['veo-3.1'];
-
-    beforeEach(() => {
-      modelCatalogState.extraModels = [veo] as unknown as Array<Record<string, unknown>>;
-      // The page reads a model's descriptor off its registry entry, where the real catalog hook
-      // lays it (applyGenerationModelCatalogToRegistries). This file's hook stand-in does not, so
-      // the page would read its built-in table, which never offered Quality a picture.
-      registry['veo-3.1'] = { ...VIDEO_MODELS['veo-3.1'], ...catalogVideoEntryFields(veo) };
-      getPersistedImageElementRecordsMock.mockResolvedValue([
-        { id: 'saved-1', displayName: 'Hero', file: new File(['image'], 'hero.png', { type: 'image/png' }) },
-      ]);
-    });
-
-    afterEach(() => {
-      registry['veo-3.1'] = builtIn;
-    });
-
-    async function chooseVariant(name: 'Fast' | 'Quality') {
-      fireEvent.click(await screen.findByRole('button', { name: /^Generation settings: / }));
-      const variants = screen.getByRole('radiogroup', { name: /^Model variant/ });
-      fireEvent.click(within(variants).getByRole('radio', { name: new RegExp(`^${name}`) }));
-    }
-
-    it('keeps it out of a Quality run, says why, and prices the run without it', async () => {
-      render(<CreateVideoClient prefill={{ model: 'veo-3.1' }} />);
-      await chooseVariant('Quality');
-
-      await waitFor(() => expect(quoteStandIn.lastRequest()?.settings?.mode).toBe('veo3'));
-      expect(await screen.findByText('Saved references are on standby')).toBeInTheDocument();
-      expect(screen.getByText(/Reusable references require Veo Lite or Fast\./)).toBeInTheDocument();
-      // Frames are the one side Quality takes, so the card draws no switch to references.
-      expect(screen.queryByRole('radio', { name: 'References' })).not.toBeInTheDocument();
-      const request = quoteStandIn.lastRequest()!;
-      expect(request.settings).toMatchObject({ mode: 'veo3', referenceMode: 'frames' });
-      expect(request.inputMetadata?.slots?.imageReferences).toBeUndefined();
-      // The server's own price for the request the page asks, where it refused the picture.
-      expect(serverCatalog.quoteGenerationModel({ ...request, catalogRevision: undefined }).costCredits).toBe(250);
-    });
-
-    it('brings it back into the run on Fast', async () => {
-      render(<CreateVideoClient prefill={{ model: 'veo-3.1' }} />);
-      await chooseVariant('Fast');
-
-      await waitFor(() => expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.imageReferences).toEqual({ count: 1 }));
-      const request = quoteStandIn.lastRequest()!;
-      expect(request.settings).toMatchObject({ mode: 'veo3_fast', referenceMode: 'elements' });
-      expect(screen.queryByText('Saved references are on standby')).not.toBeInTheDocument();
-      expect(serverCatalog.quoteGenerationModel({ ...request, catalogRevision: undefined }).costCredits).toBe(60);
-    });
-  });
-
-  /**
    * What a creator with no draft opens on: the catalog's default video model at that
    * model's own defaults. Since 2026-10-28 that is Seedance 2 Mini at 480p for 5 s without
    * sound, 19 credits, inside a new account's 25 welcome credits. The page draws Kling 3.0
@@ -4514,6 +4452,100 @@ describe('CreateVideoClient Kling video elements', () => {
 
       expect(screen.getByText('Saved clip')).toBeInTheDocument();
       expect(standbyCard()).toBeNull();
+    });
+
+    /**
+     * Veo 3.1 takes reference pictures on Lite and Fast only (Kie's REFERENCE_2_VIDEO), and its
+     * quote refuses them on Quality. Its descriptor opened them on every variant until release
+     * veo-quality-references-20261030, so a saved picture made a Quality run a references run that
+     * the quote refused. Now the picture waits on Quality and comes back on the other two.
+     */
+    describe('a saved picture on Veo 3.1, by variant', () => {
+      /** Picks a variant in the settings, opened if they are shut. */
+      function chooseVariant(name: 'Lite' | 'Fast' | 'Quality') {
+        openSettings();
+        const variants = screen.getByRole('radiogroup', { name: /^Model variant/ });
+        fireEvent.click(within(variants).getByRole('radio', { name: new RegExp(`^${name}`) }));
+      }
+
+      it('waits on Quality, says why, and the run is priced without it', async () => {
+        saveInTheBrowser({ images: 1 });
+        render(<CreateVideoClient prefill={{ model: 'veo-3.1' }} />);
+        await restored();
+        chooseVariant('Quality');
+
+        await waitFor(() => expect(lastQuoteRequest().settings.mode).toBe('veo3'));
+        const request = lastQuoteRequest();
+        expect(request.settings.referenceMode).toBe('frames');
+        expect(slotCount(request, 'imageReferences')).toBe(0);
+        expect(refusedByTheServer(request)).toBeNull();
+        expect(standbyCard()).toEqual([
+          'Your 1 saved image reference remains available. Reusable references require Veo Lite or Fast. Use start / end frames for this run, or choose a supported single-shot mode to use reusable references.',
+        ]);
+        // Frames are the one side Quality takes: no switch to references.
+        expect(screen.queryByRole('radio', { name: 'References' })).not.toBeInTheDocument();
+      });
+
+      it('comes back when the creator moves from Quality to Fast', async () => {
+        saveInTheBrowser({ images: 1 });
+        render(<CreateVideoClient prefill={{ model: 'veo-3.1' }} />);
+        await restored();
+        chooseVariant('Quality');
+        await waitFor(() => expect(lastQuoteRequest().settings.mode).toBe('veo3'));
+        expect(slotCount(lastQuoteRequest(), 'imageReferences')).toBe(0);
+        chooseVariant('Fast');
+
+        await waitFor(() => expect(slotCount(lastQuoteRequest(), 'imageReferences')).toBe(1));
+        expect(lastQuoteRequest().settings).toMatchObject({ mode: 'veo3_fast', referenceMode: 'elements' });
+        expect(refusedByTheServer(lastQuoteRequest())).toBeNull();
+        expect(standbyCard()).toBeNull();
+      });
+
+      it('prices the Quality option as the run it makes, without the picture', async () => {
+        // Each listed run at the server's own price, or refused where the server refuses it.
+        priceListStandIn.price = pricedBy((request) => {
+          try {
+            return serverCatalog.quoteGenerationModel({ ...request, catalogRevision: undefined }).costCredits;
+          } catch {
+            return null;
+          }
+        });
+        saveInTheBrowser({ images: 1 });
+        render(<CreateVideoClient prefill={{ model: 'veo-3.1' }} />);
+        await restored();
+        chooseVariant('Fast');
+        await waitFor(() => expect(slotCount(lastQuoteRequest(), 'imageReferences')).toBe(1));
+
+        openSettings();
+        const variants = screen.getByRole('radiogroup', { name: /^Model variant/ });
+        // Lite and Fast take the picture; Quality leaves it waiting and makes the frames run.
+        expect(await within(variants).findByRole('radio', { name: /^Quality, 250 credits/ })).toBeInTheDocument();
+        expect(within(variants).getByRole('radio', { name: /^Lite, 30 credits/ })).toBeInTheDocument();
+        expect(within(variants).getByRole('radio', { name: /^Fast, 60 credits/ })).toBeInTheDocument();
+      });
+
+      it('prices a variant that takes the pictures as the page\'s own run, past the three it takes too', async () => {
+        // Four pictures are one more than Lite and Fast take: the run is refused on both until one
+        // goes, and Fast is not priced as a run of three the page would not send. Quality, which
+        // leaves them all waiting, makes its frames run.
+        priceListStandIn.price = pricedBy((request) => {
+          try {
+            return serverCatalog.quoteGenerationModel({ ...request, catalogRevision: undefined }).costCredits;
+          } catch {
+            return null;
+          }
+        });
+        saveInTheBrowser({ images: 4 });
+        render(<CreateVideoClient prefill={{ model: 'veo-3.1' }} />);
+        await restored();
+        chooseVariant('Lite');
+        await waitFor(() => expect(slotCount(lastQuoteRequest(), 'imageReferences')).toBe(4));
+
+        openSettings();
+        const variants = screen.getByRole('radiogroup', { name: /^Model variant/ });
+        expect(await within(variants).findByRole('radio', { name: /^Quality, 250 credits/ })).toBeInTheDocument();
+        expect(within(variants).getByRole('radio', { name: 'Fast' })).toBeInTheDocument();
+      });
     });
 
     /**

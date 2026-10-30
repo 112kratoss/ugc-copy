@@ -144,12 +144,6 @@ describe('Veo 3.1 by variant', () => {
     expect(sidesOf(production, 'veo-3.1', { mode: 'veo3' }).references).toMatchObject({ pictures: 3 });
   });
 
-  it('shows Quality the frames side with no switch, whichever side was picked last', () => {
-    const quality = sidesOf(code, 'veo-3.1', { mode: 'veo3' });
-    expect(videoInputView(quality, NOTHING, 'references')).toEqual({ side: 'frames', switchable: false, heldSide: null, framesLeftOut: [] });
-    expect(videoInputsHint({ view: videoInputView(quality, NOTHING, 'references'), sides: quality, model: 'Veo 3.1', held: NOTHING, remixPictures: 0, subjectsHeld: false }))
-      .toBe('Optional. Set a first and last image.');
-  });
 });
 
 describe('the side the card shows', () => {

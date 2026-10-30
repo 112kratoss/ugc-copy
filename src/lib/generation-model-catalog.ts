@@ -5,13 +5,13 @@ import { modeGatedSettingValues } from '../../ugc-mobile/lib/model-catalog/proto
 import {
   IMAGE_MODELS,
   MOTION_MODELS,
+  VEO_REFERENCE_MODES,
   VIDEO_MODELS,
   getImageQualityModes,
   getVideoDurationRange,
   type VideoModelId,
 } from '@/lib/models';
 import {
-  VEO_REFERENCE_MODES,
   buildCodeGenerationModelOperations,
   calculateGenerationModelRuntimeCost,
   generationModelConditionMatches,

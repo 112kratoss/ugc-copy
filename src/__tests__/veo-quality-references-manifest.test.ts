@@ -17,10 +17,6 @@ import {
 } from '@/lib/generation-model-runtime';
 import {
   CLIENT_RENDERED_CONTROL_TYPES,
-  CLIENT_RENDERED_INPUT_CONSTRAINT_TYPES,
-  CLIENT_RENDERED_INPUT_MODE_KEYS,
-  CLIENT_RENDERED_INPUT_SLOT_KINDS,
-  CLIENT_RENDERED_INPUT_SLOT_ROLES,
   catalogConditionsMatch,
   catalogRunQuoteInput,
   type CatalogRunInputFact,
@@ -86,30 +82,30 @@ const published = projectGenerationModelDescriptor(parsePublishedModelDescriptor
   { web: released.webEnabled, mobile: released.mobileEnabled },
 ), 2);
 
-/** Quotes a Veo 3.1 run against the release's own entry, as production will once it is published. */
+// The release's own entry, as production's catalog will serve and quote it once it is published.
+const publishedCatalog = { ...catalog, models: catalog.models.map((model) => (model.id === 'veo-3.1' ? published : model)) };
+const publishedOperations = new Map<string, GenerationModelOperationalConfig>([['veo-3.1', {
+  modelId: released.modelId,
+  kind: released.kind,
+  adapterKey: released.adapterKey as GenerationModelOperationalConfig['adapterKey'],
+  adapterConfig: released.adapterConfig,
+  providerModelMap: released.providerModelMap,
+  pricingStrategy: released.pricingStrategy as GenerationModelOperationalConfig['pricingStrategy'],
+  pricingConfig: released.pricingConfig,
+  validationStrategy: released.validationStrategy as GenerationModelOperationalConfig['validationStrategy'],
+  validationConfig: released.validationConfig,
+  verificationConfig: released.verificationConfig,
+}]]);
+
+/** Quotes a Veo 3.1 run as both creators ask for it, against the release's own entry. */
 function quoteRun(settings: Record<string, string | number | boolean>, inputs: CatalogRunInputFact[] = []) {
-  const config: GenerationModelOperationalConfig = {
-    modelId: released.modelId,
-    kind: released.kind,
-    adapterKey: released.adapterKey as GenerationModelOperationalConfig['adapterKey'],
-    adapterConfig: released.adapterConfig,
-    providerModelMap: released.providerModelMap,
-    pricingStrategy: released.pricingStrategy as GenerationModelOperationalConfig['pricingStrategy'],
-    pricingConfig: released.pricingConfig,
-    validationStrategy: released.validationStrategy as GenerationModelOperationalConfig['validationStrategy'],
-    validationConfig: released.validationConfig,
-    verificationConfig: released.verificationConfig,
-  };
   return quoteGenerationModel(catalogRunQuoteInput({
     kind: 'video',
     modelId: 'veo-3.1',
     catalogRevision: catalog.revision,
     settings,
     inputs,
-  }), {
-    catalog: { ...catalog, models: catalog.models.map((model) => (model.id === 'veo-3.1' ? published : model)) },
-    operations: new Map([['veo-3.1', config]]),
-  });
+  }), { catalog: publishedCatalog, operations: publishedOperations });
 }
 
 function refusal(run: () => unknown): Record<string, string> {
@@ -174,10 +170,11 @@ describe('veo-quality-references release', () => {
     const modes = published.inputModes ?? [];
     const variants = published.controls.find((control) => control.key === 'mode');
     expect(variants?.type === 'choice' && variants.options.map((option) => option.value)).toEqual(['veo3_lite', 'veo3_fast', 'veo3']);
-    const opens = (key: string, settings: Record<string, string>) => catalogConditionsMatch(
-      modes.find((mode) => mode.key === key)?.conditions,
-      settings,
-    );
+    const opens = (key: string, settings: Record<string, string>) => {
+      const mode = modes.find((candidate) => candidate.key === key);
+      if (!mode) throw new Error(`veo-3.1 publishes no ${key} mode`);
+      return catalogConditionsMatch(mode.conditions, settings);
+    };
     expect(opens('references', { mode: 'veo3_lite', referenceMode: 'elements' })).toBe(true);
     expect(opens('references', { mode: 'veo3_fast', referenceMode: 'elements' })).toBe(true);
     expect(opens('references', { mode: 'veo3', referenceMode: 'elements' })).toBe(false);
@@ -204,30 +201,35 @@ describe('veo-quality-references release', () => {
   });
 
   it('uses only what installed apps already read, so it needs no app release', () => {
+    // The descriptor is production's entry with one condition more (above), so only that condition
+    // is new to the apps: the shared lists are held for every model by model-catalog-client-parity.
     expect(published.minClientSchemaVersion).toBe(1);
-    expect(published.controls.map((control) => control.key)).toEqual(
-      (previous.publicDescriptor.controls as Array<{ key: string }>).map((control) => control.key),
-    );
     for (const control of published.controls) {
       expect(CLIENT_RENDERED_CONTROL_TYPES as readonly string[]).toContain(control.type);
     }
-    for (const mode of published.inputModes ?? []) {
-      expect(CLIENT_RENDERED_INPUT_MODE_KEYS as readonly string[]).toContain(mode.key);
-      for (const slot of mode.slots) {
-        expect(CLIENT_RENDERED_INPUT_SLOT_KINDS as readonly string[]).toContain(slot.kind);
-        expect(CLIENT_RENDERED_INPUT_SLOT_ROLES as readonly string[]).toContain(slot.role);
-      }
-      // Both parsers have taken `in` with a list of values since the v2 catalog shipped
-      // (2026-07-24): a list must be non-empty for the native one.
-      for (const condition of mode.conditions ?? []) {
-        expect(['equals', 'in']).toContain(condition.operator);
-        if (condition.operator === 'in') {
-          expect(Array.isArray(condition.value) && condition.value.length > 0).toBe(true);
-        }
-      }
+    // Both parsers have taken `in` with a list of values since the v2 catalog shipped (2026-07-24),
+    // and the native one needs the list non-empty. The app's code in the store builds (from
+    // 6d435fb1 and 35d8cb29) keeps this descriptor and opens its pictures on Lite and Fast alone.
+    for (const condition of (published.inputModes ?? []).flatMap((mode) => mode.conditions ?? [])) {
+      expect(['equals', 'in']).toContain(condition.operator);
+      if (condition.operator === 'in') expect(Array.isArray(condition.value) && condition.value.length > 0).toBe(true);
     }
-    for (const constraint of published.inputConstraints ?? []) {
-      expect(CLIENT_RENDERED_INPUT_CONSTRAINT_TYPES as readonly string[]).toContain(constraint.type);
-    }
+  });
+
+  it('still refuses a Quality run from an app that counts its pictures without a slot', () => {
+    // The app's code before the run's shape was read off the descriptor keeps 'elements' once a
+    // picture is attached. On this descriptor its Quality request names no picture slot and still
+    // counts the pictures, and the quote refuses it by that count, with the reason it gave before.
+    const request = {
+      schemaVersion: 2 as const,
+      kind: 'video' as const,
+      modelId: 'veo-3.1',
+      settings: run('veo3', 'elements'),
+      inputCounts: { images: 2, videos: 0, audios: 0, preparedAudios: 0, characters: 0 },
+      inputMetadata: { slots: {}, referenceVideoDurationsSeconds: [] },
+      catalogRevision: catalog.revision,
+    };
+    expect(refusal(() => quoteGenerationModel(request, { catalog: publishedCatalog, operations: publishedOperations })))
+      .toEqual({ images: 'Reusable references require Veo Lite or Fast.' });
   });
 });
