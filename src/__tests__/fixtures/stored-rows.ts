@@ -6,6 +6,16 @@ type Call = (args: Row) => unknown;
 /** The filter the owner library route sends, word for word. Any other `or` is refused. */
 const LIBRARY_FILTER = 'and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true';
 
+const FAILURE = Symbol('database error');
+
+/**
+ * What a function in `calls` returns to fail the way Postgres fails: the call
+ * answers `{ data: null, error }`, as supabase-js reports it, and throws nothing.
+ */
+export function databaseError(code: string, message: string) {
+  return { [FAILURE]: { code, message } };
+}
+
 /**
  * Rows the real code can read the way it reads Postgres.
  *
@@ -143,7 +153,10 @@ export function createStoredRows(tables: Record<string, Row[]>, calls: Record<st
       const call = calls[name];
       if (!call) throw new Error(`Unexpected call: ${name}`);
       called.push(name);
-      return { data: await call(args), error: null };
+      const answer = await call(args);
+      return answer !== null && typeof answer === 'object' && FAILURE in answer
+        ? { data: null, error: (answer as { [FAILURE]: unknown })[FAILURE] }
+        : { data: answer, error: null };
     },
   };
 

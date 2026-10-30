@@ -730,7 +730,6 @@ export async function resolvePostRowsToFeedItems(
   // counted on the page a caller serves (addCreationReferenceCountsToFeedItems).
   const assetHydrationPromise = timed('hydrate_bundles', () =>
     getMarketplaceAssetSummaryHydration(postIds, adminSupabase));
-  const assetMapPromise = assetHydrationPromise.then(({ assetMap }) => assetMap);
   // Every read still starts together. Only the preview signing inside
   // `loadGenerationInfo` waits on the media rows, because only it needs to
   // know which covers already have a poster of their own — this function runs
@@ -739,14 +738,14 @@ export async function resolvePostRowsToFeedItems(
   const mediaItemsPromise = timed('hydrate_media', () => loadPostMediaItemsMap(adminSupabase, postIds));
   const [
     profilesMap,
-    assetMap,
+    { assetMap, unreadRecipePostIds },
     mediaItemsMap,
     sourceToolsMap,
     generationInfoMap,
     nsfwIds,
   ] = await Promise.all([
     timed('hydrate_profiles', loadProfiles),
-    assetMapPromise,
+    assetHydrationPromise,
     mediaItemsPromise,
     timed('hydrate_tools', loadSourceTools),
     timed('hydrate_generations', () => loadGenerationInfo(mediaItemsPromise)),
@@ -775,12 +774,16 @@ export async function resolvePostRowsToFeedItems(
 
       const profile = post.user_id ? profilesMap[post.user_id] : undefined;
       const asset = assetMap.get(post.id) ?? null;
+      // A recipe that could not be read may sell this post's prompt, which the
+      // post can still store from before it had one: served as a paid recipe
+      // nobody has unlocked, never as a post without a recipe.
+      const recipeUnread = !asset && unreadRecipePostIds.has(post.id);
       const publicContent = sanitizePublicPostContent({
         prompt: post.prompt?.trim() || '',
         body: post.body?.trim() || '',
         description: post.description?.trim() || '',
-        hasRecipe: Boolean(asset),
-        isPaidRecipe: asset?.accessMode === 'paid',
+        hasRecipe: Boolean(asset) || recipeUnread,
+        isPaidRecipe: asset?.accessMode === 'paid' || recipeUnread,
       });
       const body = publicContent.body;
       // A template result's reads as Studio's `template-workflow` (`loadGenerationPreviewInfoMap`).
@@ -805,7 +808,9 @@ export async function resolvePostRowsToFeedItems(
               allowRemix: asset.allowRemix,
               items: asset.lockedPreview?.itemPreviews ?? [],
             }
-          : null,
+          : recipeUnread
+            ? { viewerCanAccess: false, allowRemix: false, items: [] }
+            : null,
       });
 
       const item: ShowcaseFeedItem = {

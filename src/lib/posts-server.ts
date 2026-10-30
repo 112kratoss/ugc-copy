@@ -409,6 +409,13 @@ export async function findPublicPostReferenceByIdOrGenerationId(
 export interface MarketplaceAssetSummaryHydration {
   assetMap: Map<string, ShowcaseAssetSummary>;
   knownBundlePostIds: ReadonlySet<string> | null;
+  /**
+   * Posts whose published recipe could not be read: the read failed, or it
+   * answered with a row this code does not trust. Any of them may sell its
+   * prompt and Remix, so a reader serves each as a locked recipe it cannot
+   * show, never as a post without one. A draft is not unread: it sells nothing.
+   */
+  unreadRecipePostIds: ReadonlySet<string>;
 }
 
 const PUBLIC_BUNDLE_SUMMARY_RPC = 'get_public_post_resource_bundle_summaries';
@@ -450,7 +457,17 @@ function failClosedMarketplaceAssetSummaryHydration(postIds: string[]): Marketpl
     // be established. This prevents a database error from synthesizing a public
     // recipe over an intentional draft bundle.
     knownBundlePostIds: new Set(postIds),
+    unreadRecipePostIds: new Set(postIds),
   };
+}
+
+/** A published row with what a recipe's summary needs; without it the recipe cannot be shown. */
+function isReadablePublishedBundleRow(row: Record<string, unknown>): boolean {
+  return typeof row.id === 'string' &&
+    typeof row.post_id === 'string' &&
+    typeof row.title === 'string' &&
+    (row.access_mode === 'free' || row.access_mode === 'paid') &&
+    typeof row.price_usd_cents === 'number';
 }
 
 function buildMarketplaceAssetSummaryMap(
@@ -459,13 +476,7 @@ function buildMarketplaceAssetSummaryMap(
   return new Map(
     bundleRows
       .filter((row) => row.status === 'published')
-      .filter((row) =>
-        typeof row.id === 'string' &&
-        typeof row.post_id === 'string' &&
-        typeof row.title === 'string' &&
-        (row.access_mode === 'free' || row.access_mode === 'paid') &&
-        typeof row.price_usd_cents === 'number'
-      )
+      .filter(isReadablePublishedBundleRow)
       .map((row) => {
         const salesCount = typeof row.sales_count === 'number' ? row.sales_count : 0;
         // Absent from the missing-RPC fallback's select, which serves only a
@@ -514,6 +525,23 @@ function buildMarketplaceAssetSummaryMap(
   );
 }
 
+/** The summaries of the published recipes among `rows`, and those it could not read. */
+function hydrateBundleSummaryRows(
+  rows: Array<Record<string, unknown>>,
+  knownBundlePostIds: ReadonlySet<string>
+): MarketplaceAssetSummaryHydration {
+  const assetMap = buildMarketplaceAssetSummaryMap(rows);
+  return {
+    assetMap,
+    knownBundlePostIds,
+    unreadRecipePostIds: new Set(
+      rows
+        .filter((row) => row.status === 'published' && typeof row.post_id === 'string' && !assetMap.has(row.post_id))
+        .map((row) => row.post_id as string)
+    ),
+  };
+}
+
 function hydratePublicBundleSummaryRows(
   rows: Array<Record<string, unknown>>,
   postIds: string[]
@@ -534,10 +562,7 @@ function hydratePublicBundleSummaryRows(
     }
   }
 
-  return {
-    assetMap: buildMarketplaceAssetSummaryMap(rows),
-    knownBundlePostIds,
-  };
+  return hydrateBundleSummaryRows(rows, knownBundlePostIds);
 }
 
 async function getMarketplaceAssetSummaryHydrationFallback(
@@ -567,7 +592,7 @@ async function getMarketplaceAssetSummaryHydrationFallback(
     .filter((postId): postId is string => typeof postId === 'string');
 
   if (publishedPostIds.length === 0) {
-    return { assetMap: new Map(), knownBundlePostIds };
+    return { assetMap: new Map(), knownBundlePostIds, unreadRecipePostIds: new Set() };
   }
 
   const bundleSelectWithItems =
@@ -589,15 +614,13 @@ async function getMarketplaceAssetSummaryHydrationFallback(
   if (bundleResult.error) {
     if (isMissingPostResourceBundlesSchemaError(bundleResult.error)) return null;
     logBackendError('failed_to_load_published_post_resource_bundle_summaries', { error: bundleResult.error });
-    return { assetMap: new Map(), knownBundlePostIds };
+    return { assetMap: new Map(), knownBundlePostIds, unreadRecipePostIds: new Set(publishedPostIds) };
   }
 
-  return {
-    assetMap: buildMarketplaceAssetSummaryMap(
-      (bundleResult.data ?? []) as unknown as Array<Record<string, unknown>>
-    ),
-    knownBundlePostIds,
-  };
+  return hydrateBundleSummaryRows(
+    (bundleResult.data ?? []) as unknown as Array<Record<string, unknown>>,
+    knownBundlePostIds
+  );
 }
 
 async function getLegacyMarketplaceAssetSummaryHydration(
@@ -611,12 +634,14 @@ async function getLegacyMarketplaceAssetSummaryHydration(
     .eq('status', 'active');
 
   if (error) {
-    if (!isMissingMarketplaceSchemaError(error)) {
+    const hasNoMarketplace = isMissingMarketplaceSchemaError(error);
+    if (!hasNoMarketplace) {
       logBackendError('failed_to_load_legacy_marketplace_asset_summaries', { error: error });
     }
     return {
       assetMap: new Map(),
       knownBundlePostIds: null,
+      unreadRecipePostIds: hasNoMarketplace ? new Set() : new Set(postIds),
     };
   }
 
@@ -645,6 +670,7 @@ async function getLegacyMarketplaceAssetSummaryHydration(
         ])
     ),
     knownBundlePostIds: null,
+    unreadRecipePostIds: new Set(),
   };
 }
 
@@ -656,6 +682,7 @@ export async function getMarketplaceAssetSummaryHydration(
     return {
       assetMap: new Map(),
       knownBundlePostIds: new Set(),
+      unreadRecipePostIds: new Set(),
     };
   }
 

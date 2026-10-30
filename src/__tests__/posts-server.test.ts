@@ -35,16 +35,22 @@ let rpcCallsState: string[] = [];
 let tableAccessesState: string[] = [];
 let selectedColumnsState: string[] = [];
 let tableQueryErrorState: TestDatabaseError | null = null;
+/** Fails only the fallback's second read, the one that selects published details. */
+let detailQueryErrorState: TestDatabaseError | null = null;
 
 function createThenableQuery<T extends Record<string, unknown>>(rows: T[]) {
   const filters: Array<(row: T) => boolean> = [];
+  let selected = '';
 
   const applyFilters = () =>
     rows.filter((row) => filters.every((filter) => filter(row)));
 
   const query = {
     select(columns?: string) {
-      if (typeof columns === 'string') selectedColumnsState.push(columns);
+      if (typeof columns === 'string') {
+        selectedColumnsState.push(columns);
+        selected = columns;
+      }
       return query;
     },
     in(column: string, values: unknown[]) {
@@ -56,9 +62,11 @@ function createThenableQuery<T extends Record<string, unknown>>(rows: T[]) {
       return query;
     },
     then(resolve: (value: { data: T[] | null; error: unknown }) => void) {
+      const error = tableQueryErrorState
+        ?? (selected.includes('prompt_text') ? detailQueryErrorState : null);
       resolve({
-        data: tableQueryErrorState ? null : applyFilters(),
-        error: tableQueryErrorState,
+        data: error ? null : applyFilters(),
+        error,
       });
     },
   };
@@ -127,6 +135,7 @@ describe('posts-server marketplace summaries', () => {
     tableAccessesState = [];
     selectedColumnsState = [];
     tableQueryErrorState = null;
+    detailQueryErrorState = null;
     draftFreeUnlockCountState = null;
     resourceBundlesState = [
       {
@@ -273,6 +282,7 @@ describe('posts-server marketplace summaries', () => {
 
     expect(hydration.assetMap.size).toBe(0);
     expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
+    expect(Array.from(hydration.unreadRecipePostIds).sort()).toEqual(['post-1', 'post-2']);
     expect(JSON.parse(consoleError.mock.calls[0][0] as string).msg)
       .toBe('public_bundle_summary_rpc_returned_details_for_a_non_published_bundle');
   });
@@ -283,6 +293,8 @@ describe('posts-server marketplace summaries', () => {
 
     expect(Array.from(hydration.assetMap.keys())).toEqual(['post-1']);
     expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
+    // A draft sells nothing yet, so its post is not a recipe left unread.
+    expect(Array.from(hydration.unreadRecipePostIds)).toEqual([]);
     expect(rpcCallsState).toEqual(['get_public_post_resource_bundle_summaries']);
     expect(tableAccessesState).toEqual([]);
     expect(JSON.stringify(lastRpcResponseState)).not.toContain('DRAFT_SECRET');
@@ -298,6 +310,7 @@ describe('posts-server marketplace summaries', () => {
 
     expect(Array.from(hydration.assetMap.keys())).toEqual(['post-1']);
     expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
+    expect(Array.from(hydration.unreadRecipePostIds)).toEqual([]);
     expect(tableAccessesState).toEqual(['post_resource_bundles', 'post_resource_bundles']);
     expect(selectedColumnsState[0]).toBe('post_id, status');
     expect(selectedColumnsState[1]).toContain('prompt_text');
@@ -314,6 +327,7 @@ describe('posts-server marketplace summaries', () => {
 
     expect(hydration.assetMap.size).toBe(0);
     expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
+    expect(Array.from(hydration.unreadRecipePostIds).sort()).toEqual(['post-1', 'post-2']);
     expect(tableAccessesState).toEqual([]);
     // The failure is now reported through the structured logger, so assert the
     // stable event name and the surfaced error rather than a message string.
@@ -338,11 +352,40 @@ describe('posts-server marketplace summaries', () => {
 
     expect(hydration.assetMap.size).toBe(0);
     expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
+    expect(Array.from(hydration.unreadRecipePostIds).sort()).toEqual(['post-1', 'post-2']);
     expect(tableAccessesState).toEqual(['post_resource_bundles']);
     expect(selectedColumnsState).toEqual(['post_id, status']);
     const presenceLog = JSON.parse(consoleError.mock.calls[0][0] as string);
     expect(presenceLog.msg).toBe('failed_to_load_post_resource_bundle_presence');
     expect(presenceLog.level).toBe('error');
     expect(presenceLog.errorMessage).toBe(tableQueryErrorState.message);
+  });
+
+  it('marks a published recipe it cannot read as unread, not as no recipe', async () => {
+    resourceBundlesState[0] = { ...resourceBundlesState[0], title: null as unknown as string };
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
+    const hydration = await getMarketplaceAssetSummaryHydration(['post-1', 'post-2']);
+
+    expect(hydration.assetMap.size).toBe(0);
+    expect(Array.from(hydration.unreadRecipePostIds)).toEqual(['post-1']);
+  });
+
+  it('marks the published recipes unread when the missing-RPC fallback cannot read their details', async () => {
+    rpcErrorState = {
+      code: 'PGRST202',
+      message: 'Could not find the function public.get_public_post_resource_bundle_summaries(p_post_ids) in the schema cache',
+    };
+    detailQueryErrorState = {
+      code: 'XX000',
+      message: 'temporary detail query failure',
+    };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
+    const hydration = await getMarketplaceAssetSummaryHydration(['post-1', 'post-2']);
+
+    expect(hydration.assetMap.size).toBe(0);
+    expect(Array.from(hydration.unreadRecipePostIds)).toEqual(['post-1']);
+    expect(JSON.parse(consoleError.mock.calls[0][0] as string).msg)
+      .toBe('failed_to_load_published_post_resource_bundle_summaries');
   });
 });
