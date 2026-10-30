@@ -69,6 +69,19 @@ npm run ops:moderation -- dismiss-post \
   --confirm
 ```
 
+## Copyright and trademark complaints
+
+The Terms (section 8, 2026-10-30) keep AI fan art of well-known characters up: it stays personal and unsold and comes down when the rights owner asks. A resemblance alone is not a reason to remove a post; a complaint from the owner, or from someone acting for them, is. Complaints arrive two ways: a "Stolen content" report on the post (web post page, or the app viewer's ••• menu; it needs an account) or an email to the support address with the details section 8 lists.
+
+1. Check the complaint names a work, the posts, and who is asking (the owner or their agent), with the good-faith statement. Ask by email for what is missing; a "Stolen content" report from someone not shown to be the owner is not enough on its own.
+2. While you decide, hide the post from `/admin` → Content (reversible, and it records who and why). Do not take it down yet: a take-down cannot be restored.
+3. Email the poster (the account's address) with the complaint and how to reply. Section 8 promises no automatic notice, so this email is the notice.
+4. If it infringes, take it down: from the report (`take-down-post` above) or, for an emailed complaint, from `/admin` → Content. If it does not, restore it from `/admin` → Content and dismiss the report. A poster whose post was taken down by mistake posts it again, as section 8 says.
+5. A paid recipe or bundle featuring someone else's characters or brands breaks section 8 whoever complains: take it down, and before paying out, check the seller's requests for earnings from it (section 8 lets us withhold them).
+6. Keep a note of each confirmed infringement per account; suspend an account that keeps infringing (`/admin` → Users).
+
+Emailed complaints do not enter the queue or its 24-hour alerts: answer them from the support inbox within the same service level.
+
 ## Comment reports
 
 The queue includes the comment id, post id, current status, and a short body

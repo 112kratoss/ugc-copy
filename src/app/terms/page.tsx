@@ -123,31 +123,34 @@ export default function TermsOfService() {
                             to all input content.
                         </p>
                         <p className="mb-4">
-                            <strong>AI Fan Art:</strong> People use {siteConfig.name} to make AI images and videos inspired by
-                            films, series, games, anime and comics, including well-known characters. You may create and
-                            share this kind of fan art on {siteConfig.name} as personal, non-commercial creative work. It is
-                            not official and not endorsed by the owners of those characters, so do not present it as
-                            official, do not use their logos or names to suggest a connection, and do not sell it: recipes,
-                            bundles and other paid items must not feature characters, brands or works you do not have the
-                            rights to. Images of real people must also follow the Acceptable Use rules above.
+                            <strong>AI Fan Art:</strong> Many people use {siteConfig.name} to make images and videos inspired
+                            by films, series, games, anime and comics. We do not own those characters and cannot give you
+                            any rights in them, and owning an image you make here does not give you rights in the
+                            characters, brands or works it shows. If you share fan art, keep it personal and
+                            non-commercial, do not present it as official or use logos or names to suggest a connection,
+                            and we will remove it if the owner asks. Recipes, bundles and other paid items must not feature
+                            characters, brands or works you do not have the rights to; if we remove a paid item for
+                            breaking this rule, we may withhold or cancel the earnings from its sales. Images of real
+                            people must also follow the Acceptable Use rules above.
                         </p>
                         <p className="mb-4">
-                            <strong>Copyright and Trademark Complaints:</strong> If you own a character, brand or other work
-                            and believe a post infringes it, report the post as &ldquo;Stolen content&rdquo; or email us at{" "}
+                            <strong>Copyright and Trademark Complaints:</strong> If you own a character, brand or other work,
+                            or act for its owner, and believe a post infringes it, open the post and report it as
+                            &ldquo;Stolen content&rdquo; (you need a {siteConfig.name} account), or email us at{" "}
                             <a href={`mailto:${siteConfig.supportEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">
                                 {siteConfig.supportEmail}
                             </a>{" "}
                             with:
                         </p>
                         <ul className="list-disc list-inside space-y-2 ml-4 mb-4">
-                            <li>Your name and contact details</li>
-                            <li>The work you own, and the link to each post you believe infringes it</li>
+                            <li>Your name and contact details, and whether you act for the owner</li>
+                            <li>The work, and the link to each post you believe infringes it</li>
                             <li>A statement that you believe in good faith the use is not authorized, and that your notice is accurate</li>
                         </ul>
                         <p>
-                            We review every complaint, remove content that infringes, and tell the person who posted it.
-                            If your post was removed and you believe that was a mistake, reply to our email and we will
-                            look at it again. We may close the accounts of people who repeatedly infringe.
+                            We review every complaint and remove content that infringes. If your post was removed and you
+                            believe that was a mistake, email us at the same address with the link to the post; if we
+                            agree, you can post it again. We may close the accounts of people who repeatedly infringe.
                         </p>
                     </section>
 
