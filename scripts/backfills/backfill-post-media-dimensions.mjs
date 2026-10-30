@@ -53,7 +53,7 @@ const FETCH_TIMEOUT_MS = 30_000;
 const SIGNED_URL_TTL_SECONDS = 120;
 const CONCURRENCY = 6;
 const NULL_SIZE_FILTER = 'width.is.null,height.is.null';
-const CANDIDATE_COLUMNS = 'id, post_id, media_kind, storage_path, external_url, preview_storage_path, sort_order, width, height, source_unavailable_at, posts!inner(user_id, generation_id)';
+const CANDIDATE_COLUMNS = 'id, post_id, media_kind, storage_path, external_url, preview_storage_path, sort_order, width, height, source_unavailable_at, posts!inner(user_id, generation_id, deleted_generation_id)';
 // The buckets `getUserOwnedStoredMediaLocation` accepts for a creator's file.
 const USER_SCOPED_BUCKETS = new Set([
   'uploads',
@@ -161,7 +161,8 @@ export function postMediaBucket(path) {
 /**
  * A `post_media` path only where the preview sweep would read it
  * (`getCanonicalPostMediaPath` in src/lib/media-preview-repair.ts): under the
- * post's own prefix, or under its generation's `showcase/` prefix.
+ * post's own prefix, or under its creation's `showcase/` prefix (a deleted
+ * one's too, which the post records).
  *
  * @param {unknown} path
  * @param {{ postId: string, generationId: string | null }} scope
@@ -221,7 +222,11 @@ function embeddedPost(row) {
   const post = Array.isArray(row?.posts) ? row.posts[0] : row?.posts;
   return {
     userId: typeof post?.user_id === 'string' ? post.user_id : null,
-    generationId: typeof post?.generation_id === 'string' ? post.generation_id : null,
+    // A post whose creation was deleted keeps the creation's folder, which it
+    // records (`deleted_generation_id`).
+    generationId: typeof post?.generation_id === 'string' ? post.generation_id
+      : typeof post?.deleted_generation_id === 'string' ? post.deleted_generation_id
+        : null,
   };
 }
 

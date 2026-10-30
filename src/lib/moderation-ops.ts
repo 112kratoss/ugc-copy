@@ -15,7 +15,6 @@ const RESOLVED_POST_REPORT_STATUSES = ['reviewed', 'dismissed'];
 const RESOLVED_SUBJECT_REPORT_STATUSES = ['resolved', 'dismissed'];
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const GENERATED_MEDIA_BUCKETS = ['generated_images', 'generated_videos', 'generated_audio'];
-const GENERATION_FOLDER = /^(?:showcase|private-posts)\/([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\//;
 const POST_MEDIA_PATH_COLUMNS = [
   'storage_path',
   'preview_storage_path',
@@ -196,6 +195,8 @@ type PostModerationMediaRow = {
   id: string;
   user_id: string;
   generation_id: string | null;
+  /** The creation whose delete unlinked the post; the database writes it. */
+  deleted_generation_id: string | null;
   showcase_asset_path: string | null;
   output_url: string | null;
 };
@@ -360,56 +361,6 @@ async function isOwnOrLinkedAccount(
 }
 
 /**
- * The deleted creation a post's copy is filed under. `posts.generation_id` is
- * ON DELETE SET NULL, and deleting a creation keeps the copy its post serves,
- * so the post is left naming `showcase/<generation>/…` (or `private-posts/`)
- * with no creation to verify it against. The folder is this post's alone only
- * when nothing else can be serving a file in it: no creation by that id, and
- * no other post or post media row naming a path in it. Media filed under more
- * than one creation proves nothing, and the scope check refuses it.
- */
-async function readDeletedGenerationId(
-  supabase: SupabaseClient,
-  postId: string,
-  storageValues: Array<string | null | undefined>,
-): Promise<string | null> {
-  const generationIds = new Set<string>();
-  for (const value of storageValues) {
-    const generationId = GENERATION_FOLDER.exec(normalizeShowcaseMediaPath(value) ?? '')?.[1];
-    if (generationId && generationId !== postId) generationIds.add(generationId);
-  }
-  if (generationIds.size !== 1) return null;
-
-  const [generationId] = generationIds;
-  const namesFolder = (columns: readonly string[]) => columns
-    .map((column) => `${column}.like.*/${generationId}/*`)
-    .join(',');
-  const [generation, otherPosts, otherMedia] = await Promise.all([
-    supabase.from('generations').select('id').eq('id', generationId).maybeSingle(),
-    supabase
-      .from('posts')
-      .select('id')
-      .neq('id', postId)
-      .or(namesFolder(['showcase_asset_path', 'output_url']))
-      .limit(1),
-    supabase
-      .from('post_media')
-      .select('post_id')
-      .neq('post_id', postId)
-      .or(namesFolder(POST_MEDIA_PATH_COLUMNS))
-      .limit(1),
-  ]);
-  const error = generation.error ?? otherPosts.error ?? otherMedia.error;
-  if (error) {
-    throw databaseError('Failed to verify the taken-down copy belongs to this post alone', error);
-  }
-  const nothingElseNamesIt = !generation.data
-    && Array.isArray(otherPosts.data) && otherPosts.data.length === 0
-    && Array.isArray(otherMedia.data) && otherMedia.data.length === 0;
-  return nothingElseNamesIt ? generationId : null;
-}
-
-/**
  * Whoever made a deleted creation, read off the folder its private original
  * sits in, when that is the post's owner or a guest linked to the post's
  * owner. Anyone else leaves the original to the scope check.
@@ -438,7 +389,7 @@ export async function revokePostPublicMedia(
   const [postResult, mediaResult] = await Promise.all([
     supabase
       .from('posts')
-      .select('id, user_id, generation_id, showcase_asset_path, output_url')
+      .select('id, user_id, generation_id, deleted_generation_id, showcase_asset_path, output_url')
       .eq('id', postId)
       .maybeSingle(),
     supabase
@@ -482,11 +433,10 @@ export async function revokePostPublicMedia(
       generationOwnerId = ownerId;
     }
   } else {
-    verifiedGenerationId = await readDeletedGenerationId(
-      supabase,
-      postId,
-      [post.showcase_asset_path, post.output_url, ...mediaValues],
-    );
+    // `posts.generation_id` is ON DELETE SET NULL, and deleting a creation
+    // keeps the copy its post serves. The database recorded that creation on
+    // the post when the delete unlinked it, and nothing else can write that.
+    verifiedGenerationId = post.deleted_generation_id;
     // Asked even with no copy left: a post made private before its creation
     // was deleted names nothing but the original.
     generationOwnerId = await readDeletedGenerationOwnerId(supabase, post);

@@ -18,6 +18,8 @@ type MockPost = {
   id: string;
   user_id: string;
   generation_id: string | null;
+  /** The creation whose delete unlinked the post; the database writes it. */
+  deleted_generation_id?: string | null;
   visibility: 'public' | 'unlisted' | 'private';
   title: string | null;
   source_kind: string;
@@ -125,7 +127,13 @@ function createSupabaseMock({
       },
       maybeSingle() {
         if (table === 'posts') {
-          return Promise.resolve({ data: post, error: null });
+          // Only the columns the read asked for, as PostgREST answers.
+          return Promise.resolve({
+            data: post && selected
+              ? Object.fromEntries(selected.map((column) => [column, (post as Record<string, unknown>)[column]]))
+              : post,
+            error: null,
+          });
         }
 
         if (table === 'post_resource_bundles') {
@@ -611,6 +619,55 @@ describe('deleteOwnerPostForRoute', () => {
       })).resolves.toMatchObject({ ok: true });
 
       expect(calls.deletes).toEqual([{ table: 'posts', filters: { id: 'post-1', user_id: 'user-1' } }]);
+      expect(calls.removals).toEqual([]);
+    });
+  });
+
+  // Deleting a creation keeps its post and the copy the post serves, and
+  // unlinks the post (`generation_id` is ON DELETE SET NULL); the post records
+  // the creation in `deleted_generation_id`.
+  describe('whose creation was deleted', () => {
+    const unlinkedPost: MockPost = {
+      id: 'post-1',
+      user_id: 'user-1',
+      generation_id: null,
+      deleted_generation_id: 'generation-4',
+      visibility: 'public',
+      title: 'Creation since deleted',
+      source_kind: 'magicbooklet',
+      showcase_asset_path: 'showcase/generation-4/public.jpg',
+    };
+
+    async function deletePost(post: MockPost) {
+      const mock = createSupabaseMock({ post, bundle: null });
+      await expect(deleteOwnerPostForRoute({
+        adminSupabase: mock.client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+      })).resolves.toMatchObject({ ok: true });
+      return mock.calls;
+    }
+
+    it('removes the public copy filed under the creation it recorded, straight away', async () => {
+      const calls = await deletePost(unlinkedPost);
+
+      expect(calls.removals).toEqual([
+        { bucket: 'showcase_media', paths: ['showcase/generation-4/public.jpg'] },
+      ]);
+      // The database wrote the record when the creation went; there is no row
+      // left to ask.
+      expect(calls.tables).not.toContain('generations');
+    });
+
+    it('leaves a path outside that folder', async () => {
+      const calls = await deletePost({ ...unlinkedPost, showcase_asset_path: 'showcase/generation-5/public.jpg' });
+
+      expect(calls.removals).toEqual([]);
+    });
+
+    it('leaves a creation folder the post did not record', async () => {
+      const calls = await deletePost({ ...unlinkedPost, deleted_generation_id: null });
+
       expect(calls.removals).toEqual([]);
     });
   });
