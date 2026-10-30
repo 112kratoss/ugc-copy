@@ -2126,39 +2126,93 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     });
 
-    // A remix of someone else's run is given no settings naming its clips, only
-    // the clips, each with the handle the prompt mentions it by. The app names
-    // every clip "Reference Video", and the first was taken away before the run,
-    // so neither handle is the one a clip's name and place would give.
-    it('restores a Kling clip under the handle its remix bundle hands with it', async () => {
-      stubRemix({
-        generation: { id: 'gen-1', title: 'Harbour', prompt: '@reference_video_2 walks in, @reference_video_3 waves', category: 'video', model: 'kling-3.0-video' },
-        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
-        inputs: {
-          video: {
-            referenceMode: 'elements',
-            startFrame: null,
-            endFrame: null,
-            elements: [],
-            referenceVideos: [['00', '@reference_video_2'], ['01', '@reference_video_3']].map(([index, handle]) => ({
-              kind: 'video' as const,
-              label: 'Reference Video',
-              handle,
-              storagePath: `generation_inputs/owner-1/gen-1/${index}-reference_video.mp4`,
-              sourceGenerationId: null,
-              url: `https://signed.example.com/generation_inputs/owner-1/gen-1/${index}-reference_video.mp4`,
-            })),
-            referenceAudios: [],
-          },
+    /**
+     * A remix of someone else's Kling 3.0 run: it is given no settings naming its clips,
+     * only the clips, each with the handle the prompt mentions it by where the run kept one.
+     */
+    const klingClipsRemix = (
+      prompt: string,
+      clips: Array<{ label: string; handle?: string }>,
+      workflowSettings: Record<string, unknown> = {},
+    ): RemixSourceBundle => ({
+      generation: { id: 'gen-1', title: 'Harbour', prompt, category: 'video', model: 'kling-3.0-video' },
+      result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [],
+          referenceVideos: clips.map(({ label, handle }, index) => ({
+            kind: 'video' as const,
+            label,
+            ...(handle ? { handle } : {}),
+            storagePath: `generation_inputs/owner-1/gen-1/0${index}-reference_video.mp4`,
+            sourceGenerationId: null,
+            url: `https://signed.example.com/generation_inputs/owner-1/gen-1/0${index}-reference_video.mp4`,
+          })),
+          referenceAudios: [],
         },
-        workflowSettings: { model: 'kling-3.0-video' },
-        restoreIssues: [],
-      });
+      },
+      workflowSettings: { model: 'kling-3.0-video', ...workflowSettings },
+      restoreIssues: [],
+    });
+    const unhandedClips = (label: string, count: number) => Array.from({ length: count }, () => ({ label }));
+
+    // The app names every clip "Reference Video", and the first was taken away before the
+    // run, so neither handle is the one a clip's name and place would give.
+    it('restores a Kling clip under the handle its remix bundle hands with it', async () => {
+      stubRemix(klingClipsRemix('@reference_video_2 walks in, @reference_video_3 waves', [
+        { label: 'Reference Video', handle: '@reference_video_2' },
+        { label: 'Reference Video', handle: '@reference_video_3' },
+      ]));
 
       const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
       await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@reference_video_2', '@reference_video_3']));
       expect(promptBox()).toHaveValue('@reference_video_2 walks in, @reference_video_3 waves');
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    // A run kept before clips had handles hands them back with none, while its words still
+    // name the handles its clips had. Rebuilt from name and place, they come back as the
+    // source named them, unless the source lost a clip first.
+    it('rebuilds a Kling clip handed without a handle from its name and place when that answers every mention', async () => {
+      stubRemix(klingClipsRemix('@video_element_1 hands the cup to @video_element_2', [
+        { label: 'Video element 1' },
+        { label: 'Video element 2' },
+      ]));
+
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1', '@video_element_2']));
+      expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
+    });
+
+    // The same remix as the handed one above, from before handles were kept: rebuilt from
+    // name and place, the second clip took "@reference_video_2", the first clip's mention,
+    // without a word.
+    it('names Kling clips handed without a handle past every mentioned handle when the rebuild leaves one unanswered', async () => {
+      stubRemix(klingClipsRemix('@reference_video_2 walks in, @reference_video_3 waves', unhandedClips('Reference Video', 2)));
+
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@reference_video', '@reference_video_4']));
+      expect(promptBox()).toHaveValue('@reference_video_2 walks in, @reference_video_3 waves');
+      // Held on the mentions no clip answers, for the creator to point them at the right clips.
+      const notice = screen.getByText(/Unknown element mentions/);
+      expect(notice.textContent).toContain('@reference_video_2');
+      expect(notice.textContent).toContain('@reference_video_3');
+    });
+
+    it('reads the restored shots for the handles a Kling clip handed without one must not take', async () => {
+      stubRemix(klingClipsRemix('', unhandedClips('Reference Video', 2), {
+        isMultiShot: true,
+        multiPrompts: [
+          { id: 'shot-1', prompt: '@reference_video_2 walks in.', duration: 3 },
+          { id: 'shot-2', prompt: '@reference_video_3 waves.', duration: 2 },
+        ],
+      }));
+
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@reference_video', '@reference_video_4']));
     });
 
     it('gives a renamed image reference the handle of its new name, and the prompt follows', async () => {

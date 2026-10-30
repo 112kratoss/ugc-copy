@@ -1,9 +1,11 @@
 import { createReadStream } from 'node:fs';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
+  assignElementHandles,
   buildElementHandle,
   compileImagePromptWithElements,
   compilePromptWithElements,
+  extractMentionedHandles,
   findUnknownPromptHandles,
   isValidElementHandle,
   normalizeElementDisplayName,
@@ -1017,58 +1019,48 @@ function normalizeReferenceImageInputs(value: ReferenceImageInput[] | undefined)
     } => Boolean(reference));
 }
 
-function normalizeKlingVideoElementInputs(value: KlingVideoElementInput[] | undefined) {
-  const usedHandles = new Set<string>();
+/**
+ * Kling 3.0's clips, each under the handle Kie is sent it by (Kling reads no plain clip
+ * link), named as the creators name theirs (`assignElementHandles`): a clip keeps a handle
+ * no clip before it holds, and every other clip gets one made from its name. A clip may
+ * come without one: an installed app sends a clip carried over from a model whose clips
+ * take none as `handle: null`.
+ *
+ * A made handle is never one the run's words mention. In a remix of a run kept before
+ * clips had handles, the words still name the source's, and a made handle that took one
+ * would bind that mention to a clip it never meant; the start refuses the mention as
+ * unknown instead, before anything is held, as the app holds it (`withClipHandles`, #599).
+ */
+function normalizeKlingVideoElementInputs(
+  value: KlingVideoElementInput[] | undefined,
+  mentionedHandles: Iterable<string>,
+) {
+  const clips = (value || []).flatMap((element) => (
+    element && typeof element === 'object' && typeof element.url === 'string' && element.url.trim()
+      ? [{
+          element,
+          displayName: typeof element.displayName === 'string' ? element.displayName : null,
+          // Read leniently, as before: "@Lead" or "lead" is sent as "@lead".
+          handle: normalizeReferenceHandle(element.handle),
+        }]
+      : []
+  ));
 
-  return (value || [])
-    .map((element, index) => {
-      if (!element || typeof element !== 'object') {
-        return null;
-      }
-
-      const url = typeof element.url === 'string' ? element.url.trim() : '';
-      if (!url) {
-        return null;
-      }
-
-      const displayName = normalizeElementDisplayName(
-        typeof element.displayName === 'string' ? element.displayName : undefined,
-        index + 1
-      );
-      const normalizedHandle = normalizeReferenceHandle(element.handle);
-      const handle = normalizedHandle && !usedHandles.has(normalizedHandle)
-        ? normalizedHandle
-        : buildElementHandle(displayName, usedHandles, index + 1);
-
-      if (normalizedHandle && handle === normalizedHandle) {
-        usedHandles.add(handle);
-      }
-
-      return {
-        id: typeof element.id === 'string' && element.id.trim() ? element.id : null,
-        url,
-        handle,
-        displayName,
-        storagePath: typeof element.storagePath === 'string' ? element.storagePath : null,
-        sourceGenerationId:
-          typeof element.sourceGenerationId === 'string'
-            ? element.sourceGenerationId
-            : null,
-        durationSeconds:
-          typeof element.durationSeconds === 'number' && Number.isFinite(element.durationSeconds)
-            ? element.durationSeconds
-            : null,
-      };
-    })
-    .filter((element): element is {
-      id: string | null;
-      url: string;
-      handle: string;
-      displayName: string;
-      storagePath: string | null;
-      sourceGenerationId: string | null;
-      durationSeconds: number | null;
-    } => Boolean(element));
+  return assignElementHandles(clips, mentionedHandles).map(({ element, displayName, handle }) => ({
+    id: typeof element.id === 'string' && element.id.trim() ? element.id : null,
+    url: element.url.trim(),
+    handle,
+    displayName,
+    storagePath: typeof element.storagePath === 'string' ? element.storagePath : null,
+    sourceGenerationId:
+      typeof element.sourceGenerationId === 'string'
+        ? element.sourceGenerationId
+        : null,
+    durationSeconds:
+      typeof element.durationSeconds === 'number' && Number.isFinite(element.durationSeconds)
+        ? element.durationSeconds
+        : null,
+  }));
 }
 
 const KLING_SUBJECT_MIN_IMAGES = 2;
@@ -2411,7 +2403,6 @@ export async function startVideoGeneration(params: {
   const rawPrompt = typeof prompt === 'string' ? prompt : '';
   const trimmedPrompt = rawPrompt.trim();
   const normalizedReferences = normalizeReferenceImageInputs(references);
-  const normalizedKlingVideoElements = normalizeKlingVideoElementInputs(klingVideoElements);
   const normalizedKlingSubjects = normalizeKlingSubjectInputs(klingSubjects);
   const normalizedElements = normalizedReferences.length > 0
     ? normalizedReferences
@@ -2450,6 +2441,10 @@ export async function startVideoGeneration(params: {
         ? Math.max(1, Math.min(12, Math.round(shot.duration)))
         : 5,
   }));
+  const normalizedKlingVideoElements = normalizeKlingVideoElementInputs(
+    klingVideoElements,
+    extractMentionedHandles([trimmedPrompt, ...normalizedMultiPrompts.map((shot) => shot.prompt)]),
+  );
 
   if (isMultiShot) {
     assertGenerationRequest(

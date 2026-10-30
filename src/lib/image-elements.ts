@@ -93,11 +93,15 @@ const SUBJECT_STAND_INS: HandleStandIns = {
  * The handles being kept are set aside first, so a new handle never takes one
  * that another element holds.
  *
+ * `reservedHandles` are handles no new handle may take, though an element may
+ * keep one: see `assignRemixElementHandles`.
+ *
  * `standIns` is for a card whose elements go by another word: see
  * `assignSubjectHandles`.
  */
 export function assignElementHandles<T extends { displayName?: string | null; handle?: string | null }>(
   elements: T[],
+  reservedHandles: Iterable<string> = [],
   standIns: HandleStandIns = ELEMENT_STAND_INS
 ): Array<T & { displayName: string; handle: string }> {
   const usedHandles = new Set<string>();
@@ -110,6 +114,9 @@ export function assignElementHandles<T extends { displayName?: string | null; ha
     usedHandles.add(handle);
     return handle;
   });
+  for (const handle of reservedHandles) {
+    usedHandles.add(handle);
+  }
 
   return elements.map((element, index) => {
     const place = index + 1;
@@ -121,6 +128,43 @@ export function assignElementHandles<T extends { displayName?: string | null; ha
       handle: keptHandles[index] ?? buildElementHandle(displayName, usedHandles, place, standIns.handleBase(place)),
     };
   });
+}
+
+/**
+ * Names the references a remix hands back when some come without a handle (a
+ * run kept before its references had handles), while the run's words still
+ * mention the handles its source gave them.
+ *
+ * The source named them as `assignElementHandles` does, and a rebuild gives a
+ * reference its source's handle for certain only where place plays no part: a
+ * reference whose own name no other shares gets the handle of that name alone.
+ * Where names repeat, the numbers come from place, and a source that lost or
+ * added a reference before its run numbered them otherwise: three clips all
+ * called "Reference Video" with the first removed ran as `@reference_video_2`
+ * and `@reference_video_3`, and a rebuild hands `@reference_video_2` to the clip
+ * after the one the words meant. So the rebuild is kept only when every mention
+ * is answered by a handle handed back or by a reference named alone; otherwise
+ * the references are named past every mentioned handle, and those mentions
+ * show as unknown until the creator points them at the right references.
+ */
+export function assignRemixElementHandles<T extends { displayName?: string | null; handle?: string | null }>(
+  elements: T[],
+  mentionedHandles: Iterable<string>
+): Array<T & { displayName: string; handle: string }> {
+  const rebuilt = assignElementHandles(elements);
+  const nameBases = elements.map((element) => toHandleBase(element.displayName ?? '', ''));
+  const certain = new Set(rebuilt.flatMap((element, index) => {
+    const handedBack = elements[index].handle === element.handle;
+    const base = nameBases[index];
+    const namedAlone = base !== ''
+      && element.handle === `@${base}`
+      && nameBases.filter((other) => other === base).length === 1;
+    return handedBack || namedAlone ? [element.handle] : [];
+  }));
+  const mentioned = Array.from(mentionedHandles);
+  return mentioned.every((handle) => certain.has(handle))
+    ? rebuilt
+    : assignElementHandles(elements, mentioned);
 }
 
 /**
@@ -140,7 +184,12 @@ export function assignElementHandles<T extends { displayName?: string | null; ha
 export function assignSubjectHandles<T extends { displayName?: string | null; handle?: string | null }>(
   subjects: T[]
 ): Array<T & { displayName: string; handle: string }> {
-  return assignElementHandles(subjects, SUBJECT_STAND_INS);
+  return assignElementHandles(subjects, [], SUBJECT_STAND_INS);
+}
+
+/** Every handle any of a run's words mention (its prompt and each shot's), once each. */
+export function extractMentionedHandles(words: readonly unknown[]): string[] {
+  return Array.from(new Set(words.flatMap((text) => extractPromptHandles(typeof text === 'string' ? text : ''))));
 }
 
 export function extractPromptHandles(prompt: string): string[] {

@@ -188,9 +188,11 @@ import {
 } from '@/lib/generation-status-client';
 import {
     assignElementHandles,
+    assignRemixElementHandles,
     assignSubjectHandles,
     createElementHandleReplacementMap,
     createElementId,
+    extractMentionedHandles,
     extractPromptHandles,
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
@@ -1117,8 +1119,15 @@ function keptReferenceSeeds(kept: RemixResolvedAsset[] | undefined): SeedanceMed
     }] : []);
 }
 
-function hydrateKlingVideoElements(seeds: KlingVideoElementSeed[]): KlingVideoElementDraft[] {
-    return assignElementHandles(seeds).map((seed) => ({
+/**
+ * Kling 3.0's clip cards, each under its handle. `mentionedHandles` are the handles a
+ * remix's words mention, for clips it hands back without one (`assignRemixElementHandles`).
+ */
+function hydrateKlingVideoElements(
+    seeds: KlingVideoElementSeed[],
+    mentionedHandles: Iterable<string> = [],
+): KlingVideoElementDraft[] {
+    return assignRemixElementHandles(seeds, mentionedHandles).map((seed) => ({
         id: typeof seed.id === 'string' && seed.id.trim() ? seed.id : createElementId(),
         displayName: seed.displayName,
         handle: seed.handle,
@@ -2597,7 +2606,15 @@ export default function CreateVideoClient({
 	                                sourceGenerationId: item.sourceGenerationId ?? null,
 	                            }] : []))
 	                        : [];
-	                    commitKlingVideoElements(hydrateKlingVideoElements(klingVideoSeeds));
+	                    // A run kept before clips had handles hands its clips back with none,
+	                    // while its words still name the source's: the words the page may show
+	                    // (the source's, or the creator's own if they typed during the load).
+	                    const restoredMentions = extractMentionedHandles([
+	                        bundle.generation.prompt,
+	                        promptRef.current,
+	                        ...(Array.isArray(settings?.multiPrompts) ? settings.multiPrompts : []).map((shot) => shot?.prompt),
+	                    ]);
+	                    commitKlingVideoElements(hydrateKlingVideoElements(klingVideoSeeds, restoredMentions));
                 }
 
                 const keptStartFrame = restoresFrames ? restoredStartFrame : null;

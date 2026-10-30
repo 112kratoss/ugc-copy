@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assignElementHandles,
+  assignRemixElementHandles,
   assignSubjectHandles,
   createElementHandleReplacementMap,
+  extractMentionedHandles,
   extractPromptHandles,
   findUnknownPromptHandles,
   getMentionQueryAtCaret,
@@ -165,6 +167,15 @@ describe('assignElementHandles', () => {
         { displayName: 'Dinghy', handle: '@harbour' },
       ]))).toEqual(['@hero_shot', '@umbrella', '@harbour_3', '@harbour', '@dinghy']);
     });
+
+    it('makes no handle it is told to reserve, and keeps a handed one that is reserved', () => {
+      expect(handles(assignElementHandles([
+        { displayName: 'Reference Video' },
+        { displayName: 'Reference Video' },
+        { displayName: 'Lead' },
+        { displayName: 'Hero', handle: '@lead' },
+      ], ['@reference_video_2', '@reference_video_3', '@lead']))).toEqual(['@reference_video', '@reference_video_4', '@lead_3', '@lead']);
+    });
   });
 
   describe('a reload', () => {
@@ -213,6 +224,64 @@ describe('assignElementHandles', () => {
         { id: 'b', displayName: 'Red jacket', handle: null },
       ]))).toEqual(['@red_jacket', '@red_jacket_2']);
     });
+  });
+});
+
+describe('assignRemixElementHandles', () => {
+  // A source kept before its references had handles: they come back with none, while
+  // its words name the handles the source gave them, from their names and places.
+  it('rebuilds the handles from name and place when that answers every mention', () => {
+    expect(handles(assignRemixElementHandles(
+      [{ displayName: 'Video element 1' }, { displayName: 'Video element 2' }],
+      ['@video_element_1', '@video_element_2'],
+    ))).toEqual(['@video_element_1', '@video_element_2']);
+    // Words that mention fewer than every reference, and no words at all.
+    expect(handles(assignRemixElementHandles([{ displayName: 'Reference Video' }], ['@reference_video'])))
+      .toEqual(['@reference_video']);
+    expect(handles(assignRemixElementHandles([{ displayName: 'Reference Video' }, { displayName: 'Prop' }], [])))
+      .toEqual(['@reference_video', '@prop']);
+  });
+
+  // The source lost its first "Reference Video" before the run, so its words say "_2" and
+  // "_3": the rebuild would give "_2" to the clip after the one the words meant.
+  it('names past every mentioned handle when the rebuild leaves a mention unanswered', () => {
+    expect(handles(assignRemixElementHandles(
+      [{ displayName: 'Reference Video' }, { displayName: 'Reference Video' }],
+      ['@reference_video_2', '@reference_video_3'],
+    ))).toEqual(['@reference_video', '@reference_video_4']);
+  });
+
+  // Where names repeat, the rebuild numbers them by place, and a source that lost or added
+  // one before its run numbered them otherwise; an answered mention proves nothing there.
+  it('names past every mentioned handle when a mention is answered only by place', () => {
+    // The source lost its first clip and its words mention only what is now the first.
+    expect(handles(assignRemixElementHandles(
+      [{ displayName: 'Reference Video' }, { displayName: 'Reference Video' }],
+      ['@reference_video_2'],
+    ))).toEqual(['@reference_video', '@reference_video_3']);
+    // Every clip mentioned, the numbers still from place.
+    expect(handles(assignRemixElementHandles(
+      [{ displayName: 'Reference Video' }, { displayName: 'Reference Video' }],
+      ['@reference_video', '@reference_video_2'],
+    ))).toEqual(['@reference_video_3', '@reference_video_4']);
+    // Names that differ only in what a handle cannot hold share a base.
+    expect(handles(assignRemixElementHandles(
+      [{ displayName: 'Dancer' }, { displayName: 'dancer!' }],
+      ['@dancer'],
+    ))).toEqual(['@dancer_2', '@dancer_3']);
+  });
+
+  it('keeps every handle handed back, mentioned or not', () => {
+    expect(handles(assignRemixElementHandles(
+      [{ displayName: 'Opening', handle: '@lead' }, { displayName: 'Reference Video' }],
+      ['@lead', '@gone'],
+    ))).toEqual(['@lead', '@reference_video']);
+  });
+});
+
+describe('extractMentionedHandles', () => {
+  it('reads every handle a run’s words mention, once each, and nothing from words that are not text', () => {
+    expect(extractMentionedHandles(['@lead walks to @prop', 'Then @lead waves', null, undefined, 3, ''])).toEqual(['@lead', '@prop']);
   });
 });
 
