@@ -676,24 +676,36 @@ describe('post resource bundle server access', () => {
   // post being hidden.
   it('fails the public detail when its post cannot be read, rather than answer no recipe', async () => {
     postListReadError = { code: 'XX000', message: 'temporary database failure' };
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
 
-    await expect(getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false }))
-      .rejects.toMatchObject({ message: 'temporary database failure' });
+      await expect(getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false }))
+        .rejects.toMatchObject({ message: 'temporary database failure' });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
-  it('still opens the detail for its creator when the post cannot be read', async () => {
+  it('answers its creator and a buyer as before when the post cannot be read', async () => {
     postListReadError = { code: 'XX000', message: 'temporary database failure' };
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
 
-    const detail = await getPostResourceBundleDetailByPostId('post-1', {
-      viewerUserId: (bundleRow as BundleRow).owner_user_id,
-      isNsfw: false,
-    });
+      const forCreator = await getPostResourceBundleDetailByPostId('post-1', {
+        viewerUserId: (bundleRow as BundleRow).owner_user_id,
+        isNsfw: false,
+      });
+      expect(forCreator?.viewerCanAccess).toBe(true);
 
-    expect(detail?.viewerCanAccess).toBe(true);
+      // A buyer's library falls back to the purchased version on a null.
+      viewerHasPurchased = true;
+      await expect(getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1', isNsfw: false }))
+        .resolves.toBeNull();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   // Decision 6 (2026-10-17): free unlocks are not sales. Both counts are public

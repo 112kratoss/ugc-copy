@@ -1694,10 +1694,11 @@ async function hydrateBundleRows(
     // marketplace, its search) counts only what it serves, after filtering on
     // what recipes store; the single-post detail counts its own.
     creationReferencesFor?: { ownerUserId: string | null };
-    // The single-post detail for someone other than its creator: a post
-    // lookup that fails throws instead of reading as the post being hidden,
-    // which its callers would serve as a post without a recipe, its stored
-    // prompt included. A listing drops the row instead.
+    // The single-post detail for someone without the recipe: a post lookup
+    // that fails throws instead of reading as the post being hidden, which
+    // its callers would serve as a post without a recipe, its stored prompt
+    // included. Its creator and buyers keep the null (a buyer's library then
+    // falls back to the purchased version), and a listing drops the row.
     throwOnPostReadError?: boolean;
   } = {},
 ): Promise<MarketplaceResourceListItem[]> {
@@ -2749,7 +2750,7 @@ export async function getPostResourceBundleDetailByPostId(
     hydrateBundleRows([row], countryCode, viewerIsOwner ? 'owner' : 'public', false, {
       postScope,
       allowNsfw: true, // The owner, reveal or purchase check above already authorized this single post.
-      throwOnPostReadError: !viewerIsOwner,
+      throwOnPostReadError: !viewerCanAccess,
     }),
     readsCreationInputs
       ? loadGenerationRecipeInputSources({
