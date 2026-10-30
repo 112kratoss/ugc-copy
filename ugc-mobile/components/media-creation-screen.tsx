@@ -82,6 +82,7 @@ import {
   catalogRefusedRunPrice,
   catalogRunEnhancementInputs,
   catalogRunSlots,
+  catalogStandbyReferencesReason,
   catalogStartRequest,
   catalogSubjectSlot,
   catalogVideoRunReferenceMode,
@@ -4427,6 +4428,8 @@ function VideoCreatorComposer({
   const standbyIds = new Set(standbyReferences.map((media) => media.id));
   const isSent = (media: MediaDraft) => !standbyIds.has(media.id);
   const referenceLimitMessage = validationErrors.find(isReferenceLimitError) ?? null;
+  // Why they wait, when a setting the creator can change keeps them out (Veo 3.1 takes pictures on Lite and Fast only).
+  const standbyReason = model && standbyReferences.length > 0 ? catalogStandbyReferencesReason(draft, model) : null;
   // The handles a run on this model may name: those it sends, as the server refuses the rest.
   const runHandles = new Set(model
     ? catalogDraftRunHandles({ ...draft, referenceMode }, model)
@@ -4883,7 +4886,7 @@ function VideoCreatorComposer({
           <Text style={{ color: theme.colors.muted, fontSize: 11 }}>This model creates from text without reference media.</Text>
         )}
 
-        <StandbyReferences references={standbyReferences} message={referenceLimitMessage} onRemove={removeReference} />
+        <StandbyReferences references={standbyReferences} message={referenceLimitMessage} reason={standbyReason} onRemove={removeReference} />
       </View>
 
       <ReferenceDetailsOverlay
@@ -4970,15 +4973,19 @@ function UploadCancelButton({ onPress }: { onPress: () => void }) {
 /**
  * References a draft keeps that this run does not send: past a slot's max, or of a kind this
  * model or mode takes none of. A model change keeps them, as the web creator does, so they
- * wait here, each with its own Remove, and an excess that blocks Generate says why beside them.
+ * wait here, each with its own Remove, and an excess that blocks Generate says why beside them,
+ * as does a setting that keeps them out (a variant that takes none), naming the options that take them.
  */
 function StandbyReferences({
   references,
   message,
+  reason = null,
   onRemove,
 }: {
   references: MediaDraft[];
   message: string | null;
+  /** Why they wait when a setting the creator can change keeps them out; nothing blocks the run. */
+  reason?: string | null;
   onRemove: (media: MediaDraft) => void;
 }) {
   const theme = useAppTheme();
@@ -4987,6 +4994,7 @@ function StandbyReferences({
     <View testID="standby-references" style={{ gap: 8 }}>
       <View style={{ gap: 2 }}>
         <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Not sent with this run</Text>
+        {reason ? <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>{reason}</Text> : null}
         {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{message}</Text> : null}
       </View>
       <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
