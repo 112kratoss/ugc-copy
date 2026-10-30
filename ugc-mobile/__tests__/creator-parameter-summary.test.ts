@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { APP_CREATOR_OPENINGS } from '@/lib/app-creator-opening/app-creator-opening';
 import { creatorParameterSummary } from '@/lib/creator-parameter-summary';
 import type { CatalogChoiceControl } from '@/lib/generation-model-catalog';
+import { createOpeningCreationDraft } from '@/lib/generation-model-draft';
 import { createDefaultCreationDraft, type MediaDraft } from '@/lib/media-creation-view-model';
 
 /**
@@ -54,6 +56,15 @@ describe('the video bar summary', () => {
     expect(creatorParameterSummary(draft, { controls: [sound] })).toBe('480P · 9:16 · 5s · Sound on');
     expect(creatorParameterSummary({ ...draft, sound: false }, { controls: [sound] })).toBe('480P · 9:16 · 5s · Sound off');
     expect(creatorParameterSummary(draft, { controls: [] })).toBe('480P · 9:16 · 5s');
+  });
+
+  it('says the sound of the app\'s opening before its model is in, as the model then does', () => {
+    const draft = createOpeningCreationDraft('video');
+    expect(creatorParameterSummary(draft, null, APP_CREATOR_OPENINGS.video)).toBe('480P · 16:9 · 5s · Sound off');
+    expect(creatorParameterSummary(draft, null)).toBe('480P · 16:9 · 5s');
+    // An opening with no sound to switch says none, and once the model is in its controls decide.
+    expect(creatorParameterSummary(draft, null, { settings: { resolution: '480p' } })).toBe('480P · 16:9 · 5s');
+    expect(creatorParameterSummary(draft, { controls: [] }, APP_CREATOR_OPENINGS.video)).toBe('480P · 16:9 · 5s');
   });
 
   it('gives a multi-shot run\'s length as its shots together, as the request sends them', () => {

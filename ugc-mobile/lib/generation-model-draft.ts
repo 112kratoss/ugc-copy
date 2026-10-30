@@ -16,7 +16,9 @@ import {
   isUsableCatalogModel,
   normalizeCatalogSettings,
 } from './generation-model-catalog';
+import { APP_CREATOR_OPENINGS } from './app-creator-opening/app-creator-opening';
 import {
+  createDefaultCreationDraft,
   extractPromptHandles,
   hydrateCreationDraftFromRemixSource,
   REMIX_RESTORE_WARNING_MESSAGE,
@@ -523,6 +525,28 @@ export function applyCatalogModelInitialDefaults(
     model: model.id,
     catalogSettings: {},
   } as CreationDraft, model, catalogRevision);
+}
+
+/**
+ * The draft a creator opens on until its catalog arrives: the app's opening for the tool
+ * (APP_CREATOR_OPENINGS), the default model at its published settings, written as
+ * applyCatalogModelInitialDefaults writes them. It has no revision and the screen counts its
+ * model as its own (`seededModelIds`), so the catalog reads it as new whatever is typed into it
+ * meanwhile, and settles it on the default the confirmed revision names, keeping the words; while
+ * that default is the opening's, nothing on screen changes.
+ */
+export function createOpeningCreationDraft(tool: 'image'): ImageCreationDraft;
+export function createOpeningCreationDraft(tool: 'video'): VideoCreationDraft;
+export function createOpeningCreationDraft(tool: 'motion'): MotionCreationDraft;
+export function createOpeningCreationDraft(tool: CreationDraft['tool']): CreationDraft;
+export function createOpeningCreationDraft(tool: CreationDraft['tool']): CreationDraft {
+  const draft = createDefaultCreationDraft(tool);
+  const opening = APP_CREATOR_OPENINGS[tool];
+  const settings = Object.fromEntries(Object.entries(opening.settings).map(([key, value]) => [
+    draftKey(draft, key),
+    key === 'duration' ? Number(value) : value,
+  ]));
+  return { ...draft, ...settings, model: opening.modelId } as CreationDraft;
 }
 
 function referenceSummary(draft: CreationDraft) {
@@ -1354,10 +1378,14 @@ export interface CreationStarter {
  * draft that has to wait for details comes back as the same object.
  *
  * `missingIds` are the models the catalog says it does not carry: a starter among them gives
- * way to the default. `seededModelIds` are every starter the screen may have named in the
- * draft (`guidedCreationStarters`), so a draft seeded with one the catalog has since dropped
- * still moves to the next. `seededPrompt` is the prompt the screen's entry link put in the
- * draft: those words are not the creator's, so they keep no model.
+ * way to the default. `seededModelIds` are the models the screen itself put in a new draft: the
+ * app's opening (APP_CREATOR_OPENINGS) and every starter it may have named
+ * (`guidedCreationStarters`), so words typed into a new draft on one keep no model, and a draft
+ * seeded with a starter the catalog has since dropped still moves to the next. `seededPrompt` is
+ * the prompt the screen's entry link put in the draft: those words are not the creator's, so they
+ * keep no model. `revisionUnconfirmed` says the catalog is the one the phone stored, while the
+ * network is asked for the current revision: a new draft waits for that answer, as the web
+ * creators' first pick does, so a stored revision from before a default changed never settles it.
  */
 export function normalizeCreationDraftForCatalog(
   draft: CreationDraft,
@@ -1368,15 +1396,17 @@ export function normalizeCreationDraftForCatalog(
     missingIds?: readonly string[];
     seededModelIds?: readonly string[];
     seededPrompt?: string | null;
+    revisionUnconfirmed?: boolean;
   },
 ): CatalogDraftNormalization {
   const fresh = !draft.catalogRevision && !options.modelSelectionTouched;
+  if (fresh && options.revisionUnconfirmed) return { draft, warning: null, missingModel: false };
   const starter = options.starter ?? null;
-  // The screen names a starter's model in its first draft, so words typed before the model's
-  // details arrive do not make it the creator's pick: the starter, or the default once the
-  // starter is gone, still applies, and keeps them.
-  const seeded = fresh && starter !== null
-    && (draft.model === starter.modelId || (options.seededModelIds?.includes(draft.model) ?? false));
+  // The screen names its opening, or a starter's model, in its first draft, so words typed before
+  // the catalog settles the draft do not make that model the creator's pick: the starter, or the
+  // default, still applies, and keeps them.
+  const seeded = fresh
+    && (draft.model === starter?.modelId || (options.seededModelIds?.includes(draft.model) ?? false));
   const linkWords = options.seededPrompt?.trim();
   const started = hasStartedCreationDraft(linkWords && draft.prompt.trim() === linkWords ? { ...draft, prompt: '' } : draft);
   const defaultId = catalog.defaults[draft.tool];
@@ -1416,7 +1446,7 @@ export function normalizeCreationDraftForCatalog(
   if (untouched && defaultId && !fallback && !options.missingIds?.includes(defaultId)) {
     return { draft, warning: null, missingModel: false };
   }
-  // A seeded draft whose starter is gone waits for the default's details: its model was never the creator's.
+  // A seeded draft with no default to take yet waits for one: its model was never the creator's.
   if (seeded) return { draft, warning: null, missingModel: false };
   if (!getCatalogModel(catalog, draft.model)) return { draft, warning: null, missingModel: true };
   const result = reconcileCreationDraftWithCatalog(draft, catalog);

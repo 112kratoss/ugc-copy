@@ -46,6 +46,8 @@ export function useGenerationModelCatalog(api: GenerationCatalogApi, options: { 
   return { catalog, current: current, summaries: state.summaries, missingIds: state.missingIds,
     isLoadingModels: Boolean(options.pickerOpen && nextCursors[options.kind ?? 'all'] !== null && !error),
     isLoading: !catalog && state.loading, isRefreshing: state.loading || state.loadingDetails,
+    // While the network is asked for the current revision; a catalog the phone stored stands in meanwhile.
+    isCheckingRevision: state.loading,
     isUnavailable: Boolean(error && (!catalog || (options.selectedIds ?? []).some(id => !details.some(model => model.id === id)))),
     status: !catalog ? state.loading ? 'loading' as const : 'unavailable' as const : 'ready' as const,
     error: error, refreshError: error, loadDetails, refetch, retry: refetch, isUsingCache: Boolean(catalog && error) };

@@ -68,6 +68,8 @@ const catalogState = vi.hoisted(() => ({
   // When set, the picker's list, which can name models `catalog` has no details for.
   summaries: null as unknown[] | null,
   isLoading: false,
+  // A stored catalog standing in while the network is asked for the current revision.
+  isCheckingRevision: false,
   isUnavailable: false,
   error: null as Error | null,
   refetch: vi.fn(),
@@ -279,7 +281,7 @@ import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-pro
 import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '../lib/media';
 import { UploadCancelledError } from '../lib/upload-file';
-import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel, seedance2MiniAtRelease, seedance2MiniModel } from './fixtures/generation-model-catalog';
+import { createPublishedDefaultsCatalog, createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel, seedance2MiniAtRelease, seedance2MiniModel } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 import type { CatalogInputMode, CatalogInputSlot, GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
 import { creationDraftStorageKey, ordinaryDraftScope, remixDraftScope } from '../lib/creation-draft-resume';
@@ -699,6 +701,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     catalogState.loadDetails = null;
     catalogState.summaries = null;
     catalogState.isLoading = false;
+    catalogState.isCheckingRevision = false;
     catalogState.isUnavailable = false;
     catalogState.error = null;
     catalogState.refetch.mockReset();
@@ -1134,6 +1137,216 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe(words);
         vi.useRealTimers();
       }
+    });
+  });
+
+  /**
+   * The app has no server render: until the catalog arrives (half a second on the Pixel 9a against
+   * production on 2026-10-30, longer on a slow network) a creator draws the draft it opens on. That was a
+   * stand-in, Kling 3.0 at 720p and 9:16 under "Loading model settings…", then Kling 3.0 Cinematic for a
+   * frame, then the default; image opened at 4:5 before `auto`, and words typed meanwhile kept Kling 3.0
+   * (70 credits) for good. The opening is now the default itself, settled on the revision the network confirms.
+   */
+  describe('before the catalog arrives', () => {
+    const quotedModels = () => authState.api.quoteGenerationModel.mock.calls.map(([request]) => (request as { modelId: string }).modelId);
+    const OPENINGS = [
+      { tool: 'video', model: 'Seedance 2 Mini', settings: '480P · 16:9 · 5s · Sound off' },
+      { tool: 'image', model: 'Nano Banana 2.0', settings: '1K · AUTO · JPG' },
+      { tool: 'motion', model: 'Kling 2.6', settings: '720P · Add motion' },
+    ] as const;
+    type Tool = (typeof OPENINGS)[number]['tool'];
+    /** What the model chip and the settings chip say. */
+    const shown = (tree: renderer.ReactTestRenderer) => ({
+      model: findPressableByLabelPrefix(tree.root, 'Selected model ').props.accessibilityLabel,
+      settings: findPressableByLabelPrefix(tree.root, 'Generation parameters. ').props.accessibilityLabel,
+    });
+    const editor = (tool: Tool) => <MediaCreationScreen initialTool={tool} insideTab />;
+    /** The screen as it opens: with no catalog yet, or with one the phone stored while the network is asked. */
+    const open = (element: React.ReactElement, stored: GenerationModelCatalog | null = null) => {
+      catalogState.catalog = stored;
+      catalogState.isLoading = !stored;
+      catalogState.isCheckingRevision = Boolean(stored);
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => {
+        tree = renderer.create(element);
+      });
+      return tree;
+    };
+    /** The network's answer, its revision confirmed. */
+    const catalogArrives = async (tree: renderer.ReactTestRenderer, element: React.ReactElement, catalog = createPublishedDefaultsCatalog()) => {
+      catalogState.catalog = catalog;
+      catalogState.isLoading = false;
+      catalogState.isCheckingRevision = false;
+      renderer.act(() => {
+        tree.update(element);
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+    };
+    const typePrompt = (tree: renderer.ReactTestRenderer, words: string) => renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText(words);
+    });
+    const promptOf = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value;
+    // A release after this build, which made Seedance 2 the default video.
+    const laterRelease = () => createPublishedDefaultsCatalog({
+      revision: 'later-release',
+      defaults: { image: 'nano-banana-2', video: 'seedance-2', motion: 'kling-2.6' },
+    });
+
+    it.each(OPENINGS)('names the $tool default and draws its published settings', ({ tool, model, settings }) => {
+      const tree = open(editor(tool));
+
+      expect(shown(tree)).toEqual({
+        model: `Selected model ${model}. Change model`,
+        settings: `Generation parameters. ${settings}`,
+      });
+      // Only the defaults' details are asked for: a stand-in's came with them and was drawn for a frame.
+      expect([...catalogHookCalls.selectedIds].sort()).toEqual(['kling-2.6', 'nano-banana-2', 'seedance-2-mini']);
+    });
+
+    it.each(OPENINGS)('changes nothing on the $tool chips when the catalog arrives', async ({ tool }) => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      const tree = open(editor(tool));
+      const before = shown(tree);
+
+      await catalogArrives(tree, editor(tool));
+
+      expect(shown(tree)).toEqual(before);
+      if (tool !== 'motion') expect(quotedModels()).toEqual([createPublishedDefaultsCatalog().defaults[tool]]);
+    });
+
+    it('says what the video inputs take only once the catalog describes the model', async () => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      const textOnly = 'This model creates from text without reference media.';
+      const tree = open(editor('video'));
+
+      // Seedance 2 Mini takes frames and references: before its details, the card claimed it took neither.
+      expect(collectText(tree.root)).not.toContain(textOnly);
+      await catalogArrives(tree, editor('video'));
+      expect(collectText(tree.root)).not.toContain(textOnly);
+      expect(collectText(tree.root)).toContain('Start frame');
+    });
+
+    it('gives the image references no count until the model says how many it takes', async () => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(8);
+      const tree = open(editor('image'));
+      const counts = () => collectText(tree.root).filter((text) => /^\d+ \/ \d+$/.test(text));
+
+      // Under "Nano Banana 2.0" the rail said "0 / 0", which takes ten.
+      expect(counts()).toEqual([]);
+      expect(findPressableByLabelPrefix(tree.root, 'Add reference images').props.disabled).toBe(true);
+      await catalogArrives(tree, editor('image'));
+      expect(counts()).toEqual(['0 / 10']);
+    });
+
+    it('keeps words typed before the catalog arrives on the default', async () => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      const tree = open(editor('video'));
+      typePrompt(tree, 'A lighthouse in a storm');
+
+      await catalogArrives(tree, editor('video'));
+
+      // The draft was started on the stand-in, so it kept Kling 3.0 (70 credits) for good.
+      expect(quotedModels()).toEqual(['seedance-2-mini']);
+      expect(shown(tree).model).toBe('Selected model Seedance 2 Mini. Change model');
+    });
+
+    it('moves words typed early to the default a later release names, keeping them', async () => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      const tree = open(editor('video'));
+      typePrompt(tree, 'A lighthouse in a storm');
+
+      await catalogArrives(tree, editor('video'), laterRelease());
+
+      // The opening's model was this build's choice, not the creator's: an app the update has not reached yet
+      // follows the release as the web does.
+      expect(quotedModels()).toEqual(['seedance-2']);
+      expect(shown(tree).model).toBe('Selected model Seedance 2. Change model');
+      expect(promptOf(tree)).toBe('A lighthouse in a storm');
+    });
+
+    it('moves them with no notice when the release took the opening\'s model away', async () => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      EMPTY_MISSING_IDS.push('seedance-2-mini');
+      const withoutMini = laterRelease();
+      const tree = open(editor('video'));
+      typePrompt(tree, 'A lighthouse in a storm');
+
+      await catalogArrives(tree, editor('video'), { ...withoutMini, models: withoutMini.models.filter((model) => model.id !== 'seedance-2-mini') });
+
+      expect(quotedModels()).toEqual(['seedance-2']);
+      expect(collectText(tree.root).some((text) => text.includes('no longer available'))).toBe(false);
+      expect(promptOf(tree)).toBe('A lighthouse in a storm');
+    });
+
+    it('settles a new draft on the revision the network confirms, never on one the phone stored', async () => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      // The phone last opened the creator before 2026-10-28, when Kling 3.0 Cinematic was the default video.
+      const stored = createPublishedDefaultsCatalog({
+        revision: 'kie-checkup-20261020',
+        defaults: { image: 'nano-banana-2', video: 'kling-3.0-video', motion: 'kling-2.6' },
+      });
+      const tree = open(editor('video'), stored);
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      typePrompt(tree, 'A lighthouse in a storm');
+
+      // The stored revision neither settles nor prices the new draft: it went to Kling 3.0, and words typed
+      // then kept it there after the network named Seedance 2 Mini.
+      expect(shown(tree).model).toBe('Selected model Seedance 2 Mini. Change model');
+      expect(quotedModels()).toEqual([]);
+
+      await catalogArrives(tree, editor('video'));
+      expect(shown(tree).model).toBe('Selected model Seedance 2 Mini. Change model');
+      expect(quotedModels()).toEqual(['seedance-2-mini']);
+      expect(promptOf(tree)).toBe('A lighthouse in a storm');
+    });
+
+    it('settles a new draft when the network confirms the stored revision unchanged, with no new catalog', async () => {
+      vi.useFakeTimers();
+      quoteEchoingSettings(19);
+      const savedVideo = () => {
+        const calls = draftStorage.setItem.mock.calls.filter(([key]) => key === creationDraftStorageKey(ordinaryDraftScope('user-123')));
+        return calls.length ? JSON.parse(calls[calls.length - 1][1] as string).video : null;
+      };
+      const stored = createPublishedDefaultsCatalog();
+      const tree = open(editor('video'), stored);
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(savedVideo()?.catalogRevision ?? null).toBeNull();
+
+      // A 304: the session keeps the catalog it has and only stops checking.
+      catalogState.isCheckingRevision = false;
+      renderer.act(() => {
+        tree.update(editor('video'));
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(savedVideo()).toMatchObject({ model: 'seedance-2-mini', catalogRevision: 'kie-catalog-inputs-20261029' });
+      expect(quotedModels()).toEqual(['seedance-2-mini']);
+    });
+
+    it('names the opening on a Recreate that names a post but brings no source, and not on a remix', () => {
+      const recreate = open(<MediaCreationScreen initialTool="video" initialPrompt="A lighthouse in a storm" remixSource={{ postId: 'post-1' }} />);
+      expect(shown(recreate)).toEqual({
+        model: 'Selected model Seedance 2 Mini. Change model',
+        settings: 'Generation parameters. 480P · 16:9 · 5s · Sound off',
+      });
+
+      const remix = open(<MediaCreationScreen initialTool="video" remixSource={{ generationId: 'generation-1', postId: 'post-1' }} />);
+      expect(shown(remix).model).toBe('Selected model Loading model settings…. Change model');
     });
   });
 

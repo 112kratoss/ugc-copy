@@ -1,9 +1,11 @@
-import type {
-  CatalogControl,
-  GenerationModelCatalog,
-  GenerationModelDescriptor,
-  GenerationModelKind,
+import {
+  parseModelCatalogDetail,
+  type CatalogControl,
+  type GenerationModelCatalog,
+  type GenerationModelDescriptor,
+  type GenerationModelKind,
 } from '../../lib/generation-model-catalog';
+import publishedDefaults from './published-default-descriptors.json';
 
 function controls(kind: GenerationModelKind): CatalogControl[] {
   if (kind === 'motion') {
@@ -223,5 +225,21 @@ export function createRemixRestoreCatalog(): GenerationModelCatalog {
         inputs: { imageReferences: { max: 1, supportsNaming: false }, videoReferences: { max: 1 }, audioReferences: null, startFrame: false, endFrame: false },
       }),
     ],
+  };
+}
+
+/**
+ * The catalog as production published it to the app on 2026-10-30 (`published-default-descriptors.json`):
+ * each tool's default, which the creators' opening (lib/app-creator-opening) draws before the catalog
+ * arrives, with Kling 3.0 Cinematic, Kling 3.0 and Seedance 2 beside them. `overrides` stands in for a
+ * later release or a stored one (another default or revision).
+ */
+export function createPublishedDefaultsCatalog(overrides: Partial<Pick<GenerationModelCatalog, 'revision' | 'defaults'>> = {}): GenerationModelCatalog {
+  return {
+    schemaVersion: 3,
+    revision: publishedDefaults.revision,
+    defaults: publishedDefaults.defaults,
+    models: publishedDefaults.models.map((model) => parseModelCatalogDetail(model)),
+    ...overrides,
   };
 }
