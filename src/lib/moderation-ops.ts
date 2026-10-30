@@ -333,22 +333,24 @@ function isExternalHttpMediaUrl(value: string): boolean {
 }
 
 /**
- * Whether a creation's owner is a guest identity linked to the post's owner.
- * Publish files a creation made as a guest under the account the guest was
- * linked to, and the creation keeps the guest's id: the rule
+ * Whether a creation's maker is the post's owner, or a guest identity linked to
+ * the post's owner. Publish files a creation made as a guest under the account
+ * the guest was linked to, and the creation keeps the guest's id: the rule
  * `sync_generation_exposure_with_post` applies. Asked here rather than through
  * `isOwnOrLinkedAccountId`, as `account-identity` imports `server-only`, which
  * the moderation CLI (`scripts/ops/moderation-ops.ts`, tsx) cannot load.
  */
-async function isGuestLinkedToAccount(
+async function isOwnOrLinkedAccount(
   supabase: SupabaseClient,
-  guestUserId: string,
+  userId: string,
   accountUserId: string,
 ): Promise<boolean> {
+  if (userId === accountUserId) return true;
+  if (!UUID_PATTERN.test(userId)) return false;
   const { data, error } = await supabase
     .from('profiles')
     .select('id')
-    .eq('id', guestUserId)
+    .eq('id', userId)
     .eq('merged_into_user_id', accountUserId)
     .maybeSingle();
   if (error) {
@@ -364,7 +366,7 @@ async function isGuestLinkedToAccount(
  * with no creation to verify it against. The folder is this post's alone only
  * when nothing else can be serving a file in it: no creation by that id, and
  * no other post or post media row naming a path in it. Media filed under more
- * than one creation proves nothing.
+ * than one creation proves nothing, and the scope check refuses it.
  */
 async function readDeletedGenerationId(
   supabase: SupabaseClient,
@@ -401,13 +403,16 @@ async function readDeletedGenerationId(
   if (error) {
     throw databaseError('Failed to verify the taken-down copy belongs to this post alone', error);
   }
-  return generation.data || otherPosts.data?.length || otherMedia.data?.length ? null : generationId;
+  const nothingElseNamesIt = !generation.data
+    && Array.isArray(otherPosts.data) && otherPosts.data.length === 0
+    && Array.isArray(otherMedia.data) && otherMedia.data.length === 0;
+  return nothingElseNamesIt ? generationId : null;
 }
 
 /**
  * Whoever made a deleted creation, read off the folder its private original
- * sits in: the post's owner, or a guest linked to the post's owner. Anyone
- * else leaves the original to the scope check.
+ * sits in, when that is the post's owner or a guest linked to the post's
+ * owner. Anyone else leaves the original to the scope check.
  */
 async function readDeletedGenerationOwnerId(
   supabase: SupabaseClient,
@@ -416,9 +421,8 @@ async function readDeletedGenerationOwnerId(
   const original = post.output_url
     ? getCanonicalStoredMediaLocation(post.output_url, { allowedBuckets: GENERATED_MEDIA_BUCKETS })
     : null;
-  const folderOwnerId = original?.filePath.split('/')[0] ?? null;
-  if (!folderOwnerId || folderOwnerId === post.user_id) return folderOwnerId;
-  return UUID_PATTERN.test(folderOwnerId) && await isGuestLinkedToAccount(supabase, folderOwnerId, post.user_id)
+  const folderOwnerId = original?.filePath.split('/')[0];
+  return folderOwnerId && await isOwnOrLinkedAccount(supabase, folderOwnerId, post.user_id)
     ? folderOwnerId
     : null;
 }
@@ -459,13 +463,7 @@ export async function revokePostPublicMedia(
   // The feed rendition and teaser are separate public objects, not variants of
   // storage_path -- omitting them left a taken-down video still fetchable at
   // the exact URLs the feed had been serving.
-  const mediaValues = mediaRows.flatMap((row) => [
-    row.storage_path,
-    row.preview_storage_path,
-    row.rendition_storage_path,
-    row.teaser_storage_path,
-    row.display_storage_path,
-  ]);
+  const mediaValues = mediaRows.flatMap((row) => POST_MEDIA_PATH_COLUMNS.map((column) => row[column]));
 
   let verifiedGenerationId: string | null = null;
   let generationOwnerId: string | null = null;
@@ -479,7 +477,7 @@ export async function revokePostPublicMedia(
       throw databaseError('Failed to verify taken-down generation ownership', generationResult.error);
     }
     const ownerId = (generationResult.data as { user_id: string | null } | null)?.user_id ?? null;
-    if (ownerId && (ownerId === post.user_id || await isGuestLinkedToAccount(supabase, ownerId, post.user_id))) {
+    if (ownerId && await isOwnOrLinkedAccount(supabase, ownerId, post.user_id)) {
       verifiedGenerationId = post.generation_id;
       generationOwnerId = ownerId;
     }
@@ -489,9 +487,9 @@ export async function revokePostPublicMedia(
       postId,
       [post.showcase_asset_path, post.output_url, ...mediaValues],
     );
-    if (verifiedGenerationId) {
-      generationOwnerId = await readDeletedGenerationOwnerId(supabase, post);
-    }
+    // Asked even with no copy left: a post made private before its creation
+    // was deleted names nothing but the original.
+    generationOwnerId = await readDeletedGenerationOwnerId(supabase, post);
   }
 
   // A creation post's output_url is the creation's private original, in the

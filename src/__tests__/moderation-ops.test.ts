@@ -17,6 +17,17 @@ const REVIEWER_ID = '30000000-0000-4000-8000-000000000003';
 const COMMENT_ID = '40000000-0000-4000-8000-000000000004';
 const TEMPLATE_ID = '90000000-0000-4000-8000-000000000009';
 const TEMPLATE_CREATOR_ID = 'a0000000-0000-4000-8000-00000000000a';
+// The columns a take-down may search with LIKE for other rows naming a folder.
+const MODERATION_LIKE_COLUMNS = {
+  posts: ['showcase_asset_path', 'output_url'],
+  post_media: [
+    'storage_path',
+    'preview_storage_path',
+    'rendition_storage_path',
+    'teaser_storage_path',
+    'display_storage_path',
+  ],
+};
 
 function queryResult(data: unknown, error: unknown = null) {
   const result = Promise.resolve({ data, error });
@@ -504,48 +515,79 @@ describe('moderation operations', () => {
         };
       }
 
+      // The searches that prove nothing else names the folder; a stand-in for
+      // either one failing, while every other read of its table succeeds.
+      const FOLDER_SEARCHES: Record<string, string> = { posts: 'id', post_media: 'post_id' };
+      function failedSearch(message: string) {
+        const failed = { data: null, error: { message } };
+        const query = {
+          neq: () => query,
+          or: () => query,
+          limit: () => query,
+          then: <T>(resolve: (value: typeof failed) => T) => Promise.resolve(failed).then(resolve),
+        };
+        return query;
+      }
+
       function orphanedClient({
+        showcasePath = SHOWCASE_PATH,
         outputUrl = `generated_images/${OWNER_ID}/generated_abc.png`,
         generations = [],
         otherPosts = [],
-        postMedia = [],
+        postMedia = [mediaRow(POST_ID, SHOWCASE_PATH, PREVIEW_PATH)],
         profiles = [],
+        failingSearch,
       }: {
+        showcasePath?: string | null;
         outputUrl?: string;
         generations?: Array<Record<string, unknown>> | ReturnType<typeof databaseError>;
         otherPosts?: Array<Record<string, unknown>>;
         postMedia?: Array<Record<string, unknown>>;
         profiles?: Array<Record<string, unknown>>;
+        failingSearch?: 'posts' | 'post_media';
       } = {}) {
         const stored = createStoredRows({
           posts: [{
             id: POST_ID,
             user_id: OWNER_ID,
             generation_id: null,
-            showcase_asset_path: SHOWCASE_PATH,
+            showcase_asset_path: showcasePath,
             output_url: outputUrl,
           }, ...otherPosts],
-          post_media: [mediaRow(POST_ID, SHOWCASE_PATH, PREVIEW_PATH), ...postMedia],
+          post_media: postMedia,
           generations,
           profiles,
-        });
+        }, {}, { likeColumns: MODERATION_LIKE_COLUMNS });
         const remove = vi.fn(async () => ({ data: [], error: null }));
         const exists = vi.fn(async () => ({ data: false, error: { status: 404 } }));
         const client = {
-          from: stored.client.from,
+          from: (table: string) => {
+            const query = stored.client.from(table);
+            return table === failingSearch
+              ? {
+                ...query,
+                select: (columns: string) => (columns === FOLDER_SEARCHES[table]
+                  ? failedSearch(`${table} unavailable`)
+                  : query.select(columns)),
+              }
+              : query;
+          },
           storage: { from: vi.fn(() => ({ remove, exists })) },
         } as unknown as SupabaseClient;
         return { client, remove, reads: stored.reads };
       }
 
       it('revokes its public copy and the media made from it', async () => {
-        const { client, remove } = orphanedClient();
+        const { client, remove, reads } = orphanedClient();
 
         await expect(revokePostPublicMedia(client, POST_ID)).resolves.toMatchObject({
           revokedMediaCount: 2,
           mediaRevocationVerified: true,
         });
         expect(remove).toHaveBeenCalledWith([SHOWCASE_PATH, PREVIEW_PATH]);
+        // The post's own media are read with every column the search covers.
+        expect(reads.find((read) => read.table === 'post_media')?.columns)
+          .toEqual(expect.arrayContaining(MODERATION_LIKE_COLUMNS.post_media));
       });
 
       it('revokes the copy of one made as a guest', async () => {
@@ -584,7 +626,10 @@ describe('moderation operations', () => {
 
       it("still refuses while another post's media names a file beside it", async () => {
         const { client, remove } = orphanedClient({
-          postMedia: [mediaRow(OTHER_POST_ID, `showcase/${GENERATION_ID}/other.def456.webp`)],
+          postMedia: [
+            mediaRow(POST_ID, SHOWCASE_PATH, PREVIEW_PATH),
+            mediaRow(OTHER_POST_ID, `showcase/${GENERATION_ID}/other.def456.webp`),
+          ],
         });
 
         await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow('outside the reported post scope');
@@ -593,7 +638,10 @@ describe('moderation operations', () => {
 
       it('still refuses media filed under two creations, without asking after either', async () => {
         const { client, remove, reads } = orphanedClient({
-          postMedia: [mediaRow(POST_ID, 'showcase/80000000-0000-4000-8000-00000000000e/second.webp')],
+          postMedia: [
+            mediaRow(POST_ID, SHOWCASE_PATH, PREVIEW_PATH),
+            mediaRow(POST_ID, 'showcase/80000000-0000-4000-8000-00000000000e/second.webp'),
+          ],
         });
 
         await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow('outside the reported post scope');
@@ -610,6 +658,61 @@ describe('moderation operations', () => {
         await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow('outside the reported post scope');
         expect(remove).not.toHaveBeenCalled();
       });
+
+      // Made private first, the post dropped its copy and the media rows naming
+      // it; only the private original was left to name anything.
+      it('takes down one made private before its creation was deleted', async () => {
+        const { client, remove } = orphanedClient({ showcasePath: null, postMedia: [] });
+
+        await expect(revokePostPublicMedia(client, POST_ID)).resolves.toMatchObject({
+          revokedMediaCount: 0,
+          mediaRevocationVerified: true,
+        });
+        expect(remove).not.toHaveBeenCalled();
+      });
+
+      it("still refuses while another post's output names the copy by its URL", async () => {
+        const { client, remove } = orphanedClient({
+          otherPosts: [{
+            id: OTHER_POST_ID,
+            user_id: OWNER_ID,
+            generation_id: null,
+            showcase_asset_path: null,
+            output_url: `https://project.supabase.co/storage/v1/object/public/showcase_media/${SHOWCASE_PATH}`,
+          }],
+        });
+
+        await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow('outside the reported post scope');
+        expect(remove).not.toHaveBeenCalled();
+      });
+
+      it("still refuses while another post's media names the creation's NSFW copy", async () => {
+        const { client, remove } = orphanedClient({
+          postMedia: [
+            mediaRow(POST_ID, SHOWCASE_PATH, PREVIEW_PATH),
+            mediaRow(
+              OTHER_POST_ID,
+              `posts/${OTHER_POST_ID}/0/cover.webp`,
+              `private-posts/${GENERATION_ID}/output.abc123.preview.webp`,
+            ),
+          ],
+        });
+
+        await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow('outside the reported post scope');
+        expect(remove).not.toHaveBeenCalled();
+      });
+
+      it.each(['posts', 'post_media'] as const)(
+        'fails as a read failure when the search of %s for other rows cannot be read',
+        async (failingSearch) => {
+          const { client, remove } = orphanedClient({ failingSearch });
+
+          await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow(
+            `Failed to verify the taken-down copy belongs to this post alone: ${failingSearch} unavailable`,
+          );
+          expect(remove).not.toHaveBeenCalled();
+        },
+      );
 
       it('fails as a read failure, not a scope refusal, when it cannot check', async () => {
         const { client, remove } = orphanedClient({

@@ -4,12 +4,16 @@ type Row = Record<string, unknown>;
 type Call = (args: Row) => unknown;
 
 /**
- * The filter the owner library route sends, word for word. Any other `or` must
- * be a list of `column.like.pattern` terms, or it is refused.
+ * The filter the owner library route sends, word for word. Any other `or` is
+ * refused, unless it is a list of `column.like.pattern` terms over columns the
+ * caller named in `likeColumns`.
  */
 const LIBRARY_FILTER = 'and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true';
 
-/** A LIKE pattern as PostgREST reads it: `*` and `%` match any run, `_` one character. */
+/**
+ * A LIKE pattern as PostgREST reads it: `*` and `%` match any run, `_` one
+ * character. Postgres reads `\` as an escape, which this does not model.
+ */
 function likePattern(pattern: string) {
   const source = [...pattern].map((character) => {
     if (character === '*' || character === '%') return '.*';
@@ -44,11 +48,16 @@ function isFailure(value: unknown): value is Failure {
  * have is refused, as PostgREST refuses it. Filters are applied, not just
  * recorded: a row a query would not return is not returned here.
  *
- * It covers the filters the generation jobs, the notifier and the owner
- * library route use, and nothing else. A filter it does not know throws, so
- * a query that changes shape is noticed rather than answered wrongly.
+ * It covers the filters the generation jobs, the notifier, the owner library
+ * route and the take-down's folder search use, and nothing else. A filter it
+ * does not know throws, so a query that changes shape is noticed rather than
+ * answered wrongly.
  */
-export function createStoredRows(tables: Record<string, Row[] | Failure>, calls: Record<string, Call> = {}) {
+export function createStoredRows(
+  tables: Record<string, Row[] | Failure>,
+  calls: Record<string, Call> = {},
+  { likeColumns = {} }: { likeColumns?: Record<string, readonly string[]> } = {},
+) {
   /** Every read, in order: the table and the columns it asked for. */
   const reads: Array<{ table: string; columns: string[] }> = [];
   /** Every database call, in order, by name. */
@@ -107,8 +116,8 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
         const stored = tables[table];
         const known = Array.isArray(stored) ? stored[0] : undefined;
         const terms = expression.split(',').map((term) => {
-          const match = /^([a-z_]+)\.like\.(.+)$/.exec(term);
-          if (!match) throw new Error(`Unexpected filter: ${expression}`);
+          const match = /^([a-z_]+)\.like\.([^\\]+)$/.exec(term);
+          if (!match || !likeColumns[table]?.includes(match[1])) throw new Error(`Unexpected filter: ${expression}`);
           const [, column, pattern] = match;
           if (known && !(column in known)) throw new Error(`column ${table}.${column} does not exist`);
           const like = likePattern(pattern);
