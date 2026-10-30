@@ -506,9 +506,15 @@ function buildElementHandle(displayName: string, usedHandles: Set<string>, fallb
   return handle;
 }
 
-function normalizeExistingHandle(value: string | undefined, usedHandles: Set<string>) {
+/** A handle a prompt can mention, by the rule the server keeps and hands one by (`isValidElementHandle`), or null. */
+function mentionableHandle(value: string | null | undefined): string | null {
   const handle = value?.trim();
-  if (!handle || !/^@[a-z0-9_]+$/.test(handle) || usedHandles.has(handle)) {
+  return handle && /^@[a-z0-9_]+$/.test(handle) ? handle : null;
+}
+
+function normalizeExistingHandle(value: string | undefined, usedHandles: Set<string>) {
+  const handle = mentionableHandle(value);
+  if (!handle || usedHandles.has(handle)) {
     return null;
   }
   usedHandles.add(handle);
@@ -834,7 +840,7 @@ function createMediaDraftFromRemixAsset(
   // A clip comes back under the handle the run's prompt mentions it by (Kling 3.0's video elements),
   // where the run kept one: its name cannot give it back, since the app names every clip alike and a
   // run whose first clip was taken away mentions @reference_video_2 and @reference_video_3.
-  const keptHandle = asset.kind === 'video' ? normalizeExistingHandle(asset.handle ?? undefined, new Set()) : null;
+  const keptHandle = asset.kind === 'video' ? mentionableHandle(asset.handle) : null;
 
   return {
     ...draft,

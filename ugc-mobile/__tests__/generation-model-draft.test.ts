@@ -44,7 +44,7 @@ import type { SeedanceAssetMetadata } from '../lib/model-catalog/seedance-assets
 import type { RemixSourceBundle } from '../lib/types';
 import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel } from './fixtures/generation-model-catalog';
 import liveCatalog from './fixtures/live-catalog-descriptors.json';
-import { remoteVideoModel } from './generation-model-catalog-v2-fixtures';
+import { klingVideoModel, remoteVideoModel } from './generation-model-catalog-v2-fixtures';
 
 describe('catalog-backed mobile creation drafts', () => {
   it('applies remote model defaults without bundled model data, and keeps references past the model limit', () => {
@@ -721,28 +721,7 @@ function imageModelWithSlots(id: string, displayName: string, maxImages: number)
   };
 }
 
-const kling30 = remoteVideoModel('kling-3.0-video', {
-  displayName: 'Kling 3.0 Cinematic',
-  controls: [
-    choice('aspectRatio', 'Aspect ratio', ['16:9', '9:16', '1:1']),
-    choice('mode', 'Quality mode', ['std', 'pro']),
-    seconds(3, 15, 5),
-    toggle('sound', 'Sound'),
-    toggle('isMultiShot', 'Multi-shot'),
-  ],
-  capabilities: { multiShot: true, sound: true, fixedLens: false, googleSearch: false, outputFormat: false },
-  inputs: { ...noLegacyInputs, videoReferences: { max: 3 }, startFrame: true, endFrame: true },
-  inputModes: [
-    framesMode(),
-    {
-      key: 'video-elements',
-      label: 'Video elements',
-      default: false,
-      slots: [{ key: 'videoElements', kind: 'video', role: 'reference', label: 'Video elements', min: 0, max: 3, supportsNaming: true, durationMetadata: 'optional' }],
-    },
-  ],
-  inputConstraints: [],
-});
+const kling30 = klingVideoModel();
 
 const klingO3 = remoteVideoModel('kling-o3', {
   displayName: 'Kling O3',

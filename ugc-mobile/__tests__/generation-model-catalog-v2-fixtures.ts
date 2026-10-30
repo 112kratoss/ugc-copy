@@ -131,6 +131,57 @@ export function remoteVideoModel(
   };
 }
 
+/**
+ * Kling 3.0 as published (config/generation-model-catalog/releases/2026-10-28-mini-default-video.json):
+ * frames, and its clips in a mode of their own beside them, each under the handle its prompt mentions.
+ */
+export function klingVideoModel(): GenerationModelDescriptor {
+  const choice = (key: string, label: string, values: string[]) => ({
+    key, label, type: 'choice' as const, presentation: 'chips' as const, defaultValue: values[0], options: values.map((value) => ({ value, label: value })),
+  });
+  const toggle = (key: string, label: string) => ({ key, label, type: 'boolean' as const, presentation: 'toggle' as const, defaultValue: false });
+  return remoteVideoModel('kling-3.0-video', {
+    displayName: 'Kling 3.0 Cinematic',
+    controls: [
+      choice('aspectRatio', 'Aspect ratio', ['16:9', '9:16', '1:1']),
+      choice('mode', 'Quality mode', ['std', 'pro']),
+      { key: 'duration', label: 'Duration', type: 'integer', presentation: 'stepper', defaultValue: 5, min: 3, max: 15, step: 1, unit: 'seconds' },
+      toggle('sound', 'Sound'),
+      toggle('isMultiShot', 'Multi-shot'),
+    ],
+    capabilities: { multiShot: true, sound: true, fixedLens: false, googleSearch: false, outputFormat: false },
+    inputs: {
+      imageReferences: null,
+      videoReferences: { max: 3 },
+      audioReferences: null,
+      preparedAudioReferences: null,
+      characterReferences: null,
+      startFrame: true,
+      endFrame: true,
+      combineFramesWithReferences: false,
+    },
+    inputModes: [
+      {
+        key: 'frames',
+        label: 'Frames',
+        default: true,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
+        slots: [
+          { key: 'startFrame', kind: 'image', role: 'startFrame', label: 'Start frame', min: 0, max: 1 },
+          { key: 'endFrame', kind: 'image', role: 'endFrame', label: 'End frame', min: 0, max: 1 },
+        ],
+      },
+      {
+        key: 'video-elements',
+        label: 'Video elements',
+        default: false,
+        slots: [{ key: 'videoElements', kind: 'video', role: 'reference', label: 'Video elements', min: 0, max: 3, supportsNaming: true, durationMetadata: 'optional' }],
+      },
+    ],
+    inputConstraints: [],
+  });
+}
+
 export function catalogV2(
   models: GenerationModelDescriptor[] = [
     remoteVideoModel('fallback-video-v2'),

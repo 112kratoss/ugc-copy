@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GenerationModelDescriptor } from '../lib/generation-model-catalog';
+import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
 import {
+  applyCatalogModelDefaults,
   buildUnifiedCatalogGenerationRequest,
+  catalogDraftRunHandles,
   hydrateCatalogCreationDraftFromRemixSource,
   validateCatalogCreationDraft,
 } from '../lib/generation-model-draft';
@@ -12,7 +14,8 @@ import {
   type VideoCreationDraft,
 } from '../lib/media-creation-view-model';
 import type { RemixResolvedAsset, RemixResolvedImageElement, RemixSourceBundle } from '../lib/types';
-import { catalogV2, remoteVideoModel } from './generation-model-catalog-v2-fixtures';
+import liveCatalog from './fixtures/live-catalog-descriptors.json';
+import { catalogV2, klingVideoModel, remoteVideoModel } from './generation-model-catalog-v2-fixtures';
 
 function namedReference(handle: string, index: number): RemixResolvedImageElement {
   const name = handle.slice(1);
@@ -180,53 +183,15 @@ describe('catalog remix restore of reusable video references', () => {
   });
 });
 
-/** Kling 3.0 as published: frames, and named clips in a mode of their own beside them. */
-function kling30(): GenerationModelDescriptor {
-  return remoteVideoModel('kling-3.0-video', {
-    displayName: 'Kling 3.0 Cinematic',
-    controls: [
-      { key: 'duration', label: 'Duration', type: 'integer', presentation: 'stepper', defaultValue: 5, min: 3, max: 15, step: 1, unit: 'seconds' },
-    ],
-    capabilities: { multiShot: true, sound: true, fixedLens: false, googleSearch: false, outputFormat: false },
-    inputs: {
-      imageReferences: null,
-      videoReferences: { max: 3 },
-      audioReferences: null,
-      preparedAudioReferences: null,
-      characterReferences: null,
-      startFrame: true,
-      endFrame: true,
-      combineFramesWithReferences: false,
-    },
-    inputModes: [
-      {
-        key: 'frames',
-        label: 'Frames',
-        default: true,
-        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
-        slots: [{ key: 'startFrame', kind: 'image', role: 'startFrame', label: 'Start frame', min: 0, max: 1 }],
-      },
-      {
-        key: 'video-elements',
-        label: 'Video elements',
-        default: false,
-        slots: [{ key: 'videoElements', kind: 'video', role: 'reference', label: 'Video elements', min: 0, max: 3, supportsNaming: true, durationMetadata: 'optional' }],
-      },
-    ],
-    inputConstraints: [],
-  });
-}
-
-/** A clip a Kling 3.0 run kept. The app names every clip it uploads "Reference Video". */
-function keptClip(place: number, handle?: string): RemixResolvedAsset {
+/** A clip a Kling 3.0 run kept, as the server hands it: its handle, and no length. The app names every clip it uploads "Reference Video". */
+function keptKlingClip(place: number, handle?: string): RemixResolvedAsset {
   return {
     kind: 'video',
     label: 'Reference Video',
     storagePath: `generation_inputs/owner/source-generation/0${place}-reference_video.mp4`,
     sourceGenerationId: null,
     url: `https://cdn.example.com/clip-${place}.mp4`,
-    durationSeconds: 4,
-    ...(handle === undefined ? {} : { handle }),
+    handle,
   };
 }
 
@@ -243,22 +208,20 @@ function klingClipsRemix(referenceVideos: RemixResolvedAsset[], prompt: string):
 }
 
 describe('catalog remix restore of Kling 3.0 clips', () => {
+  const twoKeptClips = () => klingClipsRemix(
+    [keptKlingClip(2, '@reference_video_2'), keptKlingClip(3, '@reference_video_3')],
+    'Open on @reference_video_2, then cut to @reference_video_3',
+  );
+
   // Uploaded as @reference_video, @reference_video_2 and @reference_video_3, the first taken away
   // before the run: the run kept two clips, both named "Reference Video", under the handles its
   // prompt mentions. Restored without them, the app held the run ("Unknown element mentions:
   // @reference_video_2, @reference_video_3") and would have sent both clips with no handle.
   it('restores each clip under the handle its run kept, so the prompt still names them', () => {
-    const catalog = catalogV2([kling30()]);
+    const catalog = catalogV2([klingVideoModel()]);
     const model = catalog.models[0];
 
-    const restored = hydrateCatalogCreationDraftFromRemixSource(
-      createDefaultCreationDraft('video'),
-      klingClipsRemix(
-        [keptClip(2, '@reference_video_2'), keptClip(3, '@reference_video_3')],
-        'Open on @reference_video_2, then cut to @reference_video_3',
-      ),
-      catalog,
-    );
+    const restored = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('video'), twoKeptClips(), catalog);
     const draft = restored.draft as VideoCreationDraft;
 
     expect(restored.warning).toBeNull();
@@ -272,18 +235,35 @@ describe('catalog remix restore of Kling 3.0 clips', () => {
     expect(renameMediaDraft(draft.referenceVideos[1], 'Jump').handle).toBe('@jump');
   });
 
-  // The server hands only a handle it would accept in a run; one that is not (an older row, a
-  // hand-edited one) names nothing a prompt could mention, so the clip is restored as before.
-  it('restores a clip without a handle that is not one a prompt can mention', () => {
-    const catalog = catalogV2([kling30()]);
+  // The server hands a clip's handle only when it is one a prompt can mention (toRemixAssetDescriptor),
+  // so none of these arrives today: this holds the app to its own check of what it is handed. A clip
+  // handed none, as a row kept before handles were, still comes back without one.
+  it('keeps no handed handle a prompt could not mention', () => {
+    const catalog = catalogV2([klingVideoModel()]);
 
     const restored = hydrateCatalogCreationDraftFromRemixSource(
       createDefaultCreationDraft('video'),
-      klingClipsRemix([keptClip(1, '@Reference Video'), keptClip(2, ''), keptClip(3)], 'Three moves'),
+      klingClipsRemix([keptKlingClip(1, '@Reference Video'), keptKlingClip(2, ''), keptKlingClip(3)], 'Three moves'),
       catalog,
     );
 
     expect((restored.draft as VideoCreationDraft).referenceVideos.map((clip) => clip.handle))
       .toEqual([undefined, undefined, undefined]);
+  });
+
+  // Only Kling 3.0 takes a clip under a handle (the server's videoElementInputs); Wan 2.7's slot names
+  // none. A remix moved there kept its clips' handles, and the app took the prompt's mentions of them
+  // for ones the run could send, which the server then refused.
+  it('reads a mention of a clip as naming nothing on a model whose clips take no handle', () => {
+    const catalog = catalogV2([klingVideoModel()]);
+    const wan27 = parseModelCatalogDetail(liveCatalog.models.find((entry) => entry.id === 'wan-2.7'));
+    const restored = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('video'), twoKeptClips(), catalog).draft;
+
+    const onWan = applyCatalogModelDefaults(restored, wan27) as VideoCreationDraft;
+
+    expect(onWan.referenceVideos.map((clip) => clip.handle)).toEqual(['@reference_video_2', '@reference_video_3']);
+    expect(catalogDraftRunHandles(onWan, wan27)).toEqual([]);
+    expect(validateCatalogCreationDraft(onWan, wan27).errors)
+      .toContain('Unknown element mentions: @reference_video_2, @reference_video_3');
   });
 });
