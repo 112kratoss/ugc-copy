@@ -35,11 +35,59 @@ let rpcBundleRows: TestBundleRow[] | null = null;
 let rpcCalls: Array<{ offset: number; limit: number }> = [];
 let hiddenLinkedPostIds = new Set<string>();
 let nsfwPostIds = new Set<string>();
+// Posts made in the app, each with a public generation of two saved pictures
+// its recipe's creator may share (B3).
+let creationPostIds = new Set<string>();
+// The posts each read of what an unlock adds from those pictures asked about,
+// and its filters.
+let creationInputReads: Array<{ postIds: string[]; filters: Record<string, unknown> }> = [];
+
+function creationGenerationId(postId: string) {
+  return postId.replace('post-', 'gen-');
+}
+
+/** A recipe as the read of what its unlock adds from the creation's inputs nests it. */
+function creationInputSource(row: TestBundleRow) {
+  const generationId = creationGenerationId(row.post_id);
+  return {
+    post_id: row.post_id,
+    owner_user_id: row.owner_user_id,
+    post: {
+      id: row.post_id,
+      user_id: row.owner_user_id,
+      generation_id: generationId,
+      category: 'image',
+      visibility: 'public',
+      archived_at: null,
+      review_status: 'visible',
+      source_kind: 'magicbooklet',
+      generation: {
+        id: generationId,
+        user_id: row.owner_user_id,
+        is_public: true,
+        category: 'image',
+        workflow_settings: null,
+        inputs: ['image-1', 'image-2'].map((name, sortOrder) => ({
+          id: `${generationId}-${name}`,
+          generation_id: generationId,
+          user_id: row.owner_user_id,
+          media_type: 'image',
+          role: 'reference_image',
+          label: null,
+          storage_path: `generation_inputs/${row.owner_user_id}/${generationId}/${name}.png`,
+          source_generation_id: null,
+          sort_order: sortOrder,
+          metadata: {},
+        })),
+      },
+    },
+  };
+}
 
 function buildLinkedPost(postId: string) {
   return {
     id: postId,
-    generation_id: null,
+    generation_id: creationPostIds.has(postId) ? creationGenerationId(postId) : null,
     title: `Published result for ${postId}`,
     body: 'A detailed public result that gives buyers enough proof to evaluate the unlock.',
     category: 'image',
@@ -91,14 +139,41 @@ vi.mock('@/lib/server-helpers', () => ({
     from(table: string) {
       if (table === 'post_resource_bundles') {
         let selectedColumns = '';
+        let postIds: string[] = [];
+        const filters: Record<string, unknown> = {};
         const query = {
           select(columns: string) {
             selectedColumns = columns;
             selectedBundleColumns.push(columns);
             return query;
           },
-          eq() {
+          // The scan's own filters are not applied (every fixture row is
+          // published); the inputs read's are.
+          eq(column: string, value: unknown) {
+            filters[column] = value;
             return query;
+          },
+          in(_column: string, values: string[]) {
+            postIds = values;
+            return query;
+          },
+          abortSignal() {
+            return query;
+          },
+          // Only the read of what each unlock adds from the creation's inputs
+          // is awaited without a range.
+          then(resolve: (value: { data: unknown[]; error: null }) => void) {
+            creationInputReads.push({ postIds: [...postIds], filters: { ...filters } });
+            resolve({
+              data: bundleRows
+                .filter((row) => (
+                  postIds.includes(row.post_id)
+                  && creationPostIds.has(row.post_id)
+                  && Object.entries(filters).every(([column, value]) => (row as Record<string, unknown>)[column] === value)
+                ))
+                .map(creationInputSource),
+              error: null,
+            });
           },
           order(column: string, options: { ascending: boolean }) {
             orderCalls.push({ column, ascending: options.ascending });
@@ -228,6 +303,39 @@ describe('marketplace resource list missing-RPC fallback batching', () => {
     rpcCalls = [];
     hiddenLinkedPostIds = new Set();
     nsfwPostIds = new Set();
+    creationPostIds = new Set();
+    creationInputReads = [];
+  });
+
+  // Review of 2026-10-29: the bridge counted each scanned batch's recipes with
+  // a best-effort read and filtered on the kinds it counted, so whether a
+  // recipe was under Files shifted with that read, and its waits added up
+  // batch by batch.
+  it('filters on what recipes store, and counts the page it serves in one read', async () => {
+    bundleRows = Array.from({ length: 30 }, (_, index) => ({
+      ...buildBundleRow(index, `Launch recipe ${index}`),
+      allow_remix: true,
+    }));
+    creationPostIds = new Set(bundleRows.map((row) => row.post_id));
+    // Only post-025 stores a file of its own.
+    bundleRows[25] = {
+      ...bundleRows[25],
+      resource_items: [
+        { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Create a polished campaign visual.' },
+        { id: 'lut-1', type: 'reference_image', title: 'Colour LUT', storagePath: 'owner-025/resources/lut.png', contentType: 'image/png' },
+      ],
+    };
+    const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+    const files = await getMarketplaceResourceList({ resource: 'files', offset: 0, limit: 1 });
+
+    expect(files.items.map((item) => item.postId)).toEqual(['post-025']);
+    // Two batches scanned, one read, for the page served.
+    expect(rangeCalls).toEqual([{ start: 0, end: 23 }, { start: 24, end: 47 }]);
+    expect(creationInputReads).toEqual([
+      { postIds: ['post-025'], filters: { allow_remix: true, status: 'published' } },
+    ]);
+    expect(files.items[0]?.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 3 });
   });
 
   it('advances past a returned lookahead row when hydration drops an earlier row', async () => {

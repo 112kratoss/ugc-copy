@@ -13,6 +13,7 @@ import {
   normalizePostResourceAttachments,
   normalizePostResourceItems,
   normalizePostResourceSections,
+  sanitizePostResourceBundleLockedPreview,
   type PostResourceBundleResources,
 } from '@/lib/post-resource-bundles';
 import {
@@ -484,7 +485,12 @@ function buildMarketplaceAssetSummaryMap(
           ...legacyResources,
           items: resourceItems,
         };
-        const lockedPreview = buildPostResourceBundleLockedPreview(normalizedResources);
+        // Public surfaces serve this summary, so its preview is the teaser from
+        // the start (counts, kinds, generic names): a read that forgot to
+        // sanitize has none of the creator's titles, cards, files or sizes.
+        const lockedPreview = sanitizePostResourceBundleLockedPreview(
+          buildPostResourceBundleLockedPreview(normalizedResources),
+        )!;
         const resourceKinds = getPostResourceKinds(normalizedResources);
 
         return [

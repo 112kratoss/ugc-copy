@@ -4,12 +4,17 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { loadBlockedCreatorIds as defaultLoadBlockedCreatorIds } from '@/lib/moderation-service';
 import { isMissingPostsSchemaError } from '@/lib/posts-server';
-import { resolvePostRowsToFeedItems as defaultResolvePostRowsToFeedItems } from '@/lib/showcase-feed';
-import type {
-  ShowcaseFeedItem,
-  ShowcaseFeedPage,
+import {
+  addCreationReferenceCountsToFeedItems,
+  attachLocalizedAssetPrices,
+  attachViewerStateToFeed,
+  resolvePostRowsToFeedItems as defaultResolvePostRowsToFeedItems,
+} from '@/lib/showcase-feed';
+import {
+  sanitizeShowcaseFeedPage,
+  type ShowcaseFeedItem,
+  type ShowcaseFeedPage,
 } from '@/lib/showcase';
 
 export const DEFAULT_SAVED_MEDIA_LIMIT = 24;
@@ -36,8 +41,9 @@ export type SavedMediaRouteResult =
 
 type GetSavedMediaFeedParams = {
   createAdminSupabase: () => SupabaseClient;
+  /** The viewer's country, which recipe prices are quoted in, as on the feed. */
+  countryCode?: string | null;
   limit: number;
-  loadBlockedCreatorIds?: typeof defaultLoadBlockedCreatorIds;
   offset: number;
   pagination?: string;
   cursor?: string | null;
@@ -61,8 +67,8 @@ function emptySavedMediaPage(limit: number, offset: number, cursorMode = false):
 
 export async function getSavedMediaFeedForRoute({
   createAdminSupabase,
+  countryCode = null,
   limit,
-  loadBlockedCreatorIds = defaultLoadBlockedCreatorIds,
   offset,
   pagination,
   cursor,
@@ -166,7 +172,7 @@ export async function getSavedMediaFeedForRoute({
   const { data: postRows, error: postError } = await adminSupabase
     .from('posts')
     .select(
-      'id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility'
+      'id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility'
     )
     .in(saveSource === 'post' ? 'id' : 'generation_id', lookupIds)
     .in('visibility', ['public', 'unlisted'])
@@ -178,26 +184,25 @@ export async function getSavedMediaFeedForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to fetch saved media' } };
   }
 
-  const hydratedItems = await resolvePostRowsToFeedItems(
-    (postRows ?? []) as Parameters<typeof resolvePostRowsToFeedItems>[0],
-    adminSupabase
+  // A saved post goes out the way the feed's reads by id send it to this
+  // viewer: its recipe teaser counting what the unlock adds from the
+  // creation's inputs, priced in their currency, with the recipes and Remix
+  // they own, without a creator either of them blocked (none at all if that
+  // cannot be read), and through the sanitizer every public read ends with.
+  const hydratedItems = await addCreationReferenceCountsToFeedItems(
+    await resolvePostRowsToFeedItems(
+      (postRows ?? []) as Parameters<typeof resolvePostRowsToFeedItems>[0],
+      adminSupabase
+    ),
+    adminSupabase,
   );
-  let viewerSafeItems = hydratedItems;
-  try {
-    const blockedCreatorIds = await loadBlockedCreatorIds({
-      adminSupabase,
-      creatorIds: hydratedItems
-        .map((item) => item.creator?.id)
-        .filter((id): id is string => Boolean(id)),
-      viewerUserId: userId,
-    });
-    viewerSafeItems = hydratedItems.filter((item) => (
-      !item.creator?.id || !blockedCreatorIds.has(item.creator.id)
-    ));
-  } catch (error) {
-    logBackendError('error_filtering_blocked_creators_from_saved_media', { error: error });
-    viewerSafeItems = [];
-  }
+  const pricedFeed = await attachLocalizedAssetPrices(
+    { items: hydratedItems, pageInfo: { hasMore: false, nextOffset: null, limit, offset } },
+    countryCode,
+  );
+  const viewerSafeItems = sanitizeShowcaseFeedPage(
+    await attachViewerStateToFeed(pricedFeed, userId, adminSupabase),
+  ).items;
 
   const hydratedMap = new Map<string, ShowcaseFeedItem>();
   for (const item of viewerSafeItems) {

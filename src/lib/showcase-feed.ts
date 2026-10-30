@@ -26,9 +26,13 @@ import {
   resolveOwnedStoredMediaUrl,
 } from '@/lib/server-helpers';
 import {
+  countGenerationRecipeReferenceItemsByPostId,
   getPostResourceBundlePriceQuote,
 } from '@/lib/post-resource-bundles-server';
-import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
+import {
+  addPostResourceItemCountsToLockedPreview,
+  resolvePostRemixCapability,
+} from '@/lib/post-resource-bundles';
 import {
   coverNeedsGenerationPreview,
   graftGenerationPreviewOntoCover,
@@ -568,6 +572,60 @@ function buildAvailableTools(items: ShowcaseFeedItem[]) {
   }));
 }
 
+/**
+ * The items a response serves, each recipe teaser counting what its unlock
+ * adds from the creation's saved inputs, so the reel's "Recipe includes …" and
+ * every card's chips name what the unlock gives (recipe reading review B3).
+ * One read for the page, made once the page is cut, as a buyer would unlock
+ * (the feed is the same for everyone): a scan hydrating batch after batch
+ * waits on it once, and which posts a filter keeps is decided on what recipes
+ * store, never on this best-effort read. A page with no published creation
+ * recipe reads nothing, and a read that fails keeps the stored counts.
+ */
+export async function addCreationReferenceCountsToFeedItems(
+  items: ShowcaseFeedItem[],
+  adminSupabase: ReturnType<typeof createServiceClient>,
+): Promise<ShowcaseFeedItem[]> {
+  // Only a creation recipe whose creator may share the inputs can gain any.
+  const postIds = items.flatMap((item) => (
+    item.generationId && item.asset?.allowRemix && item.asset.lockedPreview ? [item.id] : []
+  ));
+  if (postIds.length === 0) {
+    return items;
+  }
+
+  const creationReferenceCounts = await countGenerationRecipeReferenceItemsByPostId({
+    adminSupabase,
+    postIds,
+    ownerUserId: null,
+  });
+  return items.map((item) => {
+    const counts = creationReferenceCounts.get(item.id);
+    if (!counts || !item.asset?.lockedPreview) {
+      return item;
+    }
+
+    const lockedPreview = addPostResourceItemCountsToLockedPreview(item.asset.lockedPreview, counts);
+    return {
+      ...item,
+      asset: {
+        ...item.asset,
+        lockedPreview,
+        itemCounts: lockedPreview.itemCounts,
+        resourceKinds: lockedPreview.resourceKinds,
+      },
+    };
+  });
+}
+
+/** A page whose recipe teasers count what each unlock adds (B3). */
+async function withCreationReferenceCounts(
+  page: ShowcaseFeedPage,
+  adminSupabase: ReturnType<typeof createServiceClient>,
+): Promise<ShowcaseFeedPage> {
+  return { ...page, items: await addCreationReferenceCountsToFeedItems(page.items, adminSupabase) };
+}
+
 export async function resolvePostRowsToFeedItems(
   rows: PostRow[],
   adminSupabase: ReturnType<typeof createServiceClient>,
@@ -668,6 +726,8 @@ export async function resolvePostRowsToFeedItems(
   };
 
   const postIds = rowsToHydrate.map((row) => row.id);
+  // What recipes store: what an unlock adds from a creation's inputs is
+  // counted on the page a caller serves (addCreationReferenceCountsToFeedItems).
   const assetHydrationPromise = timed('hydrate_bundles', () =>
     getMarketplaceAssetSummaryHydration(postIds, adminSupabase));
   const assetMapPromise = assetHydrationPromise.then(({ assetMap }) => assetMap);
@@ -873,8 +933,31 @@ async function collectFilteredFeedItems(params: {
   };
 }
 
-/** `forYouPool` is set only when For you fills its candidate pool from this page. */
+/**
+ * A sort lane's page, its recipe teasers counted once it is cut (B3). For
+ * you's pool builds on `buildShowcaseFeedPage` and counts its own page.
+ */
 async function getShowcaseFeedPageBase(
+  category: ShowcaseCategory,
+  sort: ShowcaseSort,
+  offset: number,
+  limit: number,
+  toolSlug: string | null,
+  unlockFilter: ShowcaseUnlockFilter,
+  resourceFilter: ShowcaseResourceFilter,
+): Promise<ShowcaseFeedPage> {
+  return withCreationReferenceCounts(
+    await buildShowcaseFeedPage(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter),
+    createServiceClient(),
+  );
+}
+
+/**
+ * A page as its posts and recipes store them, nothing counted from creations'
+ * inputs. `forYouPool` is set only when For you fills its candidate pool from
+ * this page.
+ */
+async function buildShowcaseFeedPage(
   category: ShowcaseCategory,
   sort: ShowcaseSort,
   offset: number,
@@ -1164,7 +1247,9 @@ async function getShowcaseForYouFeedPage(params: {
   const adminSupabase = params.adminSupabase ?? createServiceClient();
   const hydrationCache: ShowcaseFeedHydrationCache = new Map();
 
-  return getPersonalizedShowcaseFeedPage({
+  // Ranked and cut first, then its recipe teasers counted once (B3): the
+  // hydrated pool holds what recipes store, which is what its filters read.
+  const page = await getPersonalizedShowcaseFeedPage({
     anonymousKeyHash: params.anonymousKeyHash,
     cursor: params.cursor,
     filters: {
@@ -1191,7 +1276,7 @@ async function getShowcaseForYouFeedPage(params: {
       ));
     },
     fallbackItems: async (target) => {
-      const page = await getShowcaseFeedPageBase(
+      const fallbackPage = await buildShowcaseFeedPage(
         params.category,
         'recent',
         0,
@@ -1201,7 +1286,7 @@ async function getShowcaseForYouFeedPage(params: {
         params.resourceFilter,
         { hydrationCache },
       );
-      return page.items.filter((item) => !item.isNsfw);
+      return fallbackPage.items.filter((item) => !item.isNsfw);
     },
     limit: params.limit,
     offset: params.offset,
@@ -1209,6 +1294,12 @@ async function getShowcaseForYouFeedPage(params: {
     viewerUserId: params.viewerUserId,
     onPhaseTiming: params.onPhaseTiming,
   });
+  const startedAt = performance.now();
+  try {
+    return await withCreationReferenceCounts(page, adminSupabase);
+  } finally {
+    params.onPhaseTiming?.('recipe_reference_counts', performance.now() - startedAt);
+  }
 }
 
 const getCachedIdentitylessShowcaseForYouBootstrap = unstable_cache(
@@ -1615,7 +1706,10 @@ export async function getShowcaseFeedItemById(options: {
   }
 
   const revealed = options.revealNsfw && await hasNsfwReveal(adminSupabase, postId, viewerUserId);
-  const [item] = await resolvePostRowsToFeedItems([row], adminSupabase, undefined, undefined, revealed ? new Set([postId]) : new Set());
+  const [item] = await addCreationReferenceCountsToFeedItems(
+    await resolvePostRowsToFeedItems([row], adminSupabase, undefined, undefined, revealed ? new Set([postId]) : new Set()),
+    adminSupabase,
+  );
   if (!item) {
     return null;
   }
@@ -1657,7 +1751,10 @@ export async function getShowcaseFeedItemsByPostIds(options: {
   const rows = await fetchPostRowsByIds(uniquePostIds, adminSupabase);
   if (!rows) return [];
 
-  const items = await resolvePostRowsToFeedItems(rows, adminSupabase);
+  const items = await addCreationReferenceCountsToFeedItems(
+    await resolvePostRowsToFeedItems(rows, adminSupabase),
+    adminSupabase,
+  );
   const rankedItemById = new Map(items.map((item) => [item.id, item]));
   const rankedItems = uniquePostIds.flatMap((postId) => {
     const item = rankedItemById.get(postId);
@@ -1681,7 +1778,8 @@ export async function getShowcaseFeedItemsByPostIds(options: {
   return sanitizeShowcaseFeedPage(viewerFeed).items;
 }
 
-async function attachLocalizedAssetPrices(
+/** Each recipe's price in the viewer's currency; saved media prices its page with it too. */
+export async function attachLocalizedAssetPrices(
   feed: ShowcaseFeedPage,
   countryCode?: string | null
 ): Promise<ShowcaseFeedPage> {

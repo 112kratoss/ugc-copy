@@ -26,7 +26,11 @@ import {
   type ShowcaseItemCategory,
   type ShowcasePostFormat,
 } from '@/lib/showcase';
-import { resolvePostRowsToFeedItems, type PostRow } from '@/lib/showcase-feed';
+import {
+  addCreationReferenceCountsToFeedItems,
+  resolvePostRowsToFeedItems,
+  type PostRow,
+} from '@/lib/showcase-feed';
 import { slugifySourceTool } from '@/lib/source-tools';
 
 interface LegacyCreatorGenerationRow {
@@ -690,8 +694,12 @@ const loadCreatorProfilePage = cache(async (
   // A creator profile is a public surface, so it owes viewers the same
   // redaction the showcase feed applies: locked bundle metadata (real filenames,
   // item titles, sizes) and paid recipe text never leave the server.
-  const items = (await resolvePostRowsToFeedItems(visibleRows, adminSupabase))
-    .map(sanitizeShowcaseFeedItem);
+  // Each recipe teaser counts what its unlock adds from the creation's inputs
+  // (B3) before it is redacted, which keeps counts and kinds alone.
+  const items = (await addCreationReferenceCountsToFeedItems(
+    await resolvePostRowsToFeedItems(visibleRows, adminSupabase),
+    adminSupabase,
+  )).map(sanitizeShowcaseFeedItem);
   const stats = includeStats
     ? aggregateStats ?? await summarizeCreatorPosts(
         await loadAllCreatorPostMetricRows(adminSupabase, profile.id) ?? visibleRows,
