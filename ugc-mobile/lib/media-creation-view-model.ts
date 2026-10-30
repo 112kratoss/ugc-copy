@@ -831,9 +831,14 @@ function createMediaDraftFromRemixAsset(
       sourceGenerationId: asset.sourceGenerationId ?? null,
     }
   );
+  // A clip comes back under the handle the run's prompt mentions it by (Kling 3.0's video elements),
+  // where the run kept one: its name cannot give it back, since the app names every clip alike and a
+  // run whose first clip was taken away mentions @reference_video_2 and @reference_video_3.
+  const keptHandle = asset.kind === 'video' ? normalizeExistingHandle(asset.handle ?? undefined, new Set()) : null;
 
   return {
     ...draft,
+    handle: keptHandle ?? draft.handle,
     storagePath: asset.storagePath ?? null,
     sourceGenerationId: asset.sourceGenerationId ?? null,
   };

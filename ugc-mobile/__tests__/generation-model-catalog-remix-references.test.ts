@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { GenerationModelDescriptor } from '../lib/generation-model-catalog';
 import {
   buildUnifiedCatalogGenerationRequest,
   hydrateCatalogCreationDraftFromRemixSource,
@@ -7,9 +8,10 @@ import {
 } from '../lib/generation-model-draft';
 import {
   createDefaultCreationDraft,
+  renameMediaDraft,
   type VideoCreationDraft,
 } from '../lib/media-creation-view-model';
-import type { RemixResolvedImageElement, RemixSourceBundle } from '../lib/types';
+import type { RemixResolvedAsset, RemixResolvedImageElement, RemixSourceBundle } from '../lib/types';
 import { catalogV2, remoteVideoModel } from './generation-model-catalog-v2-fixtures';
 
 function namedReference(handle: string, index: number): RemixResolvedImageElement {
@@ -175,5 +177,113 @@ describe('catalog remix restore of reusable video references', () => {
     // A source that kept the clip before lengths were recorded still says so.
     expect(validateCatalogCreationDraft(restore([clip]), model).errors)
       .toEqual(['Reference videos requires duration metadata.']);
+  });
+});
+
+/** Kling 3.0 as published: frames, and named clips in a mode of their own beside them. */
+function kling30(): GenerationModelDescriptor {
+  return remoteVideoModel('kling-3.0-video', {
+    displayName: 'Kling 3.0 Cinematic',
+    controls: [
+      { key: 'duration', label: 'Duration', type: 'integer', presentation: 'stepper', defaultValue: 5, min: 3, max: 15, step: 1, unit: 'seconds' },
+    ],
+    capabilities: { multiShot: true, sound: true, fixedLens: false, googleSearch: false, outputFormat: false },
+    inputs: {
+      imageReferences: null,
+      videoReferences: { max: 3 },
+      audioReferences: null,
+      preparedAudioReferences: null,
+      characterReferences: null,
+      startFrame: true,
+      endFrame: true,
+      combineFramesWithReferences: false,
+    },
+    inputModes: [
+      {
+        key: 'frames',
+        label: 'Frames',
+        default: true,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
+        slots: [{ key: 'startFrame', kind: 'image', role: 'startFrame', label: 'Start frame', min: 0, max: 1 }],
+      },
+      {
+        key: 'video-elements',
+        label: 'Video elements',
+        default: false,
+        slots: [{ key: 'videoElements', kind: 'video', role: 'reference', label: 'Video elements', min: 0, max: 3, supportsNaming: true, durationMetadata: 'optional' }],
+      },
+    ],
+    inputConstraints: [],
+  });
+}
+
+/** A clip a Kling 3.0 run kept. The app names every clip it uploads "Reference Video". */
+function keptClip(place: number, handle?: string): RemixResolvedAsset {
+  return {
+    kind: 'video',
+    label: 'Reference Video',
+    storagePath: `generation_inputs/owner/source-generation/0${place}-reference_video.mp4`,
+    sourceGenerationId: null,
+    url: `https://cdn.example.com/clip-${place}.mp4`,
+    durationSeconds: 4,
+    ...(handle === undefined ? {} : { handle }),
+  };
+}
+
+function klingClipsRemix(referenceVideos: RemixResolvedAsset[], prompt: string): RemixSourceBundle {
+  return {
+    generation: { id: 'source-generation', title: 'Two moves', prompt, category: 'video', model: 'kling-3.0-video' },
+    result: null,
+    inputs: {
+      video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos, referenceAudios: [] },
+    },
+    workflowSettings: { model: 'kling-3.0-video', referenceMode: 'frames', duration: 5 },
+    restoreIssues: [],
+  };
+}
+
+describe('catalog remix restore of Kling 3.0 clips', () => {
+  // Uploaded as @reference_video, @reference_video_2 and @reference_video_3, the first taken away
+  // before the run: the run kept two clips, both named "Reference Video", under the handles its
+  // prompt mentions. Restored without them, the app held the run ("Unknown element mentions:
+  // @reference_video_2, @reference_video_3") and would have sent both clips with no handle.
+  it('restores each clip under the handle its run kept, so the prompt still names them', () => {
+    const catalog = catalogV2([kling30()]);
+    const model = catalog.models[0];
+
+    const restored = hydrateCatalogCreationDraftFromRemixSource(
+      createDefaultCreationDraft('video'),
+      klingClipsRemix(
+        [keptClip(2, '@reference_video_2'), keptClip(3, '@reference_video_3')],
+        'Open on @reference_video_2, then cut to @reference_video_3',
+      ),
+      catalog,
+    );
+    const draft = restored.draft as VideoCreationDraft;
+
+    expect(restored.warning).toBeNull();
+    expect(draft.referenceVideos.map((clip) => clip.handle)).toEqual(['@reference_video_2', '@reference_video_3']);
+    expect(validateCatalogCreationDraft(draft, model).errors).toEqual([]);
+    expect(buildUnifiedCatalogGenerationRequest(draft, model, catalog.revision).inputs).toEqual([
+      expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_2', url: 'https://cdn.example.com/clip-2.mp4' }),
+      expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_3', url: 'https://cdn.example.com/clip-3.mp4' }),
+    ]);
+    // Renamed later, a restored clip answers to its new name, as one the creator uploaded does.
+    expect(renameMediaDraft(draft.referenceVideos[1], 'Jump').handle).toBe('@jump');
+  });
+
+  // The server hands only a handle it would accept in a run; one that is not (an older row, a
+  // hand-edited one) names nothing a prompt could mention, so the clip is restored as before.
+  it('restores a clip without a handle that is not one a prompt can mention', () => {
+    const catalog = catalogV2([kling30()]);
+
+    const restored = hydrateCatalogCreationDraftFromRemixSource(
+      createDefaultCreationDraft('video'),
+      klingClipsRemix([keptClip(1, '@Reference Video'), keptClip(2, ''), keptClip(3)], 'Three moves'),
+      catalog,
+    );
+
+    expect((restored.draft as VideoCreationDraft).referenceVideos.map((clip) => clip.handle))
+      .toEqual([undefined, undefined, undefined]);
   });
 });

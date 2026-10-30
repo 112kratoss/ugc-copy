@@ -5447,6 +5447,51 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         ]));
       });
 
+      // A run whose creator took the first of three clips away kept two, both named "Reference Video",
+      // under the handles its prompt mentions. A remix restored them without, and the run was held:
+      // "Unknown element mentions: @reference_video_2, @reference_video_3".
+      it('restores a remix’s clips under the handles its prompt names, and renames a mention with its clip', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        const keptClip = (place: number) => ({
+          kind: 'video',
+          label: 'Reference Video',
+          handle: `@reference_video_${place}`,
+          url: `https://cdn.example.com/clip-${place}.mp4`,
+          storagePath: `generation_inputs/owner/gen-clips/0${place}-reference_video.mp4`,
+          sourceGenerationId: null,
+          durationSeconds: 4,
+        });
+        authState.api.getRemixSourceBundle.mockResolvedValue({
+          generation: { id: 'gen-clips', title: 'Two moves', prompt: 'Open on @reference_video_2, then @reference_video_3', category: 'video', model: 'kling-3.0-video' },
+          result: null,
+          inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [keptClip(2), keptClip(3)], referenceAudios: [] } },
+          workflowSettings: { model: 'kling-3.0-video', referenceMode: 'frames', duration: 5 },
+          restoreIssues: [],
+        });
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-clips', postId: 'post-clips' }} />);
+        await settle();
+        expect(text(tree)).not.toContain('Unknown element mention');
+
+        const clipTiles = tree.root.findAll((node) => (
+          String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Open details for Reference Video'
+        ));
+        expect(clipTiles).toHaveLength(2);
+        renderer.act(() => { clipTiles[1].props.onPress(); });
+        renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Reference name for Reference Video' }).props.onChangeText('Jump'); });
+        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
+        await settle();
+
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+        const request = authState.api.startGeneration.mock.calls[0][0] as { prompt: string; inputs: Array<Record<string, unknown>> };
+        expect(request.prompt).toBe('Open on @reference_video_2, then @jump');
+        expect(request.inputs).toEqual([
+          expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_2', url: 'https://cdn.example.com/clip-2.mp4' }),
+          expect.objectContaining({ slot: 'videoElements', handle: '@jump', label: 'Jump', url: 'https://cdn.example.com/clip-3.mp4' }),
+        ]);
+      });
+
       it('keeps clips from Seedance 2 waiting on Seedance 1.5 Pro, without locking its frames or offering them to mention', async () => {
         const seedanceOneFive: GenerationModelDescriptor = {
           ...paritySeedanceVideo(),
