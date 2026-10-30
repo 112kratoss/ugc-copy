@@ -408,7 +408,15 @@ export async function findPublicPostReferenceByIdOrGenerationId(
 
 export interface MarketplaceAssetSummaryHydration {
   assetMap: Map<string, ShowcaseAssetSummary>;
-  knownBundlePostIds: ReadonlySet<string> | null;
+  /**
+   * Posts with a published recipe whose summary could not be read: the
+   * summaries call failed, or answered with rows this code does not trust.
+   * Each may sell its prompt and Remix, so a reader serves it as a locked
+   * recipe it cannot show, never as a post without one. A draft sells nothing
+   * and is never here. When not even which posts have a published recipe can
+   * be read, the hydration throws instead, as the NSFW read beside it does.
+   */
+  unreadRecipePostIds: ReadonlySet<string>;
 }
 
 const PUBLIC_BUNDLE_SUMMARY_RPC = 'get_public_post_resource_bundle_summaries';
@@ -443,14 +451,14 @@ function isMissingPublicBundleSummaryRpcError(error: unknown): boolean {
   ) && errorText.includes(PUBLIC_BUNDLE_SUMMARY_RPC);
 }
 
-function failClosedMarketplaceAssetSummaryHydration(postIds: string[]): MarketplaceAssetSummaryHydration {
-  return {
-    assetMap: new Map(),
-    // Treat every requested post as potentially bundled until bundle presence can
-    // be established. This prevents a database error from synthesizing a public
-    // recipe over an intentional draft bundle.
-    knownBundlePostIds: new Set(postIds),
-  };
+/** A published row with what a recipe's summary needs; any other published row is a recipe this code cannot show. */
+function isReadablePublishedBundleRow(row: Record<string, unknown>): boolean {
+  return row.status === 'published' &&
+    typeof row.id === 'string' &&
+    typeof row.post_id === 'string' &&
+    typeof row.title === 'string' &&
+    (row.access_mode === 'free' || row.access_mode === 'paid') &&
+    typeof row.price_usd_cents === 'number';
 }
 
 function buildMarketplaceAssetSummaryMap(
@@ -458,14 +466,7 @@ function buildMarketplaceAssetSummaryMap(
 ): Map<string, ShowcaseAssetSummary> {
   return new Map(
     bundleRows
-      .filter((row) => row.status === 'published')
-      .filter((row) =>
-        typeof row.id === 'string' &&
-        typeof row.post_id === 'string' &&
-        typeof row.title === 'string' &&
-        (row.access_mode === 'free' || row.access_mode === 'paid') &&
-        typeof row.price_usd_cents === 'number'
-      )
+      .filter(isReadablePublishedBundleRow)
       .map((row) => {
         const salesCount = typeof row.sales_count === 'number' ? row.sales_count : 0;
         // Absent from the missing-RPC fallback's select, which serves only a
@@ -514,60 +515,90 @@ function buildMarketplaceAssetSummaryMap(
   );
 }
 
+/** The summaries of the published recipes among `rows`, and the published ones it could not read. */
+function hydrateBundleSummaryRows(rows: Array<Record<string, unknown>>): MarketplaceAssetSummaryHydration {
+  const assetMap = buildMarketplaceAssetSummaryMap(rows);
+  const unreadRecipePostIds = new Set(
+    rows
+      .filter((row) => row.status === 'published' && typeof row.post_id === 'string' && !assetMap.has(row.post_id))
+      .map((row) => row.post_id as string)
+  );
+  if (unreadRecipePostIds.size > 0) {
+    logBackendError('published_post_resource_bundle_summary_unreadable', { count: unreadRecipePostIds.size });
+  }
+  return { assetMap, unreadRecipePostIds };
+}
+
+/** The summaries call's rows, or null when they cannot be trusted. */
 function hydratePublicBundleSummaryRows(
-  rows: Array<Record<string, unknown>>,
-  postIds: string[]
-): MarketplaceAssetSummaryHydration {
-  const knownBundlePostIds = new Set<string>();
+  rows: Array<Record<string, unknown>>
+): MarketplaceAssetSummaryHydration | null {
   for (const row of rows) {
     if (typeof row.post_id !== 'string') {
       logBackendError('public_bundle_summary_rpc_returned_a_row_without_a_post_id');
-      return failClosedMarketplaceAssetSummaryHydration(postIds);
+      return null;
     }
-    knownBundlePostIds.add(row.post_id);
     if (
       row.status !== 'published' &&
       PRIVATE_BUNDLE_SUMMARY_FIELDS.some((field) => row[field] !== null && row[field] !== undefined)
     ) {
       logBackendError('public_bundle_summary_rpc_returned_details_for_a_non_published_bundle');
-      return failClosedMarketplaceAssetSummaryHydration(postIds);
+      return null;
     }
   }
 
-  return {
-    assetMap: buildMarketplaceAssetSummaryMap(rows),
-    knownBundlePostIds,
-  };
+  return hydrateBundleSummaryRows(rows);
+}
+
+/**
+ * Which of `postIds` have a published recipe, read on its own: the status of
+ * each post's recipe row and nothing else. Null when the bundles table is
+ * missing (a database that predates recipes). A read that fails throws: then
+ * no post can be told apart from one that sells its prompt.
+ */
+async function loadPublishedBundlePostIds(
+  postIds: string[],
+  adminSupabase: SupabaseClient
+): Promise<string[] | null> {
+  const { data, error } = await adminSupabase
+    .from('post_resource_bundles')
+    .select('post_id, status')
+    .in('post_id', postIds);
+
+  if (error) {
+    if (isMissingPostResourceBundlesSchemaError(error)) return null;
+    logBackendError('failed_to_load_post_resource_bundle_presence', { error: error });
+    throw error;
+  }
+
+  return ((data ?? []) as unknown as Array<Record<string, unknown>>)
+    .filter((row) => row.status === 'published' && typeof row.post_id === 'string')
+    .map((row) => row.post_id as string);
+}
+
+/**
+ * The summaries could not be read or trusted. Only the posts that have a
+ * published recipe are served locked: one failed call must neither leak a
+ * recipe nor lock every post it was asked about, which would empty the home
+ * shelf and send the Remixable lane through the whole catalog.
+ */
+async function lockPublishedRecipes(
+  postIds: string[],
+  adminSupabase: SupabaseClient
+): Promise<MarketplaceAssetSummaryHydration> {
+  const publishedPostIds = await loadPublishedBundlePostIds(postIds, adminSupabase);
+  if (!publishedPostIds) return getLegacyMarketplaceAssetSummaryHydration(postIds, adminSupabase);
+  return { assetMap: new Map(), unreadRecipePostIds: new Set(publishedPostIds) };
 }
 
 async function getMarketplaceAssetSummaryHydrationFallback(
   postIds: string[],
   adminSupabase: SupabaseClient
 ): Promise<MarketplaceAssetSummaryHydration | null> {
-  const { data: presenceData, error: presenceError } = await adminSupabase
-    .from('post_resource_bundles')
-    .select('post_id, status')
-    .in('post_id', postIds);
-
-  if (presenceError) {
-    if (isMissingPostResourceBundlesSchemaError(presenceError)) return null;
-    logBackendError('failed_to_load_post_resource_bundle_presence', { error: presenceError });
-    return failClosedMarketplaceAssetSummaryHydration(postIds);
-  }
-
-  const presenceRows = (presenceData ?? []) as unknown as Array<Record<string, unknown>>;
-  const knownBundlePostIds = new Set(
-    presenceRows
-      .map((row) => row.post_id)
-      .filter((postId): postId is string => typeof postId === 'string')
-  );
-  const publishedPostIds = presenceRows
-    .filter((row) => row.status === 'published')
-    .map((row) => row.post_id)
-    .filter((postId): postId is string => typeof postId === 'string');
-
+  const publishedPostIds = await loadPublishedBundlePostIds(postIds, adminSupabase);
+  if (!publishedPostIds) return null;
   if (publishedPostIds.length === 0) {
-    return { assetMap: new Map(), knownBundlePostIds };
+    return { assetMap: new Map(), unreadRecipePostIds: new Set() };
   }
 
   const bundleSelectWithItems =
@@ -587,17 +618,13 @@ async function getMarketplaceAssetSummaryHydrationFallback(
   }
 
   if (bundleResult.error) {
-    if (isMissingPostResourceBundlesSchemaError(bundleResult.error)) return null;
+    // These recipes were just read as published, so whatever failed, they are
+    // served locked rather than as posts without one.
     logBackendError('failed_to_load_published_post_resource_bundle_summaries', { error: bundleResult.error });
-    return { assetMap: new Map(), knownBundlePostIds };
+    return { assetMap: new Map(), unreadRecipePostIds: new Set(publishedPostIds) };
   }
 
-  return {
-    assetMap: buildMarketplaceAssetSummaryMap(
-      (bundleResult.data ?? []) as unknown as Array<Record<string, unknown>>
-    ),
-    knownBundlePostIds,
-  };
+  return hydrateBundleSummaryRows((bundleResult.data ?? []) as unknown as Array<Record<string, unknown>>);
 }
 
 async function getLegacyMarketplaceAssetSummaryHydration(
@@ -611,40 +638,42 @@ async function getLegacyMarketplaceAssetSummaryHydration(
     .eq('status', 'active');
 
   if (error) {
-    if (!isMissingMarketplaceSchemaError(error)) {
-      logBackendError('failed_to_load_legacy_marketplace_asset_summaries', { error: error });
+    if (isMissingMarketplaceSchemaError(error)) {
+      return { assetMap: new Map(), unreadRecipePostIds: new Set() };
     }
-    return {
-      assetMap: new Map(),
-      knownBundlePostIds: null,
-    };
+    logBackendError('failed_to_load_legacy_marketplace_asset_summaries', { error: error });
+    throw error;
   }
 
+  const rows = data ?? [];
+  const readableRows = rows.filter((row) =>
+    typeof row.id === 'string' &&
+    typeof row.post_id === 'string' &&
+    typeof row.title === 'string' &&
+    typeof row.price_usd_cents === 'number'
+  );
   return {
     assetMap: new Map(
-      (data ?? [])
-        .filter((row) =>
-          typeof row.id === 'string' &&
-          typeof row.post_id === 'string' &&
-          typeof row.title === 'string' &&
-          typeof row.price_usd_cents === 'number'
-        )
-        .map((row) => [
-          row.post_id as string,
-          {
-            id: row.id as string,
-            postId: row.post_id as string,
-            title: row.title as string,
-            accessMode: (row.price_usd_cents as number) === 0 ? 'free' : 'paid',
-            priceUsdCents: row.price_usd_cents as number,
-            previewText: '',
-            allowRemix: false,
-            salesCount: 0,
-            resourceKinds: [],
-          } satisfies ShowcaseAssetSummary,
-        ])
+      readableRows.map((row) => [
+        row.post_id as string,
+        {
+          id: row.id as string,
+          postId: row.post_id as string,
+          title: row.title as string,
+          accessMode: (row.price_usd_cents as number) === 0 ? 'free' : 'paid',
+          priceUsdCents: row.price_usd_cents as number,
+          previewText: '',
+          allowRemix: false,
+          salesCount: 0,
+          resourceKinds: [],
+        } satisfies ShowcaseAssetSummary,
+      ])
     ),
-    knownBundlePostIds: null,
+    unreadRecipePostIds: new Set(
+      rows
+        .filter((row) => typeof row.post_id === 'string' && !readableRows.includes(row))
+        .map((row) => row.post_id as string)
+    ),
   };
 }
 
@@ -653,10 +682,7 @@ export async function getMarketplaceAssetSummaryHydration(
   adminSupabase = createServiceClient()
 ): Promise<MarketplaceAssetSummaryHydration> {
   if (postIds.length === 0) {
-    return {
-      assetMap: new Map(),
-      knownBundlePostIds: new Set(),
-    };
+    return { assetMap: new Map(), unreadRecipePostIds: new Set() };
   }
 
   const rpc = (adminSupabase as unknown as {
@@ -672,16 +698,14 @@ export async function getMarketplaceAssetSummaryHydration(
     if (!error) {
       if (!Array.isArray(data)) {
         logBackendError('public_bundle_summary_rpc_returned_an_invalid_response');
-        return failClosedMarketplaceAssetSummaryHydration(postIds);
+        return lockPublishedRecipes(postIds, adminSupabase);
       }
-      return hydratePublicBundleSummaryRows(
-        data as Array<Record<string, unknown>>,
-        postIds
-      );
+      return hydratePublicBundleSummaryRows(data as Array<Record<string, unknown>>)
+        ?? lockPublishedRecipes(postIds, adminSupabase);
     }
     if (!isMissingPublicBundleSummaryRpcError(error)) {
       logBackendError('failed_to_load_public_post_resource_bundle_summaries', { error: error });
-      return failClosedMarketplaceAssetSummaryHydration(postIds);
+      return lockPublishedRecipes(postIds, adminSupabase);
     }
   }
 
@@ -695,12 +719,4 @@ export async function getMarketplaceAssetSummaryHydration(
   if (fallbackHydration) return fallbackHydration;
 
   return getLegacyMarketplaceAssetSummaryHydration(postIds, adminSupabase);
-}
-
-export async function getMarketplaceAssetSummaryMap(
-  postIds: string[],
-  adminSupabase = createServiceClient()
-): Promise<Map<string, ShowcaseAssetSummary>> {
-  const { assetMap } = await getMarketplaceAssetSummaryHydration(postIds, adminSupabase);
-  return assetMap;
 }
