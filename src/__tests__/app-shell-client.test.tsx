@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AppShellClient from '@/components/AppShellClient';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import type { ConfirmationRequest } from '@/components/feedback-state';
+import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
 
 let mockedPathname = '/';
@@ -763,6 +764,124 @@ describe('AppShellClient', () => {
 
     expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
     expect(document.body.style.overflow).toBe('');
+  });
+
+  // The owner's decision for the phone-width web (2026-10-28, "Hide it while creating"): the
+  // creators hide the bottom navigation, their bar holds the bottom edge, and the top bar's menu
+  // reaches every page. The stylesheet's half: app-shell-bottom-nav-while-creating.test.ts.
+  describe('while creating', () => {
+    const drawerLinks = () => within(screen.getByRole('dialog', { name: 'Navigation' })).getAllByRole('link')
+      .map((link) => [link.textContent, link.getAttribute('href'), link.getAttribute('aria-current')]);
+
+    // Which paths hide it is the rule's own test (app-shell-bottom-nav-while-creating.test.ts):
+    // here, that the shell draws the rule's answer.
+    it('marks the image, video and motion creators as holding the bottom edge, and no other page', () => {
+      for (const [pathname, hidden] of [
+        ['/create-image', true], ['/create-video', true], ['/create-motion', true],
+        // Pages that start as the creators' paths do, and the rest, keep it.
+        ['/create', false], ['/create-workflow', false], ['/post/new', false], ['/showcase', false],
+      ] as const) {
+        mockedPathname = pathname;
+        const { container, unmount } = render(
+          <AppShellClient>
+            <div>Page content</div>
+          </AppShellClient>
+        );
+        const root = container.querySelector('.app-shell-root');
+        expect(root?.getAttribute('data-bottom-nav') ?? null, pathname).toBe(hidden ? 'hidden' : null);
+        unmount();
+      }
+    });
+
+    it('draws the mark on the server, so a phone never sees the navigation come and go', () => {
+      const { container, onRecoverableError, attributeWarnings } = hydrateShell({ server: '/create-video', browser: '/create-video' });
+      expect(container.querySelector('.app-shell-root')).toHaveAttribute('data-bottom-nav', 'hidden');
+      expect(onRecoverableError).not.toHaveBeenCalled();
+      expect(attributeWarnings).toEqual([]);
+    });
+
+    it("names the navigation's places in the top bar's menu where it hides, the Create menu's two among them", () => {
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+      // Search stays the top bar's own.
+      expect(within(screen.getByRole('banner')).getByRole('link', { name: 'Search creators, posts, and recipes' })).toHaveAttribute('href', '/search');
+      fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+      expect(drawerLinks()).toEqual([
+        ['magicbooklet', '/', null],
+        ['Home', '/', null],
+        ['Explore', '/showcase', null],
+        ['Marketplace', '/marketplace', null],
+        // A way in, as the bottom bar's + was: the launchpad, never the page open.
+        ['Create', '/create', null],
+        ['Post', '/post/new', null],
+        ['Studio', '/creations', null],
+        ['Workflow Canvas', '/create-workflow', null],
+        ['Alerts', '/notifications', null],
+        ['Profile', '/profile', null],
+        ['Help & feedback', '/contact', null],
+      ]);
+    });
+
+    it("shows the Alerts count on the top bar's menu button where the navigation hides, and only there", () => {
+      publishUnreadAlertsCount(3);
+      try {
+        for (const [pathname, shown] of [['/create-video', true], ['/showcase', false]] as const) {
+          mockedPathname = pathname;
+          const { unmount } = render(
+            <AppShellClient>
+              <div>Page content</div>
+            </AppShellClient>
+          );
+          const menuButton = screen.getByRole('button', { name: /^Open navigation/ });
+          // In the button's name too: a screen reader hears a button by its name, not its badge.
+          expect(menuButton.getAttribute('aria-label'), pathname).toBe(shown ? 'Open navigation, 3 unread alerts' : 'Open navigation');
+          const badge = within(menuButton).queryByLabelText('3 unread alerts');
+          expect(Boolean(badge), pathname).toBe(shown);
+          // From 640px the bell shows the count: one count on the top bar.
+          if (badge) expect(badge.className.split(' ')).toContain('sm:hidden');
+          unmount();
+        }
+      } finally {
+        publishUnreadAlertsCount(0);
+      }
+    });
+
+    // The side navigation shows from 768px in px (globals.css). The menu button hid at md, 48rem,
+    // which moves with the browser's text size: at a small one a creator between 48rem and 768px,
+    // with no bottom navigation, had no way to the other pages at all.
+    it("hides the menu button and its drawer from 768px in px, where the side navigation shows", () => {
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+      const menuButton = screen.getByRole('button', { name: 'Open navigation' });
+      expect(menuButton.className.split(' ')).toContain('min-[768px]:hidden');
+      expect(menuButton.className.split(' ')).not.toContain('md:hidden');
+      fireEvent.click(menuButton);
+      const drawerLayer = screen.getByRole('dialog', { name: 'Navigation' }).parentElement!;
+      expect(drawerLayer.className.split(' ')).toContain('min-[768px]:hidden');
+    });
+
+    it('leaves the menu as it was where the navigation shows', () => {
+      mockedPathname = '/showcase';
+      render(
+        <AppShellClient>
+          <div>Explore</div>
+        </AppShellClient>
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+      expect(drawerLinks().map(([label]) => label)).toEqual([
+        'magicbooklet', 'Home', 'Explore', 'Marketplace', 'Studio', 'Workflow Canvas', 'Profile', 'Help & feedback',
+      ]);
+    });
   });
 
   it('keeps sign-in focused by omitting workspace navigation', () => {

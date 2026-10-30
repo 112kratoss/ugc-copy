@@ -1,10 +1,18 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  announceGenerationFollowedOnPage,
+  announceGenerationLeftOnPage,
+  announceGenerationSettledOnPage,
+  clearGenerationsOnPage,
   fetchGenerationStatus,
   fetchGenerationStatusWithRetry,
   GenerationStatusRequestError,
   getGenerationStatusRetryDelayMs,
+  readGenerationsOnPage,
+  subscribeToGenerationOnPage,
+  useAnnounceRunOnPage,
   waitForNextGenerationStatusPoll,
 } from '@/lib/generation-status-client';
 
@@ -266,5 +274,93 @@ describe('fetchGenerationStatusWithRetry', () => {
     await expect(outcome).resolves.toMatchObject({ name: 'AbortError' });
     await vi.advanceTimersByTimeAsync(20_000);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+// What a creator tells the shell's run toasts (GenerationNotifications) of the run it shows, so the
+// toast does not say its end again over the creator's Publish, whichever poll read the end first.
+describe('a run on its own page', () => {
+  type Props = { id: string | null; following: boolean; settled: 'succeeded' | 'failed' | null };
+  const said = (heard: ReturnType<typeof vi.fn>) => heard.mock.calls.map(([change]) => change);
+
+  beforeEach(() => {
+    clearGenerationsOnPage();
+  });
+
+  it('is followed, then settled; settled outlives the page letting go, and a subscriber hears each once', () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationOnPage(heard);
+    announceGenerationFollowedOnPage('gen-1');
+    announceGenerationFollowedOnPage('gen-1');
+    expect(readGenerationsOnPage().get('gen-1')).toBe('following');
+    announceGenerationSettledOnPage({ id: 'gen-1', status: 'succeeded' });
+    announceGenerationLeftOnPage('gen-1');
+    expect(readGenerationsOnPage().get('gen-1')).toBe('succeeded');
+    expect(said(heard)).toEqual([
+      { id: 'gen-1', state: 'following' },
+      { id: 'gen-1', state: 'succeeded' },
+    ]);
+    unsubscribe();
+    announceGenerationFollowedOnPage('gen-2');
+    expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it('is forgotten when the page lets go of it at work, once', () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationOnPage(heard);
+    announceGenerationFollowedOnPage('gen-1');
+    announceGenerationLeftOnPage('gen-1');
+    announceGenerationLeftOnPage('gen-1');
+    expect(readGenerationsOnPage().has('gen-1')).toBe(false);
+    expect(said(heard)).toEqual([
+      { id: 'gen-1', state: 'following' },
+      { id: 'gen-1', state: 'left' },
+    ]);
+    unsubscribe();
+  });
+
+  it('is what a creator says of the run it shows: followed while shown, settled once the canvas shows the end', () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationOnPage(heard);
+    const { rerender, unmount } = renderHook<void, Props>(
+      ({ id, following, settled }) => useAnnounceRunOnPage(id, following, settled),
+      { initialProps: { id: null, following: false, settled: null } },
+    );
+    // A start with no answer yet names no run.
+    expect(heard).not.toHaveBeenCalled();
+    rerender({ id: 'gen-1', following: true, settled: null });
+    rerender({ id: 'gen-1', following: true, settled: null });
+    expect(said(heard)).toEqual([{ id: 'gen-1', state: 'following' }]);
+    // The end shown, said once; the same end again says nothing more.
+    rerender({ id: 'gen-1', following: true, settled: 'succeeded' });
+    rerender({ id: 'gen-1', following: true, settled: 'succeeded' });
+    expect(said(heard)).toEqual([{ id: 'gen-1', state: 'following' }, { id: 'gen-1', state: 'succeeded' }]);
+    // Leaving the page after the end changes nothing: the end stays said.
+    unmount();
+    expect(heard).toHaveBeenCalledTimes(2);
+    expect(readGenerationsOnPage().get('gen-1')).toBe('succeeded');
+    unsubscribe();
+  });
+
+  it('lets go of a run the page loses sight of at work, and of one it leaves at work', () => {
+    const heard = vi.fn();
+    const unsubscribe = subscribeToGenerationOnPage(heard);
+    const { rerender, unmount } = renderHook<void, Props>(
+      ({ id, following, settled }) => useAnnounceRunOnPage(id, following, settled),
+      { initialProps: { id: 'gen-1', following: true, settled: null } },
+    );
+    // Left to the server: out of the page's sight.
+    rerender({ id: 'gen-1', following: false, settled: null });
+    expect(readGenerationsOnPage().has('gen-1')).toBe(false);
+    // Shown again, then the page goes.
+    rerender({ id: 'gen-1', following: true, settled: null });
+    unmount();
+    expect(said(heard)).toEqual([
+      { id: 'gen-1', state: 'following' },
+      { id: 'gen-1', state: 'left' },
+      { id: 'gen-1', state: 'following' },
+      { id: 'gen-1', state: 'left' },
+    ]);
+    unsubscribe();
   });
 });

@@ -3,6 +3,7 @@ import {
   getSafeProfileNextPath,
   type CreatorProfileReadinessInput,
 } from '@/lib/profile';
+import { CREATOR_PAGE_PATHS } from '@/lib/creator-pages';
 import { REFERRAL_CLAIM_STATUS_PARAM } from '@/lib/referral-claim-copy';
 
 export const DEFAULT_AUTH_NEXT_PATH = '/create';
@@ -17,7 +18,7 @@ export const PROFILE_ONBOARDING_SKIPPED_METADATA_KEY = 'creator_profile_onboardi
  * its own way back with `handover`, so a sign-in that only returns to a creator
  * (a remix link, the top bar's Sign in) keeps the usual onboarding.
  */
-const CREATOR_PATHS = new Set(['/create-image', '/create-video', '/create-motion']);
+const CREATOR_PATHS = new Set<string>(CREATOR_PAGE_PATHS);
 
 /** The query flag that has a creator greet an account back from sign-up. */
 export const CREATOR_WELCOME_PARAM = 'welcome';

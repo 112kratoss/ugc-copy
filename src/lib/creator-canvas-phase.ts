@@ -24,6 +24,21 @@ export function creatorCanvasPhase(run: {
 }
 
 /**
+ * Whether the canvas shows the run and will show its end: what the page tells the shell's run
+ * toasts to hold for. A run left to the server (`background`) is out of the page's sight, so its
+ * toast comes as for any run.
+ */
+export function creatorCanvasFollowsRun(phase: CreatorCanvasPhase): boolean {
+  return phase === 'generating' || phase === 'done' || phase === 'failed';
+}
+
+/** How the run ended, where the canvas shows it end: what the page tells the shell's run toasts. */
+export function creatorCanvasSettledStatus(phase: CreatorCanvasPhase): 'succeeded' | 'failed' | null {
+  if (phase === 'done') return 'succeeded';
+  return phase === 'failed' ? 'failed' : null;
+}
+
+/**
  * The canvas's heading: "Done", the tool's words for a run at work ("Making your video") and
  * for its place before a result ("Your video"), and "It didn’t finish".
  */

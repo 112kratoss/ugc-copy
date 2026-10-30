@@ -1108,6 +1108,18 @@ button:disabled,
   backdrop-filter: blur(20px);
 }
 
+/* A page that holds the bottom edge itself has no bottom navigation, and no room
+   kept for it: the creators, while creating (AppShellClient sets the attribute,
+   `hidesBottomNav`). Their bar sits on the edge, the safe area inside it, and
+   the top bar's menu names the navigation's places. From 768px no page has it. */
+.app-shell-root[data-bottom-nav='hidden'] {
+  --app-shell-bottom-nav-space: 0px;
+}
+
+.app-shell-root[data-bottom-nav='hidden'] .app-shell-bottom-nav {
+  display: none;
+}
+
 .app-panel {
   border: 1px solid var(--ui-border-default);
   border-radius: 1.5rem;

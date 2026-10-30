@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { resetFeedbackState } from '@/components/feedback-state';
+import { clearGenerationsOnPage, subscribeToGenerationOnPage } from '@/lib/generation-status-client';
 import { creatorOpeningFromCatalog, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
@@ -5026,6 +5027,42 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 12 credits$/);
       // The prompt the run was sent with stays with its clip.
       expect(within(canvas).getByText(PROMPT)).toBeInTheDocument();
+    });
+
+    // The shell's run toast would only say again what the canvas says, over Publish (2026-10-30):
+    // the page follows the run it shows, and says how it ended once the canvas shows that.
+    it('tells the shell\'s run toasts it follows its run, then how it ended once the canvas shows it', async () => {
+      clearGenerationsOnPage();
+      const heard = vi.fn();
+      const unsubscribe = subscribeToGenerationOnPage(heard);
+      try {
+        let answerStatus: ((response: Response) => void) | null = null;
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+          if (String(input).includes('/api/generate-video?id=')) {
+            return new Promise<Response>((resolve) => { answerStatus = resolve; });
+          }
+          return defaultResponse(input, init);
+        });
+        render(<CreateVideoClient prefill={{}} />);
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+
+        const canvas = screen.getByRole('region', { name: 'Result' });
+        expect(await within(canvas).findByRole('heading', { name: 'Making your video' })).toBeInTheDocument();
+        await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'gen-run-1', state: 'following' }));
+        expect(heard).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(answerStatus).not.toBeNull());
+
+        await act(async () => {
+          answerStatus!({ ok: true, status: 200, json: async () => ({ status: 'failed', error: 'Unknown error' }) } as Response);
+        });
+        expect(await within(canvas).findByRole('heading', { name: 'It didn’t finish' })).toBeInTheDocument();
+        await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'gen-run-1', state: 'failed' }));
+        expect(heard).toHaveBeenCalledTimes(2);
+      } finally {
+        unsubscribe();
+        clearGenerationsOnPage();
+      }
     });
 
     it('leaves the focus with a creator already typing the next prompt when the run ends', async () => {

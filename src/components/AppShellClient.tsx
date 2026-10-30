@@ -26,15 +26,23 @@ import {
 
 import {
   APP_NAV_ITEMS,
+  CREATE_MENU_ITEMS,
   getActiveAppNavItem,
   getAppShellTitle,
+  getCreateMenuHref,
+  hidesBottomNav,
   isMinimalAppChromePath,
   isNotFoundRouteSegment,
   type AppNavItem,
 } from './app-shell-nav';
-import AppShellCreateMenu, { APP_SHELL_CREATE_MENU_ID, openCreateMenuWithoutPopovers } from './AppShellCreateMenu';
+import AppShellCreateMenu, {
+  APP_SHELL_CREATE_MENU_ID,
+  CREATE_MENU_ICONS,
+  openCreateMenuWithoutPopovers,
+} from './AppShellCreateMenu';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
 import AlertsBadge from '@/components/AlertsBadge';
+import { useUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 import { holdForLeaveGuard } from '@/lib/use-leave-guard';
 
 // The places to go. Search, Alerts, Create and Invite & Earn are the top bar's
@@ -46,7 +54,57 @@ const NAV_GROUPS = [
   { label: 'Account', ids: ['profile'] },
 ] as const;
 
+// Where a page hides the bottom navigation (the creators: `hidesBottomNav`), the phone layout's
+// menu also names the places only that navigation held on a phone, whose top bar shows no bell
+// below 640px and no Create below 768px: the Create menu's two choices and Alerts, each at the
+// head of its group. The top bar's menu then reaches every page.
+const BOTTOM_NAV_ONLY_PLACES: Partial<Record<(typeof NAV_GROUPS)[number]['label'], ReadonlyArray<DrawerPlace['id']>>> = {
+  Create: ['create', 'post'],
+  Account: ['alerts'],
+};
+const NAV_GROUPS_WITHOUT_BOTTOM_NAV = NAV_GROUPS.map((group) => ({
+  label: group.label,
+  ids: [...(BOTTOM_NAV_ONLY_PLACES[group.label] ?? []), ...group.ids],
+}));
+
 const ALERTS_NAV_ITEM = APP_NAV_ITEMS.find((item) => item.id === 'alerts')!;
+const POST_MENU_ITEM = CREATE_MENU_ITEMS.find((item) => item.id === 'post')!;
+
+/** A place the drawer links to: one of the shell's places, or the Create menu's Post. */
+type DrawerPlace = Pick<AppNavItem, 'label' | 'href' | 'icon'> & { id: AppNavItem['id'] | 'post' };
+
+/**
+ * The top bar's menu button, hidden from 768px in px, as the side navigation shows
+ * (globals.css): a rem breakpoint moved with the browser's text size and, on a creator, left a
+ * small-text window with no navigation at all. Where the page hides the bottom navigation (the
+ * creators), the Alerts count that only the navigation held below 640px shows here, in the
+ * button's name too; from 640px the bell shows it. Its own component, so the count's changes
+ * redraw this button and not the frame.
+ */
+function NavigationMenuButton({ open, onOpen, carriesAlerts }: { open: boolean; onOpen: () => void; carriesAlerts: boolean }) {
+  const unread = useUnreadAlertsCount();
+  const label = carriesAlerts && unread > 0 ? `Open navigation, ${unread} unread alerts` : 'Open navigation';
+
+  return (
+    <button
+      type="button"
+      className="ui-focus-ring relative inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] min-[768px]:hidden"
+      onClick={onOpen}
+      aria-label={label}
+      aria-expanded={open}
+    >
+      <Menu className="h-5 w-5" aria-hidden />
+      {carriesAlerts ? <AlertsBadge className="absolute -right-1 -top-1 sm:hidden" /> : null}
+    </button>
+  );
+}
+
+function drawerPlace(id: DrawerPlace['id'], pathname: string): DrawerPlace | null {
+  if (id === 'post') {
+    return { id, label: POST_MENU_ITEM.label, href: getCreateMenuHref('post', pathname), icon: CREATE_MENU_ICONS.post };
+  }
+  return APP_NAV_ITEMS.find((item) => item.id === id) ?? null;
+}
 
 const subscribeToHydration = () => () => undefined;
 const getHydratedSnapshot = () => true;
@@ -67,7 +125,7 @@ const RESELECT_TO_TOP_TAB_IDS = new Set<AppNavItem['id']>([
 
 type AppNavClickHandler = (
   event: ReactMouseEvent<HTMLAnchorElement>,
-  item: AppNavItem
+  item: Pick<DrawerPlace, 'id'>
 ) => void;
 
 function getReselectableTabId(pathname: string) {
@@ -163,7 +221,7 @@ function DrawerNavItem({
   onClick,
   onNavigate,
 }: {
-  item: AppNavItem;
+  item: DrawerPlace;
   active: boolean;
   onClick: () => void;
   onNavigate: AppNavClickHandler;
@@ -187,6 +245,7 @@ function DrawerNavItem({
     >
       <Icon className={`h-[18px] w-[18px] ${active ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-faint)]'}`} aria-hidden />
       <span>{item.label}</span>
+      {item.id === 'alerts' ? <AlertsBadge className="ml-auto" /> : null}
     </Link>
   );
 }
@@ -296,6 +355,9 @@ const AppShellFrame = memo(function AppShellFrame({
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
   const title = useMemo(() => getAppShellTitle(pathname), [pathname]);
+  const bottomNavHidden = hidesBottomNav(pathname);
+  const drawerGroups: ReadonlyArray<{ label: string; ids: ReadonlyArray<DrawerPlace['id']> }> =
+    bottomNavHidden ? NAV_GROUPS_WITHOUT_BOTTOM_NAV : NAV_GROUPS;
   const visibleBottomItems = useMemo(() => {
     const ids = ['home', 'showcase', 'create', 'alerts', 'profile'] as const;
     return ids
@@ -410,7 +472,9 @@ const AppShellFrame = memo(function AppShellFrame({
   }
 
   return (
-    <div className="app-shell-root">
+    // The stylesheet hides the bottom navigation, and the room kept for it, on a page that holds
+    // the bottom edge itself (`.app-shell-root[data-bottom-nav='hidden']` in globals.css).
+    <div className="app-shell-root" data-bottom-nav={bottomNavHidden ? 'hidden' : undefined}>
       <aside className="app-shell-sidebar" aria-label="Primary navigation">
         <div className="px-4 pt-5">
           <Brand />
@@ -454,15 +518,11 @@ const AppShellFrame = memo(function AppShellFrame({
       <div className="app-shell-main" aria-hidden={mobileOpen ? true : undefined}>
         <header className="app-shell-header">
           <div className="flex min-w-0 items-center gap-3">
-            <button
-              type="button"
-              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] md:hidden"
-              onClick={() => setMobileOpen(true)}
-              aria-label="Open navigation"
-              aria-expanded={mobileOpen}
-            >
-              <Menu className="h-5 w-5" aria-hidden />
-            </button>
+            <NavigationMenuButton
+              open={mobileOpen}
+              onOpen={() => setMobileOpen(true)}
+              carriesAlerts={bottomNavHidden}
+            />
             {title !== null ? (
               <div className="min-w-0">
                 <div className="truncate text-[15px] font-extrabold text-[var(--ui-text-primary)]">{title}</div>
@@ -570,7 +630,7 @@ const AppShellFrame = memo(function AppShellFrame({
 
       {mobileOpen ? (
         <div
-          className="fixed inset-0 z-[80] bg-black/[0.72] backdrop-blur-sm md:hidden"
+          className="fixed inset-0 z-[80] bg-black/[0.72] backdrop-blur-sm min-[768px]:hidden"
           role="presentation"
           onClick={(event) => {
             if (event.target === event.currentTarget) setMobileOpen(false);
@@ -597,19 +657,21 @@ const AppShellFrame = memo(function AppShellFrame({
             </div>
 
             <nav className="mt-8 flex flex-col gap-6">
-              {NAV_GROUPS.map((group) => (
+              {drawerGroups.map((group) => (
                 <div key={group.label}>
                   <div className="mb-1.5 px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--ui-text-faint)]">
                     {group.label}
                   </div>
                   <div className="flex flex-col gap-1">
                     {group.ids.map((id) => {
-                      const item = APP_NAV_ITEMS.find((candidate) => candidate.id === id);
+                      const item = drawerPlace(id, pathname);
                       return item ? (
                         <DrawerNavItem
                           key={item.id}
                           item={item}
-                          active={activeItem?.id === item.id}
+                          // Create opens the launchpad: a way in, as the bottom bar's + was,
+                          // never the page open, though its section claims the creators.
+                          active={item.id !== 'create' && activeItem?.id === item.id}
                           onClick={() => setMobileOpen(false)}
                           onNavigate={handleAppNavClick}
                         />

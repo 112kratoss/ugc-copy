@@ -79,7 +79,7 @@ import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
-import { creatorCanvasPhase, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
+import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
@@ -121,6 +121,7 @@ import {
     isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
     type GenerationStatusResponse,
+    useAnnounceRunOnPage,
 } from '@/lib/generation-status-client';
 import {
     createLocalGenerationTiming,
@@ -1732,6 +1733,12 @@ export default function CreateImageClient({
     };
     const outputImageDownloadUrl = getOutputImageDownloadUrl(outputImage, 0);
 
+    // Where the run is, as the canvas says it (read before the sign-in check below returns early,
+    // as every hook is): what it shows of the run goes to the shell's run toasts, which would only
+    // say its end again, over Publish.
+    const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputImage), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
+    useAnnounceRunOnPage(latestGenerationId, creatorCanvasFollowsRun(canvasPhase), creatorCanvasSettledStatus(canvasPhase));
+
     if (isLoadingUser) {
         return (
             <div className="ui-page min-h-screen text-[var(--ui-text-primary)] flex items-center justify-center">
@@ -1746,7 +1753,6 @@ export default function CreateImageClient({
 
     // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
     // and its chip what the run is and holds.
-    const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputImage), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
     const canvasTitle = creatorCanvasTitle(canvasPhase, { making: 'Making your image', waiting: 'Your image' });
     const canvasChip = creatorCanvasChip(canvasPhase, runShape?.label, runShape?.cost);
     const showsEmptyCanvas = canvasPhase === 'empty';

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateImageClient from '@/app/create-image/CreateImageClient';
 import type { CreatorOpening } from '@/lib/creator-opening';
-import { GenerationStatusRequestError } from '@/lib/generation-status-client';
+import { clearGenerationsOnPage, GenerationStatusRequestError, subscribeToGenerationOnPage } from '@/lib/generation-status-client';
 import type { PersistedImageElementRecord } from '@/lib/persisted-media';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
@@ -1647,6 +1647,37 @@ describe('CreateImageClient generation pipeline', () => {
       const canvas = screen.getByRole('region', { name: 'Result' });
       expect(await within(canvas).findByText('8 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
       expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 8 credits$/);
+    });
+
+    // The shell's run toast would only say again what the canvas says, over Publish (2026-10-30):
+    // the page follows the run it shows, and says how it ended once the canvas shows that.
+    it('tells the shell\'s run toasts it follows its run, then how it ended once the canvas shows it', async () => {
+      clearGenerationsOnPage();
+      const heard = vi.fn();
+      const unsubscribe = subscribeToGenerationOnPage(heard);
+      try {
+        let finish: (value: unknown) => void = () => {};
+        fetchGenerationStatusWithRetryMock.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+        installFetch({ starts: [startedReply()] });
+        render(<CreateImageClient prefill={{}} />);
+        typePrompt('A lighthouse at dawn');
+        pressGenerate();
+
+        const canvas = screen.getByRole('region', { name: 'Result' });
+        expect(await within(canvas).findByRole('heading', { name: 'Making your image' })).toBeInTheDocument();
+        await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'gen-new', state: 'following' }));
+        expect(heard).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          finish({ status: 'failed', error: 'Unknown error' });
+        });
+        expect(await within(canvas).findByRole('heading', { name: 'It didn’t finish' })).toBeInTheDocument();
+        await waitFor(() => expect(heard).toHaveBeenCalledWith({ id: 'gen-new', state: 'failed' }));
+        expect(heard).toHaveBeenCalledTimes(2);
+      } finally {
+        unsubscribe();
+        clearGenerationsOnPage();
+      }
     });
 
     // The artboards Generating and Result (owner, 2026-10-28), and the build notes' focus on "Done".

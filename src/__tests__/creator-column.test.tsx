@@ -158,12 +158,33 @@ describe('the creator column bar', () => {
     expect(screen.getByRole('button', { name: 'Generate' })).toBeInTheDocument();
   });
 
-  it('stays above the bottom navigation on a phone', () => {
+  // The creators hide the shell's bottom navigation below 768px (`hidesBottomNav`), where the bar
+  // holds the window's bottom edge, the safe area inside it; wider it floats 0.75rem above the
+  // edge. In px, as the shell's own breakpoint: `max-md` is 48rem, which moves with the browser's
+  // text size (at 20px the bar sat flush up to 960px, where the shell floats it).
+  it('holds the bottom edge on a phone, the safe area inside it, and floats just above it wider', () => {
     const { container } = renderBar();
     const bar = container.querySelector('[data-creator-bar]');
-    // The shell's room for the bottom navigation, 0px from 768px; without it the nav took Generate's taps.
-    expect(bar?.className).toContain('bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)]');
-    expect(bar?.className).toContain('sticky');
+    const classes = bar?.className.split(' ') ?? [];
+    expect(classes).toEqual(expect.arrayContaining(['sticky', 'bottom-3', 'max-[768px]:bottom-0']));
+    expect(bar?.firstElementChild?.className.split(' ')).toContain('max-[768px]:pb-[env(safe-area-inset-bottom)]');
+    expect(bar?.className).not.toMatch(/max-md:/);
+  });
+
+  // `max-[1119px]` is `width < 1119px`: at 1119px, one column, the bar stayed stuck and the Publish
+  // bar never showed. `max-[1120px]` is the exact complement of the two panes' `min-[1120px]`.
+  it('waits at the column\'s end under the two panes\' width, with no safe area', () => {
+    const { container } = render(
+      <CreatorColumnBar
+        settingsSummary="1K · AUTO · JPG"
+        settings={null}
+        holdsFootUnderColumn={false}
+        action={<button type="button">Generate · 8 credits</button>}
+      />
+    );
+    const bar = container.querySelector('[data-creator-bar]');
+    expect(bar?.className.split(' ')).toContain('max-[1120px]:static');
+    expect(bar?.firstElementChild?.className).not.toContain('safe-area-inset-bottom');
   });
 });
 
@@ -833,6 +854,19 @@ describe('an upload slot', () => {
   it('keeps a locked slot out of reach of the keyboard', () => {
     const view = render(slot({ src: null, disabled: true }));
     expect(view.container.querySelector('#character-input')).toBeDisabled();
+  });
+});
+
+// The layout's half of the one-column break: `max-[1120px]` (width < 1120px), the exact complement of
+// the two panes' `min-[1120px]`; `max-[1119px]` left 1119px in one column with the result not first.
+describe('the creator column layout', () => {
+  it('moves the result first under the two panes\' width when asked', () => {
+    const { container } = render(
+      <CreatorColumnLayout title="Video creator" column={<div>Column</div>} canvas={<section aria-label="Result" />} resultFirst />
+    );
+    const grid = container.querySelector('h1')?.parentElement;
+    expect(grid?.className.split(' ')).toContain('max-[1120px]:[&>section]:order-first');
+    expect(grid?.className).not.toMatch(/1119/);
   });
 });
 

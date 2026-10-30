@@ -61,7 +61,7 @@ import { motionSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
 import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
-import { creatorCanvasPhase, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
+import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
@@ -90,6 +90,7 @@ import {
     isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
     type GenerationStatusResponse,
+    useAnnounceRunOnPage,
 } from '@/lib/generation-status-client';
 import {
     createLocalGenerationTiming,
@@ -1350,6 +1351,12 @@ export default function CreateMotionClient({
     // keeps no draft, so it is never reloaded under the creator.
     const { newBuildAvailable } = useDeploymentRefresh(!isGenerating && !isBackgroundProcessing && !remixId);
 
+    // Where the run is, as the canvas says it (read before the sign-in check below returns early,
+    // as every hook is): what it shows of the run goes to the shell's run toasts, which would only
+    // say its end again, over Publish.
+    const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputVideo), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
+    useAnnounceRunOnPage(latestGenerationId, creatorCanvasFollowsRun(canvasPhase), creatorCanvasSettledStatus(canvasPhase));
+
     if (isLoadingUser) {
         return (
             <div className="ui-page min-h-screen text-[var(--ui-text-primary)] flex items-center justify-center">
@@ -1369,7 +1376,6 @@ export default function CreateMotionClient({
 
     // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
     // and its chip what the run is and holds.
-    const canvasPhase = creatorCanvasPhase({ hasResult: Boolean(outputVideo), isGenerating, isBackgroundProcessing, hasFailure: runFailure !== null });
     const canvasTitle = creatorCanvasTitle(canvasPhase, { making: 'Animating your character', waiting: 'Your motion clip' });
     const canvasChip = creatorCanvasChip(canvasPhase, runLabel, runCost);
     const showsEmptyCanvas = canvasPhase === 'empty';

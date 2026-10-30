@@ -256,9 +256,11 @@ test('on a phone a bar holds Publish while the form’s own is out of view, and 
   expect(answers.publishes[0].postDataJSON()).toMatchObject({ title: 'Paper boat at dawn', resourceBundle: { accessMode: 'free' } });
 });
 
-// The floating bottom navigation covers the window's foot: the form's Publish behind it is not
-// in reach, so the bar stays until the button is above it.
-test('on a phone the bar stays while the form’s Publish is behind the bottom navigation', async ({ page, context }) => {
+// On a phone the creators hide the bottom navigation (`hidesBottomNav`, 2026-10-30): nothing else
+// holds the window's foot, so the bar stays while the form's Publish is below the window and goes
+// once the button is in it. (Before, the navigation covered the foot and the bar stayed until the
+// button was above it.)
+test('on a phone the bar stays while the form’s Publish is below the window, with no navigation at the foot', async ({ page, context }) => {
   await page.setViewportSize(PHONE);
   await signIn(context);
   const answers: Answers = { publishes: [], profileSaves: [] };
@@ -266,7 +268,7 @@ test('on a phone the bar stays while the form’s Publish is behind the bottom n
   await runToDone(page);
 
   const formPublish = publishForm(page).getByRole('button', { name: 'Publish to the feed' });
-  const navSpace = await formPublish.evaluate((button) => {
+  const room = await formPublish.evaluate((button) => {
     const probe = document.createElement('div');
     probe.style.cssText = 'position:absolute;visibility:hidden;height:var(--app-shell-bottom-nav-space,0px)';
     button.parentElement!.appendChild(probe);
@@ -274,7 +276,7 @@ test('on a phone the bar stays while the form’s Publish is behind the bottom n
     probe.remove();
     return height;
   });
-  expect(navSpace).toBeGreaterThan(48);
+  expect(room, 'the creators keep no room for the bottom navigation').toBe(0);
   /** Puts the button's middle this far above the window's foot, at once, and lets the observers answer. */
   const middleAbove = async (fromFoot: number) => {
     await formPublish.evaluate((button, offset) => {
@@ -287,11 +289,11 @@ test('on a phone the bar stays while the form’s Publish is behind the bottom n
   };
   const bar = page.getByTestId('creator-publish-bar');
 
-  // In the window, but under the navigation: out of reach, so the bar stays.
-  await middleAbove(navSpace / 2);
+  // Mostly below the window's foot: out of reach, so the bar stays.
+  await middleAbove(-12);
   await expect(bar).toBeVisible();
-  // Above the navigation: in reach, so the bar goes.
-  await middleAbove(navSpace + 48);
+  // In the window: in reach, so the bar goes.
+  await middleAbove(48);
   await expect(bar).toHaveCount(0);
 });
 
