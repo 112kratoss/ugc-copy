@@ -277,9 +277,23 @@ export async function isOwnOrLinkedAccountId(
   userId: string,
   ownerUserId: string | null | undefined,
 ): Promise<boolean> {
+  return (await readIsOwnOrLinkedAccountId(admin, userId, ownerUserId)) ?? false;
+}
+
+/**
+ * The same answer, or null when the link could not be read: for a caller to
+ * whom "not linked" is not the safe answer, as where a post's creation made as
+ * a guest would then keep a public copy its account took down.
+ */
+export async function readIsOwnOrLinkedAccountId(
+  admin: SupabaseClient,
+  userId: string,
+  ownerUserId: string | null | undefined,
+): Promise<boolean | null> {
   if (!ownerUserId) return false;
   if (ownerUserId === userId) return true;
-  return (await resolveLinkedAccountIds(admin, userId)).includes(ownerUserId);
+  const linked = await readLinkedAccountIds(admin, userId);
+  return linked ? linked.includes(ownerUserId) : null;
 }
 
 /**

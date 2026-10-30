@@ -48,6 +48,8 @@ function createSupabaseMock({
   bundleError = null,
   purchases = [],
   pendingOrders = [],
+  profiles = [],
+  profilesError = null,
 }: {
   post: MockPost | null;
   bundle: MockBundle | null;
@@ -55,6 +57,9 @@ function createSupabaseMock({
   bundleError?: { message: string } | null;
   purchases?: Array<{ bundle_id: string }>;
   pendingOrders?: Array<{ id: string }>;
+  /** Guest identities and the account each was linked to (`merged_into_user_id`). */
+  profiles?: Array<Record<string, unknown>>;
+  profilesError?: { message: string } | null;
 }) {
   const calls = {
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
@@ -62,11 +67,15 @@ function createSupabaseMock({
     updates: [] as Array<{ table: string; patch: Record<string, unknown>; filters: Record<string, unknown> }>,
     deletes: [] as Array<{ table: string; filters: Record<string, unknown> }>,
     removals: [] as Array<{ bucket: string; paths: string[] }>,
+    /** Every table read or written, in order. */
+    tables: [] as string[],
   };
 
   function createQuery(table: string) {
+    calls.tables.push(table);
     let operation: QueryOperation = 'select';
     let patch: Record<string, unknown> = {};
+    let selected: string[] | null = null;
     const filters: Record<string, unknown> = {};
 
     const resolve = async () => {
@@ -78,12 +87,22 @@ function createSupabaseMock({
         calls.deletes.push({ table, filters });
       }
 
+      if (table === 'profiles') {
+        return {
+          data: profilesError
+            ? null
+            : profiles.filter((row) => Object.entries(filters).every(([column, value]) => row[column] === value)),
+          error: profilesError,
+        };
+      }
+
       return { data: null, error: null };
     };
 
     const query = {
-      select() {
+      select(columns?: string) {
         operation = 'select';
+        selected = columns ? columns.split(',').map((column) => column.trim()) : null;
         return query;
       },
       eq(column: string, value: unknown) {
@@ -117,7 +136,14 @@ function createSupabaseMock({
           const matchesOwner = !filters.user_id
             || !generation?.user_id
             || generation.user_id === filters.user_id;
-          return Promise.resolve({ data: matchesOwner ? generation ?? null : null, error: null });
+          const row = matchesOwner ? generation ?? null : null;
+          // Only the columns the read asked for, as PostgREST answers.
+          return Promise.resolve({
+            data: row && selected
+              ? Object.fromEntries(selected.map((column) => [column, (row as Record<string, unknown>)[column]]))
+              : row,
+            error: null,
+          });
         }
 
         return Promise.resolve({ data: null, error: null });
@@ -138,7 +164,7 @@ function createSupabaseMock({
         operation = 'delete';
         return query;
       },
-      then(resolveThen: (value: { data: null; error: null }) => unknown, rejectThen?: (reason: unknown) => unknown) {
+      then(resolveThen: (value: { data: unknown; error: unknown }) => unknown, rejectThen?: (reason: unknown) => unknown) {
         return resolve().then(resolveThen, rejectThen);
       },
     };
@@ -294,6 +320,7 @@ describe('deleteOwnerPostForRoute', () => {
       },
       generation: {
         id: 'generation-1',
+        user_id: 'user-1',
         showcase_asset_path: 'posts/post-1/cover.jpg',
       },
     });
@@ -432,6 +459,7 @@ describe('deleteOwnerPostForRoute', () => {
       },
       generation: {
         id: 'generation-1',
+        user_id: 'user-1',
         showcase_asset_path: 'posts/post-1/cover.jpg',
       },
     });
@@ -496,6 +524,95 @@ describe('deleteOwnerPostForRoute', () => {
 
     expect(calls.removals).toEqual([]);
     expect(calls.updates.some((update) => update.table === 'generations')).toBe(false);
+  });
+
+  it("removes the public copy of the owner's own creation straight away, asking no link", async () => {
+    const { client, calls } = createSupabaseMock({
+      purchases: [],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: 'generation-1',
+        visibility: 'public',
+        title: 'Own creation',
+        source_kind: 'generation',
+        showcase_asset_path: 'showcase/generation-1/public.jpg',
+      },
+      bundle: null,
+      generation: {
+        id: 'generation-1',
+        user_id: 'user-1',
+        showcase_asset_path: 'showcase/generation-1/public.jpg',
+      },
+    });
+
+    await expect(deleteOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(calls.removals).toEqual([
+      { bucket: 'showcase_media', paths: ['showcase/generation-1/public.jpg'] },
+    ]);
+    expect(calls.tables).not.toContain('profiles');
+  });
+
+  // Publish files a creation made as a guest under the account the guest was
+  // linked to, and the generation keeps the guest's id.
+  describe('a creation its owner made as a guest', () => {
+    const guestPost: MockPost = {
+      id: 'post-1',
+      user_id: 'user-1',
+      generation_id: 'generation-3',
+      visibility: 'public',
+      title: 'Made as a guest',
+      source_kind: 'generation',
+      showcase_asset_path: 'showcase/generation-3/public.jpg',
+    };
+    const guestGeneration = {
+      id: 'generation-3',
+      user_id: 'guest-1',
+      showcase_asset_path: 'showcase/generation-3/public.jpg',
+    };
+
+    it('removes its public copy straight away', async () => {
+      const { client, calls } = createSupabaseMock({
+        post: guestPost,
+        bundle: null,
+        generation: guestGeneration,
+        profiles: [{ id: 'guest-1', merged_into_user_id: 'user-1' }],
+      });
+
+      await expect(deleteOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+      })).resolves.toMatchObject({ ok: true });
+
+      expect(calls.removals).toEqual([
+        { bucket: 'showcase_media', paths: ['showcase/generation-3/public.jpg'] },
+      ]);
+    });
+
+    it('leaves the copy to the revocation queue when the link cannot be read', async () => {
+      // The posts trigger queued it in the delete's own statement.
+      const { client, calls } = createSupabaseMock({
+        post: guestPost,
+        bundle: null,
+        generation: guestGeneration,
+        profilesError: { message: 'profiles unavailable' },
+      });
+
+      await expect(deleteOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+      })).resolves.toMatchObject({ ok: true });
+
+      expect(calls.deletes).toEqual([{ table: 'posts', filters: { id: 'post-1', user_id: 'user-1' } }]);
+      expect(calls.removals).toEqual([]);
+    });
   });
 
   it('does not delete the post when bundle state cannot be loaded for the audit decision', async () => {

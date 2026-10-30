@@ -6,6 +6,7 @@ import {
   IDENTITY_CHECK_UNAVAILABLE,
   isGuestUser,
   isOwnOrLinkedAccountId,
+  readIsOwnOrLinkedAccountId,
   requireIdentity,
   requireRegisteredUser,
   resolveLinkedAccountIds,
@@ -138,6 +139,30 @@ describe('account identity', () => {
         'user-1',
         'guest-1',
       )).resolves.toBe(false);
+    });
+  });
+
+  describe('readIsOwnOrLinkedAccountId', () => {
+    it('answers as isOwnOrLinkedAccountId while the link can be read', async () => {
+      const admin = adminFor();
+      await expect(readIsOwnOrLinkedAccountId(admin, 'user-1', 'user-1')).resolves.toBe(true);
+      await expect(readIsOwnOrLinkedAccountId(admin, 'user-1', null)).resolves.toBe(false);
+      expect(admin.from).not.toHaveBeenCalled();
+
+      await expect(readIsOwnOrLinkedAccountId(adminFor({ linkedIds: ['guest-1'] }), 'user-1', 'guest-1'))
+        .resolves.toBe(true);
+      await expect(readIsOwnOrLinkedAccountId(adminFor({ linkedIds: ['guest-1'] }), 'user-1', 'guest-2'))
+        .resolves.toBe(false);
+    });
+
+    it('answers null, not "not linked", when the link cannot be read', async () => {
+      await expect(readIsOwnOrLinkedAccountId(adminFor({ throwOnProfiles: true }), 'user-1', 'guest-1'))
+        .resolves.toBeNull();
+      await expect(readIsOwnOrLinkedAccountId(
+        adminFor({ linkedIds: ['guest-1'], profilesError: new Error('nope') }),
+        'user-1',
+        'guest-1',
+      )).resolves.toBeNull();
     });
   });
 

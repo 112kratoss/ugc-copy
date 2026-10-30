@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { runPagedQuery } from '@/lib/admin-paged-query';
 import {
   getCanonicalStoredMediaLocation,
+  getUserOwnedStoredMediaLocation,
   parseCanonicalStorageObjectPath,
 } from '@/lib/storage-ownership';
 
@@ -13,6 +14,7 @@ const MAX_QUEUE_LIMIT = 200;
 const RESOLVED_POST_REPORT_STATUSES = ['reviewed', 'dismissed'];
 const RESOLVED_SUBJECT_REPORT_STATUSES = ['resolved', 'dismissed'];
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+const GENERATED_MEDIA_BUCKETS = ['generated_images', 'generated_videos', 'generated_audio'];
 
 export type PostModerationQueueItem = {
   id: string;
@@ -293,10 +295,14 @@ export function normalizeShowcaseMediaPath(value: string | null | undefined) {
   return parseCanonicalStorageObjectPath(value);
 }
 
+// A creation's copy is filed under its generation: `showcase/`, or
+// `private-posts/` for one marked NSFW (`createGenerationShowcaseDerivative`).
 function isOwnedModerationMediaPath(path: string, postId: string, generationId: string | null) {
   return path.startsWith(`posts/${postId}/`)
     || path.startsWith(`private-posts/${postId}/`)
-    || Boolean(generationId && path.startsWith(`showcase/${generationId}/`));
+    || Boolean(generationId && (
+      path.startsWith(`showcase/${generationId}/`) || path.startsWith(`private-posts/${generationId}/`)
+    ));
 }
 
 export function getCanonicalOwnedModerationMediaPath(
@@ -316,6 +322,31 @@ function isExternalHttpMediaUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether a creation's owner is a guest identity linked to the post's owner.
+ * Publish files a creation made as a guest under the account the guest was
+ * linked to, and the creation keeps the guest's id: the rule
+ * `sync_generation_exposure_with_post` applies. Asked here rather than through
+ * `isOwnOrLinkedAccountId`, as `account-identity` imports `server-only`, which
+ * the moderation CLI (`scripts/ops/moderation-ops.ts`, tsx) cannot load.
+ */
+async function isGuestLinkedToAccount(
+  supabase: SupabaseClient,
+  guestUserId: string,
+  accountUserId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('id', guestUserId)
+    .eq('merged_into_user_id', accountUserId)
+    .maybeSingle();
+  if (error) {
+    throw databaseError('Failed to verify taken-down generation ownership', error);
+  }
+  return Boolean(data);
 }
 
 export async function revokePostPublicMedia(
@@ -351,18 +382,30 @@ export async function revokePostPublicMedia(
   }
 
   let verifiedGenerationId: string | null = null;
+  let generationOwnerId: string | null = null;
   if (post.generation_id) {
     const generationResult = await supabase
       .from('generations')
-      .select('id')
+      .select('id, user_id')
       .eq('id', post.generation_id)
-      .eq('user_id', post.user_id)
       .maybeSingle();
     if (generationResult.error) {
       throw databaseError('Failed to verify taken-down generation ownership', generationResult.error);
     }
-    if (generationResult.data) verifiedGenerationId = post.generation_id;
+    const ownerId = (generationResult.data as { user_id: string | null } | null)?.user_id ?? null;
+    if (ownerId && (ownerId === post.user_id || await isGuestLinkedToAccount(supabase, ownerId, post.user_id))) {
+      verifiedGenerationId = post.generation_id;
+      generationOwnerId = ownerId;
+    }
   }
+
+  // A creation post's output_url is the creation's private original, in the
+  // folder of whoever made it; its public copy is showcase_asset_path. The
+  // original is not public media of the post, and stays the creator's.
+  const outputUrl = generationOwnerId && post.output_url
+    && getUserOwnedStoredMediaLocation(post.output_url, generationOwnerId, { allowedBuckets: GENERATED_MEDIA_BUCKETS })
+    ? null
+    : post.output_url;
 
   const mediaRows = (mediaResult.data ?? []) as PostMediaModerationRow[];
   // The feed rendition and teaser are separate public objects, not variants of
@@ -370,7 +413,7 @@ export async function revokePostPublicMedia(
   // the exact URLs the feed had been serving.
   const rawStorageValues = [
     post.showcase_asset_path,
-    post.output_url,
+    outputUrl,
     ...mediaRows.flatMap((row) => [
       row.storage_path,
       row.preview_storage_path,

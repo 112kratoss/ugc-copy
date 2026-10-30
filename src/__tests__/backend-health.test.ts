@@ -2342,6 +2342,8 @@ describe('collectBackendHealth', () => {
         projectionReadError: null,
       });
       expect(dataAccessIssues(health)).toEqual([]);
+      // A source its post owner made needs no link read.
+      expect(db.builders.profiles).toBeUndefined();
     });
 
     it('warns rather than degrades when only some sources are missing', async () => {
@@ -2385,6 +2387,55 @@ describe('collectBackendHealth', () => {
         remixSourcesSampled: 1,
         remixSourcesResolved: 0,
         remixSourcesGateBlocked: 1,
+      });
+    });
+
+    // Publish files a creation made as a guest under the account the guest was
+    // linked to, and the generation keeps the guest's id. The gate opens Remix
+    // on it (remix-access), so the probe counts it as the gate does.
+    describe('a source its post owner made as a guest', () => {
+      function probe(profiles: QueryResult) {
+        return createClient({
+          backend_job_runs: { error: null, data: [] },
+          posts: { error: null, data: [remixablePost] },
+          generations: [
+            ...GENERATION_READS_BEFORE_PROBE,
+            { error: null, data: [{ ...readableSource, user_id: 'guest-1' }] },
+          ],
+          profiles,
+        });
+      }
+
+      it('resolves', async () => {
+        const db = probe({ error: null, data: [{ id: 'guest-1', merged_into_user_id: 'creator-1' }] });
+
+        const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+        expect(health.dataAccess).toEqual({
+          status: 'ok',
+          remixSourcesSampled: 1,
+          remixSourcesResolved: 1,
+          remixSourcesGateBlocked: 0,
+          projectionReadError: null,
+        });
+        expect(db.builders.profiles[0].select).toHaveBeenCalledWith('id, merged_into_user_id');
+        expect(db.builders.profiles[0].in).toHaveBeenCalledWith('id', ['guest-1']);
+      });
+
+      it('is gate-blocked when the guest was linked to another account', async () => {
+        const db = probe({ error: null, data: [{ id: 'guest-1', merged_into_user_id: 'creator-9' }] });
+
+        const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+        expect(health.dataAccess).toMatchObject({ remixSourcesResolved: 0, remixSourcesGateBlocked: 1 });
+      });
+
+      it('is gate-blocked when the link cannot be read, as the gate then refuses it', async () => {
+        const db = probe({ error: new Error('profiles unavailable'), data: null });
+
+        const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+        expect(health.dataAccess).toMatchObject({ remixSourcesResolved: 0, remixSourcesGateBlocked: 1 });
       });
     });
 

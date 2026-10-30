@@ -16,10 +16,26 @@ import { hasAnswered } from '@/__tests__/fixtures/mobile-notification-history';
 import { notifyCompletedRemix } from '@/lib/completed-remix-notification';
 import { settleGenerationSucceeded } from '@/lib/generation-settlement';
 
-function client(remix: unknown) {
+/** `linked`: the guest identities linked to each account (`profiles.merged_into_user_id`). */
+function client(remix: unknown, linked: Record<string, string[]> = {}) {
   const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn().mockResolvedValue({ data: remix, error: null }) };
   query.select.mockReturnValue(query); query.eq.mockReturnValue(query);
-  const from = vi.fn(() => query);
+  const linkedGuests = (accountId: string) => {
+    const read = {
+      select: () => read,
+      eq: (column: string, value: string) => {
+        if (column !== 'merged_into_user_id') throw new Error(`Unexpected filter ${column}`);
+        accountId = value;
+        return read;
+      },
+      then: (resolve: (value: unknown) => unknown) => Promise.resolve({
+        data: (linked[accountId] ?? []).map((id) => ({ id })),
+        error: null,
+      }).then(resolve),
+    };
+    return read;
+  };
+  const from = vi.fn((table: string) => (table === 'profiles' ? linkedGuests('') : query));
   return { db: { from } as unknown as SupabaseClient, from, query };
 }
 
@@ -102,6 +118,21 @@ describe('completed remix notifications', () => {
     const { db } = client(remix);
     await notifyCompletedRemix(db, 'prediction');
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  // A creation made as a guest is posted by the account the guest was linked
+  // to, so a run the guest started from it is the account's own remix.
+  it('treats a remix by a guest linked to the post owner as a self-remix', async () => {
+    const { db } = client({ ...recorded, actor_user_id: 'guest-of-creator' }, { creator: ['guest-of-creator'] });
+    await notifyCompletedRemix(db, 'prediction');
+    expect(notify).not.toHaveBeenCalled();
+    expect(recordFeedEvent).not.toHaveBeenCalled();
+  });
+
+  it("still notifies for a remix by another account's guest", async () => {
+    const { db } = client({ ...recorded, actor_user_id: 'guest-of-reader' }, { reader: ['guest-of-reader'] });
+    await notifyCompletedRemix(db, 'prediction');
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ userId: 'creator', actorUserId: 'guest-of-reader' }));
   });
 
   it('never turns successful settlement into failure when notification delivery fails', async () => {

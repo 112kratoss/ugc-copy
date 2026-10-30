@@ -3,6 +3,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { readIsOwnOrLinkedAccountId } from '@/lib/account-identity';
 import {
   BackendRateLimitError,
   POST_MUTATION_RATE_LIMIT,
@@ -326,18 +327,30 @@ export async function deleteOwnerPostForRoute({
   if (post.generation_id) {
     const { data: generation, error: generationError } = await adminSupabase
       .from('generations')
-      .select('id, showcase_asset_path')
+      .select('id, user_id')
       .eq('id', post.generation_id)
-      .eq('user_id', ownerUserId)
       .maybeSingle();
 
     if (generationError) {
       logBackendError('failed_to_load_linked_generation_before_post_delete', { error: generationError });
     } else if (generation) {
-      // Tombstoning or deleting the post below takes this generation off show
-      // in that same statement, through the posts trigger, and a deleted post's
-      // public copy is queued for revocation there too.
-      verifiedLinkedGenerationId = post.generation_id;
+      // A creation made as a guest keeps the guest's id, and publish files its
+      // post under the account the guest was linked to.
+      const ownedByPostOwner = await readIsOwnOrLinkedAccountId(
+        adminSupabase,
+        ownerUserId,
+        (generation as { user_id: string | null }).user_id,
+      );
+      if (ownedByPostOwner === null) {
+        logBackendError('failed_to_load_linked_generation_before_post_delete', {
+          error: new Error('The accounts linked to the post owner could not be read.'),
+        });
+      } else if (ownedByPostOwner) {
+        // Tombstoning or deleting the post below takes this generation off
+        // show in that same statement, through the posts trigger, and a
+        // deleted post's public copy is queued for revocation there too.
+        verifiedLinkedGenerationId = post.generation_id;
+      }
     }
   }
 
