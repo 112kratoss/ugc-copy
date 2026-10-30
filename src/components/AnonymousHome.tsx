@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Suspense, use } from 'react';
 
-import { Text } from '@/components/DesignSystem';
+import { getAccentClasses, Text } from '@/components/DesignSystem';
 import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
 import HomeExperience from '@/components/HomeExperience';
 import HomeShelf from '@/components/HomeShelf';
@@ -99,21 +99,24 @@ function AnonymousHero({ shelf }: { shelf: Promise<HomeShelfItem[]> }) {
         users navigate by, and for the search result this statically
         prerendered page exists to win.
 
-        It used to be `sr-only` and read "What will you create today?", which
-        gave a crawler nothing: the only visible headings on `/` are feed post
-        titles, so the highest-authority page in the site was being read as a
-        page about whatever someone last published. Visible and compact, above
-        the shelf, so it states the category without taking the space the feed
-        is meant to occupy.
+        It is the tagline, its selling half in the commerce accent: the hero
+        says Magicbooklet is somewhere to sell what you make, not only a tool to
+        make it (owner, 2026-10-31). It replaced "Create AI videos, images, and
+        motion-transfer UGC ads", which framed the product as an ad generator;
+        the category words a search matches stay in this page's title and
+        description (`src/app/page.tsx`). Before that it was `sr-only` and read
+        "What will you create today?", which gave a crawler nothing, since the
+        only other headings on `/` are feed post titles. Visible, above the
+        shelf, at the page title's own size (36px, 48px from 640px wide). The
+        second sentence is an inline-block, so the line breaks between the two
+        sentences (measured from 320px wide up).
       */}
-      <div className="mb-6 space-y-2">
-        <Text as="h1" variant="pageTitle" className="max-w-3xl text-3xl sm:text-4xl">
-          Create AI videos, images, and motion-transfer UGC ads
-        </Text>
-        <Text variant="body" className="max-w-2xl">
-          {siteConfig.tagline}
-        </Text>
-      </div>
+      <Text as="h1" variant="pageTitle" className="mb-6 max-w-3xl">
+        {siteConfig.tagline.create}{' '}
+        <span className={`inline-block ${getAccentClasses('commerce').accentText}`}>
+          {siteConfig.tagline.sell}
+        </span>
+      </Text>
       {/*
         No fallback here, unlike the signed-in page: this page is prerendered,
         and React writes a boundary that has a fallback out of line, so the HTML

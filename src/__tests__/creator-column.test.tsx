@@ -15,7 +15,8 @@ import {
   CreatorColumnBar,
   CreatorColumnLayout,
   CreatorMentionPanel,
-  CreatorReferenceRow,
+  CreatorReferenceStrip,
+  CreatorReferenceTile,
   CreatorSettingChoices,
   CreatorSettingSwitch,
   CreatorTemplatesTile,
@@ -25,6 +26,7 @@ import {
   CreatorRunFailed,
   CreatorRunFailedLine,
   CreatorRunWaitLines,
+  aspectRatioMark,
   creatorRunChip,
   describeRunFailure,
   parseAspectRatio,
@@ -286,6 +288,37 @@ describe('the setting choices', () => {
     fireEvent.keyDown(screen.getByRole('radio', { name: '16:9' }), { key: 'ArrowRight' });
     expect(onChange).toHaveBeenLastCalledWith('auto');
     expect(screen.getByRole('radio', { name: 'auto' })).toHaveFocus();
+  });
+
+  it('draws each ratio as a box to scale beside its words where the page asks for it', () => {
+    const ratios = ['auto', '1:1', '9:16', '21:9', '1:8'];
+    const view = render(
+      <CreatorSettingChoices
+        label="Aspect ratio"
+        options={ratios}
+        value="9:16"
+        onChange={() => {}}
+        columns={5}
+        optionMark={aspectRatioMark}
+      />
+    );
+    const boxOf = (name: string) => within(screen.getByRole('radio', { name })).queryByTestId('creator-option-ratio-box');
+
+    expect(boxOf('auto')).toBeNull();
+    expect(boxOf('1:1')).toHaveStyle({ width: '14px', height: '14px' });
+    expect(boxOf('9:16')).toHaveStyle({ width: '8px', height: '14px' });
+    expect(boxOf('21:9')).toHaveStyle({ width: '14px', height: '6px' });
+    // To scale, 1:8 would be 2px wide: it keeps 3px, so it still shows as a bar.
+    expect(boxOf('1:8')).toHaveStyle({ width: '3px', height: '14px' });
+    // A picture of the words, so the option is still read by its ratio alone.
+    expect(boxOf('9:16')).toHaveAttribute('aria-hidden', 'true');
+    // The chosen one's box takes the accent, as its border does.
+    expect(boxOf('9:16')?.parentElement).toHaveClass('text-brand-blue');
+    expect(boxOf('1:1')?.parentElement).not.toHaveClass('text-brand-blue');
+
+    // The group draws no box of its own accord, even for options written as ratios.
+    view.rerender(<CreatorSettingChoices label="Aspect ratio" options={ratios} value="9:16" onChange={() => {}} columns={5} />);
+    expect(screen.queryAllByTestId('creator-option-ratio-box')).toHaveLength(0);
   });
 });
 
@@ -709,7 +742,78 @@ describe('the top-up notice', () => {
   });
 });
 
-describe('a reference row', () => {
+describe('a reference tile', () => {
+  it('lays its references side by side in one row that scrolls sideways', () => {
+    render(
+      <CreatorReferenceStrip aria-label="Reference images">
+        {['Hero', 'Villain', 'Sidekick'].map((name) => (
+          <CreatorReferenceTile
+            key={name}
+            accent="image"
+            preview={<span />}
+            displayName={name}
+            nameDraft={undefined}
+            placeholder="Rename element"
+            onNameChange={() => {}}
+            onNameCommit={() => {}}
+            onNameCancel={() => {}}
+            onRemove={() => {}}
+            handle={`@${name.toLowerCase()}`}
+            handleClassName="text-sky-300"
+            onInsert={() => {}}
+          />
+        ))}
+      </CreatorReferenceStrip>
+    );
+    const strip = screen.getByRole('list', { name: 'Reference images' });
+
+    expect(within(strip).getAllByRole('listitem')).toHaveLength(3);
+    // One column of tiles that runs sideways, never a second line of them.
+    expect(strip).toHaveClass('grid-flow-col', 'overflow-x-auto');
+  });
+
+  it('brings a reference added to the strip into view, and leaves the first ones where they start', () => {
+    const scrollTo = vi.fn();
+    const own = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
+    const strip = (names: string[]) => (
+      <CreatorReferenceStrip aria-label="Reference images">
+        {names.map((name) => (
+          <CreatorReferenceTile
+            key={name}
+            accent="image"
+            preview={<span />}
+            displayName={name}
+            nameDraft={undefined}
+            placeholder="Rename element"
+            onNameChange={() => {}}
+            onNameCommit={() => {}}
+            onNameCancel={() => {}}
+            onRemove={() => {}}
+            handle={`@${name.toLowerCase()}`}
+            handleClassName="text-sky-300"
+            onInsert={() => {}}
+          />
+        ))}
+      </CreatorReferenceStrip>
+    );
+    try {
+      // A remix's restored set, or the first pictures picked, start at the strip's left.
+      const view = render(strip(['Hero', 'Villain']));
+      expect(scrollTo).not.toHaveBeenCalled();
+
+      view.rerender(strip(['Hero', 'Villain', 'Sidekick']));
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+
+      // A removal moves nothing.
+      view.rerender(strip(['Hero', 'Sidekick']));
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+    } finally {
+      if (own) Object.defineProperty(HTMLElement.prototype, 'scrollTo', own);
+      else delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+    }
+  });
+
   it('names its controls for the reference and the handle they act on', () => {
     const calls = {
       onNameChange: vi.fn(),
@@ -721,7 +825,7 @@ describe('a reference row', () => {
     };
     render(
       <ul>
-        <CreatorReferenceRow
+        <CreatorReferenceTile
           accent="video"
           preview={<span />}
           displayName="Hero"
@@ -735,6 +839,9 @@ describe('a reference row', () => {
       </ul>
     );
 
+    // The handle is the one Insert control: a tile has no room for a second.
+    expect(screen.getAllByRole('button', { name: /^Insert/ })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Insert @hero' })).toHaveTextContent('@hero');
     fireEvent.click(screen.getByRole('button', { name: 'Insert @hero' }));
     fireEvent.click(screen.getByRole('button', { name: 'Copy @hero' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove Hero' }));
@@ -755,7 +862,7 @@ describe('a reference row', () => {
   it('offers Copy only where the page gives one', () => {
     render(
       <ul>
-        <CreatorReferenceRow
+        <CreatorReferenceTile
           accent="image"
           preview={<span />}
           displayName="Hero"

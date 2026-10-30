@@ -18,7 +18,9 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * up its cards were 160px wide, which left the Copy and Insert buttons a 108px
  * row for their 127px, so Insert stuck out past the row's border. Since
  * 2026-10-26 each Kling clip is a row of the column, as every reference is, and
- * Copy and Insert sit side by side under its name.
+ * Copy and Insert sat side by side under its name. Since 2026-10-31 each is a
+ * tile in a row that scrolls sideways: its handle is its Insert button, on a
+ * line of its own, with Copy under it, and both stay inside the tile.
  *
  * Vitest cannot reach this. Every name and handle was in the document, and only
  * the layout was wrong.
@@ -260,14 +262,14 @@ function readChipRow(page: Page, label: string): Promise<Row | null> {
   }, label));
 }
 
-/** Measures the handle rows of the Kling video element cards, or answers null while there are none. */
+/** Measures the Kling video element tiles' Insert and Copy, or answers null while there are none. */
 function readKlingCardRows(page: Page): Promise<Row | null> {
   return readPastDevServerReloads(() => page.evaluate(() => {
     const heading = Array.from(document.querySelectorAll<HTMLElement>('h2'))
       .find((candidate) => candidate.textContent === 'Kling video elements');
-    // The panel is the heading's nearest ancestor that holds a card's Insert button.
+    // The panel is the heading's nearest ancestor that holds a tile's Insert button: its handle.
     let panel = heading?.parentElement ?? null;
-    while (panel && !Array.from(panel.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Insert')) {
+    while (panel && !Array.from(panel.querySelectorAll('button')).some((button) => /^Insert @/.test(button.getAttribute('aria-label') ?? ''))) {
       panel = panel.parentElement;
     }
     if (!panel) return null;
@@ -280,44 +282,36 @@ function readKlingCardRows(page: Page): Promise<Row | null> {
 
     const faults: string[] = [];
     for (const handle of handles) {
-      const row = handle.parentElement;
+      const tile = handle.closest<HTMLElement>('li');
       const fault = (text: string) => faults.push(`${handle.textContent}: ${text}`);
-      if (!row) {
-        fault('has no row');
+      if (!tile) {
+        fault('has no tile');
         continue;
       }
 
-      for (const element of [row, ...Array.from(row.querySelectorAll<HTMLElement>('*'))]) {
-        if (
-          element.clientWidth > 0
-          && getComputedStyle(element).overflowX === 'visible'
-          && element.scrollWidth > element.clientWidth + 1
-        ) {
-          fault(`a ${element.clientWidth}px box holds ${element.scrollWidth}px of content: ${(element.textContent ?? '').slice(0, 40)}`);
-        }
-      }
-
-      const rowBox = row.getBoundingClientRect();
-      const buttons = Array.from(row.querySelectorAll<HTMLElement>('button'));
-      const boxes = buttons.map((button) => button.getBoundingClientRect());
+      // The two buttons named for the handle: the handle itself, which inserts it, and Copy.
+      const buttons = Array.from(tile.querySelectorAll<HTMLElement>('button'))
+        .filter((button) => /^(Insert|Copy) @/.test(button.getAttribute('aria-label') ?? ''));
       if (buttons.length !== 2) {
-        fault(`has ${buttons.length} buttons, not Copy and Insert`);
+        fault(`has ${buttons.length} of Insert and Copy`);
         continue;
       }
-      buttons.forEach((button, index) => {
-        if (boxes[index].left < rowBox.left - 1 || boxes[index].right > rowBox.right + 1) {
-          fault(`${button.textContent?.trim()} runs from ${Math.round(boxes[index].left)} to ${Math.round(boxes[index].right)}px, outside its row at ${Math.round(rowBox.left)} to ${Math.round(rowBox.right)}px`);
-        }
-      });
 
-      // One above the other only where the row cannot hold both side by side.
-      const rowStyle = getComputedStyle(row);
-      const rowWidth = row.clientWidth - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight);
-      const group = buttons[0].parentElement;
-      const gap = group ? parseFloat(getComputedStyle(group).columnGap) || 0 : 0;
-      const sideBySide = boxes[0].width + gap + boxes[1].width;
-      if (Math.abs(boxes[0].top - boxes[1].top) > 1 && sideBySide <= rowWidth) {
-        fault(`Copy and Insert are stacked in a ${Math.round(rowWidth)}px row that holds their ${Math.round(sideBySide)}px`);
+      const tileBox = tile.getBoundingClientRect();
+      for (const button of buttons) {
+        for (const element of [button, ...Array.from(button.querySelectorAll<HTMLElement>('*'))]) {
+          if (
+            element.clientWidth > 0
+            && getComputedStyle(element).overflowX === 'visible'
+            && element.scrollWidth > element.clientWidth + 1
+          ) {
+            fault(`a ${element.clientWidth}px box holds ${element.scrollWidth}px of content: ${(element.textContent ?? '').slice(0, 40)}`);
+          }
+        }
+        const box = button.getBoundingClientRect();
+        if (box.left < tileBox.left - 1 || box.right > tileBox.right + 1) {
+          fault(`${button.getAttribute('aria-label')} runs from ${Math.round(box.left)} to ${Math.round(box.right)}px, outside its tile at ${Math.round(tileBox.left)} to ${Math.round(tileBox.right)}px`);
+        }
       }
     }
 
@@ -378,15 +372,15 @@ test.describe('reference chips', () => {
     await expect(page.getByRole('heading', { name: 'Reference images', exact: true })).toBeVisible();
 
     // The row of chips over the prompt went with the column layout (2026-10-26), as on the
-    // image creator: each reference's row has its own Insert, so the chips left are the "@"
-    // panel's. Those rows are on the page while it is measured, so a long name in one would
-    // show here as the page's overflow.
+    // image creator: each reference has its own Insert (its tile's handle, since 2026-10-31),
+    // so the chips left are the "@" panel's. The tiles scroll inside their strip, so the page's
+    // overflow measured here is the panel's alone.
     await expectSuggestionsInTheirRow(page, 'Insert reference', handles, () => (
       typeAtEnd(page.getByPlaceholder(/^Describe the .* scene/), ' @')
     ));
   });
 
-  test('the video creator keeps Kling clip names inside their chips and the card buttons inside their rows', async ({ page }) => {
+  test('the video creator keeps Kling clip names inside their chips and the tiles\' buttons inside their tiles', async ({ page }) => {
     await page.route('**/api/remix-source*', (route) => route.fulfill({ json: KLING_REMIX }));
     const handles = CLIPS.map((clip) => clip.handle);
 
@@ -421,9 +415,9 @@ test.describe('reference chips', () => {
     await expect(page.getByRole('heading', { name: 'Reference images', exact: true })).toBeVisible();
 
     // The row of chips over the prompt went with the column layout (2026-10-26): each
-    // reference's row has its own Insert (reference-card-handles.spec.ts), so the chips
-    // left are the "@" panel's. Those rows are on the page while it is measured, so a
-    // long name in one would show here as the page's overflow.
+    // reference has its own Insert, its tile's handle (reference-card-handles.spec.ts), so
+    // the chips left are the "@" panel's. The tiles scroll inside their strip, so the page's
+    // overflow measured here is the panel's alone.
     await expectSuggestionsInTheirRow(page, 'Insert element', handles, () => (
       typeAtEnd(page.getByPlaceholder('Describe the image you want to create...'), ' @')
     ));

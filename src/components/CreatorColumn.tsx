@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref } from 'react';
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref } from 'react';
+import { Children, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
@@ -197,6 +197,26 @@ type CreatorChoiceLayout =
   | { appearance: 'pill'; columns?: undefined };
 
 /**
+ * The box an aspect-ratio option draws beside its words, as the app's parameter
+ * sheet does: the long side 14px and the short side to scale, never under 3px, so
+ * 1:8 still shows as a bar. Nothing for "auto". The creators hand it to their
+ * ratio choices as `optionMark`, as the app picks its ratio control by its key.
+ */
+export function aspectRatioMark(option: string): ReactNode {
+  const ratio = parseAspectRatio(option);
+  if (ratio === null) return null;
+  const toScale = (share: number) => Math.max(3, Math.round(14 * share));
+  return (
+    <span
+      aria-hidden
+      data-testid="creator-option-ratio-box"
+      className="shrink-0 rounded-xs border-[1.5px] border-current"
+      style={ratio >= 1 ? { width: 14, height: toScale(1 / ratio) } : { width: toScale(ratio), height: 14 }}
+    />
+  );
+}
+
+/**
  * One setting with a single value (aspect ratio, resolution, quality): a radio
  * group, so a screen reader hears which one is chosen, and the arrow keys move
  * the choice as they do in any radio group. The parent decides whether a pick
@@ -215,6 +235,7 @@ export function CreatorSettingChoices<T extends string>({
   accent = 'image',
   capitalize = false,
   optionPrice,
+  optionMark,
   ref,
 }: {
   label: string;
@@ -235,13 +256,15 @@ export function CreatorSettingChoices<T extends string>({
    * selectable: the bar offers a top-up in Generate's place.
    */
   optionPrice?: (option: T) => OptionPrice | null;
+  /** A small picture before an option's words (the ratios' boxes: `aspectRatioMark`), in the accent once chosen. */
+  optionMark?: (option: T) => ReactNode;
   /** The radio group, for a parent that gives the focus back to the chosen option. */
   ref?: Ref<HTMLDivElement>;
 } & CreatorChoiceLayout) {
   const labelId = useId();
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedIndex = options.indexOf(value);
-  const selectedClasses = getAccentClasses(accent).selected;
+  const { selected: selectedClasses, mark: selectedMarkClass } = getAccentClasses(accent);
   const pill = appearance === 'pill';
 
   const choose = (index: number) => {
@@ -285,6 +308,7 @@ export function CreatorSettingChoices<T extends string>({
           const checked = index === selectedIndex;
           const price = optionPrice?.(option) ?? null;
           const text = optionLabel ? optionLabel(option) : option;
+          const mark = optionMark?.(option) ?? null;
           return (
             <button
               key={option}
@@ -305,6 +329,9 @@ export function CreatorSettingChoices<T extends string>({
                 'ui-focus-ring min-h-10 border text-xs font-bold transition-colors duration-150',
                 pill ? 'inline-flex items-center rounded-full px-3.5' : 'rounded-ui-md px-2',
                 optionPrice && 'flex min-h-12 flex-col items-center justify-center gap-0.5 py-1',
+                // The room a mark has is measured on the option itself (a grid cell, never a pill),
+                // and its line is centred, so a long one shares the padding on both sides.
+                mark && !pill && '@container flex items-center justify-center',
                 capitalize && 'capitalize',
                 checked
                   ? selectedClasses
@@ -313,7 +340,18 @@ export function CreatorSettingChoices<T extends string>({
                     : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
-              <span>{text}</span>
+              {mark ? (
+                // Side by side, as in the app, at every width a creator's column has (options from
+                // about 54px); stacked only narrower (five to a row on a 320px phone), where a long
+                // ratio such as 27:16 would run past the option's border.
+                <span className="inline-flex items-center gap-1 @max-[2.25rem]:flex-col @max-[2.25rem]:gap-0.5">
+                  {/* The mark takes the option's colour, and the accent once chosen, as in the app. */}
+                  <span className={clsx('inline-flex shrink-0', checked && selectedMarkClass)}>{mark}</span>
+                  {text}
+                </span>
+              ) : (
+                <span>{text}</span>
+              )}
               {price ? (
                 <span
                   data-testid="creator-option-price"
@@ -972,7 +1010,7 @@ export function CreatorMentionPanel<T extends CreatorMentionSuggestion>({
 export const CREATOR_REFERENCE_CHIP_CLASS =
   'ui-focus-ring inline-flex min-h-9 shrink-0 items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-semibold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)] disabled:cursor-not-allowed disabled:opacity-50';
 
-/** The @handle as the button that inserts it, where a creator's hint says "tap a handle". */
+/** The @handle as the button that inserts it: each reference tile's, as the creators' hints say ("tap a handle"). */
 const CREATOR_HANDLE_INSERT_CLASS =
   'ui-focus-ring inline-flex min-h-9 min-w-0 max-w-full items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-left transition-colors hover:bg-[var(--ui-surface-3)]';
 
@@ -1009,13 +1047,52 @@ export function CreatorReplaceButton({ label, accept, onFile }: {
 }
 
 /**
- * A reference in a creator's column, as a row: its picture or clip (which
- * opens a preview), its name to rename it by, Remove, and its @handle with
- * Insert (and Copy for a Kling clip), each named for the handle it acts on.
- * With `insertByHandle` the handle itself is the Insert button, and a remix's
- * reference takes `replace`.
+ * A row of cards that scrolls sideways, snapping to each: the start posts' strip
+ * (`CreatorStartPosts`) and the references'. Each sets its own cell width and gap,
+ * which a second `auto-cols-*` in a `className` could not override.
  */
-export function CreatorReferenceRow({
+export const SIDEWAYS_TRACK_CLASS = 'app-scrollbar -mx-1 grid snap-x grid-flow-col overflow-x-auto px-1 pb-2';
+
+/**
+ * A creator's references side by side in one row that scrolls sideways, as the
+ * app lists them, so ten references take one row of the column rather than ten.
+ * One added to a strip that already had some comes into view, as a row added
+ * under the list did; the first ones, or a remix's restored set, start at the left.
+ */
+export function CreatorReferenceStrip({ className, children, ...props }: ComponentPropsWithoutRef<'ul'>) {
+  const listRef = useRef<HTMLUListElement>(null);
+  const count = Children.count(children);
+  const shownCount = useRef(count);
+  const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (list && shownCount.current > 0 && count > shownCount.current) {
+      if (typeof list.scrollTo === 'function') {
+        list.scrollTo({ left: list.scrollWidth, behavior: reduceMotion ? 'auto' : 'smooth' });
+      } else {
+        list.scrollLeft = list.scrollWidth;
+      }
+    }
+    shownCount.current = count;
+  }, [count, reduceMotion]);
+
+  return (
+    <ul {...props} ref={listRef} className={clsx(SIDEWAYS_TRACK_CLASS, 'auto-cols-[8rem] gap-2', className)}>
+      {children}
+    </ul>
+  );
+}
+
+/**
+ * A reference in a creator's column, as a tile in its strip: its picture or
+ * clip (which opens a preview) with Remove on it, its name to rename it by, and
+ * its @handle, which is the button that inserts it, each named for what it acts
+ * on. Copy (a Kling clip), Replace (a remix's reference) and a note sit under
+ * the handle. The handle has the tile's width to itself and breaks after an
+ * underscore, so it always shows whole (`reference-card-handles.spec.ts`).
+ */
+export function CreatorReferenceTile({
   accent,
   preview,
   displayName,
@@ -1030,11 +1107,10 @@ export function CreatorReferenceRow({
   onInsert,
   onCopy,
   note,
-  insertByHandle = false,
   replace,
 }: {
   accent: UiAccent;
-  /** The picture or clip at the row's start. */
+  /** The picture or clip at the tile's top, as wide as the tile. */
   preview: ReactNode;
   displayName: string;
   /** The name as it is being typed, if it is. */
@@ -1050,65 +1126,65 @@ export function CreatorReferenceRow({
   onInsert: () => void;
   onCopy?: () => void;
   note?: ReactNode;
-  /** The handle is the Insert button (the video creator's hint: "tap a handle"). */
-  insertByHandle?: boolean;
   /** A remix's reference: a file of the creator's own takes its place. */
   replace?: { label: string; accept: string; onFile: (file: File) => void };
 }) {
   return (
-    <li className="flex items-start gap-3 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-2.5">
-      {preview}
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex items-center gap-1">
-          <input
-            type="text"
-            value={nameDraft ?? displayName}
-            onChange={(event) => onNameChange(event.target.value)}
-            onBlur={onNameCommit}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                onNameCommit();
-                event.currentTarget.blur();
-              }
-              if (event.key === 'Escape') {
-                onNameCancel();
-                event.currentTarget.blur();
-              }
-            }}
-            aria-label={`Name of ${displayName}`}
-            placeholder={placeholder}
-            className={clsx(
-              'min-w-0 flex-1 rounded-ui-sm border border-transparent bg-transparent px-2 py-1.5 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:bg-[var(--ui-surface-2)]',
-              getAccentClasses(accent).fieldFocus
-            )}
-          />
-          <IconButton label={`Remove ${displayName}`} icon={X} onClick={onRemove} className="shrink-0" />
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2">
-          {insertByHandle ? (
-            <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_HANDLE_INSERT_CLASS}>
-              <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
-            </button>
-          ) : (
-            <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
-          )}
-          <div className="flex flex-wrap items-center gap-1.5">
-            {replace ? <CreatorReplaceButton {...replace} /> : null}
-            {onCopy ? (
-              <button type="button" onClick={onCopy} aria-label={`Copy ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
-                Copy
-              </button>
-            ) : null}
-            {insertByHandle ? null : (
-              <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
-                Insert
-              </button>
-            )}
-          </div>
-        </div>
-        {note ? <p className="px-2 text-xs text-[var(--ui-text-faint)]">{note}</p> : null}
+    <li className="flex min-w-0 snap-start flex-col gap-1.5 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-1.5">
+      <div className="relative">
+        {preview}
+        {/* 48px to press, as every icon button is, and a 32px circle to see, so the picture stays visible. */}
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`Remove ${displayName}`}
+          title={`Remove ${displayName}`}
+          className="ui-focus-ring group/remove absolute right-0 top-0 inline-flex h-12 w-12 items-start justify-end rounded-full p-1"
+        >
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white transition group-hover/remove:bg-rose-500/90">
+            <X className="h-4 w-4" aria-hidden />
+          </span>
+        </button>
       </div>
+      <input
+        type="text"
+        value={nameDraft ?? displayName}
+        onChange={(event) => onNameChange(event.target.value)}
+        onBlur={onNameCommit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            onNameCommit();
+            event.currentTarget.blur();
+          }
+          if (event.key === 'Escape') {
+            onNameCancel();
+            event.currentTarget.blur();
+          }
+        }}
+        aria-label={`Name of ${displayName}`}
+        // A tile shows about a dozen characters of a long name; the rest on hover.
+        title={nameDraft ?? displayName}
+        placeholder={placeholder}
+        className={clsx(
+          'w-full min-w-0 rounded-ui-sm border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:bg-[var(--ui-surface-2)]',
+          getAccentClasses(accent).fieldFocus
+        )}
+      />
+      <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} title={`Insert ${handle}`} className={CREATOR_HANDLE_INSERT_CLASS}>
+        <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
+      </button>
+      {replace || onCopy ? (
+        <div className="flex flex-wrap gap-1.5">
+          {replace ? <CreatorReplaceButton {...replace} /> : null}
+          {onCopy ? (
+            <button type="button" onClick={onCopy} aria-label={`Copy ${handle}`} className={CREATOR_REFERENCE_CHIP_CLASS}>
+              Copy
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {note ? <p className="px-1.5 text-xs text-[var(--ui-text-faint)]">{note}</p> : null}
     </li>
   );
 }

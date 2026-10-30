@@ -250,7 +250,7 @@ describe('Anonymous home cacheability', () => {
     expect(html).toContain('Child safety');
   });
 
-  it('keeps exactly one h1, visible and naming what the product does', async () => {
+  it('keeps exactly one h1, visible and leading with the tagline', async () => {
     const { default: Home } = await import('@/app/page');
 
     const html = await renderPageToHtml(<Home />);
@@ -258,15 +258,27 @@ describe('Anonymous home cacheability', () => {
     container.innerHTML = html;
 
     // The h1 the document outline and the search snippet both rely on. It was
-    // `sr-only` and read "What will you create today?", which named no
-    // capability anyone searches for — and since the only other headings on `/`
-    // are feed post titles, the site's highest-authority page had nothing to
-    // rank on. Visible and specific now; losing either property is costly.
+    // `sr-only` and read "What will you create today?", which a crawler could
+    // not use, since the only other headings on `/` are feed post titles; then
+    // "Create AI videos, images, and motion-transfer UGC ads", which framed the
+    // product as an ad generator. Since 2026-10-31 it is the tagline with the
+    // selling half drawn apart, so the hero says Magicbooklet is somewhere to
+    // sell what you make (the owner's call); the category words stay in the
+    // page's title and description.
     const headings = container.querySelectorAll('h1');
 
     expect(headings).toHaveLength(1);
-    expect(headings[0].textContent).toContain('motion-transfer');
+    expect(headings[0].textContent).toBe('Create the magic. Sell the method.');
+    expect(headings[0].querySelector('span')?.textContent).toBe('Sell the method.');
     expect(headings[0].className).not.toContain('sr-only');
+  });
+
+  it('names what the product does in its title and description, now that the h1 is the tagline', async () => {
+    const { metadata } = await import('@/app/page');
+
+    // The words a search matches left the h1 on 2026-10-31; these two now carry them.
+    expect(JSON.stringify(metadata.title)).toContain('AI Video, Image & Motion Transfer');
+    expect(metadata.description).toMatch(/AI images, AI videos, motion-transfer/);
   });
 
   it('keeps feed post titles out of the top-level document outline', async () => {

@@ -1615,34 +1615,24 @@ export default function CreateMotionClient({
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
                                         description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
+                                        original={remixVideoUrl ? {
+                                            mediaType: 'video',
+                                            src: remixVideoUrl,
+                                            onOpen: () => setUploadPreview({ type: 'video', src: remixVideoUrl, alt: 'Original creation', title: 'Original Creation' }),
+                                        } : null}
                                         action={
-                                            remixVideoUrl || canUseOriginalResultAsReferenceVideo ? (
-                                                <div className="flex flex-wrap gap-2">
-                                                    {remixVideoUrl ? (
-                                                        <a
-                                                            href={remixVideoUrl}
-                                                            target="_blank"
-                                                            rel="noreferrer"
-                                                            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                        >
-                                                            <Play className="h-4 w-4" />
-                                                            View original
-                                                        </a>
-                                                    ) : null}
-                                                    {canUseOriginalResultAsReferenceVideo ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={handleUseOriginalResultAsReferenceVideo}
-                                                            disabled={isUsingOriginalResultAsReferenceVideo}
-                                                            className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${isUsingOriginalResultAsReferenceVideo
-                                                                ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
-                                                                : 'border border-[#ff7a59]/25 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/45 hover:bg-[#ff7a59]/15'}`}
-                                                        >
-                                                            <Play className="h-4 w-4" />
-                                                            {isUsingOriginalResultAsReferenceVideo ? 'Using original result' : 'Use as reference video'}
-                                                        </button>
-                                                    ) : null}
-                                                </div>
+                                            canUseOriginalResultAsReferenceVideo ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={handleUseOriginalResultAsReferenceVideo}
+                                                    disabled={isUsingOriginalResultAsReferenceVideo}
+                                                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${isUsingOriginalResultAsReferenceVideo
+                                                        ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
+                                                        : 'border border-[#ff7a59]/25 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/45 hover:bg-[#ff7a59]/15'}`}
+                                                >
+                                                    <Play className="h-4 w-4" />
+                                                    {isUsingOriginalResultAsReferenceVideo ? 'Using original result' : 'Use as reference video'}
+                                                </button>
                                             ) : undefined
                                         }
                                     />

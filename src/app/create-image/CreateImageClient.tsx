@@ -37,7 +37,8 @@ import {
     CreatorModelChip,
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
-    CreatorReferenceRow,
+    CreatorReferenceStrip,
+    CreatorReferenceTile,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -49,6 +50,7 @@ import {
     CreatorTopUpNotice,
     CreatorVisitorNote,
     CREATOR_VISITOR_CANVAS_HINT,
+    aspectRatioMark,
     creatorCanvasChip,
     describeRunFailure,
 } from '@/components/CreatorColumn';
@@ -1868,6 +1870,7 @@ export default function CreateImageClient({
                 value={aspectRatio}
                 onChange={setAspectRatio}
                 columns={5}
+                optionMark={aspectRatioMark}
                 optionPrice={sameRatioPrice ? undefined : (value) => optionPrice('aspectRatio', value)}
             />
 
@@ -2032,32 +2035,20 @@ export default function CreateImageClient({
                                 >
                                     <StudioRemixNotice
                                         description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
+                                        original={remixImageUrl ? { mediaType: 'image', src: remixImageUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={
-                                            remixImageUrl || canUseOriginalResultAsReference ? (
-                                                <div className="flex flex-wrap gap-2">
-                                                    {remixImageUrl ? (
-                                                        <button
-                                                            onClick={() => setIsPreviewModalOpen(true)}
-                                                            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                        >
-                                                            <ImageIcon className="h-4 w-4" />
-                                                            View original
-                                                        </button>
-                                                    ) : null}
-                                                    {canUseOriginalResultAsReference ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={handleUseOriginalResultAsReference}
-                                                            disabled={hasOriginalResultReference}
-                                                            className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${hasOriginalResultReference
-                                                                ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
-                                                                : 'border border-blue-400/20 bg-blue-500/10 text-blue-100 hover:border-blue-300/40 hover:bg-blue-500/15'}`}
-                                                        >
-                                                            <Sparkles className="h-4 w-4" />
-                                                            {hasOriginalResultReference ? 'Using original result' : 'Use as reference'}
-                                                        </button>
-                                                    ) : null}
-                                                </div>
+                                            canUseOriginalResultAsReference ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={handleUseOriginalResultAsReference}
+                                                    disabled={hasOriginalResultReference}
+                                                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${hasOriginalResultReference
+                                                        ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
+                                                        : 'border border-blue-400/20 bg-blue-500/10 text-blue-100 hover:border-blue-300/40 hover:bg-blue-500/15'}`}
+                                                >
+                                                    <Sparkles className="h-4 w-4" />
+                                                    {hasOriginalResultReference ? 'Using original result' : 'Use as reference'}
+                                                </button>
                                             ) : undefined
                                         }
                                     />
@@ -2158,7 +2149,7 @@ export default function CreateImageClient({
                                     </span>
                                 </div>
                                 {model.maxImages > 0 ? (
-                                    <p className="mb-3 text-xs text-[var(--ui-text-faint)]">Type @ in the prompt to use one by its name.</p>
+                                    <p className="mb-3 text-xs text-[var(--ui-text-faint)]">Type @ in the prompt, or tap a handle, to use one by its name.</p>
                                 ) : (
                                     <p className="mb-3 mt-2 text-sm text-[var(--ui-text-muted)]">
                                         {model.displayName} does not take reference images. These are kept for another model; remove them to generate here.
@@ -2166,9 +2157,9 @@ export default function CreateImageClient({
                                 )}
 
                                 {elements.length > 0 ? (
-                                    <ul className="mb-3 space-y-2">
+                                    <CreatorReferenceStrip className="mb-3">
                                         {elements.map((element) => (
-                                            <CreatorReferenceRow
+                                            <CreatorReferenceTile
                                                 key={element.id}
                                                 accent="image"
                                                 preview={
@@ -2181,7 +2172,7 @@ export default function CreateImageClient({
                                                             title: element.displayName,
                                                         })}
                                                         aria-label={`Preview ${element.displayName}`}
-                                                        className="ui-focus-ring group relative h-16 w-16 shrink-0 overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
+                                                        className="ui-focus-ring group relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
                                                     >
                                                         {/* eslint-disable-next-line @next/next/no-img-element */}
                                                         <img
@@ -2203,7 +2194,7 @@ export default function CreateImageClient({
                                                 onInsert={() => handleInsertElementHandle(element.handle)}
                                             />
                                         ))}
-                                    </ul>
+                                    </CreatorReferenceStrip>
                                 ) : null}
 
                                 {canAddReferences ? (

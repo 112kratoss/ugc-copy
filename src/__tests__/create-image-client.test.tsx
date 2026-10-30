@@ -433,9 +433,9 @@ describe('CreateImageClient element handles', () => {
   /** The @handle each element card shows, in card order. */
   function cardHandles(container: HTMLElement) {
     return Array.from(container.querySelectorAll<HTMLInputElement>('input[placeholder="Rename element"]')).map((field) => {
-      // The card body is the name field's nearest ancestor that holds the Insert button.
+      // The card is the name field's nearest ancestor that holds the handle's Insert button.
       let card = field.parentElement;
-      while (card && !Array.from(card.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Insert')) {
+      while (card && !Array.from(card.querySelectorAll('button')).some((button) => /^Insert @/.test(button.getAttribute('aria-label') ?? ''))) {
         card = card.parentElement;
       }
       return Array.from(card?.querySelectorAll('span') ?? [])

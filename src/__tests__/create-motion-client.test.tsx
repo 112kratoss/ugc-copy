@@ -689,6 +689,17 @@ describe('CreateMotionClient price of the run it sends', () => {
     expect(window.sessionStorage.getItem('magicbooklet:deployment-refresh:reloaded-from-build-id')).toBe('build-7');
   });
 
+  it("shows the remix's original in its notice, opening it in the page's own preview", async () => {
+    remixSourceBody = ROOFTOP_REMIX;
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+
+    const original = await screen.findByRole('button', { name: 'View original' });
+    expect(original.querySelector('video')).toHaveAttribute('src', 'https://cdn.example/source-result.mp4#t=0.1');
+    fireEvent.click(original);
+    // In the page, as the image and video creators show theirs, not in a new tab.
+    expect(await screen.findByRole('heading', { name: 'Original Creation' })).toBeInTheDocument();
+  });
+
   // A run that goes is forgotten as a refusal: a later quote back at the refused price (a
   // rollback) held Generate and said the page was out of date, though the start would take it.
   it('forgets a refusal once that run goes, after the page was found out of date and the price then moved', async () => {

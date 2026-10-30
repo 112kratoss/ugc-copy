@@ -8,9 +8,9 @@ import { createMetadata, siteConfig } from '@/lib/seo';
  *
  * It was previously the brand tagline alone, which named no capability a person
  * searches for — the highest-authority page in the site was competing for
- * nothing. The tagline itself is unchanged and now renders visibly in the hero
- * (`AnonymousHome`), where it reads as brand copy rather than as the page's
- * only description of what the product does.
+ * nothing. The tagline is the hero's h1 (`AnonymousHome`, since 2026-10-31), so
+ * this title and the description below are where the page names what the
+ * product does; a test holds both to those words.
  */
 export const metadata: Metadata = createMetadata({
   title: siteConfig.name,
