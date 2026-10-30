@@ -55,6 +55,8 @@ npm run ops:moderation -- take-down-post \
 
 The transactional action hides the post, makes a linked generation private, drafts a published resource bundle, unlists an active marketplace asset, and resolves duplicate open reports for that post. After the database commit, the command deletes every post-scoped object and preview from the public `showcase_media` bucket and verifies that none still exists. If deletion or verification fails, the command exits unsuccessfully; rerun the same command to retry the idempotent cleanup.
 
+A creation's post serves a copy filed under the creation (`showcase/<generation>/`, or `private-posts/<generation>/` when marked NSFW); the take-down deletes that copy and leaves the creator's private original. When the creation was deleted after it was posted, the copy goes only while no creation by that id exists and no other post or post media row names a file in its folder. Otherwise the command refuses with "outside the reported post scope" before deleting anything: find the other row first.
+
 Public Showcase uploads use a five-minute browser and image-cache TTL. Storage deletion invalidates the origin object, and the shorter TTL bounds any already-cached client copy. A returned `externalMediaRevocationRequired: true` means the post also references a provider-hosted URL that this command cannot delete; complete that provider action and record it in the incident system before closing the case.
 
 Dismiss a report only after confirming the content does not violate policy:
