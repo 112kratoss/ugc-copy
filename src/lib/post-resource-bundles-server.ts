@@ -941,6 +941,28 @@ function canViewGenerationRecipeInputs(
 }
 
 /**
+ * The three gates, in one place for every reader: the recipe's panel
+ * (`resolveGenerationRecipeInputs`) and the remix's loader
+ * (`loadEligibleGenerationRecipeInputMedia`) both ask here, so a remix never
+ * hands over a creation's inputs the panel withholds. The remix is the
+ * stricter of the two: it never reads through a tombstone.
+ */
+async function passesGenerationRecipeInputGates(
+  adminSupabase: SupabaseClient,
+  post: GenerationRecipeGatePostRow,
+  generation: Pick<GenerationRecipeRow, 'id' | 'user_id' | 'is_public'>,
+  reader: GenerationRecipeInputReader,
+): Promise<boolean> {
+  // A reader who bought a since-deleted post keeps reading through its
+  // tombstone; everyone else needs the post on a public surface.
+  return isGenerationRecipeInputPost(post, generation.id, { entitled: reader.boughtTombstonedPost })
+    && canViewGenerationRecipeInputs(generation, reader)
+    // Awaited: a pending answer is truthy, and would let any account's
+    // generation through.
+    && await isGenerationRecipeInputGeneration(adminSupabase, post, generation);
+}
+
+/**
  * The generation's saved inputs, or for a generation made before inputs were
  * saved, the ones its settings name, signed from the folder of whoever made
  * it: a guest's creation keeps its files under the guest's id.
@@ -999,7 +1021,8 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
   postId: string;
   generationId: string;
   urlMode: 'signed' | 'none';
-  entitled?: boolean;
+  /** Whether the reader owns the recipe, which shows them their own creation's inputs whatever its state. */
+  viewerIsOwner: boolean;
   /**
    * Rethrow a failed read of the kept inputs. Taken for "nothing kept", it
    * hands over the uploads the run's settings name, file names and all.
@@ -1008,12 +1031,17 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
 }): Promise<{ generation: GenerationRecipeRow; inputMedia: GenerationInputMediaItem[] } | null> {
   const { adminSupabase } = params;
   const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
-  if (!post || !isGenerationRecipeInputPost(post, params.generationId, { entitled: params.entitled })) {
-    return null;
-  }
-
-  const generation = await loadGenerationRecipeRow(adminSupabase, params.generationId);
-  if (!generation || !(await isGenerationRecipeInputGeneration(adminSupabase, post, generation))) {
+  const generation = post ? await loadGenerationRecipeRow(adminSupabase, params.generationId) : null;
+  if (
+    !post
+    || !generation
+    // A remix restores files into the reader's own work, so it never reads
+    // through a tombstone: entitlement to read is not entitlement to reuse.
+    || !(await passesGenerationRecipeInputGates(adminSupabase, post, generation, {
+      isOwner: params.viewerIsOwner,
+      boughtTombstonedPost: false,
+    }))
+  ) {
     return null;
   }
 
@@ -1125,17 +1153,7 @@ async function resolveGenerationRecipeInputs(params: {
 }): Promise<GenerationInputMediaItem[] | null> {
   const { post, reader } = params;
   const generation = post?.generation ?? null;
-  if (
-    !post
-    || !generation
-    // A buyer keeps reading through a tombstone; everyone else needs the post
-    // on a public surface.
-    || !isGenerationRecipeInputPost(post, generation.id, { entitled: reader.boughtTombstonedPost })
-    // Awaited: a pending answer is truthy, and would let any account's
-    // generation through.
-    || !(await isGenerationRecipeInputGeneration(params.adminSupabase, post, generation))
-    || !canViewGenerationRecipeInputs(generation, reader)
-  ) {
+  if (!post || !generation || !(await passesGenerationRecipeInputGates(params.adminSupabase, post, generation, reader))) {
     return null;
   }
 
@@ -1269,6 +1287,10 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
     postId: params.postId,
     generationId: params.generationId,
     urlMode: 'signed',
+    // The unlock's gates for this reader, so a remix and the copy a generation
+    // start makes from it withhold what the unlocked recipe withholds, such as
+    // a live post's creation that is no longer public.
+    viewerIsOwner: entitlement.viewerIsOwner,
     throwOnError: params.throwOnError,
   });
 
