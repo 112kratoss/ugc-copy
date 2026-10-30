@@ -480,6 +480,7 @@ describe('unified generation start service', () => {
           sourceGenerationId: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
         },
         userId: 'user-1',
+        callerIsGuest: false,
         supabase: userSupabase as never,
         adminSupabase: adminSupabase as never,
       },
@@ -629,6 +630,7 @@ describe('reference lengths a caller reports', () => {
         }),
         body,
         userId: 'user-1',
+        callerIsGuest: false,
         supabase: { label: 'user-client' } as never,
         adminSupabase: createAdminClient(existingGeneration) as never,
       },
@@ -1082,6 +1084,7 @@ describe('a page run with a named reference picture', () => {
           ],
         },
         userId: 'user-1',
+        callerIsGuest: false,
         supabase: {} as never,
         adminSupabase: createAdminClient() as never,
       },
@@ -1367,6 +1370,7 @@ describe('a multi-shot run', () => {
           ],
         },
         userId: 'user-1',
+        callerIsGuest: false,
         supabase: {} as never,
         adminSupabase: createAdminClient(existingGeneration) as never,
       },
@@ -1499,6 +1503,7 @@ describe('a page run the provider is sent', () => {
         }),
         body: { ...body, catalogRevision: catalog.revision },
         userId: 'user-1',
+        callerIsGuest: false,
         supabase: {} as never,
         adminSupabase: {
           rpc,
@@ -1765,7 +1770,15 @@ describe('a run started from someone else’s post', () => {
     restoreSink();
   });
 
-  async function startFromSource(blocks: Array<{ blocker_user_id: string; blocked_user_id: string }> = []) {
+  async function startFromSource({
+    blocks = [],
+    callerId = 'user-1',
+    callerIsGuest = false,
+  }: {
+    blocks?: Array<{ blocker_user_id: string; blocked_user_id: string }>;
+    callerId?: string;
+    callerIsGuest?: boolean;
+  } = {}) {
     // The service client: the source, the tables Remix reads, and the start's claim and lock.
     const stored = createStoredRows({ generations: [SOURCE], ...remixSourceTables(SOURCE, { blocks }) }, {
       claim_generation_start_request: () => 'claimed',
@@ -1792,7 +1805,8 @@ describe('a run started from someone else’s post', () => {
           settings: { duration: 5 },
           sourceGenerationId: SOURCE.id,
         },
-        userId: 'user-1',
+        userId: callerId,
+        callerIsGuest,
         supabase: { label: 'user-client' } as never,
         adminSupabase: stored.client as never,
       },
@@ -1841,13 +1855,22 @@ describe('a run started from someone else’s post', () => {
   });
 
   it('starts a run from a creator who blocked the caller as an ordinary one', async () => {
-    const { outcome, startCatalog } = await startFromSource([
-      { blocker_user_id: SOURCE.user_id, blocked_user_id: 'user-1' },
-    ]);
+    const { outcome, startCatalog } = await startFromSource({
+      blocks: [{ blocker_user_id: SOURCE.user_id, blocked_user_id: 'user-1' }],
+    });
 
     expect(outcome).toMatchObject({ success: true, predictionId: 'provider-task' });
     expect(startCatalog).toHaveBeenCalledWith(expect.objectContaining({ sourceGenerationId: null }));
     // Refused by the rule: a read that failed on the way would have been logged.
+    expect(records.filter((record) => record.level === 'error')).toEqual([]);
+  });
+
+  // Remix serves a guest nothing but its own creations.
+  it('starts a guest’s run from someone else’s post as an ordinary one', async () => {
+    const { outcome, startCatalog } = await startFromSource({ callerId: 'guest-1', callerIsGuest: true });
+
+    expect(outcome).toMatchObject({ success: true, predictionId: 'provider-task' });
+    expect(startCatalog).toHaveBeenCalledWith(expect.objectContaining({ sourceGenerationId: null }));
     expect(records.filter((record) => record.level === 'error')).toEqual([]);
   });
 });

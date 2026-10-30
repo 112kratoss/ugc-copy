@@ -22,6 +22,10 @@ vi.mock('@/lib/backend-logger', async (importOriginal) => ({
 const SOURCE_ID = '0f0e0d0c-0b0a-4901-8807-060504030201';
 const GENERATION_SELECT = ['id', 'user_id', 'is_public', 'template_run_id', 'template_run_step_id'];
 
+/** A caller with an account, and a guest identity (`isGuestUser`). */
+const REGISTERED = { callerIsGuest: false };
+const GUEST = { callerIsGuest: true };
+
 type Row = Record<string, unknown>;
 
 /** Someone else's public creation. */
@@ -110,6 +114,7 @@ describe('source generation validation', () => {
       supabase,
       'user-1',
       ` ${SOURCE_ID} `,
+      REGISTERED,
     )).resolves.toBe(SOURCE_ID);
 
     // The visibility rule lives in code, so no caller-influenced value is ever
@@ -129,7 +134,7 @@ describe('source generation validation', () => {
       generation: { ...PUBLIC_SOURCE, ...row, template_run_id: 'run-1', template_run_step_id: 'step-1' },
     });
 
-    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBeNull();
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED)).resolves.toBeNull();
     expect(reads[0]).toEqual({ table: 'generations', columns: GENERATION_SELECT });
   });
 
@@ -142,6 +147,7 @@ describe('source generation validation', () => {
       supabase,
       'user-1',
       SOURCE_ID,
+      REGISTERED,
     )).resolves.toBe(SOURCE_ID);
     // A direct owner match costs generation start no linked-account lookup.
     expect(tables()).toEqual(['generations']);
@@ -159,6 +165,7 @@ describe('source generation validation', () => {
       supabase,
       'user-1',
       SOURCE_ID,
+      REGISTERED,
     )).resolves.toBe(SOURCE_ID);
     expect(tables()).toEqual(['generations', 'profiles']);
   });
@@ -173,6 +180,7 @@ describe('source generation validation', () => {
       supabase,
       'user-1',
       SOURCE_ID,
+      REGISTERED,
     )).rejects.toMatchObject({
       name: 'SourceGenerationValidationError',
       status: 400,
@@ -188,6 +196,7 @@ describe('source generation validation', () => {
       supabase,
       'user-1',
       SOURCE_ID,
+      REGISTERED,
     )).rejects.toMatchObject({
       name: 'SourceGenerationValidationError',
       status: 400,
@@ -197,7 +206,7 @@ describe('source generation validation', () => {
   it('returns null when no remix source is provided', async () => {
     const { supabase, tables } = createSupabaseMock();
 
-    await expect(resolveSourceGenerationId(supabase, 'user-1', '  ')).resolves.toBeNull();
+    await expect(resolveSourceGenerationId(supabase, 'user-1', '  ', REGISTERED)).resolves.toBeNull();
 
     expect(tables()).toEqual([]);
   });
@@ -214,6 +223,7 @@ describe('source generation validation', () => {
         supabase,
         'user-1',
         malicious,
+        REGISTERED,
       )).rejects.toMatchObject({
         name: 'SourceGenerationValidationError',
         status: 400,
@@ -230,6 +240,7 @@ describe('source generation validation', () => {
       supabase,
       'user-1',
       SOURCE_ID,
+      REGISTERED,
     )).rejects.toMatchObject({
       name: 'SourceGenerationValidationError',
       status: 400,
@@ -243,12 +254,14 @@ describe('source generation validation', () => {
       supabase,
       'user-1',
       SOURCE_ID,
+      REGISTERED,
     )).rejects.toBeInstanceOf(SourceGenerationValidationError);
 
     await expect(resolveSourceGenerationId(
       supabase,
       'user-1',
       SOURCE_ID,
+      REGISTERED,
     )).rejects.toMatchObject({ status: 500 });
   });
 });
@@ -264,7 +277,7 @@ describe('remix credit', () => {
    * null too, but logs, so a refusal that logged refused for the wrong reason.
    */
   async function expectNoRemixByRule(supabase: SupabaseClient) {
-    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBeNull();
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED)).resolves.toBeNull();
     expect(logBackendErrorMock).not.toHaveBeenCalled();
   }
 
@@ -288,7 +301,7 @@ describe('remix credit', () => {
       purchases: [{ id: 'purchase-1', bundle_id: PUBLISHED_RECIPE.id, buyer_user_id: 'user-1' }],
     });
 
-    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBe(SOURCE_ID);
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED)).resolves.toBe(SOURCE_ID);
   });
 
   // A post held for review keeps its creation public (`generations.is_public`),
@@ -297,10 +310,45 @@ describe('remix credit', () => {
     await expectNoRemixByRule(createSupabaseMock({ posts: [{ ...EXPOSED_POST, review_status: 'flagged' }] }).supabase);
   });
 
+  // Remix serves a guest nothing but its own creations: `/api/remix-source`
+  // answers anyone else's 403, and `/api/showcase/remix` takes accounts only.
+  it('records no remix of someone else’s post for a guest, and starts the run as an ordinary one', async () => {
+    const { supabase, tables } = createSupabaseMock();
+
+    await expect(resolveSourceGenerationId(supabase, 'guest-1', SOURCE_ID, GUEST)).resolves.toBeNull();
+    expect(logBackendErrorMock).not.toHaveBeenCalled();
+    // Decided by whose creation it is, as `/api/remix-source` decides it,
+    // before anything Remix reads about the post.
+    expect(tables()).toEqual(['generations', 'profiles']);
+  });
+
+  // The guest rule answers only public sources: a private one that is not the
+  // guest's still answers 400, as for anyone, so a guest cannot tell someone's
+  // private creation from none by whether its run starts.
+  it('still refuses a guest someone else’s private creation', async () => {
+    const { supabase } = createSupabaseMock({ generation: { ...PUBLIC_SOURCE, is_public: false } });
+
+    await expect(resolveSourceGenerationId(supabase, 'guest-1', SOURCE_ID, GUEST)).rejects.toMatchObject({
+      name: 'SourceGenerationValidationError',
+      status: 400,
+    });
+  });
+
+  it.each([
+    ['private', false],
+    ['public', true],
+  ])('keeps a guest’s own %s creation, as Recreate restores it', async (_label, isPublic) => {
+    const { supabase } = createSupabaseMock({
+      generation: { ...PUBLIC_SOURCE, user_id: 'guest-1', is_public: isPublic },
+    });
+
+    await expect(resolveSourceGenerationId(supabase, 'guest-1', SOURCE_ID, GUEST)).resolves.toBe(SOURCE_ID);
+  });
+
   it('credits the caller’s own public source without reading its post', async () => {
     const { supabase, tables } = createSupabaseMock({ generation: { ...PUBLIC_SOURCE, user_id: 'user-1' } });
 
-    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBe(SOURCE_ID);
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED)).resolves.toBe(SOURCE_ID);
     expect(tables()).toEqual(['generations']);
   });
 
@@ -317,7 +365,7 @@ describe('remix credit', () => {
     const timeout = { message: 'timeout' };
     const { supabase, tables } = createSupabaseMock({ ...rows, failingReads: { [table]: timeout } });
 
-    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID)).resolves.toBeNull();
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED)).resolves.toBeNull();
     expect(tables()).toContain(table);
     expect(logBackendErrorMock).toHaveBeenCalledTimes(1);
     expect(logBackendErrorMock).toHaveBeenCalledWith(event, { error: timeout });

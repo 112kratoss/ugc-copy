@@ -1,3 +1,4 @@
+import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
@@ -12,6 +13,8 @@ import {
 } from '@/lib/generation-public-failure';
 import { GenerationServiceError } from '@/lib/generation-services';
 import { GenerationStartIdempotencyError } from '@/lib/generation-start-idempotency';
+import { registerIdentityAdmissionContext } from '@/lib/identity-admission-assertion';
+import { createAdmittedIdentityHeaders, evaluateUserFacingRouteIdentity } from '@/lib/route-identity-admission';
 import { SourceGenerationValidationError } from '@/lib/source-generation';
 
 const startUnifiedGenerationForRouteMock = vi.hoisted(() => vi.fn());
@@ -140,8 +143,83 @@ describe('unified generation route service', () => {
       request: expect.any(Request),
       body,
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient,
       adminSupabase: adminClient,
+    });
+  });
+
+  // The start credits a guest with no remix of anyone else's post, as Remix
+  // serves it none (`source-generation.ts`), so it is told who is a guest.
+  // In production the route's caller is the proxy's signed word for the token
+  // (`identity-admission-assertion.ts`), not a second Auth lookup, so the
+  // guest flag must survive that word.
+  describe('the caller the proxy admitted', () => {
+    const CALLER_ID = '0a0a0a0a-0000-4000-8000-00000000000a';
+
+    beforeEach(() => {
+      vi.stubEnv('IDENTITY_ADMISSION_SECRET', 'test-identity-admission-secret-at-least-32-bytes');
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    /** The start request as the proxy hands it on: the token and its signed admission. */
+    async function admittedRequest(isAnonymous: boolean) {
+      const init = { method: 'POST', headers: { Authorization: 'Bearer caller-token' } };
+      const incoming = new NextRequest('https://magicbooklet.test/api/generations', init);
+      const admission = await evaluateUserFacingRouteIdentity(incoming, {
+        createUserClient: () => ({
+          auth: {
+            getClaims: vi.fn(async () => ({
+              data: {
+                claims: { sub: CALLER_ID, aud: 'authenticated', role: 'authenticated', is_anonymous: isAnonymous },
+              },
+              error: null,
+            })),
+          },
+          rpc: vi.fn(async () => ({
+            data: { state: 'active', created_at: '2026-10-15T00:00:00+00:00', banned: false, session_valid: true },
+            error: null,
+          })),
+        }),
+      });
+      expect(admission.assertion).toBeTruthy();
+      return new Request('https://magicbooklet.test/api/generations', {
+        ...init,
+        headers: createAdmittedIdentityHeaders(incoming, admission),
+      });
+    }
+
+    // The start credits a guest with no remix of anyone else's post, as Remix
+    // serves it none (`source-generation.ts`).
+    it.each([
+      ['a guest', true],
+      ['an account', false],
+    ])('tells the start whether it is a guest, for %s', async (_label, isAnonymous) => {
+      const request = await admittedRequest(isAnonymous);
+      // Asking Auth instead of the proxy's word fails.
+      const userClient = {
+        auth: {
+          getUser: async () => ({ data: { user: null }, error: new Error('Auth was asked instead of the admission') }),
+        },
+      };
+      registerIdentityAdmissionContext(userClient, request);
+      startUnifiedGenerationForRouteMock.mockResolvedValue({ success: true });
+
+      await postUnifiedGenerationForRoute({
+        request,
+        createUserSupabase: () => userClient,
+        createAdminSupabase: () => ({ kind: 'admin' }),
+        kieApiKey: 'configured',
+        readRequestBody: async () => ({ kind: 'image', modelId: 'remote-image' }),
+      });
+
+      expect(startUnifiedGenerationForRouteMock).toHaveBeenCalledWith(expect.objectContaining({
+        userId: CALLER_ID,
+        callerIsGuest: isAnonymous,
+      }));
     });
   });
 

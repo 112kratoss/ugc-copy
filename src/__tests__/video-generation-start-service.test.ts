@@ -113,6 +113,7 @@ describe('startVideoGenerationForRoute', () => {
         catalogRevision: 'stale-revision',
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient.client,
       adminSupabase: adminClient.client,
     })).rejects.toBeInstanceOf(CatalogError);
@@ -156,6 +157,7 @@ describe('startVideoGenerationForRoute', () => {
         catalogRevision,
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient.client,
       adminSupabase: adminClient.client,
     });
@@ -217,6 +219,7 @@ describe('startVideoGenerationForRoute', () => {
           catalogRevision,
         },
         userId: 'user-1',
+        callerIsGuest: false,
         supabase: createClientMock().client,
         adminSupabase: adminClient.client,
       }).catch((error: unknown) => error);
@@ -254,6 +257,7 @@ describe('startVideoGenerationForRoute', () => {
         persistInputMedia: true,
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient.client,
       adminSupabase: adminClient.client,
       persistInputMedia: false,
@@ -300,6 +304,7 @@ describe('startVideoGenerationForRoute', () => {
         catalogRevision,
       },
       userId: 'user-1',
+      callerIsGuest: false,
       supabase: userClient.client,
       adminSupabase: adminClient.client,
     });

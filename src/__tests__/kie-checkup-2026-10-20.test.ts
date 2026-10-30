@@ -431,6 +431,7 @@ describe('a run the provider is sent', () => {
         }),
         body: { ...body, catalogRevision: published.revision },
         userId: 'user-1',
+        callerIsGuest: false,
         supabase: {} as never,
         adminSupabase: admin as never,
       },

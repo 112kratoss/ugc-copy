@@ -20,7 +20,13 @@ export class SourceGenerationValidationError extends Error {
 export async function resolveSourceGenerationId(
   adminSupabase: SupabaseClient,
   userId: string,
-  rawSourceGenerationId: unknown
+  rawSourceGenerationId: unknown,
+  {
+    callerIsGuest,
+  }: {
+    /** The caller is a guest identity (`isGuestUser`), which Remix serves only its own creations. */
+    callerIsGuest: boolean;
+  },
 ): Promise<string | null> {
   if (typeof rawSourceGenerationId !== 'string' || rawSourceGenerationId.trim().length === 0) {
     return null;
@@ -67,7 +73,14 @@ export async function resolveSourceGenerationId(
   // exposed, no block between the two, no recipe locked to the caller. The
   // create page sends its URL's id even after Remix refused, so a refusal
   // starts an ordinary run, as a template result does.
-  if (data.is_public && !(await remixWouldBeAllowed(adminSupabase, userId, data))) return null;
+  if (data.is_public) {
+    // Remix serves a guest only its own creations, and `resolveRemixAccess`
+    // does not ask who is a guest: `/api/remix-source` answers a guest 403 for
+    // anyone else's before asking it, as here, and the proxy keeps guests off
+    // `/api/showcase/remix`.
+    if (callerIsGuest && !(await isOwnOrLinkedAccountId(adminSupabase, userId, data.user_id))) return null;
+    if (!(await remixWouldBeAllowed(adminSupabase, userId, data))) return null;
+  }
 
   return sourceGenerationId;
 }

@@ -341,6 +341,7 @@ describe('generation starts log a picture over Kie’s documented size limit, th
           inputs: [{ slot: 'imageReferences', kind: 'image', url: `uploads/${USER_ID}/label.png`, label: 'Label' }],
         },
         userId: USER_ID,
+        callerIsGuest: false,
         supabase: service.client as never,
         adminSupabase: service.client as never,
       },

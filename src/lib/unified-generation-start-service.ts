@@ -160,6 +160,8 @@ type StartUnifiedGenerationInput = {
   request: Request;
   body: Record<string, unknown>;
   userId: string;
+  /** The caller is a guest identity (`isGuestUser`): it is credited with no remix of anyone else's post. */
+  callerIsGuest: boolean;
   supabase: UnifiedGenerationClient;
   adminSupabase: UnifiedGenerationClient;
 };
@@ -883,6 +885,7 @@ export async function startUnifiedGenerationForRoute(
     request,
     body,
     userId,
+    callerIsGuest,
     supabase,
     adminSupabase,
   }: StartUnifiedGenerationInput,
@@ -919,7 +922,12 @@ export async function startUnifiedGenerationForRoute(
         operations: snapshot.operations,
       });
       const operation = requireOperation(snapshot, parsed.modelId);
-      const sourceGenerationId = await resolveSource(adminSupabase, userId, parsed.sourceGenerationId);
+      const sourceGenerationId = await resolveSource(
+        adminSupabase,
+        userId,
+        parsed.sourceGenerationId,
+        { callerIsGuest },
+      );
       const billable = await resolveBillableInputDurations({
         request: run,
         descriptor: snapshot.catalog.models.find((model) => (
