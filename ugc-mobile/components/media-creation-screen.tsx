@@ -1083,6 +1083,9 @@ function IdentityCreationScreen({
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resumedRemixRef = useRef(false);
   const recoveringRemixReferences = useRef(false);
+  // The draft a recovery repairs, as it was read back: the catalog reconcile names its clips before the
+  // source is back, and the recovery tells those names from the ones a creator gave (recoverRemixReferences).
+  const recoveringRemixDraftAsSaved = useRef<CreationDraft | null>(null);
   const remixResolvedRef = useRef(false);
   const [remixRetry, setRemixRetry] = useState(0);
   const [remixRestoreFailed, setRemixRestoreFailed] = useState(false);
@@ -1196,6 +1199,7 @@ function IdentityCreationScreen({
     setDraftLoadError(false);
     resumedRemixRef.current = false;
     recoveringRemixReferences.current = false;
+    recoveringRemixDraftAsSaved.current = null;
     remixResolvedRef.current = false;
     // Read when the scope changes rather than tracked: the session object is
     // replaced on every token refresh, and reloading then would pull the drafts
@@ -1228,6 +1232,7 @@ function IdentityCreationScreen({
         // the creator's other saved fields.
         recoveringRemixReferences.current = Boolean(remixScope && persisted.remixRestored
           && needsRemixReferenceRecovery(persisted[initialTool], { now: Date.now(), storageBaseUrl: env.supabaseUrl }));
+        recoveringRemixDraftAsSaved.current = recoveringRemixReferences.current ? persisted[initialTool] : null;
         resumedRemixRef.current = Boolean(remixScope && persisted.remixRestored && !recoveringRemixReferences.current);
         remixResolvedRef.current = resumedRemixRef.current;
         savedRemixEdits.current = persisted.remixEditedKeys ?? {};
@@ -1740,7 +1745,7 @@ function IdentityCreationScreen({
         const restoredPrompt = savedRemixEdits.current[targetTool]?.includes('prompt') ? current.prompt : prompt;
         // A model chosen while loading keeps its compatible settings as a unit.
         const merged = recoveringRemixReferences.current
-          ? recoverRemixReferences(current, restored.draft)
+          ? recoverRemixReferences(current, restored.draft, recoveringRemixDraftAsSaved.current ?? current)
           : 'model' in edits
           ? { ...current, sourceGenerationId: restored.draft.sourceGenerationId }
           : { ...restored.draft, ...edits, prompt: restoredPrompt };

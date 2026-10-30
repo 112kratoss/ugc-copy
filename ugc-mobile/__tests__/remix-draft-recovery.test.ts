@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { applyCatalogModelDefaults } from '../lib/generation-model-draft';
 import { createDefaultCreationDraft, type MediaDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
 import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '../lib/remix-draft-recovery';
 import type { RemixSourceBundle } from '../lib/types';
+import { klingVideoModel } from './generation-model-catalog-v2-fixtures';
 const reference = { id: 'girl', kind: 'image' as const, url: 'https://example.com/girl.jpg', fileName: 'girl.jpg', displayName: 'Girl', handle: '@girl' };
 function draft(overrides: Partial<VideoCreationDraft> = {}): VideoCreationDraft {
   return { ...createDefaultCreationDraft('video'), model: 'seedance-2', prompt: 'My edited scene with @girl', ...overrides };
@@ -155,6 +157,34 @@ describe('saved remix clips without the handles their words mention', () => {
 
     expect(recovered.references).toEqual([mine]);
     expect(recovered.referenceVideos).toEqual([clip(2, '@reference_video_2')]);
+  });
+
+  // Kling 3.0 takes a clip only under a handle, so the screen's catalog reconcile names each clip as the
+  // saved draft lands on it, before the source is back. The draft as it was read back tells those
+  // stand-ins from a handle the creator gave.
+  it('gives a clip its source’s handle over the stand-in the catalog named it with', () => {
+    const saved = kling({ referenceVideos: [clip(2), clip(3)] });
+    const landed = applyCatalogModelDefaults(saved, klingVideoModel()) as VideoCreationDraft;
+    // Past the handles the words mention, so the two cannot meet.
+    expect(landed.referenceVideos.map((item) => item.handle)).toEqual(['@reference_video', '@reference_video_4']);
+
+    const recovered = recoverRemixReferences(landed, keptHandles(), saved) as VideoCreationDraft;
+
+    expect(recovered.referenceVideos.map((item) => item.handle)).toEqual(['@reference_video_2', '@reference_video_3']);
+    expect(needsRemixReferenceRecovery(recovered)).toBe(false);
+  });
+
+  it('keeps a stand-in its words never mention, and a handle the clip was saved with', () => {
+    // Four clips uploaded, the first taken away: the source kept @reference_video_2 to _4. The second
+    // was renamed before the session was saved; the words mention the second's and the third's.
+    const saved = kling({ prompt: 'Open on @reference_video_3, then @reference_video_4', referenceVideos: [clip(2), clip(3, '@spin'), clip(4)] });
+    const source = kling({ referenceVideos: [clip(2, '@reference_video_2'), clip(3, '@reference_video_3'), clip(4, '@reference_video_4')] });
+    const landed = applyCatalogModelDefaults(saved, klingVideoModel()) as VideoCreationDraft;
+    expect(landed.referenceVideos.map((item) => item.handle)).toEqual(['@reference_video', '@spin', '@reference_video_2']);
+
+    const recovered = recoverRemixReferences(landed, source, saved) as VideoCreationDraft;
+
+    expect(recovered.referenceVideos.map((item) => item.handle)).toEqual(['@reference_video', '@spin', '@reference_video_4']);
   });
 });
 

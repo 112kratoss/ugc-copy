@@ -116,12 +116,16 @@ function missesReferences(draft: CreationDraft): boolean {
   return extractPromptHandles(draft.prompt).length > 0;
 }
 
+/** The handles a video draft's words mention: its prompt's and its shots'. */
+function mentionedHandles(draft: VideoCreationDraft): Set<string> {
+  return new Set([draft.prompt, ...draft.multiPrompts.map((shot) => shot.prompt)].flatMap(extractPromptHandles));
+}
+
 /** A clip without a handle, beside words (the prompt or a shot) that mention one nothing in the draft answers to. */
 function missesClipHandles(draft: VideoCreationDraft): boolean {
   if (!draft.referenceVideos.some((clip) => !clip.handle)) return false;
   const held = new Set(videoDraftHandles(draft));
-  return [draft.prompt, ...draft.multiPrompts.map((shot) => shot.prompt)]
-    .some((words) => extractPromptHandles(words).some((handle) => !held.has(handle)));
+  return [...mentionedHandles(draft)].some((handle) => !held.has(handle));
 }
 
 /**
@@ -132,14 +136,26 @@ function missesClipHandles(draft: VideoCreationDraft): boolean {
  * for a clip saved without the handle its source kept: it takes that handle
  * back, unless something else in the draft answers to it by now.
  * Missing images come back only while the prompt still mentions them.
+ *
+ * `saved` is the draft as it was read back. A model that takes clips only under
+ * a handle has each clip named as the draft lands on it (`withClipHandles`),
+ * before the source is back, so a clip saved without one may hold a stand-in by
+ * now: it takes its source's handle over that where its words mention it, and
+ * keeps the stand-in otherwise. A stand-in is made past every handle the words
+ * mention, so it never holds one another clip takes back. A handle the clip was
+ * saved with stays, as the creator gave it.
  */
-export function recoverRemixReferences(current: CreationDraft, restored: CreationDraft): CreationDraft {
+export function recoverRemixReferences(current: CreationDraft, restored: CreationDraft, saved: CreationDraft = current): CreationDraft {
   const sourceMedia = heldDraftMedia(restored);
-  const taken = new Set(heldDraftMedia(current).flatMap((media) => (media.handle ? [media.handle] : [])));
+  const savedWithoutHandle = new Set(saved.tool === 'video' ? saved.referenceVideos.filter((clip) => !clip.handle).map((clip) => clip.id) : []);
+  const standsIn = (media: MediaDraft) => media.kind === 'video' && Boolean(media.handle) && savedWithoutHandle.has(media.id);
+  const mentioned = current.tool === 'video' ? mentionedHandles(current) : new Set<string>();
+  const taken = new Set(heldDraftMedia(current).flatMap((media) => (media.handle && !standsIn(media) ? [media.handle] : [])));
   const renewed = mapDraftMedia(current, (media) => {
     const match = sourceMedia.find((candidate) => isSameMedia(media, candidate));
     const url = match?.url && match.url !== media.url ? match.url : media.url;
-    const keptHandle = media.kind === 'video' && !media.handle && match?.handle && !taken.has(match.handle) ? match.handle : null;
+    const waits = media.kind === 'video' && (!media.handle || (standsIn(media) && Boolean(match?.handle && mentioned.has(match.handle))));
+    const keptHandle = waits && match?.handle && !taken.has(match.handle) ? match.handle : null;
     if (keptHandle) taken.add(keptHandle);
     if (url === media.url && !keptHandle) return media;
     return keptHandle ? { ...media, url, handle: keptHandle } : { ...media, url };

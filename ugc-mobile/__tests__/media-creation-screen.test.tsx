@@ -5844,6 +5844,32 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         renderer.act(() => prompt.props.onSelectionChange({ nativeEvent: { selection: { start: 15, end: 15 } } }));
         expect(text(tree)).toContain('No named references match “@st”.');
       });
+
+      // Seedance 2's clips take no handle, and the server sends a Kling 3.0 clip only under one
+      // (videoElementInputs): a clip uploaded on the first and carried onto the second was quoted and
+      // shown, and the run went without it.
+      it('names a clip uploaded on Seedance 2 when the draft moves to Kling 3.0, and sends it', async () => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo(), parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-2',
+          catalogRevision: 'parity-rev',
+          prompt: 'The dancer spins',
+          referenceVideos: [stagedMedia('dance', 'video', { displayName: 'Reference Video', handle: undefined })],
+        } }));
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await pickModel(tree, 'Kling 3.0 Cinematic');
+        await settle();
+        await pressGenerate(tree);
+
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+        expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({
+          modelId: 'kling-3.0-video',
+          prompt: 'The dancer spins',
+          inputs: [expect.objectContaining({ slot: 'videoElements', handle: '@reference_video', url: 'https://cdn.example.com/dance.mp4' })],
+        });
+      });
     });
 
     describe('a multi-shot run', () => {

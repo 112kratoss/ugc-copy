@@ -24,6 +24,7 @@ import {
   hydrateCreationDraftFromRemixSource,
   REMIX_RESTORE_WARNING_MESSAGE,
   videoSubjects,
+  withClipHandles,
   type CatalogDraftInputAsset,
   type CatalogDraftInputSlots,
   type CreationDraft,
@@ -561,6 +562,11 @@ export function applyCatalogModelDefaults(
         : [],
       startFrame: model.inputs.startFrame ? draft.startFrame : null,
       endFrame: model.inputs.endFrame && !isMultiShot ? draft.endFrame : null,
+      // A clip goes with a Kling 3.0 run only under a handle: the server takes none without one
+      // (`videoElementInputs` in src/lib/unified-generation-start-service.ts), and Kling 3.0 reads no
+      // plain clip link. One uploaded on a model whose clips take none (Seedance 2 Mini, the video
+      // default) was quoted, shown and charged for, and left out of the run.
+      referenceVideos: takesNamedClips(model) ? withClipHandles(draft) : draft.referenceVideos,
     } as VideoCreationDraft;
     const shaped = { ...normalized, referenceMode: catalogVideoRunReferenceMode(normalized, model) };
     return { ...shaped, catalogSettings: getCatalogDraftSettings(shaped, model) };
@@ -657,6 +663,11 @@ export function getCatalogCreationSectionSummary(draft: CreationDraft, model: Ge
  */
 function namesReferences(slot: CatalogInputSlot): boolean {
   return slot.role === 'reference' && (slot.kind !== 'video' || Boolean(slot.supportsNaming));
+}
+
+/** Whether a model takes clips under the handles a prompt mentions them by: a clip slot of its names them. */
+function takesNamedClips(model: GenerationModelDescriptor): boolean {
+  return (model.inputModes ?? []).some((mode) => mode.slots.some((slot) => slot.kind === 'video' && namesReferences(slot)));
 }
 
 /**

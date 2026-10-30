@@ -1011,6 +1011,35 @@ export function videoDraftHandles(draft: VideoCreationDraft): string[] {
 }
 
 /**
+ * A video draft's clips, each under an @handle, for a model that takes clips only under one (Kling
+ * 3.0's video elements). A clip keeps a valid handle that no clip before it holds, as the web's
+ * `assignElementHandles` keeps one; the rest get one made from their name, as an upload's is
+ * ("@reference_video", "@reference_video_2"), past every handle the draft's references, clips and
+ * subjects answer to and every one its words mention. A handle made here is one no words mention yet,
+ * so they stay as they are, and a mention nothing answers to (a remix's, whose clip has not been given
+ * its handle back) is not taken over by a clip it may never have meant. The same clips come back when
+ * each already has a handle of its own.
+ */
+export function withClipHandles(draft: VideoCreationDraft): MediaDraft[] {
+  const clips = draft.referenceVideos;
+  const kept = new Set<string>();
+  const keptHandles = clips.map((clip) => normalizeExistingHandle(clip.handle, kept));
+  if (keptHandles.every((handle, index) => handle === clips[index].handle)) return clips;
+  const taken = [
+    ...draft.references.flatMap((media) => (media.handle ? [media.handle] : [])),
+    ...subjectHandles(draft),
+    ...kept,
+    ...[draft.prompt, ...draft.multiPrompts.map((shot) => shot.prompt)].flatMap(extractPromptHandles),
+  ];
+  return clips.map((clip, index) => {
+    const keptHandle = keptHandles[index];
+    const handle = keptHandle ?? uniqueHandle(clip.displayName, taken);
+    if (!keptHandle) taken.push(handle);
+    return handle === clip.handle ? clip : { ...clip, handle };
+  });
+}
+
+/**
  * A named subject from the pictures just picked. Its pictures take the subject's
  * handle, which is how the catalog slot carries them, and the subject's own id so a
  * tile can open it.
