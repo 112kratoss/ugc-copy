@@ -199,6 +199,58 @@ describe('posts-server marketplace summaries', () => {
     expect(assetMap.get('post-1')?.lockedPreview?.hasRemix).toBe(true);
   });
 
+  // Every public read of a post serves this summary, so its locked preview is
+  // the teaser from the start: a read that forgets to sanitize (saved media
+  // did, until 2026-10-30) has nothing of the recipe to hand out.
+  it('builds a summary\'s locked preview as the teaser, without the creator\'s titles, cards, files or sizes', async () => {
+    resourceBundlesState[0] = {
+      ...resourceBundlesState[0],
+      attachments: [{
+        label: 'lighting-diagram.pdf',
+        kind: 'file',
+        storagePath: 'user-1/files/lighting-diagram.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 7340032,
+      }],
+      resource_sections: [{
+        id: 'lighting',
+        title: 'Lighting setup',
+        kind: 'workflow_step',
+        description: 'Two softboxes at forty-five degrees',
+      }],
+      resource_items: [
+        { id: 'item-prompt', type: 'prompt', title: 'Golden hour prompt', textContent: 'A warm portrait.', sectionId: 'lighting' },
+        {
+          id: 'item-reference',
+          type: 'reference_image',
+          title: 'Hero reference still',
+          storagePath: 'user-1/references/hero.png',
+          contentType: 'image/png',
+          sizeBytes: 48213,
+          sectionId: 'lighting',
+        },
+      ],
+    };
+    const { getMarketplaceAssetSummaryMap } = await import('@/lib/posts-server');
+
+    const asset = (await getMarketplaceAssetSummaryMap(['post-1'])).get('post-1');
+
+    expect(asset?.itemCounts).toEqual({ prompt: 1, reference_image: 1 });
+    expect(asset?.lockedPreview).toMatchObject({
+      itemCounts: { prompt: 1, reference_image: 1 },
+      sectionCount: 1,
+      sectionPreviews: [],
+      attachmentPreviews: [{ label: 'File 1', kind: 'file', contentType: null, sizeBytes: null }],
+      itemPreviews: [
+        { type: 'prompt', title: 'Prompt', sectionId: null, contentType: null, sizeBytes: null },
+        { type: 'reference_image', title: 'Reference image', sectionId: null, contentType: null, sizeBytes: null },
+      ],
+    });
+    expect(JSON.stringify(asset)).not.toMatch(
+      /Golden hour|Hero reference|Lighting setup|softboxes|lighting-diagram|user-1\/|application\/pdf|image\/png|48213|7340032/,
+    );
+  });
+
   // Decision 6 (2026-10-17): the feed card's "N sold" counts paid unlocks and a
   // free recipe's "N opened" counts free ones, so the asset carries both.
   it('carries a recipe\'s paid sales and free unlocks apart, leaving out a zero', async () => {

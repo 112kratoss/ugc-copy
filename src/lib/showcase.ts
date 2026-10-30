@@ -269,13 +269,6 @@ export function sanitizeShowcaseAssetSummary(
 }
 
 /**
- * Strips locked bundle metadata and paid recipe text from a single feed item.
- * Every public surface that serves posts must map its items through this —
- * the showcase feed and creator profiles both do. Sanitizing returns fresh
- * objects, so callers may localize prices on the result without mutating rows
- * shared with a cache.
- */
-/**
  * The media a feed item carries, in display order: the post's media rows
  * when it has them, else its cover as a single item. One copy for the grid,
  * the bootstrap grid, the reel and the creator page, which each had their own
@@ -303,6 +296,13 @@ export function getShowcaseItemMediaItems(item: ShowcaseFeedItem): ShowcaseMedia
     }];
 }
 
+/**
+ * Strips locked bundle metadata and paid recipe text from a single feed item.
+ * Every surface that serves posts must map its items through this: the
+ * showcase feed, the reads by id, creator profiles and saved media all do.
+ * Sanitizing returns fresh objects, so callers may localize prices on the
+ * result without mutating rows shared with a cache.
+ */
 export function sanitizeShowcaseFeedItem(item: ShowcaseFeedItem): ShowcaseFeedItem {
     const asset = sanitizeShowcaseAssetSummary(item.asset);
     const publicContent = sanitizePublicPostContent({

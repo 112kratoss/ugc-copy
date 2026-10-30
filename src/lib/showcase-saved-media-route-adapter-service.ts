@@ -66,6 +66,7 @@ async function handleShowcaseSavedMediaGET(
     const query = getSavedMediaQuery(request);
     const result = await dependencies.getSavedMediaFeedForRoute({
       createAdminSupabase: dependencies.createServiceClient,
+      countryCode: request.headers.get('x-vercel-ip-country'),
       ...query,
       userId: user.id,
       userSupabase: supabase,
