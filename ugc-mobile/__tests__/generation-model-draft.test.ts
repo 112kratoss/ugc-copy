@@ -17,8 +17,10 @@ import {
   catalogPromptMeters,
   catalogRunEnhancementInputs,
   catalogRunInputSlots,
+  catalogStandbyReferencesReason,
   catalogVideoRunReferenceMode,
   reconcileCreationDraftWithCatalog,
+  videoSettingsHiddenControlKeys,
   buildCatalogGenerationPayload,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
@@ -42,7 +44,7 @@ import {
 } from '../lib/media-creation-view-model';
 import type { SeedanceAssetMetadata } from '../lib/model-catalog/seedance-assets';
 import type { RemixSourceBundle } from '../lib/types';
-import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel } from './fixtures/generation-model-catalog';
+import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel, veo31Model } from './fixtures/generation-model-catalog';
 import liveCatalog from './fixtures/live-catalog-descriptors.json';
 import { remoteVideoModel } from './generation-model-catalog-v2-fixtures';
 
@@ -900,6 +902,107 @@ describe('references kept across a model change', () => {
       },
     });
     expect(validateCatalogCreationDraft(draft, kling30, ready)).toMatchObject({ errors: [], canGenerate: true });
+  });
+});
+
+describe('why references a draft holds wait out of its run', () => {
+  // As the native parser reads it from the catalog: the reason reads its `in` condition and the labels.
+  const veo = parseModelCatalogDetail(veo31Model);
+  const pictures = ['hero', 'prop'].map((name) => upload(`${name}.png`, 'image'));
+  // The shape a single shot's references rail asks about, as the composer passes it (referenceRailShape).
+  const singleShotRail = 'elements';
+
+  it('names the Veo 3.1 variants that take the pictures a Quality run leaves out', () => {
+    const draft = videoDraft(veo, { mode: 'veo3', references: pictures });
+
+    // The run goes as frames without them, and nothing blocks it: they wait under "Not sent with this run".
+    expect(catalogRunInputSlots(draft, veo).imageReferences).toBeUndefined();
+    expect(validateCatalogCreationDraft(draft, veo, ready).errors).toEqual([]);
+    expect(catalogStandbyReferencesReason(draft, veo, singleShotRail)).toBe('Veo 3.1 takes reference pictures on Lite or Fast.');
+    // Beside a frame the run sends, too.
+    expect(catalogStandbyReferencesReason({ ...draft, startFrame: upload('start.png', 'image') }, veo, singleShotRail))
+      .toBe('Veo 3.1 takes reference pictures on Lite or Fast.');
+  });
+
+  it.each(['veo3_lite', 'veo3_fast'])('says nothing on %s, which sends the pictures', (mode) => {
+    const draft = videoDraft(veo, { mode, references: pictures });
+
+    expect(catalogRunInputSlots(draft, veo).imageReferences?.map((asset) => asset.url)).toEqual(pictures.map((picture) => picture.url));
+    expect(catalogStandbyReferencesReason(draft, veo, singleShotRail)).toBeNull();
+  });
+
+  it('leaves pictures past the slot’s max to the validator’s line', () => {
+    const draft = videoDraft(veo, { mode: 'veo3_fast', references: ['a', 'b', 'c', 'd'].map((name) => upload(`${name}.png`, 'image')) });
+
+    expect(validateCatalogCreationDraft(draft, veo, ready).errors).toEqual(['Reference images supports up to 3 inputs.']);
+    expect(catalogStandbyReferencesReason(draft, veo, singleShotRail)).toBeNull();
+  });
+
+  it('says nothing on Quality while the draft holds no picture', () => {
+    expect(catalogStandbyReferencesReason(videoDraft(veo, { mode: 'veo3', startFrame: upload('start.png', 'image') }), veo, singleShotRail)).toBeNull();
+  });
+
+  it('keeps the silence of a model with no slot for them on any setting', () => {
+    // Kling 3.0 takes clips beside its frames and no picture, on either quality mode.
+    const onKling = videoDraft(kling30, { references: pictures });
+    expect(catalogRunInputSlots(onKling, kling30).imageReferences).toBeUndefined();
+    expect(catalogStandbyReferencesReason(onKling, kling30, singleShotRail)).toBeNull();
+    // A descriptor without input modes has no slots to read.
+    const withoutModes: GenerationModelDescriptor = { ...veo, inputModes: undefined };
+    expect(catalogStandbyReferencesReason(videoDraft(withoutModes, { mode: 'veo3', references: pictures }), withoutModes, singleShotRail)).toBeNull();
+  });
+
+  // Kling O3's pictures open on its input mode alone, which follows what is attached and is no choice the
+  // settings sheet shows: a multi-shot run, which sends no picture, must not be told "on References".
+  it('names no option the settings sheet keeps off it', () => {
+    const story = videoDraft(klingO3, {
+      isMultiShot: true,
+      multiPrompts: [{ id: 'shot-1', prompt: 'A door opens.', duration: 5 }],
+      references: pictures,
+    });
+    const storyRail = catalogVideoRunReferenceMode(story, klingO3);
+
+    expect(storyRail).toBe('frames');
+    expect(catalogRunInputSlots(story, klingO3).imageReferences).toBeUndefined();
+    expect(videoSettingsHiddenControlKeys(story)).toEqual(['isMultiShot', 'referenceMode', 'duration']);
+    expect(catalogStandbyReferencesReason(story, klingO3, storyRail)).toBeNull();
+  });
+
+  it('names every option that opens the slot, in the control’s order and with its labels, for each kind', () => {
+    const tiered = remoteVideoModel('tiered-video', {
+      displayName: 'Tiered Video',
+      controls: [
+        {
+          key: 'tier',
+          label: 'Tier',
+          type: 'choice',
+          presentation: 'chips',
+          defaultValue: 'basic',
+          options: [{ value: 'basic', label: 'Basic' }, { value: 'plus', label: 'Plus' }, { value: 'pro', label: 'Pro' }, { value: 'max', label: 'Max' }],
+        },
+        choice('referenceMode', 'Input mode', ['frames', 'elements']),
+      ],
+      inputs: { ...noLegacyInputs, videoReferences: { max: 2 }, audioReferences: { max: 1 }, startFrame: true, endFrame: true },
+      inputModes: [
+        framesMode(),
+        {
+          ...referencesMode([
+            { key: 'videoReferences', kind: 'video', role: 'reference', label: 'Reference videos', min: 0, max: 2 },
+            { key: 'audioReferences', kind: 'audio', role: 'reference', label: 'Reference audio', min: 0, max: 1 },
+          ]),
+          // Listed out of the control's order: the line follows the control, as the sheet shows it.
+          conditions: [byReferenceMode('elements'), { source: 'setting', key: 'tier', operator: 'in', value: ['max', 'plus', 'pro'] }],
+        },
+      ],
+      inputConstraints: [],
+    });
+    const draft = videoDraft(tiered, {
+      referenceVideos: [upload('spin.mp4', 'video', { durationSeconds: 4 })],
+      referenceAudios: [upload('hum.mp3', 'audio', { durationSeconds: 4 })],
+    });
+
+    expect(catalogStandbyReferencesReason(draft, tiered, singleShotRail))
+      .toBe('Tiered Video takes reference clips on Plus, Pro or Max. Tiered Video takes reference tracks on Plus, Pro or Max.');
   });
 });
 

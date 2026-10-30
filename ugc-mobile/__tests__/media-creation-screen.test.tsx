@@ -281,7 +281,7 @@ import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-pro
 import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '../lib/media';
 import { UploadCancelledError } from '../lib/upload-file';
-import { createPublishedDefaultsCatalog, createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel, seedance2MiniAtRelease, seedance2MiniModel } from './fixtures/generation-model-catalog';
+import { createPublishedDefaultsCatalog, createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel, seedance2MiniAtRelease, seedance2MiniModel, veo31Model } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 import type { CatalogInputMode, CatalogInputSlot, GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
 import { creationDraftStorageKey, ordinaryDraftScope, remixDraftScope } from '../lib/creation-draft-resume';
@@ -5496,6 +5496,43 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
         expect(text(tree)).toContain('4 / 5');
         expect(storedDrafts().image.model).toBe('wide-image');
+      });
+    });
+
+    // Veo 3.1's pictures go on Lite and Fast only (release veo-quality-references-20261030). On Quality
+    // its references open no slot, so the pictures a draft holds wait apart, and the list says which
+    // variants take them, as the web's standby card does.
+    describe('Veo 3.1, which takes reference pictures on Lite and Fast only', () => {
+      const veoDraft = (mode: string) => savedDrafts({ video: {
+        model: 'veo-3.1',
+        catalogRevision: 'parity-rev',
+        prompt: 'A product turning slowly on a table',
+        mode,
+        references: [stagedMedia('hero')],
+      } });
+
+      beforeEach(() => {
+        catalogState.catalog = parityCatalog([veo31Model]);
+      });
+
+      it('says under the pictures a Quality run leaves out which variants take them', async () => {
+        memory.set(ordinaryKey, veoDraft('veo3'));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        const standby = tree.root.findByProps({ testID: 'standby-references' });
+        expect(collectText(standby)).toEqual(['Not sent with this run', 'Veo 3.1 takes reference pictures on Lite or Fast.', 'Remove']);
+        expect(pressables(standby).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Hero']);
+        // It explains and holds nothing: the run goes as frames.
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
+      it('draws no list on Lite, which sends the picture', async () => {
+        memory.set(ordinaryKey, veoDraft('veo3_lite'));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+        expect(labelled(tree.root, 'Open details for Hero')).toBeTruthy();
+        expect(text(tree)).not.toContain('takes reference pictures');
       });
     });
 
