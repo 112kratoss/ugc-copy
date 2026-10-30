@@ -329,8 +329,9 @@ export function CreatorSettingChoices<T extends string>({
                 'ui-focus-ring min-h-10 border text-xs font-bold transition-colors duration-150',
                 pill ? 'inline-flex items-center rounded-full px-3.5' : 'rounded-ui-md px-2',
                 optionPrice && 'flex min-h-12 flex-col items-center justify-center gap-0.5 py-1',
-                // The room a mark has is measured on the option itself (a grid cell, never a pill).
-                mark && !pill && '@container',
+                // The room a mark has is measured on the option itself (a grid cell, never a pill),
+                // and its line is centred, so a long one shares the padding on both sides.
+                mark && !pill && '@container flex items-center justify-center',
                 capitalize && 'capitalize',
                 checked
                   ? selectedClasses
@@ -340,9 +341,10 @@ export function CreatorSettingChoices<T extends string>({
               )}
             >
               {mark ? (
-                // Side by side where the option has room, as in the app; stacked in a narrow
-                // option (five to a row on a phone), so a long ratio such as 27:16 never runs out.
-                <span className="inline-flex items-center gap-1 @max-[3.25rem]:flex-col @max-[3.25rem]:gap-0.5">
+                // Side by side, as in the app, at every width a creator's column has (options from
+                // about 54px); stacked only narrower (five to a row on a 320px phone), where a long
+                // ratio such as 27:16 would run past the option's border.
+                <span className="inline-flex items-center gap-1 @max-[2.25rem]:flex-col @max-[2.25rem]:gap-0.5">
                   {/* The mark takes the option's colour, and the accent once chosen, as in the app. */}
                   <span className={clsx('inline-flex shrink-0', checked && selectedMarkClass)}>{mark}</span>
                   {text}
