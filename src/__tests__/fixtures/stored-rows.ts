@@ -3,8 +3,21 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 type Row = Record<string, unknown>;
 type Call = (args: Row) => unknown;
 
-/** The filter the owner library route sends, word for word. Any other `or` is refused. */
+/**
+ * The filter the owner library route sends, word for word. Any other `or` must
+ * be a list of `column.like.pattern` terms, or it is refused.
+ */
 const LIBRARY_FILTER = 'and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true';
+
+/** A LIKE pattern as PostgREST reads it: `*` and `%` match any run, `_` one character. */
+function likePattern(pattern: string) {
+  const source = [...pattern].map((character) => {
+    if (character === '*' || character === '%') return '.*';
+    if (character === '_') return '.';
+    return character.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  }).join('');
+  return new RegExp(`^${source}$`, 's');
+}
 
 const FAILURE = Symbol('database error');
 
@@ -84,11 +97,24 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
         return this;
       },
       or(expression: string) {
-        if (expression !== LIBRARY_FILTER) throw new Error(`Unexpected filter: ${expression}`);
-        tests.push((row) => (
-          ((row.template_run_id ?? null) === null && (row.template_run_step_id ?? null) === null)
-          || row.studio_visible === true
-        ));
+        if (expression === LIBRARY_FILTER) {
+          tests.push((row) => (
+            ((row.template_run_id ?? null) === null && (row.template_run_step_id ?? null) === null)
+            || row.studio_visible === true
+          ));
+          return this;
+        }
+        const stored = tables[table];
+        const known = Array.isArray(stored) ? stored[0] : undefined;
+        const terms = expression.split(',').map((term) => {
+          const match = /^([a-z_]+)\.like\.(.+)$/.exec(term);
+          if (!match) throw new Error(`Unexpected filter: ${expression}`);
+          const [, column, pattern] = match;
+          if (known && !(column in known)) throw new Error(`column ${table}.${column} does not exist`);
+          const like = likePattern(pattern);
+          return (row: Row) => typeof row[column] === 'string' && like.test(row[column] as string);
+        });
+        tests.push((row) => terms.some((term) => term(row)));
         return this;
       },
       order() {
