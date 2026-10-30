@@ -566,7 +566,7 @@ export function applyCatalogModelDefaults(
       // (`videoElementInputs` in src/lib/unified-generation-start-service.ts), and Kling 3.0 reads no
       // plain clip link. One uploaded on a model whose clips take none (Seedance 2 Mini, the video
       // default) was quoted, shown and charged for, and left out of the run.
-      referenceVideos: withNamedClips(draft, model).referenceVideos,
+      referenceVideos: takesNamedClips(model) ? withClipHandles(draft) : draft.referenceVideos,
     } as VideoCreationDraft;
     const shaped = { ...normalized, referenceMode: catalogVideoRunReferenceMode(normalized, model) };
     return { ...shaped, catalogSettings: getCatalogDraftSettings(shaped, model) };
@@ -666,17 +666,18 @@ function namesReferences(slot: CatalogInputSlot): boolean {
 }
 
 /** Whether a model takes clips under the handles a prompt mentions them by: a clip slot of its names them. */
-function takesNamedClips(model: GenerationModelDescriptor): boolean {
-  // A descriptor without input modes names no slot: Kling 3.0's, as the screen and the run handles read it.
+export function takesNamedClips(model: GenerationModelDescriptor): boolean {
+  // A descriptor without input modes names no slot: Kling 3.0's, as the run's handles read it.
   if (!model.inputModes) return model.id === 'kling-3.0-video';
   return model.inputModes.some((mode) => mode.slots.some((slot) => slot.kind === 'video' && namesReferences(slot)));
 }
 
 /**
  * The draft with every clip under a handle where this model takes clips only under one
- * (`withClipHandles`), and the same draft elsewhere.
+ * (`withClipHandles`), and the same draft elsewhere. A remix restore merged into the screen's draft as it
+ * came is named with this, as the run request names anything that reaches it unnamed.
  */
-function withNamedClips<T extends CreationDraft>(draft: T, model: GenerationModelDescriptor): T {
+export function withNamedClips<T extends CreationDraft>(draft: T, model: GenerationModelDescriptor): T {
   if (draft.tool !== 'video' || !takesNamedClips(model)) return draft;
   const referenceVideos = withClipHandles(draft);
   return referenceVideos === draft.referenceVideos ? draft : { ...draft, referenceVideos };

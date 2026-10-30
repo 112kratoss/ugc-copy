@@ -5806,14 +5806,25 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await expectSourceHandlesSent(await openSavedClipsSession([2, 3].map((place) => savedClip(place))));
       });
 
-      // The catalog names such clips as the draft lands on Kling 3.0, before the source is read. Saved so
-      // (the source failed, or the screen closed first), they come back under those stand-ins, and the
-      // repair still comes.
-      it('reads the source again for a saved remix whose clips hold the stand-ins they were named with', async () => {
-        await expectSourceHandlesSent(await openSavedClipsSession([
-          savedClip(2, { handle: '@reference_video', handleStandIn: true }),
-          savedClip(3, { handle: '@reference_video_4', handleStandIn: true }),
-        ]));
+      // The catalog names such clips as the draft lands on Kling 3.0, before the source is read. When the
+      // source fails, the session is saved under those stand-ins, as a session still to repair: the next
+      // visit repairs it, rather than restoring it afresh over the named draft.
+      it('repairs on the next visit a saved remix whose source failed after its clips were named', async () => {
+        authState.api.getRemixSourceBundle.mockRejectedValueOnce(new Error('Network request failed'));
+        const first = await openSavedClipsSession([2, 3].map((place) => savedClip(place)));
+        await settle();
+        const saved = JSON.parse(memory.get(creationDraftStorageKey(remixDraftScope('user-123', clipsRemix)!)) ?? 'null');
+        expect(saved).toMatchObject({ remixRestored: true });
+        expect(saved.video.referenceVideos.map((clip: { handle?: string; handleStandIn?: boolean }) => [clip.handle, clip.handleStandIn])).toEqual([
+          ['@reference_video', true],
+          ['@reference_video_4', true],
+        ]);
+        renderer.act(() => { first.unmount(); });
+        authState.api.getRemixSourceBundle.mockClear();
+
+        const tree = await open(<MediaCreationScreen initialTool="video" remixSource={clipsRemix} />);
+        await settle();
+        await expectSourceHandlesSent(tree);
       });
 
       it('keeps clips from Seedance 2 waiting on Seedance 1.5 Pro, without locking its frames or offering them to mention', async () => {
@@ -5891,6 +5902,29 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           modelId: 'kling-3.0-video',
           prompt: 'The dancer spins',
           inputs: [expect.objectContaining({ slot: 'videoElements', handle: '@reference_video', url: 'https://cdn.example.com/dance.mp4' })],
+        });
+      });
+
+      // A clip the creator adds takes a handle their words mention that nothing answers to, as a picture
+      // does: the clip they mean, mentioned before it was picked (or re-added after a restore left it out).
+      it('gives a clip added on Kling 3.0 the handle its prompt already mentions', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: { model: 'kling-3.0-video', catalogRevision: 'parity-rev', prompt: '@reference_video spins' } }));
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 4000 } as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue({
+          signedUrl: 'https://cdn.example.com/move.mp4', storagePath: 'uploads/user-123/move.mp4', mimeType: 'video/mp4', fileName: 'move.mp4', kind: 'video', durationSeconds: 4, sizeBytes: 4096,
+        });
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add Video 0/3').props.onPress(); });
+        await settle();
+        expect(text(tree)).not.toContain('Unknown element mention');
+        await pressGenerate(tree);
+
+        expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({
+          prompt: '@reference_video spins',
+          inputs: [expect.objectContaining({ slot: 'videoElements', handle: '@reference_video', url: 'https://cdn.example.com/move.mp4' })],
         });
       });
     });

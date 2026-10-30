@@ -167,7 +167,8 @@ describe('saved remix clips without the handles their words mention', () => {
   const withSource = (...places: number[]) => kling({ referenceVideos: places.map((place) => clip(place, `@reference_video_${place}`)) });
 
   it('gives a clip its source’s handle over the stand-in the catalog named it with', () => {
-    const landed = landOnKling(kling({ referenceVideos: [clip(2), clip(3)] }));
+    // Read back as saved: the mark is part of the draft a later visit loads.
+    const landed = JSON.parse(JSON.stringify(landOnKling(kling({ referenceVideos: [clip(2), clip(3)] })))) as VideoCreationDraft;
     // Past the handles the words mention, and marked, so the session still reads its source again.
     expect(landed.referenceVideos.map((item) => [item.handle, item.handleStandIn])).toEqual([['@reference_video', true], ['@reference_video_4', true]]);
     expect(needsRemixReferenceRecovery(landed)).toBe(true);
@@ -178,13 +179,16 @@ describe('saved remix clips without the handles their words mention', () => {
     expect(needsRemixReferenceRecovery(recovered)).toBe(false);
   });
 
-  // Saved before the source came back (it failed, the screen closed, the app went to the background),
-  // the stand-ins are read back on the next visit as they were made, and the repair still comes.
-  it('recovers a session saved with its stand-ins on a later visit', () => {
-    const savedAgain = JSON.parse(JSON.stringify(landOnKling(kling({ referenceVideos: [clip(2), clip(3)] })))) as VideoCreationDraft;
+  // A source read that cannot sign one of the clips this time leaves it out. That clip keeps its mark,
+  // so the next read can still give it its handle.
+  it('leaves the mark on a clip the source did not answer for', () => {
+    const landed = landOnKling(kling({ referenceVideos: [clip(2), clip(3)] }));
 
-    expect(needsRemixReferenceRecovery(savedAgain)).toBe(true);
-    expect(handles(recoverRemixReferences(savedAgain, keptHandles()))).toEqual(['@reference_video_2', '@reference_video_3']);
+    const partly = recoverRemixReferences(landed, withSource(2)) as VideoCreationDraft;
+    expect(partly.referenceVideos.map((item) => [item.handle, item.handleStandIn])).toEqual([['@reference_video_2', undefined], ['@reference_video_4', true]]);
+    expect(needsRemixReferenceRecovery(partly)).toBe(true);
+
+    expect(handles(recoverRemixReferences(partly, keptHandles()))).toEqual(['@reference_video_2', '@reference_video_3']);
   });
 
   it('keeps a stand-in no words mention its source by, and settles it', () => {
@@ -215,6 +219,20 @@ describe('saved remix clips without the handles their words mention', () => {
     // The renamed clip keeps @spin; the second keeps the stand-in its words now name; the third would
     // take @reference_video_3 back, which the second holds, and keeps its own.
     expect(handles(recoverRemixReferences(edited, source))).toEqual(['@spin', '@reference_video_3', '@reference_video_4']);
+  });
+
+  // Each rule on its own: a stand-in gives way only to a source handle the words mention, and never once
+  // the words mention the stand-in itself.
+  it('takes a source handle back only while the words mention it and not the stand-in', () => {
+    // The source's @reference_video_2 is free, but no words name it.
+    const unmentioned = landOnKling(kling({ prompt: 'Open on @someone', referenceVideos: [clip(2)] }));
+    expect(handles(recoverRemixReferences(unmentioned, withSource(2)))).toEqual(['@reference_video']);
+
+    // Both are named, the stand-in by the creator while the source loaded.
+    const landed = landOnKling(kling({ prompt: 'Open on @reference_video_2', referenceVideos: [clip(2)] }));
+    const mentioned = { ...landed, prompt: 'Open on @reference_video_2 with @reference_video' };
+    expect(handles(recoverRemixReferences(mentioned, withSource(2)))).toEqual(['@reference_video']);
+    expect(handles(recoverRemixReferences(landed, withSource(2)))).toEqual(['@reference_video_2']);
   });
 
   // A clip the source kept no handle for comes back from the restore under one the restore made up for

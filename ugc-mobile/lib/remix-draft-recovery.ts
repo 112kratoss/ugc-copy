@@ -138,10 +138,11 @@ function missesClipHandles(draft: VideoCreationDraft): boolean {
  * answers to it by now. A clip under a stand-in (`handleStandIn`: named by the
  * catalog as the draft landed on Kling 3.0, before the source was read) takes it
  * back over the stand-in only where the words mention it and not the stand-in.
- * Either way the recovery settles a stand-in: one it leaves is the clip's own
- * from then on, so no later visit reads the source again for it. A handle the
- * creator gave stays. Missing images come back only while the prompt still
- * mentions them.
+ * Either way the recovery settles a stand-in the source answered for: one it
+ * leaves is the clip's own from then on. A clip the source left out (it could
+ * not sign it this time) keeps its mark, so a later visit can still give it its
+ * handle. A handle the creator gave stays. Missing images come back only while
+ * the prompt still mentions them.
  */
 export function recoverRemixReferences(current: CreationDraft, restored: CreationDraft): CreationDraft {
   const sourceMedia = heldDraftMedia(restored);
@@ -155,9 +156,10 @@ export function recoverRemixReferences(current: CreationDraft, restored: Creatio
       || (Boolean(media.handleStandIn) && !mentioned.has(media.handle) && Boolean(sourceHandle && mentioned.has(sourceHandle)));
     const keptHandle = sourceHandle && replaces && !taken.has(sourceHandle) ? sourceHandle : null;
     if (keptHandle) taken.add(keptHandle);
-    if (url === media.url && !keptHandle && !media.handleStandIn) return media;
+    const settles = Boolean(match && media.handleStandIn);
+    if (url === media.url && !keptHandle && !settles) return media;
     const next: MediaDraft = keptHandle ? { ...media, url, handle: keptHandle } : { ...media, url };
-    delete next.handleStandIn;
+    if (settles) delete next.handleStandIn;
     return next;
   });
   if (!missesReferences(renewed) || renewed.tool === 'motion' || restored.tool === 'motion'

@@ -24,7 +24,10 @@ import {
   validateCreationDraft,
   videoDraftReferenceMode,
   VIDEO_MODELS,
+  withClipHandles,
+  withCreatorClipHandle,
   type MediaDraft,
+  type VideoCreationDraft,
 } from '../lib/media-creation-view-model';
 import type { RemixSourceBundle } from '../lib/types';
 
@@ -1124,5 +1127,51 @@ describe('nameUnnamedReferences', () => {
   it('changes nothing about a picture it names but its name and mention', () => {
     const original = picked('1000333161.jpg');
     expect(nameUnnamedReferences([original], [])).toEqual([{ ...original, displayName: 'Reference 1', handle: '@reference_1' }]);
+  });
+});
+
+// Kling 3.0 takes a clip only under a handle. A clip that reaches the draft without one of its own is named
+// past every handle the words mention (withClipHandles); a clip the creator adds or renames may take a
+// mentioned handle nothing answers to, unless a clip still waits for its own back (withCreatorClipHandle).
+describe('clip handles', () => {
+  const clip = (id: string, extra: Partial<MediaDraft> = {}): MediaDraft => ({
+    id, kind: 'video', url: `https://cdn.example.com/${id}.mp4`, fileName: `${id}.mp4`, displayName: 'Reference Video', ...extra,
+  });
+  const kling = (overrides: Partial<VideoCreationDraft>): VideoCreationDraft => ({
+    ...createDefaultCreationDraft('video'), model: 'kling-3.0-video', ...overrides,
+  });
+
+  it('names a clip without a valid handle of its own, a null one included, and marks the handle made up', () => {
+    const draft = kling({ referenceVideos: [clip('kept', { handle: '@spin' }), clip('lost', { handle: null as unknown as string })] });
+
+    expect(withClipHandles(draft).map((item) => [item.handle, item.handleStandIn])).toEqual([['@spin', undefined], ['@reference_video', true]]);
+  });
+
+  it('gives a clip the creator adds a mentioned handle nothing answers to', () => {
+    const draft = kling({ prompt: '@reference_video spins', referenceVideos: [clip('kept', { handle: '@spin' })] });
+
+    expect(withCreatorClipHandle(draft, clip('new'))).toMatchObject({ handle: '@reference_video' });
+  });
+
+  it('keeps the mentions free for a clip waiting for its handle back, and never marks the creator’s own', () => {
+    // A remix's clip under a stand-in may still get @reference_video_2 back from its source.
+    const waiting = kling({
+      prompt: 'Open on @reference_video_2',
+      referenceVideos: [clip('restored', { handle: '@reference_video', handleStandIn: true })],
+    });
+
+    const added = withCreatorClipHandle(waiting, clip('new', { handleStandIn: true }));
+
+    expect(added.handle).toBe('@reference_video_3');
+    expect(added.handleStandIn).toBeUndefined();
+  });
+
+  it('keeps a renamed clip on its own mentioned handle', () => {
+    const draft = kling({
+      prompt: 'Then @jump and @reference_video_2',
+      referenceVideos: [clip('jump', { displayName: 'Jump', handle: '@jump' }), clip('restored', { handle: '@reference_video', handleStandIn: true })],
+    });
+
+    expect(withCreatorClipHandle(draft, { ...draft.referenceVideos[0], displayName: 'Jump' }).handle).toBe('@jump');
   });
 });

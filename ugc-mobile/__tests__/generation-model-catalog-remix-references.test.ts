@@ -250,7 +250,12 @@ describe('catalog remix restore of Kling 3.0 clips', () => {
     );
     const draft = restored.draft as VideoCreationDraft;
 
-    expect(draft.referenceVideos.map((clip) => clip.handle)).toEqual(['@reference_video', '@reference_video_2', '@reference_video_3']);
+    // Made from the clips' names and marked so: a recovery never gives one back as the source's own.
+    expect(draft.referenceVideos.map((clip) => [clip.handle, clip.handleStandIn])).toEqual([
+      ['@reference_video', true],
+      ['@reference_video_2', true],
+      ['@reference_video_3', true],
+    ]);
     expect(buildUnifiedCatalogGenerationRequest(draft, model, catalog.revision).inputs.map((input) => [input.slot, input.handle])).toEqual([
       ['videoElements', '@reference_video'],
       ['videoElements', '@reference_video_2'],

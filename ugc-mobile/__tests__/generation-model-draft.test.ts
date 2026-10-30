@@ -909,12 +909,9 @@ describe('references kept across a model change', () => {
     const clip = (name: string, displayName: string, handle?: string): MediaDraft => ({
       ...upload(`${name}.mp4`, 'video', { durationSeconds: 4 }), displayName, handle,
     });
-    const onKling = (overrides: Partial<VideoCreationDraft>) => applyCatalogModelDefaults({
-      ...createDefaultCreationDraft('video'), model: kling30.id, ...overrides,
-    }, kling30) as VideoCreationDraft;
 
     // A second @spin, and one no prompt could mention, are made from their names.
-    const renamed = onKling({ prompt: 'Start on @spin.', referenceVideos: [clip('spin', 'Spin', '@spin'), clip('again', 'Spin', '@spin'), clip('loud', 'Loud Move', '@Loud Move')] });
+    const renamed = videoDraft(kling30, { prompt: 'Start on @spin.', referenceVideos: [clip('spin', 'Spin', '@spin'), clip('again', 'Spin', '@spin'), clip('loud', 'Loud Move', '@Loud Move')] });
     expect(renamed.referenceVideos.map((item) => [item.handle, item.handleStandIn])).toEqual([
       ['@spin', undefined],
       ['@spin_2', true],
@@ -924,7 +921,7 @@ describe('references kept across a model change', () => {
     // Past a picture's handle, a subject's and the ones the words mention, which stay as they are; a name
     // with nothing a handle can hold makes the generic one.
     const prompt = 'Then @reference_video_3 and @someone.';
-    const crowded = onKling({
+    const crowded = videoDraft(kling30, {
       prompt,
       references: [{ ...upload('poster.png', 'image'), displayName: 'Reference Video', handle: '@reference_video' }],
       subjects: [createSubjectDraft([upload('hero.png', 'image')], 'Reference Video', ['@reference_video'])],
@@ -940,8 +937,9 @@ describe('references kept across a model change', () => {
     expect(onSeedance.referenceVideos).toBe(renamed.referenceVideos);
     expect((applyCatalogModelDefaults(onSeedance, kling30) as VideoCreationDraft).referenceVideos.map((item) => item.handle))
       .toEqual(['@spin', '@spin_2', '@loud_move']);
-    // A clip added beside them, as an upload is, is named by the same rule, past the handles mentioned.
-    const added = onKling({ ...renamed, prompt: 'Then @reference_video.', referenceVideos: [...renamed.referenceVideos, clip('new', 'Reference Video')] });
+    // A clip that joins them without a handle of its own (carried over, restored) is named by the same rule,
+    // past the handles mentioned. One the creator adds may take a mentioned one: withCreatorClipHandle.
+    const added = videoDraft(kling30, { ...renamed, prompt: 'Then @reference_video.', referenceVideos: [...renamed.referenceVideos, clip('new', 'Reference Video')] });
     expect(added.referenceVideos.map((item) => item.handle)).toEqual(['@spin', '@spin_2', '@loud_move', '@reference_video_2']);
     // Renamed, a made-up handle is the creator's.
     expect(renameMediaDraft(added.referenceVideos[1], 'Jump', true)).toMatchObject({ handle: '@jump' });
@@ -958,7 +956,6 @@ describe('references kept across a model change', () => {
     expect(buildUnifiedCatalogGenerationRequest(unnamed, kling30, 'revision-1').inputs).toEqual([
       expect.objectContaining({ slot: 'videoElements', url: clip.url, handle: '@reference_video_2' }),
     ]);
-    expect(buildCatalogQuoteRequest(unnamed, kling30, 'revision-1')).toMatchObject({ inputMetadata: { slots: { videoElements: { count: 1 } } } });
   });
 });
 

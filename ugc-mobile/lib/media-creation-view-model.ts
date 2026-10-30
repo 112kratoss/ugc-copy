@@ -353,7 +353,7 @@ export interface MediaDraft {
    * The handle was made up by the app (`withClipHandles`), not given by the creator or kept by a
    * source: a remix's recovery may still give the clip its source's handle in its place. Saved with
    * the draft, so a later visit can tell it apart too; cleared once the creator renames the clip or a
-   * recovery settles it.
+   * recovery settles it against the source.
    */
   handleStandIn?: boolean;
   durationSeconds?: number | null;
@@ -1027,25 +1027,47 @@ export function videoDraftMentionedHandles(draft: VideoCreationDraft): Set<strin
 
 /**
  * A video draft's clips, each under an @handle, for a model that takes clips only under one (Kling
- * 3.0's video elements). A clip keeps a valid handle that no clip before it holds; the rest get one
- * made from their name ("@reference_video", "@reference_video_2"), past every handle the draft's
- * references, clips and subjects answer to and every one its words mention, and marked as made up
- * (`handleStandIn`). A handle made here is one no words mention yet, so they stay as they are, and a
- * mention nothing answers to (a remix's, whose clip has not been given its handle back) is not taken
- * over by a clip it may never have meant. The same clips come back when each already has a handle of
- * its own. Uploads are named here too, so every clip the app names follows this one rule.
+ * 3.0's video elements). A clip keeps a valid handle that no clip before it holds; the rest, clips that
+ * reached the draft without one of their own (carried over from a model whose clips take none, restored
+ * from a run that kept none), get one made from their name ("@reference_video", "@reference_video_2"),
+ * past every handle the draft's references, clips and subjects answer to and every one its words
+ * mention, and marked as made up (`handleStandIn`). A handle made here is one no words mention yet, so
+ * they stay as they are, and a mention nothing answers to (a remix's, whose clip has not been given its
+ * handle back) is not taken over by a clip it may never have meant. The same clips come back when each
+ * already has a handle of its own. A clip the creator adds or renames is named by
+ * `withCreatorClipHandle`.
  */
 export function withClipHandles(draft: VideoCreationDraft): MediaDraft[] {
   const clips = draft.referenceVideos;
   const kept = new Set<string>();
-  const keptHandles = clips.map((clip) => normalizeExistingHandle(clip.handle, kept));
-  if (keptHandles.every((handle, index) => handle === clips[index].handle)) return clips;
-  const taken = new Set([...videoDraftHandles(draft), ...kept, ...videoDraftMentionedHandles(draft)]);
-  return clips.map((clip, index) => {
-    const keptHandle = keptHandles[index];
-    if (keptHandle) return keptHandle === clip.handle ? clip : { ...clip, handle: keptHandle };
-    return { ...clip, handle: buildElementHandle(clip.displayName, taken, 2), handleStandIn: true };
-  });
+  const keeps = clips.map((clip) => normalizeExistingHandle(clip.handle, kept) !== null);
+  if (keeps.every(Boolean)) return clips;
+  const taken = new Set([...videoDraftHandles(draft), ...videoDraftMentionedHandles(draft)]);
+  return clips.map((clip, index) => (keeps[index]
+    ? clip
+    : { ...clip, handle: buildElementHandle(clip.displayName, taken, 2), handleStandIn: true }));
+}
+
+/**
+ * A clip the creator adds or renames, under the handle made from its name past every handle the draft's
+ * references, clips and subjects answer to (its own aside). A handle the words mention that nothing
+ * answers to is free for it, as it is for a picture: the clip the creator adds is most likely the one
+ * they mean (re-added after a restore left one out, or mentioned before it was picked). Not while a clip
+ * waits for its handle back (a stand-in a remix's recovery may still replace): those mentions may be its.
+ * The handle is the creator's, so it carries no stand-in mark.
+ */
+export function withCreatorClipHandle(draft: VideoCreationDraft, clip: MediaDraft): MediaDraft {
+  const others = draft.referenceVideos.filter((held) => held.id !== clip.id);
+  const own = draft.referenceVideos.find((held) => held.id === clip.id)?.handle;
+  const taken = new Set([
+    ...videoDraftHandles({ ...draft, referenceVideos: others }),
+    ...(others.some((held) => held.handleStandIn)
+      ? [...videoDraftMentionedHandles(draft)].filter((handle) => handle !== own)
+      : []),
+  ]);
+  const named: MediaDraft = { ...clip, handle: buildElementHandle(clip.displayName, taken, 2) };
+  delete named.handleStandIn;
+  return named;
 }
 
 /**
