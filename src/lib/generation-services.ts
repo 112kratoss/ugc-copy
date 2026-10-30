@@ -1029,7 +1029,7 @@ function normalizeReferenceImageInputs(value: ReferenceImageInput[] | undefined)
  * A made handle is never one the run's words mention. In a remix of a run kept before
  * clips had handles, the words still name the source's, and a made handle that took one
  * would bind that mention to a clip it never meant; the start refuses the mention as
- * unknown instead, before anything is held, as the app holds it (`withClipHandles`).
+ * unknown instead, before anything is held, as the app holds it (`withClipHandles`, #599).
  */
 function normalizeKlingVideoElementInputs(
   value: KlingVideoElementInput[] | undefined,

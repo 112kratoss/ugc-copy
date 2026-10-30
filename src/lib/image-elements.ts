@@ -135,24 +135,34 @@ export function assignElementHandles<T extends { displayName?: string | null; ha
  * run kept before its references had handles), while the run's words still
  * mention the handles its source gave them.
  *
- * The source named them as `assignElementHandles` does, from name and place, so
- * that rebuild gives the source's handles back unless the source lost a
- * reference before its run: three clips all called "Reference Video" with the
- * first removed ran as `@reference_video_2` and `@reference_video_3`, and the
- * rebuild would hand `@reference_video_2` to the clip after the one the words
- * meant. A rebuild that answers every mention is kept; one that leaves a
- * mention unanswered is taken as such a shift, and the references are named
- * past every mentioned handle instead, so each of those mentions shows as
- * unknown until the creator points it at the right reference.
+ * The source named them as `assignElementHandles` does, and a rebuild gives a
+ * reference its source's handle for certain only where place plays no part: a
+ * reference whose own name no other shares gets the handle of that name alone.
+ * Where names repeat, the numbers come from place, and a source that lost or
+ * added a reference before its run numbered them otherwise: three clips all
+ * called "Reference Video" with the first removed ran as `@reference_video_2`
+ * and `@reference_video_3`, and a rebuild hands `@reference_video_2` to the clip
+ * after the one the words meant. So the rebuild is kept only when every mention
+ * is answered by a handle handed back or by a reference named alone; otherwise
+ * the references are named past every mentioned handle, and those mentions
+ * show as unknown until the creator points them at the right references.
  */
 export function assignRemixElementHandles<T extends { displayName?: string | null; handle?: string | null }>(
   elements: T[],
   mentionedHandles: Iterable<string>
 ): Array<T & { displayName: string; handle: string }> {
   const rebuilt = assignElementHandles(elements);
-  const held = new Set(rebuilt.map((element) => element.handle));
+  const nameBases = elements.map((element) => toHandleBase(element.displayName ?? '', ''));
+  const certain = new Set(rebuilt.flatMap((element, index) => {
+    const handedBack = elements[index].handle === element.handle;
+    const base = nameBases[index];
+    const namedAlone = base !== ''
+      && element.handle === `@${base}`
+      && nameBases.filter((other) => other === base).length === 1;
+    return handedBack || namedAlone ? [element.handle] : [];
+  }));
   const mentioned = Array.from(mentionedHandles);
-  return mentioned.every((handle) => held.has(handle))
+  return mentioned.every((handle) => certain.has(handle))
     ? rebuilt
     : assignElementHandles(elements, mentioned);
 }

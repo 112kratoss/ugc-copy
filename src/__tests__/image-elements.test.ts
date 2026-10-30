@@ -227,17 +227,6 @@ describe('assignElementHandles', () => {
   });
 });
 
-/**
- * A Kling O3 subject's handle kept the capitals of its name ("@Hero_creator",
- * 2026-10-03). No other handle has capitals, and the functions that read handles
- * out of a prompt read lower case only: the handle on the card was one no prompt
- * could mention, and the lower-case one was refused as unknown.
- *
- * It was also built from the subjects' names each time their cards were drawn,
- * so it moved when another subject was renamed or removed. A subject keeps its
- * handle now, by the rule assignElementHandles is tested for above. These are the
- * cases a subject has of its own, and the two faults that rule ends.
- */
 describe('assignRemixElementHandles', () => {
   // A source kept before its references had handles: they come back with none, while
   // its words name the handles the source gave them, from their names and places.
@@ -246,10 +235,6 @@ describe('assignRemixElementHandles', () => {
       [{ displayName: 'Video element 1' }, { displayName: 'Video element 2' }],
       ['@video_element_1', '@video_element_2'],
     ))).toEqual(['@video_element_1', '@video_element_2']);
-    expect(handles(assignRemixElementHandles(
-      [{ displayName: 'Reference Video' }, { displayName: 'Reference Video' }],
-      ['@reference_video', '@reference_video_2'],
-    ))).toEqual(['@reference_video', '@reference_video_2']);
     // Words that mention fewer than every reference, and no words at all.
     expect(handles(assignRemixElementHandles([{ displayName: 'Reference Video' }], ['@reference_video'])))
       .toEqual(['@reference_video']);
@@ -266,6 +251,26 @@ describe('assignRemixElementHandles', () => {
     ))).toEqual(['@reference_video', '@reference_video_4']);
   });
 
+  // Where names repeat, the rebuild numbers them by place, and a source that lost or added
+  // one before its run numbered them otherwise; an answered mention proves nothing there.
+  it('names past every mentioned handle when a mention is answered only by place', () => {
+    // The source lost its first clip and its words mention only what is now the first.
+    expect(handles(assignRemixElementHandles(
+      [{ displayName: 'Reference Video' }, { displayName: 'Reference Video' }],
+      ['@reference_video_2'],
+    ))).toEqual(['@reference_video', '@reference_video_3']);
+    // Every clip mentioned, the numbers still from place.
+    expect(handles(assignRemixElementHandles(
+      [{ displayName: 'Reference Video' }, { displayName: 'Reference Video' }],
+      ['@reference_video', '@reference_video_2'],
+    ))).toEqual(['@reference_video_3', '@reference_video_4']);
+    // Names that differ only in what a handle cannot hold share a base.
+    expect(handles(assignRemixElementHandles(
+      [{ displayName: 'Dancer' }, { displayName: 'dancer!' }],
+      ['@dancer'],
+    ))).toEqual(['@dancer_2', '@dancer_3']);
+  });
+
   it('keeps every handle handed back, mentioned or not', () => {
     expect(handles(assignRemixElementHandles(
       [{ displayName: 'Opening', handle: '@lead' }, { displayName: 'Reference Video' }],
@@ -280,6 +285,17 @@ describe('extractMentionedHandles', () => {
   });
 });
 
+/**
+ * A Kling O3 subject's handle kept the capitals of its name ("@Hero_creator",
+ * 2026-10-03). No other handle has capitals, and the functions that read handles
+ * out of a prompt read lower case only: the handle on the card was one no prompt
+ * could mention, and the lower-case one was refused as unknown.
+ *
+ * It was also built from the subjects' names each time their cards were drawn,
+ * so it moved when another subject was renamed or removed. A subject keeps its
+ * handle now, by the rule assignElementHandles is tested for above. These are the
+ * cases a subject has of its own, and the two faults that rule ends.
+ */
 describe('assignSubjectHandles', () => {
   function subjectHandles(names: string[]) {
     return handles(assignSubjectHandles(names.map((displayName) => ({ displayName }))));
