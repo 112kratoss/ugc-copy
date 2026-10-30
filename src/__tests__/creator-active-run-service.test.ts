@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 
 import {
-  ACTIVE_RUN_CANDIDATES,
+  ACTIVE_RUN_PAGE,
   findCreatorActiveRun,
   parseCreatorActiveRunTool,
 } from '@/lib/creator-active-run-service';
@@ -38,7 +38,7 @@ function stored(generations: Row[], canvasSteps: Row[] = []) {
   return createStoredRows({ generations, workflow_canvas_run_steps: canvasSteps });
 }
 
-/** The `order` and `limit` each read asks for, which the fixture does not apply. */
+/** The `order` and `range` each read asks for; the fixture keeps the stored order. */
 function recordOrdering(client: SupabaseClient) {
   const asked: unknown[][] = [];
   const from = client.from.bind(client);
@@ -49,7 +49,7 @@ function recordOrdering(client: SupabaseClient) {
         ...reads,
         select(columns: string) {
           const query = reads.select(columns) as unknown as Record<string, (...args: unknown[]) => unknown>;
-          for (const method of ['order', 'limit']) {
+          for (const method of ['order', 'range']) {
             const original = query[method];
             query[method] = (...args: unknown[]) => {
               asked.push([table, method, ...args]);
@@ -133,7 +133,7 @@ describe('findCreatorActiveRun', () => {
     expect(idle.reads.map((read) => read.table)).toEqual(['generations']);
   });
 
-  it('reads the newest runs first, a handful at a time', async () => {
+  it('reads the newest runs first, a page at a time', async () => {
     const { client } = stored([run('image-1')]);
     const asked = recordOrdering(client);
 
@@ -141,8 +141,21 @@ describe('findCreatorActiveRun', () => {
 
     expect(asked).toEqual([
       ['generations', 'order', 'created_at', { ascending: false }],
-      ['generations', 'limit', ACTIVE_RUN_CANDIDATES],
+      ['generations', 'range', 0, ACTIVE_RUN_PAGE - 1],
     ]);
+  });
+
+  it('reads on past a page of runs a canvas holds to the creator\'s own', async () => {
+    const canvasNodes = Array.from({ length: ACTIVE_RUN_PAGE + 2 }, (_, index) => run(`canvas-node-${index}`));
+    const steps = canvasNodes.map((node) => ({ generation_id: node.id }));
+
+    const behind = stored([...canvasNodes, run('from-the-creator')], steps);
+    await expect(findCreatorActiveRun({ client: behind.client, userIds: ['account-1'], tool: 'image' }))
+      .resolves.toMatchObject({ id: 'from-the-creator' });
+    expect(behind.reads.map((read) => read.table)).toEqual(['generations', 'workflow_canvas_run_steps', 'generations', 'workflow_canvas_run_steps']);
+
+    const canvasOnly = stored(canvasNodes, steps);
+    await expect(findCreatorActiveRun({ client: canvasOnly.client, userIds: ['account-1'], tool: 'image' })).resolves.toBeNull();
   });
 
   it('throws a failed read for the route to log', async () => {

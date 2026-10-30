@@ -5272,6 +5272,30 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(within(canvas).getByText('19 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
     });
 
+    it('keeps the creator\'s own press, refusal and all, when the look answers after it', async () => {
+      const run = { id: 'gen-old', predictionId: 'pred-old', status: 'processing', createdAt: new Date().toISOString(), cost: 19, prompt: 'An earlier run', model: 'kling-3.0-video', duration: 5 };
+      const refused = refusal(402, { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 12 credits.' });
+      let answerLook: (response: Response) => void = () => undefined;
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === '/api/generations/active?tool=video') return new Promise<Response>((resolve) => { answerLook = resolve; });
+        if (String(input).includes('/api/generations') && init?.method === 'POST') return refused();
+        return defaultResponse(input, init);
+      });
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(activeRunReads()).toHaveLength(1));
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+      expect(await screen.findByText('Insufficient credits. This action costs 12 credits.')).toBeInTheDocument();
+
+      await act(async () => {
+        answerLook({ ok: true, status: 200, json: async () => ({ run }) } as Response);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(screen.getByText('Insufficient credits. This action costs 12 credits.')).toBeInTheDocument();
+      expect(statusChecks()).toHaveLength(0);
+    });
+
     // The page's unmount aborts only a poll that exists: a look still out then would start
     // one nothing stops.
     it('drops a look that answers after the page has gone', async () => {

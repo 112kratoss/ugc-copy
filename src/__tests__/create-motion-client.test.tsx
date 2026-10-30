@@ -612,6 +612,45 @@ describe('CreateMotionClient price of the run it sends', () => {
     expect(startBodies()[0].expectedCostCredits).toBe(20);
   });
 
+  // A look for a run at work that answers late is dropped: the page has gone, or the
+  // creator pressed Generate and the page is theirs.
+  const motionRunAtWork = () => ({ id: 'gen-motion-1', predictionId: 'pred-motion-1', status: 'processing', createdAt: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: 30, model: 'kling-3.0' });
+
+  it('drops a look that answers after the page has gone', async () => {
+    let answerLook: (response: Response) => void = () => undefined;
+    activeRunAnswer = new Promise<Response>((resolve) => { answerLook = resolve; });
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await waitFor(() => expect(activeRunReads()).toHaveLength(1));
+
+    view.unmount();
+    await act(async () => {
+      answerLook(jsonResponse({ run: motionRunAtWork() }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(statusMocks.fetchGenerationStatusWithRetry).not.toHaveBeenCalled();
+  });
+
+  it('keeps the creator\'s own press, refusal and all, when the look answers after it', async () => {
+    let answerLook: (response: Response) => void = () => undefined;
+    activeRunAnswer = new Promise<Response>((resolve) => { answerLook = resolve; });
+    quoteStandIn.answers = [20, 24];
+    startAnswers = [jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409)];
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await waitFor(() => expect(activeRunReads()).toHaveLength(1));
+    await attachBothInputs(view.container);
+    await pressGenerate();
+    expect(await screen.findByText(COST_CHANGED)).toBeInTheDocument();
+
+    await act(async () => {
+      answerLook(jsonResponse({ run: motionRunAtWork() }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.getByText(COST_CHANGED)).toBeInTheDocument();
+    expect(statusMocks.fetchGenerationStatusWithRetry).not.toHaveBeenCalled();
+  });
+
   it('asks for the price again when the server says it changed, and sends the next run at the new price under a new key', async () => {
     quoteStandIn.answers = [20, 24];
     startAnswers = [jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409)];

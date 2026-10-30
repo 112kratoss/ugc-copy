@@ -37,8 +37,8 @@ export type CreatorActiveRun = {
 };
 
 const ACTIVE_RUN_STATUSES = ['processing', 'waiting'] as const;
-/** Runs at work read at once: enough to pass the few a workflow canvas holds. */
-export const ACTIVE_RUN_CANDIDATES = 10;
+/** Runs at work read at a time, newest first, until one is not a workflow canvas's. */
+export const ACTIVE_RUN_PAGE = 10;
 
 export function parseCreatorActiveRunTool(value: string | null): CreatorActiveRunTool | null {
   return CREATOR_ACTIVE_RUN_TOOLS.find((tool) => tool === value) ?? null;
@@ -55,17 +55,7 @@ type ActiveRunRow = {
   duration: number | null;
 };
 
-export async function findCreatorActiveRun({
-  client,
-  userIds,
-  tool,
-}: {
-  /** The service client: `authenticated` may not read these columns. */
-  client: SupabaseClient;
-  /** The caller and every guest identity linked to it. */
-  userIds: string[];
-  tool: CreatorActiveRunTool;
-}): Promise<CreatorActiveRun | null> {
+async function readActiveRuns(client: SupabaseClient, userIds: string[], tool: CreatorActiveRunTool, from: number) {
   let query = client
     .from('generations')
     .select('id, prediction_id, status, created_at, prompt, cost, model, duration')
@@ -85,30 +75,51 @@ export async function findCreatorActiveRun({
 
   const { data, error } = await query
     .order('created_at', { ascending: false })
-    .limit(ACTIVE_RUN_CANDIDATES);
+    .range(from, from + ACTIVE_RUN_PAGE - 1);
   if (error) throw error;
-  const rows = (data ?? []) as ActiveRunRow[];
-  if (rows.length === 0) return null;
+  return (data ?? []) as ActiveRunRow[];
+}
 
-  // A workflow canvas starts its nodes' runs as ordinary generations and follows them on
-  // its own page; only the steps that hold them say so.
-  const { data: steps, error: stepsError } = await client
+/** The ids among `ids` that a workflow canvas step holds. */
+async function readCanvasRuns(client: SupabaseClient, ids: string[]) {
+  const { data, error } = await client
     .from('workflow_canvas_run_steps')
     .select('generation_id')
-    .in('generation_id', rows.map((row) => row.id));
-  if (stepsError) throw stepsError;
-  const canvasRuns = new Set((steps ?? []).map((step) => (step as { generation_id: string }).generation_id));
-  const row = rows.find((candidate) => !canvasRuns.has(candidate.id));
-  if (!row) return null;
+    .in('generation_id', ids);
+  if (error) throw error;
+  return new Set((data ?? []).map((step) => (step as { generation_id: string }).generation_id));
+}
 
-  return {
-    id: row.id,
-    predictionId: row.prediction_id,
-    status: row.status,
-    createdAt: row.created_at,
-    prompt: row.prompt,
-    cost: row.cost,
-    model: row.model,
-    duration: row.duration,
-  };
+export async function findCreatorActiveRun({
+  client,
+  userIds,
+  tool,
+}: {
+  /** The service client: `authenticated` may not read these columns. */
+  client: SupabaseClient;
+  /** The caller and every guest identity linked to it. */
+  userIds: string[];
+  tool: CreatorActiveRunTool;
+}): Promise<CreatorActiveRun | null> {
+  // A workflow canvas starts its nodes' runs as ordinary generations and follows them on
+  // its own page; only the steps that hold them say so, and a large canvas holds many.
+  for (let from = 0; ; from += ACTIVE_RUN_PAGE) {
+    const rows = await readActiveRuns(client, userIds, tool, from);
+    if (rows.length === 0) return null;
+    const canvasRuns = await readCanvasRuns(client, rows.map((row) => row.id));
+    const row = rows.find((candidate) => !canvasRuns.has(candidate.id));
+    if (row) {
+      return {
+        id: row.id,
+        predictionId: row.prediction_id,
+        status: row.status,
+        createdAt: row.created_at,
+        prompt: row.prompt,
+        cost: row.cost,
+        model: row.model,
+        duration: row.duration,
+      };
+    }
+    if (rows.length < ACTIVE_RUN_PAGE) return null;
+  }
 }
