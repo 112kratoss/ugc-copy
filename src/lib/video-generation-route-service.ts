@@ -50,6 +50,10 @@ async function getAuthenticatedUser(supabase: VideoRouteSupabaseClient) {
   return authError || !user ? null : user;
 }
 
+async function getAuthenticatedUserId(supabase: VideoRouteSupabaseClient) {
+  return (await getAuthenticatedUser(supabase))?.id ?? null;
+}
+
 async function readRequestBody(input: VideoGenerationRouteInput) {
   const body = input.readRequestBody ? await input.readRequestBody() : await input.request.json();
   return body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
@@ -120,7 +124,7 @@ export async function getVideoGenerationForRoute(
 
   try {
     const supabase = input.createUserSupabase() as VideoRouteSupabaseClient;
-    const userId = (await getAuthenticatedUser(supabase))?.id;
+    const userId = await getAuthenticatedUserId(supabase);
     if (!userId) {
       return {
         ok: false,

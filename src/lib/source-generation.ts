@@ -70,11 +70,17 @@ export async function resolveSourceGenerationId(
   // The id kept here credits the post with a remix and tells its creator
   // (`record_completed_post_remix`, `notifyCompletedRemix`). So a public source
   // counts only when Remix would hand the caller its recipe now: the post
-  // exposed, no block between the two, no recipe locked to the caller, and a
-  // guest's own creation or none. The create page sends its URL's id even
-  // after Remix refused, so a refusal starts an ordinary run, as a template
-  // result does.
-  if (data.is_public && !(await remixWouldBeAllowed(adminSupabase, { userId, callerIsGuest }, data))) return null;
+  // exposed, no block between the two, no recipe locked to the caller. The
+  // create page sends its URL's id even after Remix refused, so a refusal
+  // starts an ordinary run, as a template result does.
+  if (data.is_public) {
+    // Remix serves a guest only its own creations, and `resolveRemixAccess`
+    // does not ask who is a guest: `/api/remix-source` answers a guest 403 for
+    // anyone else's before asking it, as here, and the proxy keeps guests off
+    // `/api/showcase/remix`.
+    if (callerIsGuest && !(await isOwnOrLinkedAccountId(adminSupabase, userId, data.user_id))) return null;
+    if (!(await remixWouldBeAllowed(adminSupabase, userId, data))) return null;
+  }
 
   return sourceGenerationId;
 }
@@ -82,15 +88,12 @@ export async function resolveSourceGenerationId(
 /** Bookkeeping, so a check that cannot be made credits no remix rather than failing the start. */
 async function remixWouldBeAllowed(
   adminSupabase: SupabaseClient,
-  { userId, callerIsGuest }: { userId: string; callerIsGuest: boolean },
+  userId: string,
   generation: RemixAccessGeneration,
 ) {
   try {
     const access = await resolveRemixAccess({ adminSupabase, viewerUserId: userId, generation });
-    // `resolveRemixAccess` does not ask who the viewer is: the routes refuse a
-    // guest anything but its own creations themselves (`/api/remix-source`
-    // answers 403, `/api/showcase/remix` takes accounts only).
-    return access.allowed && (access.basis === 'owner' || !callerIsGuest);
+    return access.allowed;
   } catch (error) {
     logBackendError('failed_to_check_remix_access_for_source_generation', { error });
     return false;

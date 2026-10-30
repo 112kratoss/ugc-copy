@@ -313,10 +313,25 @@ describe('remix credit', () => {
   // Remix serves a guest nothing but its own creations: `/api/remix-source`
   // answers anyone else's 403, and `/api/showcase/remix` takes accounts only.
   it('records no remix of someone else’s post for a guest, and starts the run as an ordinary one', async () => {
-    const { supabase } = createSupabaseMock();
+    const { supabase, tables } = createSupabaseMock();
 
     await expect(resolveSourceGenerationId(supabase, 'guest-1', SOURCE_ID, GUEST)).resolves.toBeNull();
     expect(logBackendErrorMock).not.toHaveBeenCalled();
+    // Decided by whose creation it is, as `/api/remix-source` decides it,
+    // before anything Remix reads about the post.
+    expect(tables()).toEqual(['generations', 'profiles']);
+  });
+
+  // The guest rule answers only public sources: a private one that is not the
+  // guest's still answers 400, as for anyone, so a guest cannot tell someone's
+  // private creation from none by whether its run starts.
+  it('still refuses a guest someone else’s private creation', async () => {
+    const { supabase } = createSupabaseMock({ generation: { ...PUBLIC_SOURCE, is_public: false } });
+
+    await expect(resolveSourceGenerationId(supabase, 'guest-1', SOURCE_ID, GUEST)).rejects.toMatchObject({
+      name: 'SourceGenerationValidationError',
+      status: 400,
+    });
   });
 
   it.each([

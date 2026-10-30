@@ -154,6 +154,11 @@ async function hasPurchasedBundle(
  *   another matter: they go to someone who unlocked it (`recipeEntitled`) only
  *   where the creator's stored switch offered them, as before.
  *
+ * It does not ask whether the viewer is a guest, whom Remix serves only its own
+ * creations: every caller refuses a guest anyone else's itself, before asking
+ * here (`/api/remix-source`, the proxy for `/api/showcase/remix`, the shared
+ * input import and the start's remix credit in `source-generation.ts`).
+ *
  * A read that fails throws instead of allowing. The routes turn that into a
  * 500, and a blocked-state check that fails counts as blocked. A generation
  * start asks here before crediting a remix (`source-generation.ts`), and counts

@@ -51,6 +51,10 @@ async function getAuthenticatedUser(supabase: MotionRouteSupabaseClient) {
   return authError || !user ? null : user;
 }
 
+async function getAuthenticatedUserId(supabase: MotionRouteSupabaseClient) {
+  return (await getAuthenticatedUser(supabase))?.id ?? null;
+}
+
 async function readRequestBody(input: MotionGenerationRouteInput) {
   const body = input.readRequestBody ? await input.readRequestBody() : await input.request.json();
   return body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
@@ -129,7 +133,7 @@ export async function getMotionGenerationForRoute(
 
   try {
     const supabase = input.createUserSupabase() as MotionRouteSupabaseClient;
-    const userId = (await getAuthenticatedUser(supabase))?.id;
+    const userId = await getAuthenticatedUserId(supabase);
     if (!userId) {
       return {
         ok: false,
