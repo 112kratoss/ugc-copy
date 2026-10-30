@@ -182,6 +182,7 @@ import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     announceGenerationStarted,
+    fetchCreatorActiveRun,
     fetchGenerationStatusWithRetry,
     isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
@@ -1336,6 +1337,8 @@ export default function CreateVideoClient({
     const [modelSettled, setModelSettled] = useState(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
+    // The look, as the page opens, for a run already at work.
+    const activeRunLookupRef = useRef<AbortController | null>(null);
     const elementInputRef = useRef<HTMLInputElement>(null);
     const referenceVideoInputRef = useRef<HTMLInputElement>(null);
     const referenceAudioInputRef = useRef<HTMLInputElement>(null);
@@ -4402,6 +4405,11 @@ export default function CreateVideoClient({
     }, [remixFit, remixLeftAlone, shortenRuns, priceOf, userCredits]);
 
     useEffect(() => {
+        // Dropped when the page goes (development's Strict Mode mounts it twice) and at a
+        // press: a run it found then would get a follower nothing stops, or take the page
+        // from the creator's own run.
+        const lookup = new AbortController();
+        activeRunLookupRef.current = lookup;
         const resumePendingGeneration = async () => {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) return;
@@ -4414,54 +4422,47 @@ export default function CreateVideoClient({
                 return;
             }
 
-            const { data, error: pendingError } = await supabase
-                .from('generations')
-                .select('id, prediction_id, status, created_at, cost, prompt, model')
-                .eq('user_id', session.user.id)
-                .eq('category', 'video')
-                .is('creation_mode', null)
-                .in('status', ['processing', 'waiting'])
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
+            // Asked of the server: the browser may not read a run's prompt, cost or model.
+            const run = await fetchCreatorActiveRun({ tool: 'video', accessToken: session.access_token, signal: lookup.signal });
+            // One run on the page at a time, held as a press holds it.
+            if (!run || lookup.signal.aborted || activeGenerationRequestKeyRef.current) return;
+            activeGenerationRequestKeyRef.current = `resume:${run.predictionId}`;
 
-            if (pendingError || !data?.prediction_id) {
-                return;
-            }
-
-            const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
+            const startedAtMs = Number.isNaN(Date.parse(run.createdAt)) ? Date.now() : Date.parse(run.createdAt);
 
             setIsGenerating(true);
             setError(null);
-            setLatestGenerationId(data.id ?? null);
+            setLatestGenerationId(run.id);
             setRunShape({
                 aspectRatio: null,
-                label: videoModelName(data.model),
-                prompt: typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null,
-                cost: typeof data.cost === 'number' ? data.cost : null,
+                label: videoModelName(run.model),
+                prompt: run.prompt?.trim() || null,
+                cost: run.cost,
                 answered: true,
             });
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'video',
                 phaseLabel: 'Resuming active run',
                 startedAtMs,
-                appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+                appStatus: run.status,
             }));
 
             try {
-                const result = await pollPrediction(data.prediction_id, startedAtMs, null);
+                const result = await pollPrediction(run.predictionId, startedAtMs, null);
                 setOutputVideo(result.output);
                 if (result.timing) {
                     setGenerationTiming(result.timing);
                 }
             } catch (generationError) {
-                handleRunFailure(generationError, startedAtMs, typeof data.cost === 'number' ? data.cost : null, false);
+                handleRunFailure(generationError, startedAtMs, run.cost, false);
             } finally {
+                activeGenerationRequestKeyRef.current = null;
                 setIsGenerating(false);
             }
         };
 
         void resumePendingGeneration();
+        return () => lookup.abort();
         // Recovery is intentionally a mount-only lookup; changing form settings must not restart it.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -4632,6 +4633,7 @@ export default function CreateVideoClient({
         // Held from here, so a second click while the session is read sends nothing.
         const idempotencyKey = createGenerationIdempotencyKey('video');
         activeGenerationRequestKeyRef.current = idempotencyKey;
+        activeRunLookupRef.current?.abort();
 
         // A newer build was deployed since this page loaded. The run is not sent from the
         // old one: the draft is saved and the page reloads onto the new build.

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 
+import type { CreatorActiveRun, CreatorActiveRunTool } from '@/lib/creator-active-run-service';
 import type { GenerationTiming } from '@/lib/generation-timing';
 
 const GENERATION_STATUSES = new Set([
@@ -106,6 +107,59 @@ export async function fetchGenerationStatus<
   }
 
   return payload as T;
+}
+
+function parseCreatorActiveRun(value: unknown): CreatorActiveRun | null {
+  if (
+    !isRecord(value)
+    || typeof value.id !== 'string' || !value.id
+    || typeof value.predictionId !== 'string' || !value.predictionId
+    || (value.status !== 'processing' && value.status !== 'waiting')
+    || typeof value.createdAt !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    predictionId: value.predictionId,
+    status: value.status,
+    createdAt: value.createdAt,
+    prompt: typeof value.prompt === 'string' ? value.prompt : null,
+    cost: typeof value.cost === 'number' ? value.cost : null,
+    model: typeof value.model === 'string' ? value.model : null,
+    duration: typeof value.duration === 'number' ? value.duration : null,
+  };
+}
+
+/**
+ * The caller's run of this creator still at work, for the page to pick up as it
+ * opens: one started before a reload, in another tab or on another device. Null
+ * when there is none, when the server cannot say, and once `signal` aborts: the
+ * page then opens as it would with none, and the run still reaches Studio and its
+ * alert.
+ */
+export async function fetchCreatorActiveRun({
+  tool,
+  accessToken,
+  signal,
+  fetchImpl = fetch,
+}: {
+  tool: CreatorActiveRunTool;
+  accessToken: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<CreatorActiveRun | null> {
+  try {
+    const response = await fetchImpl(`/api/generations/active?tool=${tool}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      ...(signal ? { signal } : {}),
+    });
+    if (!response.ok) return null;
+    const payload: unknown = await response.json();
+    return isRecord(payload) ? parseCreatorActiveRun(payload.run) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

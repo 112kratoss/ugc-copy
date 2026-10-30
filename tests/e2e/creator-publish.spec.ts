@@ -71,7 +71,7 @@ async function signIn(context: BrowserContext) {
       const row = { display_name: 'E2E Creator', avatar_url: null, credits: 25 };
       return route.fulfill({ json: single ? row : [row] });
     }
-    // The page's look for a run already under way on load: none.
+    // Any other table read: no rows. (The look for a run already at work is the API's.)
     if (pathname.startsWith('/rest/v1/')) return route.fulfill(single ? { status: 406, json: {} } : { json: [] });
     return route.fulfill({ status: 404, json: {} });
   });

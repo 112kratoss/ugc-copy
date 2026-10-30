@@ -85,6 +85,7 @@ import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     announceGenerationStarted,
+    fetchCreatorActiveRun,
     fetchGenerationStatusWithRetry,
     GenerationStatusRequestError,
     isGenerationStatusAbortError,
@@ -271,6 +272,8 @@ export default function CreateMotionClient({
     const hasResolvedInitialCatalogModel = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
+    // The look, as the page opens, for a run already at work.
+    const activeRunLookupRef = useRef<AbortController | null>(null);
 
     const [characterImage, setCharacterImage] = useState<string | null>(null);
     const [characterImageFile, setCharacterImageFile] = useState<File | null>(null);
@@ -1065,6 +1068,7 @@ export default function CreateMotionClient({
         if (activeGenerationRequestKeyRef.current) return;
         const idempotencyKey = createGenerationIdempotencyKey('motion');
         activeGenerationRequestKeyRef.current = idempotencyKey;
+        activeRunLookupRef.current?.abort();
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = getMotionGenerationEstimate(runSettings.duration);
         beginRunView(startedAtMs, estimatedTotalMs, 'Preparing inputs');
@@ -1212,43 +1216,37 @@ export default function CreateMotionClient({
 
     // An unanswered start is checked first, under its own key: it may be the
     // very run the newest-run lookup would otherwise find.
-    const resumeNewestMotionRun = async () => {
+    const resumeNewestMotionRun = async (signal: AbortSignal) => {
         const { data: { session: currentSession } } = await supabase.auth.getSession();
         if (!currentSession) return;
-        const { data } = await supabase
-            .from('generations')
-            .select('id, prediction_id, status, created_at, duration, prompt, cost, model')
-            .eq('user_id', currentSession.user.id)
-            .eq('category', 'video')
-            .eq('creation_mode', 'motion')
-            .in('status', ['processing', 'waiting'])
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
+        // Asked of the server: the browser may not read a run's prompt, cost or model.
+        const run = await fetchCreatorActiveRun({ tool: 'motion', accessToken: currentSession.access_token, signal });
 
-        if (!data?.prediction_id || activeGenerationRequestKeyRef.current) return;
-        activeGenerationRequestKeyRef.current = `resume:${data.prediction_id}`;
-        const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
+        if (!run || signal.aborted || activeGenerationRequestKeyRef.current) return;
+        activeGenerationRequestKeyRef.current = `resume:${run.predictionId}`;
+        const startedAtMs = Number.isNaN(Date.parse(run.createdAt)) ? Date.now() : Date.parse(run.createdAt);
         setIsGenerating(true);
         setError(null);
-        setLatestGenerationId(data.id ?? null);
-        setRunPrompt(typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt.trim() : null);
-        setRunLabel(motionModelName(data.model));
-        latestRunCostRef.current = typeof data.cost === 'number' ? data.cost : null;
+        setLatestGenerationId(run.id);
+        setRunPrompt(run.prompt?.trim() || null);
+        setRunLabel(motionModelName(run.model));
+        latestRunCostRef.current = run.cost;
         setRunCost(latestRunCostRef.current);
         setRunAnswered(true);
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'motion',
             phaseLabel: 'Resuming active run',
             startedAtMs,
-            appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+            appStatus: run.status,
         }));
-        if (typeof data.duration === 'number') {
-            setDuration(data.duration);
+        if (run.duration !== null) {
+            // A clip the form already holds keeps the length measured from it.
+            const runSeconds = run.duration;
+            setDuration((measured) => (measured > 0 ? measured : runSeconds));
         }
 
         try {
-            const result = await pollPrediction(data.prediction_id, startedAtMs, null);
+            const result = await pollPrediction(run.predictionId, startedAtMs, null);
             setOutputVideo(result.output);
             if (result.timing) {
                 setGenerationTiming(result.timing);
@@ -1268,7 +1266,13 @@ export default function CreateMotionClient({
             void replayPendingStart(pending);
             return;
         }
-        void resumeNewestMotionRun();
+        // Dropped when the page goes (development's Strict Mode mounts it twice) and at a
+        // press: a run it found then would get a follower nothing stops, or take the page
+        // from the creator's own run.
+        const lookup = new AbortController();
+        activeRunLookupRef.current = lookup;
+        void resumeNewestMotionRun(lookup.signal);
+        return () => lookup.abort();
         // Recovery is intentionally a mount-only lookup; changing form settings must not restart it.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);

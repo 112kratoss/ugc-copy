@@ -119,6 +119,7 @@ import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     announceGenerationStarted,
+    fetchCreatorActiveRun,
     fetchGenerationStatusWithRetry,
     isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
@@ -414,6 +415,8 @@ export default function CreateImageClient({
     const restoredPersistedMediaForUserRef = useRef<string | null>(null);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
+    // The look, as the page opens, for a run already at work.
+    const activeRunLookupRef = useRef<AbortController | null>(null);
     const elementRefs = useRef<ImageElementDraft[]>([]);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
     // Bumped once a run the creator started is under way: the canvas then comes into view.
@@ -1458,6 +1461,11 @@ export default function CreateImageClient({
     };
 
     useEffect(() => {
+        // Dropped when the page goes (development's Strict Mode mounts it twice) and at a
+        // press: a run it found then would get a follower nothing stops, or take the page
+        // from the creator's own run.
+        const lookup = new AbortController();
+        activeRunLookupRef.current = lookup;
         const resumePendingGeneration = async () => {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) return;
@@ -1470,48 +1478,42 @@ export default function CreateImageClient({
                 return;
             }
 
-            const { data, error: pendingError } = await supabase
-                .from('generations')
-                .select('id, prediction_id, status, created_at, prompt, cost, model')
-                .eq('user_id', session.user.id)
-                .eq('category', 'image')
-                .in('status', ['processing', 'waiting'])
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
+            // Asked of the server: the browser may not read a run's prompt, cost or model.
+            const run = await fetchCreatorActiveRun({ tool: 'image', accessToken: session.access_token, signal: lookup.signal });
+            // One run on the page at a time, held as a press holds it.
+            if (!run || lookup.signal.aborted || activeGenerationRequestKeyRef.current) return;
+            activeGenerationRequestKeyRef.current = `resume:${run.predictionId}`;
 
-            if (pendingError || !data?.prediction_id) {
-                return;
-            }
-
-            const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
+            const startedAtMs = Number.isNaN(Date.parse(run.createdAt)) ? Date.now() : Date.parse(run.createdAt);
 
             setIsGenerating(true);
             setError(null);
-            setLatestGenerationId(data.id ?? null);
-            setSubmittedPrompt(typeof data.prompt === 'string' ? data.prompt : '');
-            setRunShape({ aspectRatio: null, label: imageModelName(data.model), cost: typeof data.cost === 'number' ? data.cost : null, answered: true });
+            setLatestGenerationId(run.id);
+            setSubmittedPrompt(run.prompt ?? '');
+            setRunShape({ aspectRatio: null, label: imageModelName(run.model), cost: run.cost, answered: true });
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'image',
                 phaseLabel: 'Resuming active run',
                 startedAtMs,
-                appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+                appStatus: run.status,
             }));
 
             try {
-                await followRun(data.prediction_id, {
+                await followRun(run.predictionId, {
                     startedAtMs,
                     estimatedTotalMs: null,
-                    cost: typeof data.cost === 'number' ? data.cost : null,
-                    generationId: data.id ?? null,
+                    cost: run.cost,
+                    generationId: run.id,
                     followed: false,
                 });
             } finally {
+                activeGenerationRequestKeyRef.current = null;
                 setIsGenerating(false);
             }
         };
 
         void resumePendingGeneration();
+        return () => lookup.abort();
         // Recovery is intentionally a mount-only lookup; changing form settings must not restart it.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -1619,6 +1621,7 @@ export default function CreateImageClient({
 
         const idempotencyKey = createGenerationIdempotencyKey('image');
         activeGenerationRequestKeyRef.current = idempotencyKey;
+        activeRunLookupRef.current?.abort();
         setIsGenerating(true);
         setError(null);
         setRunFailure(null);

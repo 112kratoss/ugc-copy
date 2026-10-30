@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateImageClient from '@/app/create-image/CreateImageClient';
@@ -89,16 +90,6 @@ const authState = vi.hoisted(() => ({
 const getSessionMock = vi.hoisted(() => vi.fn());
 const restoredFile = new File(['image-bytes'], 'restored-element.png', { type: 'image/png' });
 
-const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
-const queryBuilder = {
-  select: vi.fn(() => queryBuilder),
-  eq: vi.fn(() => queryBuilder),
-  in: vi.fn(() => queryBuilder),
-  order: vi.fn(() => queryBuilder),
-  limit: vi.fn(() => queryBuilder),
-  maybeSingle: maybeSingleMock,
-};
-
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
 }));
@@ -169,7 +160,10 @@ vi.mock('@/lib/supabase', () => ({
     auth: {
       getSession: getSessionMock,
     },
-    from: vi.fn(() => queryBuilder),
+    // Production refuses the browser a run's prompt, cost and model (42501): the page asks the API.
+    from: vi.fn((table: string) => {
+      throw new Error(`The page read ${table} from the browser.`);
+    }),
   },
 }));
 
@@ -243,7 +237,6 @@ describe('CreateImageClient persisted elements', () => {
     modelCatalogState.missingIds = [];
     modelCatalogState.error = null;
     modelCatalogState.summaries = [];
-    maybeSingleMock.mockClear();
     URL.createObjectURL = vi.fn(() => 'blob:restored-element') as typeof URL.createObjectURL;
     URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
     window.scrollTo = vi.fn();
@@ -755,11 +748,17 @@ function jsonResponse(status: number, body: unknown) {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
 }
 
-/** Answers the start POSTs in order, and the creation read the publish modal makes. */
-function installFetch({ starts = [], publishDetails = null, remixBundle = null }: {
+/**
+ * Answers the start POSTs in order, the creation read the publish modal makes, and the look
+ * for a run already at work as the page opens (`activeRun`, none by default).
+ */
+function installFetch({ starts = [], publishDetails = null, remixBundle = null, activeRun = null, activeRunAnswer = null }: {
   starts?: StartReply[];
   publishDetails?: unknown;
   remixBundle?: RemixSourceBundle | null;
+  activeRun?: Record<string, unknown> | null;
+  /** Answers the look in place of `activeRun`, when the test resolves it. */
+  activeRunAnswer?: Promise<Response> | null;
 } = {}) {
   const replies = [...starts];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -772,6 +771,7 @@ function installFetch({ starts = [], publishDetails = null, remixBundle = null }
       return jsonResponse(reply.status, reply.body);
     }
     if (url.startsWith('/api/generations?')) return jsonResponse(200, publishDetails ?? { generations: [] });
+    if (url === '/api/generations/active?tool=image') return activeRunAnswer ?? jsonResponse(200, { run: activeRun });
     if (url.startsWith('/api/remix-source?') && remixBundle) return jsonResponse(200, remixBundle);
     throw new Error(`Unexpected fetch: ${url}`);
   });
@@ -781,6 +781,32 @@ function installFetch({ starts = [], publishDetails = null, remixBundle = null }
 
 function startCalls(fetchMock: ReturnType<typeof installFetch>) {
   return fetchMock.mock.calls.filter(([url, init]) => String(url) === '/api/generations' && init?.method === 'POST');
+}
+
+function activeRunReads(fetchMock: ReturnType<typeof installFetch>) {
+  return fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/generations/active'));
+}
+
+/** An answer the test gives when it chooses. */
+function heldAnswer() {
+  let answer: (response: Response) => void = () => undefined;
+  const promise = new Promise<Response>((resolve) => { answer = resolve; });
+  return { promise, answer: (response: Response) => answer(response) };
+}
+
+/** A run of this page's tool at work in another tab, as the API describes it. */
+function runAtWork(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'gen-old',
+    predictionId: 'pred-old',
+    status: 'processing',
+    createdAt: new Date().toISOString(),
+    prompt: 'An earlier run',
+    cost: 8,
+    model: 'nano-banana-2',
+    duration: null,
+    ...overrides,
+  };
 }
 
 function startKey(call: unknown[]) {
@@ -830,7 +856,6 @@ describe('CreateImageClient generation pipeline', () => {
     getPersistedImageElementRecordsMock.mockResolvedValue([]);
     setPersistedImageElementRecordsMock.mockClear();
     removePersistedMediaMock.mockClear();
-    maybeSingleMock.mockClear();
     modelCatalogState.missingIds = [];
     modelCatalogState.error = null;
     modelCatalogState.summaries = [];
@@ -937,7 +962,7 @@ describe('CreateImageClient generation pipeline', () => {
       expect(startKey(startCalls(fetchMock)[0])).toBe('image:kept-key');
       expect(startBody(startCalls(fetchMock)[0])).toEqual({ schemaVersion: 3, ...body });
       expect(await findResult()).toBeInTheDocument();
-      expect(maybeSingleMock).not.toHaveBeenCalled();
+      expect(activeRunReads(fetchMock)).toHaveLength(0);
     });
   });
 
@@ -1289,11 +1314,7 @@ describe('CreateImageClient generation pipeline', () => {
 
     it('stays put when a run is picked up on load, so the page opens at its top', async () => {
       placeCanvas(1500);
-      maybeSingleMock.mockResolvedValueOnce({
-        data: { id: 'gen-old', prediction_id: 'pred-old', status: 'processing', created_at: new Date().toISOString(), prompt: 'An earlier run', cost: 8 },
-        error: null,
-      } as never);
-      installFetch();
+      installFetch({ activeRun: runAtWork({ model: null }) });
       render(<CreateImageClient prefill={{}} />);
 
       // The earlier run was picked up and followed to its end.
@@ -1636,17 +1657,93 @@ describe('CreateImageClient generation pipeline', () => {
     });
 
     it('names a run picked up on load and what it holds, as its failure does', async () => {
-      maybeSingleMock.mockResolvedValueOnce({
-        data: { id: 'gen-old', prediction_id: 'pred-old', status: 'processing', created_at: new Date().toISOString(), prompt: 'An earlier run', cost: 8, model: 'nano-banana-2' },
-        error: null,
-      } as never);
       fetchGenerationStatusWithRetryMock.mockImplementation(() => new Promise(() => undefined));
-      installFetch();
+      const fetchMock = installFetch({ activeRun: runAtWork() });
       render(<CreateImageClient prefill={{}} />);
 
       const canvas = screen.getByRole('region', { name: 'Result' });
       expect(await within(canvas).findByText('8 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
       expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 8 credits$/);
+      // Asked of the API with the session's token, then followed by its prediction.
+      expect(activeRunReads(fetchMock)).toEqual([
+        ['/api/generations/active?tool=image', { headers: { Authorization: 'Bearer test-token' }, signal: expect.any(AbortSignal) }],
+      ]);
+      expect(fetchGenerationStatusWithRetryMock).toHaveBeenCalledWith(expect.objectContaining({ url: '/api/generate-image?id=pred-old' }));
+    });
+
+    // Development mounts the page twice (Strict Mode), and each mount looks. A second follower
+    // aborted the first one's poll, whose ending then set the page idle under the live run.
+    it('follows a run picked up on load once, though the page mounts twice', async () => {
+      fetchGenerationStatusWithRetryMock.mockImplementation(({ signal }: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(Object.assign(new Error('Generation status check cancelled.'), { name: 'AbortError' })));
+      }));
+      const fetchMock = installFetch({ activeRun: runAtWork() });
+      render(<StrictMode><CreateImageClient prefill={{}} /></StrictMode>);
+
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(await within(canvas).findByText('8 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+      await waitFor(() => expect(activeRunReads(fetchMock)).toHaveLength(2));
+      // Both looks answered and every step after them ran.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(fetchGenerationStatusWithRetryMock).toHaveBeenCalledTimes(1);
+      expect(within(canvas).getByText('8 credits are held for this run. If it fails, they come back.')).toBeInTheDocument();
+    });
+
+    // The page's unmount aborts only a poll that exists: a look still out then would start
+    // one nothing stops.
+    it('drops a look that answers after the page has gone', async () => {
+      const look = heldAnswer();
+      const fetchMock = installFetch({ activeRunAnswer: look.promise });
+      const view = render(<CreateImageClient prefill={{}} />);
+      await waitFor(() => expect(activeRunReads(fetchMock)).toHaveLength(1));
+
+      view.unmount();
+      await act(async () => {
+        look.answer(jsonResponse(200, { run: runAtWork() }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(fetchGenerationStatusWithRetryMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps the creator\'s own press, refusal and all, when the look answers after it', async () => {
+      const look = heldAnswer();
+      const fetchMock = installFetch({
+        starts: [{ status: 402, body: { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 8 credits.' } }],
+        activeRunAnswer: look.promise,
+      });
+      render(<CreateImageClient prefill={{}} />);
+      await waitFor(() => expect(activeRunReads(fetchMock)).toHaveLength(1));
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+      expect(await screen.findByText('Insufficient credits. This action costs 8 credits.')).toBeInTheDocument();
+
+      await act(async () => {
+        look.answer(jsonResponse(200, { run: runAtWork() }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(screen.getByText('Insufficient credits. This action costs 8 credits.')).toBeInTheDocument();
+      expect(fetchGenerationStatusWithRetryMock).not.toHaveBeenCalled();
+    });
+
+    // A look that fails says nothing: the run still reaches Studio and its alert.
+    it('opens idle, with nothing held, when the look for a run at work fails', async () => {
+      const fetchMock = installFetch();
+      fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+        if (String(input).startsWith('/api/generations/active')) return jsonResponse(500, { error: 'Could not check for a run in progress.' });
+        throw new Error(`Unexpected fetch: ${String(input)}`);
+      });
+      render(<CreateImageClient prefill={{}} />);
+
+      await waitFor(() => expect(activeRunReads(fetchMock)).toHaveLength(1));
+      const canvas = screen.getByRole('region', { name: 'Result' });
+      expect(within(canvas).queryByText(/credits are held for this run/)).not.toBeInTheDocument();
+      expect(fetchGenerationStatusWithRetryMock).not.toHaveBeenCalled();
     });
 
     // The shell's run toast would only say again what the canvas says, over Publish (2026-10-30):

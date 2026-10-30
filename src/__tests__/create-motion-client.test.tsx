@@ -92,16 +92,6 @@ const deployState = vi.hoisted(() => ({ newBuildAvailable: false, enabled: [] as
 // What the result's player was last given.
 const resultVideoState = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 
-const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
-const queryBuilder = {
-  select: vi.fn(() => queryBuilder),
-  eq: vi.fn(() => queryBuilder),
-  in: vi.fn(() => queryBuilder),
-  order: vi.fn(() => queryBuilder),
-  limit: vi.fn(() => queryBuilder),
-  maybeSingle: maybeSingleMock,
-};
-
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
 }));
@@ -176,7 +166,10 @@ vi.mock('@/lib/supabase', () => ({
         },
       })),
     },
-    from: vi.fn(() => queryBuilder),
+    // Production refuses the browser a run's prompt, cost and model (42501): the page asks the API.
+    from: vi.fn((table: string) => {
+      throw new Error(`The page read ${table} from the browser.`);
+    }),
   },
 }));
 
@@ -208,6 +201,10 @@ type StartAnswer = Response | Error | (() => Response | Promise<Response>);
 let startAnswers: StartAnswer[] = [];
 let generationLookupBody: unknown = { generations: [] };
 let remixSourceBody: unknown = null;
+/** The motion run already at work as the page opens, as the API describes it. */
+let activeRun: Record<string, unknown> | null = null;
+/** Answers the look in place of `activeRun`, when the test resolves it. */
+let activeRunAnswer: Promise<Response> | null = null;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -240,8 +237,15 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   if (url.startsWith('/api/generations?')) {
     return jsonResponse(generationLookupBody);
   }
+  if (url === '/api/generations/active?tool=motion') {
+    return activeRunAnswer ?? jsonResponse({ run: activeRun });
+  }
   throw new Error(`Unexpected fetch ${url}`);
 });
+
+function activeRunReads() {
+  return fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/generations/active'));
+}
 
 function startPosts() {
   return fetchMock.mock.calls.filter(([input, init]) => String(input) === '/api/generations' && init?.method === 'POST');
@@ -331,8 +335,6 @@ beforeEach(() => {
   priceListStandIn.reset();
   for (const model of motionCatalog.models) delete (model as { inputModes?: unknown }).inputModes;
   generationCatalogRefetchMock.mockClear();
-  maybeSingleMock.mockClear();
-  queryBuilder.select.mockClear();
   routerMock.push.mockClear();
   authState.credits = 10_000;
   authState.updateCredits.mockClear();
@@ -355,6 +357,8 @@ beforeEach(() => {
   startAnswers = [];
   generationLookupBody = { generations: [] };
   remixSourceBody = null;
+  activeRun = null;
+  activeRunAnswer = null;
   fetchMock.mockClear();
   vi.stubGlobal('fetch', fetchMock);
   window.sessionStorage.clear();
@@ -606,6 +610,45 @@ describe('CreateMotionClient price of the run it sends', () => {
 
     await waitFor(() => expect(startPosts()).toHaveLength(1));
     expect(startBodies()[0].expectedCostCredits).toBe(20);
+  });
+
+  // A look for a run at work that answers late is dropped: the page has gone, or the
+  // creator pressed Generate and the page is theirs.
+  const motionRunAtWork = () => ({ id: 'gen-motion-1', predictionId: 'pred-motion-1', status: 'processing', createdAt: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: 30, model: 'kling-3.0' });
+
+  it('drops a look that answers after the page has gone', async () => {
+    let answerLook: (response: Response) => void = () => undefined;
+    activeRunAnswer = new Promise<Response>((resolve) => { answerLook = resolve; });
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await waitFor(() => expect(activeRunReads()).toHaveLength(1));
+
+    view.unmount();
+    await act(async () => {
+      answerLook(jsonResponse({ run: motionRunAtWork() }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(statusMocks.fetchGenerationStatusWithRetry).not.toHaveBeenCalled();
+  });
+
+  it('keeps the creator\'s own press, refusal and all, when the look answers after it', async () => {
+    let answerLook: (response: Response) => void = () => undefined;
+    activeRunAnswer = new Promise<Response>((resolve) => { answerLook = resolve; });
+    quoteStandIn.answers = [20, 24];
+    startAnswers = [jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409)];
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await waitFor(() => expect(activeRunReads()).toHaveLength(1));
+    await attachBothInputs(view.container);
+    await pressGenerate();
+    expect(await screen.findByText(COST_CHANGED)).toBeInTheDocument();
+
+    await act(async () => {
+      answerLook(jsonResponse({ run: motionRunAtWork() }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.getByText(COST_CHANGED)).toBeInTheDocument();
+    expect(statusMocks.fetchGenerationStatusWithRetry).not.toHaveBeenCalled();
   });
 
   it('asks for the price again when the server says it changed, and sends the next run at the new price under a new key', async () => {
@@ -903,7 +946,7 @@ describe('CreateMotionClient start', () => {
     // Exactly as saved: a start saved before the price went with runs goes without one.
     expect(startBodies()[0]).toEqual({ schemaVersion: 3, ...pendingStart().body });
     expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
-    expect(queryBuilder.select).not.toHaveBeenCalled();
+    expect(activeRunReads()).toHaveLength(0);
     expect(loadPendingWebStart('motion', 'user-1')).toBeNull();
   });
 
@@ -912,7 +955,9 @@ describe('CreateMotionClient start', () => {
 
     render(<CreateMotionClient prefill={{}} />);
 
-    await waitFor(() => expect(queryBuilder.select).toHaveBeenCalled());
+    await waitFor(() => expect(activeRunReads()).toEqual([
+      ['/api/generations/active?tool=motion', { headers: { Authorization: 'Bearer test-token' }, signal: expect.any(AbortSignal) }],
+    ]));
     expect(startPosts()).toHaveLength(0);
   });
 
@@ -1040,10 +1085,7 @@ describe('CreateMotionClient start', () => {
   });
 
   it('says what a run picked up on load gave back when it fails', async () => {
-    maybeSingleMock.mockResolvedValueOnce({
-      data: { id: 'gen-motion-1', prediction_id: 'pred-motion-1', status: 'processing', created_at: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: 30, model: 'kling-3.0' },
-      error: null,
-    } as never);
+    activeRun = { id: 'gen-motion-1', predictionId: 'pred-motion-1', status: 'processing', createdAt: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: 30, model: 'kling-3.0' };
     statusMocks.fetchGenerationStatusWithRetry.mockResolvedValue({ status: 'failed', error: 'The provider could not render this clip' });
     render(<CreateMotionClient prefill={{}} />);
 
@@ -1300,14 +1342,27 @@ describe('CreateMotionClient on the column', () => {
 
   it('reads "Add motion" while the page holds no clip, though a run picked up on load gave a length', async () => {
     // The newest run, still under way, comes back with its length and without its clip.
-    maybeSingleMock.mockResolvedValueOnce({
-      data: { id: 'gen-motion-1', prediction_id: 'pred-motion-1', status: 'processing', created_at: new Date().toISOString(), duration: 10, prompt: 'Saved prompt' },
-      error: null,
-    } as never);
+    activeRun = { id: 'gen-motion-1', predictionId: 'pred-motion-1', status: 'processing', createdAt: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: null, model: null };
     render(<CreateMotionClient prefill={{}} />);
 
     expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 720P · Add motion');
+  });
+
+  it('keeps the length measured from the clip it holds when a run picked up on load gave another', async () => {
+    let answerLook: (response: Response) => void = () => undefined;
+    activeRunAnswer = new Promise<Response>((resolve) => { answerLook = resolve; });
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await waitFor(() => expect(activeRunReads()).toHaveLength(1));
+    await attachBothInputs(view.container);
+
+    await act(async () => {
+      answerLook(jsonResponse({ run: { id: 'gen-motion-1', predictionId: 'pred-motion-1', status: 'processing', createdAt: new Date().toISOString(), duration: 10, prompt: 'Saved prompt', cost: 30, model: 'kling-3.0' } }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(statusMocks.fetchGenerationStatusWithRetry).toHaveBeenCalled();
+    expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
   });
 
   it('keeps the prompt the run was sent with under its clip while the next one is written', async () => {

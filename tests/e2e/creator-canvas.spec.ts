@@ -6,7 +6,9 @@ import { expect, test, type BrowserContext, type Page, type Route } from '@playw
  * - a run at work names its settings and the credits it holds, promises the alert a
  *   finished run sends, and says the page can be left;
  * - a failed run names its cause, says the credits are back, and offers the same run again;
- * - a finished run says Done, and the focus moves there (the build notes).
+ * - a finished run says Done, and the focus moves there (the build notes);
+ * - a run already at work when any creator opens (a reload, another tab or device) is picked
+ *   up and followed there.
  *
  * The E2E account holds 25 credits. Offline nothing can be priced or started, so the quotes,
  * the start and the run's status are answered here; the client signs in with a made-up
@@ -71,7 +73,14 @@ async function signIn(context: BrowserContext) {
       const single = (route.request().headers().accept ?? '').includes('vnd.pgrst.object');
       return route.fulfill({ json: single ? row : [row] });
     }
-    // The page's look for a run already under way on load: none.
+    // As production answers it: `authenticated` may not read a run's prompt, cost or model, and
+    // the creators' own look for a run at work was refused this way until 2026-10-31.
+    if (pathname === '/rest/v1/generations') {
+      return route.fulfill({
+        status: 403,
+        json: { code: '42501', details: null, hint: null, message: 'permission denied for table generations' },
+      });
+    }
     if (pathname.startsWith('/rest/v1/')) {
       const single = (route.request().headers().accept ?? '').includes('vnd.pgrst.object');
       return route.fulfill(single ? { status: 406, json: {} } : { json: [] });
@@ -223,3 +232,57 @@ test('a failed run is said in the bar on a phone, and See why brings the canvas 
   await expect(heading).toBeFocused();
   await expect(heading).toBeInViewport();
 });
+
+// A run started before a reload, in another tab or on another device. The browser may not read
+// it from the table (above), so each creator asks the API as it opens, then follows the run.
+const RUNS_AT_WORK = [
+  { tool: 'image', path: '/create-image', status: '**/api/generate-image?id=**', making: 'Making your image', model: 'nano-banana-2', name: 'Nano Banana 2.0', cost: 8 },
+  { tool: 'video', path: '/create-video', status: '**/api/generate-video?id=**', making: 'Making your video', model: 'seedance-2-mini', name: 'Seedance 2 Mini', cost: 19 },
+  { tool: 'motion', path: '/create-motion', status: '**/api/generate?id=**', making: 'Animating your character', model: 'kling-3.0', name: 'Kling 3.0', cost: 30 },
+] as const;
+
+for (const run of RUNS_AT_WORK) {
+  test(`a ${run.tool} run already at work when the page opens is picked up, with what it holds`, async ({ page, context }) => {
+    await signIn(context);
+    await answerApi(page, answer({ status: 'processing', timing: null }));
+    const looks: string[] = [];
+    await page.route('**/api/generations/active?**', (route) => {
+      looks.push(new URL(route.request().url()).search);
+      return route.fulfill({
+        json: {
+          run: {
+            id: 'gen-earlier',
+            predictionId: 'pred-earlier',
+            status: 'processing',
+            createdAt: new Date(Date.now() - 30_000).toISOString(),
+            prompt: 'A lantern-lit street in the rain',
+            cost: run.cost,
+            model: run.model,
+            duration: run.tool === 'motion' ? 8 : null,
+          },
+        },
+      });
+    });
+    const checks: string[] = [];
+    await page.route(run.status, (route) => {
+      checks.push(new URL(route.request().url()).search);
+      return route.fulfill({ json: { status: 'processing', timing: null } });
+    });
+
+    // A route's first compile spends the timeout of whatever waits on it (.claude/rules/e2e.md).
+    await page.request.get(run.path, { timeout: 0 });
+    await page.goto(run.path, COLD_PAGE);
+
+    await expect(canvas(page).getByRole('heading', { name: run.making })).toBeVisible(COLD_PAGE);
+    await expect(canvas(page)).toContainText(`${run.cost} credits are held for this run. If it fails, they come back.`);
+    await expect(canvas(page).getByTestId('creator-canvas-chip')).toContainText(run.name);
+    await expect.poll(() => checks[0]).toBe('?id=pred-earlier');
+    // One follower, though development mounts the page twice (Strict Mode): a run at work is
+    // checked again only some 15 s later, so a second check now would be a second follower's.
+    await page.waitForTimeout(3_000);
+    expect(checks).toHaveLength(1);
+    expect(looks.length).toBeGreaterThan(0);
+    expect([...new Set(looks)]).toEqual([`?tool=${run.tool}`]);
+    await expect(canvas(page).getByRole('heading', { name: run.making })).toBeVisible();
+  });
+}
