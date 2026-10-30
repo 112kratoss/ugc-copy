@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultCreationDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
+import { createDefaultCreationDraft, type MediaDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
 import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '../lib/remix-draft-recovery';
 import type { RemixSourceBundle } from '../lib/types';
 const reference = { id: 'girl', kind: 'image' as const, url: 'https://example.com/girl.jpg', fileName: 'girl.jpg', displayName: 'Girl', handle: '@girl' };
@@ -92,6 +92,69 @@ describe('saved remix references whose links have run out', () => {
     const restored: MotionCreationDraft = { ...current, prompt: 'Source prompt', characterImage: { ...current.characterImage!, id: 'hero-2', url: freshHero } };
 
     expect(recoverRemixReferences(current, restored)).toEqual({ ...current, characterImage: { ...current.characterImage!, url: freshHero } });
+  });
+});
+
+// Until 2026-10-30 a restore gave every clip no handle, though a Kling 3.0 run keeps the one its
+// prompt mentions each clip by, and the session was saved so: resumed as saved while its links were
+// good, given only fresh links once they ran out, and held for good on "Unknown element mentions".
+describe('saved remix clips without the handles their words mention', () => {
+  const clip = (place: number, handle?: string): MediaDraft => ({
+    id: `video-${place}`,
+    kind: 'video',
+    url: `https://cdn.example.com/clip-${place}.mp4`,
+    storagePath: `generation_inputs/owner/source-generation/0${place}-reference_video.mp4`,
+    fileName: `0${place}-reference_video.mp4`,
+    displayName: 'Reference Video',
+    ...(handle ? { handle } : {}),
+  });
+  const kling = (overrides: Partial<VideoCreationDraft> = {}) => draft({
+    model: 'kling-3.0-video',
+    prompt: 'Open on @reference_video_2, then @reference_video_3',
+    ...overrides,
+  });
+  const keptHandles = () => kling({ referenceVideos: [clip(2, '@reference_video_2'), clip(3, '@reference_video_3')] });
+
+  it('reads the source again while a clip has no handle and the words mention one nothing answers to', () => {
+    expect(needsRemixReferenceRecovery(kling({ referenceVideos: [clip(2), clip(3)] }))).toBe(true);
+    // A story's shots are words too.
+    expect(needsRemixReferenceRecovery(kling({
+      prompt: '',
+      isMultiShot: true,
+      multiPrompts: [{ id: 'shot-1', prompt: '@reference_video_3 jumps', duration: 5 }],
+      referenceVideos: [clip(3)],
+    }))).toBe(true);
+    // Not once the clips answer to the mentions, nor while the words mention nothing unknown.
+    expect(needsRemixReferenceRecovery(keptHandles())).toBe(false);
+    expect(needsRemixReferenceRecovery(kling({ prompt: 'Two moves', referenceVideos: [clip(2), clip(3)] }))).toBe(false);
+  });
+
+  it('gives each clip back the handle its source kept, keeping every other edit', () => {
+    const saved = kling({ aspectRatio: '9:16', referenceVideos: [clip(2), clip(3)] });
+
+    const recovered = recoverRemixReferences(saved, { ...keptHandles(), aspectRatio: '16:9' });
+
+    expect(recovered).toEqual({ ...saved, referenceVideos: [clip(2, '@reference_video_2'), clip(3, '@reference_video_3')] });
+    expect(needsRemixReferenceRecovery(recovered)).toBe(false);
+  });
+
+  it('keeps the handle a creator gave a clip, and gives none that another clip already answers to', () => {
+    // The first clip renamed while saved, and a clip uploaded since under @reference_video_3.
+    const upload = { ...clip(9, '@reference_video_3'), storagePath: 'uploads/user/clip-9.mp4' };
+    const saved = kling({ referenceVideos: [clip(2, '@spin'), clip(3), upload] });
+
+    expect((recoverRemixReferences(saved, keptHandles()) as VideoCreationDraft).referenceVideos.map((item) => item.handle))
+      .toEqual(['@spin', undefined, '@reference_video_3']);
+  });
+
+  it('brings back no pictures the creator replaced while it repairs the clips', () => {
+    const mine = { ...reference, id: 'mine', handle: '@mine' };
+    const saved = kling({ prompt: 'Open on @reference_video_2 with @mine and @girl', references: [mine], referenceVideos: [clip(2)] });
+
+    const recovered = recoverRemixReferences(saved, { ...keptHandles(), references: [reference] }) as VideoCreationDraft;
+
+    expect(recovered.references).toEqual([mine]);
+    expect(recovered.referenceVideos).toEqual([clip(2, '@reference_video_2')]);
   });
 });
 

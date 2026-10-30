@@ -1054,6 +1054,18 @@ describe('extractPromptHandles', () => {
     expect(server).toBeDefined();
     expect(patternIn(join(repoRoot, 'lib/media-creation-view-model.ts'))).toBe(server);
   });
+
+  // A remix hands a clip the handle its run kept only when the server's rule takes it
+  // (isValidElementHandle), and the app keeps it by its own copy of that rule. A copy that
+  // drifts drops a handle the prompt mentions, and the run is held again.
+  it('keeps a handed handle by the rule the server hands one by', () => {
+    const ruleIn = (file: string, name: string) => readFileSync(file, 'utf8')
+      .match(new RegExp(`function ${name}\\([^)]*\\)[^{]*\\{[^}]*?(\\/\\^@[^/\\n]+\\/)`))?.[1];
+    const server = ruleIn(join(repoRoot, '..', 'src/lib/image-elements.ts'), 'isValidElementHandle');
+
+    expect(server).toBe('/^@[a-z0-9_]+$/');
+    expect(ruleIn(join(repoRoot, 'lib/media-creation-view-model.ts'), 'mentionableHandle')).toBe(server);
+  });
 });
 
 // Android's system photo picker names a picture by its media id ("1000333161.jpg"), so a reference

@@ -511,7 +511,7 @@ export function catalogRunEnhancementInputs(
     return asset ? { url: asset.url ?? null } : null;
   };
   const elementReferences = new Map<string, string>();
-  for (const asset of sent((slot) => slot.role === 'reference')) {
+  for (const asset of sent(namesReferences)) {
     if (asset.handle && !elementReferences.has(asset.handle)) {
       elementReferences.set(asset.handle, asset.displayName ?? asset.handle.slice(1));
     }
@@ -650,11 +650,22 @@ export function getCatalogCreationSectionSummary(draft: CreationDraft, model: Ge
 }
 
 /**
+ * Whether a reference slot's inputs answer to the handles a prompt mentions: pictures wherever
+ * they go, clips only where the slot names them (Kling 3.0's video elements). The server takes no
+ * other clip under a handle (`videoElementInputs` in src/lib/unified-generation-start-service.ts),
+ * and a clip kept from a Kling 3.0 run holds one wherever the draft moves.
+ */
+function namesReferences(slot: CatalogInputSlot): boolean {
+  return slot.role === 'reference' && (slot.kind !== 'video' || Boolean(slot.supportsNaming));
+}
+
+/**
  * The @handles a run's prompt and shots may name: those of the references in the slots
- * the run fills, as the server lets a prompt name only what it is sent. A reference kept
- * from another model, which this one has no slot for, is not one the provider would be
- * given. One past its slot's max still counts here: that excess already blocks the run
- * with its own message, and removing either reference settles which one the prompt meant.
+ * the run fills that name them (`namesReferences`), as the server lets a prompt name only
+ * what it is sent under a handle. A reference kept from another model, which this one has
+ * no slot for, is not one the provider would be given. One past its slot's max still counts
+ * here: that excess already blocks the run with its own message, and removing either
+ * reference settles which one the prompt meant.
  */
 export function catalogDraftRunHandles(draft: CreationDraft, model: GenerationModelDescriptor): string[] {
   if (draft.tool === 'motion') return [];
@@ -672,7 +683,7 @@ export function catalogDraftRunHandles(draft: CreationDraft, model: GenerationMo
   }
   const runDraft = catalogRunDraft(draft, model);
   return Array.from(new Set(heldCatalogDraftInputSlots(runDraft, model, catalogRunSettings(runDraft, model))
-    .filter(({ slot }) => slot.role === 'reference')
+    .filter(({ slot }) => namesReferences(slot))
     .flatMap(({ assets }) => assets)
     .map((asset) => asset.handle)
     .filter((handle): handle is string => Boolean(handle))));

@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
+import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
 import {
+  applyCatalogModelDefaults,
   buildUnifiedCatalogGenerationRequest,
+  catalogDraftRunHandles,
   hydrateCatalogCreationDraftFromRemixSource,
   validateCatalogCreationDraft,
 } from '../lib/generation-model-draft';
 import {
   createDefaultCreationDraft,
+  renameMediaDraft,
   type VideoCreationDraft,
 } from '../lib/media-creation-view-model';
-import type { RemixResolvedImageElement, RemixSourceBundle } from '../lib/types';
-import { catalogV2, remoteVideoModel } from './generation-model-catalog-v2-fixtures';
+import type { RemixResolvedAsset, RemixResolvedImageElement, RemixSourceBundle } from '../lib/types';
+import liveCatalog from './fixtures/live-catalog-descriptors.json';
+import { catalogV2, klingVideoModel, remoteVideoModel } from './generation-model-catalog-v2-fixtures';
 
 function namedReference(handle: string, index: number): RemixResolvedImageElement {
   const name = handle.slice(1);
@@ -175,5 +180,90 @@ describe('catalog remix restore of reusable video references', () => {
     // A source that kept the clip before lengths were recorded still says so.
     expect(validateCatalogCreationDraft(restore([clip]), model).errors)
       .toEqual(['Reference videos requires duration metadata.']);
+  });
+});
+
+/** A clip a Kling 3.0 run kept, as the server hands it: its handle, and no length. The app names every clip it uploads "Reference Video". */
+function keptKlingClip(place: number, handle?: string): RemixResolvedAsset {
+  return {
+    kind: 'video',
+    label: 'Reference Video',
+    storagePath: `generation_inputs/owner/source-generation/0${place}-reference_video.mp4`,
+    sourceGenerationId: null,
+    url: `https://cdn.example.com/clip-${place}.mp4`,
+    handle,
+  };
+}
+
+function klingClipsRemix(referenceVideos: RemixResolvedAsset[], prompt: string): RemixSourceBundle {
+  return {
+    generation: { id: 'source-generation', title: 'Two moves', prompt, category: 'video', model: 'kling-3.0-video' },
+    result: null,
+    inputs: {
+      video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos, referenceAudios: [] },
+    },
+    workflowSettings: { model: 'kling-3.0-video', referenceMode: 'frames', duration: 5 },
+    restoreIssues: [],
+  };
+}
+
+describe('catalog remix restore of Kling 3.0 clips', () => {
+  const twoKeptClips = () => klingClipsRemix(
+    [keptKlingClip(2, '@reference_video_2'), keptKlingClip(3, '@reference_video_3')],
+    'Open on @reference_video_2, then cut to @reference_video_3',
+  );
+
+  // Uploaded as @reference_video, @reference_video_2 and @reference_video_3, the first taken away
+  // before the run: the run kept two clips, both named "Reference Video", under the handles its
+  // prompt mentions. Restored without them, the app held the run ("Unknown element mentions:
+  // @reference_video_2, @reference_video_3") and would have sent both clips with no handle.
+  it('restores each clip under the handle its run kept, so the prompt still names them', () => {
+    const catalog = catalogV2([klingVideoModel()]);
+    const model = catalog.models[0];
+
+    const restored = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('video'), twoKeptClips(), catalog);
+    const draft = restored.draft as VideoCreationDraft;
+
+    expect(restored.warning).toBeNull();
+    expect(draft.referenceVideos.map((clip) => clip.handle)).toEqual(['@reference_video_2', '@reference_video_3']);
+    expect(validateCatalogCreationDraft(draft, model).errors).toEqual([]);
+    expect(buildUnifiedCatalogGenerationRequest(draft, model, catalog.revision).inputs).toEqual([
+      expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_2', url: 'https://cdn.example.com/clip-2.mp4' }),
+      expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_3', url: 'https://cdn.example.com/clip-3.mp4' }),
+    ]);
+    // Renamed later, a restored clip answers to its new name, as one the creator uploaded does.
+    expect(renameMediaDraft(draft.referenceVideos[1], 'Jump').handle).toBe('@jump');
+  });
+
+  // The server hands a clip's handle only when it is one a prompt can mention (toRemixAssetDescriptor),
+  // so none of these arrives today: this holds the app to its own check of what it is handed. A clip
+  // handed none, as a row kept before handles were, still comes back without one.
+  it('keeps no handed handle a prompt could not mention', () => {
+    const catalog = catalogV2([klingVideoModel()]);
+
+    const restored = hydrateCatalogCreationDraftFromRemixSource(
+      createDefaultCreationDraft('video'),
+      klingClipsRemix([keptKlingClip(1, '@Reference Video'), keptKlingClip(2, ''), keptKlingClip(3)], 'Three moves'),
+      catalog,
+    );
+
+    expect((restored.draft as VideoCreationDraft).referenceVideos.map((clip) => clip.handle))
+      .toEqual([undefined, undefined, undefined]);
+  });
+
+  // Only Kling 3.0 takes a clip under a handle (the server's videoElementInputs); Wan 2.7's slot names
+  // none. A remix moved there kept its clips' handles, and the app took the prompt's mentions of them
+  // for ones the run could send, which the server then refused.
+  it('reads a mention of a clip as naming nothing on a model whose clips take no handle', () => {
+    const catalog = catalogV2([klingVideoModel()]);
+    const wan27 = parseModelCatalogDetail(liveCatalog.models.find((entry) => entry.id === 'wan-2.7'));
+    const restored = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('video'), twoKeptClips(), catalog).draft;
+
+    const onWan = applyCatalogModelDefaults(restored, wan27) as VideoCreationDraft;
+
+    expect(onWan.referenceVideos.map((clip) => clip.handle)).toEqual(['@reference_video_2', '@reference_video_3']);
+    expect(catalogDraftRunHandles(onWan, wan27)).toEqual([]);
+    expect(validateCatalogCreationDraft(onWan, wan27).errors)
+      .toContain('Unknown element mentions: @reference_video_2, @reference_video_3');
   });
 });

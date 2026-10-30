@@ -5697,6 +5697,107 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         ]));
       });
 
+      // A run whose creator took the first of three clips away kept two, both named "Reference Video",
+      // under the handles its prompt mentions. A remix restored them without, and the run was held:
+      // "Unknown element mentions: @reference_video_2, @reference_video_3".
+      const clipsRemix = { generationId: 'gen-clips', postId: 'post-clips' };
+      const clipsPrompt = 'Open on @reference_video_2, then @reference_video_3';
+      const clipPath = (place: number) => `generation_inputs/owner/gen-clips/0${place}-reference_video.mp4`;
+      const clipsSource = () => ({
+        generation: { id: 'gen-clips', title: 'Two moves', prompt: clipsPrompt, category: 'video', model: 'kling-3.0-video' },
+        result: null,
+        inputs: {
+          video: {
+            referenceMode: 'frames',
+            startFrame: null,
+            endFrame: null,
+            elements: [],
+            // As the server hands kept Kling clips: a handle, and no length.
+            referenceVideos: [2, 3].map((place) => ({
+              kind: 'video',
+              label: 'Reference Video',
+              handle: `@reference_video_${place}`,
+              url: `https://cdn.example.com/clip-${place}.mp4`,
+              storagePath: clipPath(place),
+              sourceGenerationId: null,
+            })),
+            referenceAudios: [],
+          },
+        },
+        workflowSettings: { model: 'kling-3.0-video', referenceMode: 'frames', duration: 5 },
+        restoreIssues: [],
+      });
+      const sentClips = () => (authState.api.startGeneration.mock.calls[0][0] as { prompt: string; inputs: Array<Record<string, unknown>> });
+
+      it('restores a remix’s clips under the handles its prompt names, and renames a mention with its clip', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        authState.api.getRemixSourceBundle.mockResolvedValue(clipsSource());
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" remixSource={clipsRemix} />);
+        await settle();
+        expect(text(tree)).not.toContain('Unknown element mention');
+
+        const clipTiles = pressables(tree.root).filter((node) => node.props.accessibilityLabel === 'Open details for Reference Video');
+        expect(clipTiles).toHaveLength(2);
+        renderer.act(() => { clipTiles[1].props.onPress(); });
+        renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Reference name for Reference Video' }).props.onChangeText('Jump'); });
+        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
+        await settle();
+
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+        expect(sentClips().prompt).toBe('Open on @reference_video_2, then @jump');
+        expect(sentClips().inputs).toEqual([
+          expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_2', url: 'https://cdn.example.com/clip-2.mp4' }),
+          expect.objectContaining({ slot: 'videoElements', handle: '@jump', label: 'Jump', url: 'https://cdn.example.com/clip-3.mp4' }),
+        ]);
+      });
+
+      // A session an earlier build saved so came back as saved, its links still good, and stayed held.
+      it('reads the source again for a saved remix whose clips lost the handles its prompt names', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(creationDraftStorageKey(remixDraftScope('user-123', clipsRemix)!), JSON.stringify({
+          image: createDefaultCreationDraft('image'),
+          video: {
+            ...createDefaultCreationDraft('video'),
+            model: 'kling-3.0-video',
+            catalogRevision: 'parity-rev',
+            prompt: clipsPrompt,
+            aspectRatio: '9:16',
+            referenceVideos: [2, 3].map((place) => ({
+              id: `video-saved-${place}`,
+              kind: 'video',
+              url: `https://cdn.example.com/clip-${place}.mp4`,
+              storagePath: clipPath(place),
+              mimeType: 'video/mp4',
+              fileName: `0${place}-reference_video.mp4`,
+              displayName: 'Reference Video',
+              durationSeconds: null,
+              sizeBytes: null,
+              sourceGenerationId: null,
+            })),
+          },
+          motion: createDefaultCreationDraft('motion'),
+          updatedAt: new Date().toISOString(),
+          remixRestored: true,
+          remixEditedKeys: { video: ['aspectRatio'] },
+        }));
+        authState.api.getRemixSourceBundle.mockResolvedValue(clipsSource());
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" remixSource={clipsRemix} />);
+        await settle();
+
+        expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+        expect(text(tree)).not.toContain('Unknown element mention');
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+        expect(sentClips()).toMatchObject({ prompt: clipsPrompt, settings: expect.objectContaining({ aspectRatio: '9:16' }) });
+        expect(sentClips().inputs).toEqual([
+          expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_2', url: 'https://cdn.example.com/clip-2.mp4' }),
+          expect.objectContaining({ slot: 'videoElements', handle: '@reference_video_3', url: 'https://cdn.example.com/clip-3.mp4' }),
+        ]);
+      });
+
       it('keeps clips from Seedance 2 waiting on Seedance 1.5 Pro, without locking its frames or offering them to mention', async () => {
         const seedanceOneFive: GenerationModelDescriptor = {
           ...paritySeedanceVideo(),

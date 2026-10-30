@@ -1,4 +1,4 @@
-import { extractPromptHandles, videoSubjects, type CreationDraft, type MediaDraft, type SubjectDraft } from './media-creation-view-model';
+import { extractPromptHandles, videoDraftHandles, videoSubjects, type CreationDraft, type MediaDraft, type SubjectDraft, type VideoCreationDraft } from './media-creation-view-model';
 import type { SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 import { signedStorageUrlExpiresAt } from './media-url-expiry';
 import type { RemixSourceBundle } from './types';
@@ -97,28 +97,54 @@ function hasExpiredLink(draft: CreationDraft, { now, storageBaseUrl }: Reference
  * those last an hour (audit A6). Given a clock, a link that has run out needs
  * the source too: reading it again is the only way to a fresh link for media
  * someone else owns.
+ *
+ * So does a video draft holding a clip without a handle while its words mention
+ * one that nothing it holds answers to: until 2026-10-30 a restore gave every
+ * clip none, though a Kling 3.0 run keeps the handle its prompt mentions each
+ * clip by, and such a session was resumed as saved, held for good.
  */
 export function needsRemixReferenceRecovery(draft: CreationDraft, clock?: ReferenceLinkClock): boolean {
   if (clock && hasExpiredLink(draft, clock)) return true;
+  if (draft.tool === 'video' && missesClipHandles(draft)) return true;
+  return missesReferences(draft);
+}
+
+/** A saved restore whose rail came back empty while its prompt still mentions what was on it. */
+function missesReferences(draft: CreationDraft): boolean {
   if (draft.tool === 'motion' || draft.references.length > 0) return false;
   if (draft.tool === 'video' && (draft.startFrame || draft.endFrame || draft.referenceVideos.length > 0 || videoSubjects(draft).length > 0)) return false;
   return extractPromptHandles(draft.prompt).length > 0;
+}
+
+/** A clip without a handle, beside words (the prompt or a shot) that mention one nothing in the draft answers to. */
+function missesClipHandles(draft: VideoCreationDraft): boolean {
+  if (!draft.referenceVideos.some((clip) => !clip.handle)) return false;
+  const held = new Set(videoDraftHandles(draft));
+  return [draft.prompt, ...draft.multiPrompts.map((shot) => shot.prompt)]
+    .some((words) => extractPromptHandles(words).some((handle) => !held.has(handle)));
 }
 
 /**
  * Repair a saved remix from its authorized source. The saved prompt and
  * settings stay, and so does every edit made since, removals included.
  *
- * Media still in the draft take the source's fresh link and nothing else.
+ * Media still in the draft take the source's fresh link and nothing else, but
+ * for a clip saved without the handle its source kept: it takes that handle
+ * back, unless something else in the draft answers to it by now.
  * Missing images come back only while the prompt still mentions them.
  */
 export function recoverRemixReferences(current: CreationDraft, restored: CreationDraft): CreationDraft {
   const sourceMedia = heldDraftMedia(restored);
+  const taken = new Set(heldDraftMedia(current).flatMap((media) => (media.handle ? [media.handle] : [])));
   const renewed = mapDraftMedia(current, (media) => {
     const match = sourceMedia.find((candidate) => isSameMedia(media, candidate));
-    return match?.url && match.url !== media.url ? { ...media, url: match.url } : media;
+    const url = match?.url && match.url !== media.url ? match.url : media.url;
+    const keptHandle = media.kind === 'video' && !media.handle && match?.handle && !taken.has(match.handle) ? match.handle : null;
+    if (keptHandle) taken.add(keptHandle);
+    if (url === media.url && !keptHandle) return media;
+    return keptHandle ? { ...media, url, handle: keptHandle } : { ...media, url };
   });
-  if (!needsRemixReferenceRecovery(renewed) || renewed.tool === 'motion' || restored.tool === 'motion'
+  if (!missesReferences(renewed) || renewed.tool === 'motion' || restored.tool === 'motion'
     || renewed.tool !== restored.tool || renewed.model !== restored.model) return renewed;
   const handles = new Set(extractPromptHandles(renewed.prompt));
   const references = restored.references.filter(reference => reference.handle && handles.has(reference.handle));
