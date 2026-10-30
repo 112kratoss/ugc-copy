@@ -277,9 +277,7 @@ export async function isOwnOrLinkedAccountId(
   userId: string,
   ownerUserId: string | null | undefined,
 ): Promise<boolean> {
-  if (!ownerUserId) return false;
-  if (ownerUserId === userId) return true;
-  return (await resolveLinkedAccountIds(admin, userId)).includes(ownerUserId);
+  return (await readIsOwnOrLinkedAccountId(admin, userId, ownerUserId)) ?? false;
 }
 
 /**

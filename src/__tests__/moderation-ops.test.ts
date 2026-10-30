@@ -47,9 +47,16 @@ describe('moderation operations', () => {
       POST_ID,
       generationId,
     )).toBe(`showcase/${generationId}/output.webp`);
+    // A creation marked NSFW keeps its copy in the private bucket.
+    expect(getCanonicalOwnedModerationMediaPath(
+      `private-posts/${generationId}/output.webp`,
+      POST_ID,
+      generationId,
+    )).toBe(`private-posts/${generationId}/output.webp`);
 
     for (const storagePath of [
       'posts/another-post/private.webp',
+      'private-posts/80000000-0000-4000-8000-000000000009/another-generation.webp',
       'posts/20000000-0000-4000-8000-000000000002/../another-post/private.webp',
       `posts/${POST_ID}/%252fanother-post/private.webp`,
       `posts/${POST_ID}/%255canother-post/private.webp`,
@@ -351,7 +358,12 @@ describe('moderation operations', () => {
         output_url: null,
       });
       if (table === 'post_media') return queryResult([]);
-      if (table === 'generations') return queryResult(null);
+      // Someone else's creation, and no link from its owner to the post's.
+      if (table === 'generations') return queryResult({
+        id: foreignGenerationId,
+        user_id: '70000000-0000-4000-8000-000000000009',
+      });
+      if (table === 'profiles') return queryResult(null);
       throw new Error(`Unexpected table ${table}`);
     });
     const remove = vi.fn();
@@ -365,31 +377,44 @@ describe('moderation operations', () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
-  describe('a creation the post owner made as a guest', () => {
-    // Publish files a creation made as a guest under the account the guest was
-    // linked to; the generation keeps the guest's id.
-    const ACCOUNT_ID = '70000000-0000-4000-8000-000000000007';
+  describe('a creation post', () => {
+    const OWNER_ID = '70000000-0000-4000-8000-000000000007';
     const GUEST_ID = '70000000-0000-4000-8000-00000000000b';
     const GENERATION_ID = '80000000-0000-4000-8000-00000000000a';
-    const SHOWCASE_PATH = `showcase/${GENERATION_ID}/output.webp`;
+    const SHOWCASE_PATH = `showcase/${GENERATION_ID}/output.abc123.webp`;
 
-    function takenDownClient(profiles: Array<Record<string, unknown>>, options: { profilesError?: boolean } = {}) {
+    // As publish writes it: the public copy in `showcase_asset_path`, and the
+    // creation's private original, in the folder of whoever made it, as
+    // `output_url`.
+    function takenDownClient({
+      generationOwnerId = OWNER_ID,
+      showcasePath = SHOWCASE_PATH,
+      outputUrl = `generated_images/${generationOwnerId}/generated_abc.png`,
+      profiles = [],
+      profilesError = false,
+    }: {
+      generationOwnerId?: string;
+      showcasePath?: string;
+      outputUrl?: string;
+      profiles?: Array<Record<string, unknown>>;
+      profilesError?: boolean;
+    } = {}) {
       const stored = createStoredRows({
         posts: [{
           id: POST_ID,
-          user_id: ACCOUNT_ID,
+          user_id: OWNER_ID,
           generation_id: GENERATION_ID,
-          showcase_asset_path: SHOWCASE_PATH,
-          output_url: null,
+          showcase_asset_path: showcasePath,
+          output_url: outputUrl,
         }],
         post_media: [],
-        generations: [{ id: GENERATION_ID, user_id: GUEST_ID }],
+        generations: [{ id: GENERATION_ID, user_id: generationOwnerId }],
         profiles,
       });
       const remove = vi.fn(async () => ({ data: [], error: null }));
       const exists = vi.fn(async () => ({ data: false, error: { status: 404 } }));
       const client = {
-        from: (table: string) => (table === 'profiles' && options.profilesError
+        from: (table: string) => (table === 'profiles' && profilesError
           ? queryResult(null, { message: 'profiles unavailable' })
           : stored.client.from(table)),
         storage: { from: vi.fn(() => ({ remove, exists })) },
@@ -397,8 +422,8 @@ describe('moderation operations', () => {
       return { client, remove };
     }
 
-    it('revokes its public copy', async () => {
-      const { client, remove } = takenDownClient([{ id: GUEST_ID, merged_into_user_id: ACCOUNT_ID }]);
+    it('revokes its public copy and leaves its private original where it is', async () => {
+      const { client, remove } = takenDownClient();
 
       await expect(revokePostPublicMedia(client, POST_ID)).resolves.toMatchObject({
         revokedMediaCount: 1,
@@ -407,22 +432,57 @@ describe('moderation operations', () => {
       expect(remove).toHaveBeenCalledWith([SHOWCASE_PATH]);
     });
 
-    it('still refuses the copy of a guest linked to another account', async () => {
-      const { client, remove } = takenDownClient([
-        { id: GUEST_ID, merged_into_user_id: '70000000-0000-4000-8000-00000000000c' },
-      ]);
+    it('revokes the private-bucket copy of a creation marked NSFW', async () => {
+      const privateCopy = `private-posts/${GENERATION_ID}/output.abc123.webp`;
+      const { client, remove } = takenDownClient({ showcasePath: privateCopy });
+
+      await expect(revokePostPublicMedia(client, POST_ID)).resolves.toMatchObject({ revokedMediaCount: 1 });
+      expect(remove).toHaveBeenCalledWith([privateCopy]);
+    });
+
+    it('still refuses an output that is not in the folder of whoever made the creation', async () => {
+      const { client, remove } = takenDownClient({
+        outputUrl: 'generated_images/70000000-0000-4000-8000-000000000009/generated_abc.png',
+      });
 
       await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow('outside the reported post scope');
       expect(remove).not.toHaveBeenCalled();
     });
 
-    it('fails as a read failure, not a scope refusal, when the link cannot be read', async () => {
-      const { client, remove } = takenDownClient([], { profilesError: true });
+    // Publish files a creation made as a guest under the account the guest was
+    // linked to; the generation keeps the guest's id.
+    describe('made as a guest', () => {
+      it('revokes its public copy', async () => {
+        const { client, remove } = takenDownClient({
+          generationOwnerId: GUEST_ID,
+          profiles: [{ id: GUEST_ID, merged_into_user_id: OWNER_ID }],
+        });
 
-      await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow(
-        'Failed to verify taken-down generation ownership: profiles unavailable',
-      );
-      expect(remove).not.toHaveBeenCalled();
+        await expect(revokePostPublicMedia(client, POST_ID)).resolves.toMatchObject({
+          revokedMediaCount: 1,
+          mediaRevocationVerified: true,
+        });
+        expect(remove).toHaveBeenCalledWith([SHOWCASE_PATH]);
+      });
+
+      it('still refuses the copy of a guest linked to another account', async () => {
+        const { client, remove } = takenDownClient({
+          generationOwnerId: GUEST_ID,
+          profiles: [{ id: GUEST_ID, merged_into_user_id: '70000000-0000-4000-8000-00000000000c' }],
+        });
+
+        await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow('outside the reported post scope');
+        expect(remove).not.toHaveBeenCalled();
+      });
+
+      it('fails as a read failure, not a scope refusal, when the link cannot be read', async () => {
+        const { client, remove } = takenDownClient({ generationOwnerId: GUEST_ID, profilesError: true });
+
+        await expect(revokePostPublicMedia(client, POST_ID)).rejects.toThrow(
+          'Failed to verify taken-down generation ownership: profiles unavailable',
+        );
+        expect(remove).not.toHaveBeenCalled();
+      });
     });
   });
 

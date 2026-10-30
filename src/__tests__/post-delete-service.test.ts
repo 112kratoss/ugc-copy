@@ -67,11 +67,15 @@ function createSupabaseMock({
     updates: [] as Array<{ table: string; patch: Record<string, unknown>; filters: Record<string, unknown> }>,
     deletes: [] as Array<{ table: string; filters: Record<string, unknown> }>,
     removals: [] as Array<{ bucket: string; paths: string[] }>,
+    /** Every table read or written, in order. */
+    tables: [] as string[],
   };
 
   function createQuery(table: string) {
+    calls.tables.push(table);
     let operation: QueryOperation = 'select';
     let patch: Record<string, unknown> = {};
+    let selected: string[] | null = null;
     const filters: Record<string, unknown> = {};
 
     const resolve = async () => {
@@ -96,8 +100,9 @@ function createSupabaseMock({
     };
 
     const query = {
-      select() {
+      select(columns?: string) {
         operation = 'select';
+        selected = columns ? columns.split(',').map((column) => column.trim()) : null;
         return query;
       },
       eq(column: string, value: unknown) {
@@ -131,7 +136,14 @@ function createSupabaseMock({
           const matchesOwner = !filters.user_id
             || !generation?.user_id
             || generation.user_id === filters.user_id;
-          return Promise.resolve({ data: matchesOwner ? generation ?? null : null, error: null });
+          const row = matchesOwner ? generation ?? null : null;
+          // Only the columns the read asked for, as PostgREST answers.
+          return Promise.resolve({
+            data: row && selected
+              ? Object.fromEntries(selected.map((column) => [column, (row as Record<string, unknown>)[column]]))
+              : row,
+            error: null,
+          });
         }
 
         return Promise.resolve({ data: null, error: null });
@@ -308,6 +320,7 @@ describe('deleteOwnerPostForRoute', () => {
       },
       generation: {
         id: 'generation-1',
+        user_id: 'user-1',
         showcase_asset_path: 'posts/post-1/cover.jpg',
       },
     });
@@ -446,6 +459,7 @@ describe('deleteOwnerPostForRoute', () => {
       },
       generation: {
         id: 'generation-1',
+        user_id: 'user-1',
         showcase_asset_path: 'posts/post-1/cover.jpg',
       },
     });
@@ -510,6 +524,38 @@ describe('deleteOwnerPostForRoute', () => {
 
     expect(calls.removals).toEqual([]);
     expect(calls.updates.some((update) => update.table === 'generations')).toBe(false);
+  });
+
+  it("removes the public copy of the owner's own creation straight away, asking no link", async () => {
+    const { client, calls } = createSupabaseMock({
+      purchases: [],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: 'generation-1',
+        visibility: 'public',
+        title: 'Own creation',
+        source_kind: 'generation',
+        showcase_asset_path: 'showcase/generation-1/public.jpg',
+      },
+      bundle: null,
+      generation: {
+        id: 'generation-1',
+        user_id: 'user-1',
+        showcase_asset_path: 'showcase/generation-1/public.jpg',
+      },
+    });
+
+    await expect(deleteOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(calls.removals).toEqual([
+      { bucket: 'showcase_media', paths: ['showcase/generation-1/public.jpg'] },
+    ]);
+    expect(calls.tables).not.toContain('profiles');
   });
 
   // Publish files a creation made as a guest under the account the guest was

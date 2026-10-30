@@ -79,18 +79,25 @@ function createSupabaseMock({
   const client = {
     from(table: string) {
       const filters: Record<string, unknown> = {};
+      let selected: string[] | null = null;
       let generationUpdate: Record<string, unknown> | null = null;
       // As in Postgres, a generation read or write filtered on an owner the
       // row does not have finds nothing.
       const matchesGenerationOwner = () => !('user_id' in filters)
-        || !generation?.user_id
-        || generation.user_id === filters.user_id;
+        || (generation?.user_id !== undefined && generation.user_id === filters.user_id);
       const query = {
-        select() {
+        select(columns?: string) {
+          selected = columns ? columns.split(',').map((column) => column.trim()) : null;
           return query;
         },
         eq(column: string, value: unknown) {
           filters[column] = value;
+          // Recorded when made, however the chain ends, and taken back if a
+          // filter rules the row out.
+          if (generationUpdate && !matchesGenerationOwner()) {
+            generationUpdates.splice(generationUpdates.indexOf(generationUpdate), 1);
+            generationUpdate = null;
+          }
           return query;
         },
         // media_upload_intents bookkeeping after a successful media replace,
@@ -98,13 +105,11 @@ function createSupabaseMock({
         update(values?: Record<string, unknown>) {
           if (table === 'generations' && values) {
             generationUpdate = values;
+            generationUpdates.push(values);
           }
           return query;
         },
         then(resolve: (value: { data?: unknown; error: { message: string } | null }) => unknown) {
-          if (generationUpdate && matchesGenerationOwner()) {
-            generationUpdates.push(generationUpdate);
-          }
           if (table === 'profiles') {
             return Promise.resolve({
               data: profilesError
@@ -146,7 +151,12 @@ function createSupabaseMock({
           }
 
           if (table === 'generations') {
-            return Promise.resolve({ data: matchesGenerationOwner() ? generation : null, error: null });
+            const row = matchesGenerationOwner() ? generation : null;
+            // Only the columns the read asked for, as PostgREST answers.
+            return Promise.resolve({
+              data: row && selected ? Object.fromEntries(selected.map((column) => [column, row[column]])) : row,
+              error: null,
+            });
           }
 
           return Promise.resolve({ data: null, error: null });

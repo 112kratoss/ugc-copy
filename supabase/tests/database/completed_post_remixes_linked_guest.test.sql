@@ -15,6 +15,7 @@ select plan(9);
 
 select ok(
   (select procedures.prosecdef
+     and pg_catalog.pg_get_userbyid(procedures.proowner) = 'postgres'
      and procedures.proconfig @> array['search_path=public, pg_temp']
      and not has_function_privilege('authenticated', procedures.oid, 'EXECUTE')
      and not has_function_privilege('anon', procedures.oid, 'EXECUTE')

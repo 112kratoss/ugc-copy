@@ -1,5 +1,6 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
 import { buildMobileNotificationDeepLink, createMobileNotification } from '@/lib/mobile-notifications';
 import { recordAuthoritativeFeedEvent } from '@/lib/showcase-feed-events-service';
@@ -64,7 +65,9 @@ export async function notifyCompletedRemix(supabase: SupabaseClient, predictionI
     if (error) throw error;
     if (!remix) return;
     const post = Array.isArray(remix.posts) ? remix.posts[0] : remix.posts;
-    if (!post?.user_id || post.user_id === remix.actor_user_id) return;
+    // A run the creator made as a guest since linked to them is their own
+    // remix too: publish files a guest-made creation under the account.
+    if (!post?.user_id || await isOwnOrLinkedAccountId(supabase, post.user_id, remix.actor_user_id)) return;
     await Promise.all([
       notifyRemixedCreator(supabase, remix, post.user_id),
       recordAuthoritativeFeedEvent(supabase, {

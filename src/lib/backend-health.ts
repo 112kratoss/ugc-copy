@@ -1501,7 +1501,7 @@ export async function collectBackendHealth(
     remixablePosts,
     remixSources,
     remixProjectionError,
-    remixProjectionError ? new Map() : await loadLinkedGuestAccounts(client, remixablePosts, remixSources),
+    await loadLinkedGuestAccounts(client, remixablePosts, remixSources),
   );
 
   // Same tolerance as the remix projection above: a probe that cannot read must
