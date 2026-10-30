@@ -373,9 +373,8 @@ test.describe('reference chips', () => {
 
     // The row of chips over the prompt went with the column layout (2026-10-26), as on the
     // image creator: each reference has its own Insert (its tile's handle, since 2026-10-31),
-    // so the chips left are the "@" panel's. Those tiles are on the page while it is measured,
-    // in a strip that scrolls inside its column, so a long name in one would show here as the
-    // page's overflow.
+    // so the chips left are the "@" panel's. The tiles scroll inside their strip, so the page's
+    // overflow measured here is the panel's alone.
     await expectSuggestionsInTheirRow(page, 'Insert reference', handles, () => (
       typeAtEnd(page.getByPlaceholder(/^Describe the .* scene/), ' @')
     ));
@@ -417,8 +416,8 @@ test.describe('reference chips', () => {
 
     // The row of chips over the prompt went with the column layout (2026-10-26): each
     // reference has its own Insert, its tile's handle (reference-card-handles.spec.ts), so
-    // the chips left are the "@" panel's. Those tiles are on the page while it is measured,
-    // so a long name in one would show here as the page's overflow.
+    // the chips left are the "@" panel's. The tiles scroll inside their strip, so the page's
+    // overflow measured here is the panel's alone.
     await expectSuggestionsInTheirRow(page, 'Insert element', handles, () => (
       typeAtEnd(page.getByPlaceholder('Describe the image you want to create...'), ' @')
     ));
