@@ -4305,7 +4305,7 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(runInputs('videoElements')).toEqual([expect.objectContaining({ handle: '@saved_kling_clip' })]);
       });
 
-      it('leaves the clip alone on a model that sends none', async () => {
+      it('leaves the clip alone on a model that sends none, and runs without it', async () => {
         saveInTheBrowser({ klingClip: true, klingClipSeconds: 2.16 });
         render(<CreateVideoClient prefill={{ model: 'seedance-2-mini' }} />);
         await restored();
@@ -4315,6 +4315,12 @@ describe('CreateVideoClient Kling video elements', () => {
 
         await waitFor(() => expect(generateButton()).not.toBeDisabled());
         expect(screen.queryByText(/must be at least 3 seconds long/)).toBeNull();
+        // The clip waits on standby for Kling 3.0: the run goes, and sends no part of it.
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(postedRun().modelId).toBe('seedance-2-mini');
+        expect(runInputs('videoElements')).toEqual([]);
+        expect(postedRun().inputs.filter((input: { kind: string }) => input.kind === 'video')).toEqual([]);
       });
     });
 
