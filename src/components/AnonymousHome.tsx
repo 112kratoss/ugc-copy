@@ -106,12 +106,12 @@ function AnonymousHero({ shelf }: { shelf: Promise<HomeShelfItem[]> }) {
         the category words a search matches stay in this page's title and
         description (`src/app/page.tsx`). Before that it was `sr-only` and read
         "What will you create today?", which gave a crawler nothing, since the
-        only other headings on `/` are feed post titles. Visible and compact,
-        above the shelf, so it does not take the space the feed is meant to
-        occupy. The second sentence is an inline-block, so a phone breaks the
-        line between the two sentences, never inside one.
+        only other headings on `/` are feed post titles. Visible, above the
+        shelf, at the page title's own size (36px, 48px from 640px wide). The
+        second sentence is an inline-block, so the line breaks between the two
+        sentences (measured from 320px wide up).
       */}
-      <Text as="h1" variant="pageTitle" className="mb-6 max-w-3xl text-3xl sm:text-4xl">
+      <Text as="h1" variant="pageTitle" className="mb-6 max-w-3xl">
         {siteConfig.tagline.create}{' '}
         <span className={`inline-block ${getAccentClasses('commerce').accentText}`}>
           {siteConfig.tagline.sell}

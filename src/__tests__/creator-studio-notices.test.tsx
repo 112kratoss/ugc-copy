@@ -35,26 +35,25 @@ describe('creator studio notices', () => {
     fireEvent.click(picture);
     expect(onOpen).toHaveBeenCalledTimes(1);
 
-    // A video shows a still from its first moment, never a playing loop; the
-    // motion creator's opens the file in a new tab.
+    // A video shows a still from its first moment, never a playing loop.
     view.rerender(
       <StudioRemixNotice
         description={description}
-        original={{ mediaType: 'video', src: 'https://example.com/result.mp4', href: 'https://example.com/result.mp4' }}
+        original={{ mediaType: 'video', src: 'https://example.com/result.mp4', onOpen }}
       />
     );
-    const link = screen.getByRole('link', { name: 'View original' });
-    expect(link).toHaveAttribute('href', 'https://example.com/result.mp4');
-    expect(link).toHaveAttribute('target', '_blank');
-    const still = link.querySelector('video');
+    const clip = screen.getByRole('button', { name: 'View original' });
+    const still = clip.querySelector('video');
     expect(still).toHaveAttribute('src', 'https://example.com/result.mp4#t=0.1');
     expect(still).toHaveAttribute('preload', 'metadata');
     expect(still).not.toHaveAttribute('autoplay');
+    expect(still).not.toHaveAttribute('tabindex');
+    fireEvent.click(clip);
+    expect(onOpen).toHaveBeenCalledTimes(2);
 
     // No restored result: nothing to open, and the notice keeps its icon.
     view.rerender(<StudioRemixNotice description={description} original={null} />);
     expect(screen.queryByRole('button', { name: 'View original' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'View original' })).not.toBeInTheDocument();
   });
 
   it('offers a dismiss button only when the model notice can be dismissed', () => {

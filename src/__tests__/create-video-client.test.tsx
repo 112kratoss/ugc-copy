@@ -623,6 +623,29 @@ describe('CreateVideoClient Kling video elements', () => {
     expect(url.searchParams.get('postId')).toBe('post-1');
   });
 
+  it("shows the remix's original in its notice, opening it in the page's own preview", async () => {
+    const bundle: RemixSourceBundle = {
+      generation: { id: 'gen-1', title: 'Rooftop', prompt: 'A dancer on a rooftop at dusk', category: 'video', model: 'seedance-2-5' },
+      result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+      inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [] } },
+      workflowSettings: { model: 'seedance-2-5' },
+      restoreIssues: [],
+    };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => ({
+      ok: true,
+      json: async () => (String(input).includes('/api/remix-source')
+        ? bundle
+        : { status: 'succeeded', output: 'https://example.com/result.mp4', timing: null }),
+    } as Response));
+
+    render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+    const original = await screen.findByRole('button', { name: 'View original' });
+    expect(original.querySelector('video')).toHaveAttribute('src', 'https://example.com/result.mp4#t=0.1');
+    fireEvent.click(original);
+    expect(await screen.findByRole('heading', { name: 'Original Creation' })).toBeInTheDocument();
+  });
+
   it('restores a remix reference clip and track with their lengths, so the quote can price them', async () => {
     // Seedance 2 prices a run by the length of its reference clip, and the quote refuses a
     // clip that arrives without one ("Reference videos requires duration metadata for every

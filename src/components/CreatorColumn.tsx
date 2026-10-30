@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import type { ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref } from 'react';
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref } from 'react';
+import { Children, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
@@ -197,21 +197,23 @@ type CreatorChoiceLayout =
   | { appearance: 'pill'; columns?: undefined };
 
 /**
- * The box an option written as a ratio ("16:9") draws beside its words, as the
- * app's parameter sheet does: the long side 16px and the short side to scale,
- * never under 3px, so 1:8 still shows as a bar. Null for anything else ("auto",
- * a resolution, a length), which draws no box.
+ * The box an aspect-ratio option draws beside its words, as the app's parameter
+ * sheet does: the long side 14px and the short side to scale, never under 3px, so
+ * 1:8 still shows as a bar. Nothing for "auto". The creators hand it to their
+ * ratio choices as `optionMark`, as the app picks its ratio control by its key.
  */
-function ratioBoxSize(option: string): { width: number; height: number } | null {
-  const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(option);
-  if (!match) return null;
-  const across = Number(match[1]);
-  const down = Number(match[2]);
-  if (!(across > 0 && down > 0)) return null;
-  const toScale = (share: number) => Math.max(3, Math.round(16 * share));
-  return across >= down
-    ? { width: 16, height: toScale(down / across) }
-    : { width: toScale(across / down), height: 16 };
+export function aspectRatioMark(option: string): ReactNode {
+  const ratio = parseAspectRatio(option);
+  if (ratio === null) return null;
+  const toScale = (share: number) => Math.max(3, Math.round(14 * share));
+  return (
+    <span
+      aria-hidden
+      data-testid="creator-option-ratio-box"
+      className="shrink-0 rounded-xs border-[1.5px] border-current"
+      style={ratio >= 1 ? { width: 14, height: toScale(1 / ratio) } : { width: toScale(ratio), height: 14 }}
+    />
+  );
 }
 
 /**
@@ -233,6 +235,7 @@ export function CreatorSettingChoices<T extends string>({
   accent = 'image',
   capitalize = false,
   optionPrice,
+  optionMark,
   ref,
 }: {
   label: string;
@@ -253,6 +256,8 @@ export function CreatorSettingChoices<T extends string>({
    * selectable: the bar offers a top-up in Generate's place.
    */
   optionPrice?: (option: T) => OptionPrice | null;
+  /** A small picture before an option's words (the ratios' boxes: `aspectRatioMark`), in the accent once chosen. */
+  optionMark?: (option: T) => ReactNode;
   /** The radio group, for a parent that gives the focus back to the chosen option. */
   ref?: Ref<HTMLDivElement>;
 } & CreatorChoiceLayout) {
@@ -303,7 +308,7 @@ export function CreatorSettingChoices<T extends string>({
           const checked = index === selectedIndex;
           const price = optionPrice?.(option) ?? null;
           const text = optionLabel ? optionLabel(option) : option;
-          const box = ratioBoxSize(option);
+          const mark = optionMark?.(option) ?? null;
           return (
             <button
               key={option}
@@ -324,6 +329,8 @@ export function CreatorSettingChoices<T extends string>({
                 'ui-focus-ring min-h-10 border text-xs font-bold transition-colors duration-150',
                 pill ? 'inline-flex items-center rounded-full px-3.5' : 'rounded-ui-md px-2',
                 optionPrice && 'flex min-h-12 flex-col items-center justify-center gap-0.5 py-1',
+                // The room a mark has is measured on the option itself (a grid cell, never a pill).
+                mark && !pill && '@container',
                 capitalize && 'capitalize',
                 checked
                   ? selectedClasses
@@ -332,15 +339,12 @@ export function CreatorSettingChoices<T extends string>({
                     : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
-              {box ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    aria-hidden
-                    data-testid="creator-option-ratio-box"
-                    // The box takes the option's colour, and the accent once chosen, as in the app.
-                    className={clsx('shrink-0 rounded-[2px] border-[1.5px] border-current', checked && selectedMarkClass)}
-                    style={{ width: box.width, height: box.height }}
-                  />
+              {mark ? (
+                // Side by side where the option has room, as in the app; stacked in a narrow
+                // option (five to a row on a phone), so a long ratio such as 27:16 never runs out.
+                <span className="inline-flex items-center gap-1 @max-[3.25rem]:flex-col @max-[3.25rem]:gap-0.5">
+                  {/* The mark takes the option's colour, and the accent once chosen, as in the app. */}
+                  <span className={clsx('inline-flex shrink-0', checked && selectedMarkClass)}>{mark}</span>
                   {text}
                 </span>
               ) : (
@@ -1004,7 +1008,7 @@ export function CreatorMentionPanel<T extends CreatorMentionSuggestion>({
 export const CREATOR_REFERENCE_CHIP_CLASS =
   'ui-focus-ring inline-flex min-h-9 shrink-0 items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-semibold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)] disabled:cursor-not-allowed disabled:opacity-50';
 
-/** The @handle as the button that inserts it, where a creator's hint says "tap a handle". */
+/** The @handle as the button that inserts it: each reference tile's, as the creators' hints say ("tap a handle"). */
 const CREATOR_HANDLE_INSERT_CLASS =
   'ui-focus-ring inline-flex min-h-9 min-w-0 max-w-full items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-left transition-colors hover:bg-[var(--ui-surface-3)]';
 
@@ -1041,16 +1045,38 @@ export function CreatorReplaceButton({ label, accept, onFile }: {
 }
 
 /**
+ * A row of cards that scrolls sideways, snapping to each: the start posts' strip
+ * (`CreatorStartPosts`) and the references'. Each sets its own cell width and gap,
+ * which a second `auto-cols-*` in a `className` could not override.
+ */
+export const SIDEWAYS_TRACK_CLASS = 'app-scrollbar -mx-1 grid snap-x grid-flow-col overflow-x-auto px-1 pb-2';
+
+/**
  * A creator's references side by side in one row that scrolls sideways, as the
  * app lists them, so ten references take one row of the column rather than ten.
- * The track is the start posts' strip's (`CreatorStartPosts`), with narrower cells.
+ * One added to a strip that already had some comes into view, as a row added
+ * under the list did; the first ones, or a remix's restored set, start at the left.
  */
-export function CreatorReferenceStrip({ className, children, ...props }: ComponentPropsWithRef<'ul'>) {
+export function CreatorReferenceStrip({ className, children, ...props }: ComponentPropsWithoutRef<'ul'>) {
+  const listRef = useRef<HTMLUListElement>(null);
+  const count = Children.count(children);
+  const shownCount = useRef(count);
+  const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (list && shownCount.current > 0 && count > shownCount.current) {
+      if (typeof list.scrollTo === 'function') {
+        list.scrollTo({ left: list.scrollWidth, behavior: reduceMotion ? 'auto' : 'smooth' });
+      } else {
+        list.scrollLeft = list.scrollWidth;
+      }
+    }
+    shownCount.current = count;
+  }, [count, reduceMotion]);
+
   return (
-    <ul
-      {...props}
-      className={clsx('app-scrollbar -mx-1 grid snap-x grid-flow-col auto-cols-[8rem] gap-2 overflow-x-auto px-1 pb-2', className)}
-    >
+    <ul {...props} ref={listRef} className={clsx(SIDEWAYS_TRACK_CLASS, 'auto-cols-[8rem] gap-2', className)}>
       {children}
     </ul>
   );
@@ -1105,14 +1131,17 @@ export function CreatorReferenceTile({
     <li className="flex min-w-0 snap-start flex-col gap-1.5 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-1.5">
       <div className="relative">
         {preview}
+        {/* 48px to press, as every icon button is, and a 32px circle to see, so the picture stays visible. */}
         <button
           type="button"
           onClick={onRemove}
           aria-label={`Remove ${displayName}`}
           title={`Remove ${displayName}`}
-          className="ui-focus-ring absolute right-1 top-1 inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white transition hover:bg-rose-500/90"
+          className="ui-focus-ring group/remove absolute right-0 top-0 inline-flex h-12 w-12 items-start justify-end rounded-full p-1"
         >
-          <X className="h-4 w-4" aria-hidden />
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white transition group-hover/remove:bg-rose-500/90">
+            <X className="h-4 w-4" aria-hidden />
+          </span>
         </button>
       </div>
       <input
@@ -1132,6 +1161,8 @@ export function CreatorReferenceTile({
           }
         }}
         aria-label={`Name of ${displayName}`}
+        // A tile shows about a dozen characters of a long name; the rest on hover.
+        title={nameDraft ?? displayName}
         placeholder={placeholder}
         className={clsx(
           'w-full min-w-0 rounded-ui-sm border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:bg-[var(--ui-surface-2)]',

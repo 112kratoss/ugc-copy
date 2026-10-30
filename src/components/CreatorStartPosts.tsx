@@ -6,7 +6,7 @@ import type { LucideIcon } from 'lucide-react';
 import { LayoutTemplate, Play, Repeat2 } from 'lucide-react';
 import clsx from 'clsx';
 
-import { CREATOR_NOTE_LINK_CLASS, creditsWords } from '@/components/CreatorColumn';
+import { CREATOR_NOTE_LINK_CLASS, creditsWords, SIDEWAYS_TRACK_CLASS } from '@/components/CreatorColumn';
 import { HoverVideo } from '@/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/components/useMediaLoadingPreferences';
@@ -289,7 +289,7 @@ export function CreatorEmptyCanvas({ source, tool, balance, icon, title, hint, f
   );
 }
 
-const STRIP_TRACK_CLASS = 'app-scrollbar -mx-1 grid snap-x grid-flow-col auto-cols-[8.25rem] gap-3 overflow-x-auto px-1 pb-2';
+const STRIP_TRACK_CLASS = clsx(SIDEWAYS_TRACK_CLASS, 'auto-cols-[8.25rem] gap-3');
 
 function StripSection({ children }: { children: ReactNode }) {
   return (

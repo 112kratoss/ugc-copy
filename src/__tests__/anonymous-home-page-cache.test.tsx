@@ -273,6 +273,14 @@ describe('Anonymous home cacheability', () => {
     expect(headings[0].className).not.toContain('sr-only');
   });
 
+  it('names what the product does in its title and description, now that the h1 is the tagline', async () => {
+    const { metadata } = await import('@/app/page');
+
+    // The words a search matches left the h1 on 2026-10-31; these two now carry them.
+    expect(JSON.stringify(metadata.title)).toContain('AI Video, Image & Motion Transfer');
+    expect(metadata.description).toMatch(/AI images, AI videos, motion-transfer/);
+  });
+
   it('keeps feed post titles out of the top-level document outline', async () => {
     const { default: Home } = await import('@/app/page');
 

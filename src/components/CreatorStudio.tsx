@@ -1,4 +1,5 @@
 import InlineMediaVideo from '@/components/InlineMediaVideo';
+import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Fragment } from 'react';
@@ -240,31 +241,30 @@ function StudioNoticeCard({
   );
 }
 
-/**
- * The result a remix starts from. `onOpen` shows it in the creator's own
- * preview; `href` opens the file in a new tab instead (the motion creator has
- * no preview of its own).
- */
-export interface StudioRemixOriginal {
+/** The result a remix starts from, and the creator's own preview of it, which each creator has. */
+interface StudioRemixOriginal {
   mediaType: StudioMediaPreviewType;
   src: string;
-  onOpen?: () => void;
-  href?: string;
+  onOpen: () => void;
 }
 
 /**
  * "View original" drawn as the original itself, as the app's Remix screen
- * shows the post's picture. A video shows a still from its first moment rather
- * than a playing loop, so the notice stays calm and loads only the metadata.
+ * shows the post's picture. A picture comes through the image optimizer at the
+ * thumbnail's size where it can, not as the full-size original; a video shows a
+ * still from its first moment rather than a playing loop, so the notice stays
+ * calm and loads only the clip's metadata.
  */
-function StudioRemixOriginalThumb({ mediaType, src, onOpen, href }: StudioRemixOriginal) {
-  const className =
-    'ui-focus-ring relative block h-16 w-16 shrink-0 overflow-hidden rounded-ui-xl border border-[var(--ui-border-default)] bg-black transition hover:border-[var(--ui-border-strong)]';
-  const content = (
-    <>
+function StudioRemixOriginalThumb({ mediaType, src, onOpen }: StudioRemixOriginal) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label="View original"
+      className="ui-focus-ring relative block h-16 w-16 shrink-0 overflow-hidden rounded-ui-xl border border-[var(--ui-border-default)] bg-black transition hover:border-[var(--ui-border-strong)]"
+    >
       {mediaType === 'image' ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt="" className="h-full w-full object-cover" />
+        <OptimizedPreviewImage previewSrc={src} fallbackSrc={src} fallbackToUnoptimized alt="" sizes="64px" className="object-cover" />
       ) : (
         <video
           src={`${src}#t=0.1`}
@@ -272,23 +272,12 @@ function StudioRemixOriginalThumb({ mediaType, src, onOpen, href }: StudioRemixO
           muted
           playsInline
           aria-hidden
-          tabIndex={-1}
           className="h-full w-full object-cover"
         />
       )}
       <span className="pointer-events-none absolute bottom-1 right-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-zinc-100 backdrop-blur-sm">
         {mediaType === 'video' ? <Play className="h-3 w-3" aria-hidden /> : <Expand className="h-3 w-3" aria-hidden />}
       </span>
-    </>
-  );
-
-  return href ? (
-    <a href={href} target="_blank" rel="noreferrer" aria-label="View original" className={className}>
-      {content}
-    </a>
-  ) : (
-    <button type="button" onClick={onOpen} aria-label="View original" className={className}>
-      {content}
     </button>
   );
 }

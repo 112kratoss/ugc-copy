@@ -50,6 +50,7 @@ import {
     CreatorTopUpNotice,
     CreatorVisitorNote,
     CREATOR_VISITOR_CANVAS_HINT,
+    aspectRatioMark,
     creatorCanvasChip,
     describeRunFailure,
 } from '@/components/CreatorColumn';
@@ -1869,6 +1870,7 @@ export default function CreateImageClient({
                 value={aspectRatio}
                 onChange={setAspectRatio}
                 columns={5}
+                optionMark={aspectRatioMark}
                 optionPrice={sameRatioPrice ? undefined : (value) => optionPrice('aspectRatio', value)}
             />
 

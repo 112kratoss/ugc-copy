@@ -151,8 +151,8 @@ async function readCardHandles(page: Page, title: string): Promise<CardHandles |
     return await page.evaluate((panelTitle) => {
       const heading = Array.from(document.querySelectorAll<HTMLElement>('h2, h3'))
         .find((candidate) => candidate.textContent === panelTitle);
-      // The panel is the heading's nearest ancestor that holds a card's Insert button (on the
-      // video creator's pictures the handle itself, since PR 4).
+      // The panel is the heading's nearest ancestor that holds a card's Insert button: the
+      // handle itself, on every tile since 2026-10-31 (on the video creator's pictures since PR 4).
       let panel = heading?.parentElement ?? null;
       while (panel && !Array.from(panel.querySelectorAll('button')).some((button) => /^Insert @/.test(button.getAttribute('aria-label') ?? ''))) {
         panel = panel.parentElement;
@@ -166,8 +166,8 @@ async function readCardHandles(page: Page, title: string): Promise<CardHandles |
       if (handles.length === 0) return null;
 
       const hidden = handles.flatMap((handle) => {
-        // On the video creator's pictures the handle is its own Insert button (PR 4): the
-        // button is the handle's box in the row, and the row is the button's.
+        // The handle is its tile's Insert button: the button is the handle's box, and its
+        // row is the tile, which it has to itself.
         const own = handle.closest<HTMLElement>('button[aria-label^="Insert @"]') ?? handle;
         const row = own.parentElement;
         if (!row) return [`${handle.textContent}: has no row`];

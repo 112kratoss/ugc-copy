@@ -49,6 +49,7 @@ import {
     CREATOR_VISITOR_CANVAS_HINT,
     CREATOR_BAR_PRIMARY_CLASS,
     CREATOR_NOTE_LINK_CLASS,
+    aspectRatioMark,
     creatorAddButtonClass,
     creatorCanvasChip,
     creditsWords,
@@ -811,7 +812,7 @@ function KlingSubjectsEditor({
     onChange: (next: KlingSubjectSeed[]) => void;
     onRename: (subjectId: string, displayName: string) => void;
     onRefusedFiles: (message: string | null) => void;
-    /** Puts a subject's @handle where the creator is writing, as a reference row's Insert does. */
+    /** Puts a subject's @handle where the creator is writing, as a reference tile's handle does. */
     onInsert: (handle: string) => void;
 }) {
     const KLING_SUBJECT_LIMIT = limits.maxNamed;
@@ -5321,6 +5322,7 @@ export default function CreateVideoClient({
                 onChange={setAspectRatio}
                 columns={choiceColumns(videoModel.aspectRatios.length)}
                 accent="video"
+                optionMark={aspectRatioMark}
                 optionPrice={sameRatioPrice ? undefined : (value) => optionPrice('aspectRatio', value)}
             />
 
@@ -6001,7 +6003,7 @@ export default function CreateVideoClient({
                                     <span className={cardCountClass}>{klingVideoElements.length}/{KLING_VIDEO_ELEMENT_LIMIT}</span>
                                 </div>
                                 <p className="mb-3 text-xs text-[var(--ui-text-faint)]">
-                                    Named clips. Type @ in the prompt or a shot prompt to use one by its name.
+                                    Named clips. Type @ in the prompt or a shot prompt, or tap a handle, to use one by its name.
                                 </p>
 
                                 {klingVideoElements.length > 0 ? (

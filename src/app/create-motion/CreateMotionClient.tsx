@@ -1615,7 +1615,11 @@ export default function CreateMotionClient({
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
                                         description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
-                                        original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, href: remixVideoUrl } : null}
+                                        original={remixVideoUrl ? {
+                                            mediaType: 'video',
+                                            src: remixVideoUrl,
+                                            onOpen: () => setUploadPreview({ type: 'video', src: remixVideoUrl, alt: 'Original creation', title: 'Original Creation' }),
+                                        } : null}
                                         action={
                                             canUseOriginalResultAsReferenceVideo ? (
                                                 <button
