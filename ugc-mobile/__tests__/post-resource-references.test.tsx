@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PostResourceItem } from '../lib/types';
 
@@ -46,6 +46,15 @@ vi.mock('@/components/mature-cover', async () => {
     MatureCover: (props: MockProps) => createElement('mature-cover', props),
     MatureMediaCovered: createContext(false),
   };
+});
+
+// The still a clip gives, decided per case; by default the clip gives none.
+const stills = vi.hoisted(() => ({ grab: vi.fn<(url: string, options: { signal: AbortSignal }) => Promise<unknown>>() }));
+vi.mock('@/lib/video-frame', () => ({ grabVideoFrame: stills.grab }));
+
+beforeEach(() => {
+  stills.grab.mockReset();
+  stills.grab.mockResolvedValue(null);
 });
 
 import { MatureMediaCovered } from '@/components/mature-cover';
@@ -407,6 +416,131 @@ describe('PostResourceReferences', () => {
     renderer.act(() => tree?.unmount());
   });
 
+  describe('a clip’s still', () => {
+    const videoReference: PostResourceItem = {
+      ...referenceImage,
+      id: 'video-reference',
+      type: 'reference_video',
+      title: 'Video reference 1',
+      description: null,
+      storagePath: 'references/clip.mp4',
+      contentType: 'video/mp4',
+    };
+    const STILL = { width: 405, height: 720 };
+    const byType = (tree: renderer.ReactTestRenderer, type: string) => tree.root.findAll((node) => String(node.type) === type);
+
+    it('draws the still under the play mark, read once from the clip’s link', async () => {
+      stills.grab.mockResolvedValueOnce(STILL);
+      let tree: renderer.ReactTestRenderer | undefined;
+      await renderer.act(async () => {
+        tree = renderer.create(
+          <PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={async (path) => `https://cdn.example.com/${path}`} />
+        );
+      });
+
+      expect(stills.grab).toHaveBeenCalledTimes(1);
+      expect(stills.grab).toHaveBeenCalledWith('https://cdn.example.com/references/clip.mp4', { signal: expect.any(AbortSignal) });
+      const [still] = byType(tree!, 'image');
+      expect(still?.props).toMatchObject({ source: STILL, contentFit: 'cover', accessible: false });
+      expect(byType(tree!, 'play-icon')).toHaveLength(1);
+      expect(tree!.root.findByProps({ children: 'Open video' })).toBeTruthy();
+      renderer.act(() => tree?.unmount());
+    });
+
+    it('keeps the still, with no spinner and no second read, while opening the clip renews its link', async () => {
+      stills.grab.mockResolvedValueOnce(STILL);
+      let renew: (url: string) => void = () => undefined;
+      const resolveFileUrl = vi.fn(async (path: string) => `https://cdn.example.com/${path}`);
+      let tree: renderer.ReactTestRenderer | undefined;
+      await renderer.act(async () => {
+        tree = renderer.create(<PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />);
+      });
+
+      resolveFileUrl.mockImplementationOnce(() => new Promise<string>((resolve) => { renew = resolve; }));
+      renderer.act(() => {
+        void tree!.root.findByProps({ accessibilityLabel: 'Open reference Video reference 1' }).props.onPress();
+      });
+      expect(byType(tree!, 'activity-indicator')).toHaveLength(0);
+      expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([STILL]);
+
+      await renderer.act(async () => { renew('https://cdn.example.com/renewed/clip.mp4'); });
+      expect(tree!.root.findByType('media-lightbox' as never).props.activeIndex).toBe(0);
+      expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([STILL]);
+      expect(stills.grab).toHaveBeenCalledTimes(1);
+      renderer.act(() => tree?.unmount());
+    });
+
+    it('keeps the plain play mark when the clip gives no still, and does not ask again', async () => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      await renderer.act(async () => {
+        tree = renderer.create(
+          <PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={async (path) => `https://cdn.example.com/${path}`} />
+        );
+      });
+      await renderer.act(async () => {
+        await tree!.root.findByProps({ accessibilityLabel: 'Open reference Video reference 1' }).props.onPress();
+      });
+
+      expect(byType(tree!, 'image')).toHaveLength(0);
+      expect(byType(tree!, 'play-icon')).toHaveLength(1);
+      expect(stills.grab).toHaveBeenCalledTimes(1);
+      renderer.act(() => tree?.unmount());
+    });
+
+    it('calls off a still being read when the row is hidden or goes, and reads it again when the row comes back', async () => {
+      // A hidden <Activity> runs every effect's cleanup with its state kept, as
+      // Fast Refresh does; shown again, every effect runs again.
+      const signals: AbortSignal[] = [];
+      const answers: ((still: unknown) => void)[] = [];
+      stills.grab.mockImplementation((_url, { signal }) => {
+        signals.push(signal);
+        return new Promise((resolve) => { answers.push(resolve); });
+      });
+      const references = (mode: 'visible' | 'hidden') => (
+        <React.Activity mode={mode}>
+          <PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={async (path) => `https://cdn.example.com/${path}`} />
+        </React.Activity>
+      );
+      let tree: renderer.ReactTestRenderer | undefined;
+      await renderer.act(async () => { tree = renderer.create(references('visible')); });
+      expect(signals).toHaveLength(1);
+
+      await renderer.act(async () => { tree!.update(references('hidden')); });
+      expect(signals[0].aborted).toBe(true);
+      // The answer that lands after the call-off is not drawn.
+      await renderer.act(async () => { answers[0](STILL); });
+
+      await renderer.act(async () => { tree!.update(references('visible')); });
+      expect(signals).toHaveLength(2);
+      expect(byType(tree!, 'image')).toHaveLength(0);
+
+      const again = { width: 406, height: 720 };
+      await renderer.act(async () => { answers[1](again); });
+      expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([again]);
+
+      renderer.act(() => tree?.unmount());
+      expect(signals[1].aborted).toBe(false);
+    });
+
+    it('lets a read under way go when the row unmounts', async () => {
+      let signal: AbortSignal | undefined;
+      stills.grab.mockImplementationOnce((_url, options) => {
+        signal = options.signal;
+        return new Promise(() => undefined);
+      });
+      let tree: renderer.ReactTestRenderer | undefined;
+      await renderer.act(async () => {
+        tree = renderer.create(
+          <PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={async (path) => `https://cdn.example.com/${path}`} />
+        );
+      });
+
+      expect(signal?.aborted).toBe(false);
+      renderer.act(() => tree?.unmount());
+      expect(signal?.aborted).toBe(true);
+    });
+  });
+
   it('renders nothing when structured reference items are unavailable', () => {
     let tree: renderer.ReactTestRenderer | undefined;
 
@@ -490,9 +624,32 @@ describe('PostResourceReferences in a mature purchase', () => {
       ['https://cdn.example.com/references/camera.mp4'],
     ]);
     expect(tree!.root.findByType('media-lightbox' as never).props.activeIndex).toBeNull();
-    // The clip has no thumbnail to cover, so it keeps its own icon and label.
+    // Under the plate the clip reads no still, so it keeps its own icon and label.
     expect(tree!.root.findByProps({ children: 'Open video' })).toBeTruthy();
     expect(byType(tree!, 'mature-cover')).toHaveLength(1);
+    // Opening it in the browser signed a link; no still is read from it.
+    expect(stills.grab).not.toHaveBeenCalled();
+  });
+
+  it('reads no still under the plate, and draws none when the plate comes back', async () => {
+    const still = { width: 405, height: 720 };
+    stills.grab.mockResolvedValueOnce(still);
+    const references = (coverMedia: boolean) => (
+      <PostResourceReferences coverMedia={coverMedia} items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={async (path) => `https://cdn.example.com/${path}`} />
+    );
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => { tree = renderer.create(references(true)); });
+    expect(stills.grab).not.toHaveBeenCalled();
+
+    await renderer.act(async () => { tree!.update(references(false)); });
+    expect(stills.grab).toHaveBeenCalledTimes(1);
+    expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([still]);
+
+    await renderer.act(async () => { tree!.update(references(true)); });
+    expect(byType(tree!, 'image')).toHaveLength(0);
+    expect(byType(tree!, 'play-icon')).toHaveLength(1);
+    expect(stills.grab).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree?.unmount());
   });
 
   it('keeps the plate, and then the picture, when every effect runs again', async () => {
