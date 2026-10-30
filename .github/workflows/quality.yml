@@ -285,14 +285,16 @@ jobs:
       # closes, fails Docker's bind: start died on 0.0.0.0:54324 held by a
       # TIME-WAIT HTTPS connection on 2026-10-29, and on 54322 on 2026-10-04.
       # The kernel never picks a reserved port. This runs first, so nothing the
-      # job's steps download, install or pull can take one, and adds to whatever
-      # the image reserves. The list is every port the two config files set
-      # inside that range, kept so by supabase-stack-port-reservation.test.ts.
+      # job's steps download, install or pull can take one; a socket the runner
+      # opened before it keeps its port, so the step lists any. The list is every
+      # port the two config files set inside that range (the image reserves
+      # none), kept so by supabase-stack-port-reservation.test.ts.
       - name: Reserve the Supabase stack's ports
         run: |
-          reserved="$(sysctl -n net.ipv4.ip_local_reserved_ports)"
-          sudo -n sysctl -q -w net.ipv4.ip_local_reserved_ports="${reserved:+$reserved,}54320-54324,54327,54329"
+          sudo -n sysctl -q -w net.ipv4.ip_local_reserved_ports=54320-54324,54327,54329
           sysctl net.ipv4.ip_local_reserved_ports net.ipv4.ip_local_port_range
+          held="$(ss -Htan '( sport >= :54320 and sport <= :54329 )')"
+          printf 'Sockets already on 54320-54329, which the reservation cannot move:\n%s\n' "${held:-none}"
 
       - name: Check out repository
         uses: actions/checkout@v6
@@ -488,9 +490,10 @@ jobs:
       # first step explains.
       - name: Reserve the Supabase stack's ports
         run: |
-          reserved="$(sysctl -n net.ipv4.ip_local_reserved_ports)"
-          sudo -n sysctl -q -w net.ipv4.ip_local_reserved_ports="${reserved:+$reserved,}54320-54324,54327,54329"
+          sudo -n sysctl -q -w net.ipv4.ip_local_reserved_ports=54320-54324,54327,54329
           sysctl net.ipv4.ip_local_reserved_ports net.ipv4.ip_local_port_range
+          held="$(ss -Htan '( sport >= :54320 and sport <= :54329 )')"
+          printf 'Sockets already on 54320-54329, which the reservation cannot move:\n%s\n' "${held:-none}"
 
       - name: Check out repository
         uses: actions/checkout@v6

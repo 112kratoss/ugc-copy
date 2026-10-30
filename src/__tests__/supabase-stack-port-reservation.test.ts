@@ -9,8 +9,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 // Quality's Supabase jobs died at `supabase start` when an outbound connection on the runner had been given one of
 // the stack's host ports as its local port: 54324 on 2026-10-29, held in TIME-WAIT, and 54322 on 2026-10-04. The
 // ports sit inside Linux's ephemeral range, so every job that starts the stack reserves them as its first step. These
-// read the workflows and the two config files, and run that step's bash as Actions does (`bash -e`), with sudo and
-// sysctl stood in for.
+// read the workflows and the two config files, and run that step's bash as Actions does (`bash -e`), with sudo,
+// sysctl and ss stood in for. The sysctl stand-in refuses what the kernel and procps refuse, so a list the runner
+// would reject fails here too.
 
 const STEP = "Reserve the Supabase stack's ports";
 // Linux's default ip_local_port_range, from which the kernel picks a connection's local port; the step prints the
@@ -27,10 +28,12 @@ function configuredPorts(file: string) {
     .filter((port) => port >= EPHEMERAL_LOW && port <= EPHEMERAL_HIGH);
 }
 
-/** The ports a list such as `54320-54322,54327` names, in order, once each. */
+/** The ports a list such as `54320-54322,54327` names, in order, once each. Anything else throws. */
 function ports(list: string) {
-  const named = list.split(',').filter(Boolean).flatMap((part) => {
-    const [low, high = low] = part.split('-').map(Number);
+  const named = list.split(',').flatMap((part) => {
+    const range = /^(\d+)(?:-(\d+))?$/.exec(part);
+    if (!range) throw new Error(`"${part}" in "${list}" is neither a port nor a range`);
+    const [low, high] = [Number(range[1]), Number(range[2] ?? range[1])];
     return Array.from({ length: high - low + 1 }, (_, offset) => low + offset);
   });
   return [...new Set(named)].sort((a, b) => a - b);
@@ -38,11 +41,13 @@ function ports(list: string) {
 
 type Job = { name: string; steps: string[] };
 
+const WORKFLOWS = '.github/workflows';
+const workflowFiles = readdirSync(path.join(process.cwd(), WORKFLOWS)).filter((file) => /\.ya?ml$/.test(file)).sort();
+
 /** Every job of every workflow, with each of its steps as the text from its `- ` to the next step. */
 function workflowJobs(): Job[] {
-  const folder = '.github/workflows';
-  return readdirSync(path.join(process.cwd(), folder)).filter((file) => file.endsWith('.yml')).flatMap((file) => {
-    const workflow = read(`${folder}/${file}`);
+  return workflowFiles.flatMap((file) => {
+    const workflow = read(`${WORKFLOWS}/${file}`);
     return workflow.slice(workflow.indexOf('\njobs:\n') + 1).split(/\n(?= {2}[\w-]+:\n)/).slice(1).map((job) => {
       const steps = job.slice(Math.max(job.indexOf('\n    steps:\n'), 0));
       return { name: `${file} ${job.match(/^ {2}([\w-]+):/)?.[1]}`, steps: steps.split(/\n(?= {6}- )/).slice(1) };
@@ -62,38 +67,55 @@ afterEach(() => {
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
 });
 
-// sudo runs what follows -n; sysctl reads the reservation as $RESERVED until a -w writes one, and prints the
-// reservation and the default ephemeral range by name.
+// sudo runs what follows -n. sysctl knows the two keys the step names: as procps does on the kernel's EINVAL or on a
+// missing key, it fails on a list the kernel's parser refuses (anything but ports and ranges joined by single commas)
+// and on any other key, and it prints a written list back as the kernel holds it. ss prints $SOCKETS.
 const STUBS: Record<string, string> = {
   sudo: `echo "$*" >> "$STUB_DIR/sudo-calls"
 [ "$1" = -n ] && shift
 exec "$@"`,
-  sysctl: `reserved() { cat "$STUB_DIR/reserved" 2> /dev/null || printf '%s\\n' "$RESERVED"; }
-case " $* " in
-  *' -w '*) for arg; do case "$arg" in *=*) printf '%s\\n' "\${arg#*=}" > "$STUB_DIR/reserved" ;; esac; done ;;
-  *' -n '*) reserved ;;
-  *) for name; do
-       case "$name" in
-         net.ipv4.ip_local_reserved_ports) echo "$name = $(reserved)" ;;
-         net.ipv4.ip_local_port_range) printf '%s = 32768\\t60999\\n' "$name" ;;
-       esac
-     done ;;
-esac`,
+  sysctl: `for arg; do
+  case "$arg" in
+    -*) ;;
+    net.ipv4.ip_local_reserved_ports=*)
+      if ! printf '%s' "\${arg#*=}" | grep -Eqx '[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*'; then
+        echo 'sysctl: setting key "net.ipv4.ip_local_reserved_ports": Invalid argument' >&2
+        exit 1
+      fi
+      printf '%s\\n' "\${arg#*=}" > "$STUB_DIR/reserved" ;;
+    net.ipv4.ip_local_reserved_ports) echo "$arg = $(cat "$STUB_DIR/reserved" 2> /dev/null)" ;;
+    net.ipv4.ip_local_port_range) printf '%s = 32768\\t60999\\n' "$arg" ;;
+    *)
+      echo "sysctl: cannot stat /proc/sys/$(printf '%s' "\${arg%%=*}" | tr . /): No such file or directory" >&2
+      exit 1 ;;
+  esac
+done`,
+  ss: `echo "$*" >> "$STUB_DIR/ss-calls"
+printf '%s' "$SOCKETS"`,
 };
 
-function reserve(step: string, reserved = '') {
+const HELD = 'TIME-WAIT 0      0      10.1.0.4:54322     3.5.6.7:443\n';
+
+function reserve(script: string, sockets = HELD) {
   const dir = mkdtempSync(path.join(tmpdir(), 'supabase-port-reservation-'));
   made.push(dir);
   for (const [name, body] of Object.entries(STUBS)) {
     writeFileSync(path.join(dir, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
   }
-  const result = spawnSync('bash', ['-e', '-c', runBlock(step)], {
-    env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`, STUB_DIR: dir, RESERVED: reserved },
+  const result = spawnSync('bash', ['-e', '-c', script], {
+    env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`, STUB_DIR: dir, SOCKETS: sockets },
     encoding: 'utf8',
     timeout: 10_000,
   });
   const file = (name: string) => (existsSync(path.join(dir, name)) ? readFileSync(path.join(dir, name), 'utf8') : '');
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr, written: file('reserved').trim(), sudo: file('sudo-calls') };
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    written: file('reserved').trim(),
+    sudo: file('sudo-calls'),
+    ss: file('ss-calls'),
+  };
 }
 
 const stackJobs = workflowJobs().filter((job) => job.steps.some((step) => /^[^#\n]*\bsupabase\b[^#\n]*\sstart\b/m.test(step)));
@@ -107,7 +129,9 @@ describe("the Supabase stack's port reservation", () => {
     expect(stackPorts).toEqual(expect.arrayContaining([54321, 54322, 54324, 54327, 54329]));
   });
 
-  it('finds the jobs that start the stack', () => {
+  it('finds the jobs that start the stack, reading jobs from every workflow file', () => {
+    const jobs = workflowJobs();
+    for (const file of workflowFiles) expect(jobs.some((job) => job.name.startsWith(`${file} `)), file).toBe(true);
     expect(stackJobs.map((job) => job.name)).toEqual(expect.arrayContaining([
       'quality.yml supabase-api',
       'quality.yml supabase-migrations',
@@ -115,24 +139,46 @@ describe("the Supabase stack's port reservation", () => {
     ]));
   });
 
-  it('reserves exactly the configured ports, through sudo, as the first step of every job that starts the stack, and prints the result', () => {
-    for (const job of stackJobs) {
-      const [first = ''] = job.steps;
-      expect(first.split('\n')[0], job.name).toBe(`      - name: ${STEP}`);
-      const result = reserve(first);
+  // One step run per test: a run is several processes, and CI's runner can be slow.
+  it.each(stackJobs)('$name reserves exactly the configured ports, through sudo, as its first step, and prints the result and the sockets it cannot move', (job) => {
+    const [first = ''] = job.steps;
+    expect(first.split('\n')[0]).toBe(`      - name: ${STEP}`);
+    const result = reserve(runBlock(first));
 
-      expect(result.status, `${job.name}: ${result.stderr}`).toBe(0);
-      expect(ports(result.written), job.name).toEqual(stackPorts);
-      expect(result.sudo, job.name).toMatch(/^-n sysctl .*-w net\.ipv4\.ip_local_reserved_ports=/m);
-      expect(result.stdout, job.name).toContain(`net.ipv4.ip_local_reserved_ports = ${result.written}\n`);
-      expect(result.stdout, job.name).toContain('net.ipv4.ip_local_port_range = ');
-    }
+    expect(result.status, result.stderr).toBe(0);
+    expect(ports(result.written)).toEqual(stackPorts);
+    expect(result.sudo).toMatch(/^-n sysctl .*-w net\.ipv4\.ip_local_reserved_ports=/m);
+    expect(result.stdout).toContain(`net.ipv4.ip_local_reserved_ports = ${result.written}\n`);
+    expect(result.stdout).toContain('net.ipv4.ip_local_port_range = 32768\t60999\n');
+    expect(result.ss).toBe(`-Htan ( sport >= :${stackPorts[0]} and sport <= :${stackPorts[stackPorts.length - 1]} )\n`);
+    expect(result.stdout).toContain(`which the reservation cannot move:\n${HELD}`);
   });
 
-  it('keeps the ports the runner image already reserves', () => {
-    const result = reserve(stackJobs[0].steps[0], '1024,30000-30010');
+  it('says so when no socket holds a stack port', () => {
+    expect(reserve(runBlock(stackJobs[0].steps[0]), '').stdout).toContain('which the reservation cannot move:\nnone\n');
+  });
 
-    expect(result.written.startsWith('1024,30000-30010,')).toBe(true);
-    expect(ports(result.written)).toEqual(ports(['1024,30000-30010', ...stackPorts].join(',')));
+  // The stand-in's half of the comparison: a step it passes must be one the runner's kernel takes.
+  it.each([
+    ['a leading comma', 'ip_local_reserved_ports=', 'ip_local_reserved_ports=,'],
+    ['a space after a comma', '54320-54324,', '54320-54324, '],
+    ['an empty item', '54320-54324,', '54320-54324,,'],
+  ])('fails the step, as the runner does, on a list with %s', (_, from, to) => {
+    const script = runBlock(stackJobs[0].steps[0]);
+    expect(script.replace(from, to)).not.toBe(script);
+    const result = reserve(script.replace(from, to));
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('"net.ipv4.ip_local_reserved_ports": Invalid argument');
+  });
+
+  it('fails the step, as the runner does, on a key that does not exist', () => {
+    const script = runBlock(stackJobs[0].steps[0]);
+    const misspelled = script.replace('sysctl net.ipv4.ip_local_reserved_ports ', 'sysctl net.ipv4.ip_local_reserved_port ');
+    expect(misspelled).not.toBe(script);
+    const result = reserve(misspelled);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('cannot stat /proc/sys/net/ipv4/ip_local_reserved_port:');
   });
 });
