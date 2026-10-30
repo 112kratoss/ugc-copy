@@ -1651,6 +1651,93 @@ describe('a page run the provider is sent', () => {
     });
   });
 
+  // Installed app builds send a clip carried onto Kling 3.0 from a model whose clips take
+  // no handle as `handle: null`. Kling reads no plain clip link, so the start used to hold
+  // the run's credits and send it without the clip.
+  describe('a Kling 3.0 clip that arrives without a handle', () => {
+    const SECOND_CLIP = 'https://signed.example.com/uploads/user-1/turn.mp4';
+    const klingClips = (prompt: string, inputs: Array<Record<string, unknown>>) => ({
+      kind: 'video',
+      modelId: 'kling-3.0-video',
+      prompt,
+      shots: [],
+      settings: { aspectRatio: '16:9', sound: false, duration: 5, mode: 'std' },
+      inputs: inputs.map((input) => ({ slot: 'videoElements', kind: 'video', ...input })),
+    });
+
+    it('is sent to Kie under a handle made from its name', async () => {
+      const { outcome, request, reservation } = await startFromPage(klingClips(
+        'A dancer on a rooftop at dusk.',
+        [{ url: CLIP, label: 'Reference video', handle: null }],
+      ));
+
+      expect(outcome).toMatchObject({ success: true, modelId: 'kling-3.0-video' });
+      expect(reservation).toBeDefined();
+      expect(request).toMatchObject({
+        model: 'kling-3.0/video',
+        input: { kling_elements: [{ name: 'reference_video', element_input_urls: [CLIP] }] },
+      });
+    });
+
+    it('leaves every handle a clip keeps to that clip, wherever it comes in the list', async () => {
+      const { outcome, request } = await startFromPage(klingClips(
+        'Follow the turn in @reference_video.',
+        [
+          { url: CLIP, label: 'Reference video', handle: null },
+          { url: SECOND_CLIP, label: 'Reference video', handle: '@reference_video' },
+        ],
+      ));
+
+      expect(outcome).toMatchObject({ success: true, modelId: 'kling-3.0-video' });
+      expect(request).toMatchObject({
+        input: {
+          kling_elements: [
+            { name: 'reference_video_2', element_input_urls: [CLIP] },
+            { name: 'reference_video', element_input_urls: [SECOND_CLIP] },
+          ],
+        },
+      });
+    });
+
+    // A remix of a run kept before clip handles: its words still name the handles the
+    // source's clips had, and its clips come back with none. A made handle that took one
+    // of those names would bind the mention to whichever clip came first.
+    it('never takes a handle the prompt mentions, so a mention nothing holds is refused before the hold', async () => {
+      await expectRefusedFromPage(
+        klingClips('Keep the camera on @reference_video_2.', [
+          { url: CLIP, label: 'Reference video', handle: null },
+          { url: SECOND_CLIP, label: 'Reference video', handle: null },
+        ]),
+        'Unknown element mention: @reference_video_2',
+      );
+    });
+
+    it('never takes a handle a shot mentions', async () => {
+      await expectRefusedFromPage(
+        {
+          ...klingClips('', [
+            { url: CLIP, label: 'Reference video', handle: null },
+            { url: SECOND_CLIP, label: 'Reference video', handle: null },
+          ]),
+          shots: [
+            { prompt: 'Open on the rooftop.', duration: 3 },
+            { prompt: 'Cut to @reference_video_2 turning.', duration: 2 },
+          ],
+          settings: { aspectRatio: '16:9', sound: false, duration: 5, mode: 'std', isMultiShot: true },
+        },
+        'Unknown element mention: @reference_video_2',
+      );
+    });
+
+    it('is held to Kling’s 3 second element minimum like a named clip', async () => {
+      await expectRefusedFromPage(
+        klingClips('A dancer on a rooftop at dusk.', [{ url: CLIP, label: 'Dancer', handle: null }]),
+        'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Dancer runs 2.4 seconds.',
+        { measuredSeconds: 2.4 },
+      );
+    });
+  });
+
   it('sends Seedance 2 a prepared clip by its asset id, measured by its link', async () => {
     const { outcome, request, reservation, probeInputDuration } = await startFromPage({
       kind: 'video',

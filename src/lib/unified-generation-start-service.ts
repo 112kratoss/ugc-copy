@@ -766,11 +766,12 @@ export async function dispatchCatalogGenerationAdapter({
         });
       }
     }
+    // A clip may come without a handle: the video start names it, past the handles kept
+    // and mentioned, since Kling 3.0 reads no clip that is not a named element.
     const videoElementInputs = referenceInputs
       .filter((asset) => (
         asset.kind === 'video'
         && asset.url
-        && asset.handle
         && (
           asset.slot === 'videoElements'
           || request.modelId === 'kling-3.0-video'
@@ -818,7 +819,7 @@ export async function dispatchCatalogGenerationAdapter({
       klingVideoElements: videoElementInputs.map((asset, index) => ({
         id: `${asset.slot}-${index + 1}`,
         url: asset.url!,
-        handle: asset.handle!,
+        handle: asset.handle ?? null,
         displayName: asset.label ?? `Video ${index + 1}`,
         storagePath: asset.storagePath ?? null,
         sourceGenerationId: asset.sourceGenerationId ?? null,

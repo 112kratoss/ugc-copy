@@ -4,6 +4,7 @@ import {
   buildElementHandle,
   compileImagePromptWithElements,
   compilePromptWithElements,
+  extractPromptHandles,
   findUnknownPromptHandles,
   isValidElementHandle,
   normalizeElementDisplayName,
@@ -1017,32 +1018,46 @@ function normalizeReferenceImageInputs(value: ReferenceImageInput[] | undefined)
     } => Boolean(reference));
 }
 
-function normalizeKlingVideoElementInputs(value: KlingVideoElementInput[] | undefined) {
-  const usedHandles = new Set<string>();
+/**
+ * Kling 3.0's clips, each under the handle Kie is sent it by (Kling reads no plain clip
+ * link). A clip keeps a handle no clip before it holds. Every other clip, one that came
+ * without a handle (an installed app sends a clip carried over from a model whose clips
+ * take none as `handle: null`) or with one an earlier clip holds, gets a handle made from
+ * its name, past every handle kept and every handle in `reservedHandles`: the run's other
+ * references and the handles its words mention. A made handle that took a mentioned one
+ * would bind that mention to a clip it never meant, as in a remix of a run kept before
+ * clips had handles, whose words still name the source's.
+ */
+function normalizeKlingVideoElementInputs(
+  value: KlingVideoElementInput[] | undefined,
+  reservedHandles: Iterable<string> = [],
+) {
+  const clips = (value || []).map((element) => (
+    element && typeof element === 'object' && typeof element.url === 'string' && element.url.trim()
+      ? element
+      : null
+  ));
+  const keptHandles = new Set<string>();
+  const handleKept = clips.map((element) => {
+    const handle = element ? normalizeReferenceHandle(element.handle) : null;
+    if (!handle || keptHandles.has(handle)) return null;
+    keptHandles.add(handle);
+    return handle;
+  });
+  const usedHandles = new Set([...keptHandles, ...reservedHandles]);
 
-  return (value || [])
+  return clips
     .map((element, index) => {
-      if (!element || typeof element !== 'object') {
+      if (!element) {
         return null;
       }
 
-      const url = typeof element.url === 'string' ? element.url.trim() : '';
-      if (!url) {
-        return null;
-      }
-
+      const url = element.url.trim();
       const displayName = normalizeElementDisplayName(
         typeof element.displayName === 'string' ? element.displayName : undefined,
         index + 1
       );
-      const normalizedHandle = normalizeReferenceHandle(element.handle);
-      const handle = normalizedHandle && !usedHandles.has(normalizedHandle)
-        ? normalizedHandle
-        : buildElementHandle(displayName, usedHandles, index + 1);
-
-      if (normalizedHandle && handle === normalizedHandle) {
-        usedHandles.add(handle);
-      }
+      const handle = handleKept[index] ?? buildElementHandle(displayName, usedHandles, index + 1);
 
       return {
         id: typeof element.id === 'string' && element.id.trim() ? element.id : null,
@@ -2411,7 +2426,6 @@ export async function startVideoGeneration(params: {
   const rawPrompt = typeof prompt === 'string' ? prompt : '';
   const trimmedPrompt = rawPrompt.trim();
   const normalizedReferences = normalizeReferenceImageInputs(references);
-  const normalizedKlingVideoElements = normalizeKlingVideoElementInputs(klingVideoElements);
   const normalizedKlingSubjects = normalizeKlingSubjectInputs(klingSubjects);
   const normalizedElements = normalizedReferences.length > 0
     ? normalizedReferences
@@ -2424,6 +2438,12 @@ export async function startVideoGeneration(params: {
         sourceGenerationId: reference.sourceGenerationId,
       }) satisfies ImageElementDescriptor)
     : normalizeSubmittedElementDescriptors(elements);
+  const normalizedKlingVideoElements = normalizeKlingVideoElementInputs(klingVideoElements, [
+    ...normalizedElements.map((element) => element.handle),
+    ...normalizedKlingSubjects.map((subject) => subject.handle),
+    ...[rawPrompt, ...(multiPrompts || []).map((shot) => shot.prompt)]
+      .flatMap((words) => extractPromptHandles(typeof words === 'string' ? words : '')),
+  ]);
   const normalizedReferenceMode = referenceMode === 'elements' ? 'elements' : 'frames';
   const normalizedStartFrame = normalizeRemixMediaAssetDescriptor(startFrame, 'image');
   const normalizedEndFrame = normalizeRemixMediaAssetDescriptor(endFrame, 'image');
