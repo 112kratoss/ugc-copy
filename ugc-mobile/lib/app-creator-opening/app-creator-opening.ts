@@ -13,7 +13,8 @@
  * (`buildGenerationModelCatalog` in src/lib/generation-model-catalog.ts, the mobile platform): a
  * new default, a new name for it or a new published setting fails it until this file follows, and
  * phones learn the change with the app's next update (an OTA). Until then an installed app opens
- * on the old default and moves to the new one when its catalog arrives.
+ * on the old default and moves to the new one, with any words typed meanwhile, once the network
+ * confirms the catalog's revision (normalizeCreationDraftForCatalog).
  *
  * The web tests compile this file too: keep it free of imports, React Native, Expo and Node alike.
  */

@@ -1067,6 +1067,11 @@ export function replaceMediaDraftMedia(media: MediaDraft, upload: UploadedMediaI
   };
 }
 
+/**
+ * A blank draft on the bundled stand-in (Kling 3.0 for video and motion, whatever the catalog's
+ * default): the base a remix restores its source into, and the skeleton of the opening. A creator
+ * opens on `createOpeningCreationDraft` (lib/generation-model-draft), the catalog default, instead.
+ */
 export function createDefaultCreationDraft(tool: 'image'): ImageCreationDraft;
 export function createDefaultCreationDraft(tool: 'video'): VideoCreationDraft;
 export function createDefaultCreationDraft(tool: 'motion'): MotionCreationDraft;

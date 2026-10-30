@@ -215,7 +215,10 @@ know. A mobile release is needed only for:
 - a new model kind;
 - a `minClientSchemaVersion` above what the shipped apps read;
 - a change to the guided first video's starter model that the starter no longer fits (see "Changing a model
-  we already run").
+  we already run");
+- a new default model for a tool, a new name for one, or a new published default for one of its settings
+  (`APP_CREATOR_OPENINGS` in `ugc-mobile/lib/app-creator-opening/`, which the creators draw before their catalog
+  arrives; see "Changing a model we already run").
 
 New optional keys are fine.
 
@@ -256,12 +259,13 @@ until their catalog arrives (`APP_CREATOR_OPENINGS` in `ugc-mobile/lib/app-creat
 then settles a new draft on the default it names (`normalizeCreationDraftForCatalog`, which waits for the
 default's details). `src/__tests__/app-creator-opening.test.ts` holds that table to the code catalog, so a
 changed default, a new name for it or a new published setting means changing the table in the same piece of
-work and shipping it to phones with an app OTA; until then an installed app opens on the old default and
-moves to the new one when its catalog arrives. A saved draft that holds nothing and is still at its model's
-published defaults follows a changed default too, the first time it is opened after the change (the app for
-every tool, the web video creator; the web image and motion creators keep a saved draft's model). A draft with
-words, files or a changed setting keeps its model. So a changed default reaches existing accounts' untouched
-drafts, at its own price.
+work and shipping it to phones with an app OTA. Until then an installed app opens on the old default and moves
+to the new one once the network confirms the catalog's revision (a revision the phone stored never settles a
+new draft), with any words typed meanwhile: the opening's model was the app's choice, never the creator's
+(`seededModelIds`). A saved draft that holds nothing and is still at its model's published defaults follows a
+changed default too, the first time it is opened after the change (the app for every tool, the web video
+creator; the web image and motion creators keep a saved draft's model). A draft with words, files or a changed
+setting keeps its model. So a changed default reaches existing accounts' untouched drafts, at its own price.
 
 ## Background
 

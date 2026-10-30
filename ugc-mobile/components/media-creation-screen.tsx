@@ -246,14 +246,20 @@ function screenCatalogOptions(kind: CreatorToolId, screen: {
   initialTool: CreatorToolId;
   missingIds: readonly string[];
   linkPrompt: string | null;
+  revisionUnconfirmed: boolean;
 }) {
   const starterScreen = { guided: screen.guided, initialTool: screen.initialTool };
   return {
     modelSelectionTouched: screen.touched,
     starter: guidedCreationStarter(kind, starterScreen, screen.missingIds),
     missingIds: screen.missingIds,
-    seededModelIds: guidedCreationStarters(kind, starterScreen).map((starter) => starter.modelId),
+    // The models this screen put in a new draft itself: its opening, and every starter it may have named.
+    seededModelIds: [
+      APP_CREATOR_OPENINGS[kind].modelId,
+      ...guidedCreationStarters(kind, starterScreen).map((starter) => starter.modelId),
+    ],
     seededPrompt: kind === screen.initialTool ? screen.linkPrompt : null,
+    revisionUnconfirmed: screen.revisionUnconfirmed,
   };
 }
 
@@ -1005,12 +1011,6 @@ function IdentityCreationScreen({
     ...createOpeningCreationDraft('motion'),
     prompt: initialTool === 'motion' ? initialPrompt ?? '' : '',
   }));
-  // The opening a draft is on, whose name and settings the chips draw until the catalog describes its
-  // model. A remix waits for its source instead, which names a model of its own.
-  const openingFor = (draft: CreationDraft) => {
-    const opening = APP_CREATOR_OPENINGS[draft.tool];
-    return !remixSource && draft.model === opening.modelId ? opening : null;
-  };
   const [isUploading, setIsUploading] = useState(false);
   // The running upload's tile, progress and Cancel (uploadPicks).
   const [upload, setUpload] = useState<UploadProgress | null>(null);
@@ -1144,6 +1144,9 @@ function IdentityCreationScreen({
   const catalog = catalogQuery.catalog;
   const refetchCatalog = catalogQuery.refetch;
   const loadCatalogDetails = catalogQuery.loadDetails;
+  // A catalog the phone stored stands in while the network is asked for the current revision. A new draft
+  // is neither settled nor priced on it: a release since may name another default (normalizeCreationDraftForCatalog).
+  const revisionUnconfirmed = Boolean(catalogQuery.isCheckingRevision);
   const [parametersVisible, setParametersVisible] = useState(false);
   const [workspaceVisible, setWorkspaceVisible] = useState(false);
   // The room the page's end keeps for the persistent bar's stack: the bar and the tallest blocker from the
@@ -1265,7 +1268,7 @@ function IdentityCreationScreen({
         // normalization is never saved as something the creator changed.
         const baseline = catalog
           ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, screenCatalogOptions(tool, {
-              touched: false, guided: guidedScreen, initialTool, missingIds: catalogQuery.missingIds, linkPrompt,
+              touched: false, guided: guidedScreen, initialTool, missingIds: catalogQuery.missingIds, linkPrompt, revisionUnconfirmed,
             })).draft
           : remixBaseline.current[tool];
         return [tool, Object.keys(saved[tool]).filter((key) => JSON.stringify((saved[tool] as unknown as Record<string, unknown>)[key]) !== JSON.stringify((baseline as unknown as Record<string, unknown>)[key]))];
@@ -1349,6 +1352,7 @@ function IdentityCreationScreen({
         initialTool,
         missingIds: catalogQuery.missingIds,
         linkPrompt,
+        revisionUnconfirmed,
       });
       setter((draft) => {
         const result = normalizeCreationDraftForCatalog(draft, catalog, options);
@@ -1369,8 +1373,9 @@ function IdentityCreationScreen({
     reconcile<MotionCreationDraft>('motion', setMotionDraft);
     // Saved drafts are read against the catalog as they land, as the remix restore's baseline
     // assumes: a catalog settled before them (a stored one the network confirms unchanged) may
-    // not change again this visit, and an untouched draft would keep a replaced default.
-  }, [catalog, catalogQuery.missingIds, guidedScreen, initialTool, linkPrompt, draftsHydrated]);
+    // not change again this visit, and an untouched draft would keep a replaced default. A new
+    // draft is read once the network confirms the revision, which a 304 does without a new catalog.
+  }, [catalog, catalogQuery.missingIds, guidedScreen, initialTool, linkPrompt, draftsHydrated, revisionUnconfirmed]);
 
   const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
   const currentCatalogModel = useMemo(
@@ -1384,14 +1389,25 @@ function IdentityCreationScreen({
   const currentDraft: CreationDraft = rawDraft.tool === 'video'
     ? { ...rawDraft, referenceMode: videoRunReferenceMode(rawDraft, currentCatalogModel) }
     : rawDraft;
+  // The model chip's name: the catalog's for the draft's model, else the opening's while the draft is on it
+  // (no remix source is on its way to name another), else a word that it is loading.
+  const currentModel = currentCatalogModel?.kind === activeTool ? currentCatalogModel : null;
+  const currentOpening = !remixSource?.generationId && currentDraft.model === APP_CREATOR_OPENINGS[currentDraft.tool].modelId
+    ? APP_CREATOR_OPENINGS[currentDraft.tool]
+    : null;
+  const modelChipName = currentModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model)
+    ? 'Choose another model'
+    : currentOpening?.displayName ?? 'Loading model settings…');
   // A motion quote needs both inputs: asked without them, the server refuses it, and that
   // refusal read as an error on every first visit.
   const motionInputsMissing = currentDraft.tool === 'motion' && (!currentDraft.characterImage || !currentDraft.referenceVideo);
+  // A new draft is priced once the network confirms the revision it is settled on.
+  const awaitingRevision = revisionUnconfirmed && !currentDraft.catalogRevision;
   const quoteRequest = useMemo(
-    () => currentCatalogModel && catalog && !motionInputsMissing
+    () => currentCatalogModel && catalog && !motionInputsMissing && !awaitingRevision
       ? buildCatalogQuoteRequest(currentDraft, currentCatalogModel, catalog.revision)
       : null,
-    [catalog, currentCatalogModel, currentDraft, motionInputsMissing]
+    [awaitingRevision, catalog, currentCatalogModel, currentDraft, motionInputsMissing]
   );
   const quoteKey = quoteRequest ? JSON.stringify(quoteRequest) : null;
   // Only the price is kept from a quote. The run is built from the draft as this request was
@@ -1665,7 +1681,9 @@ function IdentityCreationScreen({
 
   useEffect(() => {
     const generationId = remixSource?.generationId?.trim();
-    if (!generationId || !catalog || !draftsHydrated || resumedRemixRef.current || remixHydrationKeyRef.current === generationId) return;
+    // A stored catalog waits for the network as a new draft does, so the baseline below is the draft
+    // as the confirmed revision settles it, never one the reconcile then settles again under the restore.
+    if (!generationId || !catalog || revisionUnconfirmed || !draftsHydrated || resumedRemixRef.current || remixHydrationKeyRef.current === generationId) return;
     // No identity to read the source as: the guest bootstrap failed, or the
     // session is not back yet. Signing in is then the way to get one.
     if (!identityUserId) {
@@ -1696,6 +1714,7 @@ function IdentityCreationScreen({
         initialTool,
         missingIds: catalogQuery.missingIds,
         linkPrompt,
+        revisionUnconfirmed,
       }),
     ).draft;
 
@@ -1704,11 +1723,7 @@ function IdentityCreationScreen({
         const modelId = typeof bundle.workflowSettings.model === 'string' ? bundle.workflowSettings.model : bundle.generation.model;
         const restoredCatalog = await loadCatalogDetails([modelId]);
         if (isCancelled) return;
-        const baseDraft = targetTool === 'image'
-          ? createDefaultCreationDraft('image')
-          : targetTool === 'video'
-            ? createDefaultCreationDraft('video')
-            : createDefaultCreationDraft('motion');
+        const baseDraft = createDefaultCreationDraft(targetTool);
         const restored = hydrateCatalogCreationDraftFromRemixSource(baseDraft, bundle, restoredCatalog);
         const creatorPrompt = draftPromptsRef.current[targetTool];
         const prompt = hasCreatorEditedPromptDuringRemix(creatorPrompt, promptWhenRemixStarted)
@@ -1782,7 +1797,7 @@ function IdentityCreationScreen({
       // is back, and marked resolved, before this cleanup runs.
       setIsRestoringRemix(false);
     };
-  }, [api, catalog, catalogQuery.missingIds, loadCatalogDetails, draftsHydrated, guidedScreen, initialTool, linkPrompt, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId]);
+  }, [api, catalog, catalogQuery.missingIds, loadCatalogDetails, draftsHydrated, guidedScreen, initialTool, linkPrompt, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId, revisionUnconfirmed]);
 
   const updatePrompt = (prompt: string) => {
     if (activeTool === 'image') setImageDraft((draft) => ({ ...draft, prompt }));
@@ -2887,7 +2902,7 @@ function IdentityCreationScreen({
       : null;
     const activeGenerationStatus = generationTool === activeTool ? status : null;
     const activeOutputUrl = generationTool === activeTool ? outputUrl : null;
-    const parameterSummary = creatorParameterSummary(activeTool === 'video' ? videoDraft : motionDraft, selectedCreatorModel, openingFor(currentDraft));
+    const parameterSummary = creatorParameterSummary(activeTool === 'video' ? videoDraft : motionDraft, selectedCreatorModel, currentOpening);
     const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
@@ -2929,7 +2944,7 @@ function IdentityCreationScreen({
         >
           <CompactCreatorHeader
             activeTool={activeTool}
-            modelName={selectedCreatorModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model) ? 'Choose another model' : openingFor(currentDraft)?.displayName ?? 'Loading model settings…')}
+            modelName={modelChipName}
             modelDisabled={!catalogQuery.current && !catalog}
             onChangeTool={changeTool}
             onOpenModels={() => setModelPickerVisible(true)}
@@ -3212,7 +3227,7 @@ function IdentityCreationScreen({
         >
           <CompactCreatorHeader
             activeTool={activeTool}
-            modelName={selectedImageModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model) ? 'Choose another model' : openingFor(currentDraft)?.displayName ?? 'Loading model settings…')}
+            modelName={modelChipName}
             modelDisabled={!catalogQuery.current && !catalog}
             onChangeTool={changeTool}
             onOpenModels={() => setModelPickerVisible(true)}
@@ -3259,7 +3274,7 @@ function IdentityCreationScreen({
 
           <ImagePromptComposer
             draft={imageDraft}
-            maxReferences={maxImageReferences}
+            maxReferences={selectedImageModel ? maxImageReferences : null}
             // Until the model's descriptor is in, nothing is known to be left out.
             referencesSent={selectedImageModel ? maxImageReferences : imageDraft.references.length}
             promptOnlyModelName={selectedImageModel && maxImageReferences === 0 ? selectedImageModel.displayName : null}
@@ -3657,7 +3672,8 @@ function ImagePromptComposer({
   onMentionStateChange,
 }: {
   draft: ImageCreationDraft;
-  maxReferences: number;
+  /** How many pictures the model takes; null until its details are in, when the rail claims no number. */
+  maxReferences: number | null;
   /** How many of the draft's references a run sends: the first ones, up to the model's max. */
   referencesSent: number;
   /** The model's name when it takes no reference images, for the note drawn in place of the rail. */
@@ -3708,7 +3724,7 @@ function ImagePromptComposer({
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedReference = draft.references.find((media) => media.id === referenceId) ?? null;
-  const referenceLimitReached = maxReferences === 0 || draft.references.length >= maxReferences;
+  const referenceLimitReached = maxReferences === null || maxReferences === 0 || draft.references.length >= maxReferences;
   // The rest wait in the draft for a model that takes them.
   const sentReferences = draft.references.slice(0, referencesSent);
   const standbyReferences = draft.references.slice(referencesSent);
@@ -3921,7 +3937,9 @@ function ImagePromptComposer({
             <>
               <View style={{ paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                 <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Reference images</Text>
-                <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
+                {maxReferences === null ? null : (
+                  <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
+                )}
               </View>
               {/* The add tile stays fixed at the start of the row, outside the pictures' scroller, so
                   it is in view however many pictures follow it and wherever they are scrolled to; a

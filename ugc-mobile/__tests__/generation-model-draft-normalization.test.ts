@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { APP_CREATOR_OPENINGS } from '../lib/app-creator-opening/app-creator-opening';
 import type { GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
 import { createOpeningCreationDraft, normalizeCreationDraftForCatalog } from '../lib/generation-model-draft';
 import { GUIDED_CREATION_STARTERS, guidedCreationStarter } from '../lib/guided-creation-starter';
 import { createDefaultCreationDraft, type CreationDraft, type MediaDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
-import { createRemixRestoreCatalog, seedance15ProModel, seedance2MiniAtRelease, seedance2MiniModel } from './fixtures/generation-model-catalog';
+import { createPublishedDefaultsCatalog, createRemixRestoreCatalog, seedance15ProModel, seedance2MiniAtRelease, seedance2MiniModel } from './fixtures/generation-model-catalog';
 
 describe('normalizeCreationDraftForCatalog', () => {
   const catalog = createRemixRestoreCatalog();
@@ -97,26 +98,33 @@ describe('normalizeCreationDraftForCatalog', () => {
  * src/__tests__/app-creator-opening.test.ts holds it to the code catalog's defaults.
  */
 describe('the opening draft', () => {
-  // Each tool's default at its published settings, as production publishes them (kie-catalog-inputs-20261029).
-  const published: GenerationModelCatalog = {
-    ...createRemixRestoreCatalog(),
-    revision: 'kie-catalog-inputs-20261029',
-    defaults: { image: 'nano-banana-2', video: 'seedance-2-mini', motion: 'kling-2.6' },
-    models: [...createRemixRestoreCatalog().models, seedance2MiniAtRelease],
-  };
+  const published = createPublishedDefaultsCatalog();
+  // What the screen tells this step about a new draft (screenCatalogOptions): the opening's model is its own choice.
+  const asTheScreen = (tool: CreationDraft['tool'], more: Partial<Parameters<typeof normalizeCreationDraftForCatalog>[2]> = {}) => ({
+    modelSelectionTouched: false,
+    seededModelIds: [APP_CREATOR_OPENINGS[tool].modelId],
+    ...more,
+  });
+  // A release after this build, which made Seedance 2 the default video.
+  const later = createPublishedDefaultsCatalog({
+    revision: 'later-release',
+    defaults: { image: 'nano-banana-2', video: 'seedance-2', motion: 'kling-2.6' },
+  });
 
   it('writes the opening\'s settings where the draft keeps them', () => {
     expect(createOpeningCreationDraft('video')).toMatchObject({
       model: 'seedance-2-mini', resolution: '480p', aspectRatio: '16:9', duration: 5, sound: false, referenceMode: 'frames', catalogRevision: null,
     });
-    // A motion run's resolution is the draft's `mode`.
-    expect(createOpeningCreationDraft('motion')).toMatchObject({ model: 'kling-2.6', mode: '720p', characterOrientation: 'video', duration: 10 });
+    // A motion run's resolution is the draft's `mode`; a motion draft has no `resolution`.
+    const motion = createOpeningCreationDraft('motion');
+    expect(motion).toMatchObject({ model: 'kling-2.6', mode: APP_CREATOR_OPENINGS.motion.settings.resolution, characterOrientation: 'video', duration: 10 });
+    expect(motion).not.toHaveProperty('resolution');
     expect(createOpeningCreationDraft('image')).toMatchObject({ model: 'nano-banana-2', resolution: '1K', aspectRatio: 'auto', outputFormat: 'jpg' });
   });
 
   it.each(['image', 'video', 'motion'] as const)('settles on the %s default with nothing changed but its revision', (tool) => {
     const opening = createOpeningCreationDraft(tool);
-    const { draft, warning } = normalizeCreationDraftForCatalog(opening, published, { modelSelectionTouched: false });
+    const { draft, warning } = normalizeCreationDraftForCatalog(opening, published, asTheScreen(tool));
 
     expect(warning).toBeNull();
     expect(draft.catalogRevision).toBe('kie-catalog-inputs-20261029');
@@ -126,11 +134,45 @@ describe('the opening draft', () => {
   it('keeps words typed before the catalog arrives on the default, where the stand-in kept Kling 3.0', () => {
     const typed = { ...createOpeningCreationDraft('video'), prompt: 'A lighthouse in a storm' };
 
-    expect(normalizeCreationDraftForCatalog(typed, published, { modelSelectionTouched: false }).draft).toMatchObject({
+    expect(normalizeCreationDraftForCatalog(typed, published, asTheScreen('video')).draft).toMatchObject({
       model: 'seedance-2-mini', prompt: 'A lighthouse in a storm', resolution: '480p', catalogRevision: 'kie-catalog-inputs-20261029',
     });
     const stoodIn = { ...createDefaultCreationDraft('video'), prompt: 'A lighthouse in a storm' };
-    expect(normalizeCreationDraftForCatalog(stoodIn, published, { modelSelectionTouched: false }).draft.model).toBe('kling-3.0-video');
+    expect(normalizeCreationDraftForCatalog(stoodIn, published, asTheScreen('video')).draft.model).toBe('kling-3.0-video');
+  });
+
+  it('moves words typed early to the default a later release names, keeping them', () => {
+    const typed = { ...createOpeningCreationDraft('video'), prompt: 'A lighthouse in a storm' };
+    const { draft, warning } = normalizeCreationDraftForCatalog(typed, later, asTheScreen('video'));
+
+    expect(warning).toBeNull();
+    expect(draft).toMatchObject({ model: 'seedance-2', prompt: 'A lighthouse in a storm', duration: 15, catalogRevision: 'later-release' });
+    // A draft the catalog already settled, or whose model the creator picked, keeps its model.
+    const settled = { ...typed, catalogRevision: 'kie-catalog-inputs-20261029' };
+    expect(normalizeCreationDraftForCatalog(settled, later, asTheScreen('video')).draft.model).toBe('seedance-2-mini');
+    expect(normalizeCreationDraftForCatalog(typed, later, asTheScreen('video', { modelSelectionTouched: true })).draft.model).toBe('seedance-2-mini');
+  });
+
+  it('waits for the revision the network confirms before settling a new draft, and reads a saved one meanwhile', () => {
+    // What a phone that last opened the creator before 2026-10-28 has stored: Kling 3.0 Cinematic the default video.
+    const stored = createPublishedDefaultsCatalog({
+      revision: 'kie-checkup-20261020',
+      defaults: { image: 'nano-banana-2', video: 'kling-3.0-video', motion: 'kling-2.6' },
+    });
+    const opening = createOpeningCreationDraft('video');
+
+    expect(normalizeCreationDraftForCatalog(opening, stored, asTheScreen('video', { revisionUnconfirmed: true })).draft).toBe(opening);
+    expect(normalizeCreationDraftForCatalog(opening, stored, asTheScreen('video')).draft.model).toBe('kling-3.0-video');
+    const saved = { ...opening, prompt: 'A lighthouse in a storm', catalogRevision: 'kie-checkup-20261020' };
+    expect(normalizeCreationDraftForCatalog(saved, stored, asTheScreen('video', { revisionUnconfirmed: true })).draft).not.toBe(saved);
+  });
+
+  it('starts the guided first video where the opening draws, so its first frame is the starter\'s too', () => {
+    // The opening knows the default's name and settings only: a starter elsewhere would open on
+    // "Loading model settings…" over the default's settings, and change when the catalog arrives.
+    const [starter] = GUIDED_CREATION_STARTERS.video ?? [];
+    expect(starter?.modelId).toBe(APP_CREATOR_OPENINGS.video.modelId);
+    for (const [key, value] of Object.entries(starter?.settings ?? {})) expect(APP_CREATOR_OPENINGS.video.settings[key]).toEqual(value);
   });
 });
 
