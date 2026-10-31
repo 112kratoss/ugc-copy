@@ -4381,7 +4381,7 @@ describe('CreateVideoClient Kling video elements', () => {
         writePrompt();
 
         expect(await screen.findByText(SHORT_CLIP)).toBeInTheDocument();
-        expect(screen.getByText('2.1s clip')).toBeInTheDocument();
+        expect(screen.getByText('2.1s clip, under the 3s minimum')).toBeInTheDocument();
         expect(generateButton()).toBeDisabled();
       });
 
