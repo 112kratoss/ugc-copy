@@ -52,6 +52,8 @@ function createSupabaseMock({
   pendingOrders = [],
   profiles = [],
   profilesError = null,
+  postMedia = [],
+  postMediaError = null,
 }: {
   post: MockPost | null;
   bundle: MockBundle | null;
@@ -62,6 +64,9 @@ function createSupabaseMock({
   /** Guest identities and the account each was linked to (`merged_into_user_id`). */
   profiles?: Array<Record<string, unknown>>;
   profilesError?: { message: string } | null;
+  /** The post's media rows, until its delete cascades to them. */
+  postMedia?: Array<Record<string, unknown>>;
+  postMediaError?: { message: string } | null;
 }) {
   const calls = {
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
@@ -71,7 +76,10 @@ function createSupabaseMock({
     removals: [] as Array<{ bucket: string; paths: string[] }>,
     /** Every table read or written, in order. */
     tables: [] as string[],
+    /** Media-row reads and post deletes, in the order they ran. */
+    sequence: [] as string[],
   };
+  let postDeleted = false;
 
   function createQuery(table: string) {
     calls.tables.push(table);
@@ -87,6 +95,25 @@ function createSupabaseMock({
 
       if (operation === 'delete') {
         calls.deletes.push({ table, filters });
+        if (table === 'posts') {
+          calls.sequence.push('delete posts');
+          postDeleted = true;
+        }
+      }
+
+      if (table === 'post_media' && operation === 'select') {
+        calls.sequence.push('read post_media');
+        const rows = postDeleted
+          ? []
+          : postMedia.filter((row) => Object.entries(filters).every(([column, value]) => row[column] === value));
+        return {
+          data: postMediaError
+            ? null
+            : rows.map((row) => (selected
+              ? Object.fromEntries(selected.map((column) => [column, row[column] ?? null]))
+              : row)),
+          error: postMediaError,
+        };
       }
 
       if (table === 'profiles') {
@@ -564,6 +591,123 @@ describe('deleteOwnerPostForRoute', () => {
       { bucket: 'showcase_media', paths: ['showcase/generation-1/public.jpg'] },
     ]);
     expect(calls.tables).not.toContain('profiles');
+  });
+
+  // The cover row publish gives a creation post names what the sweeps built
+  // from its copy, beside it in the creation's folder. The delete cascades to
+  // the row, so the paths are read first.
+  describe('the media the sweeps made from a creation’s copy', () => {
+    const creationPost: MockPost = {
+      id: 'post-1',
+      user_id: 'user-1',
+      generation_id: 'generation-1',
+      visibility: 'public',
+      title: 'Own creation',
+      source_kind: 'generation',
+      showcase_asset_path: 'showcase/generation-1/public.abc.mp4',
+    };
+    const coverRow = {
+      post_id: 'post-1',
+      storage_path: 'showcase/generation-1/public.abc.mp4',
+      preview_storage_path: 'showcase/generation-1/public.abc.preview.p1.webp',
+      display_storage_path: 'showcase/generation-1/public.abc.display.d1.webp',
+      rendition_storage_path: 'showcase/generation-1/public.abc.feed.r1.mp4',
+      teaser_storage_path: 'showcase/generation-1/public.abc.teaser.t1.mp4',
+    };
+
+    async function deleteCreationPost(options: Partial<Parameters<typeof createSupabaseMock>[0]> = {}) {
+      const mock = createSupabaseMock({
+        post: creationPost,
+        bundle: null,
+        generation: { id: 'generation-1', user_id: 'user-1', showcase_asset_path: creationPost.showcase_asset_path },
+        postMedia: [coverRow],
+        ...options,
+      });
+      await expect(deleteOwnerPostForRoute({
+        adminSupabase: mock.client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+      })).resolves.toMatchObject({ ok: true });
+      return mock.calls;
+    }
+
+    it('go with the copy straight away, read before the delete takes the row', async () => {
+      const calls = await deleteCreationPost();
+
+      expect(calls.removals).toEqual([{
+        bucket: 'showcase_media',
+        paths: [
+          'showcase/generation-1/public.abc.mp4',
+          'showcase/generation-1/public.abc.preview.p1.webp',
+          'showcase/generation-1/public.abc.display.d1.webp',
+          'showcase/generation-1/public.abc.feed.r1.mp4',
+          'showcase/generation-1/public.abc.teaser.t1.mp4',
+        ],
+      }]);
+      expect(calls.sequence).toEqual(['read post_media', 'delete posts']);
+    });
+
+    it('leave whatever a row names outside the creation’s folder', async () => {
+      const calls = await deleteCreationPost({
+        postMedia: [
+          coverRow,
+          {
+            post_id: 'post-1',
+            // An upload's private copy (post_media_private_cleanup owns it), and
+            // another creation's folder.
+            storage_path: 'private-posts/post-1/upload.jpg',
+            preview_storage_path: 'showcase/generation-2/upload.preview.p2.webp',
+            display_storage_path: 'posts/post-1/upload.display.d2.webp',
+          },
+        ],
+      });
+
+      expect(calls.removals).toHaveLength(1);
+      expect(calls.removals[0].paths).toEqual([
+        'showcase/generation-1/public.abc.mp4',
+        'showcase/generation-1/public.abc.preview.p1.webp',
+        'showcase/generation-1/public.abc.display.d1.webp',
+        'showcase/generation-1/public.abc.feed.r1.mp4',
+        'showcase/generation-1/public.abc.teaser.t1.mp4',
+      ]);
+    });
+
+    it('go with a deleted creation’s copy, under the creation the post recorded', async () => {
+      const calls = await deleteCreationPost({
+        post: { ...creationPost, generation_id: null, deleted_generation_id: 'generation-1' },
+        generation: null,
+      });
+
+      expect(calls.removals).toEqual([{
+        bucket: 'showcase_media',
+        paths: [
+          'showcase/generation-1/public.abc.mp4',
+          'showcase/generation-1/public.abc.preview.p1.webp',
+          'showcase/generation-1/public.abc.display.d1.webp',
+          'showcase/generation-1/public.abc.feed.r1.mp4',
+          'showcase/generation-1/public.abc.teaser.t1.mp4',
+        ],
+      }]);
+    });
+
+    it('are left to the revocation queue when the rows cannot be read', async () => {
+      // The posts trigger queued them in the delete's own statement.
+      const calls = await deleteCreationPost({ postMediaError: { message: 'post_media unavailable' } });
+
+      expect(calls.deletes).toEqual([{ table: 'posts', filters: { id: 'post-1', user_id: 'user-1' } }]);
+      expect(calls.removals).toEqual([
+        { bucket: 'showcase_media', paths: ['showcase/generation-1/public.abc.mp4'] },
+      ]);
+    });
+
+    it('are not read for another account’s creation', async () => {
+      const calls = await deleteCreationPost({
+        generation: { id: 'generation-1', user_id: 'user-2', showcase_asset_path: creationPost.showcase_asset_path },
+      });
+
+      expect(calls.removals).toEqual([]);
+      expect(calls.tables).not.toContain('post_media');
+    });
   });
 
   // Publish files a creation made as a guest under the account the guest was

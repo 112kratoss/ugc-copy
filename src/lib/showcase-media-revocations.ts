@@ -15,9 +15,11 @@ import {
  * The public bucket serves whatever is in it, so a copy stays fetchable until
  * its object is gone. The posts trigger `posts_sync_generation_exposure`
  * queues a derivative in the post write's own transaction whenever an
- * unexposed post drops it or a post is deleted outright. The routes still
- * delete the copy inline; this drains what they missed, so a failed or skipped
- * delete can no longer leave a private post's media public.
+ * unexposed post drops it or a post is deleted outright, and
+ * `z_posts_queue_deleted_post_media` queues what a deleted post's media rows
+ * named beside it before the delete cascades to them. The routes still delete
+ * the copy inline; this drains what they missed, so a failed or skipped delete
+ * can no longer leave a private post's media public.
  */
 
 export const SHOWCASE_MEDIA_REVOCATION_BATCH_LIMIT = 50;
@@ -43,6 +45,19 @@ type RevocationRow = {
 type ExposureRow = {
   showcase_asset_path: string | null;
   visibility?: string | null;
+};
+
+const POST_MEDIA_PATH_COLUMNS = [
+  'storage_path',
+  'preview_storage_path',
+  'display_storage_path',
+  'rendition_storage_path',
+  'teaser_storage_path',
+] as const;
+
+type CreationPostRow = {
+  id: string;
+  post_media: Array<Record<(typeof POST_MEDIA_PATH_COLUMNS)[number], string | null>> | null;
 };
 
 type RevocationOutcome =
@@ -112,7 +127,7 @@ async function revoke(
     return { settled: true, reason: 'outsidePrefix' };
   }
 
-  const [generation, post] = await Promise.all([
+  const [generation, post, creationPosts] = await Promise.all([
     client
       .from('generations')
       .select('showcase_asset_path')
@@ -125,15 +140,34 @@ async function revoke(
         .eq('id', row.post_id)
         .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
+    // The media rows of the creation's posts, linked or recording it as
+    // deleted: a deleted post's cover row queued the preview, display,
+    // rendition and teaser built from its copy, and the creation published
+    // again at once gets the same content-addressed names.
+    client
+      .from('posts')
+      .select(`id, post_media(${POST_MEDIA_PATH_COLUMNS.join(', ')})`)
+      .or(`generation_id.eq.${row.generation_id},deleted_generation_id.eq.${row.generation_id}`),
   ]);
   if (generation.error) return { settled: false, error: errorText(generation.error) };
   if (post.error) return { settled: false, error: errorText(post.error) };
+  if (creationPosts.error) return { settled: false, error: errorText(creationPosts.error) };
 
   const generationRow = generation.data as ExposureRow | null;
   const postRow = post.data as ExposureRow | null;
-  // Published again under the same path since it was queued: it is serving.
-  const stillServing = [generationRow?.showcase_asset_path, postRow?.showcase_asset_path]
-    .some((candidate) => getCanonicalGenerationShowcaseAssetPath(candidate, row.generation_id) === path);
+  // A private post's legacy media rows serve this same copy and go with it.
+  // A post that is public again has a live cover row under this prefix.
+  const removedWithPostId = postRow?.visibility === 'private' ? row.post_id : null;
+  // Published again under the same path since it was queued, or named by a
+  // media row that is not going with it: it is serving.
+  const stillServing = [
+    generationRow?.showcase_asset_path,
+    postRow?.showcase_asset_path,
+    ...((creationPosts.data ?? []) as unknown as CreationPostRow[])
+      .filter((creationPost) => creationPost.id !== removedWithPostId)
+      .flatMap((creationPost) => creationPost.post_media ?? [])
+      .flatMap((media) => POST_MEDIA_PATH_COLUMNS.map((column) => media[column])),
+  ].some((candidate) => getCanonicalGenerationShowcaseAssetPath(candidate, row.generation_id) === path);
   if (stillServing) {
     return { settled: true, reason: 'stillServing' };
   }
@@ -142,9 +176,7 @@ async function revoke(
     adminSupabase: client,
     generationId: row.generation_id,
     showcaseAssetPath: path,
-    // A private post's legacy media rows serve this same copy and go with it.
-    // A post that is public again has a live cover row under this prefix.
-    postId: postRow?.visibility === 'private' ? row.post_id : null,
+    postId: removedWithPostId,
   });
   if (removal.error) {
     return { settled: false, error: removal.error.message ?? 'Storage removal failed.' };

@@ -134,6 +134,37 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     await assertRemoved();
   });
 
+  // Public again, then deleted outright: the delete cascades to the media row before the posts AFTER DELETE triggers run.
+  const deletePublicPost=async(creation:'live'|'deleted')=>{
+    await db.query("update public.posts set visibility='public',showcase_asset_path=$2 where id=$1",[postId,paths[0]]);
+    await db.query('delete from public.showcase_media_revocations where generation_id=$1',[generationId]);
+    if(creation==='deleted')await db.query('delete from public.generations where id=$1',[generationId]);
+    await db.query('delete from public.posts where id=$1',[postId]);
+    await db.query("update public.showcase_media_revocations set next_attempt_at=now()-interval '1 minute' where generation_id=$1",[generationId]);
+  };
+  it.each(['live','deleted'] as const)("removes a deleted post's media row objects with its copy, for a %s creation",async creation=>{
+    await deletePublicPost(creation);
+    const summary=await processShowcaseMediaRevocations(admin,{now:new Date()});
+    await assertRemoved();
+    expect(summary).toMatchObject({due:6,removed:6,rescheduled:0});
+  });
+
+  it('keeps what the creation, published again at once, serves under the same names',async()=>{
+    await deletePublicPost('live');
+    // A new post with the same content-addressed copy, whose cover row the sweeps gave the same names.
+    const republishedId=randomUUID();
+    await db.query("insert into public.posts(id,user_id,generation_id,visibility,category,source_kind,review_status,post_format,title,body,showcase_asset_path) values($1,$2,$3,'public','text','external','visible','text','Fixture','Fixture body long enough for public text.',$4)",[republishedId,owner,generationId,paths[0]]);
+    try{
+      await db.query("insert into public.post_media(post_id,media_kind,storage_path,preview_storage_path,rendition_storage_path,display_storage_path,teaser_storage_path,teaser_generated_at) values($1,'image',$2,$3,$4,$5,$6,now())",[republishedId,...paths.slice(1)]);
+      const summary=await processShowcaseMediaRevocations(admin,{now:new Date()});
+      for(const path of paths)expect((await admin.storage.from('showcase_media').download(path)).error,`Removed: ${path}`).toBeNull();
+      expect(summary).toMatchObject({due:6,removed:0,stillServing:6,rescheduled:0});
+      expect((await db.query('select id from public.showcase_media_revocations where generation_id=$1',[generationId])).rows).toEqual([]);
+    }finally{
+      await db.query('delete from public.posts where id=$1',[republishedId]);
+    }
+  });
+
   it('preserves a copy republished before the worker reads exposure',async()=>{
     await db.query("update public.posts set visibility='public',showcase_asset_path=$2 where id=$1",[postId,paths[0]]);
     expect(await processShowcaseMediaRevocations(admin,{now:new Date()})).toMatchObject({due:1,removed:0,stillServing:1});

@@ -1,5 +1,5 @@
 import 'server-only';
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -42,6 +42,48 @@ export function getCanonicalPostShowcaseAssetPath(
   return generationId && canonicalPath.startsWith(`showcase/${generationId}/`)
     ? canonicalPath
     : null;
+}
+
+const POST_MEDIA_PATH_COLUMNS = [
+  'storage_path',
+  'preview_storage_path',
+  'display_storage_path',
+  'rendition_storage_path',
+  'teaser_storage_path',
+] as const;
+
+/**
+ * What a creation post's media rows name in the creation's public folder: the
+ * copy, and the preview, display, rendition and teaser the sweeps built from
+ * it. The delete cascades to the rows, so they are read before it. A failed
+ * read leaves them to the revocation queue, which the posts trigger fills in
+ * the delete's own statement.
+ */
+async function loadCreationMediaPaths(
+  adminSupabase: SupabaseClient,
+  postId: string,
+  creationId: string,
+): Promise<string[]> {
+  const { data, error } = await adminSupabase
+    .from('post_media')
+    .select(POST_MEDIA_PATH_COLUMNS.join(', '))
+    .eq('post_id', postId);
+
+  if (error) {
+    logBackendWarning('failed_to_load_post_media_before_post_delete', { error });
+    return [];
+  }
+
+  const paths: string[] = [];
+  for (const row of (data ?? []) as unknown as Array<Record<(typeof POST_MEDIA_PATH_COLUMNS)[number], string | null>>) {
+    for (const column of POST_MEDIA_PATH_COLUMNS) {
+      const canonicalPath = row[column]
+        ? parseCanonicalStorageObjectPath(row[column], { minimumSegments: 3 })
+        : null;
+      if (canonicalPath?.startsWith(`showcase/${creationId}/`)) paths.push(canonicalPath);
+    }
+  }
+  return paths;
 }
 
 type DeletablePostRow = {
@@ -359,10 +401,11 @@ export async function deleteOwnerPostForRoute({
   // A post whose creation was deleted keeps the creation's copy, and the
   // database recorded that creation when its delete unlinked the post. The
   // delete below queues that copy too.
+  const creationId = verifiedLinkedGenerationId ?? post.deleted_generation_id;
   const removableShowcasePath = getCanonicalPostShowcaseAssetPath(
     post.showcase_asset_path,
     post.id,
-    verifiedLinkedGenerationId ?? post.deleted_generation_id,
+    creationId,
   );
 
   // A post with buyers or a still-payable cash order is tombstoned, never
@@ -413,6 +456,10 @@ export async function deleteOwnerPostForRoute({
     };
   }
 
+  const creationMediaPaths = creationId
+    ? await loadCreationMediaPaths(adminSupabase, post.id, creationId)
+    : [];
+
   const { error: deleteError } = await adminSupabase
     .from('posts')
     .delete()
@@ -426,8 +473,12 @@ export async function deleteOwnerPostForRoute({
 
   invalidateShowcaseFeedCache();
 
-  if (removableShowcasePath) {
-    await removePostMediaObjects(adminSupabase, [removableShowcasePath]);
+  const removablePaths = [
+    ...(removableShowcasePath ? [removableShowcasePath] : []),
+    ...creationMediaPaths,
+  ];
+  if (removablePaths.length > 0) {
+    await removePostMediaObjects(adminSupabase, removablePaths);
   }
 
   return {

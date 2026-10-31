@@ -30,24 +30,31 @@ function queued(overrides: Row = {}): Row {
 }
 
 /**
- * A small in-memory Supabase: filters really filter, deletes really delete, and
- * `exists` answers from the set of objects still in the bucket.
+ * A small in-memory Supabase: filters really filter, deletes really delete, an
+ * embedded `post_media(...)` answers a post's rows, and `exists` answers from
+ * the set of objects still in the bucket.
  */
 function createClient({
   revocations,
   generations = [{ id: GENERATION_ID, showcase_asset_path: null }],
-  posts = [{ id: 'post-1', visibility: 'private', showcase_asset_path: null }],
+  posts = [{ id: 'post-1', generation_id: GENERATION_ID, visibility: 'private', showcase_asset_path: null }],
+  postMedia = [],
   objects = [QUEUED_PATH],
+  mediaReadError = null,
 }: {
   revocations: Row[];
   generations?: Row[];
   posts?: Row[];
+  postMedia?: Row[];
   objects?: string[];
+  /** Answers any read that embeds `post_media(...)`. */
+  mediaReadError?: { message: string } | null;
 }) {
   const tables: Record<string, Row[]> = {
     showcase_media_revocations: revocations,
     generations,
     posts,
+    post_media: postMedia,
   };
   const bucket = new Set(objects);
   const updates: Array<{ id: unknown; values: Row }> = [];
@@ -57,10 +64,17 @@ function createClient({
     const filters: Array<(row: Row) => boolean> = [];
     let operation: 'select' | 'update' | 'delete' = 'select';
     let headCount = false;
+    let embedsMedia = false;
     let limit: number | null = null;
     let values: Row = {};
     const matches = () => tables[table].filter((row) => filters.every((filter) => filter(row)));
+    const withMedia = (row: Row) => (
+      embedsMedia ? { ...row, post_media: tables.post_media.filter((media) => media.post_id === row.id) } : row
+    );
     const execute = async () => {
+      if (embedsMedia && mediaReadError) {
+        return { data: null, error: mediaReadError };
+      }
       if (operation === 'delete') {
         const doomed = new Set(matches());
         tables[table] = tables[table].filter((row) => !doomed.has(row));
@@ -73,14 +87,25 @@ function createClient({
         }
         return { data: null, error: null };
       }
-      const rows = matches();
+      const rows = matches().map(withMedia);
       return headCount
         ? { data: null, count: rows.length, error: null }
         : { data: limit === null ? rows : rows.slice(0, limit), error: null };
     };
     const builder = {
-      select: (_columns: string, options?: { head?: boolean }) => {
+      select: (columns: string, options?: { head?: boolean }) => {
         headCount = options?.head === true;
+        embedsMedia = /\bpost_media\(/.test(columns);
+        return builder;
+      },
+      // PostgREST's `a.eq.x,b.eq.y`, the only form the job sends.
+      or: (expression: string) => {
+        const branches = expression.split(',').map((branch) => {
+          const [column, operator, ...value] = branch.split('.');
+          if (operator !== 'eq') throw new Error(`Unexpected filter: ${branch}`);
+          return { column, value: value.join('.') };
+        });
+        filters.push((row) => branches.some(({ column, value }) => row[column] === value));
         return builder;
       },
       update: (next: Row) => {
@@ -203,6 +228,116 @@ describe('processShowcaseMediaRevocations', () => {
 
     expect(summary.removed).toBe(1);
     expect(removeDerivative).toHaveBeenCalledWith(expect.objectContaining({ postId: null }));
+  });
+
+  // A deleted post's cover row went with it (the cascade), and the posts
+  // trigger queued what the row named: the copy, and the preview, display,
+  // rendition and teaser the sweeps built from it.
+  describe('media a deleted post’s cover row named', () => {
+    const PREVIEW_PATH = `showcase/${GENERATION_ID}/cover.abc123.preview.9f8e7d.webp`;
+
+    it('is removed once no post of the creation names it', async () => {
+      const { client, bucket, tables } = createClient({
+        revocations: [queued({ showcase_asset_path: PREVIEW_PATH })],
+        posts: [],
+        objects: [PREVIEW_PATH],
+      });
+      const removeDerivative = removingFrom(bucket);
+
+      const summary = await processShowcaseMediaRevocations(client, { now: NOW, removeDerivative });
+
+      expect(summary).toMatchObject({ removed: 1, stillServing: 0 });
+      expect(removeDerivative).toHaveBeenCalledWith(expect.objectContaining({
+        showcaseAssetPath: PREVIEW_PATH,
+        postId: null,
+      }));
+      expect(bucket.has(PREVIEW_PATH)).toBe(false);
+      expect(tables.showcase_media_revocations).toEqual([]);
+    });
+
+    // Publishing the creation again at once makes a new post with the same
+    // content-addressed copy, and the sweeps give its cover row the same names.
+    it.each([
+      'storage_path',
+      'preview_storage_path',
+      'display_storage_path',
+      'rendition_storage_path',
+      'teaser_storage_path',
+    ])('is left while the creation’s new post names it in %s', async (column) => {
+      const { client, bucket, tables } = createClient({
+        revocations: [queued({ showcase_asset_path: PREVIEW_PATH })],
+        generations: [{ id: GENERATION_ID, showcase_asset_path: QUEUED_PATH }],
+        posts: [{ id: 'post-2', generation_id: GENERATION_ID, visibility: 'public', showcase_asset_path: QUEUED_PATH }],
+        postMedia: [{ post_id: 'post-2', storage_path: QUEUED_PATH, [column]: PREVIEW_PATH }],
+        objects: [QUEUED_PATH, PREVIEW_PATH],
+      });
+      const removeDerivative = removingFrom(bucket);
+
+      const summary = await processShowcaseMediaRevocations(client, { now: NOW, removeDerivative });
+
+      expect(summary).toMatchObject({ stillServing: 1, removed: 0 });
+      expect(removeDerivative).not.toHaveBeenCalled();
+      expect(bucket.has(PREVIEW_PATH)).toBe(true);
+      expect(tables.showcase_media_revocations).toEqual([]);
+    });
+
+    it('is left while a post that recorded the deleted creation names it', async () => {
+      const { client, bucket } = createClient({
+        revocations: [queued({ showcase_asset_path: PREVIEW_PATH })],
+        generations: [],
+        posts: [{
+          id: 'post-2',
+          generation_id: null,
+          deleted_generation_id: GENERATION_ID,
+          visibility: 'public',
+          showcase_asset_path: QUEUED_PATH,
+        }],
+        postMedia: [{ post_id: 'post-2', storage_path: QUEUED_PATH, preview_storage_path: PREVIEW_PATH }],
+        objects: [QUEUED_PATH, PREVIEW_PATH],
+      });
+      const removeDerivative = removingFrom(bucket);
+
+      const summary = await processShowcaseMediaRevocations(client, { now: NOW, removeDerivative });
+
+      expect(summary).toMatchObject({ stillServing: 1, removed: 0 });
+      expect(bucket.has(PREVIEW_PATH)).toBe(true);
+    });
+
+    it('waits when the creation’s posts cannot be read', async () => {
+      const { client, bucket, tables, updates } = createClient({
+        revocations: [queued({ showcase_asset_path: PREVIEW_PATH })],
+        posts: [],
+        objects: [PREVIEW_PATH],
+        mediaReadError: { message: 'posts unavailable' },
+      });
+      const removeDerivative = removingFrom(bucket);
+
+      const summary = await processShowcaseMediaRevocations(client, { now: NOW, removeDerivative });
+
+      expect(summary).toMatchObject({ rescheduled: 1, removed: 0 });
+      expect(removeDerivative).not.toHaveBeenCalled();
+      expect(bucket.has(PREVIEW_PATH)).toBe(true);
+      expect(updates[0]?.values).toMatchObject({ attempt_count: 1, last_error: 'posts unavailable' });
+      expect(tables.showcase_media_revocations).toHaveLength(1);
+    });
+  });
+
+  it('still removes a private post’s own rows with its copy', async () => {
+    // Its cover row names the copy, but a private post serves nothing public:
+    // the row goes with the copy (removeGenerationShowcaseDerivative's postId).
+    const { client, bucket } = createClient({
+      revocations: [queued()],
+      postMedia: [{ post_id: 'post-1', storage_path: QUEUED_PATH }],
+    });
+    const removeDerivative = removingFrom(bucket);
+
+    const summary = await processShowcaseMediaRevocations(client, { now: NOW, removeDerivative });
+
+    expect(summary).toMatchObject({ removed: 1, stillServing: 0 });
+    expect(removeDerivative).toHaveBeenCalledWith(expect.objectContaining({
+      showcaseAssetPath: QUEUED_PATH,
+      postId: 'post-1',
+    }));
   });
 
   it('never removes an object outside the generation’s own prefix', async () => {
