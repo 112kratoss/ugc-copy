@@ -572,8 +572,8 @@ describe('CreatorProfileCard', () => {
     });
 
     // The bar finishes on a change of pathname: announced for a link that only
-    // changed the search (the Profile tab from /profile?next=…), it crept on
-    // for its 12 s failsafe.
+    // changed the search (a page's own `?tab=` link), it crept on for its 12 s
+    // failsafe.
     it('announces the navigation a "leave" starts only when it changes page', async () => {
       vi.spyOn(window, 'confirm').mockReturnValue(true);
       answerBackLater();
