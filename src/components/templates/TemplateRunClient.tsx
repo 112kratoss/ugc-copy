@@ -21,7 +21,7 @@ import {
 import { useAuth } from '@/components/AuthProvider';
 import { requestConfirmation } from '@/components/feedback-state';
 import TemplateRunMedia from './TemplateRunMedia';
-import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import { buildCreationComposerPath } from '@/lib/creation-workspace';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { isSignedMediaUrlExpiring, preserveStableTemplateRunMedia } from '@/lib/template-run-stable-media';
 import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
@@ -143,6 +143,18 @@ function toPostedResult(post: TemplateRunLinkedPost): PostedResult {
     path: post.visibility === 'private' ? `/post/${post.id}/edit` : buildShowcaseDetailPath(post.id),
     visibility: post.visibility,
   };
+}
+
+/**
+ * Publishing the result opens the full composer for it, as the app's does. Its Back returns to
+ * this run, and "Publish & share" has it share the post once the post is public.
+ */
+function buildResultComposerPath(generationId: string, runId: string, shareAfterPublish = false): string {
+  return buildCreationComposerPath(generationId, {
+    from: 'template-run',
+    returnTo: `/template-runs/${encodeURIComponent(runId)}`,
+    shareAfterPublish,
+  });
 }
 
 function readFileExtension(url: string): string | null {
@@ -271,19 +283,15 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
   const [validatingInputs, setValidatingInputs] = useState<Record<string, boolean>>({});
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [resolvedDownload, setResolvedDownload] = useState<{ outputUrl: string; url: string } | null>(null);
-  const [isPublishOpen, setIsPublishOpen] = useState(false);
-  // "Publish & share": the modal shares the new public post once it exists.
-  const [shareAfterPublish, setShareAfterPublish] = useState(false);
-  const [publishedPost, setPublishedPost] = useState<PostedResult | null>(null);
   const previewUrlsRef = useRef(previewUrls);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downloadRenewalRef = useRef<AbortController | null>(null);
   const errorRef = useRef<HTMLDivElement | null>(null);
   const inputValidationSequenceRef = useRef<Record<string, number>>({});
   const isBusy = busyAction !== null;
-  // A post made in this visit, else the one the run says its result already has.
+  // The post the run says its result has: the composer makes it, and the run reads it back.
   const linkedPost = run?.result?.linkedPost ?? null;
-  const postedResult = publishedPost ?? (linkedPost ? toPostedResult(linkedPost) : null);
+  const postedResult = linkedPost ? toPostedResult(linkedPost) : null;
 
   useEffect(() => { previewUrlsRef.current = previewUrls; }, [previewUrls]);
   useEffect(() => {
@@ -958,7 +966,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                   <Button
                     variant="primary"
                     icon={Share2}
-                    onClick={() => setIsPublishOpen(true)}
+                    href={buildResultComposerPath(result.generationId, runId)}
                     className="mt-6 w-full"
                   >
                     Publish to Explore
@@ -989,10 +997,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                   <Button
                     variant="secondary"
                     icon={Share2}
-                    onClick={() => {
-                      setShareAfterPublish(true);
-                      setIsPublishOpen(true);
-                    }}
+                    href={buildResultComposerPath(result.generationId, runId, true)}
                     className="mt-3 w-full"
                   >
                     Publish &amp; share
@@ -1028,40 +1033,6 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
             )}
           </div>
         </Surface>
-      ) : null}
-
-      {!isTestRun && result?.generationId ? (
-        <PublishToShowcaseModal
-          isOpen={isPublishOpen}
-          onClose={() => {
-            setIsPublishOpen(false);
-            setShareAfterPublish(false);
-          }}
-          generationId={result.generationId}
-          accessToken={session?.access_token ?? null}
-          defaultTitle={template?.name || run.templateTitle}
-          defaultDescription=""
-          showPaidShortcut={false}
-          mediaOnly
-          shareAfterPublish={shareAfterPublish ? {
-            title: template?.name || run.templateTitle,
-            description: null,
-            sourceSurface: 'my-creations',
-          } : undefined}
-          onPublished={(payload) => {
-            const visibility = payload.visibility ?? 'private';
-            const stablePath = payload.showcasePath
-              ?? payload.ownerPath
-              ?? (payload.postId
-                ? visibility === 'private'
-                  ? `/post/${payload.postId}/edit`
-                  : `/showcase/${payload.postId}`
-                : null);
-            if (stablePath) {
-              setPublishedPost({ path: stablePath, visibility });
-            }
-          }}
-        />
       ) : null}
     </TemplatePageShell>
   );

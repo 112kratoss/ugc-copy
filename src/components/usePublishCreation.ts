@@ -3,8 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
-import { sharePublicGeneration } from '@/lib/share-client';
-import type { GenerationShareSourceSurface } from '@/lib/share';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import {
   followCreationTitleSuggestion,
@@ -23,30 +21,27 @@ import {
 } from '@/lib/public-identity';
 import {
   getPostResourceKindLabel,
-  POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
-  POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
-  type PersistedPostResourceBundleAccessMode,
-  type PostResourceBundleAccessMode,
   type PostResourceBundleInput,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 
 /**
- * One way to publish a creation, behind two faces: the Publish window (Studio, template runs)
- * and the creators' own form on the canvas (the artboard Result). The draft (title and its
+ * The creators' publish form on the canvas (the artboard Result): the draft (title and its
  * suggestion, the name and handle a first post saves, the recipe, NSFW), the request to
- * `/api/showcase/publish`, its errors and what it answers all live here, so the two cannot
- * drift apart; each face only draws them.
+ * `/api/showcase/publish`, its errors and what it answers all live here, and the form only
+ * draws them. Studio and template runs open the full composer (`/post/new`) instead, as the
+ * app does.
  */
 
 /** A post is public or private (decision 12, 2026-10-17); the server answers no other. */
 export type PostVisibility = 'public' | 'private';
 type ProfileLoadState = 'idle' | 'loading' | 'ready' | 'error';
+/** The form shares a recipe free, or none; a price is the composer's (More options). */
+type CreationRecipeAccess = 'none' | 'free';
 
 /** What a publish answers, as the page that asked keeps it. */
 export type PublishedCreation = {
   title: string;
-  description: string;
   visibility?: PostVisibility;
   resourceBundleStatus?: 'draft' | 'published' | null;
   resourceBundlePath?: string | null;
@@ -57,30 +52,9 @@ export type PublishedCreation = {
 
 const RESOURCE_KIND_ORDER: PostResourceKind[] = ['prompt', 'workflow', 'files', 'notes', 'remix'];
 
-const DEFAULT_RECIPE_PRICE_TOKENS = 900;
-
 function normalizeOptionalText(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
-}
-
-/**
- * The caption is the post's public description. It must not start out as the
- * recipe's generated setup notes: those travel with the bundle (see
- * `buildAutoResourceBundle`), and prefilling them here published "Saved
- * generation setup / Model: …" as the caption of every quick publish.
- */
-function getDefaultPublishDescription(defaultDescription: string): string {
-  return defaultDescription.trim();
-}
-
-/**
- * Prices are credit counts. `price_usd_cents` stores the count directly -- at
- * the fixed 100 credits to $1 the two numbers are the same.
- */
-function parsePriceTokens(value: string): number | null {
-  const normalized = Number.parseInt(value.trim(), 10);
-  return Number.isFinite(normalized) ? normalized : null;
 }
 
 function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined): PostResourceKind[] {
@@ -148,22 +122,15 @@ function buildAutoUnlockPreview(kinds: PostResourceKind[]): string {
   return `Unlock the saved ${listAutoUnlockKinds(kinds)} used to create this result.`;
 }
 
-function buildAutoResourceBundle({
-  prefill,
-  accessMode,
-  priceUsdCents,
-}: {
-  prefill: GenerationPaywallPrefill;
-  accessMode: PersistedPostResourceBundleAccessMode;
-  priceUsdCents: number;
-}): PostResourceBundleInput {
+/** The free recipe packed from the creation's saved setup. */
+function buildAutoResourceBundle(prefill: GenerationPaywallPrefill): PostResourceBundleInput {
   const kinds = getAutoUnlockKinds(prefill);
 
   return {
-    accessMode,
+    accessMode: 'free',
     summary: buildAutoUnlockSummary(kinds),
     previewText: buildAutoUnlockPreview(kinds),
-    priceUsdCents,
+    priceUsdCents: 0,
     resources: {
       promptText: prefill.promptText?.trim() || null,
       notesMarkdown: prefill.notesMarkdown?.trim() || null,
@@ -175,7 +142,7 @@ function buildAutoResourceBundle({
 }
 
 export interface UsePublishCreationOptions {
-  /** The window is open, or the form is on the canvas: a fresh draft starts each time it becomes so. */
+  /** The form is on the canvas: a fresh draft starts each time it becomes so. */
   active: boolean;
   generationId: string | null;
   accessToken?: string | null;
@@ -185,32 +152,22 @@ export interface UsePublishCreationOptions {
    * suggested when it has none of its own (`defaultTitle`).
    */
   creation?: CreationTitleSource | null;
-  defaultDescription?: string;
-  showPaidShortcut?: boolean;
-  mediaOnly?: boolean;
   paywallPrefill?: GenerationPaywallPrefill | null;
   /** The title of the post a remix was made from: an untitled remix starts from it ("intense (remix)"). */
   remixOfTitle?: string | null;
   /**
-   * The recipe a fresh draft starts with where the creation has one to offer: the window
-   * starts with none, for the creator to opt in; the creators' form with a free one (owner,
+   * The recipe a fresh draft starts with where the creation has one to offer: none unless
+   * asked, for the creator to opt in; the creators' form asks for a free one (owner,
    * 2026-10-28). Until the creator picks one themselves, a prefill arriving late sets it too.
    */
   startingRecipe?: 'none' | 'free';
   /**
    * The recipe leaves the creator's own uploads out until they add them (the creators' form,
    * owner 2026-10-29): only the references a remix brought from its original go in, and with
-   * any of their own in the creation none is handed to a remix. The window shares them all.
+   * any of their own in the creation none is handed to a remix. Otherwise it shares them all.
    */
   leavesOwnUploadsOut?: boolean;
-  shareAfterPublish?: {
-    title: string;
-    description?: string | null;
-    sourceSurface: GenerationShareSourceSurface;
-  };
   onPublished?: (payload: PublishedCreation) => void;
-  /** After a publish and the share that follows it: the window closes here. */
-  onFinished?: () => void;
 }
 
 export function usePublishCreation({
@@ -219,27 +176,18 @@ export function usePublishCreation({
   accessToken = null,
   defaultTitle = '',
   creation = null,
-  defaultDescription = '',
-  showPaidShortcut = true,
-  mediaOnly = false,
   paywallPrefill = null,
   remixOfTitle = null,
   startingRecipe = 'none',
   leavesOwnUploadsOut = false,
-  shareAfterPublish,
   onPublished,
-  onFinished,
 }: UsePublishCreationOptions) {
   const [isNsfw, setIsNsfw] = useState(false);
   // What the creator typed; null until they do, while the title is the starting one below.
   const [titleEdit, setTitleEdit] = useState<string | null>(null);
-  const [publishDescription, setPublishDescription] = useState(() =>
-    getDefaultPublishDescription(defaultDescription)
-  );
   // The recipe the creator picked; null until they do, while it is the starting one below.
-  const [recipeChoice, setRecipeChoice] = useState<PostResourceBundleAccessMode | null>(null);
-  const [priceTokens, setPriceTokensState] = useState(String(DEFAULT_RECIPE_PRICE_TOKENS));
-  const [publishingVisibility, setPublishingVisibility] = useState<PostVisibility | null>(null);
+  const [recipeChoice, setRecipeChoice] = useState<CreationRecipeAccess | null>(null);
+  const [isPublishing, setIsPublishing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [needsProfileRepair, setNeedsProfileRepair] = useState(false);
   const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
@@ -266,12 +214,12 @@ export function usePublishCreation({
   const sharedPrefill = sharesOwnUploads ? paywallPrefill : prefillWithoutOwn;
   const autoUnlockKinds = getAutoUnlockKinds(sharedPrefill);
   // The switch is offered where anything could go, the creator's own uploads included.
-  const hasAutoUnlock = showPaidShortcut && Boolean(paywallPrefill) && getAutoUnlockKinds(paywallPrefill).length > 0;
+  const hasAutoUnlock = Boolean(paywallPrefill) && getAutoUnlockKinds(paywallPrefill).length > 0;
   const generationReferenceCount = Math.max(0, Math.round(sharedPrefill?.referenceCount ?? 0));
   const hasGenerationReferences = generationReferenceCount > 0;
   const otherReferenceCount = allReferenceCount - ownUploadCount;
   // A recipe starts on only where it holds something without the creator's own uploads.
-  const startingRecipeAccess: PostResourceBundleAccessMode = hasAutoUnlock && getAutoUnlockKinds(prefillWithoutOwn).length > 0
+  const startingRecipeAccess: CreationRecipeAccess = hasAutoUnlock && getAutoUnlockKinds(prefillWithoutOwn).length > 0
     ? startingRecipe
     : 'none';
   // The creation's details and the original's answer can arrive after the draft started (the
@@ -290,8 +238,6 @@ export function usePublishCreation({
       : titleSuggestion.title;
   const publishTitle = titleEdit ?? startingTitle;
   const titleSuggestionHint = getCreationTitleSuggestionHint(publishTitle, titleSuggestion, promptPrivate);
-  const parsedPriceTokens = parsePriceTokens(priceTokens);
-  const isPublishing = publishingVisibility !== null;
   const profileReadiness = getCreatorProfileReadiness(profile);
   // Publishing never requires a profile photo — free and paid recipes alike use
   // the public gate (handle + display name). The avatar is only a
@@ -310,16 +256,14 @@ export function usePublishCreation({
     // defaults: the title and the recipe go back to the starting ones.
     setIsNsfw(false);
     setTitleEdit(null);
-    setPublishDescription(getDefaultPublishDescription(defaultDescription));
     setRecipeChoice(null);
-    setPriceTokensState(String(DEFAULT_RECIPE_PRICE_TOKENS));
-    setPublishingVisibility(null);
+    setIsPublishing(false);
     setFormError(null);
     setNeedsProfileRepair(false);
     setIdentityErrors({});
     setIdentityEdits(null);
     setAddsOwnUploadsState(false);
-  }, [defaultDescription, generationId, active]);
+  }, [generationId, active]);
 
   // The profile is the account's: read when the draft opens and for another account, not
   // again for each renewed token, which would put "Checking your profile…" back every hour.
@@ -376,7 +320,7 @@ export function usePublishCreation({
     setTitleEdit(value);
   };
 
-  const setRecipeAccess = (next: PostResourceBundleAccessMode) => {
+  const setRecipeAccess = (next: CreationRecipeAccess) => {
     // An untouched title follows the recipe by itself (`startingTitle`); a typed one is swapped
     // only where it is the prompt's opening or a kind title (a paid recipe keeps the prompt private).
     if (titleEdit !== null) {
@@ -391,11 +335,6 @@ export function usePublishCreation({
     setFormError(null);
   };
 
-  const setPriceTokens = (value: string) => {
-    setPriceTokensState(value);
-    setFormError(null);
-  };
-
   const setAddsOwnUploads = (next: boolean) => {
     setAddsOwnUploadsState(next);
     setFormError(null);
@@ -407,10 +346,10 @@ export function usePublishCreation({
   };
 
   /**
-   * Publishes the creation as a public or private post. Resolves true once the server has
-   * it (and its share has run, where one follows), false when it was refused or not sent.
+   * Publishes the creation as a public post. Resolves true once the server has it, false
+   * when it was refused or not sent.
    */
-  const publish = async (nextVisibility: PostVisibility): Promise<boolean> => {
+  const publish = async (): Promise<boolean> => {
     if (isPublishingRef.current) {
       return false;
     }
@@ -418,7 +357,7 @@ export function usePublishCreation({
       return false;
     }
 
-    const savesIdentity = nextVisibility === 'public' && needsPublicIdentity;
+    const savesIdentity = needsPublicIdentity;
     if (savesIdentity) {
       const localErrors = validatePublicIdentity(identity, profile?.username);
       if (localErrors.displayName || localErrors.username) {
@@ -428,7 +367,7 @@ export function usePublishCreation({
       }
     }
 
-    let resourceBundle: PostResourceBundleInput | null = mediaOnly ? null : { accessMode: 'none' };
+    let resourceBundle: PostResourceBundleInput = { accessMode: 'none' };
     if (recipeAccess !== 'none') {
       if (!sharedPrefill || autoUnlockKinds.length === 0) {
         setFormError(leavesOwnUploadsOut && !addsOwnUploads && ownUploadCount > 0
@@ -437,31 +376,11 @@ export function usePublishCreation({
         return false;
       }
 
-      // Free recipes carry no price; only the paid mode has a floor to enforce.
-      let priceUsdCents = 0;
-      if (recipeAccess === 'paid') {
-        if (
-          parsedPriceTokens === null
-          || parsedPriceTokens < POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
-          || parsedPriceTokens % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
-        ) {
-          setFormError(
-            `Paid recipes start at ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} credits, in steps of ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}.`,
-          );
-          return false;
-        }
-        priceUsdCents = parsedPriceTokens;
-      }
-
-      resourceBundle = buildAutoResourceBundle({
-        prefill: sharedPrefill,
-        accessMode: recipeAccess,
-        priceUsdCents,
-      });
+      resourceBundle = buildAutoResourceBundle(sharedPrefill);
     }
 
     isPublishingRef.current = true;
-    setPublishingVisibility(nextVisibility);
+    setIsPublishing(true);
     setFormError(null);
 
     try {
@@ -482,31 +401,26 @@ export function usePublishCreation({
         isNsfw?: boolean;
         visibility: PostVisibility;
         title?: string;
-        description?: string;
         shareInputMediaForRemix: boolean;
         includeGenerationReferences?: boolean;
         leaveOutOwnGenerationReferences?: boolean;
-        resourceBundle?: PostResourceBundleInput;
+        resourceBundle: PostResourceBundleInput;
       } = {
         generationId,
         ...(isNsfw ? { isNsfw: true } : {}),
-        visibility: nextVisibility,
+        visibility: 'public',
         title: normalizeOptionalText(publishTitle),
-        description: normalizeOptionalText(publishDescription),
         shareInputMediaForRemix: false,
+        resourceBundle,
       };
 
-      if (hasGenerationReferences && resourceBundle?.accessMode !== 'none') {
+      if (hasGenerationReferences && resourceBundle.accessMode !== 'none') {
         requestBody.includeGenerationReferences = true;
       }
       // The server holds the same line: only the original's references, and no hand-over
       // where any of the creator's own are in the creation.
-      if (!sharesOwnUploads && resourceBundle && resourceBundle.accessMode !== 'none') {
+      if (!sharesOwnUploads && resourceBundle.accessMode !== 'none') {
         requestBody.leaveOutOwnGenerationReferences = true;
-      }
-
-      if (resourceBundle) {
-        requestBody.resourceBundle = resourceBundle;
       }
 
       const response = await fetch('/api/showcase/publish', {
@@ -540,12 +454,8 @@ export function usePublishCreation({
         throw new Error(data.error || 'Failed to publish');
       }
 
-      const normalizedTitle = publishTitle.trim();
-      const normalizedDescription = publishDescription.trim();
-
       onPublished?.({
-        title: normalizedTitle,
-        description: normalizedDescription,
+        title: publishTitle.trim(),
         visibility: data.visibility,
         resourceBundleStatus: data.resourceBundleStatus ?? null,
         resourceBundlePath: data.resourceBundlePath ?? null,
@@ -554,24 +464,6 @@ export function usePublishCreation({
         ownerPath: data.ownerPath ?? null,
       });
 
-      if (shareAfterPublish && nextVisibility === 'public') {
-        try {
-          await sharePublicGeneration({
-            generationId,
-            title: normalizedTitle || shareAfterPublish.title,
-            description: normalizedDescription || shareAfterPublish.description || null,
-            sourceSurface: shareAfterPublish.sourceSurface,
-            accessToken,
-            viewerIsOwner: true,
-          });
-        } catch (shareError) {
-          // Publishing is already complete. A canceled or unavailable share
-          // action must never be reported as a failed publish.
-          console.error('Published generation, but sharing was unavailable:', shareError);
-        }
-      }
-
-      onFinished?.();
       return true;
     } catch (error) {
       console.error('Failed to publish generation:', error);
@@ -579,7 +471,7 @@ export function usePublishCreation({
       return false;
     } finally {
       isPublishingRef.current = false;
-      setPublishingVisibility(null);
+      setIsPublishing(false);
     }
   };
 
@@ -589,17 +481,9 @@ export function usePublishCreation({
     title: publishTitle,
     setTitle,
     titleSuggestionHint,
-    description: publishDescription,
-    setDescription: setPublishDescription,
     recipeAccess,
     setRecipeAccess,
-    priceTokens,
-    setPriceTokens,
-    parsedPriceTokens,
-    autoUnlockKinds,
     hasAutoUnlock,
-    generationReferenceCount,
-    hasGenerationReferences,
     ownUploadCount,
     otherReferenceCount,
     ownUploadKindCounts: leavesOwnUploadsOut ? paywallPrefill?.ownReferenceKindCounts ?? paywallPrefill?.referenceKindCounts ?? null : null,
@@ -612,7 +496,6 @@ export function usePublishCreation({
     profile,
     profileLoadState,
     formError,
-    publishingVisibility,
     isPublishing,
     isPublishingRef,
     publish,

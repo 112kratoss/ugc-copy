@@ -23,8 +23,8 @@ import { buildShowcaseDetailPath } from '@/lib/share';
  * done the canvas shows the result, its download and the publish form beside it, where the
  * Publish window used to open; once posted, the form gives way to what was posted and where
  * it went. On a phone a bar holds Publish at the foot of the window while the form's own
- * button is out of view. The form is one face of `usePublishCreation`; the Publish window
- * Studio opens is the other.
+ * button is out of view. The form draws `usePublishCreation`; Studio and template runs open
+ * the full composer instead.
  */
 
 // ---------------------------------------------------------------------------------------------
@@ -611,7 +611,6 @@ function CreatorPosted({
         <PublicShareButton
           generationId={generationId}
           title={published.title}
-          description={published.description || null}
           sourceSurface={sourceSurface}
           accessToken={accessToken}
           viewerIsOwner
@@ -803,7 +802,7 @@ export function CreatorPublishPanel({
   /** The one handler: the form's Publish and the bar's. Refused, the form shows why. */
   const submit = async (fromBar: boolean) => {
     if (waiting) return;
-    const ok = await draft.publish('public');
+    const ok = await draft.publish();
     if (!ok && formRef.current) {
       formRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
       if (fromBar) setRefusedBarPresses((count) => count + 1);

@@ -96,6 +96,28 @@ function buildCreationsQuery(params: Record<string, string>): string {
   return searchParams.toString();
 }
 
+/**
+ * The full composer for a creation, where Publish takes it, as the app's does:
+ * it reads the creation from its address and starts from the creation's title.
+ * `from` and `returnTo` say where its Back goes; `shareAfterPublish` has it
+ * share the post once the post is public.
+ */
+export function buildCreationComposerPath(
+  generationId: string,
+  {
+    from = 'creations',
+    returnTo,
+    shareAfterPublish = false,
+  }: { from?: string; returnTo?: string; shareAfterPublish?: boolean } = {},
+): string {
+  return `/post/new?${buildCreationsQuery({
+    generationId,
+    from,
+    ...(returnTo ? { returnTo } : {}),
+    ...(shareAfterPublish ? { shareAfterPublish: '1' } : {}),
+  })}`;
+}
+
 function buildGeneratedPaywallComposerPath(generationId: string): string {
   return `/post/new?${buildCreationsQuery({
     generationId,
@@ -108,9 +130,8 @@ function buildGeneratedPaywallComposerPath(generationId: string): string {
 
 /**
  * Every recipe edit on an existing post goes through the post editor, which
- * loads the stored bundle. The quick publish modal is for first publish only:
- * it rebuilds the bundle from the generation prefill and would replace a
- * hand-built recipe with the automatic one.
+ * loads the stored bundle rather than rebuilding one from the generation
+ * prefill: that would replace a hand-built recipe with the automatic one.
  *
  * "Add recipe" (a post without one) opens the editor at its recipe with no
  * mode chosen and no field focused, headed "Add a recipe to this post": it
@@ -281,7 +302,7 @@ export function resolveCreationWorkspaceCardState(
       primaryAction: {
         type: 'publish',
         label: 'Publish',
-        href: null,
+        href: buildCreationComposerPath(generation.id),
       },
       secondaryAction: {
         type: 'set-paywall',

@@ -739,11 +739,34 @@ describe('CreationsPage', () => {
     expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
   });
 
-  // The quick publish modal rebuilds a recipe from the generation prefill and
-  // sends no body, so opening it on a post that already exists would replace
-  // whatever the editor saved. An existing post's recipe is always edited in
-  // the editor, which loads the stored bundle.
-  it('links a generated card Add recipe action to the post editor instead of the publish modal', async () => {
+  // As the app's (owner, 2026-10-31): Publish opens the full composer for the
+  // creation, not a pop-up, and the composer's Back returns to this view.
+  it('opens the full composer from a creation’s Publish, on its card and in its details', async () => {
+    const creation = makeGeneration({ id: 'gen-fresh', title: 'Fresh portrait' });
+    const fetchMock = stubStudioFetch((url) => (
+      url === GENERATIONS_PAGE_URL || url === generationDetailUrl('gen-fresh')
+        ? Promise.resolve(jsonResponse({ generations: [creation] }))
+        : null
+    ));
+
+    render(<CreationsPage />);
+
+    const composerHref = '/post/new?generationId=gen-fresh&from=creations&returnTo=%2Fcreations';
+    const card = await screen.findByTestId('creation-card-gen-fresh');
+    expect(within(card).getByRole('link', { name: 'Publish' })).toHaveAttribute('href', composerHref);
+
+    fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Fresh portrait' });
+    expect(within(dialog).getByRole('link', { name: 'Publish' })).toHaveAttribute('href', composerHref);
+    // Publish is the way to the composer, so the details offer no second one.
+    expect(within(dialog).queryByRole('link', { name: 'Customize post' })).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
+  });
+
+  // Publishing the creation again would rebuild a recipe from the generation
+  // prefill and replace whatever the editor saved. An existing post's recipe
+  // is always edited in the editor, which loads the stored bundle.
+  it('links a generated card Add recipe action to the post editor', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -782,7 +805,6 @@ describe('CreationsPage', () => {
       '/post/post-linked/edit?recipe=add&from=creations#recipe',
     );
     expect(screen.queryByRole('button', { name: /^add recipe$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: /publish this creation/i })).not.toBeInTheDocument();
     // No detail fetch: the link needs nothing beyond the linked post id.
     expect(fetchMock).not.toHaveBeenCalledWith(
       '/api/generations?includeArchived=true&id=gen-linked&limit=1',
@@ -884,14 +906,13 @@ describe('CreationsPage', () => {
     render(<CreationsPage />);
 
     // The stored recipe is free; the editor link carries that so it opens on
-    // the saved access mode rather than the modal's Paid / 900 default.
+    // the saved access mode rather than a Paid default.
     const manageRecipeLink = await screen.findByRole('link', { name: /^manage recipe$/i });
     expect(manageRecipeLink).toHaveAttribute(
       'href',
       '/post/post-bundled/edit?resourceMode=free&focus=price&from=creations#recipe',
     );
     expect(screen.queryByRole('button', { name: /^manage recipe$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: /publish this creation/i })).not.toBeInTheDocument();
 
     // An uploaded post with no recipe gets the same entry point.
     expect(screen.getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
@@ -1927,7 +1948,7 @@ describe('CreationsPage', () => {
       expect(within(dialog).getByText(String(failedVideoFixture.error_message))).toBeInTheDocument();
       expect(within(dialog).getByText('40 credits returned')).toBeInTheDocument();
       // What its card offers, never Publish.
-      expect(within(dialog).queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
+      expect(within(dialog).queryByRole('link', { name: 'Publish' })).not.toBeInTheDocument();
       expect(within(dialog).getByRole('link', { name: 'Try again' })).toHaveAttribute('href', '/create-video?remix=failed-video-1');
 
       await act(async () => {
@@ -2091,15 +2112,18 @@ describe('CreationsPage', () => {
       'href',
       '/template-runs/run-gen-cancelled-step',
     );
-    expect(within(cancelled).queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
+    expect(within(cancelled).queryByRole('link', { name: 'Publish' })).not.toBeInTheDocument();
 
     const failed = screen.getByTestId('creation-card-gen-failed-step');
     expect(within(failed).getByText('From template · run failed')).toBeInTheDocument();
-    expect(within(failed).queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
+    expect(within(failed).queryByRole('link', { name: 'Publish' })).not.toBeInTheDocument();
 
     const result = screen.getByTestId('creation-card-gen-result');
     expect(within(result).getByText('From template')).toBeInTheDocument();
-    expect(within(result).getByRole('button', { name: 'Publish' })).toBeInTheDocument();
+    expect(within(result).getByRole('link', { name: 'Publish' })).toHaveAttribute(
+      'href',
+      '/post/new?generationId=gen-result&from=creations&returnTo=%2Fcreations',
+    );
     // A template's output is not filed as the creator's own model output.
     fireEvent.click(within(result).getByRole('button', { name: 'More actions for Product spin' }));
     const menu = await screen.findByRole('menu', { name: 'More actions for Product spin' });

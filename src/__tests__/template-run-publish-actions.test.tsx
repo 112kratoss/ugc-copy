@@ -17,7 +17,6 @@ const auth = vi.hoisted(() => ({
 }));
 const getTemplateRunMock = vi.hoisted(() => vi.fn());
 const getTemplateMock = vi.hoisted(() => vi.fn());
-const publishModalMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/components/AuthProvider', () => ({ useAuth: () => auth }));
 
@@ -32,36 +31,6 @@ vi.mock('@/components/templates/api', async (importOriginal) => ({
   retryTemplateRunStep: vi.fn(),
   signTemplateInput: vi.fn(),
   startTemplateRun: vi.fn(),
-}));
-
-vi.mock('@/components/PublishToShowcaseModal', () => ({
-  default: (props: {
-    isOpen: boolean;
-    generationId: string | null;
-    mediaOnly?: boolean;
-    showPaidShortcut?: boolean;
-    onPublished?: (payload: {
-      visibility: 'public';
-      postId: string;
-      showcasePath: string;
-      ownerPath: string;
-    }) => void;
-  }) => {
-    publishModalMock(props);
-    return props.isOpen ? (
-      <button
-        type="button"
-        onClick={() => props.onPublished?.({
-          visibility: 'public',
-          postId: 'post-template-1',
-          showcasePath: '/showcase/post-template-1',
-          ownerPath: '/post/post-template-1/edit',
-        })}
-      >
-        Confirm template publish
-      </button>
-    ) : null;
-  },
 }));
 
 type LinkedPost = { id: string; visibility: 'public' | 'unlisted' | 'private' } | null;
@@ -106,6 +75,12 @@ function signedUrl(path: string, expiresInMs: number, nonce: string): string {
   return `https://project.supabase.co/storage/v1/object/sign/${path}?token=${token}`;
 }
 
+/** A link's address, read as the composer reads it. */
+function readComposerLink(name: string): { pathname: string; params: Record<string, string> } {
+  const url = new URL(screen.getByRole('link', { name }).getAttribute('href') ?? '', 'https://magicbooklet.test');
+  return { pathname: url.pathname, params: Object.fromEntries(url.searchParams) };
+}
+
 /** Whether the page kept the browser from following the link. Stops jsdom from navigating either way. */
 function clickAndReadDefault(element: HTMLElement): boolean {
   let prevented = false;
@@ -125,7 +100,6 @@ describe('template run publish actions', () => {
   beforeEach(() => {
     testState.isTest = false;
     auth.refreshSessionState.mockClear();
-    publishModalMock.mockClear();
     getTemplateRunMock.mockReset();
     getTemplateRunMock.mockImplementation(async () => createRun());
     getTemplateMock.mockResolvedValue({
@@ -153,32 +127,25 @@ describe('template run publish actions', () => {
     vi.restoreAllMocks();
   });
 
-  it('makes Explore publishing primary and keeps a stable post link after success', async () => {
-    const share = vi.fn(async () => undefined);
-    Object.defineProperty(navigator, 'share', { configurable: true, value: share });
+  // As the app's: publishing the result opens the full composer for it, with a Back to this
+  // run, and Publish & share has the composer share the post once it is public.
+  it('opens the full composer for the result, to publish it or to publish and share it', async () => {
     render(<TemplateRunClient runId="run-1" />);
 
-    const publishButton = await screen.findByRole('button', { name: 'Publish to Explore' });
-    expect(screen.getByRole('button', { name: 'Publish & share' })).toBeInTheDocument();
-    fireEvent.click(publishButton);
-    fireEvent.click(await screen.findByRole('button', { name: 'Confirm template publish' }));
-
-    expect(await screen.findByText('Published to Explore')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'View post' })).toHaveAttribute(
-      'href',
-      '/showcase/post-template-1',
-    );
-    expect(screen.queryByRole('button', { name: 'Publish to Explore' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Publish & share' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Share Explore post' }));
-    await waitFor(() => expect(share).toHaveBeenCalledWith(expect.objectContaining({
-      url: new URL('/showcase/post-template-1', window.location.origin).toString(),
-    })));
-    expect(publishModalMock).toHaveBeenCalledWith(expect.objectContaining({
-      generationId: 'template-result-1',
-      mediaOnly: true,
-      showPaidShortcut: false,
-    }));
+    await screen.findByRole('link', { name: 'Publish to Explore' });
+    expect(readComposerLink('Publish to Explore')).toEqual({
+      pathname: '/post/new',
+      params: { generationId: 'template-result-1', from: 'template-run', returnTo: '/template-runs/run-1' },
+    });
+    expect(readComposerLink('Publish & share')).toEqual({
+      pathname: '/post/new',
+      params: {
+        generationId: 'template-result-1',
+        from: 'template-run',
+        returnTo: '/template-runs/run-1',
+        shareAfterPublish: '1',
+      },
+    });
   });
 
   it.each([
@@ -192,8 +159,8 @@ describe('template run publish actions', () => {
 
     expect(await screen.findByRole('link', { name: 'View post' })).toHaveAttribute('href', '/showcase/post-linked-1');
     expect(screen.getByText(title)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Publish to Explore' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Publish & share' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Publish to Explore' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Publish & share' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Share Explore post' }));
     await waitFor(() => expect(share).toHaveBeenCalledWith(expect.objectContaining({
@@ -209,8 +176,8 @@ describe('template run publish actions', () => {
     expect(screen.getByText('Saved as a private post')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'View post' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Share Explore post' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Publish to Explore' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Publish & share' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Publish to Explore' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Publish & share' })).not.toBeInTheDocument();
   });
 
   it('keeps creator test results canvas-only', async () => {
@@ -218,10 +185,8 @@ describe('template run publish actions', () => {
     render(<TemplateRunClient runId="test-run-1" />);
 
     expect((await screen.findAllByRole('link', { name: 'Back to workflow canvas' })).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: 'Publish to Explore' })).not.toBeInTheDocument();
-    await waitFor(() => {
-      expect(publishModalMock).not.toHaveBeenCalledWith(expect.objectContaining({ isOpen: true }));
-    });
+    expect(screen.queryByRole('link', { name: 'Publish to Explore' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Publish & share' })).not.toBeInTheDocument();
   });
 
   it('downloads the result in a new tab under the template name, and leaves a link with time left to the browser', async () => {

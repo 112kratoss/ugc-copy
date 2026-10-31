@@ -22,10 +22,11 @@ describe('resolveCreationWorkspaceCardState', () => {
     expect(state.state).toBe('unpublished');
     expect(state.publishBadge).toBe('Not published');
     expect(state.monetizationLabel).toBe('No recipe');
+    // Publish opens the full composer for the creation, as the app's does.
     expect(state.primaryAction).toMatchObject({
       type: 'publish',
       label: 'Publish',
-      href: null,
+      href: '/post/new?generationId=gen-1&from=creations',
     });
     expect(state.secondaryAction).toMatchObject({
       type: 'set-paywall',

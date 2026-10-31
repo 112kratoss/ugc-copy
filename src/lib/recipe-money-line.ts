@@ -20,9 +20,8 @@ function formatDollars(cents: number): string {
 }
 
 /**
- * The line under every price a creator sets, in the composer and the quick
- * publish window: "Buyers pay $9.00 · You earn ~$7.65 (85%) · Payouts from
- * $100". A price is a credit count, and 100 credits are $1, so the credits
+ * The line under every price a creator sets in the composer: "Buyers pay
+ * $9.00 · You earn ~$7.65 (85%) · Payouts from $100". A price is a credit count, and 100 credits are $1, so the credits
  * are the cents; the creator's share is rounded to the cent. The app's
  * composer writes the credits form ("Buyers pay 900 credits · …"): the app
  * never puts a cash price beside a recipe (App Review 2.1(b)).

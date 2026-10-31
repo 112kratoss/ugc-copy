@@ -749,7 +749,7 @@ function jsonResponse(status: number, body: unknown) {
 }
 
 /**
- * Answers the start POSTs in order, the creation read the publish modal makes, and the look
+ * Answers the start POSTs in order, the creation read the publish form makes, and the look
  * for a run already at work as the page opens (`activeRun`, none by default).
  */
 function installFetch({ starts = [], publishDetails = null, remixBundle = null, activeRun = null, activeRunAnswer = null }: {

@@ -38,7 +38,6 @@ vi.mock('@/components/templates/api', async (importOriginal) => ({
   signTemplateInput: vi.fn(),
   startTemplateRun: vi.fn(),
 }));
-vi.mock('@/components/PublishToShowcaseModal', () => ({ default: () => null }));
 vi.mock('@/components/templates/TemplateRunMedia', () => ({
   default: ({ alt }: { alt: string }) => <span role="img" aria-label={alt} />,
 }));

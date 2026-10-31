@@ -216,4 +216,21 @@ describe('creator auth return paths', () => {
       '/post/new?generationId=generation-1&publishIntent=paid-generation&resourceMode=paid&focus=price&from=creations'
     );
   });
+
+  // A template run's Publish & share: the run to go back to, and the share once published.
+  it('keeps the way back and the share through sign-in', async () => {
+    render(await NewPostPage({
+      searchParams: Promise.resolve({
+        generationId: 'generation-1',
+        from: 'template-run',
+        returnTo: '/template-runs/run-1',
+        shareAfterPublish: '1',
+      }),
+    }));
+
+    expect(screen.getByTestId('auth-boundary')).toHaveAttribute(
+      'data-return-to',
+      '/post/new?generationId=generation-1&from=template-run&returnTo=%2Ftemplate-runs%2Frun-1&shareAfterPublish=1'
+    );
+  });
 });

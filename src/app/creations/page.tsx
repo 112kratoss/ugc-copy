@@ -11,8 +11,7 @@ import MediaDetailsPreviewModal, {
 } from '@/components/MediaDetailsPreviewModal';
 import PostVisibilityMenu from '@/components/PostVisibilityMenu';
 import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/StudioOverflowMenu';
-import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
-import { readCreationTitleSource } from '@/lib/creation-post-title';
+import { getCreationsWorkspaceCacheKey } from '@/lib/creations-workspace-cache';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import {
     usePostLifecycle,
@@ -30,6 +29,7 @@ import StudioCard, {
     type StudioChipTone,
 } from '@/app/creations/StudioCard';
 import {
+    buildCreationComposerPath,
     buildPostRecipeManagementPath,
     getCreationMediaFilters,
     resolveCreationWorkspaceCardState,
@@ -192,15 +192,21 @@ function getGenerationCardAnchorId(generationId: string): string {
  * Paid sales and earnings, with free unlocks beside them once there are any:
  * a free unlock is not a sale since 2026-10-17 (decision 6).
  */
+/** Sets one parameter of an internal path, keeping its other parameters and its fragment. */
+function withSearchParam(path: string, key: string, value: string): string {
+    const [pathWithoutHash, hash = ''] = path.split('#');
+    const [pathnamePart, query = ''] = pathWithoutHash.split('?');
+    const params = new URLSearchParams(query);
+    params.set(key, value);
+    const nextQuery = params.toString();
+    return `${pathnamePart}${nextQuery ? `?${nextQuery}` : ''}${hash ? `#${hash}` : ''}`;
+}
+
 function formatRecipeTrackRecord(bundle: NonNullable<OwnerPost['bundle']>): string {
     const freeUnlocks = bundle.freeUnlockCount > 0
         ? ` · ${bundle.freeUnlockCount} free unlock${bundle.freeUnlockCount === 1 ? '' : 's'}`
         : '';
     return `${bundle.salesCount} sold${freeUnlocks} · ${formatUsdCents(bundle.earningsUsdCents)} earned`;
-}
-
-function getCreationsWorkspaceCacheKey(userId: string) {
-    return `magicbooklet:creations-cache:v1:${userId}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -584,8 +590,6 @@ export default function CreationsPage() {
     const requestedGenerationRef = useRef<string | null>(null);
     const [highlightedGenerationId, setHighlightedGenerationId] = useState<string | null>(null);
     const scrolledToGenerationRef = useRef<string | null>(null);
-    const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
-    const [showPaidShortcutInPublishModal, setShowPaidShortcutInPublishModal] = useState(true);
     const [restoreTarget, setRestoreTarget] = useState<Generation | null>(null);
     const [restoringGenerationId, setRestoringGenerationId] = useState<string | null>(null);
     const restoreInputRef = useRef<HTMLInputElement>(null);
@@ -1112,27 +1116,12 @@ export default function CreationsPage() {
         }
     };
 
-    // The publish modal only opens for a generation that has no post yet.
-    // Recipe changes on an existing post link to the editor instead, which
-    // loads the stored bundle rather than rebuilding one from the prefill.
-    const openPublishModal = useCallback(async (generation: Generation) => {
-        try {
-            const detailedGeneration = await loadGenerationDetail(generation);
-            setPublishTarget(detailedGeneration);
-            setShowPaidShortcutInPublishModal(detailedGeneration.origin !== 'template');
-        } catch {
-            // Error state is stored in generationDetailError for the page-level notice.
-        }
-    }, [loadGenerationDetail]);
-
-    const closePublishModal = () => {
-        setPublishTarget(null);
-        setShowPaidShortcutInPublishModal(true);
-    };
-
-    const handlePublished = () => {
-        void fetchCreations();
-    };
+    // Publish opens the full composer for a creation with no post yet, as the
+    // app's does, and its Back returns to the view it was opened from. Recipe
+    // changes on an existing post link to the editor instead, which loads the
+    // stored bundle rather than rebuilding one from the prefill.
+    const withStudioReturn = (href: string): string =>
+        withSearchParam(href, 'returnTo', buildWorkspacePath(activeView, postVisibilityFilter));
 
     const requestPreviewRestore = (generation: Generation) => {
         const mediaKind = getMediaKind(generation);
@@ -1466,14 +1455,7 @@ export default function CreationsPage() {
             model: generation.model,
         });
 
-    const appendCreationsSource = (path: string): string => {
-        const [pathWithoutHash, hash = ''] = path.split('#');
-        const [pathnamePart, query = ''] = pathWithoutHash.split('?');
-        const params = new URLSearchParams(query);
-        params.set('from', 'creations');
-        const nextQuery = params.toString();
-        return `${pathnamePart}${nextQuery ? `?${nextQuery}` : ''}${hash ? `#${hash}` : ''}`;
-    };
+    const appendCreationsSource = (path: string): string => withSearchParam(path, 'from', 'creations');
 
     const buildCreationCustomizePath = (
         generation: Generation,
@@ -1483,10 +1465,7 @@ export default function CreationsPage() {
             return appendCreationsSource(workspaceState.linkedPost.ownerPath);
         }
 
-        return `/post/new?${new URLSearchParams({
-            generationId: generation.id,
-            from: 'creations',
-        }).toString()}`;
+        return buildCreationComposerPath(generation.id);
     };
 
     const getPreviewMetadata = (generation: Generation): Array<{ label: string; value: string }> => {
@@ -1616,7 +1595,11 @@ export default function CreationsPage() {
         const primaryIsUnlock =
             workspaceState.primaryAction.type === 'add-paywall' ||
             workspaceState.primaryAction.type === 'manage-paywall';
-        const customizeHref = canManageFromCreation && !isTemplateResult
+        const publishHref = canManageFromCreation && primaryIsPublish && workspaceState.primaryAction.href
+            ? withStudioReturn(workspaceState.primaryAction.href)
+            : null;
+        // Publish already opens the composer for a creation with no post yet.
+        const customizeHref = canManageFromCreation && !isTemplateResult && !publishHref
             ? buildCreationCustomizePath(generation, workspaceState)
             : null;
         const downloadHref = generation.output_url
@@ -1628,19 +1611,15 @@ export default function CreationsPage() {
 
         return (
             <>
-                {canManageFromCreation && primaryIsPublish ? (
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setPreviewGen(null);
-                            // This callback runs only after a click; detail loading reads the cache ref then.
-                            void openPublishModal(generation);
-                        }}
+                {publishHref ? (
+                    <Link
+                        href={publishHref}
+                        onClick={() => setPreviewGen(null)}
                         className={primaryClass}
                     >
                         <Globe className="h-4 w-4" />
                         Publish
-                    </button>
+                    </Link>
                 ) : null}
 
                 {canManageFromCreation && primaryIsUnlock && workspaceState.primaryAction.href ? (
@@ -2344,20 +2323,16 @@ export default function CreationsPage() {
                                             </StudioDetail>
                                         ) : null}
                                         primaryAction={hasPrimaryAction ? (
-                                            primaryIsPublish ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void openPublishModal(gen)}
-                                                    disabled={isGenerationDetailLoading}
+                                            primaryIsPublish && workspaceState.primaryAction.href ? (
+                                                <Link
+                                                    href={withStudioReturn(workspaceState.primaryAction.href)}
+                                                    // As the other card grids: nothing is fetched for cards scrolled past.
+                                                    prefetch={false}
                                                     className={studioActionClass('primary', { size: 'md', full: true })}
                                                 >
-                                                    {isGenerationDetailLoading ? (
-                                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                                    ) : (
-                                                        <Globe className="h-4 w-4" />
-                                                    )}
+                                                    <Globe className="h-4 w-4" />
                                                     {workspaceState.primaryAction.label}
-                                                </button>
+                                                </Link>
                                             ) : primaryIsUnlock && workspaceState.primaryAction.href ? (
                                                 <Link
                                                     href={workspaceState.primaryAction.href}
@@ -2817,27 +2792,6 @@ export default function CreationsPage() {
                 metadata={previewGen ? getPreviewMetadata(previewGen) : []}
                 actions={previewGen ? renderPreviewActions(previewGen) : null}
                 statusNote={previewGen ? getPreviewStatusNote(previewGen) : null}
-            />
-
-            <PublishToShowcaseModal
-                isOpen={Boolean(publishTarget)}
-                onClose={closePublishModal}
-                generationId={publishTarget?.id ?? null}
-                accessToken={session?.access_token ?? null}
-                defaultTitle={publishTarget?.title ?? publishTarget?.template?.templateTitle ?? ''}
-                creation={publishTarget ? readCreationTitleSource(publishTarget) : null}
-                defaultDescription={publishTarget?.description ?? ''}
-                showPaidShortcut={showPaidShortcutInPublishModal}
-                mediaOnly={publishTarget?.origin === 'template'}
-                paywallPrefill={publishTarget?.paywallPrefill ?? null}
-                onPublished={() => {
-                    if (!publishTarget) {
-                        return;
-                    }
-
-                    handlePublished();
-                    closePublishModal();
-                }}
             />
         </div>
     );
