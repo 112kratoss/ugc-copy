@@ -758,7 +758,7 @@ export default function OwnerProfileMediaHub({
         </Link>
         <Link href="/marketplace/sell" className="ui-focus-ring group col-span-2 flex min-h-24 items-center gap-3 rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-[rgba(255,122,89,0.24)] hover:bg-[var(--ui-surface-2)] lg:col-span-1">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]"><Store className="h-5 w-5" aria-hidden /></span>
-          <span className="min-w-0"><span className="block font-bold text-white">Seller dashboard</span><span className="mt-1 block truncate text-xs text-zinc-500">Listings and sales</span></span>
+          <span className="min-w-0"><span className="block font-bold text-white">Recipe sales</span><span className="mt-1 block truncate text-xs text-zinc-500">Your recipes and earnings</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
         {/* The one way to see whom you blocked and take a block back: a blocked creator is left out of every place that would show them. Quiet, and a row of its own: it is housekeeping, not a destination. */}
