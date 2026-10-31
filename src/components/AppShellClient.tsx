@@ -21,11 +21,11 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type MouseEvent as ReactMouseEvent,
 } from 'react';
 
 import {
   APP_NAV_ITEMS,
+  type AppNavClickHandler,
   CREATE_MENU_ITEMS,
   getActiveAppNavItem,
   getAppShellTitle,
@@ -122,11 +122,6 @@ const RESELECT_TO_TOP_TAB_IDS = new Set<AppNavItem['id']>([
   'alerts',
   'profile',
 ]);
-
-type AppNavClickHandler = (
-  event: ReactMouseEvent<HTMLAnchorElement>,
-  item: Pick<DrawerPlace, 'id'>
-) => void;
 
 function getReselectableTabId(pathname: string) {
   if (pathname === '/' || pathname === '/home') return 'home';
@@ -602,7 +597,7 @@ const AppShellFrame = memo(function AppShellFrame({
               <Plus className="h-4 w-4" aria-hidden />
               <span className="app-shell-create-label">Create</span>
             </button>
-            <DeferredAppShellAccount pathname={pathname} />
+            <DeferredAppShellAccount pathname={pathname} onNavigate={handleAppNavClick} />
           </div>
         </header>
 
