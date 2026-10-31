@@ -532,6 +532,15 @@ export const ACCOUNT_DELETION_TIMEOUT_MS = 120_000;
  */
 export const POST_CREATE_TIMEOUT_MS = 310_000;
 const POST_CREATE_REQUEST_OPTIONS: RequestOptions = { timeoutMs: POST_CREATE_TIMEOUT_MS };
+/**
+ * The enhancer may wait on Kie for 55 s, asking again when an answer is slow
+ * (src/lib/prompt-enhancer.ts), but only for a request that says it waits that
+ * long: at the usual 30 s a slow answer was given up on here, then charged on
+ * the server and never shown. The wait is stated in `PROMPT_ENHANCE_WAIT_HEADER`.
+ */
+export const PROMPT_ENHANCE_TIMEOUT_MS = 70_000;
+const PROMPT_ENHANCE_WAIT_HEADER = 'x-magicbooklet-wait-ms';
+const PROMPT_ENHANCE_REQUEST_OPTIONS: RequestOptions = { timeoutMs: PROMPT_ENHANCE_TIMEOUT_MS };
 const REQUEST_ID_HEADER = 'x-request-id';
 const FEED_INSTALLATION_ID_HEADER = 'x-magicbooklet-installation-id';
 
@@ -1269,7 +1278,11 @@ export function createApiClient({
     getMotionGeneration: (predictionId: string) =>
       request<GenerationStatusResponse>(`/api/generate${buildQuery({ id: predictionId })}`),
     enhancePrompt: (body: PromptEnhancementRequest) =>
-      request<PromptEnhancementResponse>('/api/enhance-prompt', { method: 'POST', body: JSON.stringify(body) }),
+      request<PromptEnhancementResponse>('/api/enhance-prompt', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { [PROMPT_ENHANCE_WAIT_HEADER]: String(PROMPT_ENHANCE_TIMEOUT_MS) },
+      }, PROMPT_ENHANCE_REQUEST_OPTIONS),
     getShowcaseFeed: (params?: Record<string, QueryValue>, options: RequestOptions = {}) =>
       request<ShowcaseFeedResponse>(`/api/showcase/feed${buildQuery(params)}`, {}, {
         ...(options.auth === false ? { cacheTtlMs: CONTENT_CACHE_TTL_MS } : {}),

@@ -103,6 +103,55 @@ describe('provider fetch', () => {
     expect(globalFetcher).not.toHaveBeenCalled();
   });
 
+  it('lets a caller cancel a request it no longer needs without reporting a provider failure', async () => {
+    const { fetchWithProviderTimeout } = await import('@/lib/provider-fetch');
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(new AbortController().signal);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const cancel = new AbortController();
+    const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+
+    const request = fetchWithProviderTimeout(
+      'https://api.kie.ai/gemini-3-6-flash-openai/v1/chat/completions',
+      { method: 'POST' },
+      30_000,
+      fetcher as unknown as typeof fetch,
+      'KIE prompt enhancer',
+      { cancelSignal: cancel.signal },
+    );
+    cancel.abort();
+
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('still times out a request its caller may cancel', async () => {
+    const { fetchWithProviderTimeout } = await import('@/lib/provider-fetch');
+    const deadline = new AbortController();
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+
+    const request = fetchWithProviderTimeout(
+      'https://api.kie.ai/gemini-3-6-flash-openai/v1/chat/completions',
+      { method: 'POST' },
+      30_000,
+      fetcher as unknown as typeof fetch,
+      'KIE prompt enhancer',
+      { cancelSignal: new AbortController().signal },
+    );
+    deadline.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+
+    await expect(request).rejects.toMatchObject({ name: 'ExternalServiceTimeoutError', timeoutMs: 30_000 });
+    expect(warnSpy).toHaveBeenCalledWith('[provider-fetch]', expect.objectContaining({
+      serviceName: 'KIE prompt enhancer',
+      outcome: 'timeout',
+    }));
+  });
+
   it('normalizes wrapper-created timeout aborts into typed external timeout errors', async () => {
     const { fetchWithProviderTimeout } = await import('@/lib/provider-fetch');
     const timeoutSignal = AbortSignal.abort();

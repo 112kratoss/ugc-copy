@@ -205,10 +205,11 @@ describe('enhancePromptForUser', () => {
       { aspectRatio: '9:16' },
       'Create a product poster and the text reads SALE'
     );
+    // The web page's request has no deadline of its own, so Kie gets the whole budget.
     expect(callPromptEnhancerMock).toHaveBeenCalledWith(
       'system prompt',
       'Create a product poster and the text reads SALE',
-      { responseSchema: expect.any(Object) }
+      { responseSchema: expect.any(Object), deadlineMs: 55_000 }
     );
     expect(result).toEqual({
       ok: true,
@@ -291,5 +292,31 @@ describe('enhancePromptForUser', () => {
       p_error_message: 'provider failure',
     });
     expect(client.updates).toHaveLength(0);
+  });
+
+  // An answer that lands after the app has given up is charged and never shown.
+  it.each<{ caller: string; headers: Record<string, string>; deadlineMs: number }>([
+    { caller: 'an app that has not said how long it waits', headers: { 'x-magicbooklet-client': 'mobile' }, deadlineMs: 25_000 },
+    {
+      caller: 'an app that waits 70 s',
+      headers: { 'x-magicbooklet-client': 'mobile', 'x-magicbooklet-wait-ms': '70000' },
+      deadlineMs: 55_000,
+    },
+  ])('gives Kie only the time $caller can wait for', async ({ headers, deadlineMs }) => {
+    const client = createClient({ remainingCredits: 41 });
+    buildEnhancerSystemPromptMock.mockReturnValue('system prompt');
+    callPromptEnhancerMock.mockResolvedValue({ enhancedPrompt: 'provider structured response' });
+    buildPromptEnhancementArtifactsMock.mockReturnValue({ compiledPrompt: 'compiled prompt', agentId: 'test-enhancer', appliedSafeguards: [] });
+    applyPromptEnhancementSafeguardsWithMetadataMock.mockReturnValue({ enhancedPrompt: 'final enhanced prompt', appliedSafeguards: [] });
+    inspectPromptQualityMock.mockReturnValue({ qualityScore: 90, warnings: [] });
+
+    await enhancePromptForUser({
+      body: { medium: 'image', selectedModel: 'nano-banana-pro', prompt: 'Create a product poster' },
+      userId: 'user-1',
+      request: new Request('http://localhost/api/enhance-prompt', { method: 'POST', headers }),
+      client: client.client,
+    });
+
+    expect(callPromptEnhancerMock.mock.lastCall?.[2]).toMatchObject({ deadlineMs });
   });
 });

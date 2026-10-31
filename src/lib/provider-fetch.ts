@@ -254,6 +254,7 @@ async function fetchWithTelemetry({
   fetcher,
   serviceName,
   timeoutSignal,
+  cancelSignal,
 }: {
   input: RequestInfo | URL;
   init: ProviderFetchInit;
@@ -261,11 +262,15 @@ async function fetchWithTelemetry({
   fetcher: typeof fetch;
   serviceName: string;
   timeoutSignal?: AbortSignal;
+  cancelSignal?: AbortSignal;
 }) {
   // Resolved before telemetry so the recorded host reflects the request that
   // was actually made. Identity function unless the certification seam is on.
   const target = resolveProviderRequestTarget(input);
-  const requestInit = timeoutSignal ? { ...init, signal: timeoutSignal } : init;
+  const requestSignal = timeoutSignal && cancelSignal
+    ? AbortSignal.any([timeoutSignal, cancelSignal])
+    : timeoutSignal ?? cancelSignal;
+  const requestInit = requestSignal ? { ...init, signal: requestSignal } : init;
   const startedAtMs = performance.now();
 
   // Counted at the start, whatever the outcome: this is the denominator the
@@ -286,6 +291,12 @@ async function fetchWithTelemetry({
     }));
     return response;
   } catch (error: unknown) {
+    // Let go by a caller that no longer needs the answer: nothing the provider
+    // did, so nothing to report.
+    if (cancelSignal?.aborted && !timeoutSignal?.aborted) {
+      throw error;
+    }
+
     const timedOut = Boolean(timeoutSignal?.aborted && isAbortLikeError(error));
     emitProviderFetchTelemetry(createProviderFetchTelemetryEvent({
       input: target,
@@ -305,12 +316,19 @@ async function fetchWithTelemetry({
   }
 }
 
+/**
+ * `cancelSignal` lets a caller let a request go once it no longer needs the
+ * answer, as the prompt enhancer does with the slower of its two asks. Unlike
+ * a signal in `init`, which replaces the timeout, it is kept alongside it, and
+ * a request it ends is not reported as a provider failure.
+ */
 export function fetchWithProviderTimeout(
   input: RequestInfo | URL,
   init: ProviderFetchInit,
   timeoutMs: number,
   fetcher: typeof fetch = fetch,
   serviceName = 'External service',
+  { cancelSignal }: { cancelSignal?: AbortSignal } = {},
 ): Promise<Response> {
   if (init.signal) {
     return fetchWithTelemetry({ input, init, timeoutMs, fetcher, serviceName });
@@ -318,10 +336,10 @@ export function fetchWithProviderTimeout(
 
   const signal = createProviderTimeoutSignal(timeoutMs);
   if (!signal) {
-    return fetchWithTelemetry({ input, init, timeoutMs, fetcher, serviceName });
+    return fetchWithTelemetry({ input, init, timeoutMs, fetcher, serviceName, cancelSignal });
   }
 
-  return fetchWithTelemetry({ input, init, timeoutMs, fetcher, serviceName, timeoutSignal: signal });
+  return fetchWithTelemetry({ input, init, timeoutMs, fetcher, serviceName, timeoutSignal: signal, cancelSignal });
 }
 
 export function isExternalServiceTimeoutError(error: unknown): error is ExternalServiceTimeoutError {

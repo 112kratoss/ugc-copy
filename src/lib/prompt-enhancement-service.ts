@@ -20,6 +20,7 @@ import {
   callPromptEnhancer,
   getPlannerResponseSchema,
   getPromptEnhancementCost,
+  resolvePromptEnhancerDeadlineMs,
   type EnhancerContext,
   type Medium,
 } from '@/lib/prompt-enhancer';
@@ -257,6 +258,7 @@ export async function enhancePromptForUser({
     const result = await callPromptEnhancer(systemPrompt, validated.prompt, {
       ...(validated.context?.frameImageUrls?.length ? { imageUrls: validated.context.frameImageUrls } : {}),
       ...(responseSchema ? { responseSchema } : {}),
+      deadlineMs: resolvePromptEnhancerDeadlineMs(request.headers),
     });
     const artifacts = buildPromptEnhancementArtifacts(
       validated.medium,

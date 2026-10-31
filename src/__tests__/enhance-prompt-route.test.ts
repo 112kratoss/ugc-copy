@@ -285,10 +285,11 @@ describe('/api/enhance-prompt route', () => {
       context,
       'Create a product poster and the text reads SALE'
     );
+    // A request that is not the app's has no deadline of its own: Kie gets the whole budget.
     expect(callPromptEnhancerMock).toHaveBeenCalledWith(
       'system prompt',
       'Create a product poster and the text reads SALE',
-      { responseSchema: expect.any(Object) }
+      { responseSchema: expect.any(Object), deadlineMs: 55_000 }
     );
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
