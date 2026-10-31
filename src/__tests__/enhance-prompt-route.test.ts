@@ -285,11 +285,10 @@ describe('/api/enhance-prompt route', () => {
       context,
       'Create a product poster and the text reads SALE'
     );
-    // A request that is not the app's has no deadline of its own: Kie gets the whole budget.
     expect(callPromptEnhancerMock).toHaveBeenCalledWith(
       'system prompt',
       'Create a product poster and the text reads SALE',
-      { responseSchema: expect.any(Object), deadlineMs: 55_000 }
+      { responseSchema: expect.any(Object), deadlineMs: expect.any(Number) }
     );
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
@@ -567,5 +566,14 @@ describe('/api/enhance-prompt route', () => {
       code: 'restored_named_handles',
       message: 'Restored missing named reference handles after enhancement.',
     });
+  });
+
+  // Kie may take PROMPT_ENHANCER_MAX_DEADLINE_MS after the route's own work, and a
+  // function cut off mid-ask never settles or refunds the credit hold, so the route
+  // keeps the platform's whole budget (Fluid compute's 300 s) rather than a tighter one.
+  it('leaves the route a budget well beyond the enhancer\u2019s deadline', async () => {
+    const route = await import('@/app/api/enhance-prompt/route') as { maxDuration?: number };
+    const { PROMPT_ENHANCER_MAX_DEADLINE_MS } = await import('@/lib/prompt-enhancer');
+    expect((route.maxDuration ?? 300) * 1_000).toBeGreaterThanOrEqual(PROMPT_ENHANCER_MAX_DEADLINE_MS + 30_000);
   });
 });

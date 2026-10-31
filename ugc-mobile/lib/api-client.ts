@@ -533,7 +533,7 @@ export const ACCOUNT_DELETION_TIMEOUT_MS = 120_000;
 export const POST_CREATE_TIMEOUT_MS = 310_000;
 const POST_CREATE_REQUEST_OPTIONS: RequestOptions = { timeoutMs: POST_CREATE_TIMEOUT_MS };
 /**
- * The enhancer may wait on Kie for 55 s, asking again when an answer is slow
+ * The enhancer may wait on Kie for 45 s, asking again when an answer is slow
  * (src/lib/prompt-enhancer.ts), but only for a request that says it waits that
  * long: at the usual 30 s a slow answer was given up on here, then charged on
  * the server and never shown. The wait is stated in `PROMPT_ENHANCE_WAIT_HEADER`.

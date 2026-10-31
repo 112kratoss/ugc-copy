@@ -584,7 +584,7 @@ describe('mobile api client caching', () => {
     }
   });
 
-  // The enhancer may wait on Kie for 55 s (src/lib/prompt-enhancer.ts), but
+  // The enhancer may wait on Kie for 45 s (src/lib/prompt-enhancer.ts), but
   // only for a request that says it waits that long. At the usual 30 s a slow
   // answer was given up on here, then charged on the server and never shown.
   it('waits out the enhancer’s budget and tells the server how long it waits', async () => {

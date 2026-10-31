@@ -126,6 +126,61 @@ describe('provider fetch', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it('keeps a request let go after running past the slow line as a timeout under its own name', async () => {
+    const { fetchWithProviderTimeout, PROVIDER_SLOW_FETCH_WARNING_MS } = await import('@/lib/provider-fetch');
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(new AbortController().signal);
+    vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(PROVIDER_SLOW_FETCH_WARNING_MS + 5_000);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const cancel = new AbortController();
+    const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    }));
+
+    const request = fetchWithProviderTimeout(
+      'https://api.kie.ai/gemini-3-6-flash-openai/v1/chat/completions',
+      { method: 'POST' },
+      45_000,
+      fetcher as unknown as typeof fetch,
+      'KIE prompt enhancer',
+      { cancelSignal: cancel.signal },
+    );
+    cancel.abort();
+
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    expect(warnSpy).toHaveBeenCalledWith('[provider-fetch]', expect.objectContaining({
+      serviceName: 'KIE prompt enhancer',
+      outcome: 'timeout',
+      errorName: 'AbandonedSlowRequest',
+      durationMs: PROVIDER_SLOW_FETCH_WARNING_MS + 5_000,
+    }));
+  });
+
+  it('keeps a cancel signal beside the caller’s own signal', async () => {
+    const { fetchWithProviderTimeout } = await import('@/lib/provider-fetch');
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const callerSignal = new AbortController().signal;
+    const cancel = new AbortController();
+    let requestSignal: AbortSignal | null | undefined;
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal;
+      return { ok: true } as Response;
+    });
+
+    await fetchWithProviderTimeout(
+      'https://provider.example.com/task',
+      { method: 'POST', signal: callerSignal },
+      30_000,
+      fetcher as unknown as typeof fetch,
+      'Provider',
+      { cancelSignal: cancel.signal },
+    );
+
+    expect(timeoutSpy).not.toHaveBeenCalled();
+    expect(requestSignal?.aborted).toBe(false);
+    cancel.abort();
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
   it('still times out a request its caller may cancel', async () => {
     const { fetchWithProviderTimeout } = await import('@/lib/provider-fetch');
     const deadline = new AbortController();

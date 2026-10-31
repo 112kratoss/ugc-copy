@@ -25,6 +25,15 @@ export interface PromptEnhancementResult {
   }>;
 }
 
+/**
+ * This page waits for the route's answer with no deadline of its own, so it
+ * states the app's wait and the enhancer may use its whole budget; a request
+ * that states none is held to what an app from before the header can wait
+ * (src/lib/prompt-enhancer.ts). Literals: the server module cannot be imported here.
+ */
+export const PROMPT_ENHANCE_WAIT_HEADER = 'x-magicbooklet-wait-ms';
+export const PROMPT_ENHANCE_WAIT_MS = 70_000;
+
 export class PromptEnhancementError extends Error {
   remainingCredits?: number;
 
@@ -51,6 +60,7 @@ export async function requestPromptEnhancement({
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${session.access_token}`,
+      [PROMPT_ENHANCE_WAIT_HEADER]: String(PROMPT_ENHANCE_WAIT_MS),
     },
     body: JSON.stringify({ medium, selectedModel, prompt, context }),
   });
