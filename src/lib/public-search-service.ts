@@ -257,7 +257,7 @@ export async function searchPublicContent(
   const postCursorRow = postHasMore ? postRows[options.limit - 1] : null;
 
   // The list pages in raw rows and drops the ones it cannot show (a hidden
-  // post, a failed quality check, a match only in resource text), so only its
+  // post, a failed quality check), so only its
   // own nextOffset says where the next page starts. Counting returned items
   // repeated a row after a drop, or ended the list early after two.
   const recipeNextOffset = !isTop && recipePage.pageInfo.hasMore

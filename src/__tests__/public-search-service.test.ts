@@ -164,8 +164,8 @@ describe('public search service', () => {
 
   it('pages recipes from the list\'s own offset, so a dropped row neither repeats a card nor ends the list', async () => {
     // Raw marketplace rows in list order. An ineligible row stands for one the
-    // list drops after its query (a hidden post, a failed quality check, a
-    // match only in resource text), as getMarketplaceResourceListBase does.
+    // list drops after its query (a hidden post, a failed quality check), as
+    // getMarketplaceResourceListBase does.
     const rows = [
       { id: 'recipe-1', eligible: true },
       { id: 'dropped-1', eligible: false },

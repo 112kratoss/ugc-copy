@@ -3,11 +3,11 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(7);
+select plan(8);
 
-insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
+insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at)
 values ('0000f5c0-0000-4000-9000-000000000001'::uuid, 'f5c-search@example.invalid',
-        'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb);
+        'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb, now());
 
 update public.profiles
 set username = 'indexed-seller', display_name = 'Indexed Seller'
@@ -46,24 +46,35 @@ select is(
   'bundle insertion creates one derived search document'
 );
 
+-- An item's title is what the unlock gives; the card shows its kind only
+-- (marketplace_search_public_text.test.sql covers the rest).
 select ok(
-  (select search_text like '%nebula lighting%'
+  (select search_text not like '%nebula lighting%'
    from public.marketplace_bundle_search_documents
    where bundle_id = '0000f5c0-0000-4000-9000-000000000020'::uuid),
-  'resource item text is included in the derived search document'
+  'resource item text stays out of the derived search document'
 );
 
 select is(
   (select count(*)::bigint
    from public.list_marketplace_resource_bundles('all', 'all', null, 'nebula', 'recent', 0, 24)
    where id = '0000f5c0-0000-4000-9000-000000000020'::uuid),
-  1::bigint,
-  'indexed search returns a matching listable bundle'
+  0::bigint,
+  'so searching an item''s title does not return the bundle'
 );
 
 select is(
   (select count(*)::bigint
-   from public.list_marketplace_resource_bundles('all', 'all', null, 'ne', 'recent', 0, 24)
+   from public.list_marketplace_resource_bundles('all', 'all', null, 'aurora', 'recent', 0, 24)
+   where id = '0000f5c0-0000-4000-9000-000000000020'::uuid),
+  1::bigint,
+  'indexed search returns a matching listable bundle'
+);
+
+-- 'au' is in the document ('aurora'), so only the length guard keeps it out.
+select is(
+  (select count(*)::bigint
+   from public.list_marketplace_resource_bundles('all', 'all', null, 'au', 'recent', 0, 24)
    where id = '0000f5c0-0000-4000-9000-000000000020'::uuid),
   0::bigint,
   'database refuses undersized search terms even if a caller bypasses the API policy'

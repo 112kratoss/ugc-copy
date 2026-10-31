@@ -223,7 +223,7 @@ export interface PostRemixResolutionInput {
   } | null;
 }
 
-const POST_RESOURCE_ITEM_TYPES: PostResourceItemType[] = [
+export const POST_RESOURCE_ITEM_TYPES: PostResourceItemType[] = [
   'prompt',
   'workflow',
   'reference_image',
@@ -272,7 +272,7 @@ const POST_RESOURCE_SECTION_KINDS: PostResourceSectionKind[] = [
   'other',
 ];
 
-const POST_RESOURCE_KIND_ORDER: PostResourceKind[] = ['prompt', 'workflow', 'files', 'notes', 'remix'];
+export const POST_RESOURCE_KIND_ORDER: PostResourceKind[] = ['prompt', 'workflow', 'files', 'notes', 'remix'];
 
 const RESOURCE_ITEM_LABELS: Record<PostResourceItemType, { singular: string; plural: string }> = {
   prompt: { singular: 'prompt', plural: 'prompts' },
