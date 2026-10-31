@@ -62,7 +62,10 @@ async function guestIdentity() {
   }), 'Tag guest fixture');
   return { id: session.user.id, client, token: session.access_token };
 }
-const privateTables = ['generations', 'generation_input_media', 'ai_usage_events'];
+// Owner-scoped: a client reads its own rows. Generations are read by the server
+// only, so clients get no column of them at all (20261031033532).
+const ownerScopedTables = ['generation_input_media', 'ai_usage_events'];
+const privateTables = ['generations', ...ownerScopedTables];
 try {
   const owner = await identity('owner');
   const other = await identity('other');
@@ -96,9 +99,12 @@ try {
     slug: `audit-projection-${nonce}`, label: 'Inactive audit fixture', is_active: false }), 'Seed inactive model');
 
   for (const who of [owner, other, guest]) {
-    for (const table of privateTables) {
+    const label = who === guest ? 'guest' : who === owner ? 'owner' : 'other';
+    check(`generations: ${label} direct read denied`,
+      (await who.client.from('generations').select('id').limit(0)).error?.code, '42501');
+    for (const table of ownerScopedTables) {
       const rows = success(await who.client.from(table).select('id,user_id').in('user_id', fixtures.users), 'Private projection');
-      check(`${table}: ${who === guest ? 'guest' : who === owner ? 'owner' : 'other'} sees only own row`, rows.map(x => x.user_id), [who.id]);
+      check(`${table}: ${label} sees only own row`, rows.map(x => x.user_id), [who.id]);
     }
     const drafts = success(await who.client.from('templates').select('id,creator_user_id').in('id', fixtures.templates), 'Draft read');
     check('template drafts are owner-scoped', drafts.map(x => x.creator_user_id), [who.id]);
@@ -151,12 +157,12 @@ try {
   check('direct usage deletion changes no row', success(await owner.client.from('ai_usage_events')
     .delete().eq('user_id', owner.id).select('id'), 'Usage deletion').length, 0);
   success(await admin.auth.admin.updateUserById(other.id, { ban_duration: '1h' }), 'Ban fixture');
-  for (const table of privateTables) {
+  for (const table of ownerScopedTables) {
     check(`${table}: banned identity denied`, success(await other.client.from(table)
       .select('id').in('user_id', fixtures.users), 'Banned read').length, 0);
   }
   success(await admin.auth.admin.signOut(owner.token, 'global'), 'Revoke fixture');
-  for (const table of privateTables) {
+  for (const table of ownerScopedTables) {
     check(`${table}: revoked identity denied`, success(await owner.client.from(table)
       .select('id').in('user_id', fixtures.users), 'Revoked read').length, 0);
   }

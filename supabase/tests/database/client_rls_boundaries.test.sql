@@ -85,11 +85,14 @@ select is(
   'an authenticated user cannot read another user''s transactions'
 );
 
-select is(
-  (select count(*) from public.generations
-   where id = 'a0000000-0000-4000-8000-000000000002'::uuid),
-  0::bigint,
-  'an authenticated user cannot read another user''s private generations'
+select throws_ok(
+  $$
+    select id from public.generations
+    where id = 'a0000000-0000-4000-8000-000000000002'::uuid
+  $$,
+  '42501',
+  null,
+  'an authenticated user cannot query another user''s generations'
 );
 
 select throws_ok(
@@ -102,26 +105,25 @@ select throws_ok(
   'an authenticated user cannot insert transactions directly'
 );
 
--- ─── Column grants on generations (row owner) ────────────────────────────────
+-- ─── No column of generations (row owner) ────────────────────────────────────
 
--- The authenticated role holds a column-scoped SELECT on generations: enough
--- to resume your own work, and nothing more. Anything richer — prompts,
--- settings, media, visibility — is service-role only, behind an explicit
+-- Generation reads are the server's: the authenticated role holds no SELECT on
+-- generations (20261031033532). Every read is service-role, behind an explicit
 -- authorization check in the service layer.
 --
--- Both directions are pinned on purpose. Column privileges are evaluated
--- before row policies, so an ungranted column fails the whole statement even
--- for the row's own owner; narrowing this projection on 2026-07-26 silently
--- broke remix, publishing, and workflow-run hydration in production, and each
--- was found only when users reported dead buttons. Widening it would hand back
--- the data that hardening removed. Either direction should be a deliberate
--- change that updates this test and the readers that depend on it.
+-- Until then it held the eight columns the web creators' resume read used.
+-- Column privileges are evaluated before row policies, so an ungranted column
+-- fails the whole statement even for the row's own owner: the 2026-07-26
+-- narrowing silently broke remix, publishing, and workflow-run hydration in
+-- production, and the resume read itself from 2026-10-13, each found only when
+-- users reported dead buttons. Granting any column back should be a deliberate
+-- change that updates this test.
 --
 -- production_data_contract.test.sql also pins `prompt`, but against another
 -- user's row, where row policies would hide it anyway. These run against the
 -- caller's own row on purpose: that is the only way to show the denial comes
--- from the column grant rather than from RLS, which is precisely the
--- distinction that made the 2026-07-26 breakage so hard to see.
+-- from the grant rather than from RLS, which is precisely the distinction that
+-- made the 2026-07-26 breakage so hard to see.
 
 reset role;
 set local role authenticated;
@@ -131,13 +133,15 @@ select set_config(
   true
 );
 
-select lives_ok(
+select throws_ok(
   $$
     select id, user_id, prediction_id, status, created_at, duration, category, creation_mode
     from public.generations
     where id = 'a0000000-0000-4000-8000-000000000002'::uuid
   $$,
-  'the resume projection stays readable for the row owner'
+  '42501',
+  null,
+  'the former resume projection is refused, even on the caller''s own row'
 );
 
 select throws_ok(

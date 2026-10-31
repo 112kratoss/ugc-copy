@@ -35,6 +35,9 @@ values ('e2600000-0000-4000-8000-000000000003','e2200000-0000-4000-8000-00000000
 -- Deliberately inconsistent legacy data is invisible to client roles.
 insert into public.workflow_canvas_assistant_messages (id,canvas_id,user_id,role,content)
 values ('e2600000-0000-4000-8000-000000000004','e2200000-0000-4000-8000-000000000002','e2100000-0000-4000-8000-000000000001','user','Message');
+-- Deliberately inconsistent legacy data is invisible to client roles.
+insert into public.workflow_canvas_run_steps (id,run_id,node_id,status,generation_id)
+values ('e2600000-0000-4000-8000-000000000005','e2500000-0000-4000-8000-000000000001','foreign-legacy','succeeded','e2400000-0000-4000-8000-000000000002');
 set local role authenticated;
 select set_config('request.jwt.claims','{"sub":"e2100000-0000-4000-8000-000000000001","role":"authenticated","session_id":"e2900000-0000-4000-8000-000000000001"}',true);
 select ok(public.current_identity_is_active(), 'fixture identity passes the active identity gate');
@@ -122,6 +125,13 @@ values ('e2500000-0000-4000-8000-000000000001','foreign-generation','succeeded',
 select throws_ok($$ update public.workflow_canvas_run_steps set generation_id='e2400000-0000-4000-8000-000000000002'
 where id='e2800000-0000-4000-8000-000000000001' $$,'42501',null,
 'step updates cannot attach another owner generation');
+-- The run details and approval routes read a run's steps with the caller's
+-- client, and authenticated has no SELECT on generations: the generation check
+-- reads through current_identity_owns_generation (20261031033532).
+select is((select count(*) from public.workflow_canvas_run_steps where id='e2800000-0000-4000-8000-000000000001'),1::bigint,
+'run steps: the owner reads a step that links their generation');
+select is((select count(*) from public.workflow_canvas_run_steps where id='e2600000-0000-4000-8000-000000000005'),0::bigint,
+'run steps: a step that links another owner generation stays hidden');
 -- The new policies must still compose with the active-session boundary.
 reset role;
 delete from auth.sessions where id='e2900000-0000-4000-8000-000000000001';

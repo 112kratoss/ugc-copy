@@ -280,13 +280,12 @@ select ok(
   'anonymous has no generation projection'
 );
 select ok(
-  has_column_privilege(
+  not has_any_column_privilege(
     'authenticated',
     'public.generations',
-    'id',
     'SELECT'
   ),
-  'authenticated can read the generation resume id'
+  'authenticated has no generation column, not even the former resume id'
 );
 select ok(
   not has_column_privilege(
@@ -437,8 +436,8 @@ select ok(
   'future functions require an explicit service-role grant'
 );
 
--- Authenticated client A can resume only A's generation and can see only A's
--- save relationships.
+-- Authenticated client A reads no generation, not even A's own, and can see
+-- only A's save relationships.
 set local role authenticated;
 select set_config(
   'request.jwt.claims',
@@ -446,22 +445,24 @@ select set_config(
   true
 );
 
-select is(
-  (
-    select count(*)
+select throws_ok(
+  $$
+    select id
     from public.generations
     where id = '93000000-0000-4000-8000-000000000001'::uuid
-  ),
-  1::bigint,
-  'authenticated can read their own safe generation projection'
+  $$,
+  '42501',
+  null,
+  'authenticated cannot read their own generation directly'
 );
-select is(
-  (
-    select count(*)
+select throws_ok(
+  $$
+    select id
     from public.generations
     where id = '93000000-0000-4000-8000-000000000002'::uuid
-  ),
-  0::bigint,
+  $$,
+  '42501',
+  null,
   'authenticated cannot read another user generation'
 );
 select throws_ok(

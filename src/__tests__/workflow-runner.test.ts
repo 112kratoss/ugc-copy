@@ -31,8 +31,8 @@ import { GenerationServiceError } from '@/lib/generation-service-core';
 import { createSeedanceAssetMetadata } from '@/lib/seedance-assets';
 import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
-// The runner reads generations service-role (authenticated grants stop at the
-// resume projection), so the service client must serve the same state-backed
+// The runner reads generations service-role (authenticated has no SELECT on
+// the table), so the service client must serve the same state-backed
 // tables as the user client. Capture the latest built mock and hand it out.
 const lastSupabaseMockRef: { current: unknown } = { current: null };
 const createServiceClientMock = vi.fn(() => lastSupabaseMockRef.current ?? { role: 'service' });

@@ -94,8 +94,8 @@ function createCanonicalTemplateAdminClientMock({
 /**
  * Admin client for ordinary (non-template) publishes. Serves the generation
  * read — the service reads with the service client on purpose, because the
- * authenticated Data API grant on `generations` is column-scoped and cannot
- * see the publish columns — and deliberately throws on `template_runs`:
+ * authenticated Data API has no SELECT on `generations` — and deliberately
+ * throws on `template_runs`:
  * an unlinked row must never pay for the canonical-run lookup.
  */
 function createAdminClientMock(
@@ -630,7 +630,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       },
     });
     // The read goes through the service client — the authenticated Data API
-    // grant is column-scoped and cannot see the publish columns — and asks for
+    // has no SELECT on `generations` — and asks for
     // the template linkage so backend-private rows are recognized from the row.
     expect(adminClient.selects[0]).toContain('showcase_asset_path');
     expect(adminClient.selects[0]).toContain('template_run_id');

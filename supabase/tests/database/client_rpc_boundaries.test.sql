@@ -7,8 +7,8 @@ select is((select string_agg(p.proname, ',' order by p.proname)
   from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and p.prosecdef
     and has_function_privilege('authenticated',p.oid,'EXECUTE')),
-  'current_identity_admission,current_identity_is_active,current_identity_is_registered,current_identity_state,initialize_workflow_canvas_run,start_workflow_canvas_run',
-  'only the reviewed six privileged public functions are client callable');
+  'current_identity_admission,current_identity_is_active,current_identity_is_registered,current_identity_owns_generation,current_identity_state,initialize_workflow_canvas_run,start_workflow_canvas_run',
+  'only the reviewed seven privileged public functions are client callable');
 select is((select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and p.prosecdef and has_function_privilege('anon',p.oid,'EXECUTE')),
   0::bigint,'no privileged public function is callable without authentication');
@@ -21,12 +21,17 @@ insert into public.workflow_canvases(id,user_id,title,graph) values('e7200001-00
 insert into auth.users(id,email,aud,role,is_anonymous,created_at) values('e7100002-0000-4000-8000-000000000002','rpc-e7100002@example.invalid','authenticated','authenticated',false,now());
 insert into auth.sessions(id,user_id,created_at,updated_at) values('e7100002-0000-4000-8000-000000000002','e7100002-0000-4000-8000-000000000002',now(),now());
 insert into public.workflow_canvases(id,user_id,title,graph) values('e7200002-0000-4000-8000-000000000002','e7100002-0000-4000-8000-000000000002','RPC rollback fixture','{"version":1,"nodes":[],"edges":[]}');
+insert into public.generations(id,user_id,model,status) values('e7300001-0000-4000-8000-000000000001','e7100001-0000-4000-8000-000000000001','rpc-rollback-fixture','succeeded'),('e7300002-0000-4000-8000-000000000002','e7100002-0000-4000-8000-000000000002','rpc-rollback-fixture','succeeded');
 set local role authenticated;
 select set_config('request.jwt.claims','{"sub":"e7100001-0000-4000-8000-000000000001","role":"authenticated","session_id":"e7100001-0000-4000-8000-000000000001"}',true);
 select is(public.current_identity_state(),'active','identity state is current subject');
 select is(public.current_identity_is_active(),true,'live owner admitted');
 select is(public.current_identity_is_registered(),true,'registered owner identified');
 select is((public.current_identity_admission()->>'session_valid')::boolean,true,'current subject session checked');
+-- Callable because RLS calls it; it answers only for the caller's own rows.
+select is(public.current_identity_owns_generation('e7300001-0000-4000-8000-000000000001'),true,'generation ownership: own generation');
+select is(public.current_identity_owns_generation('e7300002-0000-4000-8000-000000000002'),false,'generation ownership: another user generation');
+select is(public.current_identity_owns_generation(null),false,'generation ownership: no generation');
 select throws_ok($q$select * from public.initialize_workflow_canvas_run('e7200002-0000-4000-8000-000000000002','e7100002-0000-4000-8000-000000000002','start','node',null,'{}','blocked', '[{"nodeId":"start"}]')$q$,'P0001','cannot start a workflow run for another user','initialize: forged subject denied');
 select throws_ok($q$select * from public.initialize_workflow_canvas_run('e7200002-0000-4000-8000-000000000002','e7100001-0000-4000-8000-000000000001','start','node',null,'{}','blocked', '[{"nodeId":"start"}]')$q$,'P0001','workflow canvas not found for this user','initialize: foreign canvas denied');
 select throws_ok($q$select * from public.start_workflow_canvas_run('e7200002-0000-4000-8000-000000000002','e7100002-0000-4000-8000-000000000002','start','node',null,'{}','blocked')$q$,'P0001','cannot start a workflow run for another user','start: forged subject denied');
@@ -85,6 +90,7 @@ select throws_ok($q$select public.current_identity_admission()$q$,'42501',null,'
 select throws_ok($q$select public.current_identity_state()$q$,'42501',null,'anon: current_identity_state execute denied');
 select throws_ok($q$select public.current_identity_is_active()$q$,'42501',null,'anon: current_identity_is_active execute denied');
 select throws_ok($q$select public.current_identity_is_registered()$q$,'42501',null,'anon: current_identity_is_registered execute denied');
+select throws_ok($q$select public.current_identity_owns_generation('e7300001-0000-4000-8000-000000000001')$q$,'42501',null,'anon: current_identity_owns_generation execute denied');
 reset role;
 set local role service_role;
 select set_config('request.jwt.claims','{"role":"service_role"}',true);

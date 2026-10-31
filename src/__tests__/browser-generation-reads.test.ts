@@ -4,9 +4,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * `authenticated` may read only the resume columns of `generations`
- * (20260726071722_harden_data_api_and_storage_contract.sql), and a read of any
- * other column fails the whole query (42501, a 403 from PostgREST). The pages'
+ * `authenticated` may read no column of `generations`
+ * (20261031033532_revoke_authenticated_generation_reads.sql; until then only
+ * the resume columns of 20260726071722), and such a read fails the whole query
+ * (42501, a 403 from PostgREST). The pages'
  * tests mock Supabase, so they pass either way: from 2026-10-13 production
  * refused every creator's look for a run at work (it had gained the prompt, the
  * cost and the model), and each creator opened idle while the run went on.
