@@ -38,13 +38,24 @@ async function rootDirectory() {
   return root;
 }
 
+/**
+ * Only local filesystems whose inherited flock semantics are supported here.
+ * Unknown/network filesystems are neither swept nor admitted. `systemType` is
+ * the statfs type of `/`, read on macOS only.
+ */
+export function isLocalLockFilesystem(platform: NodeJS.Platform, type: number, systemType: number | null) {
+  if (platform === 'linux') return [0x01021994, 0x794c7630, 0xef53].includes(type); // tmpfs, overlayfs, ext4
+  // APFS. macOS numbers a filesystem as it registers at boot, so APFS has no
+  // fixed statfs type: the development Mac reported 0x1a until a reboot on
+  // 2026-10-31 and 0x19 after. The system volume is APFS on every macOS Node
+  // supports, so match the type `/` reports.
+  return platform === 'darwin' && type === systemType;
+}
+
 async function localLockFilesystem(root: string) {
   const { type } = await statfs(root);
-  // Only local filesystems whose inherited flock semantics are supported here.
-  // Unknown/network filesystems are neither swept nor admitted.
-  return process.platform === 'linux'
-    ? [0x01021994, 0x794c7630, 0xef53].includes(type) // tmpfs, overlayfs, ext4
-    : process.platform === 'darwin' && type === 0x1a; // APFS
+  const systemType = process.platform === 'darwin' ? (await statfs('/')).type : null;
+  return isLocalLockFilesystem(process.platform, type, systemType);
 }
 
 /** Open without following a link, and retain the descriptor for identity checks. */
