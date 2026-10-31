@@ -528,6 +528,9 @@ export default function AppShellAccount({
               prefetch={false}
               role="menuitem"
               aria-current={getActiveAppNavItem(pathname)?.id === PROFILE_NAV_ITEM.id ? 'page' : undefined}
+              // Named for a page's leave guard only with the shell's click,
+              // which keeps the press on the page (AppNavClickHandler).
+              data-app-nav-tab={onNavigate ? PROFILE_NAV_ITEM.id : undefined}
               onClick={(event) => {
                 setAccountOpen(false);
                 onNavigate?.(event, PROFILE_NAV_ITEM);

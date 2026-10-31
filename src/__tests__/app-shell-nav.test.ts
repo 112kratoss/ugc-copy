@@ -5,11 +5,26 @@ import { describe, expect, it } from 'vitest';
 import {
   getActiveAppNavItem,
   getAppShellTitle,
+  getReselectableTabId,
   isMinimalAppChromePath,
   isNotFoundRouteSegment,
 } from '@/components/app-shell-nav';
 
 describe('app shell navigation', () => {
+  // The shell's controls take such a tab to its top, and a page's leave guard
+  // lets their press through; anywhere else they navigate, and the guard asks.
+  it('names a tab a press takes to its top only at the tab\'s own address', () => {
+    expect(getReselectableTabId('/')).toBe('home');
+    expect(getReselectableTabId('/home')).toBe('home');
+    expect(getReselectableTabId('/showcase')).toBe('showcase');
+    expect(getReselectableTabId('/notifications')).toBe('alerts');
+    expect(getReselectableTabId('/profile')).toBe('profile');
+
+    for (const pathname of ['/profile/edit', '/showcase/a-post', '/creators/someone', '/creations', '/marketplace', '/post/new']) {
+      expect(getReselectableTabId(pathname), pathname).toBeNull();
+    }
+  });
+
   it('keeps post composer routes in the Studio section', () => {
     expect(getActiveAppNavItem('/post/new')?.id).toBe('studio');
     expect(getActiveAppNavItem('/post/post-1/edit')?.id).toBe('studio');
