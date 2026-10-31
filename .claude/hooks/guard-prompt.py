@@ -17,7 +17,8 @@ prompt = payload.get("prompt") or ""
 cwd = payload.get("cwd") or os.getcwd()
 # An @-mention starts a word (so an email address is not one) and runs to the next space, or sits in quotes.
 for mention in re.finditer(r"(?<![\w.@])@(\"[^\"\n]+\"|'[^'\n]+'|\S+)", prompt):
-    path = mention.group(1).strip("\"'").rstrip(",.;:!?)]}>")
+    # A line range (`@.env.local#L5-10`, `@file:12`) still pastes the file's lines.
+    path = re.sub(r"(?:#L?|:)\d[\d-]*$", "", mention.group(1).strip("\"'").rstrip(",.;:!?)]}>"))
     if not path:
         continue
     for candidate in (path, os.path.realpath(os.path.join(cwd, os.path.expanduser(path)))):

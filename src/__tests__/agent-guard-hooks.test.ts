@@ -127,6 +127,7 @@ describe('guard-prompt.py on prompts', () => {
     'is @ugc-app/.env.local, pointing at production?',
     'see @"/Users/athuls/UGC copy/ugc-app/.env.local"',
     '@.mcp.json has the token?',
+    'lines @.env.local#L5-10 look off',
   ])('blocks a prompt that @-mentions a secrets file: %s', (text) => {
     const result = prompt(text);
     expect(result.status).toBe(2);
@@ -166,6 +167,17 @@ describe('guard-bash.py on secrets files', () => {
     "openssl rand -hex 32 | sed 's/^/KIE_WEBHOOK_SECRET=/' >> .env.local",
     "sed -Ei '' 's/^#(NAME=)/\\1/' .env.local",
     "git grep -n -E 'grep .*\\.env' -- '*.md'",
+    // Here-document prose: the apostrophe must not run the later lines into one command.
+    "git commit -F - <<'EOF'\nDon't rm anything.\nIt mentions .env.local only.\nEOF",
+    // Text that only names a secrets file: commit messages, PR titles, a here-document fed to cat, a search for the name.
+    'git commit -m "fix: sort .env.local keys"',
+    'git commit -m "docs: look at .env.local handling"',
+    'gh pr create --title "Guard .env files" --body "Moves the .env.local guard into hooks"',
+    "git commit -m \"$(cat <<'EOF'\nchore: never cat .env.local\nEOF\n)\"",
+    "grep -rn '.env.local' docs",
+    "grep '^NEXT_PUBLIC_SUPABASE_URL=' .env.local 2>/dev/null",
+    `grep '^NEXT_PUBLIC_SUPABASE_URL=' "/Users/athuls/UGC copy/ugc-app/.env.local"`,
+    "if grep -q '^NAME=' .env.local; then echo set; fi",
   ])('allows %s', (command) => {
     const result = bash(command);
     expect(result.status, result.stderr).toBe(0);
@@ -196,7 +208,15 @@ describe('guard-bash.py on secrets files', () => {
     ['rm .env.local', 'overwrites a secrets file'],
     ['cp .env.example .env.local', 'overwrites a secrets file'],
     ['mv .env.local /tmp/x', 'overwrites a secrets file'],
-    ['find . -name .env.local -delete', 'overwrites a secrets file'],
+    ['find . -name .env.local -delete', 'finds a secrets file'],
+    ["find . -name '.env*' -exec cat {} \\;", 'finds a secrets file'],
+    ['grep -v NEXT_PUBLIC_SUPABASE_URL .env.local', 'searching a secrets file'],
+    ["bash -c 'cat .env.local'", 'prints a secrets file'],
+    ['eval "cat .env.local"', 'prints a secrets file'],
+    ["bash <<'EOF'\ncat .env.local\nEOF", 'prints a secrets file'],
+    ['c""at .env.local', 'prints a secrets file'],
+    ['if true; then cat .env.local; fi', 'prints a secrets file'],
+    ['diff <(cat .env.local) /dev/null', 'prints a secrets file'],
   ])('blocks %s', (command, reason) => {
     const result = bash(command);
     expect(result.status).toBe(2);
