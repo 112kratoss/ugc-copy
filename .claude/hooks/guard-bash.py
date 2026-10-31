@@ -21,44 +21,81 @@ def block(message):
 
 
 # A secrets file named in the command: .env, .env.local, .env.production and the like (not .env.example) and
-# .mcp.json, in any case (a macOS volume ignores it), starting a word or a path component, so `process.env.KEY` and
-# `next-env.d.ts` are not one.
-SECRET_FILE = r"(?<![\w$.-])(?i:\.env(?!\.example\b)(?:\.[\w.-]+)?\b|\.mcp\.json\b)"
-# A redirection's target naming one: double- or single-quoted (spaces allowed) or a bare word with escapes.
-TARGET = r"\s*(?:\"[^\"\n]*?|'[^'\n]*?|(?:\\.|[^\s\"'|;&<>\\])*?)(?:" + SECRET_FILE + ")"
+# .mcp.json, in any case (a macOS volume ignores it), starting a word or a path component, so `process.env.KEY`,
+# `next-env.d.ts` and a regex's `\.env` are not one.
+SECRET_FILE = r"(?<![\w$.\\-])(?i:\.env(?!\.example\b)(?:\.[\w.-]+)?\b|\.mcp\.json\b)"
+# A redirection target naming one: any run of quoted parts, escapes and bare characters, then the name, which may sit
+# inside an opening quote: "/Users/athuls/UGC copy/ugc-app/.env.local", "$ROOT"/.env.local, UGC\ copy/.env.local.
+TARGET = r"\s*(?:\"[^\"\n]*\"|'[^'\n]*'|\\.|[^\s\"'|;&<>\\])*?(?:\"[^\"\n]*?|'[^'\n]*?)?(?:" + SECRET_FILE + ")"
 TRUNCATING = r"(?<![<>])>[|&]?(?!>)" + TARGET  # `>`, `>|`, `>&`, `&>`, `N>`; `>>` appends and passes
 READING = r"(?<![<])<(?![<>&(])" + TARGET  # `< file` and `$(< file)`; not `<<`, `<<<`, `<>` or `<(`
-PRINTERS = r"\b(?:cat|less|more|head|tail|bat|strings|od|xxd|hexdump|base64|nl|cut|sort|uniq|tee|awk|diff|comm|paste)\b"
+APPENDING = r"(?<![<>])\d*&?>>" + TARGET  # written to, not read: dropped before the readers below are matched
+PRINTERS = (r"\b(?:cat|tac|less|more|head|tail|bat|strings|od|xxd|hexdump|base64|nl|cut|sort|uniq|tee|awk|diff|comm|"
+            r"paste|rev|column|jq|yq|fold|fmt|pr|expand|unexpand|iconv|zcat|look)\b")
 SEARCHERS = r"(?<![\w-])(?:grep|egrep|fgrep|ugrep|rg|ag|ack)\b"
 MOVERS = r"(?<![\w-])(?:rm|unlink|shred|truncate|mv|cp|ln|rsync|dd)\b"
+COUNTING = r"(?:^|\s)(?:-\w*[clq]|--(?:count|files-with-matches|quiet|silent)\b)"
+# The one search allowed to print: the project URL line, which names the Supabase project and holds no key.
+PROJECT_URL = r"^\s*(?:-[a-zA-Z]+\s+)*(['\"]?)\^?(?:NEXT_PUBLIC_)?SUPABASE_URL=?\1\s+\S+\s*$"
+IN_PLACE = r"\s(?:-[a-zA-Z]*[iI][a-zA-Z]*|--in-place)\b"
 APPEND_HINT = "Append with `>>` (`printf 'NAME=%s\\n' \"$(pbpaste)\" >> .env.local`) or toggle a block with `sed -i`."
 
 
+def segments(command):
+    """The simple commands of a command line: split at ;, |, ||, &&, a lone & and line breaks, outside quotes."""
+    parts, current, quote, i = [], [], None, 0
+    while i < len(command):
+        char = command[i]
+        if quote:
+            current.append(char)
+            if char == "\\" and quote == '"' and i + 1 < len(command):
+                current.append(command[i + 1])
+                i += 1
+            elif char == quote:
+                quote = None
+        elif char == "\\" and i + 1 < len(command):
+            current.append(command[i:i + 2])
+            i += 1
+        elif char in "'\"":
+            quote = char
+            current.append(char)
+        elif char in ";|\n" or (char == "&" and not "".join(current).endswith((">", "<")) and command[i + 1:i + 2] != ">"):
+            parts.append("".join(current))
+            current = []
+            if char in "|&" and command[i + 1:i + 2] == char:
+                i += 1
+        else:
+            current.append(char)
+        i += 1
+    parts.append("".join(current))
+    return [part.strip() for part in parts if part.strip()]
+
+
 def check_secrets(command):
-    # Whole-command checks first: splitting on `|` would cut `>|` apart.
+    # Redirections on the whole line: the split below would cut `>|` apart.
     if re.search(TRUNCATING, command):
         block("that truncates a secrets file; never overwrite one. " + APPEND_HINT)
     if re.search(READING, command):
         block("that reads a secrets file through `<`, which prints or passes on its values. Check a name with "
               "`grep -c '^NAME=' .env.local`, or the size with `wc -c .env.local`.")
-    for segment in re.split(r"\|\||&&|;|\||\n", command):
-        segment = segment.strip()
-        if not segment or not re.search(SECRET_FILE, segment):
+    for segment in segments(command):
+        reads = re.sub(APPENDING, " ", segment)
+        if not re.search(SECRET_FILE, reads):
             continue
-        if re.search(PRINTERS + r"[^|;&\n]*(?:" + SECRET_FILE + ")", segment):
+        if re.search(PRINTERS + r"[\s\S]*?(?:" + SECRET_FILE + ")", reads):
             block("that prints a secrets file (.env*, .mcp.json) into the transcript. Check presence with "
                   "`grep -c '^NAME=' .env.local` or `wc -c`; install a value with `printf 'NAME=%s\\n' \"$(pbpaste)\" >> .env.local`.")
-        if re.search(r"\bsed\b(?![^|;&\n]*\s-i\b)[^|;&\n]*(?:" + SECRET_FILE + ")", segment):
+        if re.search(r"\bsed\b(?![\s\S]*" + IN_PLACE + r")[\s\S]*?(?:" + SECRET_FILE + ")", reads):
             block("sed without -i prints a secrets file. Use `grep -c` to check a name, or `sed -i` to toggle a block in place.")
-        if re.search(MOVERS + r"[^|;&\n]*(?:" + SECRET_FILE + ")", segment) or (
-            re.search(r"\bfind\b", segment) and re.search(r"\s-delete\b", segment)
+        if re.search(MOVERS + r"[\s\S]*?(?:" + SECRET_FILE + ")", reads) or (
+            re.search(r"\bfind\b", reads) and re.search(r"\s-delete\b", reads)
         ):
             block("that deletes, moves, copies or overwrites a secrets file. Leave .env* and .mcp.json where they are; "
                   "the owner removes, rotates or copies them.")
-        search = re.search(SEARCHERS + r"([^|;&\n]*)", segment)
-        if search and not re.search(r"(?:^|\s)(?:-\w*[clq]|--(?:count|files-with-matches|quiet|silent)\b)", search.group(1)) \
-                and not re.search(r"URL", search.group(1)):
-            block("searching a secrets file prints matching lines. Use `grep -c`, `grep -l` or `grep -q`, or match only `_URL` lines.")
+        search = re.search(SEARCHERS + r"([\s\S]*)", reads)
+        if search and not re.search(COUNTING, search.group(1)) and not re.search(PROJECT_URL, search.group(1)):
+            block("searching a secrets file prints matching lines. Use `grep -c`, `grep -l` or `grep -q`; the one line a "
+                  "search may print is the project's, `grep '^NEXT_PUBLIC_SUPABASE_URL=' .env.local`.")
 
 
 def check_processes(command):

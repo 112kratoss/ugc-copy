@@ -83,6 +83,9 @@ describe('protect-migrations.py on the file tools', () => {
     ['Write', { file_path: '/repo/.env.production', content: 'A=1\n' }],
     ['Grep', { pattern: 'KEY', path: '/repo/.env.local' }],
     ['Grep', { pattern: 'KEY', path: '/repo', glob: '**/.env*' }],
+    // ripgrep's --glob overrides .gitignore, so a glob that merely matches .env.local reaches it.
+    ['Grep', { pattern: 'KEY', path: '/repo', glob: '*.local' }],
+    ['Grep', { pattern: 'KEY', path: '/repo', glob: '.*' }],
   ])('blocks %s on a secrets file (%j)', (tool, input) => {
     const result = fileTool(tool, input);
     expect(result.status, result.stderr).toBe(2);
@@ -103,6 +106,8 @@ describe('protect-migrations.py on the file tools', () => {
     ['Read', { file_path: '/repo/supabase/migrations/20260101000000_example.sql' }],
     ['Grep', { pattern: 'KEY', path: '/repo/src' }],
     ['Grep', { pattern: 'KEY', path: '/repo', glob: '.env.example' }],
+    ['Grep', { pattern: 'KEY', path: '/repo', glob: '*.json' }],
+    ['Grep', { pattern: 'KEY', path: '/repo', glob: 'src/**' }],
     ['Edit', { file_path: '/repo/src/lib/env.ts', old_string: 'a', new_string: 'b' }],
   ])('lets %s through elsewhere (%j)', (tool, input) => {
     const result = fileTool(tool, input);
@@ -157,6 +162,10 @@ describe('guard-bash.py on secrets files', () => {
     'docker run --rm --env-file .env.local node:24 true',
     'echo ok >| /tmp/out',
     'wc -l < src/lib/env.ts',
+    "grep '^NEXT_PUBLIC_SUPABASE_URL=' .env.local",
+    "openssl rand -hex 32 | sed 's/^/KIE_WEBHOOK_SECRET=/' >> .env.local",
+    "sed -Ei '' 's/^#(NAME=)/\\1/' .env.local",
+    "git grep -n -E 'grep .*\\.env' -- '*.md'",
   ])('allows %s', (command) => {
     const result = bash(command);
     expect(result.status, result.stderr).toBe(0);
@@ -168,7 +177,15 @@ describe('guard-bash.py on secrets files', () => {
     ['cat \\\n  .env.local', 'prints a secrets file'],
     ['grep KEY .env.local', 'searching a secrets file'],
     ['rg -n SERVICE_ROLE .env.local', 'searching a secrets file'],
+    // A separator inside quotes is part of the argument, not the end of the command.
+    ["grep -E 'KIE_API_KEY|SUPABASE_SERVICE_ROLE_KEY' .env.local", 'searching a secrets file'],
+    ['grep -e SUPABASE_URL -e SUPABASE_SERVICE_ROLE_KEY .env.local', 'searching a secrets file'],
+    ["sed -n '1p;3p' .env.local", 'sed without -i'],
     ['sed -n 1p .env.local', 'sed without -i'],
+    ['jq -R . .env.local', 'prints a secrets file'],
+    ['cat 2>&1 .env.local', 'prints a secrets file'],
+    ['sleep 1 & cat .env.local', 'prints a secrets file'],
+    [`printf 'A=1\\n' > "$CLAUDE_PROJECT_DIR"/.env.local`, 'truncates a secrets file'],
     ["echo 'A=1' > .env.local", 'truncates a secrets file'],
     ['echo A=1 > "/Users/athuls/UGC copy/ugc-app/.env.local"', 'truncates a secrets file'],
     ['echo x > "$(git rev-parse --show-toplevel)/.env.local"', 'truncates a secrets file'],

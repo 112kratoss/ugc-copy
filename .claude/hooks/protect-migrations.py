@@ -11,6 +11,7 @@ deny refuses the `>> .env.local` install and the `sed -i` toggle. guard-bash.py 
 truncating or deleting a secrets file. .mcp.json keeps its Read deny too, as no shell recipe needs it.
 """
 import datetime
+import fnmatch
 import json
 import os
 import re
@@ -34,10 +35,40 @@ def secret_name(path):
     return None
 
 
-# Grep searches a path (a file, or a folder whose gitignored .env files it skips) and may narrow it with a glob.
+ENV_NAMES = (".env", ".env.local", ".env.development.local", ".env.production.local", ".env.test.local", ".env.production",
+             ".env.development", ".env.test", ".env.sentry-build-plugin")
+PREFIXES = ("", "ugc-mobile/", "ugc-app/", "ugc-app/ugc-mobile/")
+
+
+def expand_braces(glob):
+    match = re.search(r"\{([^{}]*)\}", glob)
+    if not match:
+        return [glob]
+    return [g for part in match.group(1).split(",") for g in expand_braces(glob[:match.start()] + part + glob[match.end():])]
+
+
+def glob_reaches_secret(glob):
+    """Whether a Grep glob can pick out a secrets file. ripgrep's --glob overrides .gitignore, so `*.local` or `.*`
+    reaches .env.local. .mcp.json counts only for a glob whose last part starts with a dot, so `*.json` stays open."""
+    for pattern in expand_braces(glob.strip()):
+        if not pattern or pattern.startswith("!"):  # an exclusion narrows the search
+            continue
+        pattern = pattern.lower().rstrip("/")
+        names = ENV_NAMES + ((".mcp.json",) if pattern.split("/")[-1].startswith(".") else ())
+        if "/" not in pattern:
+            if any(fnmatch.fnmatchcase(name, pattern) for name in names):
+                return True
+        else:
+            core = pattern[3:] if pattern.startswith("**/") else pattern
+            if any(fnmatch.fnmatchcase(prefix + name, p) for prefix in PREFIXES for name in names for p in (pattern, core)):
+                return True
+    return False
+
+
+# Grep searches a path (a file, or a folder whose gitignored .env files it skips unless a glob picks them out).
 named = secret_name(tool_input.get("path") if tool == "Grep" else tool_input.get("file_path"))
 glob = str(tool_input.get("glob") or "") if tool == "Grep" else ""
-if named or re.search(r"(?i)\.env(?!\.example\b)|\.mcp\.json", glob):
+if named or (glob and glob_reaches_secret(glob)):
     sys.stderr.write(
         f"Blocked by .claude/hooks/protect-migrations.py: {named or glob} names a secrets file, closed to the Read, Edit, "
         "Write and Grep tools so no value reaches the transcript. Check a name with `grep -c '^NAME=' .env.local`, "
