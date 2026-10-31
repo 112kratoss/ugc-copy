@@ -1,11 +1,13 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { UNDERSCORE_NOT_FOUND_ROUTE } from 'next/dist/shared/lib/entry-constants';
 import { NOT_FOUND_SEGMENT_KEY } from 'next/dist/shared/lib/segment';
+import Link from 'next/link';
 import { useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellClient from '@/components/AppShellClient';
+import type { AppNavClickHandler } from '@/components/app-shell-nav';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
@@ -75,6 +77,22 @@ vi.mock('next/link', () => ({
     );
   },
 }));
+
+/** What the shell last handed the account island, whose menu loads in the browser only. */
+const accountIsland = vi.hoisted(() => ({
+  props: null as { pathname?: string; onNavigate?: AppNavClickHandler } | null,
+}));
+
+vi.mock('@/components/DeferredAppShellAccount', async (importOriginal) => {
+  const { default: DeferredAppShellAccount } =
+    await importOriginal<typeof import('@/components/DeferredAppShellAccount')>();
+  return {
+    default: function RecordedAccountIsland(props: ComponentPropsWithoutRef<typeof DeferredAppShellAccount>) {
+      accountIsland.props = props;
+      return <DeferredAppShellAccount {...props} />;
+    },
+  };
+});
 
 /**
  * Draws the shell as the server did at `server` (renderToString), then
@@ -149,6 +167,7 @@ describe('AppShellClient', () => {
     mockedScrollY = 0;
     mockedReducedMotion = false;
     navigations.length = 0;
+    accountIsland.props = null;
     scrollToMock.mockClear();
     document.body.style.overflow = '';
     window.sessionStorage.clear();
@@ -606,6 +625,47 @@ describe('AppShellClient', () => {
     );
 
     expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'auto' });
+  });
+
+  /** A link that hands its click to the shell as the account menu's Profile row does. */
+  function renderAccountMenuProfile() {
+    return render(
+      <Link href="/profile" onClick={(event) => accountIsland.props?.onNavigate?.(event, { id: 'profile' })}>
+        Account menu Profile
+      </Link>
+    ).getByRole('link', { name: 'Account menu Profile' });
+  }
+
+  it('gives the account menu its press, so the menu\'s Profile on Profile scrolls to the top', () => {
+    mockedPathname = '/profile';
+    mockedScrollY = 480;
+    render(
+      <AppShellClient>
+        <div>Profile content</div>
+      </AppShellClient>
+    );
+    expect(accountIsland.props?.pathname).toBe('/profile');
+
+    fireEvent.click(renderAccountMenuProfile());
+
+    // As the navigation's Profile: no navigation, which would load the page
+    // again and drop its query and any unsaved edits.
+    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
+    expect(navigations).toEqual([]);
+  });
+
+  it('lets the account menu\'s Profile navigate from any other page', () => {
+    mockedPathname = '/models';
+    render(
+      <AppShellClient>
+        <div>Models content</div>
+      </AppShellClient>
+    );
+
+    fireEvent.click(renderAccountMenuProfile());
+
+    expect(scrollToMock).not.toHaveBeenCalled();
+    expect(navigations).toEqual(['/profile']);
   });
 
   it('ignores a tab position an earlier shell left in session storage', () => {

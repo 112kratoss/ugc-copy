@@ -11,6 +11,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { CREATOR_PAGE_PATHS } from '@/lib/creator-pages';
 
@@ -23,6 +24,16 @@ export interface AppNavItem {
   icon: LucideIcon;
   match: (pathname: string) => boolean;
 }
+
+/**
+ * The shell's click on every control that names a tab (the navigation's, the
+ * top bar's bell, the account menu's Profile): pressed on the tab already open,
+ * it scrolls the page to its top instead of navigating (`AppShellClient`).
+ */
+export type AppNavClickHandler = (
+  event: ReactMouseEvent<HTMLAnchorElement>,
+  item: { id: AppNavItem['id'] | 'post' }
+) => void;
 
 const isExactOrChild = (pathname: string, href: string) =>
   pathname === href || pathname.startsWith(`${href}/`);

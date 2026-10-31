@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AppShellAccount from '@/components/AppShellAccount';
 import AppShellAccountFallback from '@/components/AppShellAccountFallback';
 import FeedbackViewport from '@/components/FeedbackViewport';
+import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
 import { resetFeedbackState } from '@/components/feedback-state';
 
 const mocks = vi.hoisted(() => ({
@@ -31,6 +32,17 @@ function clearCookies() {
 
 /** What auth-js returns when Supabase Auth cannot be reached. */
 const unreachable = Object.assign(new Error('Failed to fetch'), { name: 'AuthRetryableFetchError', status: 0 });
+
+/** jsdom cannot load another document; the menu's own click handlers still run. */
+function clickWithoutLeaving(link: HTMLElement) {
+  const stayOnPage = (event: MouseEvent) => event.preventDefault();
+  document.addEventListener('click', stayOnPage);
+  try {
+    fireEvent.click(link);
+  } finally {
+    document.removeEventListener('click', stayOnPage);
+  }
+}
 
 const authenticatedSession = {
   access_token: 'verified-access-token',
@@ -143,10 +155,48 @@ describe('AppShellAccount', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open account menu for Test Creator' }));
 
-    // Profile is the navigation's, and the balance the bar's: the menu named both again.
+    // The balance is the bar's alone: the menu's Profile row used to carry it too.
     const menu = screen.getByRole('menu', { name: 'Account' });
-    expect(within(menu).queryByRole('menuitem', { name: /^Profile/ })).not.toBeInTheDocument();
     expect(within(menu).queryByText(/1295/)).not.toBeInTheDocument();
+  });
+
+  it('opens the account menu on the navigation\'s Profile, and gives its press to the shell on the way', async () => {
+    const onNavigate = vi.fn();
+    render(<AppShellAccount pathname="/creations" onNavigate={onNavigate} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+
+    const navProfile = APP_NAV_ITEMS.find((item) => item.id === 'profile')!;
+    const profile = screen.getByRole('menuitem', { name: navProfile.label });
+    expect(profile).toHaveAttribute('href', navProfile.href);
+    expect(profile).not.toHaveAttribute('aria-current');
+    expect(screen.getAllByRole('menuitem')[0]).toBe(profile);
+
+    clickWithoutLeaving(profile);
+    // The shell's click decides, as for the navigation's Profile: on Profile it
+    // scrolls to the top rather than loading the page again.
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(onNavigate.mock.calls[0][1]).toBe(navProfile);
+    expect(screen.queryByRole('menu', { name: 'Account' })).not.toBeInTheDocument();
+  });
+
+  it('marks the menu\'s Profile as the current page under Profile, as the navigation does', async () => {
+    render(<AppShellAccount pathname="/profile/edit" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+
+    expect(screen.getByRole('menuitem', { name: 'Profile' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('closes the account menu when the page under it changes, as after a leave the page held', async () => {
+    const { rerender } = render(<AppShellAccount pathname="/post/new" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+    rerender(<AppShellAccount pathname="/post/new" />);
+    expect(screen.getByRole('menu', { name: 'Account' })).toBeInTheDocument();
+
+    rerender(<AppShellAccount pathname="/profile" />);
+    expect(screen.queryByRole('menu', { name: 'Account' })).not.toBeInTheDocument();
   });
 
   it('links the account menu to the credit history, after Invite & Earn, and closes on the way', async () => {
@@ -159,14 +209,7 @@ describe('AppShellAccount', () => {
     expect(creditHistory).toHaveAttribute('href', '/credits');
     expect(items.indexOf(creditHistory)).toBe(items.indexOf(screen.getByRole('menuitem', { name: /Invite & Earn/ })) + 1);
 
-    // jsdom cannot load another document; the menu's own click handler still runs.
-    const stayOnPage = (event: MouseEvent) => event.preventDefault();
-    document.addEventListener('click', stayOnPage);
-    try {
-      fireEvent.click(creditHistory);
-    } finally {
-      document.removeEventListener('click', stayOnPage);
-    }
+    clickWithoutLeaving(creditHistory);
     expect(screen.queryByRole('menu', { name: 'Account' })).not.toBeInTheDocument();
   });
 
