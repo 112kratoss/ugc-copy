@@ -1,4 +1,8 @@
-/** Metadata is advisory; server-side probing remains authoritative. */
+/**
+ * Metadata is advisory; server-side probing remains authoritative. A picked file is loaded whatever
+ * canPlayType says of its type: Chrome answers '' for video/quicktime yet reads an iPhone's .mov,
+ * and a file it cannot read ends in an error within milliseconds, or at the timeout.
+ */
 export function readVideoDurationSeconds(source: File | string, signal?: AbortSignal): Promise<number | null> {
   return new Promise(resolve => {
     if (signal?.aborted) { resolve(null); return; }
@@ -25,10 +29,6 @@ export function readVideoDurationSeconds(source: File | string, signal?: AbortSi
     const failed = () => finish(null);
     const loaded = () => finish(Number.isFinite(video.duration) && video.duration >= 0 ? video.duration : null);
     try {
-      if (typeof source !== 'string' && video.canPlayType(source.type) === '') {
-        resolve(null);
-        return;
-      }
       const url = typeof source === 'string' ? source : (objectUrl = URL.createObjectURL(source));
       video.preload = 'metadata';
       video.addEventListener('loadedmetadata', loaded);

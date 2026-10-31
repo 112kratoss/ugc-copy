@@ -43,6 +43,14 @@ vi.mock('@/lib/temporary-media-upload', () => ({
   uploadMediaToTemporaryStorage: temporaryUploadMock,
 }));
 
+// A picked video's length, as the browser reads it (its own test file). A jsdom
+// media element never loads, so the real reader would hold every video pick
+// until its 4 s timeout; unread (null) leaves the length to the server, as these
+// tests always had it.
+vi.mock('@/lib/video-metadata-probe', () => ({
+  readVideoDurationSeconds: vi.fn(async () => null),
+}));
+
 // The composer reads the profile up front to ask for a name and handle before
 // a public post. Unread (null) leaves the decision to the server, as these
 // tests always had it; the identity tests answer it themselves.
