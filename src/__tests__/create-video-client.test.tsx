@@ -46,6 +46,9 @@ const saveCreatorDraftMock = vi.hoisted(() => vi.fn(async (_tool: string, _userI
   void _userId;
   void _draft;
 }));
+// Whose draft the page keeps, where a test moves it as `useCreatorDraftOwner` would: a sign-up's
+// hand-over finishing, another account. Null leaves the hook's own answer.
+const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean } | null }));
 const purgeLegacyPersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
 const setPersistedFileMock = vi.hoisted(() => vi.fn(async (_key: string, _file: File): Promise<void> => {
   void _key;
@@ -156,6 +159,17 @@ vi.mock('@/lib/persisted-creator-draft', () => ({
   loadCreatorDraft: loadCreatorDraftMock,
   saveCreatorDraft: saveCreatorDraftMock,
 }));
+
+vi.mock('@/lib/use-creator-draft-owner', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/use-creator-draft-owner')>();
+  return {
+    ...actual,
+    useCreatorDraftOwner: (...args: Parameters<typeof actual.useCreatorDraftOwner>) => {
+      const answer = actual.useCreatorDraftOwner(...args);
+      return draftOwnerOverride.current ?? answer;
+    },
+  };
+});
 
 vi.mock('@/lib/video-metadata-probe', () => ({
   readVideoDurationSeconds: readDurationMock,
@@ -496,6 +510,7 @@ describe('CreateVideoClient Kling video elements', () => {
     loadCreatorDraftMock.mockReset();
     loadCreatorDraftMock.mockResolvedValue(null);
     saveCreatorDraftMock.mockClear();
+    draftOwnerOverride.current = null;
     purgeLegacyPersistedMediaMock.mockClear();
     setPersistedFileMock.mockClear();
     getPersistedValueMock.mockReset();
@@ -5086,6 +5101,69 @@ describe('CreateVideoClient Kling video elements', () => {
         }
         view.unmount();
       }
+    });
+
+    // The prompt box's rule when a draft is read back after the page opened (owner, 2026-11-01).
+    describe('read back after the page opened', () => {
+      function ownDraftAs(owner: string | null, carriedDraft = false) {
+        draftOwnerOverride.current = { owner, carriedDraft };
+      }
+      const draftsSavedFor = (owner: string) => saveCreatorDraftMock.mock.calls
+        .filter(([, savedFor]) => savedFor === owner)
+        .map(([, , draft]) => draft as { prompt: string; shots: Array<{ prompt: string }> });
+
+      it('brings the prompt carried from sign-up back over words typed while it was on its way, once', async () => {
+        const carried = 'A corgi astronaut on the moon, cinematic';
+        const page = () => <CreateVideoClient prefill={{}} handoverNonce="nonce-1" />;
+        // The visitor's draft, moved to the account by the hand-over.
+        loadCreatorDraftMock.mockResolvedValue({ prompt: carried });
+        ownDraftAs(null);
+        const view = render(page());
+        fireEvent.change(promptBox(), { target: { value: 'A corgi astr' } });
+        expect(loadCreatorDraftMock).not.toHaveBeenCalled();
+
+        ownDraftAs('user-1', true);
+        view.rerender(page());
+        await waitFor(() => expect(promptBox()).toHaveValue(carried));
+
+        // A session that lapses and comes back reads the account's draft again: that is the
+        // creator's own save now, and the newer words stay.
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        ownDraftAs(null);
+        view.rerender(page());
+        ownDraftAs('user-1', true);
+        view.rerender(page());
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledTimes(2));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(promptBox()).toHaveValue(PROMPT);
+      });
+
+      it('never keeps one account’s words for another, the shots’ included, nor saves them under it', async () => {
+        loadCreatorDraftMock.mockImplementation(async (_tool: string, owner: string) => draftsSavedFor(owner).at(-1) ?? null);
+        ownDraftAs('user-1');
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(screen.getByRole('radio', { name: 'Multi-shot' }));
+        fireEvent.change(screen.getByRole('textbox', { name: 'Shot 1 prompt' }), { target: { value: 'A lamp lights on the quay' } });
+        await waitFor(() => expect(draftsSavedFor('user-1').at(-1)?.shots[0]?.prompt).toBe('A lamp lights on the quay'), { timeout: 2_000 });
+
+        // Another account signs in on this page from another tab; it has no draft.
+        ownDraftAs('user-2');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('');
+        await waitFor(() => expect(draftsSavedFor('user-2').length).toBeGreaterThan(0), { timeout: 2_000 });
+        expect(draftsSavedFor('user-2').every((draft) => draft.prompt === '' && draft.shots.every((shot) => shot.prompt === ''))).toBe(true);
+
+        // Back to the first account: its own words come back.
+        ownDraftAs('user-1');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('A lamp lights on the quay'));
+        fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
+        expect(promptBox()).toHaveValue(PROMPT);
+      });
     });
 
     it('keeps the key of a start that got no answer, and Check again sends that key and body once more', async () => {

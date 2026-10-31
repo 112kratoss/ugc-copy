@@ -71,6 +71,9 @@ const persistedMediaMocks = vi.hoisted(() => ({
   purgeLegacyPersistedMedia: vi.fn(async () => undefined),
 }));
 const savedDrafts = vi.hoisted(() => new Map<string, unknown>());
+// Whose draft the page keeps, where a test moves it as `useCreatorDraftOwner` would: a sign-up's
+// hand-over finishing, another account. Null leaves the hook's own answer.
+const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean } | null }));
 const draftMocks = vi.hoisted(() => ({
   loadCreatorDraft: vi.fn(async (tool: string, userId: string) => savedDrafts.get(`${tool}:${userId}`) ?? null),
   saveCreatorDraft: vi.fn(async (tool: string, userId: string, draft: unknown) => {
@@ -133,6 +136,17 @@ vi.mock('@/lib/persisted-media', () => ({
 }));
 
 vi.mock('@/lib/persisted-creator-draft', () => draftMocks);
+
+vi.mock('@/lib/use-creator-draft-owner', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/use-creator-draft-owner')>();
+  return {
+    ...actual,
+    useCreatorDraftOwner: (...args: Parameters<typeof actual.useCreatorDraftOwner>) => {
+      const answer = actual.useCreatorDraftOwner(...args);
+      return draftOwnerOverride.current ?? answer;
+    },
+  };
+});
 
 vi.mock('@/lib/temporary-media-upload', async () => {
   const actual = await vi.importActual<typeof import('@/lib/temporary-media-upload')>('@/lib/temporary-media-upload');
@@ -344,6 +358,7 @@ beforeEach(() => {
   Object.values(persistedMediaMocks).forEach((mock) => mock.mockClear());
   savedDrafts.clear();
   Object.values(draftMocks).forEach((mock) => mock.mockClear());
+  draftOwnerOverride.current = null;
   Object.values(uploadMocks).forEach((mock) => mock.mockClear());
   probeState.seconds = 7.3;
   statusMocks.fetchGenerationStatusWithRetry.mockReset();
@@ -1318,6 +1333,86 @@ describe('CreateMotionClient drafts and media', () => {
     render(<CreateMotionClient prefill={{ prompt: 'From the post' }} />);
 
     expect(await screen.findByDisplayValue('From the post, edited')).toBeInTheDocument();
+  });
+
+  // The prompt box's rule when a draft is read back after the page opened (owner, 2026-11-01).
+  describe('read back after the page opened', () => {
+    const OPENING = "No distortion, the character's movements are consistent with the video.";
+    const box = () => screen.getByPlaceholderText(/Describe the kind of movement/);
+    function ownDraftAs(owner: string | null, carriedDraft = false) {
+      draftOwnerOverride.current = { owner, carriedDraft };
+    }
+    const promptsSavedFor = (owner: string) => draftMocks.saveCreatorDraft.mock.calls
+      .filter(([, savedFor]) => savedFor === owner)
+      .map(([, , draft]) => (draft as { prompt: string }).prompt);
+    const savedDraft = (prompt: string) => ({
+      prompt,
+      modelId: 'kling-3.0',
+      duration: 0,
+      characterOrientation: 'video',
+      mode: '720p',
+      linkPrefill: { prompt: null, model: null },
+    });
+
+    it('brings the prompt carried from sign-up back over words typed while it was on its way, once', async () => {
+      const carried = 'Moonwalk to the left, arms loose';
+      const page = () => <CreateMotionClient prefill={{}} handoverNonce="nonce-1" />;
+      // The visitor's draft, moved to the account by the hand-over.
+      savedDrafts.set('motion:user-1', savedDraft(carried));
+      ownDraftAs(null);
+      const view = render(page());
+      fireEvent.change(box(), { target: { value: 'Moonwalk to the' } });
+      expect(draftMocks.loadCreatorDraft).not.toHaveBeenCalled();
+
+      ownDraftAs('user-1', true);
+      view.rerender(page());
+      await waitFor(() => expect(box()).toHaveValue(carried));
+
+      // A session that lapses and comes back reads the account's draft again: that is the
+      // creator's own save now, and the newer words stay.
+      fireEvent.change(box(), { target: { value: 'A slow spin on the spot' } });
+      ownDraftAs(null);
+      view.rerender(page());
+      ownDraftAs('user-1', true);
+      view.rerender(page());
+      await waitFor(() => expect(draftMocks.loadCreatorDraft).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(box()).toHaveValue('A slow spin on the spot');
+    });
+
+    it('never keeps one account’s words for another, nor saves them under it', async () => {
+      ownDraftAs('user-1');
+      const view = render(<CreateMotionClient prefill={{}} />);
+      await waitFor(() => expect(draftMocks.loadCreatorDraft).toHaveBeenCalledWith('motion', 'user-1'));
+      fireEvent.change(box(), { target: { value: 'Asha’s cartwheel across the stage' } });
+      await waitFor(() => expect(promptsSavedFor('user-1')).toContain('Asha’s cartwheel across the stage'), { timeout: 2_000 });
+
+      // Asha signs out in another tab and Ben, who has no draft, signs in.
+      ownDraftAs(null);
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      ownDraftAs('user-2');
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      expect(box()).toHaveValue(OPENING);
+      await waitFor(() => expect(promptsSavedFor('user-2')).toContain(OPENING), { timeout: 2_000 });
+      expect(promptsSavedFor('user-2')).not.toContain('Asha’s cartwheel across the stage');
+
+      ownDraftAs('user-1');
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      await waitFor(() => expect(box()).toHaveValue('Asha’s cartwheel across the stage'));
+    });
+
+    it('fills a box emptied of its opening prompt before the saved draft came back', async () => {
+      let answer: (draft: object) => void = () => undefined;
+      draftMocks.loadCreatorDraft.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+      render(<CreateMotionClient prefill={{}} />);
+      await waitFor(() => expect(draftMocks.loadCreatorDraft).toHaveBeenCalledWith('motion', 'user-1'));
+      fireEvent.change(box(), { target: { value: '' } });
+
+      await act(async () => answer(savedDraft('The saved prompt')));
+      expect(box()).toHaveValue('The saved prompt');
+    });
   });
 
   it('keeps media per account and clears legacy media once', async () => {
