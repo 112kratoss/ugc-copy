@@ -22,10 +22,12 @@ import { expect, test, type Page } from '@playwright/test';
 const PROMPT = 'A paper boat drifting across a sunlit pond, gentle ripples, soft morning light, slow push-in.';
 const COLD_PAGE = { timeout: 45_000 };
 
-/** Offline the quote cannot be priced, so the page is given one. */
+/** Offline the quote cannot be priced, so the page is given one. Returns the quotes the page has asked for. */
 async function answerQuote(page: Page, costCredits: number) {
+  const asked: Array<{ modelId?: string; catalogRevision?: string }> = [];
   await page.route('**/api/generation-models/quote', async (route) => {
     const request = (route.request().postDataJSON() ?? {}) as { modelId?: string; catalogRevision?: string };
+    asked.push(request);
     await route.fulfill({
       json: {
         modelId: request.modelId ?? 'unknown',
@@ -35,6 +37,7 @@ async function answerQuote(page: Page, costCredits: number) {
       },
     });
   });
+  return asked;
 }
 
 /** The account's welcome credits and profile, as the routes answer a new account. */
@@ -65,7 +68,7 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   page.on('request', (request) => {
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/generations') starts.push(request.url());
   });
-  await answerQuote(page, 19);
+  const quotes = await answerQuote(page, 19);
 
   await page.goto('/create-video', COLD_PAGE);
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
@@ -73,6 +76,12 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   await expect(page.getByText('Try it before you sign up')).toBeVisible();
   // What a new account starts with, under the bar (the server stub's welcome grant).
   await expect(page.locator('[data-creator-bar-note]')).toContainText('New accounts get 25 free credits');
+  // Typed and pressed only once the page's script runs: before then a fill is reset by hydration and
+  // a press is dropped. All of the above is in the server's HTML, the price under the bar too (the
+  // server's own, for the run the page opens on), so the sign is the page's own quote, which only its
+  // script asks for. Under `next dev` that can take seconds: a compile that ends while the page
+  // hydrates has the dev client refetch the page, and hydration waits for the answer (6 to 8 s on CI).
+  await expect.poll(() => quotes.length, COLD_PAGE).toBeGreaterThan(0);
   await prompt.fill(PROMPT);
 
   await page.getByRole('button', { name: 'Sign up to generate' }).click();
