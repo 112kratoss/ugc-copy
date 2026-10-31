@@ -344,6 +344,7 @@ vi.mock('@tanstack/react-query', () => ({
 import { ProfileDashboard } from '../components/profile-dashboard';
 import { resetMediaZoomTransitions } from '../lib/media-zoom-transition';
 import { DEFAULT_PROFILE_MEDIA_TAB, PROFILE_MEDIA_TABS } from '../lib/profile-view-model';
+import { PROFILE_MEDIA_MIN_FILL_COUNT } from '../lib/profile-media-query';
 
 // A tile's open holds every other tile off until the screen it opened can be
 // touched (`beginTileOpen`), and that state is module-wide: each test starts
@@ -589,6 +590,38 @@ describe('ProfileDashboard for a guest', () => {
 
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Create an account to keep these on every device' })).toHaveLength(0);
     expect(tree.root.findAllByProps({ children: 'No creations yet' }).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the offer to its creations, off the Failed scope, and opens a fresh guest on Active', () => {
+    queryState.generations = [
+      guestCreation,
+      { id: 'guest-failed', status: 'failed', output_url: null, category: 'image', title: 'Guest try', prompt: 'Prompt' },
+    ];
+    const tree = renderProfile();
+    const offer = () => tree.root.findAll((node) => String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Create an account to keep these on every device');
+    const failedTiles = () => tree.root.findAll((node) => String(node.type) === 'pressable'
+      && typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.includes(', failed, '));
+    expect(offer()).toHaveLength(1);
+
+    renderer.act(() => { findPressableByText(tree.root, 'Failed (1)').props.onPress(); });
+    expect(failedTiles()).toHaveLength(1);
+    expect(offer()).toHaveLength(0);
+
+    // A refused session or deleted guest data hands the tab a new guest identity.
+    authState.identityUserId = 'guest-2';
+    renderer.act(() => { tree.update(<ProfileDashboard />); });
+    expect(failedTiles()).toHaveLength(0);
+    expect(offer()).toHaveLength(1);
+  });
+
+  it('says nothing about keeping runs that only failed, which wait under their own chip', () => {
+    queryState.generations = [{ id: 'guest-failed', status: 'failed', output_url: null, category: 'image', title: 'Guest try', prompt: 'Prompt' }];
+    const tree = renderProfile();
+
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Create an account to keep these on every device' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ children: 'No creations yet' }).length).toBeGreaterThan(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Failed (1)' }).length).toBeGreaterThan(0);
   });
 
   it('shows the runs still rendering, where Home’s render count lands', () => {
@@ -2098,8 +2131,19 @@ describe('ProfileDashboard media tiles routing', () => {
       id: `failed-${index}`, status: 'failed', output_url: null, category: 'image', title: `Failure ${index}`, created_at: '2026-10-13T08:00:00Z',
     }));
 
+    const tabSegment = (tree: renderer.ReactTestRenderer, tab: 'Creations' | 'Posts') => tree.root.find((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityRole === 'tab' && node.props.accessibilityLabel === tab
+    ));
+
     beforeEach(() => {
       queryState.generations = runs();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      // The describes after this one do not reset these.
+      queryState.generationsHasNextPage = false;
+      queryState.ownerPosts = [];
     });
 
     it('keeps failed runs off the Active grid, under a Failed chip between Active and Archived', () => {
@@ -2112,7 +2156,7 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(stripHeadings(tree)).toEqual(['Rendering (1)']);
     });
 
-    it('lists every failed run that is not archived in place of the grid, with its title', () => {
+    it('lists every failed run that is not archived as the list rows, with its title, under the Rendering strip', () => {
       const tree = renderDashboard();
 
       renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
@@ -2121,13 +2165,30 @@ describe('ProfileDashboard media tiles routing', () => {
         'Video, failed, A slow push-in',
         'Image, failed, Poster try',
       ]);
-      // The grid's rule is unchanged: none of them is a grid tile, and the
-      // finished creation stays under Active. The chosen chip names the runs, so
-      // no heading repeats it, and the empty card stays away.
+      // They are the list's own rows, so it pages, windows and recycles them as
+      // it does tiles: drawn in its header, they left FlashList's end-of-list
+      // check armed only once, and nothing but the fill paged on.
+      const list = tree.root.find((node) => String(node.type) === 'flash-list');
+      expect(list.props.data.map((card: { sourceId: string }) => card.sourceId)).toEqual(['failed-video', 'failed-image']);
+      // Each draws as a failed run, never as a grid tile; the finished creation
+      // stays under Active; and the Rendering strip stays above them, where a
+      // run tried again from its failure is watched.
       expect(tree.root.findAllByProps({ accessibilityLabel: 'Creation, Poster try, Not posted' })).toHaveLength(0);
       expect(tree.root.findAllByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toHaveLength(0);
-      expect(stripHeadings(tree)).toEqual([]);
+      expect(stripHeadings(tree)).toEqual(['Rendering (1)']);
       expect(tree.root.findAllByProps({ children: 'No failed creations' })).toHaveLength(0);
+    });
+
+    it('reads the first page again every 15 seconds over Failed while a run renders, so one that fails joins it', () => {
+      vi.useFakeTimers();
+      const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+      const before = authState.api.listGenerations.mock.calls.length;
+
+      renderer.act(() => { vi.advanceTimersByTime(15_000); });
+
+      expect(authState.api.listGenerations.mock.calls.length).toBe(before + 1);
+      renderer.act(() => { tree.unmount(); });
     });
 
     it("opens a failed run's status page, where its alert lands: Try again, Archive and Delete are there", () => {
@@ -2155,6 +2216,59 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(failedTiles(posts)).toHaveLength(0);
     });
 
+    it('keeps failed runs out of Archived while they exist, which says it is empty', () => {
+      const tree = renderDashboard();
+
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (0)').props.onPress(); });
+
+      expect(failedTiles(tree)).toHaveLength(0);
+      expect(tree.root.findAllByProps({ children: 'No archived creations' }).length).toBeGreaterThan(0);
+      expect(scopeChips(tree)).toEqual(['Active (1)', 'Failed (2)', 'Archived (0)']);
+    });
+
+    it('opens another account on Active, though Failed stays while chosen', () => {
+      const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+      expect(failedTiles(tree)).toHaveLength(2);
+
+      const signedIn = authState.user;
+      try {
+        authState.user = { id: 'user-456', email: 'other@example.com' };
+        renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+
+        expect(failedTiles(tree)).toHaveLength(0);
+        expect(tree.root.findByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toBeTruthy();
+      } finally {
+        authState.user = signedIn;
+      }
+    });
+
+    it('sets the scope of the tab it is pressed on, and each tab keeps its own', () => {
+      queryState.ownerPosts = [
+        {
+          id: 'ready-post', title: 'Ready media post', createdAt: '2026-06-10T00:00:00Z', visibility: 'public',
+          mediaUrl: 'ready-post.png', mediaKind: 'image', body: 'Post body', category: 'image', postFormat: 'media',
+          mediaItems: [{ id: 'ready-post-media', url: 'ready-post.png', previewUrl: 'ready-post.preview.webp', mediaKind: 'image', gridReady: true }],
+        },
+        {
+          id: 'archived-post', title: 'Archived post', createdAt: '2026-06-10T00:00:00Z', visibility: 'public',
+          mediaUrl: 'archived-post.png', mediaKind: 'image', body: 'Archived body', category: 'image', postFormat: 'media',
+          archivedAt: '2026-06-11T00:00:00Z',
+        },
+      ];
+      const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+
+      renderer.act(() => { tabSegment(tree, 'Posts').props.onPress(); });
+      expect(scopeChips(tree)).toEqual(['Active (1)', 'Archived (1)']);
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (1)').props.onPress(); });
+      expect(tree.root.findByProps({ accessibilityLabel: 'Post, Archived post, Public' })).toBeTruthy();
+
+      renderer.act(() => { tabSegment(tree, 'Creations').props.onPress(); });
+      expect(failedTiles(tree)).toHaveLength(2);
+      expect(scopeChips(tree)).toEqual(['Active (1)', 'Failed (2)', 'Archived (0)']);
+    });
+
     it('stays on Failed, empty, once its last run is cleared, and its chip goes when another is chosen', () => {
       const tree = renderDashboard();
       renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
@@ -2166,6 +2280,8 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(scopeChips(tree)).toEqual(['Active (1)', 'Failed (0)', 'Archived (0)']);
       expect(failedTiles(tree)).toHaveLength(0);
       expect(tree.root.findAllByProps({ children: 'No failed creations' }).length).toBeGreaterThan(0);
+      // An empty Failed scope is the good case: it never promises to fill.
+      expect(tree.root.findAllByProps({ children: 'A run that fails shows here. Open it to see what went wrong.' }).length).toBeGreaterThan(0);
 
       renderer.act(() => { findPressableByText(tree.root, 'Active (1)').props.onPress(); });
       expect(scopeChips(tree)).toEqual(['Active (1)', 'Archived (0)']);
@@ -2174,9 +2290,9 @@ describe('ProfileDashboard media tiles routing', () => {
 
     it('reads further pages while its failed runs are too few to fill the screen, as the grid does for tiles', () => {
       queryState.generationsHasNextPage = true;
-      queryState.generations = [...readyRuns(12), ...failedRuns(2)];
+      queryState.generations = [...readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT), ...failedRuns(2)];
       const tree = renderDashboard();
-      // Twelve tiles fill the Active grid, so nothing more is read for it.
+      // A screenful of tiles fills the Active grid, so nothing more is read for it.
       expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
 
       renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
@@ -2184,15 +2300,18 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
     });
 
-    it('reads no further pages for failed runs that already fill the screen', () => {
+    it('leaves further pages to the end of the list once its failed runs fill the screen', () => {
       queryState.generationsHasNextPage = true;
-      queryState.generations = [...readyRuns(12), ...failedRuns(12)];
+      queryState.generations = [...readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT), ...failedRuns(PROFILE_MEDIA_MIN_FILL_COUNT)];
       const tree = renderDashboard();
 
-      renderer.act(() => { findPressableByText(tree.root, 'Failed (12)').props.onPress(); });
+      renderer.act(() => { findPressableByText(tree.root, `Failed (${PROFILE_MEDIA_MIN_FILL_COUNT})`).props.onPress(); });
 
-      expect(failedTiles(tree)).toHaveLength(12);
+      expect(failedTiles(tree)).toHaveLength(PROFILE_MEDIA_MIN_FILL_COUNT);
       expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+      const list = tree.root.find((node) => String(node.type) === 'flash-list');
+      renderer.act(() => { list.props.onEndReached(); });
+      expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
     });
   });
 });

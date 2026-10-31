@@ -7,8 +7,10 @@ import {
   OWN_PROFILE_SHARE_SOURCE,
   generationToProfileMediaCard,
   getOwnerPostScopeCounts,
+  getProfileMediaEmptyBody,
   getProfileMediaEmptyTitle,
   getProfileScopeOptions,
+  PROFILE_MEDIA_EMPTY_BODY,
   getProfileStats,
   getWalletCardContent,
   UNKNOWN_PROFILE_STAT_VALUE,
@@ -557,6 +559,21 @@ describe('the scope chips', () => {
     expect(getProfileMediaEmptyTitle('Creations', 'archived')).toBe('No archived creations');
     expect(getProfileMediaEmptyTitle('Creations')).toBe('No creations yet');
     expect(getProfileMediaEmptyTitle('Posts', 'archived')).toBe('No archived posts');
+  });
+
+  it('never promises an empty Failed scope that it will fill', () => {
+    expect(getProfileMediaEmptyBody('Creations', 'failed')).toBe('A run that fails shows here. Open it to see what went wrong.');
+    expect(getProfileMediaEmptyBody('Creations', 'archived')).toBe(PROFILE_MEDIA_EMPTY_BODY);
+    expect(getProfileMediaEmptyBody('Creations')).toBe(PROFILE_MEDIA_EMPTY_BODY);
+    expect(getProfileMediaEmptyBody('Saved')).toBe(PROFILE_MEDIA_EMPTY_BODY);
+  });
+
+  it("marks a failed run's card, the Failed scope's row, and no other", () => {
+    const run = (status: string) => generationToProfileMediaCard({ id: `run-${status}`, status, output_url: null, category: 'image', title: 'Try' } as GenerationListItem);
+
+    expect(run('failed').runFailed).toBe(true);
+    expect(run('succeeded').runFailed).toBe(false);
+    expect(run('processing').runFailed).toBe(false);
   });
 });
 

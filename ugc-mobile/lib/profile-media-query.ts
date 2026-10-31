@@ -191,7 +191,7 @@ export function selectRenderingCreations<T extends GenerationListItem>(items: T[
 }
 
 /**
- * The runs on the Creations "Failed" strip: failed and not archived, in the
+ * The runs the Creations Failed scope lists: failed and not archived, in the
  * library's order. Not library members either, so a run that failed while it
  * sat on the Rendering strip used to leave it for nowhere, reachable only from
  * its alert; the web Studio lists them under Failed.

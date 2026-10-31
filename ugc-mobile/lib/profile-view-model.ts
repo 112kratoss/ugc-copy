@@ -56,6 +56,8 @@ export interface ProfileMediaCard {
   previewStatusLabel?: string;
   isGridReady?: boolean;
   isArchived?: boolean;
+  /** A run that failed: listed under the Failed scope, its tile opens the run's status page. */
+  runFailed?: boolean;
   /** Moderation took the creation down: the tile says so on a plate and never draws its media. */
   moderationRemoved?: boolean;
   /**
@@ -343,6 +345,14 @@ export function getProfileMediaEmptyTitle(tab: ProfileMediaTab, scope: ProfileCr
   return scope === 'archived' ? 'No archived posts' : 'No posts yet';
 }
 
+export const PROFILE_MEDIA_EMPTY_BODY = 'This section will fill as you save media, create generations, or publish posts.';
+
+/** Under the empty title. An empty Failed scope is the good case, so it never promises to fill. */
+export function getProfileMediaEmptyBody(tab: ProfileMediaTab, scope: ProfileCreationsScope = 'active') {
+  if (tab === 'Creations' && scope === 'failed') return 'A run that fails shows here. Open it to see what went wrong.';
+  return PROFILE_MEDIA_EMPTY_BODY;
+}
+
 export function getProfileMediaSwipeTarget(currentTab: ProfileMediaTab, direction: ProfileMediaSwipeDirection) {
   const currentIndex = PROFILE_MEDIA_TABS.indexOf(currentTab);
   if (currentIndex === -1) return currentTab;
@@ -429,6 +439,7 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
           : undefined,
     isGridReady,
     isArchived,
+    runFailed: item.status === 'failed',
     moderationRemoved,
     templateNote: runStatus === 'cancelled' || runStatus === 'failed' ? `From template · run ${runStatus}` : null,
     outputCount: getGenerationOutputCount(item),

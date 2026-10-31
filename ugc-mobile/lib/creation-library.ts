@@ -48,9 +48,9 @@ export function getCreationAvailability(item: CreationFields): CreationAvailabil
  * never showed, and an unavailable one vanished from it (audit C1, C3).
  *
  * In: finished creations with a file, or whose file is explicitly unavailable,
- * in the requested Active or Archived scope. Unfinished and failed runs have
- * strips of their own above Profile's grid (Rendering, Failed) and stay
- * reachable through their notification deep links.
+ * in the requested Active or Archived scope. Unfinished runs have a strip of
+ * their own above Profile's grid (Rendering) and failed runs a scope of their
+ * own (Failed); both stay reachable through their notification deep links.
  */
 export function isCreationLibraryMember(item: CreationFields, scope: 'active' | 'archived' = 'active'): boolean {
   if (Boolean(item.archived_at) !== (scope === 'archived')) return false;

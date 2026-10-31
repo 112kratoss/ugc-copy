@@ -184,9 +184,9 @@ describe('the Rendering strip', () => {
   });
 });
 
-describe('the Failed strip', () => {
-  // `isCreationLibraryMember` keeps failed runs out of the grid; the strip is
-  // where they are listed instead (audit 01-9).
+describe('the Failed scope', () => {
+  // `isCreationLibraryMember` keeps failed runs out of the grid; the Failed
+  // scope is where they are listed instead (audit 01-9).
   it('takes every failed run that is not archived, in the library order, and nothing else', () => {
     const items = [
       run('lost', { status: 'failed' }),
