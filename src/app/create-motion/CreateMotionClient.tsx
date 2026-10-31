@@ -109,6 +109,7 @@ import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
 // Kie's motion cap; the motion start refuses a longer prompt before anything is held.
 import { catalogInputTooShort, catalogRunQuoteInput, MOTION_CLIP_NAME, MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import { useTicker } from '@/lib/use-ticker';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 import {
     refreshTemporaryMediaUrl,
     TEMPORARY_MEDIA_UPLOAD_LIMITS,
@@ -377,6 +378,13 @@ export default function CreateMotionClient({
         if (prefillModel) setSelectedModel(prefillModel as ModelId);
     }, [prefillPrompt, prefillModel, remixId]);
 
+    const handlePromptChange = (value: string) => {
+        promptEditedRef.current = true;
+        setPrompt(value);
+    };
+
+    // Typed into the server's HTML before this page's script ran, where no React heard it.
+    useTypedBeforeHydration(promptInputRef, { drawn: prompt, enabled: !remixId && !prefillPrompt, onTyped: handlePromptChange });
 
     // Derived, not kept in `catalogNotice`: a retired model or a failed load shows only
     // while it still applies, so choosing another model or a successful reload clears
@@ -1747,10 +1755,7 @@ export default function CreateMotionClient({
                                 id="create-motion-prompt"
                                 ref={promptInputRef}
                                 value={prompt}
-                                onChange={(event) => {
-                                    promptEditedRef.current = true;
-                                    setPrompt(event.target.value);
-                                }}
+                                onChange={(event) => handlePromptChange(event.target.value)}
                                 placeholder="Describe the kind of movement, pacing, and constraints you want to preserve."
                                 maxLength={MOTION_PROMPT_MAX_LENGTH}
                                 className="block min-h-[120px] w-full resize-y bg-transparent px-4 pb-2 pt-2 text-sm leading-6 text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)]"
@@ -1762,10 +1767,7 @@ export default function CreateMotionClient({
                             variant="toolbar"
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
-                            onEnhanced={(text) => {
-                                promptEditedRef.current = true;
-                                setPrompt(text);
-                            }}
+                            onEnhanced={handlePromptChange}
                             onCreditsUpdate={updateCredits}
                             medium="motion"
                             selectedModel={selectedModel}

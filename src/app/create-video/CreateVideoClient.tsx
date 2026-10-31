@@ -225,6 +225,7 @@ import { openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 import {
     inspectPromptQuality,
     type PromptEnhancementWarning,
@@ -2883,6 +2884,8 @@ export default function CreateVideoClient({
     useEffect(() => {
         if (remixId || !draftOwner) return;
         let cancelled = false;
+        // A prompt typed while the draft is read, or before the page's script ran, is the newer one.
+        const promptWhenRestoreStarted = promptRef.current;
         // The catalog waits for the draft, so a store that never answers must not hold
         // it: past this the page goes on without the draft, and a late one is ignored.
         let settled = false;
@@ -2898,7 +2901,13 @@ export default function CreateVideoClient({
                     && !draft.shots?.some((shot) => shot.prompt.trim())
                     ? draft
                     : null;
-                if (draft.prompt !== undefined && !prefillPrompt) setPrompt(draft.prompt);
+                if (
+                    draft.prompt !== undefined
+                    && !prefillPrompt
+                    && !hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRestoreStarted)
+                ) {
+                    setPrompt(draft.prompt);
+                }
                 if (draft.modelId) {
                     restoredDraftSettingsRef.current = true;
                     setModelSettled(true);
@@ -3720,6 +3729,9 @@ export default function CreateVideoClient({
         setPromptQualityWarnings([]);
         updateMentionState(value, caretIndex);
     };
+
+    // Typed into the server's HTML before this page's script ran, where no React heard it.
+    useTypedBeforeHydration(promptTextareaRef, { drawn: prompt, enabled: !remixId && !prefillPrompt, onTyped: handlePromptChange });
 
     const syncPromptCaretState = () => {
         updateMentionState(prompt);
