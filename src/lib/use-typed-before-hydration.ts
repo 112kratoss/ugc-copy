@@ -14,14 +14,14 @@ import { typedText } from '@/lib/typed-before-hydration';
  * the server drew text in is set back to that text by the hydration itself. Either way the
  * creators' prompt lost what had been typed a moment after the page came alive
  * (2026-10-31). React's own fix, a change event replayed once hydration commits
- * (`enableHydrationChangeEvent`), ships only in its experimental build.
+ * (`enableHydrationChangeEvent`), ships only in its experimental build;
+ * `use-typed-before-hydration.test.tsx` fails once Next's own build carries it.
  *
- * So, once, as the page mounts: a field whose typed text is no longer what the server drew
- * is handed to `onTyped`, the page's own change handler, as that input event would have
- * been. The text comes from the root layout's capture (`typed-before-hydration.ts`), or
- * from the field itself where the capture kept none. A layout effect, so the page holds the
- * text before anything its mount effects wait on (a saved draft's read) comes back, and
- * they take it as the visitor's edit.
+ * So, once, as the page mounts: text the root layout's capture heard typed into the field
+ * (`typed-before-hydration.ts`), where it is no longer what the server drew, is handed to
+ * `onTyped`, the page's own change handler, as that input event would have been. A layout
+ * effect, so the page holds the text before anything its mount effects wait on (a saved
+ * draft's read) comes back, and they take it as the visitor's edit.
  */
 export function useTypedBeforeHydration(
   fieldRef: RefObject<HTMLTextAreaElement | null>,
@@ -34,10 +34,12 @@ export function useTypedBeforeHydration(
     drawn: string;
     /** Off when the page opens on text of its own (a link's prompt, a remix), which wins. */
     enabled: boolean;
-    onTyped: (value: string, caretIndex: number) => void;
+    onTyped: (value: string) => void;
   },
 ): void {
-  // Effects that run again over the same field (Strict Mode, Fast Refresh) find it done.
+  // The first run acts, with the first render's values. Effects that run again over the
+  // same field (Strict Mode, Fast Refresh) find it done: the capture keeps recording
+  // after hydration, and by then the field draws the page's own state.
   const handledRef = useRef(false);
   useLayoutEffect(() => {
     if (handledRef.current) return;
@@ -45,9 +47,7 @@ export function useTypedBeforeHydration(
     const field = fieldRef.current;
     if (!enabled || !field) return;
     const typed = typedText(field);
-    if (typed === drawn) return;
-    onTyped(typed, field.value === typed ? (field.selectionStart ?? typed.length) : typed.length);
-    // Once, as the page mounts: from then on the field draws the page's state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (typed === undefined || typed === drawn) return;
+    onTyped(typed);
+  });
 }

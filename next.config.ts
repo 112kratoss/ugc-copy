@@ -67,8 +67,11 @@ function buildCspDirective(directive: string, sources: string[]): string {
 
 const contentSecurityPolicyReportOnly = [
   buildCspDirective("default-src", ["'self'"]),
-  // 'unsafe-inline' covers the Next.js bootstrap scripts and the inline
-  // Google Analytics snippet until a nonce pipeline exists.
+  // 'unsafe-inline' covers the Next.js bootstrap scripts, the inline
+  // Google Analytics snippet and the root layout's typed-text capture
+  // (src/lib/typed-before-hydration.ts) until a nonce pipeline exists. Next
+  // gives a nonce only to its own scripts: the pipeline has to hand the
+  // capture one, or text typed before a creator's script runs is lost again.
   buildCspDirective("script-src", [
     "'self'",
     "'unsafe-inline'",

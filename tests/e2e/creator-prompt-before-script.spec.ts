@@ -87,37 +87,44 @@ async function answerQuote(page: Page) {
 
 /**
  * The prompt of the visitor's draft as the page last saved it (`creator-draft:<tool>:visitor`
- * in its IndexedDB store), or null before its first save. The store is never opened before
- * the page has made it: an open of a missing database would make an empty one.
+ * in its IndexedDB store), or null before its first save and while it cannot be read. The
+ * store is never opened before the page has made it: an open of a missing database would
+ * make an empty one.
  */
-function savedPrompt(page: Page, tool: Creator['tool']) {
-  return page.evaluate(async (key) => {
-    const databases = await indexedDB.databases();
-    if (!databases.some((database) => database.name === 'magicbooklet-persisted-media')) return null;
-    return new Promise<string | null>((resolve) => {
-      const opened = indexedDB.open('magicbooklet-persisted-media');
-      opened.onerror = () => resolve(null);
-      opened.onsuccess = () => {
-        const db = opened.result;
-        db.onversionchange = () => db.close();
-        if (!db.objectStoreNames.contains('keyvaluepairs')) {
-          db.close();
-          resolve(null);
-          return;
-        }
-        const read = db.transaction('keyvaluepairs', 'readonly').objectStore('keyvaluepairs').get(key);
-        read.onsuccess = () => {
-          db.close();
-          const prompt = (read.result as { draft?: { prompt?: unknown } } | undefined)?.draft?.prompt;
-          resolve(typeof prompt === 'string' ? prompt : null);
+async function savedPrompt(page: Page, tool: Creator['tool']): Promise<string | null> {
+  try {
+    return await page.evaluate(async (key) => {
+      const databases = await indexedDB.databases();
+      if (!databases.some((database) => database.name === 'magicbooklet-persisted-media')) return null;
+      return new Promise<string | null>((resolve) => {
+        const opened = indexedDB.open('magicbooklet-persisted-media');
+        opened.onerror = () => resolve(null);
+        opened.onsuccess = () => {
+          const db = opened.result;
+          db.onversionchange = () => db.close();
+          if (!db.objectStoreNames.contains('keyvaluepairs')) {
+            db.close();
+            resolve(null);
+            return;
+          }
+          const read = db.transaction('keyvaluepairs', 'readonly').objectStore('keyvaluepairs').get(key);
+          read.onsuccess = () => {
+            db.close();
+            const prompt = (read.result as { draft?: { prompt?: unknown } } | undefined)?.draft?.prompt;
+            resolve(typeof prompt === 'string' ? prompt : null);
+          };
+          read.onerror = () => {
+            db.close();
+            resolve(null);
+          };
         };
-        read.onerror = () => {
-          db.close();
-          resolve(null);
-        };
-      };
-    });
-  }, `creator-draft:${tool}:visitor`);
+      });
+    }, `creator-draft:${tool}:visitor`);
+  } catch (error) {
+    // A dev server reload can tear the page down in the middle of a read.
+    if (error instanceof Error && /Execution context was destroyed|frame was detached/.test(error.message)) return null;
+    throw error;
+  }
 }
 
 /** Types into the server's HTML while the page's chunk is held, then lets the script run. */

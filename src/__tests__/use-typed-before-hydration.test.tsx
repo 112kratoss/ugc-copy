@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import { act, Activity, useEffect, useRef, useState } from 'react';
 import { hydrateRoot, type Root } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
@@ -13,9 +16,9 @@ import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
  */
 type BoxProps = {
   drawn?: string;
-  adopts?: boolean;
+  /** False for a page that opens on a prompt of its own, and for the fault itself. */
   enabled?: boolean;
-  onTyped?: (value: string, caretIndex: number) => void;
+  onTyped?: (value: string) => void;
   /** A saved draft read as the page opens, answered a microtask later. */
   savedDraft?: string;
   /** Told once that read has answered. */
@@ -26,7 +29,7 @@ type BoxProps = {
   activity?: 'visible' | 'hidden';
 };
 
-function PromptBox({ drawn = '', adopts = true, enabled = true, onTyped, savedDraft, onRestoreAnswered, slowMount = false }: BoxProps) {
+function PromptBox({ drawn = '', enabled = true, onTyped, savedDraft, onRestoreAnswered, slowMount = false }: BoxProps) {
   const [prompt, setPrompt] = useState(drawn);
   const [renders, setRenders] = useState(0);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
@@ -34,11 +37,11 @@ function PromptBox({ drawn = '', adopts = true, enabled = true, onTyped, savedDr
   useEffect(() => {
     promptRef.current = prompt;
   }, [prompt]);
-  const handlePromptChange = (value: string, caretIndex: number) => {
-    onTyped?.(value, caretIndex);
+  const handlePromptChange = (value: string) => {
+    onTyped?.(value);
     setPrompt(value);
   };
-  useTypedBeforeHydration(fieldRef, { drawn: prompt, enabled: adopts && enabled, onTyped: handlePromptChange });
+  useTypedBeforeHydration(fieldRef, { drawn: prompt, enabled, onTyped: handlePromptChange });
   // The creators' draft read: an edit made while it was out wins over what it brings back.
   useEffect(() => {
     if (savedDraft === undefined) return;
@@ -55,7 +58,7 @@ function PromptBox({ drawn = '', adopts = true, enabled = true, onTyped, savedDr
   }, [savedDraft, slowMount, onRestoreAnswered]);
   return (
     <div>
-      <textarea aria-label="Prompt" ref={fieldRef} value={prompt} onChange={(event) => handlePromptChange(event.target.value, 0)} />
+      <textarea aria-label="Prompt" ref={fieldRef} value={prompt} onChange={(event) => handlePromptChange(event.target.value)} />
       <span data-testid="count">{prompt.length}</span>
       <button type="button" onClick={() => setRenders((count) => count + 1)}>
         Render {renders}
@@ -77,35 +80,32 @@ function Page({ activity = 'visible', ...props }: BoxProps) {
 }
 
 const mounted: Array<{ root: Root; container: HTMLElement }> = [];
+const recoverableErrors: unknown[] = [];
 
-const setNativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
-
-/**
- * Text typed into a field: with an input event, which the root layout's capture hears.
- * Set past React's own value tracker, as typing is, so a hydrated box hears it too.
- */
-function typeInto(field: HTMLTextAreaElement, text: string, caret = text.length) {
-  setNativeValue.call(field, text);
-  field.setSelectionRange(caret, caret);
+/** Text typed into the server's HTML: an input event, which the root layout's capture hears. */
+function typeInto(field: HTMLTextAreaElement, text: string) {
+  field.value = text;
   field.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-/** Text in a field with no capture to hear it: the value alone, as a page without the capture has. */
-function setUnheard(field: HTMLTextAreaElement, text: string) {
-  field.value = text;
-  field.setSelectionRange(text.length, text.length);
-}
-
-/** The server's HTML for the box, typed into before any script runs, then hydrated. */
-async function hydrateAfterTyping(props: BoxProps, type: (field: HTMLTextAreaElement) => void) {
+/**
+ * The server's HTML for the box, typed into before any script runs, then hydrated: inside
+ * act, or outside it, where React's scheduler orders the work as a browser's does.
+ */
+async function hydrateAfterTyping(props: BoxProps, type: (field: HTMLTextAreaElement) => void, { withinAct = true } = {}) {
   const container = document.createElement('div');
   container.innerHTML = renderToString(<Page {...props} />);
   document.body.appendChild(container);
   type(container.querySelector('textarea')!);
+  const hydrate = () => hydrateRoot(container, <Page {...props} />, { onRecoverableError: (error) => recoverableErrors.push(error) });
   let root!: Root;
-  await act(async () => {
-    root = hydrateRoot(container, <Page {...props} />);
-  });
+  if (withinAct) {
+    await act(async () => {
+      root = hydrate();
+    });
+  } else {
+    root = hydrate();
+  }
   mounted.push({ root, container });
   return { container, root };
 }
@@ -131,11 +131,13 @@ afterEach(() => {
     act(() => root.unmount());
     container.remove();
   }
+  // Every box hydrated: none was drawn again on the client.
+  expect(recoverableErrors.splice(0)).toEqual([]);
 });
 
 describe('what this React build does to text typed before hydration', () => {
   it('keeps it in an empty box, then writes the state over it at the next render', async () => {
-    const { container } = await hydrateAfterTyping({ adopts: false }, (box) => setUnheard(box, 'A lighthouse at dusk'));
+    const { container } = await hydrateAfterTyping({ enabled: false }, (box) => typeInto(box, 'A lighthouse at dusk'));
     expect(field(container).value).toBe('A lighthouse at dusk');
     expect(count(container)).toBe('0');
 
@@ -145,41 +147,42 @@ describe('what this React build does to text typed before hydration', () => {
   });
 
   it('puts the server’s text back in a box it drew text in, as it hydrates', async () => {
-    const { container } = await hydrateAfterTyping({ adopts: false, drawn: MOTION_DRAWN }, (box) => typeInto(box, 'Slow pan'));
+    const { container } = await hydrateAfterTyping({ enabled: false, drawn: MOTION_DRAWN }, (box) => typeInto(box, 'Slow pan'));
 
     expect(field(container).value).toBe(MOTION_DRAWN);
+  });
+
+  it('is still React’s own: Next’s bundled build has no replay of a change made before hydration', () => {
+    // React's fix (enableHydrationChangeEvent) queues a change event per changed field as hydration
+    // commits; once Next's stable build carries it, the hook and the root layout's capture repeat it
+    // and can go.
+    const next = path.dirname(createRequire(path.join(process.cwd(), 'package.json')).resolve('next/package.json'));
+    for (const build of ['production', 'development']) {
+      const source = readFileSync(path.join(next, 'dist/compiled/react-dom/cjs', `react-dom-client.${build}.js`), 'utf8');
+      expect(source, build).toContain('function initTextarea(');
+      expect(source, build).not.toContain('queuedChangeEventTargets');
+    }
   });
 });
 
 describe('a prompt typed before the page’s script ran', () => {
-  it('is handed to the page’s change handler as the page mounts, with its caret, and stays', async () => {
+  it('is handed to the page’s change handler as the page mounts, and stays', async () => {
     const onTyped = vi.fn();
-    const { container } = await hydrateAfterTyping({ onTyped }, (box) => typeInto(box, 'A lighthouse at dusk', 5));
+    const { container } = await hydrateAfterTyping({ onTyped }, (box) => typeInto(box, 'A lighthouse at dusk'));
 
     expect(onTyped).toHaveBeenCalledTimes(1);
-    expect(onTyped).toHaveBeenCalledWith('A lighthouse at dusk', 5);
+    expect(onTyped).toHaveBeenCalledWith('A lighthouse at dusk');
     expect(count(container)).toBe('20');
     await renderAgain(container);
     expect(field(container).value).toBe('A lighthouse at dusk');
-  });
-
-  it('is read from an empty box when no capture heard it', async () => {
-    const { container } = await hydrateAfterTyping({}, (box) => setUnheard(box, 'A lighthouse at dusk'));
-    await renderAgain(container);
-
-    expect(field(container).value).toBe('A lighthouse at dusk');
-    expect(count(container)).toBe('20');
   });
 
   it('replaces a prompt the server drew, which the hydration had put back', async () => {
-    const onTyped = vi.fn();
-    const { container } = await hydrateAfterTyping({ drawn: MOTION_DRAWN, onTyped }, (box) => typeInto(box, `${MOTION_DRAWN} Slow pan.`));
+    const { container } = await hydrateAfterTyping({ drawn: MOTION_DRAWN }, (box) => typeInto(box, `${MOTION_DRAWN} Slow pan.`));
     await renderAgain(container);
 
     expect(field(container).value).toBe(`${MOTION_DRAWN} Slow pan.`);
     expect(count(container)).toBe(String(MOTION_DRAWN.length + 10));
-    // The field held the server's text then, so the caret is put at the end of the typed one.
-    expect(onTyped).toHaveBeenCalledWith(`${MOTION_DRAWN} Slow pan.`, MOTION_DRAWN.length + 10);
   });
 
   it('is an emptied box too, where the server drew a prompt', async () => {
@@ -195,6 +198,18 @@ describe('a prompt typed before the page’s script ran', () => {
     await hydrateAfterTyping({ drawn: MOTION_DRAWN, onTyped }, (box) => typeInto(box, MOTION_DRAWN));
 
     expect(onTyped).not.toHaveBeenCalled();
+  });
+
+  it('leaves text no input event brought, as a browser restoring a form puts back, to the page', async () => {
+    // Another account's prompt or a stale tab's: never taken for the visitor's.
+    const onTyped = vi.fn();
+    const { container } = await hydrateAfterTyping({ onTyped }, (box) => {
+      box.value = 'A prompt from before';
+    });
+    await renderAgain(container);
+
+    expect(onTyped).not.toHaveBeenCalled();
+    expect(field(container).value).toBe('');
   });
 
   it('leaves the text to a page that opens on a prompt of its own', async () => {
@@ -223,22 +238,21 @@ describe('a prompt typed before the page’s script ran', () => {
   });
 
   it('wins over a saved draft that answers before React draws again, as it can outside act', async () => {
-    // Outside act the scheduler yields between the mount's effects and its next render, and a
-    // read can answer in between. The text is already the state then: the layout effect's
-    // update draws before the mount's effects are done.
+    // Outside act the scheduler hands the thread back once the mount's effects outlast its slice,
+    // and a read can answer before its next render: a passive effect's update would land after
+    // the read and lose to it. The layout effect's update draws in the same task, first.
     const reactGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
     const previousActEnvironment = reactGlobal.IS_REACT_ACT_ENVIRONMENT;
     reactGlobal.IS_REACT_ACT_ENVIRONMENT = false;
     try {
       const answered = vi.fn();
-      const props: BoxProps = { savedDraft: 'An older prompt', slowMount: true, onRestoreAnswered: answered };
-      const container = document.createElement('div');
-      container.innerHTML = renderToString(<Page {...props} />);
-      document.body.appendChild(container);
-      typeInto(container.querySelector('textarea')!, 'A lighthouse at dusk');
-      mounted.push({ root: hydrateRoot(container, <Page {...props} />), container });
+      const { container } = await hydrateAfterTyping(
+        { savedDraft: 'An older prompt', slowMount: true, onRestoreAnswered: answered },
+        (box) => typeInto(box, 'A lighthouse at dusk'),
+        { withinAct: false },
+      );
 
-      await vi.waitFor(() => expect(answered).toHaveBeenCalled());
+      await vi.waitFor(() => expect(answered).toHaveBeenCalled(), { timeout: 5000 });
       // Whatever React still had to draw once the read had answered.
       await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -281,7 +295,7 @@ describe('the capture the root layout runs', () => {
     untouched.value = 'drawn';
 
     expect(typedText(typed)).toBe('A lighthouse at dusk');
-    expect(typedText(untouched)).toBe('drawn');
+    expect(typedText(untouched)).toBeUndefined();
     typed.remove();
     untouched.remove();
   });
