@@ -12,8 +12,13 @@ const authCookieMocks = vi.hoisted(() => ({
   hasSupabaseAuthCookie: vi.fn(),
 }));
 
+const islandMocks = vi.hoisted(() => ({
+  props: [] as unknown[],
+}));
+
 vi.mock('next/dynamic', () => ({
-  default: () => function DynamicIslandStub() {
+  default: () => function DynamicIslandStub(props: unknown) {
+    islandMocks.props.push(props);
     return <div data-testid="dynamic-island" />;
   },
 }));
@@ -27,6 +32,7 @@ describe('deferred app shell islands', () => {
 
   beforeEach(() => {
     idleCallbacks = [];
+    islandMocks.props = [];
     publishAppShellAuthentication(false);
     authCookieMocks.hasSupabaseAuthCookie.mockReset();
     authCookieMocks.hasSupabaseAuthCookie.mockReturnValue(false);
@@ -59,6 +65,14 @@ describe('deferred app shell islands', () => {
 
     expect(screen.getByTestId('dynamic-island')).toBeInTheDocument();
     expect(idleCallbacks).toHaveLength(0);
+  });
+
+  it('hands the account island the shell\'s page and click, for the menu\'s Profile', () => {
+    authCookieMocks.hasSupabaseAuthCookie.mockReturnValue(true);
+    const onNavigate = vi.fn();
+    render(<DeferredAppShellAccount pathname="/profile" onNavigate={onNavigate} />);
+
+    expect(islandMocks.props.at(-1)).toEqual({ pathname: '/profile', onNavigate });
   });
 
   it('keeps the Supabase-backed account island out of anonymous renders', () => {

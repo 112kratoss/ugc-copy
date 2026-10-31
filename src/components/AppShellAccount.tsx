@@ -1,7 +1,7 @@
 'use client';
 
 import type { Session, User } from '@supabase/supabase-js';
-import { ChevronDown, Gift, History, Loader2, LogOut, MonitorSmartphone, Sparkles, UserRound } from 'lucide-react';
+import { ChevronDown, Gift, History, Loader2, LogOut, MonitorSmartphone, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -18,6 +18,7 @@ import { removeSupabaseAuthCookies } from '@/lib/supabase-auth-cookie';
 import AppShellAccountFallback from './AppShellAccountFallback';
 import { OptimizedPreviewImage } from './OptimizedPreviewImage';
 import { publishAppShellAuthentication } from './app-shell-auth-state';
+import { APP_NAV_ITEMS, getActiveAppNavItem, type AppNavClickHandler } from './app-shell-nav';
 import { pushToast, requestConfirmation } from './feedback-state';
 
 type ProfileSummary = {
@@ -32,6 +33,9 @@ const SIGN_OUT_CLEAR_WAIT_MS = 3000;
 const SESSION_RECHECK_DELAY_MS = 2000;
 /** Coming back to the tab re-reads the balance at most this often. */
 const CREDITS_RECHECK_INTERVAL_MS = 30_000;
+/** The menu's Profile row is the navigation's item, drawn a second time. */
+const PROFILE_NAV_ITEM = APP_NAV_ITEMS.find((item) => item.id === 'profile')!;
+const ProfileIcon = PROFILE_NAV_ITEM.icon;
 
 /**
  * The creators keep this account's staged files and text drafts in the
@@ -91,11 +95,30 @@ function AccountAvatar({ session, profile, size = 'md' }: AccountAvatarProps) {
   );
 }
 
-export default function AppShellAccount() {
+/**
+ * `pathname` and `onNavigate` are the shell's (see DeferredAppShellAccount):
+ * the page under the menu, and its click on a control that names a tab.
+ */
+export default function AppShellAccount({
+  pathname = '',
+  onNavigate,
+}: {
+  pathname?: string;
+  onNavigate?: AppNavClickHandler;
+}) {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
+  // The menu goes with the page it opened over, as the shell's drawer does. A
+  // row closes it as it navigates, but a page with unsaved work holds the click
+  // before that handler runs (src/lib/use-leave-guard.ts), and a leave comes
+  // later, by the router.
+  const [menuPathname, setMenuPathname] = useState(pathname);
+  if (menuPathname !== pathname) {
+    setMenuPathname(pathname);
+    setAccountOpen(false);
+  }
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isSigningOutEverywhere, setIsSigningOutEverywhere] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
@@ -481,7 +504,10 @@ export default function AppShellAccount() {
           <div
             role="menu"
             aria-label="Account"
-            className="absolute right-0 top-14 z-50 w-64 overflow-hidden rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-2 shadow-2xl shadow-black/40"
+            // Never taller than the window leaves it above the bottom
+            // navigation: on a phone held sideways the navigation covered
+            // Sign out, and the sticky top bar cannot scroll it into view.
+            className="absolute right-0 top-14 z-50 max-h-[calc(100dvh-var(--app-shell-topbar-height)-var(--app-shell-bottom-nav-space,0px)-1rem)] w-64 overflow-y-auto overscroll-contain rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-2 shadow-2xl shadow-black/40"
           >
             <div className="flex items-center gap-3 border-b border-white/10 px-2 pb-3 pt-1">
               <AccountAvatar session={session} profile={profile} size="sm" />
@@ -492,16 +518,24 @@ export default function AppShellAccount() {
             </div>
             {/* The navigation's Profile, named a second time (the owner's
                 decision, 2026-10-31): under their own avatar is where people
-                look for it first. Its word and address are the navigation's. */}
+                look for it first. It is the navigation's item and press: on
+                Profile it scrolls the page to its top, where a link to the
+                address already open would load the page again and drop its
+                query (a first profile's `?welcome=1&next=…`) and any unsaved
+                edits. */}
             <Link
-              href="/profile"
+              href={PROFILE_NAV_ITEM.href}
               prefetch={false}
               role="menuitem"
-              onClick={() => setAccountOpen(false)}
+              aria-current={getActiveAppNavItem(pathname)?.id === PROFILE_NAV_ITEM.id ? 'page' : undefined}
+              onClick={(event) => {
+                setAccountOpen(false);
+                onNavigate?.(event, PROFILE_NAV_ITEM);
+              }}
               className="ui-focus-ring mt-2 flex min-h-11 items-center gap-2 rounded-2xl px-3 py-2 text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
             >
-              <UserRound className="h-4 w-4" aria-hidden />
-              Profile
+              <ProfileIcon className="h-4 w-4" aria-hidden />
+              {PROFILE_NAV_ITEM.label}
             </Link>
             <Link
               href="/invite"

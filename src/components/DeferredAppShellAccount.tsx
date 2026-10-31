@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 
 import AppShellAccountFallback from './AppShellAccountFallback';
 import { publishAppShellAuthentication } from './app-shell-auth-state';
+import type { AppNavClickHandler } from './app-shell-nav';
 import {
   useHasHydratedSupabaseAuthCookieHint,
   useSupabaseAuthCookieHint,
@@ -17,9 +18,16 @@ const AppShellAccount = dynamic(() => import('./AppShellAccount'), {
 
 /**
  * `pathname` is the shell's own (see AppShellClient), for the Sign in link the
- * server draws: the account itself loads in the browser only.
+ * server draws: the account itself loads in the browser only. The account menu
+ * takes it with the shell's `onNavigate` for its Profile row.
  */
-export default function DeferredAppShellAccount({ pathname }: { pathname?: string }) {
+export default function DeferredAppShellAccount({
+  pathname,
+  onNavigate,
+}: {
+  pathname?: string;
+  onNavigate?: AppNavClickHandler;
+}) {
   const shouldLoadAccount = useSupabaseAuthCookieHint();
   const hasHydratedCookieHint = useHasHydratedSupabaseAuthCookieHint();
 
@@ -29,5 +37,9 @@ export default function DeferredAppShellAccount({ pathname }: { pathname?: strin
     }
   }, [hasHydratedCookieHint, shouldLoadAccount]);
 
-  return shouldLoadAccount ? <AppShellAccount /> : <AppShellAccountFallback pathname={pathname} />;
+  return shouldLoadAccount ? (
+    <AppShellAccount pathname={pathname} onNavigate={onNavigate} />
+  ) : (
+    <AppShellAccountFallback pathname={pathname} />
+  );
 }
