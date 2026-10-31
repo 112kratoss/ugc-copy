@@ -81,6 +81,7 @@ const generationRows = vi.hoisted(() => ({
       preview_width: 832,
       preview_height: 1248,
       category: 'image',
+      template_run_id: null as string | null,
     },
   ],
 }));
@@ -119,6 +120,8 @@ const compactSummaryRpc = vi.hoisted(() => ({ enabled: false }));
 // What each recipe's unlock adds from its creation's saved inputs, by post.
 const recipeReferenceCounts = vi.hoisted(() => vi.fn(async (): Promise<Map<string, Record<string, number>>> => new Map()));
 const initialPostRows = postRows.value.slice();
+const initialGenerationRows = generationRows.value.slice();
+const initialSourceToolRows = sourceToolRows.value.slice();
 
 function pickColumns(row: Record<string, unknown>, selectedColumns: string) {
   const columns = selectedColumns.split(',').map((column) => column.trim()).filter(Boolean);
@@ -285,6 +288,8 @@ describe('owner posts', () => {
     vi.resetModules();
     createServiceClientMock.mockReset();
     postRows.value = initialPostRows.slice();
+    generationRows.value = initialGenerationRows.slice();
+    sourceToolRows.value = initialSourceToolRows.slice();
     bundleRows.value = [];
     sellerProfile.value = { username: 'maya-creates', display_name: 'Maya R', avatar_url: null };
     sellerProfile.error = null;
@@ -312,6 +317,50 @@ describe('owner posts', () => {
       },
     ]);
     expect(post?.commentCount).toBe(7);
+  });
+
+  // Published before publishing wrote one, or its save failed: it reads as the
+  // row publishing writes (generation-post-source-tools.ts).
+  it('reads a creation post stored without its Made with as its creation names it', async () => {
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const creationPost = await getOwnerPostDetail('post-3', 'user-1');
+    const unlinkedPost = await getOwnerPostDetail('post-2', 'user-1');
+
+    expect(creationPost?.sourceTools).toEqual([
+      { toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: 'Nano Banana 2.0', modelSlug: 'nano-banana-2' },
+    ]);
+    expect(unlinkedPost?.sourceTools).toBeUndefined();
+  });
+
+  // Its model is the template author's (template-result.ts).
+  it('names no model in a template result’s Made with', async () => {
+    generationRows.value = [{ ...initialGenerationRows[0], template_run_id: 'run-1' }];
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const post = await getOwnerPostDetail('post-3', 'user-1');
+
+    expect(post?.sourceTools).toEqual([
+      { toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: null, modelSlug: null },
+    ]);
+  });
+
+  it('keeps the Made with a creation post has stored', async () => {
+    sourceToolRows.value = [...initialSourceToolRows, {
+      post_id: 'post-3',
+      tool_label: 'magicbooklet',
+      tool_slug: 'magicbooklet',
+      model_label: 'Nano Banana Pro',
+      model_slug: 'nano-banana-pro',
+      sort_order: 0,
+    }];
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const post = await getOwnerPostDetail('post-3', 'user-1');
+
+    expect(post?.sourceTools).toEqual([
+      { toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: 'Nano Banana Pro', modelSlug: 'nano-banana-pro' },
+    ]);
   });
 
   // A generation-backed post without `post_media` rows used to be served

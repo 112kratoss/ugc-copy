@@ -46,6 +46,7 @@ import {
 import { getOwnerPostTitleFallback } from '@/lib/owner-post-title-fallback';
 import { createServiceClient } from '@/lib/server-helpers';
 import type { SourceToolSelection } from '@/lib/source-tools';
+import { buildGenerationPostSourceTools } from '@/lib/generation-post-source-tools';
 import {
   normalizeShowcaseSourceKind,
   type RawShowcaseSourceKind,
@@ -653,14 +654,12 @@ async function toOwnerPostListItem(
     postId: row.id,
     row,
   });
+  const generationPreview = row.generation_id ? generationPreviewMap.get(row.generation_id) : null;
   // A post without `post_media` rows gets a synthesised cover with no poster,
   // which clients render as a blank plate. The showcase feed grafts the linked
   // generation's preview onto that cover; the owner surface must do the same —
   // it also serves private creation posts, whose derivative rows are removed.
-  const mediaItems = graftGenerationPreviewOntoCover(
-    rawMediaItems,
-    row.generation_id ? generationPreviewMap.get(row.generation_id) : null,
-  );
+  const mediaItems = graftGenerationPreviewOntoCover(rawMediaItems, generationPreview);
   const coverMedia = mediaItems[0] ?? null;
   const mediaUrl = coverMedia?.url ?? await resolvePostMediaUrl(adminSupabase, row);
   const mediaKind = coverMedia?.mediaKind ?? getPostMediaKind(row.category, row.post_format);
@@ -716,7 +715,10 @@ async function toOwnerPostListItem(
     sourceKind,
     sourceTool: row.source_tool,
     sourceToolSlug: row.source_tool_slug,
-    sourceTools: sourceToolsMap.get(row.id),
+    // A creation post stored without its Made with (published before publishing
+    // wrote one, or whose save failed) reads as the row publishing writes.
+    sourceTools: sourceToolsMap.get(row.id)
+      ?? (generationPreview ? buildGenerationPostSourceTools(row, generationPreview.model) : undefined),
     sourceLabel: getSourceLabel(sourceKind),
     commentCount: Math.max(0, row.comment_count ?? 0),
     createdAt: row.created_at,

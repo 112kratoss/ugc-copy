@@ -53,6 +53,8 @@ const bundleUpdateCalls: Array<{
 }> = [];
 const publishRpcCalls: Array<Record<string, unknown>> = [];
 const rateLimitRpcCalls: Array<Record<string, unknown>> = [];
+// The post's Made with, saved after the publish commits.
+const sourceToolSaveCalls: Array<Record<string, unknown>> = [];
 const removeMock = vi.fn(async () => ({ data: null, error: null }));
 const downloadMock = vi.fn(async () => ({
   data: new Blob(['reference-image'], { type: 'image/png' }),
@@ -209,6 +211,11 @@ function createServiceClientTestDouble() {
         };
       }
 
+      if (name === 'save_post_source_tools_with_catalog') {
+        sourceToolSaveCalls.push(args);
+        return { data: null, error: null };
+      }
+
       if (name !== 'publish_generation_post_with_resource_bundle') {
         throw new Error(`Unexpected rpc call: ${name}`);
       }
@@ -298,6 +305,7 @@ describe('/api/showcase/publish route', () => {
     bundleUpdateCalls.length = 0;
     publishRpcCalls.length = 0;
     rateLimitRpcCalls.length = 0;
+    sourceToolSaveCalls.length = 0;
     publishRpcError = null;
     rateLimitResult = {
       allowed: true,
@@ -547,6 +555,18 @@ describe('/api/showcase/publish route', () => {
       p_window_seconds: 600,
     });
     expect(publishRpcCalls).toHaveLength(1);
+    // The creation had no post, so its Made with is written with the new one.
+    expect(sourceToolSaveCalls).toEqual([{
+      p_post_id: 'post-1',
+      p_owner_user_id: 'user-1',
+      p_media_kind: 'image',
+      p_source_tools: [{
+        toolLabel: 'magicbooklet',
+        toolSlug: 'magicbooklet',
+        modelLabel: 'Nano Banana 2.0',
+        modelSlug: 'nano-banana-2',
+      }],
+    }]);
   });
 
   it('downgrades attached active listings to unlisted when a generation-backed post is unpublished', async () => {
@@ -623,6 +643,8 @@ describe('/api/showcase/publish route', () => {
       post_format: 'mixed',
     });
     expect(postUpserts[0]).not.toMatchObject({ title: 'Original title' });
+    // Its Made with is carried forward too.
+    expect(sourceToolSaveCalls).toEqual([]);
   });
 
   it('secures legacy provider media before making a generation-backed post private', async () => {
