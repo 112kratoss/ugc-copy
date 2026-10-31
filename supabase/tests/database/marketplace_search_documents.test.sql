@@ -5,9 +5,9 @@ set local search_path = public, extensions;
 
 select plan(8);
 
-insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
+insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at)
 values ('0000f5c0-0000-4000-9000-000000000001'::uuid, 'f5c-search@example.invalid',
-        'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb);
+        'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb, now());
 
 update public.profiles
 set username = 'indexed-seller', display_name = 'Indexed Seller'
@@ -71,9 +71,10 @@ select is(
   'indexed search returns a matching listable bundle'
 );
 
+-- 'au' is in the document ('aurora'), so only the length guard keeps it out.
 select is(
   (select count(*)::bigint
-   from public.list_marketplace_resource_bundles('all', 'all', null, 'ne', 'recent', 0, 24)
+   from public.list_marketplace_resource_bundles('all', 'all', null, 'au', 'recent', 0, 24)
    where id = '0000f5c0-0000-4000-9000-000000000020'::uuid),
   0::bigint,
   'database refuses undersized search terms even if a caller bypasses the API policy'

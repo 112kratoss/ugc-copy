@@ -771,17 +771,21 @@ export async function buildGenerationReferenceResourceItems(params: {
   return items;
 }
 
+// Trimmed again after the cut, as the list RPC trims what it is sent: a query
+// cut at a space would otherwise match there and not here.
 function normalizeMarketplaceSearchQuery(value: string | null | undefined): string {
   return typeof value === 'string'
-    ? value.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 80)
+    ? value.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 80).trim()
     : '';
 }
 
 // What a visitor who has not unlocked the recipe sees. The database's search
-// document holds these same fields in this order
-// (refresh_marketplace_bundle_search_documents, 20261031100330), so a row the
-// RPC matches is one this check keeps; the migration's test holds the two
-// lists together.
+// document holds the same text in this order, its title and seller name as
+// shown here (refresh_marketplace_bundle_search_documents, 20261031100330),
+// and the list matches the query literally, so the two find the same recipes.
+// They differ only on a post with no title, shown here under its caption's
+// first line or a fixed label. The migration's test holds the two lists
+// together.
 function marketplaceItemMatchesQuery(item: MarketplaceResourceListItem, normalizedQuery: string): boolean {
   const searchableText = [
     item.title,

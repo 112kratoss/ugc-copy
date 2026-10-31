@@ -1,10 +1,18 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getPostResourceKinds } from '@/lib/post-resource-bundles';
+import {
+  getPostResourceKinds,
+  POST_RESOURCE_ITEM_TYPES,
+  POST_RESOURCE_KIND_ORDER,
+  resolveRecipeAllowRemix,
+} from '@/lib/post-resource-bundles';
+import { getCreatorDisplayName } from '@/lib/profile';
 
-const sql = readFileSync('supabase/migrations/20261031100330_marketplace_search_indexes_public_text.sql', 'utf8');
+const migrationsDirectory = 'supabase/migrations';
+const sql = readFileSync(join(migrationsDirectory, '20261031100330_marketplace_search_indexes_public_text.sql'), 'utf8');
 // The statements alone: the header names fields the document no longer reads.
 const statements = sql.replace(/--.*$/gm, '');
 const projection = statements.slice(
@@ -12,14 +20,51 @@ const projection = statements.slice(
   statements.indexOf('$function$;'),
 );
 const serverSource = readFileSync('src/lib/post-resource-bundles-server.ts', 'utf8');
-const bundlesSource = readFileSync('src/lib/post-resource-bundles.ts', 'utf8');
-// The profiles trigger is still the one 20260810112000 made.
-const profilesTrigger = /CREATE TRIGGER profiles_refresh_marketplace_search[\s\S]*?;/.exec(
-  readFileSync('supabase/migrations/20260810112000_index_marketplace_search.sql', 'utf8'),
-)?.[0] ?? '';
 
-function listItems(source: string): string[] {
-  return source.split(',').map((entry) => entry.trim()).filter(Boolean);
+function readMigration(name: string) {
+  return readFileSync(join(migrationsDirectory, name), 'utf8');
+}
+
+/** One function's CREATE [OR REPLACE] statement, through its closing dollar quote. */
+function functionDefinition(source: string, name: string) {
+  const match = new RegExp(`CREATE (?:OR REPLACE )?FUNCTION public\\.${name}\\(`).exec(source);
+  expect(match, `${name} is not defined`).not.toBeNull();
+  const start = match!.index;
+  const tag = /\bAS (\$[a-z_]*\$)/.exec(source.slice(start));
+  if (!tag) throw new Error(`${name} has no dollar-quoted body`);
+  const bodyStart = start + tag.index + tag[0].length;
+  return source.slice(start, source.indexOf(`${tag[1]};`, bodyStart) + tag[1].length + 1);
+}
+
+/** The text inside the parentheses that open at `open`. */
+function parenthesized(source: string, open: number) {
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '(') depth += 1;
+    if (source[index] === ')') depth -= 1;
+    if (depth === 0) return source.slice(open + 1, index);
+  }
+  throw new Error('unbalanced parentheses');
+}
+
+/** Arguments separated by commas outside parentheses and quotes, whitespace collapsed. */
+function topLevelArguments(source: string) {
+  const parts: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let current = '';
+  for (const character of source) {
+    if (character === "'") quoted = !quoted;
+    if (!quoted && character === '(') depth += 1;
+    if (!quoted && character === ')') depth -= 1;
+    if (!quoted && depth === 0 && character === ',') {
+      parts.push(current);
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+  return [...parts, current].map((part) => part.replace(/\s+/g, ' ').trim()).filter(Boolean);
 }
 
 function quotedItems(source: string): string[] {
@@ -35,55 +80,81 @@ function columnsFollowed(trigger: string): string[] {
   return [...trigger.matchAll(/OLD\.([a-z_]+) IS DISTINCT FROM NEW\.\1/g)].map((match) => match[1]).sort();
 }
 
-function triggerStatement(name: string): string {
-  return new RegExp(`CREATE OR REPLACE TRIGGER ${name}[\\s\\S]*?;`).exec(statements)?.[0] ?? '';
+/** The last statement in any migration that makes the named trigger. */
+function latestTrigger(name: string): string {
+  const pattern = new RegExp(`CREATE (?:OR REPLACE )?TRIGGER ${name}\\b[\\s\\S]*?;`, 'g');
+  const definitions = readdirSync(migrationsDirectory)
+    .filter((file) => file.endsWith('.sql'))
+    .sort()
+    .flatMap((file) => [...readMigration(file).replace(/--.*$/gm, '').matchAll(pattern)].map((match) => match[0]));
+  expect(definitions.length, `${name} is never made`).toBeGreaterThan(0);
+  return definitions[definitions.length - 1];
 }
 
+const documentArguments = topLevelArguments(parenthesized(projection, projection.indexOf('concat_ws(') + 'concat_ws'.length));
+const kindWords = documentArguments[documentArguments.length - 1];
+
 // supabase/tests/database/marketplace_search_public_text.test.sql runs the
-// projection and its triggers; this file pins it to the app's search check
-// and to how the file takes its locks.
+// projection, its triggers and the list; this file holds them to the app code
+// they mirror, and pins how the file takes its locks.
 describe('marketplace search indexes public text migration', () => {
-  it('projects exactly the fields the app checks a listed recipe on, in its order', () => {
-    // [the app's field, the column the document reads], one pair per field.
+  it('projects the text the app checks a listed recipe on, field for field and in its order', () => {
+    // [the app's field, the document's expression for it]
     const fields = [
-      ['item.title', 'bundles.title'],
-      ['item.summary', 'bundles.summary'],
-      ['item.previewText', 'bundles.preview_text'],
-      ['item.seller.username', 'profiles.username'],
-      ['item.seller.name', 'profiles.display_name'],
-      ['item.post?.title', 'posts.title'],
-      ['item.post?.body', 'posts.body'],
-      ['item.post?.sourceTool', 'posts.source_tool'],
+      ['item.title', "CASE WHEN lower(btrim(coalesce(bundles.title, ''))) IN ('', 'attached unlock') THEN 'Recipe' ELSE btrim(bundles.title) END"],
+      ['item.summary', "nullif(bundles.summary, '')"],
+      ['item.previewText', "nullif(bundles.preview_text, '')"],
+      ['item.seller.username', "nullif(profiles.username, '')"],
+      ['item.seller.name', "coalesce(nullif(btrim(profiles.display_name), ''), nullif(btrim(profiles.username), ''), 'Creator')"],
+      ['item.post?.title', "nullif(btrim(posts.title), '')"],
+      ['item.post?.body', "nullif(btrim(posts.body), '')"],
+      ['item.post?.sourceTool', "nullif(posts.source_tool, '')"],
+      ["item.resourceKinds.join(' ')", kindWords],
     ];
-    const appFields = /function marketplaceItemMatchesQuery[\s\S]*?const searchableText = \[([\s\S]*?)\]\s*\.filter/.exec(serverSource)?.[1] ?? '';
-    const documentFields = /lower\(concat_ws\(\s*' ',([\s\S]*?)nullif\(concat_ws\(/.exec(projection)?.[1] ?? '';
+    const appFields = /function marketplaceItemMatchesQuery[\s\S]*?const searchableText = \[([\s\S]*?)\]\s*\.filter\(Boolean\)/.exec(serverSource)?.[1] ?? '';
 
-    expect(listItems(appFields)).toEqual([...fields.map(([app]) => app), "item.resourceKinds.join(' ')"]);
-    expect(listItems(documentFields)).toEqual(fields.map(([, column]) => column));
+    expect(appFields.split(',').map((field) => field.trim()).filter(Boolean)).toEqual(fields.map(([app]) => app));
+    expect(documentArguments).toEqual(["' '", ...fields.map(([, expression]) => expression)]);
+    expect(kindWords).toMatch(/^nullif\(concat_ws\(/);
   });
 
-  it('ends with the kinds, in the order the recipe card lists them', () => {
-    const kindOrder = /const POST_RESOURCE_KIND_ORDER: PostResourceKind\[\] = \[([^\]]*)\]/.exec(bundlesSource)?.[1] ?? '';
-    const documentKinds = [...projection.matchAll(/CASE WHEN kinds\.([a-z]+) THEN '([a-z]+)' END/g)];
-
-    expect(documentKinds.map((match) => match[1])).toEqual(documentKinds.map((match) => match[2]));
-    expect(documentKinds.map((match) => match[2])).toEqual(quotedItems(kindOrder));
+  it('reads the title and seller name as the card shows them', () => {
+    // The card's title: normalizeBundleDisplayTitle, as hydrateBundleRows reads it.
+    expect(serverSource).toContain('title: normalizeBundleDisplayTitle(row.title),');
+    expect(serverSource).toMatch(
+      /function normalizeBundleDisplayTitle\(value: string \| null \| undefined\): string \{\s+const title = value\?\.trim\(\);\s+return !title \|\| \/\^attached unlock\$\/i\.test\(title\) \? 'Recipe' : title;\s+\}/,
+    );
+    // The seller's name: getCreatorDisplayName with no email, as toSellerSummary calls it.
+    expect(serverSource).toMatch(
+      /name: getCreatorDisplayName\(\{\s+displayName: profile\?\.display_name \?\? null,\s+username: profile\?\.username \?\? null,\s+\}\)/,
+    );
+    expect(getCreatorDisplayName({ displayName: '  Maya  ', username: 'maya' })).toBe('Maya');
+    expect(getCreatorDisplayName({ displayName: '  ', username: ' maya ' })).toBe('maya');
+    expect(getCreatorDisplayName({ displayName: null, username: null })).toBe('Creator');
+    // The post's title and caption, trimmed. A post with no title is shown under
+    // a fallback the document does not hold (the header says why).
+    expect(serverSource).toContain("title: row.title?.trim() || deriveTitleFromBody(row.body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),");
+    expect(serverSource).toContain("body: row.body?.trim() || '',");
   });
 
-  it('reads no item or card text', () => {
+  it('reads nothing an unlock gives, nor the legacy columns', () => {
     expect(projection).not.toMatch(/textContent|description|resource_sections|->>'title'/);
+    expect(projection).not.toMatch(/prompt_text|notes_markdown|workflow_share_url|workflow_snapshot|attachments/);
+  });
+
+  it('ends with the kinds, in the order the app lists them', () => {
+    expect([...kindWords.matchAll(/THEN '([a-z]+)'/g)].map((match) => match[1])).toEqual(POST_RESOURCE_KIND_ORDER);
   });
 
   it('gives each item type the kind getPostResourceKinds gives it', () => {
-    const itemTypes = /const POST_RESOURCE_ITEM_TYPES: PostResourceItemType\[\] = \[([^\]]*)\]/.exec(bundlesSource)?.[1] ?? '';
-    const knownTypes = quotedItems(/WHERE item->>'type' IN \(([^)]*)\)/.exec(projection)?.[1] ?? '');
-    const files = quotedItems(/END AS workflow,\s*CASE\s*WHEN items\.types IS NOT NULL THEN items\.types && ARRAY\[([^\]]*)\]/.exec(projection)?.[1] ?? '');
-    const notes = quotedItems(/THEN items\.types && ARRAY\[([^\]]*)\]\s*ELSE btrim\(coalesce\(bundles\.notes_markdown/.exec(projection)?.[1] ?? '');
-    const remix = quotedItems(/coalesce\(items\.types && ARRAY\[([^\]]*)\], false\)/.exec(projection)?.[1] ?? '');
+    const knownTypes = quotedItems(/WHERE btrim\(item->>'type'\) IN \(([^)]*)\)/.exec(projection)?.[1] ?? '');
+    const files = quotedItems(/THEN 'workflow' END, CASE WHEN items\.types && ARRAY\[([^\]]*)\] THEN 'files' END/.exec(kindWords)?.[1] ?? '');
+    const notes = quotedItems(/CASE WHEN items\.types && ARRAY\[([^\]]*)\] THEN 'notes' END/.exec(kindWords)?.[1] ?? '');
+    const remix = quotedItems(/OR items\.types && ARRAY\[([^\]]*)\]/.exec(kindWords)?.[1] ?? '');
 
-    expect([...knownTypes].sort()).toEqual(quotedItems(itemTypes).sort());
-    expect(projection).toContain("'prompt' = ANY (items.types)");
-    expect(projection).toContain("'workflow' = ANY (items.types)");
+    expect([...knownTypes].sort()).toEqual([...POST_RESOURCE_ITEM_TYPES].sort());
+    expect(kindWords).toContain("CASE WHEN 'prompt' = ANY (items.types) THEN 'prompt' END");
+    expect(kindWords).toContain("CASE WHEN 'workflow' = ANY (items.types) THEN 'workflow' END");
     for (const type of knownTypes) {
       const documentKind = type === 'prompt' || type === 'workflow'
         ? type
@@ -92,33 +163,64 @@ describe('marketplace search indexes public text migration', () => {
     }
   });
 
-  it('holds Remix as resolveRecipeAllowRemix does', () => {
-    expect(projection).toMatch(
-      /bundles\.allow_remix IS TRUE\s+OR coalesce\(items\.types && ARRAY\['remix_access', 'remix_link'\], false\)\s+OR \(bundles\.status = 'published' AND posts\.generation_id IS NOT NULL\) AS remix/,
+  it('holds Remix as hydrateBundleRows resolves it', () => {
+    expect(kindWords).toContain(
+      "CASE WHEN bundles.allow_remix IS TRUE OR items.types && ARRAY['remix_access', 'remix_link'] OR (bundles.status = 'published' AND posts.generation_id IS NOT NULL) THEN 'remix' END",
     );
+    // What that rule says, against the function the app calls, called as
+    // hydrateBundleRows calls it (no templateResult).
+    expect(serverSource).toMatch(
+      /resolveRecipeAllowRemix\(\{\s+storedAllowRemix: row\.allow_remix,\s+status: row\.status,\s+generationId: post\?\.generationId \?\? null,\s+\}\)/,
+    );
+    for (const storedAllowRemix of [true, false, null]) {
+      for (const status of ['published', 'draft']) {
+        for (const generationId of ['generation-1', null]) {
+          const documentRule = storedAllowRemix === true || (status === 'published' && generationId !== null);
+          expect([storedAllowRemix, status, generationId, resolveRecipeAllowRemix({ storedAllowRemix, status, generationId })])
+            .toEqual([storedAllowRemix, status, generationId, documentRule]);
+        }
+      }
+    }
+    // And the kind it adds to a recipe's items.
+    expect(getPostResourceKinds({ items: [{ type: 'prompt' }], allowRemix: true } as never)).toEqual(['prompt', 'remix']);
   });
 
   it('refreshes a document whenever a column it reads changes', () => {
-    const bundleTrigger = triggerStatement('post_resource_bundles_refresh_marketplace_search_update');
-    const postTrigger = triggerStatement('posts_refresh_marketplace_search');
+    const recipeTrigger = latestTrigger('post_resource_bundles_refresh_marketplace_search_update');
+    const postTrigger = latestTrigger('posts_refresh_marketplace_search');
+    const profileTrigger = latestTrigger('profiles_refresh_marketplace_search');
 
-    expect(bundleTrigger).toMatch(/AFTER UPDATE ON public\.post_resource_bundles\s+FOR EACH ROW/);
-    expect(bundleTrigger).toContain('EXECUTE FUNCTION public.trg_refresh_marketplace_search_for_bundle();');
-    expect(columnsFollowed(bundleTrigger)).toEqual(columnsRead('bundles'));
+    expect(recipeTrigger).toMatch(/AFTER UPDATE ON public\.post_resource_bundles\s+FOR EACH ROW/);
+    expect(recipeTrigger).toContain('EXECUTE FUNCTION public.trg_refresh_marketplace_search_for_bundle();');
+    expect(columnsFollowed(recipeTrigger)).toEqual(columnsRead('bundles'));
     expect(postTrigger).toMatch(/AFTER UPDATE ON public\.posts\s+FOR EACH ROW/);
     expect(postTrigger).toContain('EXECUTE FUNCTION public.trg_refresh_marketplace_search_for_post();');
     expect(columnsFollowed(postTrigger)).toEqual(columnsRead('posts'));
-    expect(columnsFollowed(profilesTrigger)).toEqual(columnsRead('profiles'));
+    expect(columnsFollowed(profileTrigger)).toEqual(columnsRead('profiles'));
   });
 
-  it('runs as its owner and lets only the service role call it', () => {
+  it('keeps the listing as it was but for a literal search pattern', () => {
+    const previous = functionDefinition(readMigration('20261017145444_free_unlocks_are_not_sales.sql'), 'list_marketplace_resource_bundles');
+    const current = functionDefinition(sql, 'list_marketplace_resource_bundles');
+    const comparable = (definition: string) => definition.replace(/^CREATE (?:OR REPLACE )?FUNCTION/, 'CREATE FUNCTION');
+
+    // A replacer function: `$4` in a replacement string is a pattern.
+    expect(comparable(current)).toBe(comparable(previous).replace(
+      "ILIKE (''%%'' || lower(btrim($4)) || ''%%'')",
+      () => "ILIKE (''%%'' || replace(replace(replace(lower(btrim($4)), ''\\'', ''\\\\''), ''%'', ''\\%''), ''_'', ''\\_'') || ''%%'')",
+    ));
+    expect(current).not.toBe(previous.replace(/^CREATE FUNCTION/, 'CREATE OR REPLACE FUNCTION'));
+  });
+
+  it('runs both functions as their owner and lets only the service role call them', () => {
     expect(projection).toMatch(/RETURNS void\s+LANGUAGE sql\s+SECURITY DEFINER\s+SET search_path = ''/);
-    expect(statements).toContain(
-      'REVOKE ALL ON FUNCTION public.refresh_marketplace_bundle_search_documents(uuid[])\n  FROM PUBLIC, anon, authenticated;',
-    );
-    expect(statements).toContain(
-      'GRANT EXECUTE ON FUNCTION public.refresh_marketplace_bundle_search_documents(uuid[])\n  TO service_role;',
-    );
+    for (const signature of [
+      'public.refresh_marketplace_bundle_search_documents(uuid[])',
+      'public.list_marketplace_resource_bundles(text, text, text, text, text, integer, integer)',
+    ]) {
+      expect(statements).toContain(`REVOKE ALL ON FUNCTION ${signature}\n  FROM PUBLIC, anon, authenticated;`);
+      expect(statements).toContain(`GRANT EXECUTE ON FUNCTION ${signature}\n  TO service_role;`);
+    }
   });
 
   it('runs as one transaction that gives up on a busy table, and re-projects every document last', () => {
@@ -130,7 +232,7 @@ describe('marketplace search indexes public text migration', () => {
       /LOCK TABLE public\.posts IN SHARE ROW EXCLUSIVE MODE;\s+LOCK TABLE public\.post_resource_bundles IN SHARE ROW EXCLUSIVE MODE;\s+CREATE OR REPLACE FUNCTION/,
     );
     // DROP TRIGGER takes ACCESS EXCLUSIVE, which would stop every read of posts.
-    expect(statements).not.toMatch(/DROP TRIGGER/i);
+    expect(statements).not.toMatch(/DROP (?:TRIGGER|FUNCTION)/i);
     expect(statements.trim()).toMatch(/SELECT public\.refresh_marketplace_bundle_search_documents\(NULL\);\s+COMMIT;$/);
   });
 });
