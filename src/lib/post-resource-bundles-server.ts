@@ -777,6 +777,11 @@ function normalizeMarketplaceSearchQuery(value: string | null | undefined): stri
     : '';
 }
 
+// What a visitor who has not unlocked the recipe sees. The database's search
+// document holds these same fields in this order
+// (refresh_marketplace_bundle_search_documents, 20261031100330), so a row the
+// RPC matches is one this check keeps; the migration's test holds the two
+// lists together.
 function marketplaceItemMatchesQuery(item: MarketplaceResourceListItem, normalizedQuery: string): boolean {
   const searchableText = [
     item.title,
