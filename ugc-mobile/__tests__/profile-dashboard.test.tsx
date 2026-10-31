@@ -2059,8 +2059,10 @@ describe('ProfileDashboard media tiles routing', () => {
   });
 
   // A failed run is not a library member, so it left the Rendering strip for
-  // nowhere and could be found again only through its alert (audit 01-9).
-  describe('the Failed strip', () => {
+  // nowhere and could be found again only through its alert (audit 01-9). The
+  // failures have a chip of their own beside Active: as a strip above the grid
+  // they stood in front of every creation.
+  describe('the Failed scope', () => {
     const runs = () => [
       { id: 'ready-image', status: 'succeeded', output_url: 'ready.jpg', preview_url: 'ready.webp', category: 'image', title: 'Ready image', created_at: '2026-10-13T09:00:00Z' },
       { id: 'failed-video', status: 'failed', output_url: null, category: 'video', title: null, prompt: 'A slow push-in', created_at: '2026-10-13T08:00:00Z' },
@@ -2080,30 +2082,57 @@ describe('ProfileDashboard media tiles routing', () => {
       && typeof node.props.accessibilityLabel === 'string'
       && node.props.accessibilityLabel.includes(', failed, ')
     ));
+    const scopeChips = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityRole === 'radio'
+    )).map((node) => node.props.accessibilityLabel);
+    const stripHeadings = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
+      String(node.type) === 'text'
+      && node.props.accessibilityRole === 'header'
+      && typeof node.props.children === 'string'
+      && /^(Rendering|Failed) \(/.test(node.props.children)
+    )).map((node) => node.props.children);
+    const readyRuns = (count: number) => Array.from({ length: count }, (_, index) => ({
+      id: `ready-${index}`, status: 'succeeded', output_url: `ready-${index}.jpg`, preview_url: `ready-${index}.webp`, category: 'image', title: `Ready ${index}`, created_at: '2026-10-13T09:00:00Z',
+    }));
+    const failedRuns = (count: number) => Array.from({ length: count }, (_, index) => ({
+      id: `failed-${index}`, status: 'failed', output_url: null, category: 'image', title: `Failure ${index}`, created_at: '2026-10-13T08:00:00Z',
+    }));
 
     beforeEach(() => {
       queryState.generations = runs();
     });
 
-    it('lists every failed run that is not archived under the Rendering strip, with its title', () => {
+    it('keeps failed runs off the Active grid, under a Failed chip between Active and Archived', () => {
       const tree = renderDashboard();
 
-      expect(tree.root.findAllByProps({ children: 'Failed (2)' }).length).toBeGreaterThan(0);
+      expect(scopeChips(tree)).toEqual(['Active (1)', 'Failed (2)', 'Archived (0)']);
+      expect(failedTiles(tree)).toHaveLength(0);
+      expect(tree.root.findByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toBeTruthy();
+      // The Rendering strip stays with the Active grid, and no Failed strip joins it.
+      expect(stripHeadings(tree)).toEqual(['Rendering (1)']);
+    });
+
+    it('lists every failed run that is not archived in place of the grid, with its title', () => {
+      const tree = renderDashboard();
+
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+
       expect(failedTiles(tree).map((node) => node.props.accessibilityLabel)).toEqual([
         'Video, failed, A slow push-in',
         'Image, failed, Poster try',
       ]);
-      // The grid's rule is unchanged: none of them is a grid tile.
+      // The grid's rule is unchanged: none of them is a grid tile, and the
+      // finished creation stays under Active. The chosen chip names the runs, so
+      // no heading repeats it, and the empty card stays away.
       expect(tree.root.findAllByProps({ accessibilityLabel: 'Creation, Poster try, Not posted' })).toHaveLength(0);
-      expect(tree.root.findByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toBeTruthy();
-      // The strips keep their order: Rendering, then Failed.
-      const headers = tree.root.findAll((node) => typeof node.props.children === 'string'
-        && /^(Rendering|Failed) \(/.test(node.props.children) && String(node.type) === 'text');
-      expect(headers.map((node) => node.props.children)).toEqual(['Rendering (1)', 'Failed (2)']);
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toHaveLength(0);
+      expect(stripHeadings(tree)).toEqual([]);
+      expect(tree.root.findAllByProps({ children: 'No failed creations' })).toHaveLength(0);
     });
 
     it("opens a failed run's status page, where its alert lands: Try again, Archive and Delete are there", () => {
       const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
 
       renderer.act(() => { failedTiles(tree)[0].props.onPress(); });
 
@@ -2113,15 +2142,57 @@ describe('ProfileDashboard media tiles routing', () => {
       });
     });
 
-    it('is absent from the Archived scope, from the other tabs, and when nothing failed', () => {
+    it('offers no Failed chip when nothing failed, for an archived failure, or over Posts', () => {
+      queryState.generations = runs().filter((run) => run.status !== 'failed' || run.archived_at);
       const tree = renderDashboard();
+      expect(scopeChips(tree)).toEqual(['Active (1)', 'Archived (0)']);
       renderer.act(() => { findPressableByText(tree.root, 'Archived (0)').props.onPress(); });
       expect(failedTiles(tree)).toHaveLength(0);
 
-      expect(failedTiles(renderDashboard('Posts'))).toHaveLength(0);
+      queryState.generations = runs();
+      const posts = renderDashboard('Posts');
+      expect(scopeChips(posts).filter((label) => label.startsWith('Failed'))).toEqual([]);
+      expect(failedTiles(posts)).toHaveLength(0);
+    });
 
+    it('stays on Failed, empty, once its last run is cleared, and its chip goes when another is chosen', () => {
+      const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+
+      // Tried again, archived or deleted from the status page, and read back.
       queryState.generations = runs().filter((run) => run.status !== 'failed');
-      expect(failedTiles(renderDashboard())).toHaveLength(0);
+      renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+
+      expect(scopeChips(tree)).toEqual(['Active (1)', 'Failed (0)', 'Archived (0)']);
+      expect(failedTiles(tree)).toHaveLength(0);
+      expect(tree.root.findAllByProps({ children: 'No failed creations' }).length).toBeGreaterThan(0);
+
+      renderer.act(() => { findPressableByText(tree.root, 'Active (1)').props.onPress(); });
+      expect(scopeChips(tree)).toEqual(['Active (1)', 'Archived (0)']);
+      expect(tree.root.findByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toBeTruthy();
+    });
+
+    it('reads further pages while its failed runs are too few to fill the screen, as the grid does for tiles', () => {
+      queryState.generationsHasNextPage = true;
+      queryState.generations = [...readyRuns(12), ...failedRuns(2)];
+      const tree = renderDashboard();
+      // Twelve tiles fill the Active grid, so nothing more is read for it.
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+
+      expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads no further pages for failed runs that already fill the screen', () => {
+      queryState.generationsHasNextPage = true;
+      queryState.generations = [...readyRuns(12), ...failedRuns(12)];
+      const tree = renderDashboard();
+
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (12)').props.onPress(); });
+
+      expect(failedTiles(tree)).toHaveLength(12);
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
     });
   });
 });

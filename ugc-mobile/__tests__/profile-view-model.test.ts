@@ -7,6 +7,8 @@ import {
   OWN_PROFILE_SHARE_SOURCE,
   generationToProfileMediaCard,
   getOwnerPostScopeCounts,
+  getProfileMediaEmptyTitle,
+  getProfileScopeOptions,
   getProfileStats,
   getWalletCardContent,
   UNKNOWN_PROFILE_STAT_VALUE,
@@ -519,6 +521,42 @@ describe('the Posts scope counts', () => {
   it('counts the loaded tiles without totals', () => {
     expect(getOwnerPostScopeCounts(null, { active: 2, archived: 1 })).toEqual({ active: 2, archived: 1 });
     expect(getOwnerPostScopeCounts(undefined, { active: 0, archived: 0 })).toEqual({ active: 0, archived: 0 });
+  });
+});
+
+describe('the scope chips', () => {
+  it('puts Failed between Active and Archived while a run failed', () => {
+    expect(getProfileScopeOptions('active', { active: 27, failed: 7, archived: 2 })).toEqual([
+      { value: 'active', label: 'Active (27)' },
+      { value: 'failed', label: 'Failed (7)' },
+      { value: 'archived', label: 'Archived (2)' },
+    ]);
+  });
+
+  it('leaves Failed out when nothing failed, and over Posts, which count no failures', () => {
+    expect(getProfileScopeOptions('active', { active: 3, failed: 0, archived: 1 }).map((option) => option.value))
+      .toEqual(['active', 'archived']);
+    expect(getProfileScopeOptions('archived', { active: 3, archived: 1 }).map((option) => option.value))
+      .toEqual(['active', 'archived']);
+  });
+
+  it('keeps Failed while it is the one chosen, after its last run is cleared', () => {
+    expect(getProfileScopeOptions('failed', { active: 3, failed: 0, archived: 1 })).toEqual([
+      { value: 'active', label: 'Active (3)' },
+      { value: 'failed', label: 'Failed (0)' },
+      { value: 'archived', label: 'Archived (1)' },
+    ]);
+  });
+
+  it('names the chips without a count when none is known', () => {
+    expect(getProfileScopeOptions('active').map((option) => option.label)).toEqual(['Active', 'Archived']);
+  });
+
+  it('names the empty Failed scope apart from the empty library', () => {
+    expect(getProfileMediaEmptyTitle('Creations', 'failed')).toBe('No failed creations');
+    expect(getProfileMediaEmptyTitle('Creations', 'archived')).toBe('No archived creations');
+    expect(getProfileMediaEmptyTitle('Creations')).toBe('No creations yet');
+    expect(getProfileMediaEmptyTitle('Posts', 'archived')).toBe('No archived posts');
   });
 });
 

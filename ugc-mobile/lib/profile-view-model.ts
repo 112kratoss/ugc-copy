@@ -238,6 +238,32 @@ export function getProfileStats({
 }
 
 export type ProfilePostsScope = 'active' | 'archived';
+/** Creations have a third scope: the runs that failed. */
+export type ProfileCreationsScope = ProfilePostsScope | 'failed';
+export type ProfileScopeCounts = Record<ProfilePostsScope, number> & { failed?: number };
+
+/**
+ * The scope chips over a library, in order. Failed runs have a chip of their
+ * own beside Active: as a strip above the Active grid, an account with a run of
+ * failures saw rows of them before its first creation. The chip shows while a
+ * run on the loaded pages failed, and stays while it is the one chosen, so
+ * clearing the last failure from it leaves its empty state in place rather than
+ * moving the page under the reader.
+ */
+export function getProfileScopeOptions(
+  value: ProfileCreationsScope,
+  counts?: ProfileScopeCounts,
+): Array<{ value: ProfileCreationsScope; label: string }> {
+  const named = (name: string, count: number | undefined) => (count === undefined ? name : `${name} (${count})`);
+  const options: Array<{ value: ProfileCreationsScope; label: string }> = [
+    { value: 'active', label: named('Active', counts?.active) },
+  ];
+  if ((counts?.failed ?? 0) > 0 || value === 'failed') {
+    options.push({ value: 'failed', label: named('Failed', counts?.failed) });
+  }
+  options.push({ value: 'archived', label: named('Archived', counts?.archived) });
+  return options;
+}
 
 /**
  * The Active and Archived counts on the Posts scope control. The server's
@@ -308,10 +334,13 @@ export function ownProfileShareUrl(siteUrl: string, username: string) {
   return `${siteUrl.replace(/\/$/, '')}/creators/${encodeURIComponent(username)}?s=${OWN_PROFILE_SHARE_SOURCE}`;
 }
 
-export function getProfileMediaEmptyTitle(tab: ProfileMediaTab, postsScope: ProfilePostsScope = 'active') {
+export function getProfileMediaEmptyTitle(tab: ProfileMediaTab, scope: ProfileCreationsScope = 'active') {
   if (tab === 'Saved') return 'No saved media yet';
-  if (tab === 'Creations') return postsScope === 'archived' ? 'No archived creations' : 'No creations yet';
-  return postsScope === 'archived' ? 'No archived posts' : 'No posts yet';
+  if (tab === 'Creations') {
+    if (scope === 'archived') return 'No archived creations';
+    return scope === 'failed' ? 'No failed creations' : 'No creations yet';
+  }
+  return scope === 'archived' ? 'No archived posts' : 'No posts yet';
 }
 
 export function getProfileMediaSwipeTarget(currentTab: ProfileMediaTab, direction: ProfileMediaSwipeDirection) {
