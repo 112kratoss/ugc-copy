@@ -58,7 +58,7 @@ test('a 2 s .mov video element holds Kling 3.0 before Generate', async ({ page }
 
   // Unread, the card said "MP4 or MOV, 50MB max" and nothing held the run.
   await expect(page.getByRole('button', { name: 'Preview Video element 1', exact: true })).toBeVisible();
-  await expect(page.getByText('2.0s clip', { exact: true })).toBeVisible();
+  await expect(page.getByText('2.0s clip, under the 3s minimum', { exact: true })).toBeVisible();
   await expect(page.getByText(
     'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Video element 1 runs 2 seconds.',
     { exact: true },
