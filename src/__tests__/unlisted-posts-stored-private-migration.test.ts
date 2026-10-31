@@ -55,6 +55,7 @@ describe('store unlisted posts as private', () => {
     // trigger compares the visibility it is given with the stored one, so it
     // has to be given the private the row will hold, not the unlisted asked for.
     const otherBeforeTriggers = [
+      'b_posts_keep_prompt_out_of_paid_recipe',
       'posts_advance_nsfw_revision',
       'posts_delete_feed_events_before_delete',
       'posts_freeze_for_account_deletion',
