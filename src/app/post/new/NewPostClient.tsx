@@ -61,8 +61,10 @@ import {
   POST_VIDEO_MAX_UPLOAD_BYTES,
   POST_VIDEO_UPLOAD_BYTES_MESSAGE,
 } from '@/lib/post-video-limits';
-import { getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
+import { buildShowcaseDetailPath, getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
 import { sharePublicGeneration } from '@/lib/share-client';
+import { forgetCreationsWorkspaceCache } from '@/lib/creations-workspace-cache';
+import { pushToast } from '@/components/feedback-state';
 import { trackProductEvent } from '@/lib/product-analytics';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
 import {
@@ -1065,6 +1067,16 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     question: LEAVE_WITH_UNSAVED_CHANGES,
     historyKey: 'postComposerLeaveGuard',
   });
+  // Whether the page is still the composer. Back and its own Back link stay
+  // live while a post is sent, and a publish answered after the person left
+  // must neither share nor take them anywhere.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
   const askToConfirm = useConfirmation();
   const trimmedBody = body.trim();
   const bodyCount = body.length;
@@ -1377,6 +1389,13 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         setPrefilledGeneration(nextGeneration);
         setProofMode('media');
         setCategory(nextGeneration.category);
+        // A template result shares its media only (the server refuses a recipe
+        // on one), and its cards give way to a note once it is known: a recipe
+        // picked while it was loading, when the cards were still up, goes too.
+        const isTemplateResult = nextGeneration.origin === 'template';
+        if (isTemplateResult && !isEditMode) {
+          setResourceAccessMode('none');
+        }
         // maxLength caps typing, not a programmatic prefill, so trim here too —
         // otherwise a long generation title submits over-limit and the server
         // rejects a post the composer never flagged. A new post of a creation
@@ -1392,7 +1411,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
               creationMode: nextGeneration.creationMode,
             },
             // A paid recipe keeps the prompt out of the title; a free one does not (owner, 2026-10-29).
-            recipeKeepsPromptPrivate(resourceAccessModeRef.current),
+            recipeKeepsPromptPrivate(isTemplateResult ? 'none' : resourceAccessModeRef.current),
           )?.title ?? '';
         setTitle((current) => current || prefillTitle);
         setSavedSnapshot((saved) => ({
@@ -1425,8 +1444,15 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // load above (a changing identity would refetch the generation forever).
   useEffect(() => {
     if (!linkedPostRedirectId) return;
-    router.replace(`/post/${encodeURIComponent(linkedPostRedirectId)}/edit`);
-  }, [linkedPostRedirectId, router]);
+    // The way back the composer was opened with goes along, so the editor's
+    // Back still names the run or the Studio view it came from.
+    const returnParams = new URLSearchParams();
+    if (entrySurface) returnParams.set('from', entrySurface);
+    const requestedReturnTo = searchParams.get('returnTo');
+    if (requestedReturnTo) returnParams.set('returnTo', requestedReturnTo);
+    const query = returnParams.toString();
+    router.replace(`/post/${encodeURIComponent(linkedPostRedirectId)}/edit${query ? `?${query}` : ''}`);
+  }, [entrySurface, linkedPostRedirectId, router, searchParams]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2331,7 +2357,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     savedPanelRef.current?.focus({ preventScroll: true });
   }, [createdPost, isEditMode]);
 
-  const completePublish = (nextPost: CreatedPostState, options: { redirect?: 'push' | 'replace' } = {}) => {
+  const completePublish = (nextPost: CreatedPostState) => {
     setCreatedPost(nextPost);
     setStoredRecipe({
       accessMode: nextPost.resourceAccessMode,
@@ -2346,15 +2372,45 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       recipe_access: nextPost.resourceAccessMode,
       entry_surface: entrySurface ?? 'direct',
     });
+    // Studio's copy of its creations and posts is stale now: it reads them afresh.
+    forgetCreationsWorkspaceCache(session?.user?.id);
+  };
 
-    const redirect = options.redirect;
-    if (redirect) {
-      const nextPath = nextPost.showcasePath ?? nextPost.ownerPath;
-      if (nextPath) {
-        // Through the guard, so no guard entry is left under the post for Back
-        // to land on.
-        leaveComposer(() => (redirect === 'replace' ? router.replace(nextPath) : router.push(nextPath)));
+  // A new post takes the composer's place in history, as the app's composer
+  // leaves its stack: Back from the post returns to where the composer was
+  // opened from, and the post's own way back names that place. Someone who left
+  // the composer while the post was being sent is not taken anywhere.
+  const leaveForPublishedPost = (nextPost: CreatedPostState) => {
+    if (!isMountedRef.current) return;
+    const ownerReturn = new URLSearchParams({ returnTo: backHref });
+    if (entrySurface) ownerReturn.set('from', entrySurface);
+    const nextPath = nextPost.showcasePath
+      ? buildShowcaseDetailPath(nextPost.postId, { returnTo: backHref })
+      : `${nextPost.ownerPath}?${ownerReturn.toString()}`;
+    // Through the guard, so no guard entry is left under the post for Back
+    // to land on.
+    leaveComposer(() => router.replace(nextPath));
+  };
+
+  // A template run's "Publish & share", as the app's: the post's own address,
+  // once it is public. A share that is dismissed or cannot run never reads as a
+  // failed publish; a copied link, or a share that could not open, says so.
+  const sharePublishedPost = async (nextPost: CreatedPostState) => {
+    try {
+      const channel = await sharePublicGeneration({
+        // A post's id opens its page and counts its share, as a creation's does.
+        generationId: nextPost.postId,
+        title: title.trim(),
+        sourceSurface: 'my-creations',
+        accessToken: session?.access_token ?? null,
+        viewerIsOwner: true,
+      });
+      if (channel === 'copy-link') {
+        pushToast({ tone: 'success', message: 'Post link copied.' });
       }
+    } catch (shareError) {
+      console.error('Published the post, but sharing was unavailable:', shareError);
+      pushToast({ tone: 'info', message: 'Your post is published. Share it from its page.' });
     }
   };
 
@@ -2583,26 +2639,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           throw getSubmissionError(data, 'Failed to publish post.');
         }
 
-        // The post exists from here on: a dismissed or failed share must never
-        // read as a failed publish, and the page leaves for the post either way.
-        if (sharesAfterPublish && data.visibility === 'public') {
-          try {
-            await sharePublicGeneration({
-              generationId,
-              title: title.trim(),
-              sourceSurface: 'my-creations',
-              accessToken: session.access_token,
-              viewerIsOwner: true,
-            });
-          } catch (shareError) {
-            console.error('Published the creation, but sharing was unavailable:', shareError);
-          }
-        }
-
-        // The post takes the composer's place in history, as the app's composer
-        // leaves its stack: Back returns to Studio or the run, not to a composer
-        // that would only send it on to the post's editor.
-        completePublish({
+        const published: CreatedPostState = {
           postId: data.postId as string,
           showcasePath: (data.showcasePath as string | null) ?? null,
           ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
@@ -2612,7 +2649,14 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
             ? data.resourceBundleStatus
             : null,
-        }, { redirect: 'replace' });
+        };
+        // Recorded before the share, which can stay open as long as it likes:
+        // the post exists from here on.
+        completePublish(published);
+        if (sharesAfterPublish && published.visibility === 'public' && isMountedRef.current) {
+          await sharePublishedPost(published);
+        }
+        leaveForPublishedPost(published);
 
         return;
       }
@@ -2743,7 +2787,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         throw getSubmissionError(data, 'Failed to publish post.');
       }
 
-      completePublish({
+      const published: CreatedPostState = {
         postId: data.postId as string,
         showcasePath: (data.showcasePath as string | null) ?? null,
         ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
@@ -2753,7 +2797,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
           ? data.resourceBundleStatus
           : null,
-      }, { redirect: 'push' });
+      };
+      completePublish(published);
+      leaveForPublishedPost(published);
     } catch (submitError) {
       const section = submitError instanceof ComposerSubmissionError ? submitError.section : 'publish';
       trackProductEvent(isEditMode ? 'post_update_failed' : 'post_publish_failed', {

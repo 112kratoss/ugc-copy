@@ -21,6 +21,7 @@ import {
 import { useAuth } from '@/components/AuthProvider';
 import { requestConfirmation } from '@/components/feedback-state';
 import TemplateRunMedia from './TemplateRunMedia';
+import { buildCreationComposerPath } from '@/lib/creation-workspace';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { isSignedMediaUrlExpiring, preserveStableTemplateRunMedia } from '@/lib/template-run-stable-media';
 import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
@@ -149,13 +150,11 @@ function toPostedResult(post: TemplateRunLinkedPost): PostedResult {
  * this run, and "Publish & share" has it share the post once the post is public.
  */
 function buildResultComposerPath(generationId: string, runId: string, shareAfterPublish = false): string {
-  const params = new URLSearchParams({
-    generationId,
+  return buildCreationComposerPath(generationId, {
     from: 'template-run',
     returnTo: `/template-runs/${encodeURIComponent(runId)}`,
+    shareAfterPublish,
   });
-  if (shareAfterPublish) params.set('shareAfterPublish', '1');
-  return `/post/new?${params.toString()}`;
 }
 
 function readFileExtension(url: string): string | null {

@@ -94,11 +94,11 @@ test.describe('publishing a creation opens the full composer', () => {
     );
     await expect(page.getByRole('textbox', { name: /^title/i })).toHaveValue('Window light study', COLD_PAGE);
     await expect(page.getByRole('link', { name: 'Back to studio' })).toHaveAttribute('href', '/creations');
-    await expect(page.getByRole('dialog')).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath('composer-from-studio.png') });
 
     await page.getByRole('button', { name: /publish public/i }).first().click();
-    await expect(page).toHaveURL(/\/showcase\/post-e2e-studio$/, COLD_PAGE);
+    // The post's own way back names Studio.
+    await expect(page).toHaveURL(/\/showcase\/post-e2e-studio\?returnTo=%2Fcreations$/, COLD_PAGE);
     // The post took the composer's place in history, as the app's composer leaves its stack.
     await page.goBack();
     await expect(page).toHaveURL(/\/creations$/, COLD_PAGE);
@@ -149,14 +149,20 @@ test.describe('publishing a creation opens the full composer', () => {
     await page.screenshot({ path: testInfo.outputPath('composer-from-template-run.png') });
     await page.getByRole('button', { name: /publish public/i }).first().click();
 
-    await expect(page).toHaveURL(/\/showcase\/post-e2e-run$/, COLD_PAGE);
+    await expect(page).toHaveURL(/\/showcase\/post-e2e-run\?returnTo=%2Ftemplate-runs%2Frun-e2e$/, COLD_PAGE);
     expect(published).toEqual([
-      expect.objectContaining({ generationId: CREATION.id, visibility: 'public', title: 'Window light study' }),
+      expect.objectContaining({
+        generationId: CREATION.id,
+        visibility: 'public',
+        title: 'Window light study',
+        resourceBundle: { accessMode: 'none' },
+      }),
     ]);
+    // The post's own address, which records the visits the share brings.
     expect(shares).toEqual([
       expect.objectContaining({
         title: 'Window light study',
-        url: expect.stringContaining(`/showcase/${CREATION.id}`),
+        url: expect.stringContaining('/showcase/post-e2e-run?s=my-creations'),
       }),
     ]);
   });

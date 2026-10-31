@@ -611,7 +611,6 @@ function CreatorPosted({
         <PublicShareButton
           generationId={generationId}
           title={published.title}
-          description={published.description || null}
           sourceSurface={sourceSurface}
           accessToken={accessToken}
           viewerIsOwner
@@ -803,7 +802,7 @@ export function CreatorPublishPanel({
   /** The one handler: the form's Publish and the bar's. Refused, the form shows why. */
   const submit = async (fromBar: boolean) => {
     if (waiting) return;
-    const ok = await draft.publish('public');
+    const ok = await draft.publish();
     if (!ok && formRef.current) {
       formRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
       if (fromBar) setRefusedBarPresses((count) => count + 1);

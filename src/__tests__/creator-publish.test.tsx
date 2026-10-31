@@ -599,7 +599,7 @@ describe('CreatorPublishPanel: Posted', () => {
   it('leads a private post to the owner’s page of it', () => {
     installFetch();
     renderPanel({
-      published: { title: 'Harbour at dusk', description: '', visibility: 'private', postId: 'post-new', showcasePath: null, ownerPath: '/post/post-new/edit', resourceBundleStatus: null },
+      published: { title: 'Harbour at dusk', visibility: 'private', postId: 'post-new', showcasePath: null, ownerPath: '/post/post-new/edit', resourceBundleStatus: null },
     });
     expect(screen.getByRole('heading', { name: 'Saved as a private post' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'View your post' })).toHaveAttribute('href', '/post/post-new/edit');
@@ -609,7 +609,7 @@ describe('CreatorPublishPanel: Posted', () => {
     installFetch();
     renderPanel({
       remix: FREE_REMIX,
-      published: { title: 'Harbour at dusk', description: '', visibility: 'public', postId: 'post-new', showcasePath: '/showcase/gen-1', resourceBundleStatus: 'published' },
+      published: { title: 'Harbour at dusk', visibility: 'public', postId: 'post-new', showcasePath: '/showcase/gen-1', resourceBundleStatus: 'published' },
       next: <span>6 credits left</span>,
     });
     expect(screen.queryByRole('form', { name: 'Post it to the feed' })).toBeNull();

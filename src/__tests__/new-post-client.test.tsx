@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import NewPostClient from '@/app/post/new/NewPostClient';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import FeedbackViewport from '@/components/FeedbackViewport';
+import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 
 // One router object for every render: the composer's effects list the router
@@ -4158,31 +4159,37 @@ describe('NewPostClient', () => {
   // A template run's Publish to Explore and Publish & share open the composer
   // for the result, as the app's do (owner, 2026-10-31).
   describe('a template run’s result', () => {
-    const answerCreation = () => enqueueResponse({
+    const RUN_RESULT = {
+      id: 'gen-run-result',
+      output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+      category: 'image',
+      model: 'nano-banana-2',
+      title: 'Rider transformation',
+      prompt: 'A rider in neon rain.',
+      origin: 'template',
+      paywallPrefill: null,
+    };
+    const PUBLISHED = {
+      success: true,
+      postId: 'post-run-result',
+      showcasePath: '/showcase/post-run-result',
+      ownerPath: '/post/post-run-result/edit',
+      resourceBundlePath: null,
+      visibility: 'public',
+      resourceBundleStatus: null,
+    };
+    // The post in the composer's place, its own way back naming the run.
+    const POST_FROM_RUN = '/showcase/post-run-result?returnTo=%2Ftemplate-runs%2Frun-1';
+    const answerCreation = (creation: Record<string, unknown> = RUN_RESULT) => enqueueResponse({
       ok: true,
-      json: async () => ({
-        generations: [{
-          id: 'gen-run-result',
-          output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
-          category: 'image',
-          model: 'nano-banana-2',
-          title: 'Rider transformation',
-          prompt: 'A rider in neon rain.',
-          origin: 'template',
-          paywallPrefill: null,
-        }],
-      }),
+      json: async () => ({ generations: [creation] }),
     });
     const answerPublish = (visibility: 'public' | 'private') => enqueueResponse({
       ok: true,
       json: async () => ({
-        success: true,
-        postId: 'post-run-result',
-        showcasePath: visibility === 'public' ? '/showcase/post-run-result' : null,
-        ownerPath: '/post/post-run-result/edit',
-        resourceBundlePath: null,
+        ...PUBLISHED,
         visibility,
-        resourceBundleStatus: null,
+        showcasePath: visibility === 'public' ? PUBLISHED.showcasePath : null,
       }),
     });
     const openFromRun = (extra: Record<string, string> = {}) => {
@@ -4192,78 +4199,192 @@ describe('NewPostClient', () => {
         returnTo: '/template-runs/run-1',
         ...extra,
       });
-      answerCreation();
-      render(<NewPostClient />);
     };
+    const waitForCreation = () => waitFor(() => (
+      expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation')
+    ));
+    const publishBody = () => {
+      const call = fetchMock.mock.calls.find(([url]) => String(url) === '/api/showcase/publish');
+      return call ? JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown> : null;
+    };
+    const toastMessages = () => readFeedbackSnapshot().toasts.map((toast) => toast.message);
+
+    beforeEach(() => {
+      resetFeedbackState();
+      window.sessionStorage.clear();
+    });
 
     it('goes back to the run it was opened from', async () => {
       openFromRun();
+      answerCreation();
+      render(<NewPostClient />);
 
       expect(screen.getByRole('link', { name: 'Back to template run' })).toHaveAttribute('href', '/template-runs/run-1');
-      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      await waitForCreation();
     });
 
-    it('shares the post once it is public, and leaves for it only after the share', async () => {
+    // Its recipe cards are up until the creation says it is a template result,
+    // whose recipe the server refuses.
+    it('sends the post with no recipe, whatever was picked while the result loaded', async () => {
+      let finishCreation: (value: unknown) => void = () => {};
+      const creationAnswer = new Promise((resolve) => {
+        finishCreation = resolve;
+      });
+      openFromRun();
+      enqueueResponse({ ok: true, json: () => creationAnswer });
+      answerPublish('public');
+      render(<NewPostClient />);
+
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+      expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+      await act(async () => finishCreation({ generations: [RUN_RESULT] }));
+
+      expect(await screen.findByText(/This template result shares final media only/)).toBeInTheDocument();
+      await waitForCreation();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(POST_FROM_RUN));
+      expect(publishBody()).toMatchObject({ generationId: 'gen-run-result', resourceBundle: { accessMode: 'none' } });
+      expect(publishBody()).not.toHaveProperty('includeGenerationReferences');
+    });
+
+    it('records the post, shares its own address, and leaves for it only after the share', async () => {
       let finishShare = () => {};
       sharePublicGenerationMock.mockImplementation(() => new Promise<null>((resolve) => {
         finishShare = () => resolve(null);
       }));
       openFromRun({ shareAfterPublish: '1' });
+      answerCreation();
       answerPublish('public');
+      render(<NewPostClient />);
 
-      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      await waitForCreation();
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
       await waitFor(() => expect(sharePublicGenerationMock).toHaveBeenCalledWith({
-        generationId: 'gen-run-result',
+        generationId: 'post-run-result',
         title: 'Rider transformation',
         sourceSurface: 'my-creations',
         accessToken: 'test-token',
         viewerIsOwner: true,
       }));
-      // The share sheet is up: the page does not leave from under it.
+      // The share sheet is up: the post is already recorded, and the page does
+      // not leave from under the sheet.
+      expect(screen.getByText('Post published')).toBeInTheDocument();
       expect(routerMock.replace).not.toHaveBeenCalled();
       await act(async () => finishShare());
-      // In the composer's place, so Back returns to the run.
-      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/showcase/post-run-result'));
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(POST_FROM_RUN));
       expect(mockPush).not.toHaveBeenCalled();
+      expect(toastMessages()).toEqual([]);
     });
 
-    it('leaves for the post when the share fails, and never calls the publish failed', async () => {
+    it('says so when the link was copied for a browser with no share sheet', async () => {
+      sharePublicGenerationMock.mockResolvedValue('copy-link');
+      openFromRun({ shareAfterPublish: '1' });
+      answerCreation();
+      answerPublish('public');
+      render(<NewPostClient />);
+
+      await waitForCreation();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(POST_FROM_RUN));
+      expect(toastMessages()).toEqual(['Post link copied.']);
+    });
+
+    it('leaves for the post when the share fails, says where to share it, and never calls the publish failed', async () => {
       sharePublicGenerationMock.mockRejectedValue(new Error('Clipboard sharing is not supported in this browser'));
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
       openFromRun({ shareAfterPublish: '1' });
+      answerCreation();
       answerPublish('public');
+      render(<NewPostClient />);
 
-      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      await waitForCreation();
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
-      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/showcase/post-run-result'));
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(POST_FROM_RUN));
       expect(sharePublicGenerationMock).toHaveBeenCalledTimes(1);
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-      expect(consoleError).toHaveBeenCalledWith('Published the creation, but sharing was unavailable:', expect.any(Error));
+      expect(toastMessages()).toEqual(['Your post is published. Share it from its page.']);
+      expect(consoleError).toHaveBeenCalledWith('Published the post, but sharing was unavailable:', expect.any(Error));
     });
 
-    it('shares nothing for a private post', async () => {
+    it('shares nothing for a private post, and opens its editor with the way back to the run', async () => {
       openFromRun({ shareAfterPublish: '1' });
+      answerCreation();
       answerPublish('private');
+      render(<NewPostClient />);
 
-      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      await waitForCreation();
       fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
 
-      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/post/post-run-result/edit'));
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(
+        '/post/post-run-result/edit?returnTo=%2Ftemplate-runs%2Frun-1&from=template-run',
+      ));
       expect(sharePublicGenerationMock).not.toHaveBeenCalled();
     });
 
     it('shares nothing unless the run asked for it', async () => {
       openFromRun();
+      answerCreation();
       answerPublish('public');
+      render(<NewPostClient />);
 
-      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      await waitForCreation();
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
-      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/showcase/post-run-result'));
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(POST_FROM_RUN));
       expect(sharePublicGenerationMock).not.toHaveBeenCalled();
+    });
+
+    // Back and the page's own Back link stay live while the post is sent.
+    it('takes nobody anywhere, and shares nothing, once they left while the post was sent', async () => {
+      let finishPublish: (value: unknown) => void = () => {};
+      const publishAnswer = new Promise((resolve) => {
+        finishPublish = resolve;
+      });
+      openFromRun({ shareAfterPublish: '1' });
+      answerCreation();
+      enqueueResponse({ ok: true, json: () => publishAnswer });
+      const view = render(<NewPostClient />);
+
+      await waitForCreation();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.anything()));
+      view.unmount();
+      await act(async () => finishPublish(PUBLISHED));
+
+      expect(routerMock.replace).not.toHaveBeenCalled();
+      expect(sharePublicGenerationMock).not.toHaveBeenCalled();
+    });
+
+    it('opens the editor of a post the result already has, keeping the way back', async () => {
+      openFromRun({ shareAfterPublish: '1' });
+      answerCreation({ ...RUN_RESULT, linked_post_id: 'post-linked' });
+      render(<NewPostClient />);
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(
+        '/post/post-linked/edit?from=template-run&returnTo=%2Ftemplate-runs%2Frun-1',
+      ));
+    });
+
+    // Studio drew its copy first and would show the creation as not published.
+    it('has Studio read its creations afresh once the post is out', async () => {
+      window.sessionStorage.setItem(
+        'magicbooklet:creations-cache:v1:user-1',
+        JSON.stringify({ fetchedAt: Date.now(), generations: [], posts: [] }),
+      );
+      openFromRun();
+      answerCreation();
+      answerPublish('public');
+      render(<NewPostClient />);
+
+      await waitForCreation();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(POST_FROM_RUN));
+      expect(window.sessionStorage.getItem('magicbooklet:creations-cache:v1:user-1')).toBeNull();
     });
   });
 
@@ -4294,6 +4415,9 @@ describe('NewPostClient', () => {
 
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
       expect((fetchMock.mock.calls[1][1] as { body: FormData }).body.has('description')).toBe(false);
+      // A new post takes the composer's place in history, whatever it is made of.
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/showcase/post-no-description?returnTo=%2Fshowcase'));
+      expect(mockPush).not.toHaveBeenCalled();
     });
 
     it('sends no description when publishing a creation that has one', async () => {

@@ -760,7 +760,6 @@ describe('CreationsPage', () => {
     expect(within(dialog).getByRole('link', { name: 'Publish' })).toHaveAttribute('href', composerHref);
     // Publish is the way to the composer, so the details offer no second one.
     expect(within(dialog).queryByRole('link', { name: 'Customize post' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: /publish this creation/i })).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
   });
 

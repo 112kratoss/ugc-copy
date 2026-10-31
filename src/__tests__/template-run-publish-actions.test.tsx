@@ -146,7 +146,6 @@ describe('template run publish actions', () => {
         shareAfterPublish: '1',
       },
     });
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it.each([

@@ -97,13 +97,24 @@ function buildCreationsQuery(params: Record<string, string>): string {
 }
 
 /**
- * Publish opens the full composer for the creation, as the app's does: it
- * reads the creation from its address and starts from the creation's title.
+ * The full composer for a creation, where Publish takes it, as the app's does:
+ * it reads the creation from its address and starts from the creation's title.
+ * `from` and `returnTo` say where its Back goes; `shareAfterPublish` has it
+ * share the post once the post is public.
  */
-function buildCreationComposerPath(generationId: string): string {
+export function buildCreationComposerPath(
+  generationId: string,
+  {
+    from = 'creations',
+    returnTo,
+    shareAfterPublish = false,
+  }: { from?: string; returnTo?: string; shareAfterPublish?: boolean } = {},
+): string {
   return `/post/new?${buildCreationsQuery({
     generationId,
-    from: 'creations',
+    from,
+    ...(returnTo ? { returnTo } : {}),
+    ...(shareAfterPublish ? { shareAfterPublish: '1' } : {}),
   })}`;
 }
 

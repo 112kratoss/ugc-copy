@@ -48,7 +48,7 @@ export type GenerationShareEventType = 'share_click' | 'share_visit';
  * `unlocks` is the marketplace, whose links carry it; `library` is the buyer's
  * own unlock library in Studio.
  */
-type ShowcaseReturnSource = 'community' | 'unlocks' | 'library' | 'creator' | 'seller' | 'studio' | 'profile' | 'home' | 'search';
+type ShowcaseReturnSource = 'community' | 'unlocks' | 'library' | 'creator' | 'seller' | 'studio' | 'template-run' | 'profile' | 'home' | 'search';
 
 export interface ShowcaseDetailPathOptions {
   from?: ShowcaseReturnSource | string | null;
@@ -71,6 +71,7 @@ const SHOWCASE_RETURN_SOURCES: ShowcaseReturnSource[] = [
   'creator',
   'seller',
   'studio',
+  'template-run',
   'profile',
   'home',
   'search',
@@ -83,6 +84,7 @@ const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
   creator: 'Back to Creator Portfolio',
   seller: 'Back to Seller Dashboard',
   studio: 'Back to My Studio',
+  'template-run': 'Back to Template Run',
   profile: 'Back to Your Profile',
   home: 'Back to Home',
   search: 'Back to Search',
@@ -95,6 +97,7 @@ const SHOWCASE_RETURN_FALLBACKS: Record<ShowcaseReturnSource, string> = {
   creator: '/showcase',
   seller: '/marketplace/sell',
   studio: '/creations?view=posts',
+  'template-run': '/templates',
   profile: '/profile?tab=posts',
   home: '/',
   search: '/search',
@@ -187,6 +190,11 @@ function inferShowcaseReturnSource(returnTo: string | null | undefined): Showcas
 
   if (returnTo.startsWith('/creations')) {
     return 'studio';
+  }
+
+  // A post published from a template run's result (the composer's Publish & share).
+  if (returnTo.startsWith('/template-runs/')) {
+    return 'template-run';
   }
 
   if (returnTo.startsWith('/profile')) {
