@@ -691,6 +691,15 @@ async function toOwnerPostListItem(
     row.title?.trim() ||
     deriveTitleFromBody(row.body) ||
     getOwnerPostTitleFallback(row.post_format);
+  // A creation post stored without its Made with (published before publishing
+  // wrote one, or whose save failed), or with one row naming no model (the
+  // source-tool backfill of 2026-06-08 stored the app alone), reads as the row
+  // publishing writes.
+  const storedSourceTools = sourceToolsMap.get(row.id);
+  const sourceTools = generationPreview
+    && (!storedSourceTools || (storedSourceTools.length === 1 && !storedSourceTools[0].modelLabel))
+    ? buildGenerationPostSourceTools(row, generationPreview.model)
+    : storedSourceTools;
 
   return {
     id: row.id,
@@ -715,10 +724,7 @@ async function toOwnerPostListItem(
     sourceKind,
     sourceTool: row.source_tool,
     sourceToolSlug: row.source_tool_slug,
-    // A creation post stored without its Made with (published before publishing
-    // wrote one, or whose save failed) reads as the row publishing writes.
-    sourceTools: sourceToolsMap.get(row.id)
-      ?? (generationPreview ? buildGenerationPostSourceTools(row, generationPreview.model) : undefined),
+    sourceTools,
     sourceLabel: getSourceLabel(sourceKind),
     commentCount: Math.max(0, row.comment_count ?? 0),
     createdAt: row.created_at,

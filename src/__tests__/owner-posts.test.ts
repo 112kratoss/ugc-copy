@@ -104,7 +104,14 @@ const sourceToolRows = vi.hoisted(() => ({
       model_slug: 'gen-4',
       sort_order: 1,
     },
-  ],
+  ] as Array<{
+    post_id: string;
+    tool_label: string;
+    tool_slug: string;
+    model_label: string | null;
+    model_slug: string | null;
+    sort_order: number;
+  }>,
 }));
 const createServiceClientMock = vi.hoisted(() => vi.fn());
 // Recipes attached to posts, as `post_resource_bundles` rows.
@@ -331,6 +338,26 @@ describe('owner posts', () => {
       { toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: 'Nano Banana 2.0', modelSlug: 'nano-banana-2' },
     ]);
     expect(unlinkedPost?.sourceTools).toBeUndefined();
+  });
+
+  // The source-tool backfill of 2026-06-08 stored the app alone for every post
+  // it found, creation posts included.
+  it('reads a creation post’s stored app-only row as its creation names it', async () => {
+    sourceToolRows.value = [...initialSourceToolRows, {
+      post_id: 'post-3',
+      tool_label: 'magicbooklet',
+      tool_slug: 'magicbooklet',
+      model_label: null,
+      model_slug: null,
+      sort_order: 0,
+    }];
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const post = await getOwnerPostDetail('post-3', 'user-1');
+
+    expect(post?.sourceTools).toEqual([
+      { toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: 'Nano Banana 2.0', modelSlug: 'nano-banana-2' },
+    ]);
   });
 
   // Its model is the template author's (template-result.ts).
