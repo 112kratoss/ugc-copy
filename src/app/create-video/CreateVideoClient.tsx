@@ -113,7 +113,7 @@ import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
-import { heldLengthNote, planVideoRunInputs, type VideoRunInput } from '@/lib/creator-run-inputs';
+import { heldLengthNote, lengthReading, planVideoRunInputs, type VideoRunInput } from '@/lib/creator-run-inputs';
 import {
     framesLeftOutLine,
     planVideoInputSwitch,
@@ -143,7 +143,7 @@ import {
     type PendingWebStart,
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
-import { catalogInputTooShort, catalogRunQuoteInput, catalogSettingsAtControlDefaults, GENERATION_PROMPT_MAX_LENGTH, lengthInTenthsRoundedDown } from '../../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogInputTooShort, catalogRunQuoteInput, catalogSettingsAtControlDefaults, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import {
     creatorPromptViolation,
     promptLengthMeter,
@@ -2110,11 +2110,22 @@ export default function CreateVideoClient({
         return message && media && minimumSeconds ? [{ id: media.id, message, minimumSeconds }] : [];
     });
     const shortInputMessage = shortInputs[0]?.message ?? null;
-    /** A held clip's or track's card note, or null for one the run does not hold. */
-    const heldInputNote = (id: string, durationSeconds: number | null | undefined, noun: 'clip' | 'track') => {
+    /**
+     * What a clip's or track's card says of its length, or null where the page read none: read toward
+     * the limit it is past (`lengthReading`: rounded down under the slot's shortest, as the start's
+     * refusal gives it, up over its longest), and, for one the run holds, that it is under the minimum.
+     */
+    const cardLength = (id: string, durationSeconds: number | null | undefined, slotKey: 'videoReferences' | 'audioReferences' | 'videoElements', noun: 'clip' | 'track') => {
+        if (typeof durationSeconds !== 'number') return null;
         const held = shortInputs.find((input) => input.id === id);
-        return held && typeof durationSeconds === 'number' ? heldLengthNote(durationSeconds, held.minimumSeconds, noun) : null;
+        if (held) return { held: true, text: heldLengthNote(durationSeconds, held.minimumSeconds, noun) };
+        const limits = {
+            minDurationSeconds: affordances.minimumLengths.get(slotKey)?.minDurationSeconds,
+            maxDurationSeconds: slotKey === 'videoReferences' ? affordances.referenceVideos.maxDurationSeconds : null,
+        };
+        return { held: false, text: `${lengthReading(durationSeconds, limits)}s ${noun}` };
     };
+    const klingClipLengths = new Map(klingVideoElements.map((element) => [element.id, cardLength(element.id, element.durationSeconds, 'videoElements', 'clip')]));
     // The run waits, with its reason beside Generate: Generate, Start new and Try again are off.
     const runHeld = Boolean(promptLimitMessage || shortInputMessage);
     const hasKnownElementMentions = knownElementMentions.length > 0;
@@ -5859,49 +5870,45 @@ export default function CreateVideoClient({
                                             />
                                             {referenceVideos.length > 0 ? (
                                                 <ul className="space-y-2">
-                                                    {referenceVideos.map((reference) => (
-                                                        <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
-                                                            <div className="flex items-start justify-between gap-3">
-                                                                <div className="min-w-0">
-                                                                    <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
-                                                                    {/* To the nearest tenth, so a clip over the cap reads as over it; a held one reads as its line does. */}
-                                                                    {heldInputNote(reference.id, reference.durationSeconds, 'clip') ? (
-                                                                        <div className="mt-1 text-xs text-red-400">{heldInputNote(reference.id, reference.durationSeconds, 'clip')}</div>
-                                                                    ) : (
-                                                                        <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
-                                                                            {typeof reference.durationSeconds === 'number'
-                                                                                ? `${reference.durationSeconds.toFixed(1)}s clip`
-                                                                                : 'Duration unavailable'}
+                                                    {referenceVideos.map((reference) => {
+                                                        const length = cardLength(reference.id, reference.durationSeconds, 'videoReferences', 'clip');
+                                                        return (
+                                                            <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
+                                                                <div className="flex items-start justify-between gap-3">
+                                                                    <div className="min-w-0">
+                                                                        <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
+                                                                        <div className={`mt-1 text-xs ${length?.held ? 'text-red-400' : 'text-[var(--ui-text-faint)]'}`}>
+                                                                            {length?.text ?? 'Duration unavailable'}
                                                                         </div>
-                                                                    )}
-                                                                </div>
-                                                                <div className="-my-1 -mr-1 flex shrink-0 items-center gap-1.5">
-                                                                    {reference.restoredFromRemix ? (
-                                                                        <CreatorReplaceButton
-                                                                            label={`Replace ${reference.displayName} with your own clip`}
-                                                                            accept="video/*"
-                                                                            onFile={(file) => void replaceMediaReference('video', reference.id, file)}
+                                                                    </div>
+                                                                    <div className="-my-1 -mr-1 flex shrink-0 items-center gap-1.5">
+                                                                        {reference.restoredFromRemix ? (
+                                                                            <CreatorReplaceButton
+                                                                                label={`Replace ${reference.displayName} with your own clip`}
+                                                                                accept="video/*"
+                                                                                onFile={(file) => void replaceMediaReference('video', reference.id, file)}
+                                                                            />
+                                                                        ) : null}
+                                                                        <IconButton
+                                                                            label={`Remove ${reference.displayName}`}
+                                                                            icon={X}
+                                                                            onClick={() => void handleRemoveReferenceVideo(reference.id)}
+                                                                            className="shrink-0"
                                                                         />
-                                                                    ) : null}
-                                                                    <IconButton
-                                                                        label={`Remove ${reference.displayName}`}
-                                                                        icon={X}
-                                                                        onClick={() => void handleRemoveReferenceVideo(reference.id)}
-                                                                        className="shrink-0"
-                                                                    />
+                                                                    </div>
                                                                 </div>
-                                                            </div>
-                                                            {reference.previewUrl || reference.providerUrl ? (
-                                                                <InlineMediaVideo
-                                                                    src={reference.previewUrl || reference.providerUrl || undefined}
-                                                                    className="mt-3 h-40 w-full rounded-ui-md border border-[var(--ui-border-subtle)] bg-black object-cover"
-                                                                    controls
-                                                                    muted
-                                                                    playsInline
-                                                                />
-                                                            ) : null}
-                                                        </li>
-                                                    ))}
+                                                                {reference.previewUrl || reference.providerUrl ? (
+                                                                    <InlineMediaVideo
+                                                                        src={reference.previewUrl || reference.providerUrl || undefined}
+                                                                        className="mt-3 h-40 w-full rounded-ui-md border border-[var(--ui-border-subtle)] bg-black object-cover"
+                                                                        controls
+                                                                        muted
+                                                                        playsInline
+                                                                    />
+                                                                ) : null}
+                                                            </li>
+                                                        );
+                                                    })}
                                                 </ul>
                                             ) : (
                                                 <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
@@ -5933,51 +5940,54 @@ export default function CreateVideoClient({
                                                 />
                                                 {referenceAudios.length > 0 ? (
                                                     <ul className="space-y-2">
-                                                        {referenceAudios.map((reference) => (
-                                                            <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
-                                                                <div className="flex items-start justify-between gap-3">
-                                                                    <div className="min-w-0">
-                                                                        <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
-                                                                        {/* Only the Seedance 2 family prepares assets. On any other model the row says how long the track is. A held track says it is under the minimum, as its line does. */}
-                                                                        {heldInputNote(reference.id, reference.durationSeconds, 'track') ? (
-                                                                            <div className="mt-1 text-xs text-red-400">{heldInputNote(reference.id, reference.durationSeconds, 'track')}</div>
-                                                                        ) : isSeedance2Family ? (
-                                                                            <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
-                                                                                {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
-                                                                            </div>
-                                                                        ) : typeof reference.durationSeconds === 'number' ? (
-                                                                            <div className="mt-1 text-xs text-[var(--ui-text-faint)]">{`${reference.durationSeconds.toFixed(1)}s track`}</div>
-                                                                        ) : null}
-                                                                    </div>
-                                                                    <div className="-my-1 -mr-1 flex shrink-0 items-center gap-1.5">
-                                                                        {reference.restoredFromRemix ? (
-                                                                            <CreatorReplaceButton
-                                                                                label={`Replace ${reference.displayName} with your own track`}
-                                                                                accept="audio/*"
-                                                                                onFile={(file) => void replaceMediaReference('audio', reference.id, file)}
+                                                        {referenceAudios.map((reference) => {
+                                                            const length = cardLength(reference.id, reference.durationSeconds, 'audioReferences', 'track');
+                                                            return (
+                                                                <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
+                                                                    <div className="flex items-start justify-between gap-3">
+                                                                        <div className="min-w-0">
+                                                                            <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
+                                                                            {/* Only the Seedance 2 family prepares assets. On any other model the row says how long the track is. A held track says it is under the minimum, as its line does, in place of either. */}
+                                                                            {length?.held ? (
+                                                                                <div className="mt-1 text-xs text-red-400">{length.text}</div>
+                                                                            ) : isSeedance2Family ? (
+                                                                                <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
+                                                                                    {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
+                                                                                </div>
+                                                                            ) : length ? (
+                                                                                <div className="mt-1 text-xs text-[var(--ui-text-faint)]">{length.text}</div>
+                                                                            ) : null}
+                                                                        </div>
+                                                                        <div className="-my-1 -mr-1 flex shrink-0 items-center gap-1.5">
+                                                                            {reference.restoredFromRemix ? (
+                                                                                <CreatorReplaceButton
+                                                                                    label={`Replace ${reference.displayName} with your own track`}
+                                                                                    accept="audio/*"
+                                                                                    onFile={(file) => void replaceMediaReference('audio', reference.id, file)}
+                                                                                />
+                                                                            ) : null}
+                                                                            <IconButton
+                                                                                label={`Remove ${reference.displayName}`}
+                                                                                icon={X}
+                                                                                onClick={() => void handleRemoveReferenceAudio(reference.id)}
+                                                                                className="shrink-0"
                                                                             />
-                                                                        ) : null}
-                                                                        <IconButton
-                                                                            label={`Remove ${reference.displayName}`}
-                                                                            icon={X}
-                                                                            onClick={() => void handleRemoveReferenceAudio(reference.id)}
-                                                                            className="shrink-0"
-                                                                        />
+                                                                        </div>
                                                                     </div>
-                                                                </div>
-                                                                {reference.providerUrl ? (
-                                                                    <RecoverableMediaAudio
-                                                                        src={reference.providerUrl}
-                                                                        className="mt-3 w-full"
-                                                                    />
-                                                                ) : reference.previewUrl ? (
-                                                                    <RecoverableMediaAudio
-                                                                        src={reference.previewUrl}
-                                                                        className="mt-3 w-full"
-                                                                    />
-                                                                ) : null}
-                                                            </li>
-                                                        ))}
+                                                                    {reference.providerUrl ? (
+                                                                        <RecoverableMediaAudio
+                                                                            src={reference.providerUrl}
+                                                                            className="mt-3 w-full"
+                                                                        />
+                                                                    ) : reference.previewUrl ? (
+                                                                        <RecoverableMediaAudio
+                                                                            src={reference.previewUrl}
+                                                                            className="mt-3 w-full"
+                                                                        />
+                                                                    ) : null}
+                                                                </li>
+                                                            );
+                                                        })}
                                                     </ul>
                                                 ) : (
                                                     <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
@@ -6062,11 +6072,11 @@ export default function CreateVideoClient({
                                                         void navigator.clipboard.writeText(element.handle);
                                                     }
                                                 }}
-                                                // Rounded down, as the line beside Generate and the start give a clip's
-                                                // length, so a clip named there as too short never reads as 3.0s here.
-                                                note={heldInputNote(element.id, element.durationSeconds, 'clip') ? (
-                                                    <span className="text-red-400">{heldInputNote(element.id, element.durationSeconds, 'clip')}</span>
-                                                ) : typeof element.durationSeconds === 'number' ? `${lengthInTenthsRoundedDown(element.durationSeconds).toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
+                                                // Read as the line beside Generate and the start give a clip's length, so a
+                                                // clip named there as too short never reads as 3.0s here.
+                                                note={klingClipLengths.get(element.id)?.held ? (
+                                                    <span className="text-red-400">{klingClipLengths.get(element.id)?.text}</span>
+                                                ) : klingClipLengths.get(element.id)?.text ?? 'MP4 or MOV, 50MB max'}
                                             />
                                         ))}
                                     </CreatorReferenceStrip>

@@ -4391,6 +4391,9 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(await screen.findByText(SHORT_TRACK)).toBeInTheDocument();
         expect(screen.getByText('1.5s track, under the 2s minimum')).toBeInTheDocument();
+        // The note takes the place of the track's asset status, which matters again once a long enough
+        // track replaces it.
+        expect(screen.queryByText(/^(Prepared asset available|Uses URL fallback until prepared)$/)).toBeNull();
         // The clip beside it is long enough, and its card keeps its own length.
         expect(screen.getByText('4.0s clip')).toBeInTheDocument();
         expect(generateButton()).toBeDisabled();
@@ -4399,14 +4402,26 @@ describe('CreateVideoClient Kling video elements', () => {
         ])).toBe(SHORT_TRACK);
       });
 
-      it('keeps the nearest tenth on a card it does not hold, so a clip over the cap reads as over it', async () => {
-        // Seedance 2 takes clips of up to 15 seconds: rounded down, 15.06 s would read as 15.0.
-        saveInTheBrowser({ clip: true, clipSeconds: 15.06 });
+      it('reads a clip over the cap as over it', async () => {
+        // Seedance 2 takes clips of up to 15 seconds: to the nearest tenth, 15.04 s would read as 15.0.
+        saveInTheBrowser({ clip: true, clipSeconds: 15.04 });
         render(<CreateVideoClient prefill={{ model: 'seedance-2' }} />);
         await restored();
 
         expect(screen.getByText('15.1s clip')).toBeInTheDocument();
         expect(screen.queryByText(/under the 2s minimum/)).toBeNull();
+      });
+
+      it('reads a clip just under the minimum as the start would refuse it, without holding it', async () => {
+        // Inside the slack the page lets through to the start (it measures to the hundredth): 1.97 s reads
+        // 1.9, as the start's refusal would give it, not 2.0. It is not held, so it carries no mark.
+        saveInTheBrowser({ clip: true, clipSeconds: 1.97 });
+        render(<CreateVideoClient prefill={{ model: 'seedance-2' }} />);
+        await restored();
+
+        expect(screen.getByText('1.9s clip')).toBeInTheDocument();
+        expect(screen.queryByText(/under the 2s minimum/)).toBeNull();
+        expect(screen.queryByText(/must be at least 2 seconds long/)).toBeNull();
       });
     });
 

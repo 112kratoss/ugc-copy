@@ -1009,21 +1009,23 @@ describe('a clip shorter than its slot takes', () => {
   });
 
   // Release slot-min-durations-20261031 publishes the minimum on Seedance's, MiniMax's and Wan's clip and
-  // track slots and on the motion clip slot. The app's check reads any slot's, so it holds those runs too,
-  // in the start's words, with no app change: the words name the slot by its label.
-  it('holds a Seedance 2 clip or track under 2 seconds, in the start’s words', () => {
+  // track slots and on the motion clip slot. The app's check reads any slot's, so it holds a short clip
+  // too, in the start's words, with no app change: the words name the slot by its label. A track it
+  // cannot hold: its picker reads no length (uploadReferenceAudio sends none), so the start judges it.
+  it('holds a Seedance 2 clip under 2 seconds in the start’s words, and leaves a track of no known length to the start', () => {
     const published = structuredClone(seedance2);
     for (const slot of (published.inputModes ?? []).flatMap((mode) => mode.slots)) {
       if (slot.key === 'videoReferences' || slot.key === 'audioReferences') slot.minDurationSeconds = 2;
     }
     const clipOf = (seconds: number) => upload('wave.mp4', 'video', { durationSeconds: seconds });
-    const trackOf = (seconds: number) => upload('beat.mp3', 'audio', { durationSeconds: seconds });
+    const pickedTrack = upload('beat.mp3', 'audio');
 
     expect(validateCatalogCreationDraft(videoDraft(published, { referenceVideos: [clipOf(1.86)] }), published, ready).errors)
       .toEqual(['Seedance 2 reference videos must be at least 2 seconds long. wave runs 1.8 seconds.']);
-    expect(validateCatalogCreationDraft(videoDraft(published, { referenceVideos: [clipOf(4)], referenceAudios: [trackOf(1.5)] }), published, ready).errors)
-      .toEqual(['Seedance 2 reference audio must be at least 2 seconds long. beat runs 1.5 seconds.']);
-    expect(validateCatalogCreationDraft(videoDraft(published, { referenceVideos: [clipOf(1.95)], referenceAudios: [trackOf(2)] }), published, ready).errors)
+    expect(pickedTrack.durationSeconds ?? null).toBeNull();
+    expect(validateCatalogCreationDraft(videoDraft(published, { referenceVideos: [clipOf(4)], referenceAudios: [pickedTrack] }), published, ready).errors)
+      .toEqual([]);
+    expect(validateCatalogCreationDraft(videoDraft(published, { referenceVideos: [clipOf(1.95)] }), published, ready).errors)
       .toEqual([]);
   });
 

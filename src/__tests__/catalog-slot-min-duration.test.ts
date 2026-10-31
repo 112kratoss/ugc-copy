@@ -8,11 +8,13 @@ import {
   type GenerationModelDescriptor,
 } from '@/lib/generation-model-catalog';
 import { parsePublishedModelDescriptor } from '@/lib/generation-model-descriptor-parser';
+import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 import {
   referenceMediaLengthViolation,
   referenceMediaMinSeconds,
   referenceMediaRole,
 } from '@/lib/provider-input-limits';
+import { durationBoundInputSlots } from '@/lib/unified-generation-start-service';
 import {
   CREATOR_LENGTH_READING_SLACK_SECONDS,
   catalogInputTooShort,
@@ -38,8 +40,11 @@ describe('the shortest clip a slot takes', () => {
   const roleOf = (model: GenerationModelDescriptor, slot: CatalogInputSlot) => (
     referenceMediaRole(model.kind, slot.key, slot.kind as 'video' | 'audio')
   );
-  /** A slot whose files the start measures (`durationBoundInputSlots`): a clip or track with duration metadata. */
-  const measured = (slot: CatalogInputSlot) => (slot.kind === 'video' || slot.kind === 'audio') && slot.durationMetadata !== undefined;
+  const operations = new Map(buildCodeGenerationModelOperations().map((operation) => [operation.modelId, operation]));
+  /** A clip or track slot whose files the start measures before it judges them (`durationBoundInputSlots`). */
+  const measured = (model: GenerationModelDescriptor, slot: CatalogInputSlot) => (
+    (slot.kind === 'video' || slot.kind === 'audio') && durationBoundInputSlots(model, operations.get(model.id)!).has(slot.key)
+  );
   /** Every slot that publishes a shortest clip or track, with its model. */
   const published = catalog.models.flatMap((model) => slotsOf(model)
     .filter((slot) => slot.minDurationSeconds !== undefined)
@@ -52,11 +57,11 @@ describe('the shortest clip a slot takes', () => {
 
   it('publishes on every slot whose files the start measures the shortest it takes there, and on no other slot', () => {
     for (const model of catalog.models) {
-      for (const slot of slotsOf(model).filter(measured)) {
+      for (const slot of slotsOf(model).filter((candidate) => measured(model, candidate))) {
         expect(slot.minDurationSeconds, `${model.id} ${slot.key}`).toBe(referenceMediaMinSeconds(model.id, roleOf(model, slot)));
       }
     }
-    expect(published.filter(({ slot }) => !measured(slot))).toEqual([]);
+    expect(published.filter(({ model, slot }) => !measured(model, slot))).toEqual([]);
     // Kie's documented minimums, as provider-input-limits.ts records them with their sources.
     expect(published.map(({ model, slot, minimum }) => `${model.id} ${slot.key} ${minimum}`).sort()).toEqual([
       'kling-2.6 referenceVideo 3',

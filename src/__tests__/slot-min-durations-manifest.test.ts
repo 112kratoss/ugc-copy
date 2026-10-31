@@ -20,14 +20,16 @@ import {
   catalogRunQuoteInput,
   type CatalogRunInputFact,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
+import productionMotion from '../../contracts/production-motion-descriptors-v1.json';
+import { validateCatalogManifest } from '../../scripts/ops/generation-model-catalog';
 
 import { descriptorBeforeSlotMinDurations, SLOT_MIN_DURATION_SLOTS } from './fixtures/slot-min-durations-2026-10-31';
 
 /**
  * Release 2026-10-31-slot-min-durations: the clip and track slots whose files the start holds to
  * Kie's shortest publish it, `minDurationSeconds` on the slot (2 s on the Seedance 2 family's and
- * MiniMax H3's clips and tracks, 1 s on Wan 3.0 / Prime's and on Wan 2.7's tracks, 3 s on Kling
- * 2.6's motion clip). The start already refused a shorter file before any hold
+ * MiniMax H3's clips and tracks, 1 s on Wan 3.0 / Prime's clips and tracks and on Wan 2.7's tracks,
+ * 3 s on Kling 2.6's motion clip). The start already refused a shorter file before any hold
  * (src/lib/provider-input-limits.ts), but the creator learned it only once Generate was pressed;
  * the creators now hold the run to the published minimum before Generate. Each entry must equal
  * the code build, and adds those keys to production's entry. Kling 3.0 motion stays out: production
@@ -60,11 +62,16 @@ interface Manifest {
   entries: ManifestEntry[];
 }
 
+const releases = new Map<string, Manifest>();
+/** A committed release, read once. */
 function read(name: string): Manifest {
-  return JSON.parse(fs.readFileSync(path.resolve(
-    process.cwd(),
-    `config/generation-model-catalog/releases/${name}`,
-  ), 'utf8')) as Manifest;
+  if (!releases.has(name)) {
+    releases.set(name, JSON.parse(fs.readFileSync(path.resolve(
+      process.cwd(),
+      `config/generation-model-catalog/releases/${name}`,
+    ), 'utf8')) as Manifest);
+  }
+  return releases.get(name)!;
 }
 
 const manifest = read('2026-10-31-slot-min-durations.json');
@@ -131,6 +138,12 @@ function asProductionReadsIt(entry: ManifestEntry) {
 const slotsOf = (descriptor: GenerationModelDescriptor) => (descriptor.inputModes ?? []).flatMap((mode) => mode.slots);
 
 describe('slot-min-durations release', () => {
+  it('passes the release CLI’s own checks', () => {
+    // Among them, each published minimum is the one the start holds the slot to, on a slot labelled in
+    // the start's words (scripts/ops/generation-model-catalog.ts).
+    expect(() => validateCatalogManifest(manifest)).not.toThrow();
+  });
+
   it('chains onto the release production is running and changes the nine models only', () => {
     expect(manifest.release.revision).toBe('slot-min-durations-20261031');
     expect(manifest.release.basedOnRevision).toBe(base.release.revision);
@@ -218,15 +231,31 @@ describe('slot-min-durations release', () => {
     }
   });
 
-  it.each(MODEL_IDS)('%s uses only what installed apps already read, so it needs no app release', (modelId) => {
-    // One optional slot key more, on slots the apps already draw. The store builds' parsers rebuild a
-    // slot from the keys they know and keep these descriptors whole, without the minimum
-    // (archive/slot-min-durations-2026-10-31/, "Installed apps on the release").
+  it.each(MODEL_IDS)('%s keeps the client schema version and the control types installed apps read', (modelId) => {
+    // Beside the one optional slot key (the case above holds that nothing else changed): the store
+    // builds' parsers rebuild a slot from the keys they know and keep these descriptors whole, without
+    // the minimum, which the installed builds' own code showed on the release (archive/
+    // slot-min-durations-2026-10-31/, "Installed apps on the release").
     const published = asProductionReadsIt(released(modelId));
     const before = asProductionReadsIt(previous(modelId));
     expect(published.descriptor.minClientSchemaVersion).toBe(before.descriptor.minClientSchemaVersion);
     for (const control of published.descriptor.controls) {
       expect(CLIENT_RENDERED_CONTROL_TYPES as readonly string[]).toContain(control.type);
     }
+  });
+
+  it('is the Kling 2.6 the production motion contract gives both suites', () => {
+    // contracts/production-motion-descriptors-v1.json names this release: its Kling 2.6 must be this
+    // entry as the server serves it (the published row read back, the schema-3 projection, no `inputs`).
+    const entry = released('kling-2.6');
+    const served = projectGenerationModelDescriptor(parsePublishedModelDescriptor(
+      entry.publicDescriptor,
+      entry.modelId,
+      manifest.release.schemaVersion,
+      { web: entry.webEnabled, mobile: entry.mobileEnabled },
+    ), 3) as unknown as Record<string, unknown>;
+    delete served.inputs;
+    expect(productionMotion.revision).toBe(manifest.release.revision);
+    expect(productionMotion.models.find((model) => model.id === 'kling-2.6')).toEqual(served);
   });
 });

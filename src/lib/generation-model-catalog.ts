@@ -19,7 +19,7 @@ import {
   type GenerationModelRuntimeInputs,
   type GenerationModelValidationRuleType,
 } from '@/lib/generation-model-runtime';
-import { referenceMediaMinSeconds, referenceMediaRole } from '@/lib/provider-input-limits';
+import { referenceMediaSlotMinSeconds } from '@/lib/provider-input-limits';
 
 export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 3;
 // Stored releases still use schema-v2 descriptors. Schema v3 is a compact
@@ -102,7 +102,7 @@ export type CatalogInputSlot = {
    * 3.0 video element or a motion-control clip under 3, a Seedance 2 clip or track under 2. The
    * start refuses a shorter one before any hold (`referenceMediaLengthViolation`, whose table
    * this is read from: `slotMinDurationSeconds`), and the creators hold the run to it before
-   * Generate. Optional like `maxNamed`: the apps' parsers have always rebuilt a slot from the
+   * Generate, in words built from the slot's label, which the release CLI holds to the start's. Optional like `maxNamed`: the apps' parsers have always rebuilt a slot from the
    * keys they know, so installed builds read the descriptor without it.
    */
   minDurationSeconds?: number;
@@ -454,9 +454,9 @@ function referenceAudioCapSeconds(modelId: VideoModelId): number | undefined {
 }
 
 /**
- * The slot's shortest clip or track, as the start holds the file it carries (by its role in the
- * run: `referenceMediaRole`), spread into the slot only where the start holds one, so a slot whose
- * provider states no minimum stays as it was published.
+ * The slot's shortest clip or track, as the start holds the file it carries
+ * (`referenceMediaSlotMinSeconds`), spread into the slot only where the start holds one, so a slot
+ * whose provider states no minimum stays as it was published.
  */
 function slotMinDurationSeconds(
   modelId: string,
@@ -464,7 +464,7 @@ function slotMinDurationSeconds(
   slotKey: string,
   mediaKind: 'video' | 'audio',
 ): Pick<CatalogInputSlot, 'minDurationSeconds'> {
-  const minDurationSeconds = referenceMediaMinSeconds(modelId, referenceMediaRole(runKind, slotKey, mediaKind));
+  const minDurationSeconds = referenceMediaSlotMinSeconds(modelId, runKind, slotKey, mediaKind);
   return minDurationSeconds === undefined ? {} : { minDurationSeconds };
 }
 

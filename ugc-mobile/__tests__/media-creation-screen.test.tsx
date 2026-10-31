@@ -7851,11 +7851,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       });
     });
 
-    // The motion models production publishes to the app (release kie-checkup-20261020, read
-    // 2026-10-20): Kling 2.6 in the motion-inputs slots (characterImage, referenceVideo), and
-    // Kling 3.0 in one default mode of plain reference slots (imageReferences, videoReferences,
-    // min 0, max 1). The composer looked its two slots up by the motion-inputs names, so on
-    // Kling 3.0 it drew neither, and refused a clip picked from Inputs.
+    // The motion models production publishes to the app (contracts/production-motion-descriptors-v1.json,
+    // at release slot-min-durations-20261031): Kling 2.6 in the motion-inputs slots (characterImage,
+    // referenceVideo, which takes clips of 3 seconds and up), and Kling 3.0 in one default mode of plain
+    // reference slots (imageReferences, videoReferences, min 0, max 1). The composer looked its two slots
+    // up by the motion-inputs names, so on Kling 3.0 it drew neither, and refused a clip picked from Inputs.
     describe('motion on the models production publishes', () => {
       const productionMotionCatalog = (): GenerationModelCatalog => ({
         schemaVersion: 3,

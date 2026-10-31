@@ -104,10 +104,10 @@ import {
 import { useCreatorQuote } from '@/lib/use-creator-quote';
 import { openingSetting, type CreatorOpening } from '@/lib/creator-opening';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
-import { heldLengthNote, motionRunClipSlot, planMotionRunInputs } from '@/lib/creator-run-inputs';
+import { heldLengthNote, lengthReading, motionRunClipSlot, planMotionRunInputs } from '@/lib/creator-run-inputs';
 import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
 // Kie's motion cap; the motion start refuses a longer prompt before anything is held.
-import { catalogInputTooShort, catalogRunQuoteInput, MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogInputTooShort, catalogRunQuoteInput, MOTION_CLIP_NAME, MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import { useTicker } from '@/lib/use-ticker';
 import {
     refreshTemporaryMediaUrl,
@@ -1293,13 +1293,14 @@ export default function CreateMotionClient({
     // The server refuses a quote without both inputs and a length, so a fresh
     // page opened on that refusal and a Retry that could not help.
     const motionInputsReady = hasCharacterImage && hasReferenceVideo && duration > 0;
-    // The clip against the shortest its slot takes (Kie's motion control refuses one under 3
-    // seconds). The start refused such a run before any hold, but only once Generate was pressed;
-    // the run now waits, in the start's words (which call the clip "The reference video"), for as
-    // long as it holds. A length the page has not read is left to the start, which measures it.
+    // The clip against the shortest the slot it is sent in takes (Kie's motion control refuses one
+    // under 3 seconds). The start refused such a run before any hold, but only once Generate was
+    // pressed; the run now waits, in the start's words (the model by the name it gives it, the clip
+    // as MOTION_CLIP_NAME), for as long as it holds. A length the page has not read is left to the
+    // start, which measures it.
     const clipSlot = useMemo(() => motionRunClipSlot(catalogDescriptor, runSettings), [catalogDescriptor, runSettings]);
     const shortClipMessage = hasReferenceVideo && clipSlot
-        ? catalogInputTooShort(catalogDescriptor?.displayName ?? model.displayName, clipSlot, { label: 'The reference video', durationSeconds: duration })
+        ? catalogInputTooShort(model.displayName, clipSlot, { label: MOTION_CLIP_NAME, durationSeconds: duration })
         : null;
     const hasCatalogSettings = Boolean(modelCatalog.catalog && modelCatalog.detailsReady);
     // The price is the server's own quote of the run the page posts, as the start quotes
@@ -1711,10 +1712,15 @@ export default function CreateMotionClient({
                             </div>
 
                             <p className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-[var(--ui-text-muted)]">
+                                {/* Read toward the limit the clip is past, as the start's words give it; a held clip says so. */}
                                 {shortClipMessage && clipSlot?.minDurationSeconds ? (
                                     <span className="text-rose-300">{`Reference length: ${heldLengthNote(duration, clipSlot.minDurationSeconds)}`}</span>
                                 ) : (
-                                    <span>{duration > 0 ? `Reference length: ${duration.toFixed(1)}s` : 'Reference length will appear after upload.'}</span>
+                                    <span>
+                                        {duration > 0
+                                            ? `Reference length: ${lengthReading(duration, { minDurationSeconds: clipSlot?.minDurationSeconds, maxDurationSeconds: clipSlot?.maxDurationSeconds ?? maxVideoDuration })}s`
+                                            : 'Reference length will appear after upload.'}
+                                    </span>
                                 )}
                                 <span className="tabular-nums">Limit: {maxVideoDuration}s</span>
                             </p>

@@ -891,9 +891,9 @@ describe('CreateMotionClient slots the model declares', () => {
  */
 describe('CreateMotionClient a clip shorter than its slot takes', () => {
   const SHORT_CLIP = 'Kling 2.6 reference video must be at least 3 seconds long. The reference video runs 2.1 seconds.';
-  /** The motion slots as the code catalog publishes them, with the shortest clip they take. */
-  const codeMotionModes = (id: 'kling-2.6' | 'kling-3.0') => buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 })
-    .models.find((model) => model.id === id)!.inputModes!;
+  /** Kling 2.6's motion slots as the code catalog publishes them, with the shortest clip they take. */
+  const KLING_26_MODES = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 })
+    .models.find((model) => model.id === 'kling-2.6')!.inputModes!;
 
   async function attachClipOf(container: HTMLElement, seconds: number) {
     probeState.seconds = seconds;
@@ -903,7 +903,7 @@ describe('CreateMotionClient a clip shorter than its slot takes', () => {
   }
 
   it('says so above Generate and sends nothing, in the start’s own words', async () => {
-    publishMotionModes('kling-2.6', codeMotionModes('kling-2.6'));
+    publishMotionModes('kling-2.6', KLING_26_MODES);
     const view = render(<CreateMotionClient prefill={{ model: 'kling-2.6' }} />);
     await attachClipOf(view.container, 2.16);
 
@@ -922,13 +922,15 @@ describe('CreateMotionClient a clip shorter than its slot takes', () => {
     expect(referenceMediaLengthViolation('kling-2.6', [{ role: 'motion', durationSeconds: 2.16 }])).toBe(SHORT_CLIP);
   });
 
-  // 2.95 s: the start reads ffmpeg's length to the hundredth, and the browser's reading of a trimmed
-  // clip can fall a frame short of it, so a clip just under 3 seconds goes and the start judges it.
-  it.each([3.4, 2.95])('runs a clip of %s seconds', async (seconds) => {
-    publishMotionModes('kling-2.6', codeMotionModes('kling-2.6'));
+  // 2.96 s: the start reads ffmpeg's length to the hundredth, and the browser's reading of a trimmed
+  // clip can fall a frame short of it, so a clip just under 3 seconds goes and the start judges it. Its
+  // length reads 2.9, as the start's refusal would give it, not 3.0.
+  it.each([[3.4, 'Reference length: 3.4s'], [2.96, 'Reference length: 2.9s']] as const)('runs a clip of %s seconds', async (seconds, shown) => {
+    publishMotionModes('kling-2.6', KLING_26_MODES);
     const view = render(<CreateMotionClient prefill={{ model: 'kling-2.6' }} />);
     await attachClipOf(view.container, seconds);
 
+    expect(screen.getByText(shown)).toBeInTheDocument();
     expect(screen.queryByText(/must be at least 3 seconds long/)).toBeNull();
     await pressGenerate();
     await waitFor(() => expect(startPosts()).toHaveLength(1));

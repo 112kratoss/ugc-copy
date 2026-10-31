@@ -1,5 +1,5 @@
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
-import { mediaTooShortMessage } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { MOTION_CLIP_NAME, mediaTooShortMessage } from '../../ugc-mobile/lib/model-catalog/protocol';
 import {
   promptLimitViolation,
   providerPromptMaxLength,
@@ -109,8 +109,35 @@ const REFERENCE_MEDIA_NOUNS: Readonly<Record<ReferenceMediaRole, { group: string
   video: { group: 'reference videos', one: 'Reference video' },
   audio: { group: 'reference audio', one: 'Reference audio' },
   element: { group: 'video elements', one: 'Video element' },
-  motion: { group: 'reference video', one: 'The reference video' },
+  motion: { group: 'reference video', one: MOTION_CLIP_NAME },
 };
+
+/**
+ * The shortest file the start takes in a catalog slot, as it judges the file by what it is to the
+ * run (`referenceMediaRole`), or undefined where it holds none. The catalog publishes it on the slot
+ * (`minDurationSeconds`), and the release CLI holds a published one to it.
+ */
+export function referenceMediaSlotMinSeconds(
+  modelId: string,
+  runKind: 'image' | 'video' | 'motion',
+  slotKey: string,
+  mediaKind: 'video' | 'audio',
+): number | undefined {
+  return referenceMediaMinSeconds(modelId, referenceMediaRole(runKind, slotKey, mediaKind));
+}
+
+/**
+ * What the start calls a catalog slot's files when it refuses one as too short ("reference videos"):
+ * the creators say it from the slot's label, lowercased (`catalogInputTooShort`), so a slot that
+ * publishes a minimum must be labelled in these words, as the release CLI holds it.
+ */
+export function referenceMediaSlotNoun(
+  runKind: 'image' | 'video' | 'motion',
+  slotKey: string,
+  mediaKind: 'video' | 'audio',
+): string {
+  return REFERENCE_MEDIA_NOUNS[referenceMediaRole(runKind, slotKey, mediaKind)].group;
+}
 
 export type ReferenceMediaLength = {
   role: ReferenceMediaRole;
