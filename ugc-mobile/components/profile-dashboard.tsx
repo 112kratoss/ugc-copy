@@ -60,15 +60,18 @@ import {
   getProfileHandle,
   getProfileInitials,
   getProfileName,
+  getProfileScopeOptions,
   getProfileStats,
   getWalletCardContent,
   ownProfileShareUrl,
   ownerPostToProfileMediaCard,
   savedShowcaseToProfileMediaCards,
+  type ProfileCreationsScope,
   type ProfileMediaCard,
   type ProfileMediaSwipeDirection,
   type ProfileMediaTab,
   type ProfilePostsScope,
+  type ProfileScopeCounts,
 } from '@/lib/profile-view-model';
 import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import {
@@ -114,6 +117,8 @@ const PROFILE_MEDIA_SWIPE_COMMIT_DISTANCE = 56;
 const PROFILE_MEDIA_SWIPE_AXIS_RATIO = 1.25;
 // Three rows rise into place when a tab's media lands; later rows mount plain.
 const PROFILE_GALLERY_REVEAL_COUNT = PROFILE_GALLERY_COLUMNS * 3;
+// The Failed scope's grid: its runs are not library members, so none is a tile.
+const NO_PROFILE_CARDS: ProfileMediaCard[] = [];
 
 export function ProfileDashboard({
   initialTab = DEFAULT_PROFILE_MEDIA_TAB,
@@ -146,7 +151,7 @@ export function ProfileDashboard({
   // Archived posts live under their own scope of the Posts tab: the archive
   // dialog promises they can be restored from the profile, so they have to be
   // reachable here.
-  const [creationsScope, setCreationsScope] = useState<ProfilePostsScope>('active');
+  const [creationsScope, setCreationsScope] = useState<ProfileCreationsScope>('active');
   const [postsScope, setPostsScope] = useState<ProfilePostsScope>('active');
   const [backgroundMediaReady, setBackgroundMediaReady] = useState(false);
   const queryClient = useQueryClient();
@@ -250,7 +255,9 @@ export function ProfileDashboard({
   );
   const activeCreationCards = useMemo(() => allCreationCards.filter((card) => !card.isArchived), [allCreationCards]);
   const archivedCreationCards = useMemo(() => allCreationCards.filter((card) => card.isArchived), [allCreationCards]);
-  const creationCards = creationsScope === 'archived' ? archivedCreationCards : activeCreationCards;
+  const creationCards = creationsScope === 'archived'
+    ? archivedCreationCards
+    : creationsScope === 'failed' ? NO_PROFILE_CARDS : activeCreationCards;
   const renderingCreations = useMemo(
     () => selectRenderingCreations(flattenProfileGenerationPages(generationsQuery.data?.pages)),
     [generationsQuery.data]
@@ -259,8 +266,9 @@ export function ProfileDashboard({
     () => selectFailedCreations(flattenProfileGenerationPages(generationsQuery.data?.pages)),
     [generationsQuery.data]
   );
-  const showCreationStrips = activeTab === 'Creations' && creationsScope === 'active';
-  const showRenderingStrip = showCreationStrips && renderingCreations.length > 0;
+  const showRenderingStrip = activeTab === 'Creations' && creationsScope === 'active' && renderingCreations.length > 0;
+  // The Failed scope lists its runs where the grid would be.
+  const showFailedRuns = activeTab === 'Creations' && creationsScope === 'failed';
   // The run a Rendering tile opened. Its status page in the reel reads this
   // library, and Profile, under the reel and out of focus, keeps reading the
   // first page while the run renders, so that page turns into the run's media,
@@ -384,15 +392,22 @@ export function ProfileDashboard({
   }, [requestNextPage]);
 
   // A page that yields few renderable tiles can leave the grid too short to scroll, so
-  // onEndReached would never fire again. Top it up until the grid can carry itself.
+  // onEndReached would never fire again. Top it up until the grid can carry itself;
+  // in the Failed scope its runs stand where the tiles would.
+  const scopeItemCount = showFailedRuns ? failedCreations.length : tabCards.length;
   useEffect(() => {
-    if (isMediaLoading || tabCards.length >= PROFILE_MEDIA_MIN_FILL_COUNT) return;
+    if (isMediaLoading || scopeItemCount >= PROFILE_MEDIA_MIN_FILL_COUNT) return;
     requestNextPage();
-  }, [isMediaLoading, requestNextPage, tabCards.length]);
+  }, [isMediaLoading, requestNextPage, scopeItemCount]);
 
   const handleMediaTabChange = useCallback((tab: ProfileMediaTab) => {
     setActiveTab(tab);
   }, []);
+  // Posts have no Failed scope; its chip shows only over Creations.
+  const handleScopeChange = useCallback((scope: ProfileCreationsScope) => {
+    if (activeTab === 'Creations') setCreationsScope(scope);
+    else if (scope !== 'failed') setPostsScope(scope);
+  }, [activeTab]);
   const handleMediaSwipe = useCallback((direction: ProfileMediaSwipeDirection) => {
     setActiveTab((currentTab) => getProfileMediaSwipeTarget(currentTab, direction));
   }, []);
@@ -476,17 +491,17 @@ export function ProfileDashboard({
       emptyTitle={getProfileMediaEmptyTitle(activeTab, activeTab === 'Creations' ? creationsScope : postsScope)}
       fallbackAvatarInitials={initials}
       fallbackAvatarUrl={profile?.avatarUrl}
-      postsScope={activeTab === 'Creations' ? creationsScope : postsScope}
-      postsScopeCounts={activeTab === 'Creations'
-        ? { active: activeCreationCards.length, archived: archivedCreationCards.length }
+      scope={activeTab === 'Creations' ? creationsScope : postsScope}
+      scopeCounts={activeTab === 'Creations'
+        ? { active: activeCreationCards.length, failed: failedCreations.length, archived: archivedCreationCards.length }
         : getOwnerPostScopeCounts(profile?.stats, { active: activePostCards.length, archived: archivedPostCards.length })}
-      onPostsScopeChange={activeTab === 'Creations' ? setCreationsScope : setPostsScope}
+      onScopeChange={handleScopeChange}
       renderingCreations={showRenderingStrip ? renderingCreations : undefined}
       // Times on the strip are as of the page they were read from, which the
       // 15 s refresh renews; a clock read during render would be kept by memo.
       renderingAsOf={generationsQuery.dataUpdatedAt}
       onRenderingRunOpen={setWatchedRunId}
-      failedCreations={showCreationStrips && failedCreations.length > 0 ? failedCreations : undefined}
+      failedCreations={showFailedRuns ? failedCreations : undefined}
       notice={!user && guestHasCreations ? <GuestCreationsNotice /> : undefined}
       header={user ? (
         <>
@@ -579,9 +594,9 @@ function ProfileMediaList({
   onRetryNextPage,
   onSwipeTab,
   onTabChange,
-  postsScope = 'active',
-  postsScopeCounts,
-  onPostsScopeChange,
+  scope = 'active',
+  scopeCounts,
+  onScopeChange,
   renderingAsOf = 0,
   renderingCreations,
   onRenderingRunOpen,
@@ -609,13 +624,14 @@ function ProfileMediaList({
   onRetryNextPage?: () => void;
   onSwipeTab: (direction: ProfileMediaSwipeDirection) => void;
   onTabChange: (tab: ProfileMediaTab) => void;
-  postsScope?: ProfilePostsScope;
-  postsScopeCounts?: Record<ProfilePostsScope, number>;
-  onPostsScopeChange?: (scope: ProfilePostsScope) => void;
+  scope?: ProfileCreationsScope;
+  scopeCounts?: ProfileScopeCounts;
+  onScopeChange?: (scope: ProfileCreationsScope) => void;
   renderingAsOf?: number;
   renderingCreations?: GenerationListItem[];
   /** A Rendering tile opened its run's status page. */
   onRenderingRunOpen?: (generationId: string) => void;
+  /** The Failed scope's runs, listed in place of the grid. */
   failedCreations?: GenerationListItem[];
   /** A line above the grid about the reader's own media (a guest's creations). */
   notice?: React.ReactNode;
@@ -696,12 +712,12 @@ function ProfileMediaList({
               onRefresh={onRefresh}
               onTabChange={onTabChange}
             />
-            {activeTab !== 'Saved' && onPostsScopeChange ? (
+            {activeTab !== 'Saved' && onScopeChange ? (
               <ProfileMediaScopeControl
                 label={`Filter ${activeTab.toLowerCase()}`}
-                value={postsScope}
-                counts={postsScopeCounts}
-                onChange={onPostsScopeChange}
+                value={scope}
+                counts={scopeCounts}
+                onChange={onScopeChange}
               />
             ) : null}
             {headerExtrasReady && notice ? notice : null}
@@ -714,7 +730,7 @@ function ProfileMediaList({
               />
             ) : null}
             {headerExtrasReady && failedCreations?.length ? (
-              <ProfileFailedStrip items={failedCreations} tileWidth={cardWidth} />
+              <ProfileFailedRuns items={failedCreations} tileWidth={cardWidth} />
             ) : null}
             {pushOfferPostId ? (
               <PushOfferCard key={`post:${pushOfferPostId}`} moment="post" occasion={`post:${pushOfferPostId}`} />
@@ -734,7 +750,7 @@ function ProfileMediaList({
             cardWidth={cardWidth}
             cardHeight={cardHeight}
           />
-        ) : (
+        ) : failedCreations?.length ? null : (
           <ProfileMediaEmpty title={emptyTitle} />
         )}
         ListFooterComponent={isFetchingNextPage ? <ProfileGridFooterLoader />
@@ -1377,23 +1393,19 @@ function ProfileRenderingTile({
 }
 
 /**
- * Failed runs, under the Rendering strip: the web Studio's Failed section. They
- * are not library members either, so a run that failed while Profile showed it
- * left the Rendering strip for nowhere, findable again only through its alert
- * (audit 01-9). A tile opens the run's status page, where its alert lands too:
- * what came back, why it failed, and Try again, Archive and Delete.
+ * The Failed scope: the web Studio's Failed section, under a chip of its own so
+ * the Active grid starts with what was made. Failed runs are not library
+ * members, so a run that failed while Profile showed it left the Rendering strip
+ * for nowhere, findable again only through its alert (audit 01-9); its chip
+ * shows them here. A tile opens the run's status page, where its alert lands
+ * too: what came back, why it failed, and Try again, Archive and Delete.
  */
-function ProfileFailedStrip({ items, tileWidth }: { items: GenerationListItem[]; tileWidth: number }) {
+function ProfileFailedRuns({ items, tileWidth }: { items: GenerationListItem[]; tileWidth: number }) {
   return (
-    <View style={{ gap: appTheme.spacing.compact }}>
-      <AppText variant="label" color="muted" accessibilityRole="header">
-        {`Failed (${items.length})`}
-      </AppText>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: PROFILE_GALLERY_GAP }}>
-        {items.map((item) => (
-          <ProfileFailedTile key={item.id} item={item} width={tileWidth} />
-        ))}
-      </View>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: PROFILE_GALLERY_GAP }}>
+      {items.map((item) => (
+        <ProfileFailedTile key={item.id} item={item} width={tileWidth} />
+      ))}
     </View>
   );
 }
@@ -1523,15 +1535,12 @@ function ProfileMediaScopeControl({
   onChange,
 }: {
   label: string;
-  value: ProfilePostsScope;
-  counts?: Record<ProfilePostsScope, number>;
-  onChange: (scope: ProfilePostsScope) => void;
+  value: ProfileCreationsScope;
+  counts?: ProfileScopeCounts;
+  onChange: (scope: ProfileCreationsScope) => void;
 }) {
   const theme = useAppTheme();
-  const options: Array<{ value: ProfilePostsScope; label: string }> = [
-    { value: 'active', label: counts ? `Active (${counts.active})` : 'Active' },
-    { value: 'archived', label: counts ? `Archived (${counts.archived})` : 'Archived' },
-  ];
+  const options = getProfileScopeOptions(value, counts);
   return (
     <View accessibilityRole="radiogroup" accessibilityLabel={label} style={{ flexDirection: 'row', gap: 8 }}>
       {options.map((option) => {
