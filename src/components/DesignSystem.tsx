@@ -318,7 +318,10 @@ export function Button({
   icon: Icon,
   iconPosition = 'end',
   disabled = false,
+  id,
   ariaLabel,
+  ariaExpanded,
+  ariaControls,
   className,
   onClick,
   children,
@@ -331,7 +334,12 @@ export function Button({
   icon?: LucideIcon;
   iconPosition?: 'start' | 'end';
   disabled?: boolean;
+  /** For a button something else hands the focus back to. */
+  id?: string;
   ariaLabel?: string;
+  /** A button that shows and hides a panel (a disclosure): whether it is open, and its id. */
+  ariaExpanded?: boolean;
+  ariaControls?: string;
   className?: string;
   onClick?: () => void;
   children: ReactNode;
@@ -356,7 +364,7 @@ export function Button({
 
   if (href) {
     return (
-      <Link href={href} prefetch={prefetch} aria-label={ariaLabel} className={classes}>
+      <Link id={id} href={href} prefetch={prefetch} aria-label={ariaLabel} className={classes}>
         {content}
       </Link>
     );
@@ -364,9 +372,12 @@ export function Button({
 
   return (
     <button
+      id={id}
       type={type}
       disabled={disabled}
       aria-label={ariaLabel}
+      aria-expanded={ariaExpanded}
+      aria-controls={ariaControls}
       onClick={onClick}
       className={classes}
     >
@@ -509,12 +520,15 @@ export function StatusCallout({
   title,
   body,
   icon: Icon,
+  action,
   className,
 }: {
   tone?: 'neutral' | 'info' | 'success' | 'warning' | 'danger';
   title: string;
   body?: string;
   icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+  /** The next step, a button or a link, at the callout's end; under the words when they need the width. */
+  action?: ReactNode;
   className?: string;
 }) {
   const toneClass = {
@@ -531,15 +545,16 @@ export function StatusCallout({
       padding="md"
       role={tone === 'danger' ? 'alert' : 'status'}
       ariaLive={tone === 'danger' ? 'assertive' : 'polite'}
-      className={clsx('flex gap-3', className)}
+      className={clsx('flex gap-3', action && 'flex-wrap items-center', className)}
     >
-      {Icon ? <Icon className={clsx('mt-0.5 h-5 w-5 shrink-0', toneClass)} aria-hidden /> : null}
-      <div>
+      {Icon ? <Icon className={clsx('mt-0.5 h-5 w-5 shrink-0', toneClass, action && 'self-start')} aria-hidden /> : null}
+      <div className={clsx(action && 'min-w-48 flex-1')}>
         <Text as="h3" variant="cardTitle" className={clsx('text-base leading-6', toneClass)}>
           {title}
         </Text>
         {body ? <Text variant="bodySm" className="mt-1">{body}</Text> : null}
       </div>
+      {action ? <div className="shrink-0">{action}</div> : null}
     </Surface>
   );
 }

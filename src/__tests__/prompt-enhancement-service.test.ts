@@ -208,7 +208,7 @@ describe('enhancePromptForUser', () => {
     expect(callPromptEnhancerMock).toHaveBeenCalledWith(
       'system prompt',
       'Create a product poster and the text reads SALE',
-      { responseSchema: expect.any(Object) }
+      { responseSchema: expect.any(Object), deadlineMs: expect.any(Number) }
     );
     expect(result).toEqual({
       ok: true,
@@ -291,5 +291,39 @@ describe('enhancePromptForUser', () => {
       p_error_message: 'provider failure',
     });
     expect(client.updates).toHaveLength(0);
+  });
+
+  // An answer that lands after the caller has given up is charged and never shown,
+  // so Kie gets what the caller waits, less what the route itself spent first.
+  it.each<{ caller: string; headers: Record<string, string>; deadlineMs: number }>([
+    { caller: 'an app that has not said how long it waits', headers: { 'x-magicbooklet-client': 'mobile' }, deadlineMs: 25_000 },
+    { caller: 'a caller that states 70 s', headers: { 'x-magicbooklet-wait-ms': '70000' }, deadlineMs: 45_000 },
+  ])('gives Kie only the time $caller can wait for, counted from the request’s arrival', async ({ headers, deadlineMs }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const client = createClient({ remainingCredits: 41 });
+      const rpc = client.rpc.getMockImplementation()!;
+      // The rate limit and the ledger hold take 3 s of the caller's wait.
+      client.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) => {
+        if (fn === 'check_backend_rate_limit') vi.setSystemTime(Date.now() + 3_000);
+        return rpc(fn, args);
+      });
+      buildEnhancerSystemPromptMock.mockReturnValue('system prompt');
+      callPromptEnhancerMock.mockResolvedValue({ enhancedPrompt: 'provider structured response' });
+      buildPromptEnhancementArtifactsMock.mockReturnValue({ compiledPrompt: 'compiled prompt', agentId: 'test-enhancer', appliedSafeguards: [] });
+      applyPromptEnhancementSafeguardsWithMetadataMock.mockReturnValue({ enhancedPrompt: 'final enhanced prompt', appliedSafeguards: [] });
+      inspectPromptQualityMock.mockReturnValue({ qualityScore: 90, warnings: [] });
+
+      await enhancePromptForUser({
+        body: { medium: 'image', selectedModel: 'nano-banana-pro', prompt: 'Create a product poster' },
+        userId: 'user-1',
+        request: new Request('http://localhost/api/enhance-prompt', { method: 'POST', headers }),
+        client: client.client,
+      });
+
+      expect(callPromptEnhancerMock.mock.lastCall?.[2]).toMatchObject({ deadlineMs: deadlineMs - 3_000 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

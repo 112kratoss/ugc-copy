@@ -25,8 +25,8 @@
  *   a tab keeps its entries across a reload and a deploy.
  * - `guardBack` (default true): false keeps the guard out of history, for a
  *   page drawn inside another surface that answers Back itself (the profile
- *   editor in the creator page's modal). Links, the shell's search and the
- *   tab still ask.
+ *   editor in the creator page's modal). Links, the shell's search and a
+ *   closed tab still ask.
  * - `onLeave` (optional): runs when the person answers the question with a
  *   leave, as the page starts to go, for anything the page drops on its way
  *   out. It does not run for `leave()`.
@@ -46,7 +46,8 @@
  *   follows it by the router (a new tab or a download is not held). The app
  *   shell's sidebar, bottom navigation, drawer, top bar and account menu are
  *   links, and so is a page's own Back link, which needs no handler of its
- *   own: one it has never runs.
+ *   own: one it has never runs. The shell's tab that is open, pressed again,
+ *   is not held: the shell takes the page to its top and goes nowhere.
  * - The shell's ways out that are not links, which call `holdForLeaveGuard`
  *   (the top bar's search).
  * - A reload, a closed tab or a typed address, which get the browser's own
@@ -64,6 +65,7 @@
 import { useCallback, useEffect, useEffectEvent, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { getReselectableTabId } from '@/components/app-shell-nav';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import { publishNavigationStartTo } from '@/components/navigation-progress-state';
 import { useConfirmation } from '@/components/useConfirmation';
@@ -249,6 +251,13 @@ export function useLeaveGuard({
       // A link to a place on this page (the layout's "Skip to content", a
       // section anchor) leaves nothing behind, whatever its fragment.
       if (destination.pathname === current.pathname && destination.search === current.search) {
+        return;
+      }
+      // Nor does the shell's tab that is open, pressed again, whatever this
+      // page's query (a first profile's `?next=`): the shell takes the page to
+      // its top and goes nowhere. Each control of a tab names it.
+      const tabId = anchor.dataset.appNavTab;
+      if (tabId && tabId === getReselectableTabId(current.pathname)) {
         return;
       }
 

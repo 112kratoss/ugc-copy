@@ -55,13 +55,19 @@ let bundlePresenceError: unknown;
 let postRow: Record<string, unknown> | null;
 // Fails every list read of posts (the recipe's own post lookup among them).
 let postListReadError: unknown;
+// Fails only the reads of posts by id (`.in('id', …)`): a page's linked posts,
+// after a read of post ids that worked.
+let linkedPostReadError: unknown;
 let purchasedRevisionRow: Record<string, unknown> | null;
 let purchasedMediaRows: Record<string, unknown>[];
-// The seller dashboard's reads: paid orders, deletion audits, buyer profiles.
+// The seller dashboard's reads: paid orders, deletion audits, buyer profiles,
+// and the blocks between the seller and their buyers.
 let orderRows: Record<string, unknown>[];
 let deletionAuditRows: Record<string, unknown>[];
 let buyerProfileRows: Array<{ id: string; username: string | null; display_name: string | null; avatar_url: string | null }>;
 let profileReadError: unknown;
+let blockRows: Array<{ blocker_user_id: string; blocked_user_id: string }>;
+let blockReadError: unknown;
 // Guest identities and the account each was linked to, for who-is-linked reads.
 let linkedGuestRows: Array<{ id: string; merged_into_user_id: string | null }>;
 let linkedGuestReadError: unknown;
@@ -357,13 +363,77 @@ vi.mock('@/lib/server-helpers', () => ({
         };
       }
 
-      if (table === 'post_resource_bundle_orders' || table === 'post_deletion_audits') {
-        const rows = table === 'post_resource_bundle_orders' ? orderRows : deletionAuditRows;
+      // Honours the bundle, status and amount filters, the order and the
+      // limit, as the database would: the seller page reads its newest sales
+      // and free opens apart, of its own recipes, settled.
+      if (table === 'post_resource_bundle_orders') {
+        const filters: Array<(row: Record<string, unknown>) => boolean> = [];
+        let limit = Number.POSITIVE_INFINITY;
         const query = {
           select() { return query; },
-          in() { return query; },
+          in(column: string, values: unknown[]) {
+            filters.push((row) => values.includes(row[column]));
+            return query;
+          },
+          eq(column: string, value: unknown) {
+            if (column === 'amount_subunits' || column === 'status') filters.push((row) => row[column] === value);
+            return query;
+          },
+          gt(column: string, value: number) {
+            filters.push((row) => Number(row[column]) > value);
+            return query;
+          },
+          limit(count: number) {
+            limit = count;
+            return query;
+          },
+          async order(column: string, options?: { ascending?: boolean }) {
+            const direction = options?.ascending === false ? -1 : 1;
+            const rows = orderRows
+              .filter((row) => filters.every((matches) => matches(row)))
+              .sort((first, second) => String(first[column]).localeCompare(String(second[column])) * direction)
+              .slice(0, limit);
+            return { data: rows, error: null };
+          },
+        };
+        return query;
+      }
+
+      // Honours `.not(column, 'is', null)`, as the database would.
+      if (table === 'post_deletion_audits') {
+        const present: string[] = [];
+        const query = {
+          select() { return query; },
           eq() { return query; },
-          async order() { return { data: rows, error: null }; },
+          not(column: string, operator: string, value: unknown) {
+            if (operator === 'is' && value === null) present.push(column);
+            return query;
+          },
+          async order() {
+            return { data: deletionAuditRows.filter((row) => present.every((column) => row[column] != null)), error: null };
+          },
+        };
+        return query;
+      }
+
+      if (table === 'user_blocks') {
+        const equalities: Record<string, unknown> = {};
+        const query = {
+          select() { return query; },
+          eq(column: string, value: unknown) {
+            equalities[column] = value;
+            return query;
+          },
+          async in(column: string, values: unknown[]) {
+            if (blockReadError) return { data: null, error: blockReadError };
+            return {
+              data: blockRows.filter((row) => (
+                Object.entries(equalities).every(([key, value]) => row[key as keyof typeof row] === value)
+                && values.includes(row[column as keyof typeof row])
+              )),
+              error: null,
+            };
+          },
         };
         return query;
       }
@@ -372,6 +442,7 @@ vi.mock('@/lib/server-helpers', () => ({
         let eqId: string | null = null;
         const equalityFilters: Record<string, unknown> = {};
         const nullFilters: string[] = [];
+        let readsById = false;
 
         // The service narrows post visibility per viewer scope; the mock has to
         // honour those filters or an entitlement test proves nothing.
@@ -385,7 +456,8 @@ vi.mock('@/lib/server-helpers', () => ({
           select() {
             return query;
           },
-          in() {
+          in(column?: string) {
+            if (column === 'id') readsById = true;
             return query;
           },
           eq(column?: string, value?: unknown) {
@@ -405,12 +477,19 @@ vi.mock('@/lib/server-helpers', () => ({
           neq() {
             return query;
           },
+          order() {
+            return query;
+          },
+          limit() {
+            return query;
+          },
           async maybeSingle() {
             return { data: eqId === 'post-1' && matchesFilters() ? postRow : null, error: null };
           },
           then(resolve: (value: { data: unknown[] | null; error: unknown }) => void) {
-            resolve(postListReadError
-              ? { data: null, error: postListReadError }
+            const readError = postListReadError ?? (readsById ? linkedPostReadError : null);
+            resolve(readError
+              ? { data: null, error: readError }
               : { data: matchesFilters() && postRow ? [postRow] : [], error: null });
           },
         };
@@ -600,6 +679,7 @@ describe('post resource bundle server access', () => {
     viewerHasPurchased = false;
     bundlePresenceError = null;
     postListReadError = null;
+    linkedPostReadError = null;
     postRow = {
       id: 'post-1',
       user_id: 'owner-1',
@@ -644,6 +724,8 @@ describe('post resource bundle server access', () => {
     deletionAuditRows = [];
     buyerProfileRows = [];
     profileReadError = null;
+    blockRows = [];
+    blockReadError = null;
     linkedGuestRows = [];
     linkedGuestReadError = null;
     revisionRows = [];
@@ -2369,7 +2451,8 @@ describe('post resource bundle server access', () => {
       id,
       bundle_id: 'bundle-1',
       buyer_user_id: buyerUserId,
-      legacy_order_id: null,
+      razorpay_order_id: `order_${id}`,
+      status: 'paid',
       amount_subunits: 900,
       currency: 'USD',
       created_at: '2026-07-03T00:00:00.000Z',
@@ -2393,8 +2476,12 @@ describe('post resource bundle server access', () => {
       const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
       const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
 
-      expect(dashboard.sales.map((sale) => sale.buyerLabel)).toEqual(['@maya', 'Sam Buyer', 'A buyer']);
-      for (const sale of dashboard.sales) expect(sale).not.toHaveProperty('buyerUserId');
+      expect(dashboard.recentUnlocks.map((unlock) => [unlock.buyerLabel, unlock.named])).toEqual([
+        ['@maya', true],
+        ['Sam Buyer', true],
+        ['Someone', false],
+      ]);
+      for (const unlock of dashboard.recentUnlocks) expect(unlock).not.toHaveProperty('buyerUserId');
       const serialized = JSON.stringify(dashboard);
       for (const buyerId of ['buyer-with-handle', 'buyer-with-name', anonymousBuyerId]) {
         expect(serialized).not.toContain(buyerId);
@@ -2415,8 +2502,8 @@ describe('post resource bundle server access', () => {
     });
 
     // Decision 6 (2026-10-17): a free unlock is not a sale. Its order is a
-    // "paid" row of 0 subunits, counted under Free unlocks and not listed here.
-    it('lists paid sales only under Recent sales, never a free unlock', async () => {
+    // "paid" row of 0 subunits: Recent unlocks lists it as opened, not bought.
+    it('lists free unlocks beside paid sales under Recent unlocks, saying which were paid', async () => {
       orderRows = [
         paidOrder('order-paid', 'buyer-with-handle'),
         { ...paidOrder('order-free', 'buyer-with-name'), amount_subunits: 0 },
@@ -2429,10 +2516,153 @@ describe('post resource bundle server access', () => {
       const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
       const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
 
-      expect(dashboard.sales.map((sale) => sale.id)).toEqual(['order-paid']);
+      expect(dashboard.recentUnlocks.map((unlock) => [unlock.id, unlock.paid, unlock.buyerLabel])).toEqual([
+        ['order-paid', true, '@maya'],
+        ['order-free', false, 'Sam Buyer'],
+      ]);
     });
 
-    it('calls every buyer "A buyer" when the buyer profiles cannot be read', async () => {
+    // Review 3: the newest six orders of any kind let a run of free opens push
+    // a sale off the page, where the earlier Recent sales listed every sale.
+    it('keeps the newest sales in Recent unlocks however many free opens follow them', async () => {
+      orderRows = [
+        { ...paidOrder('order-sale', 'buyer-with-handle'), created_at: '2026-07-01T00:00:00.000Z' },
+        ...Array.from({ length: 7 }, (_, index) => ({
+          ...paidOrder(`order-free-${index}`, 'buyer-with-name'),
+          amount_subunits: 0,
+          created_at: `2026-07-02T00:0${index}:00.000Z`,
+        })),
+      ];
+      buyerProfileRows = [{ id: 'buyer-with-handle', username: 'maya', display_name: 'Maya R', avatar_url: null }];
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      // Newest first: the five newest free opens, then the sale.
+      expect(dashboard.recentUnlocks.map((unlock) => unlock.id)).toEqual([
+        'order-free-6',
+        'order-free-5',
+        'order-free-4',
+        'order-free-3',
+        'order-free-2',
+        'order-sale',
+      ]);
+    });
+
+    // Second review: sales first in line kept every free open off the list
+    // once there were six sales, and the Unlocks tile's "Latest" with them.
+    it('keeps the newest free opens in Recent unlocks however many sales came before them', async () => {
+      orderRows = [
+        ...Array.from({ length: 6 }, (_, index) => ({
+          ...paidOrder(`order-sale-${index}`, 'buyer-with-handle'),
+          created_at: `2026-09-0${index + 1}T00:00:00.000Z`,
+        })),
+        { ...paidOrder('order-free-1', 'buyer-with-name'), amount_subunits: 0, created_at: '2026-10-30T00:00:00.000Z' },
+        { ...paidOrder('order-free-2', 'buyer-with-name'), amount_subunits: 0, created_at: '2026-10-31T00:00:00.000Z' },
+      ];
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      // Newest first, the newest of all at the top.
+      expect(dashboard.recentUnlocks.map((unlock) => unlock.id)).toEqual([
+        'order-free-2',
+        'order-free-1',
+        'order-sale-5',
+        'order-sale-4',
+        'order-sale-3',
+        'order-sale-2',
+      ]);
+    });
+
+    // Second review: the fake ignored these filters, so nothing proved the
+    // page reads only its own recipes' settled orders.
+    it('lists only settled orders of the seller’s own recipes', async () => {
+      orderRows = [
+        paidOrder('order-own', 'buyer-with-handle'),
+        { ...paidOrder('order-other-seller', 'buyer-with-handle'), bundle_id: 'bundle-of-someone-else' },
+        { ...paidOrder('order-unpaid', 'buyer-with-handle'), status: 'created' },
+        { ...paidOrder('order-failed', 'buyer-with-handle'), status: 'failed' },
+      ];
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.recentUnlocks.map((unlock) => unlock.id)).toEqual(['order-own']);
+    });
+
+    // Second review: an unlock with credits read as a dollar amount.
+    it('says which sales were paid with credits', async () => {
+      orderRows = [
+        { ...paidOrder('order-credits', 'buyer-with-handle'), razorpay_order_id: 'credits_bundle_bundle-1_buyer-with-handle' },
+        paidOrder('order-card', 'buyer-with-name'),
+        { ...paidOrder('order-free', 'buyer-with-name'), amount_subunits: 0, razorpay_order_id: 'credits_bundle_bundle-1_buyer-with-name' },
+      ];
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.recentUnlocks.map((unlock) => [unlock.id, unlock.paidInCredits])).toEqual([
+        ['order-credits', true],
+        ['order-card', false],
+        ['order-free', false],
+      ]);
+    });
+
+    // Review 8: a sale alert stops naming its buyer across a block, either way
+    // round (20261020053858); Recent unlocks kept naming free openers.
+    it('names no free opener across a block, either way round, and keeps a paid buyer’s handle', async () => {
+      const freeOrder = (id: string, buyerUserId: string) => ({ ...paidOrder(id, buyerUserId), amount_subunits: 0 });
+      orderRows = [
+        paidOrder('order-paid-blocked', 'buyer-blocked'),
+        freeOrder('order-free-blocked', 'buyer-blocked'),
+        freeOrder('order-free-blocker', 'buyer-blocker'),
+        freeOrder('order-free-open', 'buyer-open'),
+      ];
+      buyerProfileRows = [
+        { id: 'buyer-blocked', username: 'blocked', display_name: null, avatar_url: null },
+        { id: 'buyer-blocker', username: 'blocker', display_name: null, avatar_url: null },
+        { id: 'buyer-open', username: 'open', display_name: null, avatar_url: null },
+      ];
+      blockRows = [
+        { blocker_user_id: 'owner-1', blocked_user_id: 'buyer-blocked' },
+        { blocker_user_id: 'buyer-blocker', blocked_user_id: 'owner-1' },
+        // Between two other people: no bearing on this seller's page.
+        { blocker_user_id: 'buyer-open', blocked_user_id: 'someone-else' },
+      ];
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.recentUnlocks.map((unlock) => [unlock.id, unlock.buyerLabel, unlock.named])).toEqual([
+        ['order-paid-blocked', '@blocked', true],
+        ['order-free-blocked', 'Someone', false],
+        ['order-free-blocker', 'Someone', false],
+        ['order-free-open', '@open', true],
+      ]);
+      expect(JSON.stringify(dashboard)).not.toContain('@blocker');
+    });
+
+    it('names no free opener when the blocks cannot be read', async () => {
+      orderRows = [
+        paidOrder('order-paid', 'buyer-with-handle'),
+        { ...paidOrder('order-free', 'buyer-with-name'), amount_subunits: 0 },
+      ];
+      buyerProfileRows = [
+        { id: 'buyer-with-handle', username: 'maya', display_name: 'Maya R', avatar_url: null },
+        { id: 'buyer-with-name', username: null, display_name: 'Sam Buyer', avatar_url: null },
+      ];
+      blockReadError = new Error('blocks unavailable');
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.recentUnlocks.map((unlock) => unlock.buyerLabel)).toEqual(['@maya', 'Someone']);
+      consoleError.mockRestore();
+    });
+
+    it('calls every buyer "Someone" when the buyer profiles cannot be read', async () => {
       const anonymousBuyerId = '6f1c2a4e-1111-4222-8333-444455556666';
       orderRows = [paidOrder('order-1', anonymousBuyerId)];
       profileReadError = new Error('profiles unavailable');
@@ -2441,7 +2671,7 @@ describe('post resource bundle server access', () => {
       const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
       const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
 
-      expect(dashboard.sales.map((sale) => sale.buyerLabel)).toEqual(['A buyer']);
+      expect(dashboard.recentUnlocks.map((unlock) => unlock.buyerLabel)).toEqual(['Someone']);
       expect(JSON.stringify(dashboard)).not.toContain(anonymousBuyerId);
       consoleError.mockRestore();
     });
@@ -2481,6 +2711,127 @@ describe('post resource bundle server access', () => {
 
       expect(dashboard.bundles.map((bundle) => [bundle.postId, bundle.post?.tombstoned])).toEqual([['post-1', true]]);
       expect(dashboard.deletedSnapshots.map((snapshot) => snapshot.id)).toEqual(['audit-removed', 'audit-legacy']);
+    });
+
+    // Review 7: every deleted post leaves an audit, and all of them were listed
+    // as "Deleted posts that had recipes".
+    it('leaves out a deleted post that never had a recipe', async () => {
+      const deletionAudit = (id: string, bundleAccessMode: 'free' | 'paid' | null) => ({
+        id,
+        post_id: `post-${id}`,
+        title: 'Deleted post',
+        visibility: 'public',
+        source_kind: 'magicbooklet',
+        bundle_access_mode: bundleAccessMode,
+        bundle_status: bundleAccessMode ? 'published' : null,
+        bundle_price_usd_cents: bundleAccessMode === 'paid' ? 900 : null,
+        bundle_resource_kinds: bundleAccessMode ? ['prompt'] : [],
+        sales_count: 0,
+        earnings_usd_cents: 0,
+        had_paid_orders: false,
+        deleted_at: '2026-07-02T00:00:00.000Z',
+      });
+      deletionAuditRows = [
+        deletionAudit('plain', null),
+        deletionAudit('free-recipe', 'free'),
+        deletionAudit('paid-recipe', 'paid'),
+      ];
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.deletedSnapshots.map((snapshot) => snapshot.id)).toEqual(['free-recipe', 'paid-recipe']);
+    });
+
+    // Second review: every recipe read as one whose post is gone, which
+    // nobody can buy, when the read of their posts failed.
+    it('fails the page when the posts of its recipes cannot be read', async () => {
+      linkedPostReadError = new Error('posts unavailable');
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      await expect(getSellerPostResourceBundleDashboard('owner-1')).rejects.toBeTruthy();
+      consoleError.mockRestore();
+    });
+
+    // Second review: the editor adds a recipe again to a post whose recipe was
+    // removed after it was unlocked, but the page never offered that post.
+    it('offers a post whose recipe was removed after it was unlocked', async () => {
+      bundleRow = { ...(bundleRow as BundleRow), status: 'draft', retired_at: '2026-07-04T00:00:00.000Z' } as BundleRow;
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.recipeCandidates?.map((candidate) => candidate.postId)).toEqual(['post-1']);
+    });
+
+    // Review 6: a recipe removed after it sold is a draft with retired_at set,
+    // and the page read it as a draft to publish.
+    it('says when a recipe was removed after it was unlocked', async () => {
+      bundleRow = { ...(bundleRow as BundleRow), status: 'draft', retired_at: '2026-07-04T00:00:00.000Z' } as BundleRow;
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.bundles.map((bundle) => [bundle.status, bundle.retiredAt])).toEqual([
+        ['draft', '2026-07-04T00:00:00.000Z'],
+      ]);
+    });
+
+    // Ready for a recipe, and the Add a recipe picker: the seller's public
+    // posts that have no recipe yet.
+    it('offers a public post without a recipe, and never a post that has one', async () => {
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      expect((await getSellerPostResourceBundleDashboard('owner-1')).recipeCandidates).toEqual([]);
+
+      bundleRow = null;
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.recipeCandidates).toEqual([expect.objectContaining({
+        postId: 'post-1',
+        title: 'Public recipe post',
+        postFormat: 'media',
+        saveCount: expect.any(Number),
+      })]);
+    });
+
+    it('offers only a public, visible post as one a recipe could go on', async () => {
+      bundleRow = null;
+      postRow = { ...(postRow as Record<string, unknown>), visibility: 'private' };
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.recipeCandidates).toEqual([]);
+    });
+
+    // The suggestions are extra: a read of them that fails is null, which the
+    // page says, never a page that cannot load.
+    it('loads the dashboard without suggestions when the posts read for them fails', async () => {
+      bundleRow = null;
+      postListReadError = new Error('posts unavailable');
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.recipeCandidates).toBeNull();
+      expect(dashboard.bundles).toEqual([]);
+      consoleError.mockRestore();
+    });
+
+    // Second review: only the read of post ids gave null; one of the posts
+    // themselves that failed came back as no posts at all.
+    it('loads the dashboard without suggestions when the posts behind them cannot be read', async () => {
+      bundleRow = null;
+      linkedPostReadError = new Error('posts unavailable');
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.recipeCandidates).toBeNull();
+      consoleError.mockRestore();
     });
   });
 

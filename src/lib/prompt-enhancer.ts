@@ -1,6 +1,6 @@
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import { extractPromptHandles } from '@/lib/image-elements';
 
 import {
@@ -9,7 +9,7 @@ import {
 } from '@/lib/prompt-quality';
 import {
   fetchWithProviderTimeout,
-  PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS,
+  isExternalServiceTimeoutError,
 } from '@/lib/provider-fetch';
 import {
   ENHANCER_PLAYBOOKS,
@@ -163,6 +163,49 @@ export const PROMPT_ENHANCER_PROVIDER_MODEL = 'gemini-3.6-flash';
 // payload shape as the previous gemini-3-flash endpoint (chat/completions,
 // reasoning_effort, image_url content blocks, response_format).
 const PROMPT_ENHANCER_ENDPOINT = 'https://api.kie.ai/gemini-3-6-flash-openai/v1/chat/completions';
+
+/**
+ * The longest Kie may take for one enhancement, every ask included, counted from
+ * the request's arrival. Kept well under 60 s: React Native hands iOS a request
+ * timeout of 0, which iOS may read as its 60 s default, so an iPhone can stop
+ * waiting there whatever the app's own timer says.
+ */
+export const PROMPT_ENHANCER_MAX_DEADLINE_MS = 45_000;
+/** The header in which a caller states, in whole ms, how long it waits for the route's answer. */
+export const PROMPT_ENHANCER_WAIT_HEADER = 'x-magicbooklet-wait-ms';
+/**
+ * Kept back from the caller's wait for its session, the way here and back and
+ * the ledger's settle, so the route's answer arrives before the caller gives up:
+ * an answer that lands after that is charged and never shown.
+ */
+export const PROMPT_ENHANCER_CALLER_MARGIN_MS = 5_000;
+/**
+ * What a caller that states no wait is taken to wait: the app gives every
+ * request it sets no deadline for 30 s (ugc-mobile/lib/api-client.ts), and apps
+ * from before the header still do.
+ */
+const UNSTATED_WAIT_MS = 30_000;
+export const PROMPT_ENHANCER_DEFAULT_DEADLINE_MS = UNSTATED_WAIT_MS - PROMPT_ENHANCER_CALLER_MARGIN_MS;
+/**
+ * Kie's answers on record came in 3 to 10 s, and the ones that failed hung past
+ * 30 s, four of ten from 2026-08-30 to 10-25; on 08-30 an ask sent while one
+ * hung was answered in 3 s. An ask still open after this long is sent again.
+ */
+export const PROMPT_ENHANCER_HEDGE_AFTER_MS = 12_000;
+/** With less than this left, a send cannot be answered and is not made. */
+const PROMPT_ENHANCER_MIN_SEND_MS = 2_000;
+
+/**
+ * How long Kie may take for one request: what its caller states it waits, less
+ * the time kept back, and never more than the budget. A caller that states no
+ * wait, or one that is not a whole number of ms, is taken to wait 30 s.
+ */
+export function resolvePromptEnhancerDeadlineMs(headers: Headers): number {
+  const statedWaitMs = Number(headers.get(PROMPT_ENHANCER_WAIT_HEADER));
+  const callerWaitMs = Number.isSafeInteger(statedWaitMs) && statedWaitMs > 0 ? statedWaitMs : UNSTATED_WAIT_MS;
+
+  return Math.max(0, Math.min(PROMPT_ENHANCER_MAX_DEADLINE_MS, callerWaitMs - PROMPT_ENHANCER_CALLER_MARGIN_MS));
+}
 
 export function getPromptEnhancementCost(): number {
   return PROMPT_ENHANCEMENT_COST_CREDITS;
@@ -1820,6 +1863,8 @@ export interface PromptEnhancerCallOptions {
   imageUrls?: string[];
   /** JSON schema the provider is asked to enforce on the completion. */
   responseSchema?: Record<string, unknown>;
+  /** How long Kie may take from now, every ask included (`resolvePromptEnhancerDeadlineMs`), in whole ms. */
+  deadlineMs: number;
 }
 
 type EnhancerContentBlock =
@@ -1866,44 +1911,84 @@ function buildEnhancerRequestBody(
   return JSON.stringify(body);
 }
 
-export async function callPromptEnhancer(
+/** A refusal or an unreadable answer from Kie, with the status it came with. */
+class PromptEnhancerProviderError extends Error {
+  constructor(message: string, readonly status: number | null) {
+    super(message);
+    this.name = 'PromptEnhancerProviderError';
+  }
+}
+
+/** Kie wraps some failures in an HTTP 200 whose body carries the real status. */
+function readEnvelopeStatus(data: unknown): number | null {
+  const code = (data as { code?: unknown } | null)?.code;
+  return typeof code === 'number' && code !== 200 ? code : null;
+}
+
+/**
+ * A second ask can only help when Kie failed on its side: a server error other
+ * than 505 (the feature switched off), including Kie's 501 and Cloudflare's
+ * 520 to 524, a 408 or 425, a dropped connection or an answer that could not be
+ * read. Not after a timeout, which has spent the whole wait; not after a 429,
+ * which a second ask in the same window would meet again; not after a refusal
+ * of the request or the account; and not after an answer with no content and no
+ * code, which may be a refusal of the prompt itself.
+ */
+function isWorthAskingAgain(error: unknown): boolean {
+  if (isExternalServiceTimeoutError(error)) return false;
+  // The deadline firing while an answer's body was still arriving.
+  if ((error as { name?: unknown } | null)?.name === 'TimeoutError') return false;
+  if (error instanceof PromptEnhancerProviderError) {
+    const { status } = error;
+    return status === 408 || status === 425 || (status !== null && status >= 500 && status !== 505);
+  }
+  return true;
+}
+
+async function askPromptEnhancer(
+  apiKey: string,
   systemPrompt: string,
   userPrompt: string,
-  options?: PromptEnhancerCallOptions
+  options: PromptEnhancerCallOptions,
+  remainingMs: () => number,
+  cancelSignal: AbortSignal,
 ): Promise<KieEnhancementResponse> {
-  const apiKey = process.env.KIE_AI_API_KEY;
-  if (!apiKey) {
-    throw new Error('KIE_AI_API_KEY is not configured');
-  }
+  const send = (includeResponseFormat: boolean) => fetchWithProviderTimeout(
+    PROMPT_ENHANCER_ENDPOINT,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: buildEnhancerRequestBody(systemPrompt, userPrompt, options, includeResponseFormat),
+    },
+    remainingMs(),
+    fetch,
+    'KIE prompt enhancer',
+    { cancelSignal },
+  );
 
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${apiKey}`,
-  };
+  let response = await send(true);
 
-  let response = await fetchWithProviderTimeout(PROMPT_ENHANCER_ENDPOINT, {
-    method: 'POST',
-    headers,
-    body: buildEnhancerRequestBody(systemPrompt, userPrompt, options, true),
-  }, PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS, fetch, 'KIE prompt enhancer');
-
-  if (!response.ok && options?.responseSchema && (response.status === 400 || response.status === 422)) {
+  if (
+    !response.ok
+    && options.responseSchema
+    && (response.status === 400 || response.status === 422)
+    && remainingMs() >= PROMPT_ENHANCER_MIN_SEND_MS
+  ) {
     // The schema-enforcement pass-through is undocumented on Kie's spec block;
     // fall back to an unconstrained completion rather than failing the click.
     logBackendError('promptenhancer_response_format_unsupported', {
       error: `provider rejected response_format with ${response.status}`,
     });
-    response = await fetchWithProviderTimeout(PROMPT_ENHANCER_ENDPOINT, {
-      method: 'POST',
-      headers,
-      body: buildEnhancerRequestBody(systemPrompt, userPrompt, options, false),
-    }, PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS, fetch, 'KIE prompt enhancer');
+    response = await send(false);
   }
 
   if (!response.ok) {
     const errorBody = await response.text();
     logBackendError('promptenhancer_kie_api_error', { error: response.status, errorBody });
-    throw new Error(`Kie API returned ${response.status}: ${errorBody}`);
+    throw new PromptEnhancerProviderError(`Kie API returned ${response.status}: ${errorBody}`, response.status);
   }
 
   const data = await response.json();
@@ -1911,8 +1996,77 @@ export async function callPromptEnhancer(
   const content = data?.choices?.[0]?.message?.content;
   if (!content || typeof content !== 'string') {
     logBackendError('promptenhancer_unexpected_response_shape', { error: JSON.stringify(data) });
-    throw new Error('Invalid response from Kie API: no content in choices');
+    throw new PromptEnhancerProviderError('Invalid response from Kie API: no content in choices', readEnvelopeStatus(data));
   }
 
   return { enhancedPrompt: content.trim() };
+}
+
+/**
+ * Asks Kie, and asks a second time when the first ask has not answered in
+ * `PROMPT_ENHANCER_HEDGE_AFTER_MS` or failed on Kie's side, while enough of the
+ * deadline is left to be answered. The first answer is kept and the other ask
+ * let go; both end by the one deadline. Asking twice is safe: a chat completion
+ * creates nothing, Kie bills about 0.12 of its credits for one, and the person
+ * is charged once by the ledger whichever ask answers. When both fail, the first
+ * ask's failure is the one reported.
+ */
+export async function callPromptEnhancer(
+  systemPrompt: string,
+  userPrompt: string,
+  options: PromptEnhancerCallOptions
+): Promise<KieEnhancementResponse> {
+  const apiKey = process.env.KIE_AI_API_KEY;
+  if (!apiKey) {
+    throw new Error('KIE_AI_API_KEY is not configured');
+  }
+
+  const startedAtMs = Date.now();
+  const remainingMs = () => Math.max(0, options.deadlineMs - (Date.now() - startedAtMs));
+  const openAsks = new Set<AbortController>();
+  let hedge: ReturnType<typeof setTimeout> | undefined;
+
+  const ask = () => {
+    const cancel = new AbortController();
+    openAsks.add(cancel);
+    return askPromptEnhancer(apiKey, systemPrompt, userPrompt, options, remainingMs, cancel.signal)
+      .finally(() => openAsks.delete(cancel));
+  };
+
+  try {
+    const first = ask();
+    // Follows the second ask once one is sent; rejects when none is, so that
+    // Promise.any settles on the first ask alone.
+    const second = new Promise<KieEnhancementResponse>((resolve, reject) => {
+      let decided = false;
+      const askAgain = (reason: 'slow' | 'failed', firstError?: unknown) => {
+        if (decided) return;
+        decided = true;
+        clearTimeout(hedge);
+        if (remainingMs() < PROMPT_ENHANCER_MIN_SEND_MS) {
+          reject(firstError);
+          return;
+        }
+        logBackendWarning('promptenhancer_asked_again', { reason, afterMs: Date.now() - startedAtMs });
+        ask().then(resolve, reject);
+      };
+      hedge = setTimeout(() => askAgain('slow'), PROMPT_ENHANCER_HEDGE_AFTER_MS);
+      first.catch((error: unknown) => {
+        if (isWorthAskingAgain(error)) {
+          askAgain('failed', error);
+        } else if (!decided) {
+          decided = true;
+          clearTimeout(hedge);
+          reject(error);
+        }
+      });
+    });
+    return await Promise.any([first, second]);
+  } catch (error) {
+    // Promise.any lists its failures in ask order.
+    throw error instanceof AggregateError ? error.errors[0] : error;
+  } finally {
+    clearTimeout(hedge);
+    for (const cancel of openAsks) cancel.abort();
+  }
 }

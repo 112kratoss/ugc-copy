@@ -5036,6 +5036,58 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(await screen.findByText('Video reference 1')).toBeInTheDocument();
     }
 
+    /** The saved draft's read, held until the test answers it. */
+    function holdDraftRead() {
+      let answer: ((draft: unknown) => void) | null = null;
+      loadCreatorDraftMock.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+      return async (draft: unknown) => {
+        await waitFor(() => expect(answer).not.toBeNull());
+        await act(async () => answer!(draft));
+      };
+    }
+
+    it('keeps a prompt typed while the saved draft is read over the draft’s, as one typed before the page’s script ran', async () => {
+      // The page takes in what was typed before its script ran as it mounts (useTypedBeforeHydration),
+      // while this read is out: the box's newest words are the visitor's, not the draft's.
+      for (const [typed, expected] of [[PROMPT, PROMPT], [null, 'An older prompt']] as const) {
+        const answerDraft = holdDraftRead();
+        const view = render(<CreateVideoClient prefill={{}} />);
+        if (typed) fireEvent.change(promptBox(), { target: { value: typed } });
+        await answerDraft({ prompt: 'An older prompt' });
+
+        expect(promptBox(), typed ? 'typed' : 'untouched').toHaveValue(expected);
+        view.unmount();
+      }
+    });
+
+    it('stays on the single prompt it kept when the saved draft was multi-shot, with the shots kept behind it', async () => {
+      const multiShotDraft = {
+        prompt: '',
+        modelId: 'kling-3.0-video',
+        isMultiShot: true,
+        shots: [{ id: '1', prompt: 'A lamp lights on the quay', duration: 5 }],
+      };
+      for (const typed of [PROMPT, null]) {
+        const answerDraft = holdDraftRead();
+        const view = render(<CreateVideoClient prefill={{}} />);
+        if (typed) fireEvent.change(promptBox(), { target: { value: typed } });
+        await answerDraft(multiShotDraft);
+
+        const multiShot = screen.getByRole('radio', { name: 'Multi-shot' });
+        if (typed) {
+          expect(multiShot).toHaveAttribute('aria-checked', 'false');
+          expect(promptBox()).toHaveValue(PROMPT);
+          fireEvent.click(multiShot);
+          expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('A lamp lights on the quay');
+        } else {
+          // Nothing typed: the draft's form comes back whole, multi-shot included.
+          expect(multiShot).toHaveAttribute('aria-checked', 'true');
+          expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('A lamp lights on the quay');
+        }
+        view.unmount();
+      }
+    });
+
     it('keeps the key of a start that got no answer, and Check again sends that key and body once more', async () => {
       answerStarts(async () => {
         throw new TypeError('Failed to fetch');

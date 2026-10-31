@@ -169,6 +169,9 @@ describe('AppShellAccount', () => {
     const navProfile = APP_NAV_ITEMS.find((item) => item.id === 'profile')!;
     const profile = screen.getByRole('menuitem', { name: navProfile.label });
     expect(profile).toHaveAttribute('href', navProfile.href);
+    // Named as the navigation's tab, which a page's leave guard lets through
+    // when it is open (src/lib/use-leave-guard.ts).
+    expect(profile).toHaveAttribute('data-app-nav-tab', navProfile.id);
     expect(profile).not.toHaveAttribute('aria-current');
     expect(screen.getAllByRole('menuitem')[0]).toBe(profile);
 
@@ -185,7 +188,10 @@ describe('AppShellAccount', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
 
-    expect(screen.getByRole('menuitem', { name: 'Profile' })).toHaveAttribute('aria-current', 'page');
+    const profile = screen.getByRole('menuitem', { name: 'Profile' });
+    expect(profile).toHaveAttribute('aria-current', 'page');
+    // With no shell to keep the press on the page, a leave guard must still ask.
+    expect(profile).not.toHaveAttribute('data-app-nav-tab');
   });
 
   it('closes the account menu when the page under it changes, as after a leave the page held', async () => {

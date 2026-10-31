@@ -171,7 +171,7 @@ export default function MarketplacePage({ searchParams }: MarketplacePageProps) 
                 href="/marketplace/sell"
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
               >
-                Seller Dashboard
+                Recipe sales
               </Link>
             </div>
           </div>

@@ -82,7 +82,7 @@ const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
   unlocks: 'Back to Marketplace',
   library: 'Back to unlocked recipes',
   creator: 'Back to Creator Portfolio',
-  seller: 'Back to Seller Dashboard',
+  seller: 'Back to Recipe sales',
   studio: 'Back to My Studio',
   'template-run': 'Back to Template Run',
   profile: 'Back to Your Profile',

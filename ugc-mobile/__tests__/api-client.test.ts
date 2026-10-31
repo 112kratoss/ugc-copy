@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   ACCOUNT_DELETION_TIMEOUT_MS,
   AccountDeletingError,
   ApiError,
   GENERATION_START_TIMEOUT_MS,
   POST_CREATE_TIMEOUT_MS,
+  PROMPT_ENHANCE_TIMEOUT_MS,
   SessionMergedError,
   SessionRejectedError,
   UpgradeRequiredError,
@@ -577,6 +579,41 @@ describe('mobile api client caching', () => {
       expect(POST_CREATE_TIMEOUT_MS).toBeGreaterThan(300_000);
       expect(signals[0].aborted).toBe(true);
       expect(isRequestTimeoutError(await created)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The enhancer may wait on Kie for 45 s (src/lib/prompt-enhancer.ts), but
+  // only for a request that says it waits that long. At the usual 30 s a slow
+  // answer was given up on here, then charged on the server and never shown.
+  it('waits out the enhancer’s budget and tells the server how long it waits', async () => {
+    vi.useFakeTimers();
+    const sent: { headers: Headers | null; signal: AbortSignal | null } = { headers: null, signal: null };
+    const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      sent.headers = new Headers(init?.headers);
+      sent.signal = init?.signal ?? null;
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')), { once: true });
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+      requestTimeoutMs: 100,
+    });
+    try {
+      const enhanced = api.enhancePrompt({ medium: 'image', selectedModel: 'nano-banana', prompt: 'Make it premium.' })
+        .catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(PROMPT_ENHANCE_TIMEOUT_MS - 1);
+      const { clientWait } = mobileApiContract.endpoints.enhancePrompt;
+      expect(PROMPT_ENHANCE_TIMEOUT_MS).toBe(clientWait.timeoutMs);
+      expect(sent.headers?.get(clientWait.header)).toBe(String(clientWait.timeoutMs));
+      expect(sent.signal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sent.signal?.aborted).toBe(true);
+      expect(isRequestTimeoutError(await enhanced)).toBe(true);
     } finally {
       vi.useRealTimers();
     }

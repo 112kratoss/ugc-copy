@@ -717,10 +717,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const isGeneratedPaywallIntent = publishIntent === 'paid-generation' && Boolean(generationId);
   const isCreationPaywallManagementIntent =
     isEditMode && entrySurface === 'creations' && requestedFocusTarget === 'price';
-  // Studio's "Add recipe" (A-F17): the post's recipe section with no mode
+  // "Add a recipe" (`recipe=add`, A-F17), from Studio, Recipe sales or
+  // anywhere else that sends it: the post's recipe section with no mode
   // chosen and nothing focused, not "Manage recipe"'s Paid and price.
-  const isCreationRecipeAddIntent =
-    isEditMode && entrySurface === 'creations' && searchParams.get('recipe') === 'add';
+  const isRecipeAddIntent = isEditMode && searchParams.get('recipe') === 'add';
   const initialBundle = initialPost?.resourceBundle ?? { accessMode: 'none' as const };
   const initialCategory =
     initialPost?.category && initialPost.category !== 'text'
@@ -2876,7 +2876,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     : entrySurface === 'marketplace'
       ? 'Back to marketplace'
       : entrySurface === 'seller'
-        ? 'Back to seller dashboard'
+        ? 'Back to Recipe sales'
         : entrySurface === 'home'
           ? 'Back to home'
           : entrySurface === 'template-run'
@@ -2976,7 +2976,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           <section className="rounded-[32px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
             <div className="mb-6">
               <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                {isCreationRecipeAddIntent
+                {isRecipeAddIntent
                   ? 'Add a recipe to this post'
                   : isCreationPaywallManagementIntent
                     ? 'Manage the recipe behind this post'
@@ -2985,7 +2985,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                       : 'Create post'}
               </h1>
               <p className="mt-2 text-sm text-zinc-400">
-                {isCreationRecipeAddIntent
+                {isRecipeAddIntent
                   ? 'Choose a free or paid recipe, then add what people receive.'
                   : isCreationPaywallManagementIntent
                     ? 'Adjust post settings, pricing, and visibility below.'
