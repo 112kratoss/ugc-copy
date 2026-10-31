@@ -1,8 +1,12 @@
 import { requireOptionalNativeModule } from 'expo';
-import { createVideoPlayer, type BufferOptions, type VideoPlayer, type VideoThumbnail } from 'expo-video';
+import {
+  createVideoPlayer,
+  type BufferOptions,
+  type VideoPlayer,
+  type VideoThumbnail,
+  type VideoThumbnailOptions,
+} from 'expo-video';
 import { Platform } from 'react-native';
-
-type FrameSize = { maxWidth: number; maxHeight: number };
 
 /**
  * expo-video's read of a still with no player, which only an Android binary
@@ -12,10 +16,10 @@ type FrameSize = { maxWidth: number; maxHeight: number };
  * share (`expo.modules.AsyncFunctionQueue`), so a slow or stalled link held
  * up session reads, haptics, the clipboard and the viewer's own clip for as
  * long as the open took, and a deadline here cannot free that thread. This
- * one opens it on the IO dispatcher.
+ * one opens it on the IO dispatcher. Once started it cannot be called off.
  */
 type PlayerlessStillReader = {
-  generateThumbnailFromUrlAsync(url: string, timeSeconds: number, options: FrameSize): Promise<VideoThumbnail>;
+  generateThumbnailFromUrlAsync(url: string, timeSeconds: number, options: VideoThumbnailOptions): Promise<VideoThumbnail>;
 };
 
 /**
@@ -53,10 +57,19 @@ export const VIDEO_FRAME_TIME_SECONDS = 0.1;
  */
 export const VIDEO_FRAME_MAX_SIDE = 720;
 
-const FRAME_SIZE: FrameSize = { maxWidth: VIDEO_FRAME_MAX_SIDE, maxHeight: VIDEO_FRAME_MAX_SIDE };
+const FRAME_SIZE: VideoThumbnailOptions = { maxWidth: VIDEO_FRAME_MAX_SIDE, maxHeight: VIDEO_FRAME_MAX_SIDE };
 
-/** How long one still may take before the next read starts anyway. */
+/** How long a still read from a player (iOS) may take before the next read starts anyway. */
 export const VIDEO_FRAME_DEADLINE_MS = 15_000;
+
+/**
+ * How long a read with no player (Android) is waited for, by its card and by
+ * the queue alike. It cannot be called off, and goes on reading until it has
+ * the still or its link fails: the next read waits for it rather than opening
+ * another clip beside it on what is then a slow link, and its card takes the
+ * still whenever it comes within this long.
+ */
+export const PLAYERLESS_READ_DEADLINE_MS = 60_000;
 
 /**
  * The player is never shown or played, and the still does not come from what
@@ -65,6 +78,15 @@ export const VIDEO_FRAME_DEADLINE_MS = 15_000;
 const FRAME_PLAYER_BUFFER: BufferOptions = { preferredForwardBufferDuration: 1 };
 
 let queue: Promise<void> = Promise.resolve();
+
+/** Reads with no player under way, by link: asking again for a clip being read joins its read. */
+const playerlessReads = new Map<string, Promise<VideoThumbnail>>();
+
+type GrabOptions = {
+  signal?: AbortSignal;
+  /** A still another caller read for the same clip while this one waited its turn, which then makes no read. */
+  alreadyRead?: () => VideoThumbnail | null | undefined;
+};
 
 /**
  * One still from the clip at `url`, for a card that shows what a video is
@@ -78,40 +100,75 @@ let queue: Promise<void> = Promise.resolve();
  * a time across the app, since each opens a clip beside whatever the reel is
  * playing; a read called off before its turn makes none.
  */
-export function grabVideoFrame(url: string, { signal }: { signal?: AbortSignal } = {}): Promise<VideoThumbnail | null> {
+export function grabVideoFrame(url: string, { signal, alreadyRead }: GrabOptions = {}): Promise<VideoThumbnail | null> {
   if (!VIDEO_STILLS_READ) return Promise.resolve(null);
+  const underway = playerlessReads.get(url);
+  if (underway) return untilCalledOff(signal, PLAYERLESS_READ_DEADLINE_MS, () => underway).catch(() => null);
+  // What the queue waits for before the next read: the turn itself, and on
+  // Android the native read too, which a call-off does not stop.
+  let held: Promise<unknown> = Promise.resolve();
   const turn = queue
-    .then(() => (signal?.aborted ? null : readStill(url, signal)))
+    .then(() => {
+      if (signal?.aborted) return null;
+      const ready = alreadyRead?.();
+      if (ready) return ready;
+      if (!playerlessReader) return readFromPlayer(url, signal);
+      const read = readWithoutPlayer(playerlessReader, url);
+      held = settledWithin(read, PLAYERLESS_READ_DEADLINE_MS);
+      return untilCalledOff(signal, PLAYERLESS_READ_DEADLINE_MS, () => read);
+    })
     .catch(() => null);
   // The queue keeps the turn, not the still it read.
-  queue = turn.then(() => undefined);
-  return turn;
+  queue = turn.then(() => held).then(() => undefined);
+  // A caller that calls its read off before its turn stops waiting at once.
+  return signal ? Promise.race([turn, calledOff(signal)]) : turn;
 }
 
-function readStill(url: string, outer: AbortSignal | undefined) {
-  if (!playerlessReader) return readFromPlayer(url, outer);
-  // Nothing native to let go: a read called off finishes on its own thread, and its still is dropped.
-  return untilCalledOff(outer, () => playerlessReader.generateThumbnailFromUrlAsync(url, VIDEO_FRAME_TIME_SECONDS, FRAME_SIZE));
+function readWithoutPlayer(reader: PlayerlessStillReader, url: string) {
+  const read = reader.generateThumbnailFromUrlAsync(url, VIDEO_FRAME_TIME_SECONDS, FRAME_SIZE);
+  playerlessReads.set(url, read);
+  const forget = () => {
+    if (playerlessReads.get(url) === read) playerlessReads.delete(url);
+  };
+  read.then(forget, forget);
+  return read;
+}
+
+/** Resolves once `read` settles, or after `ms` if it has not by then. */
+function settledWithin(read: Promise<unknown>, ms: number) {
+  return new Promise<void>((resolve) => {
+    const cap = setTimeout(resolve, ms);
+    const done = () => {
+      clearTimeout(cap);
+      resolve();
+    };
+    read.then(done, done);
+  });
 }
 
 async function readFromPlayer(url: string, outer: AbortSignal | undefined) {
   const player = createVideoPlayer({ uri: url });
   try {
-    return await untilCalledOff(outer, (signal) => readFrame(player, signal));
+    return await untilCalledOff(outer, VIDEO_FRAME_DEADLINE_MS, (signal) => readFrame(player, signal));
   } finally {
     player.release();
   }
 }
 
 /** The read's still, or null once it is called off or its deadline passes, whichever comes first. */
-async function untilCalledOff(outer: AbortSignal | undefined, read: (signal: AbortSignal) => Promise<VideoThumbnail | null>) {
+async function untilCalledOff(
+  outer: AbortSignal | undefined,
+  deadlineMs: number,
+  read: (signal: AbortSignal) => Promise<VideoThumbnail | null>,
+) {
   const controller = new AbortController();
   const callOff = () => controller.abort();
   outer?.addEventListener('abort', callOff);
-  const deadline = setTimeout(callOff, VIDEO_FRAME_DEADLINE_MS);
+  const deadline = setTimeout(callOff, deadlineMs);
   try {
-    // A still request already sent cannot be taken back, so the queue moves
-    // on when the read is called off rather than when it returns.
+    // A still request already sent cannot be taken back, so the caller stops
+    // waiting when the read is called off rather than when it returns (on iOS
+    // the queue moves on with it: letting the player go ends its load).
     return await Promise.race([read(controller.signal), calledOff(controller.signal)]);
   } finally {
     clearTimeout(deadline);

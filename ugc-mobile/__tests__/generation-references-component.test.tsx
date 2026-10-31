@@ -42,12 +42,12 @@ const stills = vi.hoisted(() => ({
 vi.mock('@/lib/video-frame', () => ({ grabVideoFrame: stills.grab, VIDEO_STILLS_READ: true }));
 
 import { GenerationOutputs, GenerationReferences } from '@/components/generation-references';
-import { resetVideoStillsForTests } from '@/lib/use-video-stills';
+import { clearVideoStills } from '@/lib/video-still-cache';
 
 beforeEach(() => {
   stills.grab.mockReset();
   stills.grab.mockResolvedValue(null);
-  resetVideoStillsForTests();
+  clearVideoStills();
 });
 
 function generation(url: string | null): GenerationListItem {
@@ -142,7 +142,7 @@ describe('GenerationReferences', () => {
       await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
 
       expect(stills.grab).toHaveBeenCalledTimes(1);
-      expect(stills.grab).toHaveBeenCalledWith('https://signed.test/clip.mp4', { signal: expect.any(AbortSignal) });
+      expect(stills.grab).toHaveBeenCalledWith('https://signed.test/clip.mp4', expect.objectContaining({ signal: expect.any(AbortSignal) }));
       expect(images(tree).map((node) => node.props.source)).toEqual([STILL]);
       expect(tree.root.findAllByType('play-icon' as never)).toHaveLength(1);
       expect(tree.root.findAllByType('file-icon' as never)).toHaveLength(0);
@@ -167,11 +167,11 @@ describe('GenerationReferences', () => {
       await renderer.act(async () => { tree.root.findByType('pressable' as never).props.onPress(); });
       await renderer.act(async () => { tree.update(<GenerationReferences generationId="gen-1" />); });
       expect(stills.grab).toHaveBeenCalledTimes(2);
-      expect(stills.grab).toHaveBeenLastCalledWith('https://signed.test/fresh/clip.mp4', { signal: expect.any(AbortSignal) });
+      expect(stills.grab).toHaveBeenLastCalledWith('https://signed.test/fresh/clip.mp4', expect.objectContaining({ signal: expect.any(AbortSignal) }));
       expect(images(tree).map((node) => node.props.source)).toEqual([STILL]);
     });
 
-    it('keeps a still by its file, which the recipe’s row reads under the same storage path', async () => {
+    it('keeps a still by its file from one visit to the next, under a newly signed link', async () => {
       const STILL = { width: 405, height: 720 };
       stills.grab.mockResolvedValueOnce(STILL);
       state.data = withClip('https://signed.test/clip.mp4');
@@ -184,6 +184,21 @@ describe('GenerationReferences', () => {
       await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
       expect(images(tree).map((node) => node.props.source)).toEqual([STILL]);
       expect(stills.grab).toHaveBeenCalledTimes(1);
+    });
+    it('draws no still for an input the record no longer links, though one was read before', async () => {
+      const STILL = { width: 405, height: 720 };
+      stills.grab.mockResolvedValueOnce(STILL);
+      state.data = withClip('https://signed.test/clip.mp4');
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
+      expect(images(tree)).toHaveLength(1);
+      renderer.act(() => tree.unmount());
+
+      state.data = withClip(null);
+      await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
+      expect(images(tree)).toHaveLength(0);
+      expect(tree.root.findAllByType('play-icon' as never)).toHaveLength(1);
+      expect(tree.root.findAllByType('text' as never).map((node) => node.props.children)).toContain('Unavailable · Tap to retry');
     });
   });
 
@@ -290,6 +305,41 @@ describe('GenerationOutputs', () => {
     state.data = run('image');
     await renderer.act(async () => { renderer.create(<GenerationOutputs generationId="gen-1" count={3} />); });
     expect(stills.grab).not.toHaveBeenCalled();
+  });
+
+  it('reads no still for a run it does not draw, as one with a single file', async () => {
+    state.data = run('video', { output_urls: ['https://signed.test/out-1.mp4'], preview_url: null, media: null } as Partial<GenerationListItem>);
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<GenerationOutputs generationId="gen-1" count={3} />); });
+    expect(tree.toJSON()).toBeNull();
+    expect(stills.grab).not.toHaveBeenCalled();
+  });
+
+  it('reads a still for the main output when its poster fails to load', async () => {
+    stills.grab.mockImplementation(async (url) => ({ from: url }));
+    state.data = run('video');
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<GenerationOutputs generationId="gen-1" count={3} />); });
+    expect(stills.grab.mock.calls.map(([url]) => url)).toEqual(['https://signed.test/out-1.mp4', 'https://signed.test/out-2.mp4']);
+
+    await renderer.act(async () => { frames(tree)[0].props.onImageError(); });
+    expect(stills.grab.mock.calls.map(([url]) => url)).toContain('https://signed.test/out-0.mp4');
+    expect(tree.root.findAllByType('image' as never).map((node) => node.props.source)).toEqual([
+      { from: 'https://signed.test/out-0.mp4' }, { from: 'https://signed.test/out-1.mp4' }, { from: 'https://signed.test/out-2.mp4' },
+    ]);
+  });
+
+  it('reads a video output that gave no still again when it is opened', async () => {
+    state.data = run('video');
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<GenerationOutputs generationId="gen-1" count={3} />); });
+    expect(stills.grab).toHaveBeenCalledTimes(2);
+
+    stills.grab.mockImplementation(async (url) => ({ from: url }));
+    await renderer.act(async () => { cards(tree)[1].props.onPress(); });
+    expect(stills.grab).toHaveBeenCalledTimes(3);
+    expect(stills.grab).toHaveBeenLastCalledWith('https://signed.test/out-1.mp4', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(tree.root.findAllByType('image' as never).map((node) => node.props.source)).toEqual([{ from: 'https://signed.test/out-1.mp4' }]);
   });
 
   it('gives the poster to the primary output where an older run listed it later', () => {

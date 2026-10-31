@@ -1,5 +1,5 @@
 diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
-index 0987c7c..0217c31 100644
+index 0987c7c..42a2c84 100644
 --- a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
 +++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
 @@ -1,5 +1,6 @@
@@ -22,7 +22,7 @@ index 0987c7c..0217c31 100644
  import kotlin.time.Duration
  
  // https://developer.android.com/guide/topics/media/media3/getting-started/migration-guide#improvements_in_media3
-@@ -64,6 +67,24 @@ class VideoModule : Module() {
+@@ -64,6 +67,27 @@ class VideoModule : Module() {
        VideoManager.cache.clear()
      }
  
@@ -35,7 +35,10 @@ index 0987c7c..0217c31 100644
 +      return@Coroutine withContext(Dispatchers.IO) {
 +        val retriever = MediaMetadataRetriever()
 +        try {
-+          retriever.setDataSource(url, emptyMap())
++          // Read for the platform's own cache and taken off before the request goes out: by default it reads up to
++          // 20 MiB ahead of the decoder while the retriever is open, most of a clip for one still. This holds it to
++          // 1 MiB ahead and drops the connection there.
++          retriever.setDataSource(url, mapOf("x-cache-config" to "256/1024/0", "x-disconnect-at-highwatermark" to "1"))
 +          retriever.generateThumbnailAtTime(time, options)
 +        } finally {
 +          // `release`, not `close`: the retriever is AutoCloseable only from API 29.
@@ -47,7 +50,7 @@ index 0987c7c..0217c31 100644
      View(SurfaceVideoView::class) {
        VideoViewComponent<SurfaceVideoView>()
      }
-@@ -342,14 +363,18 @@ class VideoModule : Module() {
+@@ -342,14 +366,18 @@ class VideoModule : Module() {
        }
  
        AsyncFunction("generateThumbnailsAsync") Coroutine { ref: VideoPlayer, times: List<Duration>, options: VideoThumbnailOptions? ->

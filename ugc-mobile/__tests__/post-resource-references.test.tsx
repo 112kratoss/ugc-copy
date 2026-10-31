@@ -63,11 +63,11 @@ beforeEach(() => {
   stills.grab.mockReset();
   stills.grab.mockResolvedValue(null);
   // Stills read in one case are kept for the next mount, by storage path, and every case uses the same few paths.
-  resetVideoStillsForTests();
+  clearVideoStills();
 });
 
 import { MatureMediaCovered } from '@/components/mature-cover';
-import { resetVideoStillsForTests } from '@/lib/use-video-stills';
+import { clearVideoStills } from '@/lib/video-still-cache';
 import { PostResourceReferences } from '../components/post-resource-references';
 import { createPostResourceFileUrlResolver } from '../lib/api-client';
 
@@ -449,7 +449,7 @@ describe('PostResourceReferences', () => {
       });
 
       expect(stills.grab).toHaveBeenCalledTimes(1);
-      expect(stills.grab).toHaveBeenCalledWith('https://cdn.example.com/references/clip.mp4', { signal: expect.any(AbortSignal) });
+      expect(stills.grab).toHaveBeenCalledWith('https://cdn.example.com/references/clip.mp4', expect.objectContaining({ signal: expect.any(AbortSignal) }));
       const [still] = byType(tree!, 'image');
       expect(still?.props).toMatchObject({ source: STILL, contentFit: 'cover', accessible: false });
       expect(byType(tree!, 'play-icon')).toHaveLength(1);
@@ -503,7 +503,26 @@ describe('PostResourceReferences', () => {
       });
 
       expect(stills.grab).toHaveBeenCalledTimes(2);
-      expect(stills.grab).toHaveBeenLastCalledWith('https://cdn.example.com/renewed/clip.mp4', { signal: expect.any(AbortSignal) });
+      expect(stills.grab).toHaveBeenLastCalledWith('https://cdn.example.com/renewed/clip.mp4', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([STILL]);
+      renderer.act(() => tree?.unmount());
+    });
+
+    it('reads a clip that gave no still again when it is opened, even if the renewed link reads the same', async () => {
+      // A link signed again within the same second as the first can come back unchanged.
+      const resolveFileUrl = vi.fn(async (path: string) => `https://cdn.example.com/${path}`);
+      let tree: renderer.ReactTestRenderer | undefined;
+      await renderer.act(async () => {
+        tree = renderer.create(<PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />);
+      });
+      expect(stills.grab).toHaveBeenCalledTimes(1);
+
+      stills.grab.mockResolvedValueOnce(STILL);
+      await renderer.act(async () => {
+        await tree!.root.findByProps({ accessibilityLabel: 'Open reference Video reference 1' }).props.onPress();
+      });
+      expect(stills.grab).toHaveBeenCalledTimes(2);
+      expect(stills.grab).toHaveBeenLastCalledWith('https://cdn.example.com/references/clip.mp4', expect.objectContaining({ signal: expect.any(AbortSignal) }));
       expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([STILL]);
       renderer.act(() => tree?.unmount());
     });
@@ -556,7 +575,7 @@ describe('PostResourceReferences', () => {
       renderer.act(() => tree?.unmount());
     });
 
-    it('calls off a still being read when the row is hidden or goes, and reads it again when the row comes back', async () => {
+    it('calls off a still being read when the row is hidden, and reads it again when the row comes back', async () => {
       // A hidden <Activity> runs every effect's cleanup with its state kept, as
       // Fast Refresh does; shown again, every effect runs again.
       const signals: AbortSignal[] = [];
@@ -588,12 +607,7 @@ describe('PostResourceReferences', () => {
       expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([again]);
       expect(signals).toHaveLength(2);
 
-      // Nothing is left under way: the first read was called off with the row
-      // hidden, and the second has landed. A read under way as the row goes is
-      // the next case.
       renderer.act(() => tree?.unmount());
-      expect(signals[0].aborted).toBe(true);
-      expect(signals).toHaveLength(2);
     });
 
     it('lets a read under way go when the row unmounts', async () => {

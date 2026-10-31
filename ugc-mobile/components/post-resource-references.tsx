@@ -103,17 +103,17 @@ export function PostResourceReferences({
     }
   }, [covered, referenceItems, resolveFileUrl]);
 
-  // A clip's still, by storage path, read from the link the card has: opening
-  // the clip renews the link, which keeps a still and asks again for one the
-  // old link did not give. Nothing under the plate is read, nor while the page
-  // is off screen.
+  // A clip's still, by storage path, read from the link the card has: a still
+  // stays when opening the clip renews the link, and one the old link did not
+  // give is asked for again from the new one (openItem). Nothing under the
+  // plate is read, nor while the page is off screen.
   const clips = useMemo(
     () => referenceItems.flatMap((item) => (
       item.storagePath && referenceMediaKind(item) === 'video' ? [{ key: item.storagePath, url: fileUrls[item.storagePath] }] : []
     )),
     [fileUrls, referenceItems]
   );
-  const videoFrames = useVideoStills(clips, { read: !covered && readStills });
+  const { stills: videoFrames, readAgain } = useVideoStills(clips, { read: !covered && readStills });
 
   // Everything the app can show itself: storage-backed images and videos
   // whose signed URL has arrived. External links stay links, and audio has
@@ -152,6 +152,9 @@ export function PostResourceReferences({
         if (!mounted.current || request !== openRequest.current) return;
         setFileUrls((current) => ({ ...current, [storagePath]: url }));
         setFailedPreviewPaths((current) => ({ ...current, [storagePath]: false }));
+        // A clip that gave no still, its link having run out or its read the
+        // deadline, is asked again from the renewed link, as a picture is.
+        readAgain(storagePath);
         setLightboxKey(referenceKey(item, index));
         return;
       }

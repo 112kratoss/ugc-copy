@@ -47,12 +47,12 @@ export function GenerationReferences({ generationId }: { generationId: string })
 
   const inputMedia = query.data?.input_media;
   const references = useMemo(() => generationReferences(inputMedia), [inputMedia]);
-  // An input clip's still, by its file where the record names one: the recipe's references on the same page can
-  // name that file too. Opening a reference reads the record again, and a clip that gave none is read from the new link.
+  // An input clip's still, by its file where the record names one: a recipe that lists the creation's saved inputs
+  // as they are names the same file on the same page, and draws the same still.
   const clips = useMemo(() => references.flatMap((item) => (
     item.mediaKind === 'video' ? [{ key: stillKey(generationId, item), url: item.url }] : []
   )), [generationId, references]);
-  const stills = useVideoStills(clips);
+  const { stills, readAgain } = useVideoStills(clips);
   if (!user) return null;
   if (query.data && !references.length && !query.isError) return null;
 
@@ -79,6 +79,8 @@ export function GenerationReferences({ generationId }: { generationId: string })
         delete next[id];
         return next;
       });
+      // A clip that gave no still is read again from the link just renewed.
+      if (selected.mediaKind === 'video') readAgain(stillKey(generationId, selected));
       if (selected.mediaKind === 'audio') {
         await Linking.openURL(selected.url);
       } else {
@@ -113,7 +115,8 @@ export function GenerationReferences({ generationId }: { generationId: string })
       <PagerRowScrollView keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
         {references.map((item) => {
           const failed = !item.url || failedUrls[item.id] === item.url;
-          const still = item.mediaKind === 'video' ? stills[stillKey(generationId, item)] : null;
+          // Not for a clip the record no longer links: its card says it is unavailable.
+          const still = item.url ? stills[stillKey(generationId, item)] : null;
           return (
             <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`Open reference ${item.label}`}
               disabled={openingId !== null} onPress={() => void openReference(item.id)}
@@ -126,14 +129,13 @@ export function GenerationReferences({ generationId }: { generationId: string })
                       imageContentFit="contain" style={{ width: '100%', height: '100%' }}
                       onImageError={() => setFailedUrls((current) => ({ ...current, [item.id]: item.url! }))} />
                   ) : item.mediaKind === 'image' ? <ImageIcon size={32} color={theme.colors.muted} />
-                    : still ? (
+                    // A clip reads as one: its still under a play mark, or the mark alone, where a document icon read as a file.
+                    : item.mediaKind === 'video' ? (
                       <>
-                        <VideoStill still={still} />
-                        <VideoPlayMark onPicture />
+                        {still ? <VideoStill still={still} /> : null}
+                        <VideoPlayMark onPicture={Boolean(still)} />
                       </>
                     )
-                    // A clip reads as one: a play mark, where a document icon read as a file.
-                    : item.mediaKind === 'video' ? <VideoPlayMark onPicture={false} />
                     : <FileText size={32} color={theme.colors.muted} />}
               </View>
               <View style={{ padding: appTheme.spacing.gap, gap: 4 }}>
@@ -177,14 +179,18 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
   // server saves now and was not always in older ones.
   const primaryIndex = Math.max(0, urls.indexOf(record?.media?.url ?? record?.output_url ?? ''));
   const poster = record?.media?.previewUrl ?? record?.previewUrl ?? record?.preview_url ?? null;
-  // A video is drawn by its poster, or by a still read from its file: its file is not a picture.
+  // A video is drawn by its poster, or by a still read from its file where it has none or its poster failed: its file
+  // is not a picture.
   const thumbnailUrl = (url: string, index: number) => (
     index === primaryIndex && poster ? poster : mediaKind === 'image' ? url : null
   );
-  const clips = useMemo(() => (mediaKind === 'video'
-    ? urls.flatMap((url, index) => (index === primaryIndex && poster ? [] : [{ key: outputStillKey(generationId, index), url }]))
-    : []), [generationId, mediaKind, poster, primaryIndex, urls]);
-  const stills = useVideoStills(clips);
+  const posterFailed = Boolean(poster) && failedUrls[primaryIndex] === poster;
+  // Nothing is read for a row that is not drawn (below).
+  const drawn = Boolean(user) && mediaKind === 'video' && urls.length >= 2;
+  const clips = useMemo(() => (drawn
+    ? urls.flatMap((url, index) => (index === primaryIndex && poster && !posterFailed ? [] : [{ key: outputStillKey(generationId, index), url }]))
+    : []), [drawn, generationId, poster, posterFailed, primaryIndex, urls]);
+  const { stills, readAgain } = useVideoStills(clips);
   if (!user) return null;
   // Sound and words have no place on the lightbox, and a single file is the slide itself.
   if (record && (!mediaKind || urls.length < 2)) return null;
@@ -203,6 +209,8 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
       delete next[index];
       return next;
     });
+    // A clip that gave no still is read again, as a picture that failed is loaded again.
+    readAgain(outputStillKey(generationId, index));
     setPreview({
       index,
       items: urls.map((url, position) => ({
@@ -230,7 +238,7 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
           {record ? urls.map((url, index) => {
             const thumbnail = thumbnailUrl(url, index);
             const failed = Boolean(thumbnail) && failedUrls[index] === thumbnail;
-            const still = thumbnail ? null : stills[outputStillKey(generationId, index)];
+            const still = thumbnail && !failed ? null : stills[outputStillKey(generationId, index)];
             return (
               <OutputCard key={index} accessibilityLabel={`Open output ${index + 1} of ${urls.length}`}
                 label={`Output ${index + 1}`}

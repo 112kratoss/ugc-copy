@@ -4,37 +4,62 @@ import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The still a link gives, decided per case.
-const stills = vi.hoisted(() => ({
-  read: true,
-  grab: vi.fn<(url: string, options: { signal: AbortSignal }) => Promise<unknown>>(),
-}));
+type GrabOptions = { signal: AbortSignal; alreadyRead?: () => unknown };
+
+// The still a link gives, decided per case. Like the real queue, each read
+// waits for the one before, and takes a still read meanwhile by another row
+// (`alreadyRead`) instead of making its own.
+const stills = vi.hoisted(() => {
+  const state = {
+    read: true,
+    answer: (async (url: string) => ({ name: url })) as (url: string, options: GrabOptions) => Promise<unknown>,
+    // Every read made, by link: a read that took another row's still makes none.
+    made: [] as string[],
+    queue: Promise.resolve() as Promise<unknown>,
+    grab: vi.fn((url: string, options: GrabOptions) => {
+      const turn = state.queue.then(async () => {
+        if (options.signal.aborted) return null;
+        const ready = options.alreadyRead?.();
+        if (ready) return ready;
+        state.made.push(url);
+        return state.answer(url, options);
+      });
+      state.queue = turn.catch(() => undefined);
+      return turn;
+    }),
+  };
+  return state;
+});
 vi.mock('@/lib/video-frame', () => ({
   grabVideoFrame: stills.grab,
   get VIDEO_STILLS_READ() { return stills.read; },
 }));
 
-import { resetVideoStillsForTests, useVideoStills, type StillClip } from '@/lib/use-video-stills';
+import { useVideoStills, type StillClip } from '@/lib/use-video-stills';
+import { cacheVideoStill, cachedVideoStill, clearVideoStills } from '@/lib/video-still-cache';
 
 type Shown = Record<string, unknown>;
+type Hook = ReturnType<typeof useVideoStills>;
 
-function Row({ clips, read, onStills }: { clips: StillClip[]; read?: boolean; onStills: (shown: Shown) => void }) {
-  onStills(useVideoStills(clips, { read }));
+function Row({ clips, read, onRender }: { clips: StillClip[]; read?: boolean; onRender: (hook: Hook) => void }) {
+  onRender(useVideoStills(clips, { read }));
   return null;
 }
 
-/** Renders a row and keeps what it last drew, and what it drew first. */
+/** Renders a row and keeps what it drew, first and last, and its `readAgain`. */
 async function mount(clips: StillClip[], read?: boolean) {
-  const drawn: Shown[] = [];
-  const onStills = (shown: Shown) => { drawn.push(shown); };
+  const drawn: Hook[] = [];
+  const onRender = (hook: Hook) => { drawn.push(hook); };
   let tree!: renderer.ReactTestRenderer;
-  await renderer.act(async () => { tree = renderer.create(<Row clips={clips} read={read} onStills={onStills} />); });
+  await renderer.act(async () => { tree = renderer.create(<Row clips={clips} read={read} onRender={onRender} />); });
   return {
     tree,
-    first: () => drawn[0],
-    last: () => drawn[drawn.length - 1],
+    first: (): Shown => drawn[0].stills,
+    last: (): Shown => drawn[drawn.length - 1].stills,
+    drawnAll: (): Shown[] => drawn.map((hook) => hook.stills),
+    readAgain: (key: string) => renderer.act(async () => { drawn[drawn.length - 1].readAgain(key); }),
     update: (next: StillClip[], nextRead?: boolean) => renderer.act(async () => {
-      tree.update(<Row clips={next} read={nextRead} onStills={onStills} />);
+      tree.update(<Row clips={next} read={nextRead} onRender={onRender} />);
     }),
   };
 }
@@ -44,59 +69,104 @@ const still = (name: string) => ({ name });
 
 beforeEach(() => {
   stills.read = true;
-  stills.grab.mockReset();
-  stills.grab.mockImplementation(async (url) => still(url));
-  resetVideoStillsForTests();
+  stills.made.length = 0;
+  stills.answer = async (url) => still(url);
+  stills.grab.mockClear();
+  stills.queue = Promise.resolve();
+  clearVideoStills();
 });
 
 describe('useVideoStills', () => {
-  it('reads each clip once its link arrives, and keeps its still by key when the link is renewed', async () => {
+  it('reads each clip once its link arrives, and keeps its still when the link is renewed', async () => {
     const row = await mount([clip('a', null)]);
-    expect(stills.grab).not.toHaveBeenCalled();
+    expect(stills.made).toEqual([]);
 
     await row.update([clip('a', 'https://cdn.test/a.mp4')]);
-    expect(stills.grab).toHaveBeenCalledWith('https://cdn.test/a.mp4', { signal: expect.any(AbortSignal) });
+    expect(stills.made).toEqual(['https://cdn.test/a.mp4']);
     expect(row.last()).toEqual({ a: still('https://cdn.test/a.mp4') });
 
     await row.update([clip('a', 'https://cdn.test/renewed/a.mp4')]);
-    expect(stills.grab).toHaveBeenCalledTimes(1);
+    expect(stills.made).toHaveLength(1);
     expect(row.last()).toEqual({ a: still('https://cdn.test/a.mp4') });
   });
 
-  it('reads a clip whose link gave none again only from another link', async () => {
-    stills.grab.mockResolvedValueOnce(null);
+  it('reads a clip that gave none again only when its card asks, from the link it has then', async () => {
+    stills.answer = async () => null;
     const row = await mount([clip('a')]);
     expect(row.last()).toEqual({ a: null });
 
-    await row.update([clip('a')]);
-    expect(stills.grab).toHaveBeenCalledTimes(1);
-
+    // A record read again for any other reason renews the link: not asked again.
     await row.update([clip('a', 'https://cdn.test/renewed/a.mp4')]);
-    expect(stills.grab).toHaveBeenCalledTimes(2);
+    expect(stills.made).toHaveLength(1);
+
+    stills.answer = async (url) => still(url);
+    await row.readAgain('a');
+    expect(stills.made).toEqual(['https://cdn.test/a.mp4', 'https://cdn.test/renewed/a.mp4']);
     expect(row.last()).toEqual({ a: still('https://cdn.test/renewed/a.mp4') });
+
+    // Asking again for a clip that has its still reads nothing.
+    await row.readAgain('a');
+    expect(stills.made).toHaveLength(2);
   });
 
-  it('asks again from a link renewed while a read that gives none is under way', async () => {
-    let answer: (value: unknown) => void = () => undefined;
-    stills.grab.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+  it('reads a clip that gave none again when asked, even from a link that reads the same', async () => {
+    stills.answer = async () => null;
     const row = await mount([clip('a')]);
-    await row.update([clip('a', 'https://cdn.test/renewed/a.mp4')]);
-    expect(stills.grab).toHaveBeenCalledTimes(1);
+    stills.answer = async (url) => still(url);
 
-    await renderer.act(async () => { answer(null); });
-    expect(stills.grab).toHaveBeenCalledTimes(2);
-    expect(stills.grab).toHaveBeenLastCalledWith('https://cdn.test/renewed/a.mp4', { signal: expect.any(AbortSignal) });
-    expect(row.last()).toEqual({ a: still('https://cdn.test/renewed/a.mp4') });
+    await row.readAgain('a');
+    expect(stills.made).toEqual(['https://cdn.test/a.mp4', 'https://cdn.test/a.mp4']);
+    expect(row.last()).toEqual({ a: still('https://cdn.test/a.mp4') });
+  });
+
+  it('reads a file named twice under two links once, whatever it gives', async () => {
+    stills.answer = async () => null;
+    const row = await mount([clip('a', 'https://cdn.test/one/a.mp4'), clip('a', 'https://cdn.test/two/a.mp4')]);
+    await row.update([clip('a', 'https://cdn.test/one/a.mp4'), clip('a', 'https://cdn.test/two/a.mp4')]);
+
+    expect(stills.made).toEqual(['https://cdn.test/one/a.mp4']);
+    expect(row.last()).toEqual({ a: null });
+  });
+
+  it('reads a file two rows name once, and both draw its still', async () => {
+    // Both rows mount together (the recipe's and the creation's on one page), so both reads are queued at once.
+    const drawn: Record<'first' | 'second', Hook[]> = { first: [], second: [] };
+    await renderer.act(async () => {
+      renderer.create(
+        <>
+          <Row clips={[clip('a', 'https://cdn.test/first/a.mp4')]} onRender={(hook) => { drawn.first.push(hook); }} />
+          <Row clips={[clip('a', 'https://cdn.test/second/a.mp4')]} onRender={(hook) => { drawn.second.push(hook); }} />
+        </>
+      );
+    });
+
+    expect(stills.grab.mock.calls).toHaveLength(2);
+    expect(stills.made).toEqual(['https://cdn.test/first/a.mp4']);
+    expect(drawn.first[drawn.first.length - 1].stills).toEqual({ a: still('https://cdn.test/first/a.mp4') });
+    expect(drawn.second[drawn.second.length - 1].stills).toEqual({ a: still('https://cdn.test/first/a.mp4') });
+  });
+
+  it('takes the still another row read meanwhile, where its own read gave none', async () => {
+    let answerFirst: (value: unknown) => void = () => undefined;
+    stills.answer = () => new Promise((resolve) => { answerFirst = resolve; });
+    const first = await mount([clip('a')]);
+    // The other row's still arrives while this row's read is still under way.
+    cacheVideoStill('a', still('from the other row') as never);
+
+    await renderer.act(async () => { answerFirst(null); });
+    expect(first.last()).toEqual({ a: still('from the other row') });
+    // Straight to the still: the card never blinks back to its plain mark.
+    expect(first.drawnAll().some((shown) => shown.a === null)).toBe(false);
   });
 
   it('reads nothing while told not to, calls off a read under way, and keeps the stills it has', async () => {
     const signals: AbortSignal[] = [];
-    stills.grab.mockImplementation(async (url, { signal }) => {
+    stills.answer = (url, { signal }) => {
       signals.push(signal);
-      return url.endsWith('b.mp4') ? new Promise(() => undefined) : still(url);
-    });
+      return url.endsWith('b.mp4') ? new Promise(() => undefined) : Promise.resolve(still(url));
+    };
     const row = await mount([clip('a'), clip('b')], false);
-    expect(stills.grab).not.toHaveBeenCalled();
+    expect(stills.made).toEqual([]);
 
     await row.update([clip('a'), clip('b')], true);
     expect(row.last()).toEqual({ a: still('https://cdn.test/a.mp4') });
@@ -106,61 +176,53 @@ describe('useVideoStills', () => {
     expect(signals.map((signal) => signal.aborted)).toEqual([false, true]);
     expect(row.last()).toEqual({ a: still('https://cdn.test/a.mp4') });
 
-    await row.update([clip('a'), clip('b')], true);
-    expect(stills.grab.mock.calls.map(([url]) => url)).toEqual([
-      'https://cdn.test/a.mp4', 'https://cdn.test/b.mp4', 'https://cdn.test/b.mp4',
-    ]);
     renderer.act(() => row.tree.unmount());
-    expect(signals[2].aborted).toBe(true);
   });
 
   it('draws a still read on an earlier visit from the first render, and reads its clip no more', async () => {
     const visit = await mount([clip('a')]);
     renderer.act(() => visit.tree.unmount());
-    expect(stills.grab).toHaveBeenCalledTimes(1);
+    expect(stills.made).toHaveLength(1);
 
     // Off screen (the reel mounts a page beside its slide) and with no link yet.
     const again = await mount([clip('a', null)], false);
     expect(again.first()).toEqual({ a: still('https://cdn.test/a.mp4') });
     await again.update([clip('a')], true);
-    expect(stills.grab).toHaveBeenCalledTimes(1);
+    expect(stills.made).toHaveLength(1);
   });
 
-  it('keeps only the last few stills from one visit to the next', async () => {
-    const keys = Array.from({ length: 9 }, (_, index) => `clip-${index}`);
+  it('keeps only the last few stills from one visit to the next, the least recently drawn going first', async () => {
+    const keys = Array.from({ length: 8 }, (_, index) => `clip-${index}`);
     const visit = await mount(keys.map((key) => clip(key)));
     renderer.act(() => visit.tree.unmount());
-    expect(stills.grab).toHaveBeenCalledTimes(9);
+    // clip-0, read first, is drawn again, so clip-1 is now the least recently drawn.
+    const again = await mount([clip('clip-0')]);
+    renderer.act(() => again.tree.unmount());
 
-    const again = await mount(keys.map((key) => clip(key)));
-    // The oldest was let go; the eight after it are drawn at once.
-    expect(Object.keys(again.first()).sort()).toEqual(keys.slice(1).sort());
-    expect(stills.grab).toHaveBeenCalledTimes(10);
-    expect(stills.grab).toHaveBeenLastCalledWith('https://cdn.test/clip-0.mp4', { signal: expect.any(AbortSignal) });
+    const another = await mount([clip('clip-8')]);
+    renderer.act(() => another.tree.unmount());
+    expect(cachedVideoStill('clip-0')).toEqual(still('https://cdn.test/clip-0.mp4'));
+    expect(cachedVideoStill('clip-1')).toBeUndefined();
+    expect(stills.made).toHaveLength(9);
   });
 
   it('does not keep a still that lands after its read was called off', async () => {
     let answer: (value: unknown) => void = () => undefined;
-    stills.grab.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    stills.answer = () => new Promise((resolve) => { answer = resolve; });
     const visit = await mount([clip('a')]);
     renderer.act(() => visit.tree.unmount());
     await renderer.act(async () => { answer(still('late')); });
 
+    stills.answer = async (url) => still(url);
     const again = await mount([clip('a')]);
     expect(again.first()).toEqual({});
-    expect(stills.grab).toHaveBeenCalledTimes(2);
-  });
-
-  it('reads one still for a file two cards name', async () => {
-    const row = await mount([clip('a'), clip('a')]);
-    expect(stills.grab).toHaveBeenCalledTimes(1);
-    expect(row.last()).toEqual({ a: still('https://cdn.test/a.mp4') });
+    expect(again.last()).toEqual({ a: still('https://cdn.test/a.mp4') });
   });
 
   it('reads nothing where this binary reads no stills', async () => {
     stills.read = false;
     const row = await mount([clip('a')]);
-    expect(stills.grab).not.toHaveBeenCalled();
+    expect(stills.grab.mock.calls).toHaveLength(0);
     expect(row.last()).toEqual({});
   });
 });

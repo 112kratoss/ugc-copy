@@ -165,24 +165,86 @@ describe('grabVideoFrame', () => {
       expect(players()).toHaveLength(0);
     });
 
-    it('reads one still at a time, and starts the next when one never returns', async () => {
+    it('reads one still at a time, and waits up to a minute for one, where iOS gives up at 15 s', async () => {
       vi.useFakeTimers();
+      let answerSlow: (still: unknown) => void = () => undefined;
       generateThumbnailFromUrlAsync.mockImplementation((url) => (url.endsWith('stuck.mp4')
         ? new Promise(() => undefined)
-        : Promise.resolve(STILL)));
-      const { grabVideoFrame, VIDEO_FRAME_DEADLINE_MS } = await load();
+        : url.endsWith('slow.mp4') ? new Promise((resolve) => { answerSlow = resolve; }) : Promise.resolve(STILL)));
+      const { grabVideoFrame, PLAYERLESS_READ_DEADLINE_MS, VIDEO_FRAME_DEADLINE_MS } = await load();
+
+      // A still that comes after iOS's deadline is still taken.
+      const slow = grabVideoFrame('https://cdn.test/slow.mp4');
+      await vi.advanceTimersByTimeAsync(VIDEO_FRAME_DEADLINE_MS + 5_000);
+      answerSlow(STILL);
+      await expect(slow).resolves.toBe(STILL);
 
       const stuck = grabVideoFrame('https://cdn.test/stuck.mp4');
       const next = grabVideoFrame('https://cdn.test/next.mp4');
-      await vi.advanceTimersByTimeAsync(VIDEO_FRAME_DEADLINE_MS - 1);
-      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(PLAYERLESS_READ_DEADLINE_MS - 1);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(2);
 
       await vi.advanceTimersByTimeAsync(1);
       await expect(stuck).resolves.toBeNull();
       await expect(next).resolves.toBe(STILL);
       expect(generateThumbnailFromUrlAsync.mock.calls.map(([url]) => url)).toEqual([
-        'https://cdn.test/stuck.mp4', 'https://cdn.test/next.mp4',
+        'https://cdn.test/slow.mp4', 'https://cdn.test/stuck.mp4', 'https://cdn.test/next.mp4',
       ]);
+    });
+
+    it('opens no clip beside a read called off that is still reading, until it ends', async () => {
+      let answerFirst: (still: unknown) => void = () => undefined;
+      generateThumbnailFromUrlAsync.mockImplementation((url) => (url.endsWith('first.mp4')
+        ? new Promise((resolve) => { answerFirst = resolve; })
+        : Promise.resolve(STILL)));
+      const { grabVideoFrame } = await load();
+      const page = new AbortController();
+
+      const first = grabVideoFrame('https://cdn.test/first.mp4', { signal: page.signal });
+      await settle();
+      page.abort();
+      await expect(first).resolves.toBeNull();
+
+      // The card stopped waiting, but the native read goes on: the next waits for it.
+      const next = grabVideoFrame('https://cdn.test/next.mp4');
+      await settle();
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
+
+      answerFirst(STILL);
+      await expect(next).resolves.toBe(STILL);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(2);
+    });
+
+    it('joins a read of the same link under way rather than opening the clip again', async () => {
+      let answer: (still: unknown) => void = () => undefined;
+      generateThumbnailFromUrlAsync.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+      const { grabVideoFrame } = await load();
+      const page = new AbortController();
+
+      // The page leaves mid-read and comes back: the same link is asked for again.
+      const left = grabVideoFrame('https://cdn.test/clip.mp4', { signal: page.signal });
+      await settle();
+      page.abort();
+      await expect(left).resolves.toBeNull();
+      const back = grabVideoFrame('https://cdn.test/clip.mp4');
+
+      answer(STILL);
+      await expect(back).resolves.toBe(STILL);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it('makes no read for a clip another card read while this one waited its turn', async () => {
+      const { grabVideoFrame } = await load();
+      const other = { width: 1, height: 1 };
+      let readMeanwhile: unknown;
+
+      const first = grabVideoFrame('https://cdn.test/first/clip.mp4');
+      const second = grabVideoFrame('https://cdn.test/second/clip.mp4', { alreadyRead: () => readMeanwhile as never });
+      readMeanwhile = other;
+
+      await expect(first).resolves.toBe(STILL);
+      await expect(second).resolves.toBe(other);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
     });
 
     it('asks nothing for a read called off before its turn, and gives none for one called off midway', async () => {

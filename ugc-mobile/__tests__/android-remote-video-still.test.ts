@@ -129,7 +129,12 @@ describe('Android remote video still', () => {
     // block comes before it.
     expect(body[1]).toBe('return@Coroutine withContext(Dispatchers.IO) {');
     expect(at('MediaMetadataRetriever()')).toBeGreaterThan(1);
-    expect(at('retriever.setDataSource(url, emptyMap())')).toBeGreaterThan(at('MediaMetadataRetriever()'));
+    expect(at('retriever.setDataSource(url, ')).toBeGreaterThan(at('MediaMetadataRetriever()'));
+    // The platform's cache reads up to 20 MiB ahead while the retriever is open; these two headers, taken off before
+    // the request goes out, hold it to 1 MiB ahead and drop the connection there.
+    expect(body[at('retriever.setDataSource(url, ')]).toBe(
+      'retriever.setDataSource(url, mapOf("x-cache-config" to "256/1024/0", "x-disconnect-at-highwatermark" to "1"))',
+    );
     expect(at('retriever.generateThumbnailAtTime(time, options)')).toBeGreaterThan(at('retriever.setDataSource('));
     // Released whatever the read did, with the call every API level has.
     expect(at('} finally {')).toBeGreaterThan(at('retriever.generateThumbnailAtTime('));
@@ -150,7 +155,7 @@ describe('Android remote video still', () => {
 
   it('is the function the still reader looks for', () => {
     // A rename on either side would leave Android reading no stills, without a word.
-    expect(read(stillReader)).toContain('generateThumbnailFromUrlAsync(url: string, timeSeconds: number, options: FrameSize)');
+    expect(read(stillReader)).toContain('generateThumbnailFromUrlAsync(url: string, timeSeconds: number, options: VideoThumbnailOptions)');
     expect(code.some((line) => line.startsWith('AsyncFunction("generateThumbnailFromUrlAsync") Coroutine { url: String, time: Duration, options: VideoThumbnailOptions? ->'))).toBe(true);
   });
 });
