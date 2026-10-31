@@ -31,6 +31,7 @@ import {
   type PostMediaRow,
 } from '@/lib/posts-server';
 import { getCreatorDisplayName } from '@/lib/profile';
+import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import {
   createServiceClient,
 } from '@/lib/server-helpers';
@@ -342,6 +343,8 @@ export interface PostResourceBundleDetail extends MarketplaceResourceListItem {
 
 interface SellerResourceDashboardBundle extends MarketplaceResourceListItem {
   status: PostResourceBundleStatus;
+  /** The seller removed the recipe after it was unlocked; its buyers keep it. */
+  retiredAt: string | null;
   post: PostResourceBundleLinkedPost | null;
   quality: MarketplaceQualityAssessment;
   // Hydrated at 'owner' scope, so the seller always sees their own earnings.
@@ -370,18 +373,46 @@ interface DeletedPostResourceSnapshot {
   deletedAt: string;
 }
 
+/** One unlock of a seller's recipe. */
+export interface SellerRecipeUnlock {
+  id: string;
+  bundleId: string;
+  /**
+   * A handle or a name, never an account id: "Someone" when there is neither,
+   * and for a free opener with a block between them and the seller.
+   */
+  buyerLabel: string;
+  /** Whether `buyerLabel` names someone. */
+  named: boolean;
+  /** False for a free unlock, which is not a sale (decision 6, 2026-10-17). */
+  paid: boolean;
+  /** A sale paid with credits: `amountSubunits` is then its price in credits. */
+  paidInCredits: boolean;
+  amountSubunits: number;
+  currency: MarketplaceCheckoutCurrency;
+  createdAt: string;
+}
+
+/** A public post of the seller's with no recipe yet, where one could go. */
+export interface SellerRecipeCandidate {
+  postId: string;
+  title: string;
+  postFormat: ShowcasePostFormat;
+  mediaKind: ShowcaseMediaKind | null;
+  mediaUrl: string | null;
+  mediaPreviewUrl: string | null;
+  saveCount: number;
+  remixCount: number;
+  shareVisitCount: number;
+}
+
 export interface SellerPostResourceBundleDashboard {
   bundles: SellerResourceDashboardBundle[];
   deletedSnapshots: DeletedPostResourceSnapshot[];
-  sales: Array<{
-    id: string;
-    bundleId: string;
-    bundleTitle: string;
-    buyerLabel: string;
-    amountSubunits: number;
-    currency: MarketplaceCheckoutCurrency;
-    createdAt: string;
-  }>;
+  /** The newest unlocks across the seller's recipes, newest first; each kind keeps up to half the list. */
+  recentUnlocks: SellerRecipeUnlock[];
+  /** The seller's public posts without a recipe, most saved first, then the newest; null when they could not be read. */
+  recipeCandidates: SellerRecipeCandidate[] | null;
   /** Paid unlocks across the seller's listings. */
   totalSalesCount: number;
   totalFreeUnlockCount: number;
@@ -2901,6 +2932,226 @@ export function assessOwnerListingQuality(input: {
   });
 }
 
+/** How many unlocks the seller dashboard lists, newest first. */
+const SELLER_RECENT_UNLOCK_LIMIT = 6;
+/** How many posts without a recipe it offers one for, from each of two orders: most saved, and newest. */
+const SELLER_RECIPE_CANDIDATE_LIMIT = 8;
+/** The most posts it reads to find them past the ones that have a recipe. */
+const SELLER_RECIPE_CANDIDATE_READ_CAP = 200;
+
+/**
+ * The seller's public posts that have no recipe, with each post's cover: the
+ * most saved (then remixed, visited through a shared link, newest), then the
+ * newest of the rest, so a post just shared is there to add one to. They are
+ * where a recipe could go next, so a read that fails is null, logged, and
+ * never the page.
+ */
+async function loadSellerRecipeCandidates(
+  userId: string,
+  postIdsWithRecipe: ReadonlySet<string>,
+): Promise<SellerRecipeCandidate[] | null> {
+  try {
+    const readPostIds = (order: 'most-saved' | 'newest') => {
+      const query = createServiceClient()
+        .from('posts')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('visibility', 'public')
+        .is('archived_at', null)
+        .is('tombstoned_at', null)
+        .eq('review_status', 'visible');
+      const ordered = order === 'newest'
+        ? query.order('created_at', { ascending: false })
+        : query
+          .order('save_count', { ascending: false })
+          .order('remix_count', { ascending: false })
+          .order('share_visit_count', { ascending: false })
+          .order('created_at', { ascending: false });
+      return ordered.limit(Math.min(postIdsWithRecipe.size + SELLER_RECIPE_CANDIDATE_LIMIT, SELLER_RECIPE_CANDIDATE_READ_CAP));
+    };
+    const [mostSaved, newest] = await Promise.all([readPostIds('most-saved'), readPostIds('newest')]);
+    const error = mostSaved.error ?? newest.error;
+    if (error) {
+      logBackendError('post_resource_seller_candidates_load_failed', { error });
+      return null;
+    }
+
+    const withoutRecipe = (data: unknown) => ((data ?? []) as Array<{ id: string }>)
+      .map((row) => row.id)
+      .filter((postId) => !postIdsWithRecipe.has(postId))
+      .slice(0, SELLER_RECIPE_CANDIDATE_LIMIT);
+    const postIds = Array.from(new Set([...withoutRecipe(mostSaved.data), ...withoutRecipe(newest.data)]));
+    // A read of the posts that fails throws, to the catch below: it is not a
+    // seller with no post to add a recipe to.
+    const posts = await loadLinkedPostMap(postIds, 'owner', true, true);
+
+    return postIds.flatMap((postId) => {
+      const post = posts.get(postId);
+      return post
+        ? [{
+            postId,
+            title: post.title,
+            postFormat: post.postFormat,
+            mediaKind: post.mediaKind,
+            mediaUrl: post.mediaUrl,
+            mediaPreviewUrl: post.mediaPreviewUrl,
+            saveCount: post.saveCount,
+            remixCount: post.remixCount,
+            shareVisitCount: post.shareVisitCount,
+          }]
+        : [];
+    });
+  } catch (error) {
+    logBackendError('post_resource_seller_candidates_load_failed', { error });
+    return null;
+  }
+}
+
+type SellerUnlockOrderRow = Pick<OrderRow, 'id' | 'bundle_id' | 'buyer_user_id' | 'amount_subunits' | 'currency' | 'created_at'> & {
+  razorpay_order_id: string | null;
+};
+
+/**
+ * The newest unlocks of the seller's recipes, newest first. A free unlock
+ * leaves a "paid" order of 0 subunits, and it is not a sale (decision 6,
+ * 2026-10-17). Sales and free opens are read apart, and each kind keeps up to
+ * half the list, the rest going to the newest of either: a run of free opens
+ * does not push the sales off, and six sales do not hide a free open made
+ * since.
+ *
+ * The list is serialised into the seller's page, so a buyer is a handle or a
+ * name, never an account id: "Someone" with neither, and for every buyer when
+ * the profiles cannot be read. A free opener with a block between them and
+ * the seller, either way round, is not named, as their alert is not
+ * (20261020053858), and no free opener is when the blocks cannot be read. A
+ * paid buyer keeps their handle, as Recent sales did.
+ */
+async function loadSellerRecentUnlocks(sellerId: string, bundleIds: string[]): Promise<SellerRecipeUnlock[]> {
+  if (bundleIds.length === 0) return [];
+  const adminSupabase = createServiceClient();
+  const readOrders = (sales: boolean) => {
+    const query = adminSupabase
+      .from('post_resource_bundle_orders')
+      .select('id, bundle_id, buyer_user_id, razorpay_order_id, amount_subunits, currency, created_at')
+      .in('bundle_id', bundleIds)
+      .eq('status', 'paid');
+    return (sales ? query.gt('amount_subunits', 0) : query.eq('amount_subunits', 0))
+      .limit(SELLER_RECENT_UNLOCK_LIMIT)
+      .order('created_at', { ascending: false });
+  };
+  const [salesRead, freeRead] = await Promise.all([readOrders(true), readOrders(false)]);
+  const orderError = salesRead.error ?? freeRead.error;
+  if (orderError) {
+    logBackendError('post_resource_seller_sales_load_failed', { error: orderError });
+    throw orderError;
+  }
+
+  const newestFirst = (first: SellerUnlockOrderRow, second: SellerUnlockOrderRow) => (
+    new Date(second.created_at).getTime() - new Date(first.created_at).getTime()
+  );
+  const sales = (salesRead.data ?? []) as SellerUnlockOrderRow[];
+  const freeOpens = (freeRead.data ?? []) as SellerUnlockOrderRow[];
+  const half = Math.floor(SELLER_RECENT_UNLOCK_LIMIT / 2);
+  const kept = [...sales.slice(0, half), ...freeOpens.slice(0, half)];
+  const rest = [...sales.slice(half), ...freeOpens.slice(half)].sort(newestFirst);
+  const orders = [...kept, ...rest.slice(0, SELLER_RECENT_UNLOCK_LIMIT - kept.length)].sort(newestFirst);
+
+  const isSale = (row: SellerUnlockOrderRow) => row.amount_subunits > 0;
+  const [buyerProfiles, blockedBuyerIds] = await Promise.all([
+    loadProfileMap(orders.map((row) => row.buyer_user_id)),
+    loadBlockedCreatorIds({
+      adminSupabase,
+      creatorIds: orders.filter((row) => !isSale(row)).map((row) => row.buyer_user_id),
+      viewerUserId: sellerId,
+    }).catch((error: unknown) => {
+      logBackendError('post_resource_seller_unlock_blocks_load_failed', { error });
+      return null;
+    }),
+  ]);
+
+  return orders.map((row) => {
+    const paid = isSale(row);
+    const buyerProfile = buyerProfiles.get(row.buyer_user_id);
+    const name = paid || (blockedBuyerIds && !blockedBuyerIds.has(row.buyer_user_id))
+      ? (buyerProfile?.username ? `@${buyerProfile.username}` : buyerProfile?.display_name?.trim() || null)
+      : null;
+
+    return {
+      id: row.id,
+      bundleId: row.bundle_id,
+      buyerLabel: name ?? 'Someone',
+      named: name !== null,
+      paid,
+      // An unlock with credits is a USD order of the price in credits, one a
+      // cent, whose order reference says so (unlock_post_resource_bundle_with_credits).
+      paidInCredits: paid && (row.razorpay_order_id?.startsWith('credits_') ?? false),
+      amountSubunits: row.amount_subunits,
+      currency: row.currency,
+      createdAt: row.created_at,
+    };
+  });
+}
+
+/**
+ * The seller's deleted posts that had a recipe, newest deleted first. Every
+ * deleted post leaves an audit, one with no recipe without an access mode. A
+ * post deleted while it had buyers is tombstoned, not removed, so its bundle
+ * is still one of the seller's recipes (where `post.tombstoned` labels it),
+ * and its audit is left out here so the post is not listed twice.
+ */
+async function loadSellerDeletedSnapshots(
+  userId: string,
+  listedPostIds: ReadonlySet<string>,
+): Promise<DeletedPostResourceSnapshot[]> {
+  const { data, error } = await createServiceClient()
+    .from('post_deletion_audits')
+    .select('id, post_id, title, visibility, source_kind, bundle_access_mode, bundle_status, bundle_price_usd_cents, bundle_resource_kinds, sales_count, earnings_usd_cents, had_paid_orders, deleted_at')
+    .eq('owner_user_id', userId)
+    .not('bundle_access_mode', 'is', null)
+    .order('deleted_at', { ascending: false });
+
+  if (error) {
+    logBackendError('post_resource_deleted_snapshots_load_failed', { error });
+    throw error;
+  }
+
+  return ((data ?? []) as Array<{
+    id: string;
+    post_id: string | null;
+    title: string;
+    visibility: ShowcaseVisibility;
+    source_kind: RawShowcaseSourceKind;
+    bundle_access_mode: PersistedPostResourceBundleAccessMode | null;
+    bundle_status: PostResourceBundleStatus | null;
+    bundle_price_usd_cents: number | null;
+    bundle_resource_kinds: unknown;
+    sales_count: number;
+    earnings_usd_cents: number;
+    had_paid_orders: boolean;
+    deleted_at: string;
+  }>)
+    .filter((row) => !row.post_id || !listedPostIds.has(row.post_id))
+    .map((row) => ({
+      id: row.id,
+      title: row.title,
+      visibility: row.visibility,
+      sourceKind: normalizeShowcaseSourceKind(row.source_kind),
+      bundleAccessMode: row.bundle_access_mode,
+      bundleStatus: row.bundle_status,
+      bundlePriceUsdCents: row.bundle_price_usd_cents,
+      resourceKinds: Array.isArray(row.bundle_resource_kinds)
+        ? row.bundle_resource_kinds.filter(
+            (kind): kind is PostResourceKind =>
+              kind === 'prompt' || kind === 'workflow' || kind === 'files' || kind === 'notes' || kind === 'remix'
+          )
+        : [],
+      salesCount: row.sales_count,
+      earningsUsdCents: row.earnings_usd_cents,
+      hadPaidOrders: row.had_paid_orders,
+      deletedAt: row.deleted_at,
+    }));
+}
+
 export async function getSellerPostResourceBundleDashboard(
   userId: string,
   options?: {
@@ -2925,7 +3176,8 @@ export async function getSellerPostResourceBundleDashboard(
       return {
         bundles: [],
         deletedSnapshots: [],
-        sales: [],
+        recentUnlocks: [],
+        recipeCandidates: [],
         totalSalesCount: 0,
         totalFreeUnlockCount: 0,
         totalEarningsUsdCents: 0,
@@ -2938,12 +3190,26 @@ export async function getSellerPostResourceBundleDashboard(
   }
 
   const rows = (data ?? []) as unknown as BundleRow[];
-  const hydratedBundles = await hydrateBundleRows(rows, countryCode, 'owner', false, {
-    creationReferencesFor: { ownerUserId: userId },
-  });
+  // A recipe removed after it was unlocked is retired: its row stays for its
+  // buyers, but its post has no recipe, and the editor adds one there again.
+  const postIdsWithRecipe = new Set(rows.filter((row) => !row.retired_at).map((row) => row.post_id));
+  // Read beside the rest: it fails to null, never the page.
+  const recipeCandidatesRead = loadSellerRecipeCandidates(userId, postIdsWithRecipe);
+  const [hydratedBundles, recentUnlocks, deletedSnapshots] = await Promise.all([
+    // With its media previews, so each row draws the post's cover (a clip's
+    // poster, never the clip). A read of the posts that fails fails the page:
+    // each recipe would read as one whose post is gone, which nobody can buy.
+    hydrateBundleRows(rows, countryCode, 'owner', true, {
+      creationReferencesFor: { ownerUserId: userId },
+      throwOnPostReadError: true,
+    }),
+    loadSellerRecentUnlocks(userId, rows.map((row) => row.id)),
+    loadSellerDeletedSnapshots(userId, new Set(rows.map((row) => row.post_id))),
+  ]);
   const bundles = hydratedBundles.map((bundle, index) => ({
     ...bundle,
     status: rows[index]?.status ?? 'draft',
+    retiredAt: rows[index]?.retired_at ?? null,
     earningsUsdCents: rows[index]?.earnings_usd_cents ?? 0,
     quality: assessMarketplaceListingQuality({
       title: bundle.title,
@@ -2956,102 +3222,12 @@ export async function getSellerPostResourceBundleDashboard(
       seller: bundle.seller,
     }),
   }));
-  const bundleIdToTitle = new Map(rows.map((row) => [row.id, row.title]));
-
-  let sales: SellerPostResourceBundleDashboard['sales'] = [];
-  if (rows.length > 0) {
-    const bundleIds = rows.map((row) => row.id);
-    const { data: orderData, error: orderError } = await adminSupabase
-      .from('post_resource_bundle_orders')
-      .select('id, bundle_id, buyer_user_id, legacy_order_id, amount_subunits, currency, created_at')
-      .in('bundle_id', bundleIds)
-      .eq('status', 'paid')
-      .order('created_at', { ascending: false });
-
-    if (orderError) {
-      logBackendError('post_resource_seller_sales_load_failed', { error: orderError });
-      throw orderError;
-    }
-
-    // A free unlock leaves a "paid" order of 0 subunits. It is not a sale
-    // (decision 6, 2026-10-17): the dashboard counts it under Free unlocks and
-    // lists only what buyers paid for here.
-    const orders = ((orderData ?? []) as OrderRow[]).filter((row) => row.amount_subunits > 0);
-    const buyerProfiles = await loadProfileMap(orders.map((row) => row.buyer_user_id));
-    sales = orders.map((row) => {
-      const buyerProfile = buyerProfiles.get(row.buyer_user_id);
-      // This payload is serialised into the seller's page, so a buyer is a
-      // handle or a name and never their account id: one with neither, or every
-      // buyer when the profile read fails, is "A buyer".
-      const buyerLabel = buyerProfile?.username
-        ? `@${buyerProfile.username}`
-        : buyerProfile?.display_name?.trim() || 'A buyer';
-
-      return {
-        id: row.id,
-        bundleId: row.bundle_id,
-        bundleTitle: bundleIdToTitle.get(row.bundle_id) ?? 'Recipe',
-        buyerLabel,
-        amountSubunits: row.amount_subunits,
-        currency: row.currency,
-        createdAt: row.created_at,
-      };
-    });
-  }
-
-  const { data: deletedAuditData, error: deletedAuditError } = await adminSupabase
-    .from('post_deletion_audits')
-    .select('id, post_id, title, visibility, source_kind, bundle_access_mode, bundle_status, bundle_price_usd_cents, bundle_resource_kinds, sales_count, earnings_usd_cents, had_paid_orders, deleted_at')
-    .eq('owner_user_id', userId)
-    .order('deleted_at', { ascending: false });
-
-  if (deletedAuditError) {
-    logBackendError('post_resource_deleted_snapshots_load_failed', { error: deletedAuditError });
-    throw deletedAuditError;
-  }
-
-  // A post deleted while it had buyers is tombstoned, not removed, so its
-  // bundle is still one of `bundles` (where `post.tombstoned` labels it); its
-  // deletion audit would list the same post a second time.
-  const listedPostIds = new Set(rows.map((row) => row.post_id));
-  const deletedSnapshots = ((deletedAuditData ?? []) as Array<{
-    id: string;
-    post_id: string | null;
-    title: string;
-    visibility: ShowcaseVisibility;
-    source_kind: RawShowcaseSourceKind;
-    bundle_access_mode: PersistedPostResourceBundleAccessMode | null;
-    bundle_status: PostResourceBundleStatus | null;
-    bundle_price_usd_cents: number | null;
-    bundle_resource_kinds: unknown;
-    sales_count: number;
-    earnings_usd_cents: number;
-    had_paid_orders: boolean;
-    deleted_at: string;
-  }>).filter((row) => !row.post_id || !listedPostIds.has(row.post_id)).map((row) => ({
-    id: row.id,
-    title: row.title,
-    visibility: row.visibility,
-    sourceKind: normalizeShowcaseSourceKind(row.source_kind),
-    bundleAccessMode: row.bundle_access_mode,
-    bundleStatus: row.bundle_status,
-    bundlePriceUsdCents: row.bundle_price_usd_cents,
-    resourceKinds: Array.isArray(row.bundle_resource_kinds)
-      ? row.bundle_resource_kinds.filter(
-          (kind): kind is PostResourceKind =>
-            kind === 'prompt' || kind === 'workflow' || kind === 'files' || kind === 'notes' || kind === 'remix'
-        )
-      : [],
-    salesCount: row.sales_count,
-    earningsUsdCents: row.earnings_usd_cents,
-    hadPaidOrders: row.had_paid_orders,
-    deletedAt: row.deleted_at,
-  }));
 
   return {
     bundles,
     deletedSnapshots,
-    sales,
+    recentUnlocks,
+    recipeCandidates: await recipeCandidatesRead,
     totalSalesCount: rows.reduce((sum, row) => sum + row.sales_count, 0),
     totalFreeUnlockCount: rows.reduce((sum, row) => sum + (row.free_unlock_count ?? 0), 0),
     totalEarningsUsdCents: rows.reduce((sum, row) => sum + row.earnings_usd_cents, 0),

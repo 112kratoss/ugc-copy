@@ -3044,9 +3044,14 @@ describe('NewPostClient', () => {
   });
 
   // A-F17: Studio's "Add recipe" chose Paid and focused the price of a post
-  // with nothing to sell yet. It now chooses nothing and focuses nothing.
-  it('opens Studio’s Add recipe with no mode chosen, no Studio note and nothing focused', async () => {
-    searchParamsState.value = new URLSearchParams({ recipe: 'add', from: 'creations' });
+  // with nothing to sell yet. It now chooses nothing and focuses nothing. Recipe
+  // sales' picker of posts with no recipe opens it the same way (2026-11-01).
+  it.each([
+    ['Studio', 'creations'],
+    ['Recipe sales', 'seller'],
+    ['any page', 'profile'],
+  ])('opens %s’s Add a recipe with no mode chosen, no Studio note and nothing focused', async (_surface, from) => {
+    searchParamsState.value = new URLSearchParams({ recipe: 'add', from });
 
     render(
       <NewPostClient
@@ -3116,7 +3121,7 @@ describe('NewPostClient', () => {
       />
     );
 
-    const backLink = screen.getByRole('link', { name: /back to seller dashboard/i });
+    const backLink = screen.getByRole('link', { name: /back to recipe sales/i });
     expect(backLink).toHaveAttribute('href', '/marketplace/sell');
     expect(screen.queryByRole('link', { name: /back to studio/i })).not.toBeInTheDocument();
   });

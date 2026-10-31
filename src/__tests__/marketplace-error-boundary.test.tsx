@@ -24,8 +24,8 @@ describe('the marketplace error boundary', () => {
     render(<MarketplaceError retry={retry} />);
 
     const alert = screen.getByRole('alert');
-    expect(within(alert).getByRole('heading', { name: 'Could not load your seller dashboard' })).toBeInTheDocument();
-    expect(alert).toHaveTextContent('Your listings, sales and payout balance are safe.');
+    expect(within(alert).getByRole('heading', { name: 'Could not load your recipe sales' })).toBeInTheDocument();
+    expect(alert).toHaveTextContent('Your recipes, sales and payout balance are safe.');
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry dashboard' }));
     expect(retry).toHaveBeenCalledTimes(1);
   });

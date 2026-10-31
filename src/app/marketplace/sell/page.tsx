@@ -1,4 +1,3 @@
-import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { getSellerPostResourceBundleDashboard } from '@/lib/post-resource-bundles-server';
@@ -12,10 +11,9 @@ export default async function MarketplaceSellPage() {
     redirect('/login?returnUrl=/marketplace/sell');
   }
 
-  const headerStore = await headers();
-  const dashboard = await getSellerPostResourceBundleDashboard(auth.session.user.id, {
-    countryCode: headerStore.get('x-vercel-ip-country'),
-  });
+  // No country: the page prices in credits, and a buyer's cash quote for
+  // each recipe would only cost a currency read.
+  const dashboard = await getSellerPostResourceBundleDashboard(auth.session.user.id);
 
   return (
     <MarketplaceSellClient
