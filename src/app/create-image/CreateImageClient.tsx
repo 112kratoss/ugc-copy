@@ -168,6 +168,7 @@ import { openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 import {
     refreshTemporaryMediaUrl,
     TEMPORARY_MEDIA_UPLOAD_LIMITS,
@@ -938,6 +939,9 @@ export default function CreateImageClient({
         setPrompt(value);
         updateMentionState(value, caretIndex);
     };
+
+    // Typed into the server's HTML before this page's script ran, where no React heard it.
+    useTypedBeforeHydration(promptTextareaRef, { drawn: prompt, enabled: !remixId && !prefillPrompt, onTyped: handlePromptChange });
 
     const handleInsertElementHandle = (handle: string) => {
         const textarea = promptTextareaRef.current;
