@@ -27,6 +27,8 @@ import {
 } from '@/lib/posts-server';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import { normalizeSourceToolInputWithCatalog } from '@/lib/source-tools';
+import { replacePostSourceTools } from '@/lib/post-source-tools-server';
+import { buildGenerationPostSourceTools } from '@/lib/generation-post-source-tools';
 import { MAGICBOOKLET_SOURCE_KIND } from '@/lib/showcase';
 import {
   fetchWithProviderTimeout,
@@ -56,7 +58,7 @@ import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { recipeKeepsPromptPrivate, titleForRecipePost } from '@/lib/creation-post-title';
 import { requestPostEmbedding } from '@/lib/feed-embeddings';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
-import { isTemplateResultGeneration } from '@/lib/template-result';
+import { isTemplateResultGeneration, shownGenerationModel } from '@/lib/template-result';
 import {
   getPublicUgcRecipeTextFields,
   getPublicUgcSafetyViolation,
@@ -150,6 +152,8 @@ export type ShowcasePublishServiceDependencies = {
   loadFrozenSoldGenerationBundleForQuality: typeof loadFrozenSoldGenerationBundleForQuality;
   loadExistingGenerationPostContent: typeof loadExistingGenerationPostContent;
   ensureGenerationPostCoverMedia: typeof ensureGenerationPostCoverMedia;
+  /** Writes the post's Made with rows in place of any it had. */
+  replacePostSourceTools: typeof replacePostSourceTools;
   /** Feed v4: asks the `embed-post` function for the published post's embedding. */
   requestPostEmbedding: typeof requestPostEmbedding;
 };
@@ -210,6 +214,7 @@ function resolveDependencies(
       dependencies?.loadExistingGenerationPostContent ?? loadExistingGenerationPostContent,
     ensureGenerationPostCoverMedia:
       dependencies?.ensureGenerationPostCoverMedia ?? ensureGenerationPostCoverMedia,
+    replacePostSourceTools: dependencies?.replacePostSourceTools ?? replacePostSourceTools,
     requestPostEmbedding: dependencies?.requestPostEmbedding ?? requestPostEmbedding,
   };
 }
@@ -1035,6 +1040,25 @@ export async function publishGenerationToShowcaseForRoute({
       // A thrown client error must not escape either: everything the caller
       // asked for is already committed.
       logBackendError('failed_to_record_generation_post_cover_media', { error: coverMediaError });
+    }
+  }
+
+  // The post's Made with, built from the creation (never the request) by a
+  // publish that composes the post or creates it; a visibility-only request
+  // carries the stored post forward, its rows included. The post is committed
+  // by now, so a failed save is only logged, as the cover row's is: the owner's
+  // read derives the same row for a post stored without one.
+  if (postId && (isComposeSubmission || !existingPost)) {
+    try {
+      await resolvedDependencies.replacePostSourceTools({
+        supabase: adminSupabase,
+        postId,
+        ownerUserId: userId,
+        mediaKind: postPayload.category,
+        sourceTools: buildGenerationPostSourceTools(postPayload, shownGenerationModel(generation)),
+      });
+    } catch (sourceToolsError) {
+      logBackendError('failed_to_save_generation_post_source_tools', { error: sourceToolsError });
     }
   }
 

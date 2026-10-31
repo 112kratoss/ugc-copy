@@ -1648,7 +1648,14 @@
             "generationId": "generation-1",
             "sourceTool": "Magicbooklet",
             "sourceToolSlug": "magicbooklet",
-            "sourceTools": []
+            "sourceTools": [
+              {
+                "toolLabel": "Magicbooklet",
+                "toolSlug": "magicbooklet",
+                "modelLabel": "Nano Banana 2.0",
+                "modelSlug": "nano-banana-2"
+              }
+            ]
           }
         ]
       }
@@ -1707,7 +1714,14 @@
             "generationId": "generation-1",
             "sourceTool": "Magicbooklet",
             "sourceToolSlug": "magicbooklet",
-            "sourceTools": []
+            "sourceTools": [
+              {
+                "toolLabel": "Magicbooklet",
+                "toolSlug": "magicbooklet",
+                "modelLabel": "Nano Banana 2.0",
+                "modelSlug": "nano-banana-2"
+              }
+            ]
           }
         ],
         "pageInfo": {
@@ -1783,7 +1797,14 @@
           "generationId": "generation-1",
           "sourceTool": "Magicbooklet",
           "sourceToolSlug": "magicbooklet",
-          "sourceTools": [],
+          "sourceTools": [
+            {
+              "toolLabel": "Magicbooklet",
+              "toolSlug": "magicbooklet",
+              "modelLabel": "Nano Banana 2.0",
+              "modelSlug": "nano-banana-2"
+            }
+          ],
           "resourceBundleInput": {
             "accessMode": "free",
             "summary": "Reusable launch setup.",

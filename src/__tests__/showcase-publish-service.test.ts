@@ -12,10 +12,16 @@ vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 vi.mock('@/lib/backend-logger', () => ({
   logBackendError: logBackendErrorMock,
 }));
+// No case here reaches the database for the post's Made with: the ones about
+// that row pass a writer of their own.
+vi.mock('@/lib/post-source-tools-server', () => ({
+  replacePostSourceTools: vi.fn(async () => undefined),
+}));
 
 import {
   getCanonicalGenerationShowcaseAssetPath,
   publishGenerationToShowcaseForRoute,
+  type ShowcasePublishRequestBody,
   type ShowcasePublishServiceDependencies,
 } from '@/lib/showcase-publish-service';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
@@ -2232,5 +2238,173 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(dependencies.loadGenerationInputOrigins).not.toHaveBeenCalled();
+  });
+});
+
+// The publish route stored no Made with for a creation, so both editors opened
+// its post on the app alone. The row is the creation's, never the request's
+// (generation-post-source-tools.ts): both composers show it locked.
+describe('the Made with row of a published creation', () => {
+  const generation = {
+    id: 'gen-made-with',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'nano-banana-pro',
+    category: 'image',
+    creation_mode: null,
+    output_url: 'generated_images/user-1/harbour.jpg',
+    showcase_asset_path: null,
+    title: 'Harbour at dawn',
+    description: null,
+    prompt: 'A harbour at dawn, fog over the water',
+  };
+  const app = { toolLabel: 'magicbooklet', toolSlug: 'magicbooklet' };
+
+  beforeEach(() => {
+    logBackendErrorMock.mockClear();
+  });
+
+  function publishDependencies() {
+    return {
+      ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+        outputUrl: mediaGeneration.outputUrl,
+        createdLocation: null,
+      })),
+      listSourceToolsCatalog: vi.fn(async () => [
+        { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+      ]),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+        postId: 'post-made-with',
+        visibility: 'public' as const,
+        bundleId: null,
+        bundleStatus: null,
+      })),
+      ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+      requestPostEmbedding: vi.fn(async () => undefined),
+      replacePostSourceTools: vi.fn(async () => undefined),
+    } satisfies Partial<ShowcasePublishServiceDependencies>;
+  }
+
+  async function publish(
+    body: Partial<ShowcasePublishRequestBody> & Record<string, unknown>,
+    {
+      adminSupabase = createAdminClientMock(generation).client,
+      dependencies = publishDependencies(),
+    }: { adminSupabase?: SupabaseClient; dependencies?: ReturnType<typeof publishDependencies> } = {},
+  ) {
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase,
+      body: { generationId: 'gen-made-with', ...body },
+      userId: 'user-1',
+      dependencies,
+    });
+    return { result, replacePostSourceTools: dependencies.replacePostSourceTools };
+  }
+
+  it('stores the app and the creation’s model, whatever the request sends', async () => {
+    const { result, replacePostSourceTools } = await publish({
+      visibility: 'public',
+      title: 'Harbour at dawn',
+      resourceBundle: { accessMode: 'none' },
+      // The app's composer sends the model's id as its name; neither composer
+      // lets a creator add a tool to a creation.
+      sourceTool: 'Adobe Photoshop',
+      sourceTools: [
+        { toolLabel: 'Adobe Photoshop', toolSlug: 'adobe-photoshop' },
+        { toolLabel: 'Magicbooklet', toolSlug: 'magicbooklet', modelLabel: 'nano-banana-pro', modelSlug: 'nano-banana-pro' },
+      ],
+    });
+
+    expect(result).toMatchObject({ ok: true, body: { postId: 'post-made-with', visibility: 'public' } });
+    expect(replacePostSourceTools).toHaveBeenCalledTimes(1);
+    expect(replacePostSourceTools).toHaveBeenCalledWith({
+      supabase: expect.anything(),
+      postId: 'post-made-with',
+      ownerUserId: 'user-1',
+      mediaKind: 'image',
+      sourceTools: [{ ...app, modelLabel: 'Nano Banana Pro', modelSlug: 'nano-banana-pro' }],
+    });
+  });
+
+  it.each([
+    ['a video', { model: 'veo-3.1', category: 'video', output_url: 'generated_videos/user-1/harbour.mp4' }, 'video', 'Veo 3.1', 'veo-3.1'],
+    // As its post page and feed card leave it out, rather than print the id.
+    ['a model with no name', { model: 'retired-model-9' }, 'image', null, null],
+  ])('names the model of %s as its post does', async (_label, creation, mediaKind, modelLabel, modelSlug) => {
+    const { replacePostSourceTools } = await publish(
+      { visibility: 'private', title: 'Harbour at dawn' },
+      { adminSupabase: createAdminClientMock({ ...generation, ...creation }).client },
+    );
+
+    expect(replacePostSourceTools).toHaveBeenCalledWith(expect.objectContaining({
+      mediaKind,
+      sourceTools: [{ ...app, modelLabel, modelSlug }],
+    }));
+  });
+
+  // Its model is the template author's, which no read gives out
+  // (template-result.ts): its composer shows `template-workflow`.
+  it('leaves a template result’s model out', async () => {
+    const { result, replacePostSourceTools } = await publish(
+      { visibility: 'private', title: 'My final image' },
+      {
+        adminSupabase: createCanonicalTemplateAdminClientMock({
+          generation: { ...generation, model: 'nano-banana-2', template_run_id: 'run-1', template_run_step_id: null },
+        }).client,
+      },
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    expect(replacePostSourceTools).toHaveBeenCalledWith(expect.objectContaining({
+      sourceTools: [{ ...app, modelLabel: null, modelSlug: null }],
+    }));
+  });
+
+  // Studio's old switch sends the creation and the visibility alone, and the
+  // stored post is carried forward, its Made with with it.
+  it('leaves a stored post’s rows alone on a visibility-only request', async () => {
+    const { result, replacePostSourceTools } = await publish({ visibility: 'private' }, {
+      adminSupabase: createAdminClientMock(generation, null, {
+        storedPost: {
+          id: 'post-made-with',
+          title: 'Harbour at dawn',
+          description: null,
+          prompt: null,
+          body: null,
+          category: 'image',
+          is_nsfw: false,
+        },
+      }).client,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(replacePostSourceTools).not.toHaveBeenCalled();
+  });
+
+  it('writes the row when a visibility-only request creates the post', async () => {
+    const { replacePostSourceTools } = await publish({ visibility: 'private' });
+
+    expect(replacePostSourceTools).toHaveBeenCalledWith(expect.objectContaining({
+      sourceTools: [{ ...app, modelLabel: 'Nano Banana Pro', modelSlug: 'nano-banana-pro' }],
+    }));
+  });
+
+  // The post is committed by then, as with its cover media row: answering the
+  // publish as failed would tell the creator nothing was posted.
+  it('logs a failed save and still answers the publish as done', async () => {
+    const dependencies = publishDependencies();
+    dependencies.replacePostSourceTools.mockRejectedValueOnce(new Error('connection reset'));
+
+    const { result } = await publish(
+      { visibility: 'public', title: 'Harbour at dawn', resourceBundle: { accessMode: 'none' } },
+      { dependencies },
+    );
+
+    expect(result).toMatchObject({ ok: true, body: { postId: 'post-made-with', visibility: 'public' } });
+    expect(logBackendErrorMock).toHaveBeenCalledWith(
+      'failed_to_save_generation_post_source_tools',
+      { error: expect.objectContaining({ message: 'connection reset' }) },
+    );
   });
 });
