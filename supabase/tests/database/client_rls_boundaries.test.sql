@@ -119,11 +119,9 @@ select throws_ok(
 -- users reported dead buttons. Granting any column back should be a deliberate
 -- change that updates this test.
 --
--- production_data_contract.test.sql also pins `prompt`, but against another
--- user's row, where row policies would hide it anyway. These run against the
--- caller's own row on purpose: that is the only way to show the denial comes
--- from the grant rather than from RLS, which is precisely the distinction that
--- made the 2026-07-26 breakage so hard to see.
+-- These run against the caller's own row on purpose: only there does a refusal
+-- show that it comes from the grant rather than from RLS, which is precisely
+-- the distinction that made the 2026-07-26 breakage so hard to see.
 
 reset role;
 set local role authenticated;

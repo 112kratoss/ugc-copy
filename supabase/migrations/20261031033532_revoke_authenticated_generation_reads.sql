@@ -20,6 +20,11 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
+-- generations first, the order settlement takes (its terminal trigger then
+-- reads run steps) and deletes cascade in. Taking the two linked tables
+-- first could deadlock with either.
+LOCK TABLE public.generations IN ACCESS EXCLUSIVE MODE;
+
 CREATE OR REPLACE FUNCTION public.current_identity_owns_generation(p_generation_id uuid)
 RETURNS boolean
 LANGUAGE sql
@@ -38,6 +43,12 @@ REVOKE ALL ON FUNCTION public.current_identity_owns_generation(uuid) FROM PUBLIC
 GRANT EXECUTE ON FUNCTION public.current_identity_owns_generation(uuid) TO authenticated, service_role;
 COMMENT ON FUNCTION public.current_identity_owns_generation(uuid) IS
   'Whether the current subject owns a generation. For RLS on tables that link one: authenticated has no SELECT on generations.';
+
+DROP POLICY IF EXISTS "Users can resume their own generations" ON public.generations;
+
+-- A table-level revoke also clears the column grants the resume projection was
+-- made of (granted by postgres, like this revoke).
+REVOKE ALL PRIVILEGES ON TABLE public.generations FROM PUBLIC, anon, authenticated;
 
 DROP POLICY IF EXISTS workflow_step_generation_owned ON public.workflow_canvas_run_steps;
 CREATE POLICY workflow_step_generation_owned
@@ -58,29 +69,5 @@ USING (
   (SELECT auth.uid()) = user_id
   AND public.current_identity_owns_generation(generation_id)
 );
-
-DROP POLICY IF EXISTS "Users can resume their own generations" ON public.generations;
-
-REVOKE ALL PRIVILEGES ON TABLE public.generations FROM PUBLIC, anon, authenticated;
-
--- A relation-level revoke does not remove column privileges, and the resume
--- projection was granted column by column. Clear every column, as
--- 20260822090000 does, so production and a clean replay converge.
-DO $$
-DECLARE
-  v_column_list text;
-BEGIN
-  SELECT string_agg(quote_ident(columns.column_name), ', ' ORDER BY columns.ordinal_position)
-  INTO v_column_list
-  FROM information_schema.columns
-  WHERE columns.table_schema = 'public'
-    AND columns.table_name = 'generations';
-
-  EXECUTE format(
-    'REVOKE ALL PRIVILEGES (%s) ON TABLE public.generations FROM PUBLIC, anon, authenticated',
-    v_column_list
-  );
-END;
-$$;
 
 COMMIT;
