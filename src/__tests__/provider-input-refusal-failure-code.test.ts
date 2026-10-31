@@ -105,7 +105,7 @@ describe('a start refused for what its provider would refuse', () => {
       characterImageUrl: 'https://cdn.example.com/character.png',
       duration: 3,
       referenceVideoSeconds: 2.47,
-    }), 'Kling 2.6 motion reference videos must be at least 3 seconds long. The reference video runs 2.4 seconds.');
+    }), 'Kling 2.6 reference video must be at least 3 seconds long. The reference video runs 2.4 seconds.');
   });
 
   it('codes a catalog run’s prompt and its reference track alike', async () => {

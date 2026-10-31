@@ -19,7 +19,7 @@ import {
   type GenerationModelRuntimeInputs,
   type GenerationModelValidationRuleType,
 } from '@/lib/generation-model-runtime';
-import { referenceMediaMinSeconds } from '@/lib/provider-input-limits';
+import { referenceMediaMinSeconds, referenceMediaRole } from '@/lib/provider-input-limits';
 
 export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 3;
 // Stored releases still use schema-v2 descriptors. Schema v3 is a compact
@@ -99,10 +99,11 @@ export type CatalogInputSlot = {
   maxDurationSeconds?: number;
   /**
    * The shortest clip or track the provider takes in this slot, in seconds: Kie refuses a Kling
-   * 3.0 video element under 3. The start refuses a shorter one before any hold
-   * (`referenceMediaLengthViolation`, whose table this is read from), and both creators hold
-   * the run to it before Generate. Optional like `maxNamed`: the apps' parsers have always
-   * rebuilt a slot from the keys they know, so installed builds read the descriptor without it.
+   * 3.0 video element or a motion-control clip under 3, a Seedance 2 clip or track under 2. The
+   * start refuses a shorter one before any hold (`referenceMediaLengthViolation`, whose table
+   * this is read from: `slotMinDurationSeconds`), and the creators hold the run to it before
+   * Generate. Optional like `maxNamed`: the apps' parsers have always rebuilt a slot from the
+   * keys they know, so installed builds read the descriptor without it.
    */
   minDurationSeconds?: number;
   conditions?: CatalogCondition[];
@@ -452,6 +453,21 @@ function referenceAudioCapSeconds(modelId: VideoModelId): number | undefined {
   return referenceAssetCapSeconds(modelId);
 }
 
+/**
+ * The slot's shortest clip or track, as the start holds the file it carries (by its role in the
+ * run: `referenceMediaRole`), spread into the slot only where the start holds one, so a slot whose
+ * provider states no minimum stays as it was published.
+ */
+function slotMinDurationSeconds(
+  modelId: string,
+  runKind: GenerationModelKind,
+  slotKey: string,
+  mediaKind: 'video' | 'audio',
+): Pick<CatalogInputSlot, 'minDurationSeconds'> {
+  const minDurationSeconds = referenceMediaMinSeconds(modelId, referenceMediaRole(runKind, slotKey, mediaKind));
+  return minDurationSeconds === undefined ? {} : { minDurationSeconds };
+}
+
 function videoInputModes(
   modelId: VideoModelId,
   limits: ReturnType<typeof getVideoInputLimits>,
@@ -511,9 +527,9 @@ function videoInputModes(
   }
   if (limits.videos > 0) {
     const isNamedVideoElementSlot = modelId === 'kling-3.0-video';
-    const elementMinSeconds = isNamedVideoElementSlot ? referenceMediaMinSeconds(modelId, 'element') : undefined;
+    const videoSlotKey = isNamedVideoElementSlot ? 'videoElements' : 'videoReferences';
     const videoSlot: CatalogInputSlot = {
-      key: isNamedVideoElementSlot ? 'videoElements' : 'videoReferences',
+      key: videoSlotKey,
       kind: 'video',
       role: 'reference',
       label: isNamedVideoElementSlot ? 'Video elements' : 'Reference videos',
@@ -527,7 +543,7 @@ function videoInputModes(
       // prices on reference-video seconds and could not quote without them.
       durationMetadata: videoCapSeconds !== undefined ? 'required' : 'optional',
       ...(videoCapSeconds !== undefined ? { maxDurationSeconds: videoCapSeconds } : {}),
-      ...(elementMinSeconds !== undefined ? { minDurationSeconds: elementMinSeconds } : {}),
+      ...slotMinDurationSeconds(modelId, 'video', videoSlotKey, 'video'),
     };
     if (isNamedVideoElementSlot) {
       videoElementSlots.push(videoSlot);
@@ -545,6 +561,7 @@ function videoInputModes(
       max: limits.audios,
       durationMetadata: 'optional',
       ...(audioCapSeconds !== undefined ? { maxDurationSeconds: audioCapSeconds } : {}),
+      ...slotMinDurationSeconds(modelId, 'video', 'audioReferences', 'audio'),
     });
   }
   if (limits.startFrameWithReferences) {
@@ -845,6 +862,7 @@ function motionDescriptors(): GenerationModelDescriptor[] {
           max: 1,
           durationMetadata: 'optional',
           maxDurationSeconds: model.maxDuration,
+          ...slotMinDurationSeconds(model.id, 'motion', 'referenceVideo', 'video'),
         },
       ],
     }],

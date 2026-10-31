@@ -104,10 +104,10 @@ import {
 import { useCreatorQuote } from '@/lib/use-creator-quote';
 import { openingSetting, type CreatorOpening } from '@/lib/creator-opening';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
-import { planMotionRunInputs } from '@/lib/creator-run-inputs';
+import { heldLengthNote, motionRunClipSlot, planMotionRunInputs } from '@/lib/creator-run-inputs';
 import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
 // Kie's motion cap; the motion start refuses a longer prompt before anything is held.
-import { catalogRunQuoteInput, MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogInputTooShort, catalogRunQuoteInput, MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import { useTicker } from '@/lib/use-ticker';
 import {
     refreshTemporaryMediaUrl,
@@ -1293,6 +1293,14 @@ export default function CreateMotionClient({
     // The server refuses a quote without both inputs and a length, so a fresh
     // page opened on that refusal and a Retry that could not help.
     const motionInputsReady = hasCharacterImage && hasReferenceVideo && duration > 0;
+    // The clip against the shortest its slot takes (Kie's motion control refuses one under 3
+    // seconds). The start refused such a run before any hold, but only once Generate was pressed;
+    // the run now waits, in the start's words (which call the clip "The reference video"), for as
+    // long as it holds. A length the page has not read is left to the start, which measures it.
+    const clipSlot = useMemo(() => motionRunClipSlot(catalogDescriptor, runSettings), [catalogDescriptor, runSettings]);
+    const shortClipMessage = hasReferenceVideo && clipSlot
+        ? catalogInputTooShort(catalogDescriptor?.displayName ?? model.displayName, clipSlot, { label: 'The reference video', durationSeconds: duration })
+        : null;
     const hasCatalogSettings = Boolean(modelCatalog.catalog && modelCatalog.detailsReady);
     // The price is the server's own quote of the run the page posts, as the start quotes
     // the run it is sent (catalogRunQuoteInput of its inputs, each in its slot).
@@ -1348,7 +1356,7 @@ export default function CreateMotionClient({
         ? creditRefusal.message
         : null;
     const showTopUp = insufficientCredits || Boolean(creditRefusalMessage);
-    const canGenerate = motionInputsReady && !videoError;
+    const canGenerate = motionInputsReady && !videoError && !shortClipMessage;
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('motion');
     // Watched only while idle, so a reload never lands mid-request. A remix page
@@ -1425,10 +1433,16 @@ export default function CreateMotionClient({
     const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating ? (
         <CreatorTopUpNotice cost={estimatedCost} balance={userCredits} message={creditRefusalMessage} />
     ) : null;
-    const barStatus = topUpNotice || runStatus ? (
+    // A line of its own, so no other status (an unanswered start, a price that failed) hides why
+    // Generate is off.
+    const shortClipLine = shortClipMessage && !isGenerating ? (
+        <p className="text-rose-300">{shortClipMessage}</p>
+    ) : null;
+    const barStatus = topUpNotice || runStatus || shortClipLine ? (
         <div className="space-y-3">
             {topUpNotice}
             {runStatus}
+            {shortClipLine}
         </div>
     ) : null;
 
@@ -1697,7 +1711,11 @@ export default function CreateMotionClient({
                             </div>
 
                             <p className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-[var(--ui-text-muted)]">
-                                <span>{duration > 0 ? `Reference length: ${duration.toFixed(1)}s` : 'Reference length will appear after upload.'}</span>
+                                {shortClipMessage && clipSlot?.minDurationSeconds ? (
+                                    <span className="text-rose-300">{`Reference length: ${heldLengthNote(duration, clipSlot.minDurationSeconds)}`}</span>
+                                ) : (
+                                    <span>{duration > 0 ? `Reference length: ${duration.toFixed(1)}s` : 'Reference length will appear after upload.'}</span>
+                                )}
                                 <span className="tabular-nums">Limit: {maxVideoDuration}s</span>
                             </p>
 

@@ -18,6 +18,7 @@ import {
 } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+import { descriptorBeforeSlotMinDurations } from './fixtures/slot-min-durations-2026-10-31';
 
 /**
  * Release 2026-10-19-wan-start-frame-apart: wan/2-7-r2v takes `reference_image` and
@@ -137,7 +138,7 @@ describe('wan-start-frame-apart release', () => {
   it('is the code build', () => {
     const { schemaVersion, ...publicDescriptor } = entry().publicDescriptor;
     expect(schemaVersion).toBe(2);
-    expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(catalog.models.find((model) => model.id === 'wan-2.7')!));
+    expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptorBeforeSlotMinDurations(catalog.models.find((model) => model.id === 'wan-2.7')!)));
     expect(entry().adapterKey).toBe(operation.adapterKey);
     expect(entry().adapterConfig).toEqual(operation.adapterConfig);
     expect(entry().providerModelMap).toEqual(operation.providerModelMap);

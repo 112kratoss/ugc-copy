@@ -113,7 +113,7 @@ import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
-import { planVideoRunInputs, type VideoRunInput } from '@/lib/creator-run-inputs';
+import { heldLengthNote, planVideoRunInputs, type VideoRunInput } from '@/lib/creator-run-inputs';
 import {
     framesLeftOutLine,
     planVideoInputSwitch,
@@ -2092,23 +2092,29 @@ export default function CreateVideoClient({
             elementHandles: klingVideoHandles,
         })
         : null;
-    // A clip or track the run sends that is shorter than its slot takes (Kie refuses a Kling 3.0
-    // video element under 3 seconds). The start refused such a run before any hold, but only
-    // once Generate was pressed; the run now waits, with the start's words beside Generate, for
-    // as long as it holds. A length the page never read is left to the start, which measures it.
-    const shortInputMessage = (() => {
-        for (const input of runInputs) {
-            const slot = affordances.minimumLengths.get(input.slot);
-            const media = input.slot === 'videoElements'
-                ? { label: input.element.displayName, durationSeconds: input.element.durationSeconds }
-                : input.slot === 'videoReferences' || input.slot === 'audioReferences'
-                    ? { label: input.reference.displayName, durationSeconds: input.durationSeconds }
-                    : null;
-            const message = slot && media ? catalogInputTooShort(videoModel.displayName, slot, media) : null;
-            if (message) return message;
-        }
-        return null;
-    })();
+    // The clips and tracks the run sends that are shorter than their slot takes (Kie refuses a
+    // Kling 3.0 video element under 3 seconds, a Seedance 2 clip or track under 2). The start
+    // refused such a run before any hold, but only once Generate was pressed; the run now waits,
+    // with the start's words for the first beside Generate, for as long as one holds, and each
+    // one's card says it is under the minimum. A length the page never read is left to the
+    // start, which measures it.
+    const shortInputs = runInputs.flatMap((input) => {
+        const slot = affordances.minimumLengths.get(input.slot);
+        const media = input.slot === 'videoElements'
+            ? { id: input.element.id, label: input.element.displayName, durationSeconds: input.element.durationSeconds }
+            : input.slot === 'videoReferences' || input.slot === 'audioReferences'
+                ? { id: input.reference.id, label: input.reference.displayName, durationSeconds: input.durationSeconds }
+                : null;
+        const minimumSeconds = slot?.minDurationSeconds;
+        const message = slot && media ? catalogInputTooShort(videoModel.displayName, slot, media) : null;
+        return message && media && minimumSeconds ? [{ id: media.id, message, minimumSeconds }] : [];
+    });
+    const shortInputMessage = shortInputs[0]?.message ?? null;
+    /** A held clip's or track's card note, or null for one the run does not hold. */
+    const heldInputNote = (id: string, durationSeconds: number | null | undefined, noun: 'clip' | 'track') => {
+        const held = shortInputs.find((input) => input.id === id);
+        return held && typeof durationSeconds === 'number' ? heldLengthNote(durationSeconds, held.minimumSeconds, noun) : null;
+    };
     // The run waits, with its reason beside Generate: Generate, Start new and Try again are off.
     const runHeld = Boolean(promptLimitMessage || shortInputMessage);
     const hasKnownElementMentions = knownElementMentions.length > 0;
@@ -5858,11 +5864,16 @@ export default function CreateVideoClient({
                                                             <div className="flex items-start justify-between gap-3">
                                                                 <div className="min-w-0">
                                                                     <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
-                                                                    <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
-                                                                        {typeof reference.durationSeconds === 'number'
-                                                                            ? `${reference.durationSeconds.toFixed(1)}s clip`
-                                                                            : 'Duration unavailable'}
-                                                                    </div>
+                                                                    {/* To the nearest tenth, so a clip over the cap reads as over it; a held one reads as its line does. */}
+                                                                    {heldInputNote(reference.id, reference.durationSeconds, 'clip') ? (
+                                                                        <div className="mt-1 text-xs text-red-400">{heldInputNote(reference.id, reference.durationSeconds, 'clip')}</div>
+                                                                    ) : (
+                                                                        <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
+                                                                            {typeof reference.durationSeconds === 'number'
+                                                                                ? `${reference.durationSeconds.toFixed(1)}s clip`
+                                                                                : 'Duration unavailable'}
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                                 <div className="-my-1 -mr-1 flex shrink-0 items-center gap-1.5">
                                                                     {reference.restoredFromRemix ? (
@@ -5927,8 +5938,10 @@ export default function CreateVideoClient({
                                                                 <div className="flex items-start justify-between gap-3">
                                                                     <div className="min-w-0">
                                                                         <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
-                                                                        {/* Only the Seedance 2 family prepares assets. On any other model the row says how long the track is. */}
-                                                                        {isSeedance2Family ? (
+                                                                        {/* Only the Seedance 2 family prepares assets. On any other model the row says how long the track is. A held track says it is under the minimum, as its line does. */}
+                                                                        {heldInputNote(reference.id, reference.durationSeconds, 'track') ? (
+                                                                            <div className="mt-1 text-xs text-red-400">{heldInputNote(reference.id, reference.durationSeconds, 'track')}</div>
+                                                                        ) : isSeedance2Family ? (
                                                                             <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
                                                                                 {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
                                                                             </div>
@@ -6051,7 +6064,9 @@ export default function CreateVideoClient({
                                                 }}
                                                 // Rounded down, as the line beside Generate and the start give a clip's
                                                 // length, so a clip named there as too short never reads as 3.0s here.
-                                                note={typeof element.durationSeconds === 'number' ? `${lengthInTenthsRoundedDown(element.durationSeconds).toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
+                                                note={heldInputNote(element.id, element.durationSeconds, 'clip') ? (
+                                                    <span className="text-red-400">{heldInputNote(element.id, element.durationSeconds, 'clip')}</span>
+                                                ) : typeof element.durationSeconds === 'number' ? `${lengthInTenthsRoundedDown(element.durationSeconds).toFixed(1)}s clip` : 'MP4 or MOV, 50MB max'}
                                             />
                                         ))}
                                     </CreatorReferenceStrip>

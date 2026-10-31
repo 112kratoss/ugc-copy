@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { motionRunClipSlot } from '@/lib/creator-run-inputs';
 import { getVideoInputAffordances } from '@/lib/generation-model-affordances';
 import {
   buildGenerationModelCatalog,
@@ -16,13 +17,16 @@ import {
   CREATOR_LENGTH_READING_SLACK_SECONDS,
   catalogInputTooShort,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
 /**
- * The shortest clip or track a slot takes (`minDurationSeconds`). Kie's kling-3.0/video refuses a
- * video element under 3 seconds. The server's start refused such a run before any hold
- * (provider-input-limits), but the creator learned it only once Generate was pressed. The catalog
- * publishes the start's own minimum on the slot, and both creators hold a run to it, in the start's
- * words, before Generate (the web's video page, the app's validateCatalogCreationDraft).
+ * The shortest clip or track a slot takes (`minDurationSeconds`). Kie refuses a Kling 3.0 video
+ * element under 3 seconds, a Seedance 2 or MiniMax H3 clip or track under 2, a Wan clip or track
+ * under 1 and a Kling motion-control clip under 3. The server's start refused such a run before any
+ * hold (provider-input-limits), but the creator learned it only once Generate was pressed. The
+ * catalog publishes the start's own minimum on the slot, and the creators hold a run to it, in the
+ * start's words, before Generate (the web's video and motion pages, the app's
+ * validateCatalogCreationDraft).
  */
 describe('the shortest clip a slot takes', () => {
   const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2, includeUnavailable: true });
@@ -34,6 +38,8 @@ describe('the shortest clip a slot takes', () => {
   const roleOf = (model: GenerationModelDescriptor, slot: CatalogInputSlot) => (
     referenceMediaRole(model.kind, slot.key, slot.kind as 'video' | 'audio')
   );
+  /** A slot whose files the start measures (`durationBoundInputSlots`): a clip or track with duration metadata. */
+  const measured = (slot: CatalogInputSlot) => (slot.kind === 'video' || slot.kind === 'audio') && slot.durationMetadata !== undefined;
   /** Every slot that publishes a shortest clip or track, with its model. */
   const published = catalog.models.flatMap((model) => slotsOf(model)
     .filter((slot) => slot.minDurationSeconds !== undefined)
@@ -42,10 +48,36 @@ describe('the shortest clip a slot takes', () => {
   it('publishes Kling 3.0’s video elements at the start’s own 3 seconds, on a slot whose files the start measures', () => {
     expect(elements).toMatchObject({ kind: 'video', durationMetadata: 'optional', minDurationSeconds: 3 });
     expect(referenceMediaMinSeconds('kling-3.0-video', 'element')).toBe(3);
-    // This release publishes that one; the start's other minimums (Seedance's 2 s clips and
-    // tracks, a motion performance's 3 s) stay the start's alone until a release publishes them.
-    expect(published.map(({ model, slot, minimum }) => [model.id, slot.key, minimum, referenceMediaMinSeconds(model.id, roleOf(model, slot))]))
-      .toEqual([['kling-3.0-video', 'videoElements', 3, 3]]);
+  });
+
+  it('publishes on every slot whose files the start measures the shortest it takes there, and on no other slot', () => {
+    for (const model of catalog.models) {
+      for (const slot of slotsOf(model).filter(measured)) {
+        expect(slot.minDurationSeconds, `${model.id} ${slot.key}`).toBe(referenceMediaMinSeconds(model.id, roleOf(model, slot)));
+      }
+    }
+    expect(published.filter(({ slot }) => !measured(slot))).toEqual([]);
+    // Kie's documented minimums, as provider-input-limits.ts records them with their sources.
+    expect(published.map(({ model, slot, minimum }) => `${model.id} ${slot.key} ${minimum}`).sort()).toEqual([
+      'kling-2.6 referenceVideo 3',
+      'kling-3.0 referenceVideo 3',
+      'kling-3.0-video videoElements 3',
+      'minimax-h3 audioReferences 2',
+      'minimax-h3 videoReferences 2',
+      'seedance-2 audioReferences 2',
+      'seedance-2 videoReferences 2',
+      'seedance-2-5 audioReferences 2',
+      'seedance-2-5 videoReferences 2',
+      'seedance-2-fast audioReferences 2',
+      'seedance-2-fast videoReferences 2',
+      'seedance-2-mini audioReferences 2',
+      'seedance-2-mini videoReferences 2',
+      'wan-2.7 audioReferences 1',
+      'wan-3.0 audioReferences 1',
+      'wan-3.0 videoReferences 1',
+      'wan-3.0-prime audioReferences 1',
+      'wan-3.0-prime videoReferences 1',
+    ]);
   });
 
   it('is read back from the published row, and one that is no length is left out of it', () => {
@@ -102,7 +134,24 @@ describe('the shortest clip a slot takes', () => {
     expect(getVideoInputAffordances(kling, 'kling-3.0-video').minimumLengths).toEqual(new Map([['videoElements', elements]]));
     // Before the catalog arrives the page keeps its tables, which hold no minimum.
     expect(getVideoInputAffordances(null, 'kling-3.0-video').minimumLengths.size).toBe(0);
+    // Seedance 2's clips and tracks, in the references run that sends them.
     const seedance = catalog.models.find((model) => model.id === 'seedance-2')!;
-    expect(getVideoInputAffordances(seedance, 'seedance-2', { referenceMode: 'elements' }).minimumLengths.size).toBe(0);
+    const seedanceSlot = (key: string) => slotsOf(seedance).find((slot) => slot.key === key)!;
+    expect(getVideoInputAffordances(seedance, 'seedance-2', { referenceMode: 'elements' }).minimumLengths)
+      .toEqual(new Map([['videoReferences', seedanceSlot('videoReferences')], ['audioReferences', seedanceSlot('audioReferences')]]));
+    expect(getVideoInputAffordances(seedance, 'seedance-2', { referenceMode: 'frames' }).minimumLengths.size).toBe(0);
+  });
+
+  it('reaches the motion pages through the slot a motion run sends its clip in', () => {
+    // The motion pages place the clip with the shared motion rule (planMotionRunInputs), and read the
+    // slot it lands in. Production's Kling 3.0 motion keeps the plain reference slots of the
+    // compatibility release, which publish no minimum: the start judges its clips, as before.
+    for (const id of ['kling-2.6', 'kling-3.0']) {
+      const motion = catalog.models.find((model) => model.id === id)!;
+      expect(motionRunClipSlot(motion, {}), id).toMatchObject({ key: 'referenceVideo', label: 'Reference video', minDurationSeconds: 3 });
+    }
+    expect(motionRunClipSlot({ inputModes: PRODUCTION_KLING_3_MOTION_MODES }, {})).toMatchObject({ key: 'videoReferences' });
+    expect(motionRunClipSlot({ inputModes: PRODUCTION_KLING_3_MOTION_MODES }, {})?.minDurationSeconds).toBeUndefined();
+    expect(motionRunClipSlot(null, {})).toBeNull();
   });
 });

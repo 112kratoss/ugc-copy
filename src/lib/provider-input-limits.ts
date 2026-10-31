@@ -100,11 +100,16 @@ export function referenceMediaMinSeconds(modelId: string, role: ReferenceMediaRo
   return hasRule(REFERENCE_MEDIA_MIN_SECONDS, modelId) ? REFERENCE_MEDIA_MIN_SECONDS[modelId][role] : undefined;
 }
 
+/**
+ * What a refusal calls the files of a role, as the slot they travel in is labelled (the creators
+ * build the same words from the slot's label: `catalogInputTooShort`): "Reference videos",
+ * "Reference audio", "Video elements", and a motion run's one "Reference video".
+ */
 const REFERENCE_MEDIA_NOUNS: Readonly<Record<ReferenceMediaRole, { group: string; one: string }>> = {
   video: { group: 'reference videos', one: 'Reference video' },
   audio: { group: 'reference audio', one: 'Reference audio' },
   element: { group: 'video elements', one: 'Video element' },
-  motion: { group: 'motion reference videos', one: 'The reference video' },
+  motion: { group: 'reference video', one: 'The reference video' },
 };
 
 export type ReferenceMediaLength = {

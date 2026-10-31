@@ -1613,7 +1613,7 @@ describe('a page run the provider is sent', () => {
           { slot: 'characterImage', kind: 'image', url: `${STORAGE}/character.png?token=t` },
           { slot: 'referenceVideo', kind: 'video', url: `${STORAGE}/reference.mp4?token=t`, durationSeconds: 3 },
         ],
-      }, 'Kling 2.6 motion reference videos must be at least 3 seconds long. The reference video runs 2.4 seconds.', { measuredSeconds: 2.4 });
+      }, 'Kling 2.6 reference video must be at least 3 seconds long. The reference video runs 2.4 seconds.', { measuredSeconds: 2.4 });
     });
 
     it('refuses a Seedance 2 reference clip that measures under 2 seconds', async () => {

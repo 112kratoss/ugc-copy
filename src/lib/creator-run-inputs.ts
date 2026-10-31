@@ -1,5 +1,6 @@
 import {
   catalogMotionInputSlots,
+  lengthInTenthsRoundedDown,
   SUBJECT_IMAGES_SLOT_KEY,
   type CatalogConditionPrimitive,
   type CatalogMotionInputsDescriptor,
@@ -121,6 +122,8 @@ export function planImageRunInputs<Element>(elements: readonly Element[], maxIma
 export type MotionRunDescriptor = CatalogMotionInputsDescriptor;
 
 export type MotionRunInputs = readonly [{ slot: string; kind: 'image' }, { slot: string; kind: 'video' }];
+type MotionRunMode = NonNullable<MotionRunDescriptor['inputModes']>[number];
+type MotionRunSlot = MotionRunMode['slots'][number];
 
 /**
  * The inputs a motion run sends, in this order: the character to animate and the clip whose
@@ -138,4 +141,31 @@ export function planMotionRunInputs(
     { slot: slots.image, kind: 'image' },
     { slot: slots.video, kind: 'video' },
   ];
+}
+
+/**
+ * The slot a motion run sends its clip in (`planMotionRunInputs`), as its model's descriptor
+ * declares it, or null before the descriptor is in. Its `minDurationSeconds` is the shortest clip
+ * the provider takes there: Kie's motion control refuses one under 3 seconds, which the start
+ * refused only once Generate was pressed.
+ */
+export function motionRunClipSlot<Slot extends MotionRunSlot>(
+  descriptor: { inputModes?: readonly { conditions?: MotionRunMode['conditions']; slots: readonly Slot[] }[] } | null | undefined,
+  settings: Record<string, CatalogConditionPrimitive | undefined>,
+): Slot | null {
+  if (!descriptor?.inputModes) return null;
+  const key = catalogMotionInputSlots(descriptor, settings).video;
+  return descriptor.inputModes.flatMap((mode) => mode.slots).find((slot) => slot.key === key && slot.kind === 'video') ?? null;
+}
+
+/**
+ * What a creator shows as the length of a clip or track its run holds for being too short
+ * (`catalogInputTooShort`): the length the held line gives, rounded down, and the shortest the
+ * slot takes. Elsewhere a length reads to the nearest tenth, which can show a held clip as long
+ * as its line says it is not; rounding every length down instead would show a clip over a cap
+ * as within it. A held clip is under its minimum, and so under any cap, so rounding it down
+ * misstates neither.
+ */
+export function heldLengthNote(durationSeconds: number, minimumSeconds: number, noun?: 'clip' | 'track'): string {
+  return `${lengthInTenthsRoundedDown(durationSeconds).toFixed(1)}s${noun ? ` ${noun}` : ''}, under the ${minimumSeconds}s minimum`;
 }

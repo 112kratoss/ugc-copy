@@ -113,9 +113,9 @@ describe('provider input limits', () => {
       expect(referenceMediaLengthViolation('wan-2.7', [{ role: 'audio', durationSeconds: 0.5, label: 'Narrator' }]))
         .toBe('Wan 2.7 reference audio must be at least 1 second long. Narrator runs 0.5 seconds.');
       expect(referenceMediaLengthViolation('kling-3.0', [{ role: 'motion', durationSeconds: 2.99 }]))
-        .toBe('Kling 3.0 motion reference videos must be at least 3 seconds long. The reference video runs 2.9 seconds.');
+        .toBe('Kling 3.0 reference video must be at least 3 seconds long. The reference video runs 2.9 seconds.');
       expect(referenceMediaLengthViolation('kling-2.6', [{ role: 'motion', durationSeconds: 2, exact: false }]))
-        .toBe('Kling 2.6 motion reference videos must be at least 3 seconds long.');
+        .toBe('Kling 2.6 reference video must be at least 3 seconds long.');
       // wan/3-0-video and -prime: each clip and track 1–15 s.
       expect(referenceMediaLengthViolation('wan-3.0', [{ role: 'video', durationSeconds: 0.8 }]))
         .toBe('Wan 3.0 reference videos must be at least 1 second long. Reference video 1 runs 0.8 seconds.');
