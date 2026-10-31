@@ -8,6 +8,7 @@ import {
   removeGenerationShowcaseDerivative,
   SHOWCASE_MEDIA_BUCKET,
 } from '@/lib/generation-post-media';
+import { POST_MEDIA_PATH_COLUMNS, type PostMediaPathColumn } from '@/lib/post-media-storage';
 
 /**
  * Retries for public showcase derivatives that a post stopped needing.
@@ -16,7 +17,7 @@ import {
  * its object is gone. The posts trigger `posts_sync_generation_exposure`
  * queues a derivative in the post write's own transaction whenever an
  * unexposed post drops it or a post is deleted outright, and
- * `z_posts_queue_deleted_post_media` queues what a deleted post's media rows
+ * `posts_queue_deleted_post_media` queues what a deleted post's media rows
  * named beside it before the delete cascades to them. The routes still delete
  * the copy inline; this drains what they missed, so a failed or skipped delete
  * can no longer leave a private post's media public.
@@ -42,23 +43,30 @@ type RevocationRow = {
   attempt_count: number | null;
 };
 
-type ExposureRow = {
+type GenerationRow = {
   showcase_asset_path: string | null;
-  visibility?: string | null;
 };
-
-const POST_MEDIA_PATH_COLUMNS = [
-  'storage_path',
-  'preview_storage_path',
-  'display_storage_path',
-  'rendition_storage_path',
-  'teaser_storage_path',
-] as const;
 
 type CreationPostRow = {
   id: string;
-  post_media: Array<Record<(typeof POST_MEDIA_PATH_COLUMNS)[number], string | null>> | null;
+  visibility: string | null;
+  tombstoned_at: string | null;
+  showcase_asset_path: string | null;
+  post_media: Array<Record<PostMediaPathColumn | SweepLeaseColumn, string | null>> | null;
 };
+
+/**
+ * The sweeps lease a row for five minutes (media-preview-repair's
+ * p_lock_ttl_seconds, the teaser claim's 300 s) and upload only while they
+ * hold it. A lease older than that belongs to a worker that is gone.
+ */
+const MEDIA_SWEEP_LEASE_MS = 5 * 60 * 1000;
+const SWEEP_LEASE_COLUMNS = ['preview_locked_at', 'rendition_locked_at', 'teaser_locked_at'] as const;
+type SweepLeaseColumn = (typeof SWEEP_LEASE_COLUMNS)[number];
+
+const CREATION_POST_COLUMNS = `id, visibility, tombstoned_at, showcase_asset_path, post_media(${
+  [...POST_MEDIA_PATH_COLUMNS, ...SWEEP_LEASE_COLUMNS].join(', ')
+})`;
 
 type RevocationOutcome =
   | { settled: true; reason: 'removed' | 'stillServing' | 'outsidePrefix' }
@@ -115,6 +123,7 @@ async function revoke(
   client: SupabaseClient,
   row: RevocationRow,
   removeDerivative: typeof removeGenerationShowcaseDerivative,
+  now: Date,
 ): Promise<RevocationOutcome> {
   const path = getCanonicalGenerationShowcaseAssetPath(row.showcase_asset_path, row.generation_id);
   if (!path) {
@@ -127,56 +136,65 @@ async function revoke(
     return { settled: true, reason: 'outsidePrefix' };
   }
 
-  const [generation, post, creationPosts] = await Promise.all([
+  const [generation, creationPosts] = await Promise.all([
     client
       .from('generations')
       .select('showcase_asset_path')
       .eq('id', row.generation_id)
       .maybeSingle(),
-    row.post_id
-      ? client
-        .from('posts')
-        .select('visibility, showcase_asset_path')
-        .eq('id', row.post_id)
-        .maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
-    // The media rows of the creation's posts, linked or recording it as
-    // deleted: a deleted post's cover row queued the preview, display,
-    // rendition and teaser built from its copy, and the creation published
-    // again at once gets the same content-addressed names.
+    // The creation's post as it is now, linked or recording the creation as
+    // deleted (generation_id is unique), with its media rows. The queue keeps
+    // one row per object, under the first post that queued it: that post may
+    // be gone, and the creation published again at once gets the same
+    // content-addressed names.
     client
       .from('posts')
-      .select(`id, post_media(${POST_MEDIA_PATH_COLUMNS.join(', ')})`)
+      .select(CREATION_POST_COLUMNS)
       .or(`generation_id.eq.${row.generation_id},deleted_generation_id.eq.${row.generation_id}`),
   ]);
   if (generation.error) return { settled: false, error: errorText(generation.error) };
-  if (post.error) return { settled: false, error: errorText(post.error) };
   if (creationPosts.error) return { settled: false, error: errorText(creationPosts.error) };
 
-  const generationRow = generation.data as ExposureRow | null;
-  const postRow = post.data as ExposureRow | null;
-  // A private post's legacy media rows serve this same copy and go with it.
-  // A post that is public again has a live cover row under this prefix.
-  const removedWithPostId = postRow?.visibility === 'private' ? row.post_id : null;
-  // Published again under the same path since it was queued, or named by a
-  // media row that is not going with it: it is serving.
+  const generationRow = generation.data as GenerationRow | null;
+  const posts = (creationPosts.data ?? []) as unknown as CreationPostRow[];
+  // A private post serves nothing public, so its leftover media rows go with
+  // the copy. A tombstoned one keeps its media for its buyers while it still
+  // names its copy; one made private before its tombstone had dropped it.
+  const servingPosts = posts.filter((post) => (
+    post.visibility !== 'private' || Boolean(post.tombstoned_at && post.showcase_asset_path)
+  ));
+  const privatePost = posts.find((post) => !servingPosts.includes(post));
+  // Named since it was queued, as the creation's or a post's copy or by a
+  // serving post's media row: it is serving.
   const stillServing = [
     generationRow?.showcase_asset_path,
-    postRow?.showcase_asset_path,
-    ...((creationPosts.data ?? []) as unknown as CreationPostRow[])
-      .filter((creationPost) => creationPost.id !== removedWithPostId)
-      .flatMap((creationPost) => creationPost.post_media ?? [])
+    ...posts.map((post) => post.showcase_asset_path),
+    ...servingPosts
+      .flatMap((post) => post.post_media ?? [])
       .flatMap((media) => POST_MEDIA_PATH_COLUMNS.map((column) => media[column])),
   ].some((candidate) => getCanonicalGenerationShowcaseAssetPath(candidate, row.generation_id) === path);
   if (stillServing) {
     return { settled: true, reason: 'stillServing' };
   }
 
+  // A sweep uploads a derivative before its row names it. While one holds a
+  // serving post's row, the name it is about to record may be this one.
+  const leasedSince = now.getTime() - MEDIA_SWEEP_LEASE_MS;
+  const buildingMedia = servingPosts
+    .flatMap((post) => post.post_media ?? [])
+    .some((media) => SWEEP_LEASE_COLUMNS.some((column) => {
+      const lockedAt = media[column];
+      return lockedAt !== null && Date.parse(lockedAt) > leasedSince;
+    }));
+  if (buildingMedia) {
+    return { settled: false, error: 'A post of the creation is still building its media.' };
+  }
+
   const removal = await removeDerivative({
     adminSupabase: client,
     generationId: row.generation_id,
     showcaseAssetPath: path,
-    postId: removedWithPostId,
+    postId: privatePost?.id ?? null,
   });
   if (removal.error) {
     return { settled: false, error: removal.error.message ?? 'Storage removal failed.' };
@@ -223,7 +241,7 @@ export async function processShowcaseMediaRevocations(
   for (const row of rows) {
     let outcome: RevocationOutcome;
     try {
-      outcome = await revoke(client, row, removeDerivative);
+      outcome = await revoke(client, row, removeDerivative, now);
     } catch (revokeError) {
       outcome = { settled: false, error: errorText(revokeError) };
     }

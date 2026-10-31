@@ -14,7 +14,7 @@ const code = (text: string) => normalize(text.replace(/--[^\n]*/g, ''));
 /**
  * The behaviour is asserted by pgTAP (deleted_post_derivatives.test.sql). This
  * pins the migration's shape: the paths are read before the delete cascades to
- * the media rows, by the rule the exposure trigger queues the copy by, and the
+ * the media rows, only account erasure's cascade is left to its sweep, and the
  * trigger can never cancel the delete it runs for.
  */
 describe("a deleted post queues its media rows' paths", () => {
@@ -27,17 +27,13 @@ describe("a deleted post queues its media rows' paths", () => {
   it('waits at most five seconds for the posts lock', () => {
     expect(sql.indexOf("SET LOCAL lock_timeout = '5s';")).toBeGreaterThan(-1);
     expect(sql.indexOf("SET LOCAL lock_timeout = '5s';"))
-      .toBeLessThan(sql.indexOf('CREATE TRIGGER z_posts_queue_deleted_post_media'));
+      .toBeLessThan(sql.indexOf('CREATE TRIGGER posts_queue_deleted_post_media'));
   });
 
-  it('runs before the delete, after the other BEFORE DELETE triggers on posts', () => {
+  it('runs before the delete cascades to the media rows', () => {
     expect(sql).toMatch(
-      /CREATE TRIGGER z_posts_queue_deleted_post_media\s+BEFORE DELETE ON public\.posts\s+FOR EACH ROW\s+EXECUTE FUNCTION public\.queue_deleted_post_media_revocations\(\);/,
+      /CREATE TRIGGER posts_queue_deleted_post_media\s+BEFORE DELETE ON public\.posts\s+FOR EACH ROW\s+EXECUTE FUNCTION public\.queue_deleted_post_media_revocations\(\);/,
     );
-    // Triggers of one kind fire in name order.
-    for (const other of ['posts_delete_feed_events_before_delete', 'posts_reject_sold_delete', 'posts_sync_purchase_moderation_delete']) {
-      expect('z_posts_queue_deleted_post_media' > other).toBe(true);
-    }
   });
 
   it('lets every delete through: a BEFORE trigger that returns NULL cancels it', () => {
@@ -45,17 +41,24 @@ describe("a deleted post queues its media rows' paths", () => {
     expect(code(functionBody).match(/RETURN OLD;/g)).toHaveLength(3);
   });
 
-  it('leaves an erasure cascade to the erasure sweep', () => {
-    expect(code(functionBody)).toContain('IF pg_trigger_depth() > 1 THEN RETURN OLD; END IF;');
+  it("leaves account erasure's cascade to the erasure sweep, and no other delete", () => {
+    // The cascade from auth.users runs once the owner's row is gone. Trigger
+    // depth would also skip a direct delete issued from inside a trigger.
+    expect(code(functionBody)).toContain(
+      'IF NOT EXISTS ( SELECT 1 FROM auth.users AS users WHERE users.id = OLD.user_id ) THEN RETURN OLD; END IF;',
+    );
+    expect(functionBody).not.toContain('pg_trigger_depth');
   });
 
-  it("queues under a live creation by the exposure trigger's rule, or under the deleted one the post recorded", () => {
+  it('queues under a live creation of the owner or a linked guest, whatever an operator did, or under the deleted one the post recorded', () => {
     expect(code(functionBody)).toContain(
       'IF OLD.generation_id IS NULL THEN v_folder_id := OLD.deleted_generation_id; ELSE',
     );
     expect(code(functionBody)).toContain(
-      'WHERE generations.id = OLD.generation_id AND ( generations.user_id = OLD.user_id OR EXISTS ( SELECT 1 FROM public.profiles AS owner WHERE owner.id = generations.user_id AND owner.merged_into_user_id = OLD.user_id ) ) AND generations.moderation_removed_at IS NULL;',
+      'WHERE generations.id = OLD.generation_id AND ( generations.user_id = OLD.user_id OR EXISTS ( SELECT 1 FROM public.profiles AS owner WHERE owner.id = generations.user_id AND owner.merged_into_user_id = OLD.user_id ) );',
     );
+    // An operator's removal hides the creation; the job keeps what it names.
+    expect(functionBody).not.toContain('moderation_removed_at');
     expect(code(functionBody)).toContain('IF v_folder_id IS NULL THEN RETURN OLD; END IF;');
   });
 

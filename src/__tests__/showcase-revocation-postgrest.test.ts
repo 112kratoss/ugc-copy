@@ -165,6 +165,25 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     }
   });
 
+  it('removes what a creation published again and made private still names, though the queue row names the deleted post',async()=>{
+    await deletePublicPost('live');
+    const republishedId=randomUUID();
+    await db.query("insert into public.posts(id,user_id,generation_id,visibility,category,source_kind,review_status,post_format,title,body,showcase_asset_path) values($1,$2,$3,'public','text','external','visible','text','Fixture','Fixture body long enough for public text.',$4)",[republishedId,owner,generationId,paths[0]]);
+    try{
+      await db.query("insert into public.post_media(post_id,media_kind,storage_path,preview_storage_path,rendition_storage_path,display_storage_path,teaser_storage_path,teaser_generated_at) values($1,'image',$2,$3,$4,$5,$6,now())",[republishedId,...paths.slice(1)]);
+      // Made private while its inline removal failed, so its row still names everything; the copy's queue row stays the deleted post's.
+      await db.query("update public.posts set visibility='private',showcase_asset_path=null where id=$1",[republishedId]);
+      expect((await db.query('select post_id from public.showcase_media_revocations where generation_id=$1 and showcase_asset_path=$2',[generationId,paths[0]])).rows).toEqual([{post_id:postId}]);
+      await db.query("update public.showcase_media_revocations set next_attempt_at=now()-interval '1 minute' where generation_id=$1",[generationId]);
+      const summary=await processShowcaseMediaRevocations(admin,{now:new Date()});
+      for(const path of paths){const result=await admin.storage.from('showcase_media').download(path);expect(result.data,`Still fetchable: ${path}`).toBeNull();}
+      expect((await db.query('select id from public.post_media where post_id=$1',[republishedId])).rows).toEqual([]);
+      expect(summary).toMatchObject({due:6,removed:6,stillServing:0,rescheduled:0});
+    }finally{
+      await db.query('delete from public.posts where id=$1',[republishedId]);
+    }
+  });
+
   it('preserves a copy republished before the worker reads exposure',async()=>{
     await db.query("update public.posts set visibility='public',showcase_asset_path=$2 where id=$1",[postId,paths[0]]);
     expect(await processShowcaseMediaRevocations(admin,{now:new Date()})).toMatchObject({due:1,removed:0,stillServing:1});

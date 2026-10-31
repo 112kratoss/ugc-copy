@@ -54,6 +54,7 @@ function createSupabaseMock({
   profilesError = null,
   postMedia = [],
   postMediaError = null,
+  deleteError = null,
 }: {
   post: MockPost | null;
   bundle: MockBundle | null;
@@ -64,9 +65,11 @@ function createSupabaseMock({
   /** Guest identities and the account each was linked to (`merged_into_user_id`). */
   profiles?: Array<Record<string, unknown>>;
   profilesError?: { message: string } | null;
-  /** The post's media rows, until its delete cascades to them. */
+  /** Media rows by post, until a post's delete cascades to its own. */
   postMedia?: Array<Record<string, unknown>>;
   postMediaError?: { message: string } | null;
+  /** Answers the posts delete, as the database refusing it would. */
+  deleteError?: { message: string } | null;
 }) {
   const calls = {
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
@@ -76,7 +79,7 @@ function createSupabaseMock({
     removals: [] as Array<{ bucket: string; paths: string[] }>,
     /** Every table read or written, in order. */
     tables: [] as string[],
-    /** Media-row reads and post deletes, in the order they ran. */
+    /** Media-row reads, post deletes and storage removals, in the order they ran. */
     sequence: [] as string[],
   };
   let postDeleted = false;
@@ -97,15 +100,17 @@ function createSupabaseMock({
         calls.deletes.push({ table, filters });
         if (table === 'posts') {
           calls.sequence.push('delete posts');
+          if (deleteError) return { data: null, error: deleteError };
           postDeleted = true;
         }
       }
 
       if (table === 'post_media' && operation === 'select') {
         calls.sequence.push('read post_media');
-        const rows = postDeleted
-          ? []
-          : postMedia.filter((row) => Object.entries(filters).every(([column, value]) => row[column] === value));
+        const rows = postMedia.filter((row) => (
+          !(postDeleted && row.post_id === post?.id)
+          && Object.entries(filters).every(([column, value]) => row[column] === value)
+        ));
         return {
           data: postMediaError
             ? null
@@ -226,6 +231,7 @@ function createSupabaseMock({
       from: vi.fn((bucket: string) => ({
         remove: vi.fn((paths: string[]) => {
           calls.removals.push({ bucket, paths });
+          calls.sequence.push(`remove ${bucket}`);
           return Promise.resolve({ data: null, error: null });
         }),
       })),
@@ -614,13 +620,19 @@ describe('deleteOwnerPostForRoute', () => {
       rendition_storage_path: 'showcase/generation-1/public.abc.feed.r1.mp4',
       teaser_storage_path: 'showcase/generation-1/public.abc.teaser.t1.mp4',
     };
+    // Another post's row naming the same folder: only the deleted post's rows go.
+    const otherPostRow = {
+      post_id: 'post-2',
+      storage_path: 'showcase/generation-1/other.abc.jpg',
+      preview_storage_path: 'showcase/generation-1/other.abc.preview.p2.webp',
+    };
 
     async function deleteCreationPost(options: Partial<Parameters<typeof createSupabaseMock>[0]> = {}) {
       const mock = createSupabaseMock({
         post: creationPost,
         bundle: null,
         generation: { id: 'generation-1', user_id: 'user-1', showcase_asset_path: creationPost.showcase_asset_path },
-        postMedia: [coverRow],
+        postMedia: [coverRow, otherPostRow],
         ...options,
       });
       await expect(deleteOwnerPostForRoute({
@@ -644,7 +656,28 @@ describe('deleteOwnerPostForRoute', () => {
           'showcase/generation-1/public.abc.teaser.t1.mp4',
         ],
       }]);
-      expect(calls.sequence).toEqual(['read post_media', 'delete posts']);
+      expect(calls.sequence).toEqual(['read post_media', 'delete posts', 'remove showcase_media']);
+    });
+
+    it('stay while the database refuses the delete', async () => {
+      // A purchase landing after the checks: posts_reject_sold_delete raises,
+      // and the buyer keeps what they paid for.
+      const mock = createSupabaseMock({
+        post: creationPost,
+        bundle: null,
+        generation: { id: 'generation-1', user_id: 'user-1', showcase_asset_path: creationPost.showcase_asset_path },
+        postMedia: [coverRow],
+        deleteError: { message: 'Post has retained unlocks' },
+      });
+
+      await expect(deleteOwnerPostForRoute({
+        adminSupabase: mock.client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+      })).resolves.toMatchObject({ ok: false, status: 500 });
+
+      expect(mock.calls.removals).toEqual([]);
+      expect(mock.calls.sequence).toEqual(['read post_media', 'delete posts']);
     });
 
     it('leave whatever a row names outside the creation’s folder', async () => {

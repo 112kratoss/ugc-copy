@@ -28,7 +28,11 @@ import {
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
-import { removePostMediaObjects } from '@/lib/post-media-storage';
+import {
+  POST_MEDIA_PATH_COLUMNS,
+  removePostMediaObjects,
+  type PostMediaPathColumn,
+} from '@/lib/post-media-storage';
 
 export function getCanonicalPostShowcaseAssetPath(
   storagePath: string | null | undefined,
@@ -43,14 +47,6 @@ export function getCanonicalPostShowcaseAssetPath(
     ? canonicalPath
     : null;
 }
-
-const POST_MEDIA_PATH_COLUMNS = [
-  'storage_path',
-  'preview_storage_path',
-  'display_storage_path',
-  'rendition_storage_path',
-  'teaser_storage_path',
-] as const;
 
 /**
  * What a creation post's media rows name in the creation's public folder: the
@@ -75,7 +71,7 @@ async function loadCreationMediaPaths(
   }
 
   const paths: string[] = [];
-  for (const row of (data ?? []) as unknown as Array<Record<(typeof POST_MEDIA_PATH_COLUMNS)[number], string | null>>) {
+  for (const row of (data ?? []) as unknown as Array<Record<PostMediaPathColumn, string | null>>) {
     for (const column of POST_MEDIA_PATH_COLUMNS) {
       const canonicalPath = row[column]
         ? parseCanonicalStorageObjectPath(row[column], { minimumSegments: 3 })
