@@ -34,6 +34,10 @@ for segment in re.split(r"\|\||&&|;|\||\n", command):
         )
     if re.search(r"\bsed\b(?![^|;&\n]*\s-i\b)[^|;&\n]*(?:" + SECRET_FILE + ")", segment):
         block("sed without -i prints a secrets file. Use `grep -c` to check a name, or `sed -i` to toggle a block in place.")
+    if re.search(r"(?<![<>|])>(?!>)\s*[\"']?(?:[^\s\"'|;&]*/)?(?:" + SECRET_FILE + ")", segment):
+        block("that truncates a secrets file. Append with `>>` (`printf 'NAME=%s\\n' \"$(pbpaste)\" >> .env.local`) or toggle a block with `sed -i`; never overwrite it.")
+    if re.search(r"\b(?:rm|unlink|shred)\b[^|;&\n]*(?:" + SECRET_FILE + ")", segment):
+        block("that deletes a secrets file. Leave .env* and .mcp.json in place; the owner removes or rotates them.")
     grep = re.search(r"\bgrep\b([^|;&\n]*)", segment)
     if grep and not re.search(r"(?:^|\s)-\w*[clq]", grep.group(1)) and not re.search(r"URL", grep.group(1)):
         block("grep on a secrets file prints matching lines. Use `grep -c`, `grep -l` or `grep -q`, or match only `_URL` lines.")

@@ -1,5 +1,7 @@
 # Claude Code setup review: what Anthropic does, what we do, what to adopt
 
+Archived 2026-11-01: everything here shipped (PRs #475 and #476) and the decisions live in `AGENTS.md`; the record stays for the gap analysis and the sources. The 2026-11-01 review-cost pass (review sessions at `high` effort, every subagent forced onto Sonnet, the `review-finder` agent) is recorded in `AGENTS.md` under "A fresh-context review before every merge".
+
 Status (2026-10-18): all five P3 decisions taken by the owner and written in (see "P3 decisions"). P1 shipped in PR #475 (`AGENTS.md` split into a 21 KB core plus eight path-scoped rules, three hooks and a committed `.claude/settings.json`, a compaction section, symlinked mirrors at the top level). P2 shipped in PR #476 (four repo skills, the design skill split into a core plus references, `npm run test:quiet`). Nothing is left open; the monthly prompt-audit is the standing follow-up.
 
 ## Why

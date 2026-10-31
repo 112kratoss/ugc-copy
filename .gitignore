@@ -57,9 +57,10 @@ yarn-error.log*
 # vercel
 .vercel
 
-# agent-session scratch: settings.local.json is per-machine, worktrees are full checkouts
+# agent-session scratch: settings.local.json is per-machine, worktrees are full checkouts, the hooks' bytecode is per-Python
 .claude/settings.local.json
 .claude/worktrees/
+__pycache__/
 
 # supabase cli scratch
 /supabase/snippets/

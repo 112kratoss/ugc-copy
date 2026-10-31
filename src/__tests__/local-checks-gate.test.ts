@@ -214,8 +214,14 @@ describe('the local gate', () => {
 
     expect(gate.status, gate.stdout + gate.stderr).toBe(0);
     expect(gate.stdout).toMatch(/^== ALL GREEN/m);
+    // Quality's four media audits follow its tests; two read /proc and assert Linux, so a Mac runs the other two.
+    const linuxOnly = (file: string) => (process.platform === 'linux' ? [`npx tsx --tsconfig tsconfig.scripts.json scripts/audits/${file}`] : []);
     expect(gate.calls.map((call) => call.command)).toEqual([
       'npx vitest run --reporter=dot --silent=passed-only',
+      'npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-video-poster-owner-lifetime.ts --verify-reader-lease',
+      ...linuxOnly('audit-media-scratch-lifetime.ts'),
+      'npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-output-limits.ts',
+      ...linuxOnly('audit-staging-admission.ts'),
       'npm run lint',
       'npm run typecheck',
       'npm run typecheck:scripts',

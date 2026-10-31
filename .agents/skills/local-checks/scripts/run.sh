@@ -80,11 +80,20 @@ ci_build() (
   export npm_config_node_options="$NODE_OPTIONS"
   exec "$@"
 )
+# Quality's four media audits, in its order, each with the real FFmpeg. The scratch and staging-admission audits read
+# /proc and assert Linux, so a Mac runs the other two and leaves those to CI.
+media_audits() {
+  npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-video-poster-owner-lifetime.ts --verify-reader-lease || return
+  [ "$(uname -s)" != Linux ] || npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-scratch-lifetime.ts || return
+  npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-media-output-limits.ts || return
+  [ "$(uname -s)" != Linux ] || npx tsx --tsconfig tsconfig.scripts.json scripts/audits/audit-staging-admission.ts
+}
 say "== $(git rev-parse --short HEAD) $(git diff HEAD --shortstat | sed 's/^ *//') | $(date '+%Y-%m-%d %H:%M:%S') | logs: $OUT"
 if [ "$WEB" = 1 ]; then
   say "-- web job"
   if [ "$CILIKE" = 1 ] && [ -d "$MOBILE_NM" ]; then mv "$MOBILE_NM" "$HIDDEN"; say "   ugc-mobile/node_modules hidden for the web job, as on the CI runner"; fi
   step "test"              npx vitest run --reporter=dot --silent=passed-only
+  step "media audits"      media_audits
   step "lint"              npm run lint
   step "typecheck"         npm run typecheck
   if [ "$?" != 0 ] && grep -q '\.next/types/' "$OUT/typecheck.log"; then
@@ -107,6 +116,7 @@ if [ "$WEB" = 1 ]; then
 fi
 if [ "$MOBILE" = 1 ]; then
   say "-- mobile job"
+  step "mobile release env" sh -c 'cd ugc-mobile && npm run release-env:self-test'
   step "mobile test"       sh -c 'cd ugc-mobile && npm test'
   step "mobile typecheck"  sh -c 'cd ugc-mobile && npm run typecheck'
 fi
