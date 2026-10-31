@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { isLocalLockFilesystem } from '@/lib/staging-workspace';
+import { describe, expect, it, vi } from 'vitest';
+import { isLocalLockFilesystem, localLockFilesystem } from '@/lib/staging-workspace';
 
 // The real-filesystem suites (staging-workspace and the media files that stage)
-// exercise admission on whatever host runs them. This pins the decision itself
-// for both platforms on either host.
+// exercise admission on whatever host runs them. This pins the decision and
+// what it is asked for both platforms on either host: a builtin spy does not
+// reach the module's statfs in this vitest setup, so the reader is passed in.
 describe('staging admission filesystem', () => {
   // macOS numbers a filesystem as it registers at boot: the development Mac's
   // APFS was 0x1a until a reboot on 2026-10-31 and 0x19 after it.
@@ -21,12 +22,33 @@ describe('staging admission filesystem', () => {
     for (const type of [0x01021994, 0x794c7630, 0xef53]) {
       expect(isLocalLockFilesystem('linux', type, null)).toBe(true);
     }
-    expect(isLocalLockFilesystem('linux', 0x6969, null)).toBe(false); // NFS
-    expect(isLocalLockFilesystem('linux', 0x6969, 0x6969)).toBe(false);
+    // NFS, CIFS, SMB2, FUSE, btrfs, xfs
+    for (const type of [0x6969, 0xff534d42, 0xfe534d42, 0x65735546, 0x9123683e, 0x58465342]) {
+      expect(isLocalLockFilesystem('linux', type, null)).toBe(false);
+      expect(isLocalLockFilesystem('linux', type, type)).toBe(false);
+    }
   });
 
   it('refuses every other platform', () => {
     expect(isLocalLockFilesystem('win32', 0x19, 0x19)).toBe(false);
     expect(isLocalLockFilesystem('freebsd', 0xef53, 0xef53)).toBe(false);
+  });
+
+  function statfsAnswering(types: Record<string, number>) {
+    return vi.fn(async (target: string) => ({ type: types[target] ?? -1 }));
+  }
+
+  it('compares the staging root with `/` on macOS, not with itself', async () => {
+    const elsewhere = statfsAnswering({ '/staging': 0x1a, '/': 0x19 });
+    await expect(localLockFilesystem('/staging', elsewhere, 'darwin')).resolves.toBe(false);
+    expect(elsewhere.mock.calls).toEqual([['/staging'], ['/']]);
+    await expect(localLockFilesystem('/staging', statfsAnswering({ '/staging': 0x19, '/': 0x19 }), 'darwin'))
+      .resolves.toBe(true);
+  });
+
+  it('reads only the staging root on Linux', async () => {
+    const read = statfsAnswering({ '/tmp/staging': 0xef53 });
+    await expect(localLockFilesystem('/tmp/staging', read, 'linux')).resolves.toBe(true);
+    expect(read.mock.calls).toEqual([['/tmp/staging']]);
   });
 });

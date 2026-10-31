@@ -52,10 +52,15 @@ export function isLocalLockFilesystem(platform: NodeJS.Platform, type: number, s
   return platform === 'darwin' && type === systemType;
 }
 
-async function localLockFilesystem(root: string) {
-  const { type } = await statfs(root);
-  const systemType = process.platform === 'darwin' ? (await statfs('/')).type : null;
-  return isLocalLockFilesystem(process.platform, type, systemType);
+/** Reads the root's filesystem type, and on macOS the type of `/`. Tests pass their own reader and platform. */
+export async function localLockFilesystem(
+  root: string,
+  read: (target: string) => Promise<{ type: number }> = statfs,
+  platform: NodeJS.Platform = process.platform,
+) {
+  const { type } = await read(root);
+  const systemType = platform === 'darwin' ? (await read('/')).type : null;
+  return isLocalLockFilesystem(platform, type, systemType);
 }
 
 /** Open without following a link, and retain the descriptor for identity checks. */
