@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AppShellAccount from '@/components/AppShellAccount';
 import AppShellAccountFallback from '@/components/AppShellAccountFallback';
 import FeedbackViewport from '@/components/FeedbackViewport';
+import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
 import { resetFeedbackState } from '@/components/feedback-state';
 
 const mocks = vi.hoisted(() => ({
@@ -143,10 +144,31 @@ describe('AppShellAccount', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open account menu for Test Creator' }));
 
-    // Profile is the navigation's, and the balance the bar's: the menu named both again.
+    // The balance is the bar's alone: the menu's Profile row used to carry it too.
     const menu = screen.getByRole('menu', { name: 'Account' });
-    expect(within(menu).queryByRole('menuitem', { name: /^Profile/ })).not.toBeInTheDocument();
     expect(within(menu).queryByText(/1295/)).not.toBeInTheDocument();
+  });
+
+  it('opens the account menu on Profile, in the navigation\'s word and address, and closes on the way', async () => {
+    render(<AppShellAccount />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+
+    // A rename or move of the navigation's Profile fails here, so the two never drift apart.
+    expect(APP_NAV_ITEMS.find((item) => item.id === 'profile')).toMatchObject({ label: 'Profile', href: '/profile' });
+    const profile = screen.getByRole('menuitem', { name: 'Profile' });
+    expect(profile).toHaveAttribute('href', '/profile');
+    expect(screen.getAllByRole('menuitem')[0]).toBe(profile);
+
+    // jsdom cannot load another document; the menu's own click handler still runs.
+    const stayOnPage = (event: MouseEvent) => event.preventDefault();
+    document.addEventListener('click', stayOnPage);
+    try {
+      fireEvent.click(profile);
+    } finally {
+      document.removeEventListener('click', stayOnPage);
+    }
+    expect(screen.queryByRole('menu', { name: 'Account' })).not.toBeInTheDocument();
   });
 
   it('links the account menu to the credit history, after Invite & Earn, and closes on the way', async () => {
