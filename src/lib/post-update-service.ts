@@ -462,8 +462,8 @@ type OwnedGenerationExposureRow = {
   showcase_asset_path: string | null;
 };
 
-// Read with the service client: the authenticated Data API grant on
-// `generations` is column-scoped and cannot see the media columns. A creation
+// Read with the service client: the authenticated Data API has no SELECT on
+// `generations`. A creation
 // made as a guest keeps the guest's id, and publish files its post under the
 // account the guest was linked to, so the post's owner owns it through that
 // link.

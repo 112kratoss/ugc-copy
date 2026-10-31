@@ -92,8 +92,13 @@ try {
     check('identity lifecycle RPC', success(await who.client.rpc('current_identity_state'), 'State'), 'active');
     check('identity activity RPC', success(await who.client.rpc('current_identity_is_active'), 'Active'), true);
     check('registration uses auth identity', success(await who.client.rpc('current_identity_is_registered'), 'Registered'), who !== guest);
+    // RLS calls it on tables that link a generation; it answers only for the caller.
+    check('generation ownership RPC refuses an id the caller does not own',
+      success(await who.client.rpc('current_identity_owns_generation', { p_generation_id: randomUUID() }), 'Ownership'), false);
   }
   for (const name of identities) check(`${name}: anonymous execution denied`, (await anon.rpc(name)).error?.code, '42501');
+  check('current_identity_owns_generation: anonymous execution denied',
+    (await anon.rpc('current_identity_owns_generation', { p_generation_id: randomUUID() })).error?.code, '42501');
   for (const kind of ['initialize', 'start']) {
     await denied(owner, kind, args(other, kind), 'P0001', 'cannot start a workflow run for another user');
     await denied(owner, kind, args(owner, kind, { p_canvas_id: other.canvas }), 'P0001', 'workflow canvas not found for this user');

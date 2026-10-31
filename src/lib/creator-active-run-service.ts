@@ -8,8 +8,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * tab or on another device (`GET /api/generations/active`).
  *
  * The browser used to read this from `generations` itself, but the Data API
- * grants `authenticated` only the resume columns of
- * 20260726071722_harden_data_api_and_storage_contract.sql, and the run's
+ * granted `authenticated` only the resume columns of
+ * 20260726071722_harden_data_api_and_storage_contract.sql (and none since
+ * 20261031033532_revoke_authenticated_generation_reads.sql), and the run's
  * prompt, cost and model were added to that read later: Postgres refused the
  * whole query (42501, a 403 from PostgREST) and the page opened idle on every
  * load. The read is the server's now, on the service client, scoped here to

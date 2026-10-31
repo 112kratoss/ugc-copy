@@ -28,8 +28,8 @@ select pg_temp.is((select string_agg(p.proname, ',' order by p.proname)
   from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and p.prosecdef
     and has_function_privilege('authenticated',p.oid,'EXECUTE')),
-  'current_identity_admission,current_identity_is_active,current_identity_is_registered,current_identity_state,initialize_workflow_canvas_run,start_workflow_canvas_run',
-  'only the reviewed six privileged public functions are client callable');
+  'current_identity_admission,current_identity_is_active,current_identity_is_registered,current_identity_owns_generation,current_identity_state,initialize_workflow_canvas_run,start_workflow_canvas_run',
+  'only the reviewed seven privileged public functions are client callable');
 select pg_temp.is((select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and p.prosecdef and has_function_privilege('anon',p.oid,'EXECUTE')),
   0::bigint,'no privileged public function is callable without authentication');
@@ -106,6 +106,7 @@ select pg_temp.throws_ok($q$select public.current_identity_admission()$q$,'42501
 select pg_temp.throws_ok($q$select public.current_identity_state()$q$,'42501',null,'anon: current_identity_state execute denied');
 select pg_temp.throws_ok($q$select public.current_identity_is_active()$q$,'42501',null,'anon: current_identity_is_active execute denied');
 select pg_temp.throws_ok($q$select public.current_identity_is_registered()$q$,'42501',null,'anon: current_identity_is_registered execute denied');
+select pg_temp.throws_ok($q$select public.current_identity_owns_generation(gen_random_uuid())$q$,'42501',null,'anon: current_identity_owns_generation execute denied');
 reset role;
 set local role service_role;
 select set_config('request.jwt.claims','{"role":"service_role"}',true);

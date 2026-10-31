@@ -80,8 +80,7 @@ function createServiceClientTestDouble() {
     from(table: string) {
       if (table === 'generations') {
         // The publish read deliberately goes through the service client: the
-        // authenticated Data API grant on `generations` is column-scoped and
-        // cannot see the publish columns.
+        // authenticated Data API has no SELECT on `generations`.
         return {
           select() {
             return {
@@ -345,13 +344,13 @@ describe('/api/showcase/publish route', () => {
       },
       from(table: string) {
         if (table === 'generations') {
-          // Production reality since 20260726071722: the authenticated Data
-          // API grant on `generations` is column-scoped, so a user-scoped read
-          // of the publish columns fails outright. Throwing here pins the fix —
+          // Production reality since 20261031033532: the authenticated Data
+          // API has no SELECT on `generations`, so a user-scoped read fails
+          // outright. Throwing here pins the fix —
           // any code path that reads generations through the user client again
           // fails every publish test with this message instead of shipping a
           // silent "Generation not found".
-          throw new Error('permission denied for table generations (authenticated Data API grant is column-scoped; read via the service client)');
+          throw new Error('permission denied for table generations (the authenticated Data API has no SELECT on it; read via the service client)');
         }
 
         if (table === 'posts') {

@@ -207,7 +207,8 @@ describe('showcase publish route adapter service', () => {
     });
     // The user-scoped client authenticates the request but is deliberately not
     // handed to the service: the publish read must use the service client, so
-    // the column-scoped Data API grant on `generations` cannot break it.
+    // the authenticated Data API, which has no SELECT on `generations`,
+    // cannot break it.
     expect(publishGenerationToShowcaseForRoute).toHaveBeenCalledWith({
       adminSupabase,
       body,

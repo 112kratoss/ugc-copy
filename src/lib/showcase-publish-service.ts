@@ -483,11 +483,11 @@ export async function publishGenerationToShowcaseForRoute({
     workflowSettings: requestedWorkflowSettings,
   } = requestBody;
 
-  // Read with the service client on purpose. The authenticated Data API
-  // surface for `generations` is deliberately column-scoped
-  // (20260726071722_harden_data_api_and_storage_contract.sql), so a
-  // user-scoped read of the publish columns (prompt, output_url, title, …) is
-  // rejected outright — the viewer's own creation would report "not found".
+  // Read with the service client on purpose. The authenticated Data API has
+  // no SELECT on `generations`
+  // (20261031033532_revoke_authenticated_generation_reads.sql), so a
+  // user-scoped read is rejected outright — the viewer's own creation would
+  // report "not found".
   // Authorization is the explicit ownership check below, the same boundary
   // the template path has always used.
   const generationResult = await loadOwnedGeneration({
