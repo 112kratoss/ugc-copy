@@ -19,13 +19,23 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Monitor",
         "hooks": [
           {
             "type": "command",
             "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-bash.py",
-            "timeout": 15,
-            "onFailure": "block"
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-prompt.py",
+            "timeout": 10
           }
         ]
       }

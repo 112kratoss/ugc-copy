@@ -20,18 +20,24 @@ import sys
 payload = json.load(sys.stdin)
 tool = payload.get("tool_name") or ""
 tool_input = payload.get("tool_input") or {}
-SECRET_NAME = re.compile(r"\.env(?!\.example$)(?:\.[\w.-]+)?|\.mcp\.json")
+SECRET_NAME = re.compile(r"\.env(?!\.example$)(?:\.[\w.-]+)?|\.mcp\.json", re.IGNORECASE)
 
 
 def secret_name(path):
-    name = os.path.basename(str(path or "").rstrip("/"))
-    return name if SECRET_NAME.fullmatch(name) else None
+    """The secrets file a path names, by its own name or, through a symlink, by its target's (as a deny rule matched)."""
+    if not path:
+        return None
+    for candidate in (str(path), os.path.realpath(str(path))):
+        name = os.path.basename(candidate.rstrip("/"))
+        if SECRET_NAME.fullmatch(name):
+            return name
+    return None
 
 
 # Grep searches a path (a file, or a folder whose gitignored .env files it skips) and may narrow it with a glob.
 named = secret_name(tool_input.get("path") if tool == "Grep" else tool_input.get("file_path"))
 glob = str(tool_input.get("glob") or "") if tool == "Grep" else ""
-if named or re.search(r"\.env(?!\.example\b)|\.mcp\.json", glob):
+if named or re.search(r"(?i)\.env(?!\.example\b)|\.mcp\.json", glob):
     sys.stderr.write(
         f"Blocked by .claude/hooks/protect-migrations.py: {named or glob} names a secrets file, closed to the Read, Edit, "
         "Write and Grep tools so no value reaches the transcript. Check a name with `grep -c '^NAME=' .env.local`, "

@@ -232,6 +232,17 @@ describe('the local gate', () => {
     expect(gate.calls.map((call) => call.cwd)).toEqual(gate.calls.map(() => setup.checkout));
   });
 
+  it('runs the mobile job in ugc-mobile, the release-env self-test first, as Quality does', SLOW, () => {
+    const setup = setUp();
+    fs.mkdirSync(path.join(setup.checkout, 'ugc-mobile'));
+
+    const gate = runGate(setup.checkout, path.join(setup.checkout, GATE), ['--mobile-only', '--out', path.join(setup.dir, 'out')], setup);
+
+    expect(gate.status, gate.stdout + gate.stderr).toBe(0);
+    expect(gate.calls.map((call) => call.command)).toEqual(['npm run release-env:self-test', 'npm test', 'npm run typecheck']);
+    expect(gate.calls.map((call) => call.cwd)).toEqual(gate.calls.map(() => path.join(setup.checkout, 'ugc-mobile')));
+  });
+
   // CI builds with the Build step's env on a runner that has no other variable of the app and no .env file. A
   // worktree has no .env.local, so without the step's placeholders prerendering fails; the primary checkout's can
   // point at production.
