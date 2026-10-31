@@ -3,8 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
-import { sharePublicGeneration } from '@/lib/share-client';
-import type { GenerationShareSourceSurface } from '@/lib/share';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import {
   followCreationTitleSuggestion,
@@ -32,11 +30,11 @@ import {
 } from '@/lib/post-resource-bundles';
 
 /**
- * One way to publish a creation, behind two faces: the Publish window (Studio, template runs)
- * and the creators' own form on the canvas (the artboard Result). The draft (title and its
+ * The creators' publish form on the canvas (the artboard Result): the draft (title and its
  * suggestion, the name and handle a first post saves, the recipe, NSFW), the request to
- * `/api/showcase/publish`, its errors and what it answers all live here, so the two cannot
- * drift apart; each face only draws them.
+ * `/api/showcase/publish`, its errors and what it answers all live here, and the form only
+ * draws them. Studio and template runs open the full composer (`/post/new`) instead, as the
+ * app does.
  */
 
 /** A post is public or private (decision 12, 2026-10-17); the server answers no other. */
@@ -62,16 +60,6 @@ const DEFAULT_RECIPE_PRICE_TOKENS = 900;
 function normalizeOptionalText(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
-}
-
-/**
- * The caption is the post's public description. It must not start out as the
- * recipe's generated setup notes: those travel with the bundle (see
- * `buildAutoResourceBundle`), and prefilling them here published "Saved
- * generation setup / Model: …" as the caption of every quick publish.
- */
-function getDefaultPublishDescription(defaultDescription: string): string {
-  return defaultDescription.trim();
 }
 
 /**
@@ -175,7 +163,7 @@ function buildAutoResourceBundle({
 }
 
 export interface UsePublishCreationOptions {
-  /** The window is open, or the form is on the canvas: a fresh draft starts each time it becomes so. */
+  /** The form is on the canvas: a fresh draft starts each time it becomes so. */
   active: boolean;
   generationId: string | null;
   accessToken?: string | null;
@@ -185,32 +173,22 @@ export interface UsePublishCreationOptions {
    * suggested when it has none of its own (`defaultTitle`).
    */
   creation?: CreationTitleSource | null;
-  defaultDescription?: string;
-  showPaidShortcut?: boolean;
-  mediaOnly?: boolean;
   paywallPrefill?: GenerationPaywallPrefill | null;
   /** The title of the post a remix was made from: an untitled remix starts from it ("intense (remix)"). */
   remixOfTitle?: string | null;
   /**
-   * The recipe a fresh draft starts with where the creation has one to offer: the window
-   * starts with none, for the creator to opt in; the creators' form with a free one (owner,
+   * The recipe a fresh draft starts with where the creation has one to offer: none unless
+   * asked, for the creator to opt in; the creators' form asks for a free one (owner,
    * 2026-10-28). Until the creator picks one themselves, a prefill arriving late sets it too.
    */
   startingRecipe?: 'none' | 'free';
   /**
    * The recipe leaves the creator's own uploads out until they add them (the creators' form,
    * owner 2026-10-29): only the references a remix brought from its original go in, and with
-   * any of their own in the creation none is handed to a remix. The window shares them all.
+   * any of their own in the creation none is handed to a remix. Otherwise it shares them all.
    */
   leavesOwnUploadsOut?: boolean;
-  shareAfterPublish?: {
-    title: string;
-    description?: string | null;
-    sourceSurface: GenerationShareSourceSurface;
-  };
   onPublished?: (payload: PublishedCreation) => void;
-  /** After a publish and the share that follows it: the window closes here. */
-  onFinished?: () => void;
 }
 
 export function usePublishCreation({
@@ -219,23 +197,16 @@ export function usePublishCreation({
   accessToken = null,
   defaultTitle = '',
   creation = null,
-  defaultDescription = '',
-  showPaidShortcut = true,
-  mediaOnly = false,
   paywallPrefill = null,
   remixOfTitle = null,
   startingRecipe = 'none',
   leavesOwnUploadsOut = false,
-  shareAfterPublish,
   onPublished,
-  onFinished,
 }: UsePublishCreationOptions) {
   const [isNsfw, setIsNsfw] = useState(false);
   // What the creator typed; null until they do, while the title is the starting one below.
   const [titleEdit, setTitleEdit] = useState<string | null>(null);
-  const [publishDescription, setPublishDescription] = useState(() =>
-    getDefaultPublishDescription(defaultDescription)
-  );
+  const [publishDescription, setPublishDescription] = useState('');
   // The recipe the creator picked; null until they do, while it is the starting one below.
   const [recipeChoice, setRecipeChoice] = useState<PostResourceBundleAccessMode | null>(null);
   const [priceTokens, setPriceTokensState] = useState(String(DEFAULT_RECIPE_PRICE_TOKENS));
@@ -266,7 +237,7 @@ export function usePublishCreation({
   const sharedPrefill = sharesOwnUploads ? paywallPrefill : prefillWithoutOwn;
   const autoUnlockKinds = getAutoUnlockKinds(sharedPrefill);
   // The switch is offered where anything could go, the creator's own uploads included.
-  const hasAutoUnlock = showPaidShortcut && Boolean(paywallPrefill) && getAutoUnlockKinds(paywallPrefill).length > 0;
+  const hasAutoUnlock = Boolean(paywallPrefill) && getAutoUnlockKinds(paywallPrefill).length > 0;
   const generationReferenceCount = Math.max(0, Math.round(sharedPrefill?.referenceCount ?? 0));
   const hasGenerationReferences = generationReferenceCount > 0;
   const otherReferenceCount = allReferenceCount - ownUploadCount;
@@ -310,7 +281,7 @@ export function usePublishCreation({
     // defaults: the title and the recipe go back to the starting ones.
     setIsNsfw(false);
     setTitleEdit(null);
-    setPublishDescription(getDefaultPublishDescription(defaultDescription));
+    setPublishDescription('');
     setRecipeChoice(null);
     setPriceTokensState(String(DEFAULT_RECIPE_PRICE_TOKENS));
     setPublishingVisibility(null);
@@ -319,7 +290,7 @@ export function usePublishCreation({
     setIdentityErrors({});
     setIdentityEdits(null);
     setAddsOwnUploadsState(false);
-  }, [defaultDescription, generationId, active]);
+  }, [generationId, active]);
 
   // The profile is the account's: read when the draft opens and for another account, not
   // again for each renewed token, which would put "Checking your profile…" back every hour.
@@ -408,7 +379,7 @@ export function usePublishCreation({
 
   /**
    * Publishes the creation as a public or private post. Resolves true once the server has
-   * it (and its share has run, where one follows), false when it was refused or not sent.
+   * it, false when it was refused or not sent.
    */
   const publish = async (nextVisibility: PostVisibility): Promise<boolean> => {
     if (isPublishingRef.current) {
@@ -428,7 +399,7 @@ export function usePublishCreation({
       }
     }
 
-    let resourceBundle: PostResourceBundleInput | null = mediaOnly ? null : { accessMode: 'none' };
+    let resourceBundle: PostResourceBundleInput = { accessMode: 'none' };
     if (recipeAccess !== 'none') {
       if (!sharedPrefill || autoUnlockKinds.length === 0) {
         setFormError(leavesOwnUploadsOut && !addsOwnUploads && ownUploadCount > 0
@@ -486,7 +457,7 @@ export function usePublishCreation({
         shareInputMediaForRemix: boolean;
         includeGenerationReferences?: boolean;
         leaveOutOwnGenerationReferences?: boolean;
-        resourceBundle?: PostResourceBundleInput;
+        resourceBundle: PostResourceBundleInput;
       } = {
         generationId,
         ...(isNsfw ? { isNsfw: true } : {}),
@@ -494,19 +465,16 @@ export function usePublishCreation({
         title: normalizeOptionalText(publishTitle),
         description: normalizeOptionalText(publishDescription),
         shareInputMediaForRemix: false,
+        resourceBundle,
       };
 
-      if (hasGenerationReferences && resourceBundle?.accessMode !== 'none') {
+      if (hasGenerationReferences && resourceBundle.accessMode !== 'none') {
         requestBody.includeGenerationReferences = true;
       }
       // The server holds the same line: only the original's references, and no hand-over
       // where any of the creator's own are in the creation.
-      if (!sharesOwnUploads && resourceBundle && resourceBundle.accessMode !== 'none') {
+      if (!sharesOwnUploads && resourceBundle.accessMode !== 'none') {
         requestBody.leaveOutOwnGenerationReferences = true;
-      }
-
-      if (resourceBundle) {
-        requestBody.resourceBundle = resourceBundle;
       }
 
       const response = await fetch('/api/showcase/publish', {
@@ -554,24 +522,6 @@ export function usePublishCreation({
         ownerPath: data.ownerPath ?? null,
       });
 
-      if (shareAfterPublish && nextVisibility === 'public') {
-        try {
-          await sharePublicGeneration({
-            generationId,
-            title: normalizedTitle || shareAfterPublish.title,
-            description: normalizedDescription || shareAfterPublish.description || null,
-            sourceSurface: shareAfterPublish.sourceSurface,
-            accessToken,
-            viewerIsOwner: true,
-          });
-        } catch (shareError) {
-          // Publishing is already complete. A canceled or unavailable share
-          // action must never be reported as a failed publish.
-          console.error('Published generation, but sharing was unavailable:', shareError);
-        }
-      }
-
-      onFinished?.();
       return true;
     } catch (error) {
       console.error('Failed to publish generation:', error);

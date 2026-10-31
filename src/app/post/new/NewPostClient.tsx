@@ -62,6 +62,7 @@ import {
   POST_VIDEO_UPLOAD_BYTES_MESSAGE,
 } from '@/lib/post-video-limits';
 import { getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
+import { sharePublicGeneration } from '@/lib/share-client';
 import { trackProductEvent } from '@/lib/product-analytics';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
 import {
@@ -673,6 +674,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const requestedResourceMode = searchParams.get('resourceMode');
   const requestedFocusTarget = searchParams.get('focus');
   const entrySurface = searchParams.get('from');
+  // A template run's "Publish & share", as the app's: the share opens once the
+  // creation's post is public, before the page leaves for it.
+  const sharesAfterPublish = searchParams.get('shareAfterPublish') === '1';
   const isGeneratedPaywallIntent = publishIntent === 'paid-generation' && Boolean(generationId);
   const isCreationPaywallManagementIntent =
     isEditMode && entrySurface === 'creations' && requestedFocusTarget === 'price';
@@ -796,7 +800,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // refused once everything is uploaded.
   const [composerProfile, setComposerProfile] = useState<PublicIdentityProfile | null>(initialPublicIdentity);
   // Set when the server refused a public post for the profile although it
-  // could not be read here: the fields then show, as they do in the window.
+  // could not be read here: the fields then show.
   const [profileRefused, setProfileRefused] = useState(false);
   // The fields follow the profile and the sign-in until the creator types.
   const [identityEdits, setIdentityEdits] = useState<PublicIdentityDraft | null>(null);
@@ -2327,7 +2331,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     savedPanelRef.current?.focus({ preventScroll: true });
   }, [createdPost, isEditMode]);
 
-  const completePublish = (nextPost: CreatedPostState, options: { redirect?: boolean } = {}) => {
+  const completePublish = (nextPost: CreatedPostState, options: { redirect?: 'push' | 'replace' } = {}) => {
     setCreatedPost(nextPost);
     setStoredRecipe({
       accessMode: nextPost.resourceAccessMode,
@@ -2343,12 +2347,13 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       entry_surface: entrySurface ?? 'direct',
     });
 
-    if (options.redirect) {
+    const redirect = options.redirect;
+    if (redirect) {
       const nextPath = nextPost.showcasePath ?? nextPost.ownerPath;
       if (nextPath) {
         // Through the guard, so no guard entry is left under the post for Back
         // to land on.
-        leaveComposer(() => router.push(nextPath));
+        leaveComposer(() => (redirect === 'replace' ? router.replace(nextPath) : router.push(nextPath)));
       }
     }
   };
@@ -2578,6 +2583,25 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           throw getSubmissionError(data, 'Failed to publish post.');
         }
 
+        // The post exists from here on: a dismissed or failed share must never
+        // read as a failed publish, and the page leaves for the post either way.
+        if (sharesAfterPublish && data.visibility === 'public') {
+          try {
+            await sharePublicGeneration({
+              generationId,
+              title: title.trim(),
+              sourceSurface: 'my-creations',
+              accessToken: session.access_token,
+              viewerIsOwner: true,
+            });
+          } catch (shareError) {
+            console.error('Published the creation, but sharing was unavailable:', shareError);
+          }
+        }
+
+        // The post takes the composer's place in history, as the app's composer
+        // leaves its stack: Back returns to Studio or the run, not to a composer
+        // that would only send it on to the post's editor.
         completePublish({
           postId: data.postId as string,
           showcasePath: (data.showcasePath as string | null) ?? null,
@@ -2588,7 +2612,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
             ? data.resourceBundleStatus
             : null,
-        }, { redirect: true });
+        }, { redirect: 'replace' });
 
         return;
       }
@@ -2729,7 +2753,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
           ? data.resourceBundleStatus
           : null,
-      }, { redirect: true });
+      }, { redirect: 'push' });
     } catch (submitError) {
       const section = submitError instanceof ComposerSubmissionError ? submitError.section : 'publish';
       trackProductEvent(isEditMode ? 'post_update_failed' : 'post_publish_failed', {
@@ -2743,8 +2767,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         actionHref: submitError instanceof ComposerSubmissionError ? submitError.actionHref : undefined,
         actionLabel: submitError instanceof ComposerSubmissionError ? submitError.actionLabel : undefined,
       });
-      // Refused for the profile: ask for the name and handle here, as the
-      // publish window does, beside the link to the profile.
+      // Refused for the profile: ask for the name and handle here, beside the
+      // link to the profile.
       if (submitError instanceof ComposerSubmissionError && submitError.actionHref === buildProfileRepairHref()) {
         setProfileRefused(true);
       }
@@ -2779,9 +2803,11 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         ? '/marketplace/sell'
         : entrySurface === 'home'
           ? '/'
-          : isEditMode || entrySurface === 'creations'
-            ? '/creations?view=posts'
-            : '/showcase';
+          : entrySurface === 'template-run'
+            ? '/templates'
+            : isEditMode || entrySurface === 'creations'
+              ? '/creations?view=posts'
+              : '/showcase';
   const backHref = getSafeInternalReturnPath(searchParams.get('returnTo'), fallbackBackHref);
   const backLabel = entrySurface === 'profile'
     ? 'Back to profile'
@@ -2791,9 +2817,11 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         ? 'Back to seller dashboard'
         : entrySurface === 'home'
           ? 'Back to home'
-          : isEditMode || entrySurface === 'creations'
-            ? 'Back to studio'
-            : 'Back to Explore';
+          : entrySurface === 'template-run'
+            ? 'Back to template run'
+            : isEditMode || entrySurface === 'creations'
+              ? 'Back to studio'
+              : 'Back to Explore';
   // A new post is saved private or published public. An edit keeps the post's
   // visibility with Save changes, and the other button is the one that changes it.
   const primarySubmit: { target: PostVisibility; label: string; detail: string } = isEditMode
@@ -3711,8 +3739,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                           </div>
                         </div>
                         {/* A-F5: what buyers pay and the creator's share, in
-                            money, from the one line the quick publish window
-                            shows too. */}
+                            money (`formatRecipeMoneyLine`). */}
                         <p id={recipeMoneyLineId} className="text-xs font-medium leading-5 text-emerald-200">
                           {recipeMoneyLine}
                         </p>

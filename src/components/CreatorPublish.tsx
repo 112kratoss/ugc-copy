@@ -23,8 +23,8 @@ import { buildShowcaseDetailPath } from '@/lib/share';
  * done the canvas shows the result, its download and the publish form beside it, where the
  * Publish window used to open; once posted, the form gives way to what was posted and where
  * it went. On a phone a bar holds Publish at the foot of the window while the form's own
- * button is out of view. The form is one face of `usePublishCreation`; the Publish window
- * Studio opens is the other.
+ * button is out of view. The form draws `usePublishCreation`; Studio and template runs open
+ * the full composer instead.
  */
 
 // ---------------------------------------------------------------------------------------------

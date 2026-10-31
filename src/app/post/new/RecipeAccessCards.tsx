@@ -25,8 +25,8 @@ export const RECIPE_ACCESS_CHOICES: ReadonlyArray<{
 
 /**
  * One choice of three for the post's recipe. Native radios, each a label
- * around a visually hidden input as the quick-publish modal's pill row is, so
- * the arrow keys move between the cards and Tab lands on the chosen one.
+ * around a visually hidden input, so the arrow keys move between the cards
+ * and Tab lands on the chosen one.
  */
 export default function RecipeAccessCards({
   value,

@@ -16,6 +16,7 @@ import {
   type RemixOriginalRead,
 } from '@/components/CreatorPublish';
 import type { CreationPublishDetails } from '@/lib/creation-publish-details';
+import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({ user: { email: 'athul@example.com', user_metadata: { full_name: 'Athul S' } } }),
@@ -100,6 +101,8 @@ function json(body: unknown, status = 200) {
 }
 
 let profile: Record<string, unknown> = READY_PROFILE;
+/** What saving a first post's name and handle answers, where not the saved profile. */
+let profileSaveReply: { status: number; body: unknown } | null = null;
 let publishReply: { status: number; body: unknown } = {
   status: 200,
   body: { success: true, visibility: 'public', postId: 'post-new', showcasePath: '/showcase/gen-1', resourceBundleStatus: 'published' },
@@ -110,6 +113,7 @@ function installFetch() {
     const url = String(input);
     const method = init?.method ?? 'GET';
     if (url === '/api/profile' && method === 'PATCH') {
+      if (profileSaveReply) return json(profileSaveReply.body, profileSaveReply.status);
       profile = { ...profile, ...JSON.parse(String(init?.body)) };
       return json(profile);
     }
@@ -160,6 +164,7 @@ function form() {
 beforeEach(() => {
   observers.length = 0;
   profile = READY_PROFILE;
+  profileSaveReply = null;
   publishReply = {
     status: 200,
     body: { success: true, visibility: 'public', postId: 'post-new', showcasePath: '/showcase/gen-1', resourceBundleStatus: 'published' },
@@ -264,6 +269,51 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
       title: 'Harbour at dusk',
       resourceBundle: { accessMode: 'free', priceUsdCents: 0, resources: { promptText: PROMPT, allowRemix: false } },
     });
+  });
+
+  // The three below came over from the Publish window's tests when Studio's Publish moved to
+  // the composer (2026-10-31): the form is the one face of `usePublishCreation` left.
+  it('shows a taken handle on its field and publishes nothing', async () => {
+    profile = FIRST_POST_PROFILE;
+    profileSaveReply = {
+      status: 409,
+      body: { error: 'That username is already taken.', fieldErrors: { username: 'That username is already taken.' } },
+    };
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel();
+    await within(form()).findByText('Posting as Athul S');
+
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+
+    await waitFor(() => expect(within(form()).getByRole('textbox', { name: 'Handle' })).toHaveAttribute('aria-invalid', 'true'));
+    expect(within(form()).getAllByText('That username is already taken.').length).toBeGreaterThanOrEqual(1);
+    expect(publishBody(fetchMock)).toBeNull();
+    expect(onPublished).not.toHaveBeenCalled();
+    expect(within(form()).getByRole('button', { name: 'Publish to the feed' })).toBeEnabled();
+  });
+
+  it('keeps a long creation title within the post limit, so the publish is not refused', async () => {
+    const longTitle = `${'Golden hour rooftop portrait '.repeat(5)}with city lights`;
+    expect(longTitle.length).toBeGreaterThan(TITLE_MAX_LENGTH);
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel({ details: { ...DETAILS, title: longTitle } });
+    // The field's maxlength does not trim a value it is handed.
+    expect(within(form()).getByRole('textbox', { name: 'Title' })).toHaveValue(longTitle.slice(0, TITLE_MAX_LENGTH));
+
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    expect(publishBody(fetchMock)).toMatchObject({ title: longTitle.slice(0, TITLE_MAX_LENGTH) });
+  });
+
+  it('publishes with the page’s own access token', async () => {
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel();
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    const call = fetchMock.mock.calls.find(([url]) => String(url) === '/api/showcase/publish');
+    expect((call?.[1] as RequestInit).headers).toMatchObject({ Authorization: 'Bearer token-1' });
   });
 
   it('publishes the media alone with the recipe off', async () => {

@@ -567,7 +567,7 @@ button:disabled,
  * Feedback layer (FeedbackViewport): toasts and the confirmation dialog.
  * Mounted in the root layout, so it renders on public and authenticated
  * routes alike — named classes for the same reason as the home layout below.
- * Sits above the publish modal (z 80) and the generation notification stack
+ * Sits above the app's modals (z 80) and the generation notification stack
  * (z 70); the skip link (z 120) stays on top.
  */
 /* Below the app shell's top bar, never over its controls: a toast's close

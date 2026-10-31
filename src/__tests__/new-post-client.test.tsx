@@ -110,6 +110,12 @@ vi.mock('@/lib/supabase', () => ({
   },
 }));
 
+const sharePublicGenerationMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/share-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/share-client')>()),
+  sharePublicGeneration: sharePublicGenerationMock,
+}));
+
 const SOURCE_TOOLS_RESPONSE = {
   tools: [
     { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -203,6 +209,7 @@ describe('NewPostClient', () => {
   beforeEach(() => {
     mockPush.mockReset();
     routerMock.replace.mockReset();
+    sharePublicGenerationMock.mockReset();
     fetchMock.mockReset();
     loadOwnProfileMock.mockReset();
     loadOwnProfileMock.mockResolvedValue(null);
@@ -4145,6 +4152,118 @@ describe('NewPostClient', () => {
       expect(isTicked()).toBe(false);
       fireEvent.change(text, { target: { value: 'Eighteen letters!!' } });
       expect(isTicked()).toBe(true);
+    });
+  });
+
+  // A template run's Publish to Explore and Publish & share open the composer
+  // for the result, as the app's do (owner, 2026-10-31).
+  describe('a template run’s result', () => {
+    const answerCreation = () => enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [{
+          id: 'gen-run-result',
+          output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+          category: 'image',
+          model: 'nano-banana-2',
+          title: 'Rider transformation',
+          prompt: 'A rider in neon rain.',
+          origin: 'template',
+          paywallPrefill: null,
+        }],
+      }),
+    });
+    const answerPublish = (visibility: 'public' | 'private') => enqueueResponse({
+      ok: true,
+      json: async () => ({
+        success: true,
+        postId: 'post-run-result',
+        showcasePath: visibility === 'public' ? '/showcase/post-run-result' : null,
+        ownerPath: '/post/post-run-result/edit',
+        resourceBundlePath: null,
+        visibility,
+        resourceBundleStatus: null,
+      }),
+    });
+    const openFromRun = (extra: Record<string, string> = {}) => {
+      searchParamsState.value = new URLSearchParams({
+        generationId: 'gen-run-result',
+        from: 'template-run',
+        returnTo: '/template-runs/run-1',
+        ...extra,
+      });
+      answerCreation();
+      render(<NewPostClient />);
+    };
+
+    it('goes back to the run it was opened from', async () => {
+      openFromRun();
+
+      expect(screen.getByRole('link', { name: 'Back to template run' })).toHaveAttribute('href', '/template-runs/run-1');
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+    });
+
+    it('shares the post once it is public, and leaves for it only after the share', async () => {
+      let finishShare = () => {};
+      sharePublicGenerationMock.mockImplementation(() => new Promise<null>((resolve) => {
+        finishShare = () => resolve(null);
+      }));
+      openFromRun({ shareAfterPublish: '1' });
+      answerPublish('public');
+
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(sharePublicGenerationMock).toHaveBeenCalledWith({
+        generationId: 'gen-run-result',
+        title: 'Rider transformation',
+        sourceSurface: 'my-creations',
+        accessToken: 'test-token',
+        viewerIsOwner: true,
+      }));
+      // The share sheet is up: the page does not leave from under it.
+      expect(routerMock.replace).not.toHaveBeenCalled();
+      await act(async () => finishShare());
+      // In the composer's place, so Back returns to the run.
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/showcase/post-run-result'));
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    it('leaves for the post when the share fails, and never calls the publish failed', async () => {
+      sharePublicGenerationMock.mockRejectedValue(new Error('Clipboard sharing is not supported in this browser'));
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      openFromRun({ shareAfterPublish: '1' });
+      answerPublish('public');
+
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/showcase/post-run-result'));
+      expect(sharePublicGenerationMock).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(consoleError).toHaveBeenCalledWith('Published the creation, but sharing was unavailable:', expect.any(Error));
+    });
+
+    it('shares nothing for a private post', async () => {
+      openFromRun({ shareAfterPublish: '1' });
+      answerPublish('private');
+
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/post/post-run-result/edit'));
+      expect(sharePublicGenerationMock).not.toHaveBeenCalled();
+    });
+
+    it('shares nothing unless the run asked for it', async () => {
+      openFromRun();
+      answerPublish('public');
+
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/showcase/post-run-result'));
+      expect(sharePublicGenerationMock).not.toHaveBeenCalled();
     });
   });
 
