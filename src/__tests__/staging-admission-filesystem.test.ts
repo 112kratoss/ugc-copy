@@ -46,6 +46,14 @@ describe('staging admission filesystem', () => {
       .resolves.toBe(true);
   });
 
+  it('refuses on macOS while `/` cannot be read, instead of throwing', async () => {
+    const read = vi.fn(async (target: string) => {
+      if (target === '/') throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' });
+      return { type: 0x19 };
+    });
+    await expect(localLockFilesystem('/staging', read, 'darwin')).resolves.toBe(false);
+  });
+
   it('reads only the staging root on Linux', async () => {
     const read = statfsAnswering({ '/tmp/staging': 0xef53 });
     await expect(localLockFilesystem('/tmp/staging', read, 'linux')).resolves.toBe(true);

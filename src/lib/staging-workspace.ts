@@ -59,7 +59,9 @@ export async function localLockFilesystem(
   platform: NodeJS.Platform = process.platform,
 ) {
   const { type } = await read(root);
-  const systemType = platform === 'darwin' ? (await read('/')).type : null;
+  // An unreadable `/` refuses like an unknown filesystem: callers treat the
+  // capacity refusal as retryable (media repair gets its attempt back).
+  const systemType = platform === 'darwin' ? await read('/').then(({ type: system }) => system, () => null) : null;
   return isLocalLockFilesystem(platform, type, systemType);
 }
 
