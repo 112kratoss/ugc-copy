@@ -225,6 +225,7 @@ import { openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 import {
     inspectPromptQuality,
     type PromptEnhancementWarning,
@@ -2883,6 +2884,9 @@ export default function CreateVideoClient({
     useEffect(() => {
         if (remixId || !draftOwner) return;
         let cancelled = false;
+        // A prompt typed while the draft is read is the newer one, as is one typed before the page's
+        // script ran when the read starts as the page mounts (a sign-up's hand-over starts it later).
+        const promptWhenRestoreStarted = promptRef.current;
         // The catalog waits for the draft, so a store that never answers must not hold
         // it: past this the page goes on without the draft, and a late one is ignored.
         let settled = false;
@@ -2898,7 +2902,8 @@ export default function CreateVideoClient({
                     && !draft.shots?.some((shot) => shot.prompt.trim())
                     ? draft
                     : null;
-                if (draft.prompt !== undefined && !prefillPrompt) setPrompt(draft.prompt);
+                const keepsTypedPrompt = !prefillPrompt && hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRestoreStarted);
+                if (draft.prompt !== undefined && !prefillPrompt && !keepsTypedPrompt) setPrompt(draft.prompt);
                 if (draft.modelId) {
                     restoredDraftSettingsRef.current = true;
                     setModelSettled(true);
@@ -2920,7 +2925,8 @@ export default function CreateVideoClient({
                 if (changed(draft.sound, drawnThen?.sound)) setSound(draft.sound);
                 if (changed(draft.resolution, drawnThen?.resolution)) setResolution(draft.resolution);
                 if (changed(draft.fixedLens, drawnThen?.fixedLens)) setFixedLens(draft.fixedLens);
-                if (changed(draft.isMultiShot, drawnThen?.isMultiShot)) setIsMultiShot(draft.isMultiShot);
+                // A kept prompt stays in sight: a saved multi-shot form would hide its box. Its shots still come back.
+                if (!keepsTypedPrompt && changed(draft.isMultiShot, drawnThen?.isMultiShot)) setIsMultiShot(draft.isMultiShot);
                 if (draft.shots) setMultiPrompts(draft.shots);
                 if (changed(draft.duration, drawnThen?.duration) && !prefillDuration) setSingleDuration(draft.duration);
                 if (draft.additionalSettings) pendingAdditionalSettingsRef.current = draft.additionalSettings;
@@ -3720,6 +3726,9 @@ export default function CreateVideoClient({
         setPromptQualityWarnings([]);
         updateMentionState(value, caretIndex);
     };
+
+    // Typed into the server's HTML before this page's script ran, where no React heard it.
+    useTypedBeforeHydration(promptTextareaRef, { drawn: prompt, enabled: !remixId && !prefillPrompt, onTyped: handlePromptChange });
 
     const syncPromptCaretState = () => {
         updateMentionState(prompt);
