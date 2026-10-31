@@ -1598,6 +1598,49 @@ export default function CreateVideoClient({
                 }))
         );
     };
+
+    /**
+     * Reads the length of each clip and track that holds its file but no length, and writes it on
+     * the reference it belongs to. Until 2026-10-31 the reader skipped every .mov on Chrome, so a
+     * draft saved then came back with clips the quote could not price and Kling 3.0 could not
+     * hold. Each reference is found by its file: one taken off or replaced meanwhile is left alone.
+     */
+    const measureUnreadLengths = async () => {
+        const unread = [...referenceVideosRef.current, ...referenceAudiosRef.current, ...klingVideoElementsRef.current]
+            .flatMap((item) => (item.file && item.durationSeconds == null ? [item.file] : []));
+        if (unread.length === 0) return;
+        const lengths = new Map<File, number>();
+        await Promise.all(unread.map(async (file) => {
+            const seconds = await readVideoDurationSeconds(file);
+            if (seconds !== null) lengths.set(file, seconds);
+        }));
+        const measured = <T extends { file: File | null; durationSeconds?: number | null }>(items: T[]) => {
+            let changed = false;
+            const next = items.map((item) => {
+                const length = item.file && item.durationSeconds == null ? lengths.get(item.file) : undefined;
+                if (length === undefined) return item;
+                changed = true;
+                return { ...item, durationSeconds: length };
+            });
+            return changed ? next : null;
+        };
+
+        const nextVideos = measured(referenceVideosRef.current);
+        if (nextVideos) {
+            commitReferenceVideos(nextVideos);
+            await persistReferenceVideos(nextVideos);
+        }
+        const nextAudios = measured(referenceAudiosRef.current);
+        if (nextAudios) {
+            commitReferenceAudios(nextAudios);
+            await persistReferenceAudios(nextAudios);
+        }
+        const nextKlingElements = measured(klingVideoElementsRef.current);
+        if (nextKlingElements) {
+            commitKlingVideoElements(nextKlingElements);
+            await persistKlingVideoElements(nextKlingElements);
+        }
+    };
     const persistKlingSubjects = async (nextSubjects: KlingSubjectDraft[]) => {
         const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoKlingSubjects);
         if (!key) {
@@ -2808,6 +2851,10 @@ export default function CreateVideoClient({
 	                    }))));
 	                }
                 if (isMounted) setMediaRestoredFor({ owner: draftOwner, complete: true });
+                // A clip saved without its length is read now, behind the restored draft.
+                if (isMounted) {
+                    void measureUnreadLengths().catch((err) => console.error('Error measuring restored video media:', err));
+                }
             } catch (err) {
                 console.error('Error loading persisted video media:', err);
                 // A store that cannot say what it holds keeps the saved draft's model.

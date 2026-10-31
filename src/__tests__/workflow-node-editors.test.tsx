@@ -803,7 +803,6 @@ describe('WorkflowNodeEditors', () => {
             }, 0);
           },
         });
-        previewVideo.canPlayType = vi.fn(() => 'probably' as const);
         previewVideo.load = vi.fn();
         return previewVideo;
       }

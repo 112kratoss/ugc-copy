@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 /**
  * The video page reads a QuickTime clip's length (2026-10-31).
@@ -30,27 +30,25 @@ test.beforeEach(async ({ context }) => {
 });
 
 /**
- * Picks the clip once the page answers for it. A file set before the page's script runs is
- * dropped, so it is set again until the clip shows, and never twice.
+ * Picks the clip once React owns its input. A file set before hydration is dropped, and one set
+ * again while the first is still being read (up to the reader's 4 s) would be added twice.
  */
-async function pickClip(page: Page, input: string, added: Locator) {
-  await expect(async () => {
-    if (await added.count() === 0) await page.locator(input).setInputFiles(CLIP);
-    await expect(added).toHaveCount(1, { timeout: 2_000 });
-  }).toPass({ timeout: 30_000 });
+async function pickClip(page: Page, input: string) {
+  await page.waitForFunction((selector) => {
+    const element = document.querySelector(selector);
+    return Boolean(element && Object.keys(element).some((key) => key.startsWith('__reactProps$')));
+  }, input, COLD_PAGE);
+  await page.locator(input).setInputFiles(CLIP);
 }
 
 test('a 2 s .mov video element holds Kling 3.0 before Generate', async ({ page }) => {
   await page.goto('/create-video?model=kling-3.0-video', COLD_PAGE);
   await expect(page.getByRole('group', { name: 'Inputs' })).toBeVisible(COLD_PAGE);
 
-  await pickClip(
-    page,
-    'input[type="file"][accept="video/mp4,video/quicktime,.mp4,.mov"]',
-    page.getByRole('button', { name: 'Preview Video element 1', exact: true }),
-  );
+  await pickClip(page, 'input[type="file"][accept="video/mp4,video/quicktime,.mp4,.mov"]');
 
   // Unread, the card said "MP4 or MOV, 50MB max" and nothing held the run.
+  await expect(page.getByRole('button', { name: 'Preview Video element 1', exact: true })).toBeVisible();
   await expect(page.getByText('2.0s clip', { exact: true })).toBeVisible();
   await expect(page.getByText(
     'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Video element 1 runs 2 seconds.',
@@ -74,11 +72,12 @@ test('a .mov reference clip gives Seedance 2 its length to price', async ({ page
     await expect(page.getByRole('heading', { name: 'Reference videos' })).toBeVisible({ timeout: 2_000 });
   }).toPass({ timeout: 30_000 });
 
-  // The clip's name shows twice (its card and the Seedance assets panel); the remove button is the card's.
-  await pickClip(page, 'input[type="file"][accept="video/*"][multiple]', page.getByRole('button', { name: 'Remove Video reference 1', exact: true }));
+  await pickClip(page, 'input[type="file"][accept="video/*"][multiple]');
 
   // Unread, the card said "Duration unavailable" and the quote refused the run: "Reference videos
-  // requires duration metadata for every asset."
+  // requires duration metadata for every asset." The clip's name shows twice (its card and the
+  // Seedance assets panel); the remove button is the card's.
+  await expect(page.getByRole('button', { name: 'Remove Video reference 1', exact: true })).toBeVisible();
   await expect(page.getByText('2.0s clip', { exact: true })).toBeVisible();
   await expect.poll(() => asked.at(-1)).toEqual([2]);
 });
