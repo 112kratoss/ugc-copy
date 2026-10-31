@@ -220,6 +220,40 @@ function isSameComposerSnapshot(a: ComposerSnapshot, b: ComposerSnapshot): boole
     && (a.resourceCards === b.resourceCards || JSON.stringify(a.resourceCards) === JSON.stringify(b.resourceCards));
 }
 
+// Made With rows as the snapshot holds them: what each names, in the one key
+// order the comparison above serializes.
+function snapshotMadeWith(rows: MadeWithRow[]): ComposerSnapshot['madeWith'] {
+  return rows
+    .filter((row) => row.toolLabel.trim() || row.modelLabel.trim())
+    .map(({ toolLabel, toolSlug, modelLabel, modelSlug, createTool, createModel }) => ({
+      toolLabel,
+      toolSlug,
+      modelLabel,
+      modelSlug,
+      createTool,
+      createModel,
+    }));
+}
+
+/**
+ * A new post's Made with for a creation: the row publishing stores for it
+ * (`buildGenerationPostSourceTools`, no stored tool being the app's), so the
+ * creation's model by the name its post prints, or none where that name is
+ * missing, as a template result's `template-workflow` is.
+ */
+function creationMadeWithRow(shownModel: string): MadeWithRow {
+  const [stored] = buildGenerationPostSourceTools({ source_tool: null, source_tool_slug: null }, shownModel);
+  return {
+    id: 'mw-0',
+    toolLabel: stored.toolLabel,
+    toolSlug: stored.toolSlug ?? '',
+    modelLabel: stored.modelLabel ?? '',
+    modelSlug: stored.modelSlug ?? '',
+    createTool: false,
+    createModel: false,
+  };
+}
+
 interface ComposerError {
   section: 'post' | 'story' | 'resources' | 'publish';
   message: string;
@@ -1021,16 +1055,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     visibility,
     isNsfw,
     mediaIds: mediaItems.map((item) => item.id),
-    madeWith: madeWithRows
-      .filter((row) => row.toolLabel.trim() || row.modelLabel.trim())
-      .map(({ toolLabel, toolSlug, modelLabel, modelSlug, createTool, createModel }) => ({
-        toolLabel,
-        toolSlug,
-        modelLabel,
-        modelSlug,
-        createTool,
-        createModel,
-      })),
+    madeWith: snapshotMadeWith(madeWithRows),
     resourceAccessMode,
     resourceCards,
     // A preview that is the suggestion follows from the cards: a prefill that
@@ -1415,9 +1440,14 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             recipeKeepsPromptPrivate(isTemplateResult ? 'none' : resourceAccessModeRef.current),
           )?.title ?? '';
         setTitle((current) => current || prefillTitle);
+        // A new post's Made with is the creation's row from here on (it is
+        // locked), and like the prefilled title it is where the post starts.
+        const creationRow = isEditMode ? null : creationMadeWithRow(nextGeneration.model);
+        if (creationRow) setMadeWithRows([creationRow]);
         setSavedSnapshot((saved) => ({
           ...saved,
           title: saved.title || prefillTitle,
+          ...(creationRow ? { madeWith: snapshotMadeWith([creationRow]) } : {}),
         }));
       } catch (loadError) {
         if (!cancelled) {
@@ -1473,33 +1503,6 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    // A creation's Made with is the row publishing stores: the app, then the
-    // creation's model by the name its post prints, or none where that name is
-    // missing (a template result's model is `template-workflow`). A new post's
-    // row takes it once the creation arrives; an edit opens on the stored row.
-    if (isEditMode || prefilledGeneration?.source !== 'fetched' || madeWithRows.length !== 1) return;
-    const [row] = madeWithRows;
-    if (row.toolLabel.trim() && (row.toolSlug !== 'magicbooklet' || row.modelLabel.trim())) return;
-    const [stored] = buildGenerationPostSourceTools(
-      { source_tool: 'magicbooklet', source_tool_slug: 'magicbooklet' },
-      prefilledGeneration.model,
-    );
-    const modelLabel = stored.modelLabel ?? '';
-    if (row.toolLabel === stored.toolLabel && row.modelLabel === modelLabel) return;
-    const creationRow = {
-      toolLabel: stored.toolLabel,
-      toolSlug: stored.toolSlug ?? '',
-      modelLabel,
-      modelSlug: stored.modelSlug ?? '',
-      createTool: false,
-      createModel: false,
-    };
-    setMadeWithRows([{ id: 'mw-0', ...creationRow }]);
-    // Where the post starts, as the prefilled title is: not an edit to lose.
-    setSavedSnapshot((saved) => ({ ...saved, madeWith: [creationRow] }));
-  }, [isEditMode, prefilledGeneration, madeWithRows]);
 
   const inferredCategory = useMemo((): PostMediaCategory | null => {
     if (proofMode === 'text') return null;

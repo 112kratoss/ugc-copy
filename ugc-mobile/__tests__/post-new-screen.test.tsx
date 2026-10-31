@@ -1550,6 +1550,41 @@ describe('mobile external post composer', () => {
       expect(madeWithSummary(tree)).toBe('Magicbooklet');
     });
 
+    it('names a newer model the app’s first tables left out', async () => {
+      generationState.item = { ...generationItem, model: 'pixverse-v6' };
+      const tree = await renderScreen();
+      expect(madeWithSummary(tree)).toBe('Magicbooklet · PixVerse V6');
+    });
+
+    it('takes the creation’s row over the one a draft kept by an older build holds', async () => {
+      generationState.item = { ...generationItem, model: 'nano-banana-pro' };
+      storageState.values.set('magicbooklet.post.drafts.v1', JSON.stringify({
+        'user-123:generation:gen-1': {
+          draft: {
+            ...getDefaultPostComposerDraft(),
+            mode: 'creation',
+            selectedGenerationId: 'gen-1',
+            title: 'Kept before the update',
+            madeWithRows: [{
+              id: 'mw-generation',
+              toolLabel: 'Magicbooklet',
+              toolSlug: 'magicbooklet',
+              modelLabel: 'nano-banana-pro',
+              modelSlug: 'nano-banana-pro',
+              createTool: false,
+              createModel: false,
+            }],
+          },
+          step: 'details',
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+      const tree = await renderScreen();
+      expect(collectText(tree.root)).toContain('Draft restored');
+      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Kept before the update');
+      expect(madeWithSummary(tree)).toBe('Magicbooklet · Nano Banana Pro');
+    });
+
     it('reads the same on an edit of the published post', async () => {
       paramsState.params = { postId: 'post-from-creation' };
       postEditState.post = {

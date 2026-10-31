@@ -2381,6 +2381,12 @@ function NewPostComposer() {
           resource: foldRecipeSummaryIntoPreview(sanitizePostComposerResourceCardIds(
             migratePostComposerResourceDraftToCards(persisted.draft.resource),
           )),
+          // A creation's Made with is locked to the row publishing stores, so it
+          // is the creation's, never the kept one: older builds kept the
+          // model's id there.
+          ...(generationId && explicitGeneration && !isEditMode
+            ? { madeWithRows: [buildCreationMadeWithRow(explicitGeneration.model)] }
+            : {}),
         };
         // A kept edit names its media by the ids from when it was kept, and a
         // save since then (one that went through and then failed included)
