@@ -39,6 +39,9 @@ async function killedOwner(mode?: string) {
   children.push(child);
   const [message] = await once(child, 'message') as [{ directory: string; file: string }];
   const exit = once(child, 'exit'); child.kill('SIGKILL'); await exit;
+  // A mode stops the allocator before it publishes; a worker whose patch
+  // missed would publish a whole workspace, which a sweep reclaims just the same.
+  if (mode) expect(path.basename(message.directory)).toMatch(/^item2-/);
   return message;
 }
 
