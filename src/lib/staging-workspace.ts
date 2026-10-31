@@ -256,8 +256,15 @@ async function outstandingCapacity(root: string) {
   return { reserved, active };
 }
 
-/** maxBytes is the caller's enforced write ceiling, not an HTTP length hint. */
-export async function createStagingWorkspace(maxBytes: number) {
+/**
+ * maxBytes is the caller's enforced write ceiling, not an HTTP length hint.
+ * publicationSuffix is for tests that force a publication name collision: it
+ * names an attempt, or returns undefined to leave the name to this function.
+ */
+export async function createStagingWorkspace(
+  maxBytes: number,
+  { publicationSuffix }: { publicationSuffix?: (attempt: number, allocated: string) => string | undefined } = {},
+) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new StagingCapacityError('Invalid staging byte budget.');
   const root = await rootDirectory();
   await reclaimAbandonedStagingWorkspaces();
@@ -281,8 +288,9 @@ export async function createStagingWorkspace(maxBytes: number) {
       // Publish under the older prefix before releasing admission, so 6R
       // workers count this reservation too. All capacity-aware allocators hold
       // the same root lock; never replace an existing legacy directory.
+      const allocated = path.basename(directory).slice('item2-'.length);
       for (let attempt = 0; attempt < 16; attempt++) {
-        const suffix = attempt === 0 ? path.basename(directory).slice('item2-'.length) : randomBytes(3).toString('hex');
+        const suffix = publicationSuffix?.(attempt, allocated) ?? (attempt === 0 ? allocated : randomBytes(3).toString('hex'));
         const published = path.join(root, `item-${suffix}`);
         try { await lstat(published); continue; }
         catch (error) { if (code(error) !== 'ENOENT') throw error; }

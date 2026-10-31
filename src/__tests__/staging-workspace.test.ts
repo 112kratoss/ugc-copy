@@ -1,8 +1,8 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import fs, { chmod, lstat, mkdir, mkdtemp, open, opendir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
+import { chmod, lstat, mkdir, mkdtemp, open, opendir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { flockSync } from 'fs-ext';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,8 +26,8 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await rm(root, { recursive: true, force: true });
 });
-async function create() {
-  const workspace = await createStagingWorkspace(1024); workspaces.push(workspace);
+async function create(options?: Parameters<typeof createStagingWorkspace>[1]) {
+  const workspace = await createStagingWorkspace(1024, options); workspaces.push(workspace);
   await writeFile(path.join(workspace.directory, 'media'), 'active staged bytes');
   return workspace;
 }
@@ -91,22 +91,42 @@ describe('staging workspace inherited locks', () => {
     expect(await readdir(path.join(root, STAGING_ROOT_NAME))).toEqual([path.basename(workspace.directory)]);
   });
 
+  // The old collision test spied fs.mkdtemp, which never reached the module, and
+  // passed without colliding. These name attempts through the injected source,
+  // leave the rest to the module (a fresh random name after a collision), and
+  // each checks that its collision happened.
   it('does not replace an existing workspace when the publication name collides', async () => {
     const existing = await create();
-    const original = fs.mkdtemp;
-    const allocate = vi.spyOn(fs, 'mkdtemp').mockImplementationOnce(async (...args) => {
-      const created = String(await original(...args));
-      const collision = existing.directory.replace('/item-', '/item2-');
-      await rename(created, collision);
-      return collision;
+    const publicationSuffix = vi.fn().mockReturnValueOnce(path.basename(existing.directory).slice('item-'.length));
+    const next = await create({ publicationSuffix });
+    expect(publicationSuffix).toHaveBeenCalledTimes(2);
+    expect(path.basename(next.directory)).toMatch(/^item-[0-9a-f]{6}$/);
+    expect(await readFile(path.join(existing.directory, 'media'), 'utf8')).toBe('active staged bytes');
+    expect(await reclaimAbandonedStagingWorkspaces()).toBe(0);
+  });
+
+  it('does not replace an older allocator\'s empty directory that takes its name first', async () => {
+    // Allocators from before the root lock create their directory before its
+    // lease, at any moment. A rename replaces an empty directory without a word,
+    // where it refuses a populated one.
+    const publicationSuffix = vi.fn((attempt: number, allocated: string) => {
+      if (attempt === 0) mkdirSync(path.join(root, STAGING_ROOT_NAME, `item-${allocated}`), { mode: 0o700 });
+      return undefined;
     });
-    syncBuiltinESMExports();
-    try {
-      const next = await create();
-      expect(next.directory).not.toBe(existing.directory);
-      expect(await readFile(path.join(existing.directory, 'media'), 'utf8')).toBe('active staged bytes');
-      expect(await reclaimAbandonedStagingWorkspaces()).toBe(0);
-    } finally { allocate.mockRestore(); syncBuiltinESMExports(); }
+    const next = await create({ publicationSuffix });
+    expect(publicationSuffix).toHaveBeenCalledTimes(2);
+    expect(path.basename(next.directory)).toMatch(/^item-[0-9a-f]{6}$/);
+    expect(await readdir(path.join(root, STAGING_ROOT_NAME, `item-${publicationSuffix.mock.calls[0][1]}`))).toEqual([]);
+  });
+
+  it('gives up after 16 colliding names and removes only its own allocation', async () => {
+    const existing = await create();
+    const publicationSuffix = vi.fn(() => path.basename(existing.directory).slice('item-'.length));
+    await expect(createStagingWorkspace(1024, { publicationSuffix })).rejects
+      .toMatchObject({ code: 'STAGING_CAPACITY', message: 'Cannot publish staging workspace without a name collision.' });
+    expect(publicationSuffix).toHaveBeenCalledTimes(16);
+    expect(await readdir(path.join(root, STAGING_ROOT_NAME))).toEqual([path.basename(existing.directory)]);
+    expect(await readFile(path.join(existing.directory, 'media'), 'utf8')).toBe('active staged bytes');
   });
 
   it('seals a completed source idempotently and preserves its bytes and reader lease', async () => {
