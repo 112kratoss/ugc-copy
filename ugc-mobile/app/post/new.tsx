@@ -72,10 +72,12 @@ import {
   buildOptimisticOwnerPostListItem,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
+  buildCreationMadeWithRow,
   applyCreationPromptResource,
   createPostComposerResourceCard,
   createMadeWithRow,
   getComposerVisibility,
+  getMadeWithToolLabel,
   getDefaultCreationPackageDraft,
   getDefaultPostComposerDraft,
   getPostComposerDetailErrors,
@@ -331,7 +333,7 @@ function PostDetailsPage({
   const theme = useAppTheme();
   const primaryAttribution = draft.madeWithRows.find((row) => row.toolLabel.trim());
   const attribution = primaryAttribution
-    ? `${primaryAttribution.toolLabel}${primaryAttribution.modelLabel ? ` · ${primaryAttribution.modelLabel}` : ''}`
+    ? `${getMadeWithToolLabel(primaryAttribution)}${primaryAttribution.modelLabel ? ` · ${primaryAttribution.modelLabel}` : ''}`
     : 'Add tool and model';
   // "Suggested" speaks only of a new post's starting title, never of an edit's saved one.
   const titleSuggestionHint = getCreationTitleSuggestionHint(draft, isEditMode ? null : selectedGeneration);
@@ -2234,13 +2236,7 @@ function NewPostComposer() {
             contentText: '',
             sourceTool: 'Magicbooklet',
             sourceToolSlug: 'magicbooklet',
-            madeWithRows: [createMadeWithRow({
-              id: 'mw-generation',
-              toolLabel: 'Magicbooklet',
-              toolSlug: 'magicbooklet',
-              modelLabel: found.model || '',
-              modelSlug: slugifyMobileValue(found.model || '') ?? '',
-            })],
+            madeWithRows: [buildCreationMadeWithRow(found.model)],
             category,
           };
         });
@@ -3938,7 +3934,7 @@ function MadeWithSection({
   const lockedRow = rows[0];
 
   if (compactReadOnly && lockedRow) {
-    const toolLabel = lockedRow.toolLabel.trim() || 'Magicbooklet';
+    const toolLabel = getMadeWithToolLabel(lockedRow) || 'Magicbooklet';
     const modelLabel = lockedRow.modelLabel.trim();
 
     return (

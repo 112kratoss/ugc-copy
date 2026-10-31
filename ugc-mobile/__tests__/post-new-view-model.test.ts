@@ -8,8 +8,10 @@ import {
   buildPostResourceBundleInput,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
+  buildCreationMadeWithRow,
   createMadeWithRow,
   createPostComposerResourceCard,
+  getMadeWithToolLabel,
   applyCreationPromptResource,
   getComposerVisibility,
   getDefaultPostComposerDraft,
@@ -2050,5 +2052,29 @@ describe('optimistic owner post cache updates', () => {
 
     expect(result.pages[0].posts.map((item) => item.id)).toEqual(['post-new', 'a']);
     expect(result.pages[1].posts.map((item) => item.id)).toEqual(['b']);
+  });
+});
+
+// The row publishing stores for a creation's post, shown locked while it is
+// published: the model by the name its post shows, never its id.
+describe('a creation’s Made with row', () => {
+  it('names the model as its post does and keeps its id as the slug', () => {
+    expect(buildCreationMadeWithRow('veo-3.1')).toMatchObject({
+      toolLabel: 'Magicbooklet',
+      toolSlug: 'magicbooklet',
+      modelLabel: 'Veo 3.1',
+      modelSlug: 'veo-3.1',
+    });
+  });
+
+  it('names no model the catalog does not name', () => {
+    for (const model of ['template-workflow', 'a-retired-model', null]) {
+      expect(buildCreationMadeWithRow(model)).toMatchObject({ modelLabel: '', modelSlug: '' });
+    }
+  });
+
+  it('spells the app as the app does, whatever case the catalog stores', () => {
+    expect(getMadeWithToolLabel({ toolLabel: 'magicbooklet', toolSlug: 'magicbooklet' })).toBe('Magicbooklet');
+    expect(getMadeWithToolLabel({ toolLabel: ' Runway ', toolSlug: 'runway' })).toBe('Runway');
   });
 });

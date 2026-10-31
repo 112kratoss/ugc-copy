@@ -3981,6 +3981,10 @@ describe('NewPostClient', () => {
       render(<NewPostClient />);
       const titleInput = screen.getByRole('textbox', { name: /^title/i });
       await waitFor(() => expect(titleInput).toHaveValue('The creation title'));
+      // Its Made with takes the creation's model a render later, and the guard
+      // listens only from an effect: flush both before asking.
+      await waitFor(() => expect(screen.getByRole('button', { name: /^made with/i })).toHaveTextContent('Nano Banana 2.0'));
+      await act(async () => {});
       expect(leaveWouldPrompt()).toBe(false);
 
       fireEvent.change(titleInput, { target: { value: 'A title of my own' } });
@@ -4142,6 +4146,58 @@ describe('NewPostClient', () => {
       fireEvent.click(madeWith);
       expect(screen.queryByRole('combobox', { name: 'Tool 1' })).not.toBeInTheDocument();
       expect(madeWith).toHaveTextContent('Higgsfield · Soul');
+    });
+
+    // A creation's Made with is locked to the row publishing stores: the app,
+    // then the creation's model by the name its post prints, or none where
+    // that name is missing. The row was seeded with the app alone and never
+    // took the model, so it read "magicbooklet" until the post was edited.
+    it('sums up a creation’s Made with as the row its post stores', async () => {
+      searchParamsState.value = new URLSearchParams('generationId=gen-made-with');
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          generations: [{
+            id: 'gen-made-with',
+            output_url: 'https://proxy.example.com/generated_images/user-1/gen-made-with.png',
+            category: 'image',
+            title: 'Neon still life',
+            prompt: 'neon still life, soft rim light',
+            model: 'nano-banana-pro',
+          }],
+        }),
+      });
+      render(<NewPostClient />);
+
+      await waitFor(() => (
+        expect(screen.getByRole('button', { name: /^made with/i })).toHaveTextContent('magicbooklet · Nano Banana Pro')
+      ));
+    });
+
+    // /api/generations names a template result's model `template-workflow`:
+    // its real one is the template author's.
+    it('names no model in a template result’s Made with', async () => {
+      searchParamsState.value = new URLSearchParams('generationId=gen-template-result');
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          generations: [{
+            id: 'gen-template-result',
+            output_url: 'https://proxy.example.com/generated_images/user-1/gen-template-result.png',
+            category: 'image',
+            title: 'Rider transformation',
+            model: 'template-workflow',
+            origin: 'template',
+          }],
+        }),
+      });
+      render(<NewPostClient />);
+
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      const madeWith = screen.getByRole('button', { name: /^made with/i });
+      expect(madeWith).toHaveTextContent('magicbooklet');
+      expect(madeWith).not.toHaveTextContent('·');
+      expect(madeWith).not.toHaveTextContent('template-workflow');
     });
 
     it('opens Made with when the server refuses a tool in it', async () => {

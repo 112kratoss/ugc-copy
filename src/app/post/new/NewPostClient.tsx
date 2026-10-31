@@ -81,6 +81,7 @@ import {
 } from '@/lib/post-resource-commerce';
 import { formatRecipeMoneyLine } from '@/lib/recipe-money-line';
 import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
+import { buildGenerationPostSourceTools } from '@/lib/generation-post-source-tools';
 import {
   resolveSignedUploadUrl,
   uploadFileToSignedUrl,
@@ -1474,19 +1475,31 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   }, []);
 
   useEffect(() => {
-    if (prefilledGeneration && madeWithRows.length === 1 && !madeWithRows[0].toolLabel) {
-      // A generation-backed post is authored by this product unless the user overrides it.
-      setMadeWithRows([{
-        id: 'mw-0',
-        toolLabel: 'magicbooklet',
-        toolSlug: 'magicbooklet',
-        modelLabel: prefilledGeneration.model || '',
-        modelSlug: prefilledGeneration.model || '',
-        createTool: false,
-        createModel: false,
-      }]);
-    }
-  }, [prefilledGeneration, madeWithRows]);
+    // A creation's Made with is the row publishing stores: the app, then the
+    // creation's model by the name its post prints, or none where that name is
+    // missing (a template result's model is `template-workflow`). A new post's
+    // row takes it once the creation arrives; an edit opens on the stored row.
+    if (isEditMode || prefilledGeneration?.source !== 'fetched' || madeWithRows.length !== 1) return;
+    const [row] = madeWithRows;
+    if (row.toolLabel.trim() && (row.toolSlug !== 'magicbooklet' || row.modelLabel.trim())) return;
+    const [stored] = buildGenerationPostSourceTools(
+      { source_tool: 'magicbooklet', source_tool_slug: 'magicbooklet' },
+      prefilledGeneration.model,
+    );
+    const modelLabel = stored.modelLabel ?? '';
+    if (row.toolLabel === stored.toolLabel && row.modelLabel === modelLabel) return;
+    const creationRow = {
+      toolLabel: stored.toolLabel,
+      toolSlug: stored.toolSlug ?? '',
+      modelLabel,
+      modelSlug: stored.modelSlug ?? '',
+      createTool: false,
+      createModel: false,
+    };
+    setMadeWithRows([{ id: 'mw-0', ...creationRow }]);
+    // Where the post starts, as the prefilled title is: not an edit to lose.
+    setSavedSnapshot((saved) => ({ ...saved, madeWith: [creationRow] }));
+  }, [isEditMode, prefilledGeneration, madeWithRows]);
 
   const inferredCategory = useMemo((): PostMediaCategory | null => {
     if (proofMode === 'text') return null;

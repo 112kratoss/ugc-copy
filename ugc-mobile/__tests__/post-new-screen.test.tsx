@@ -1528,6 +1528,54 @@ describe('mobile external post composer', () => {
     });
   });
 
+  // A creation's Made with is locked to the row publishing stores: the app,
+  // then the creation's model by the name its post shows, or none for a
+  // template result, whose model is its author's (`template-workflow`). It
+  // printed the raw id while publishing, and the catalog's lowercase name of
+  // the app on an edit.
+  describe('a creation’s locked Made with', () => {
+    const madeWithSummary = (tree: renderer.ReactTestRenderer) => (
+      collectText(findPressableByAccessibilityLabel(tree.root, 'Made with')).at(-1)
+    );
+
+    it('names the creation’s model as its post does', async () => {
+      generationState.item = { ...generationItem, model: 'nano-banana-pro' };
+      const tree = await renderScreen();
+      expect(madeWithSummary(tree)).toBe('Magicbooklet · Nano Banana Pro');
+    });
+
+    it('names no model for a template result', async () => {
+      generationState.item = { ...generationItem, model: 'template-workflow' };
+      const tree = await renderScreen();
+      expect(madeWithSummary(tree)).toBe('Magicbooklet');
+    });
+
+    it('reads the same on an edit of the published post', async () => {
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = {
+        id: 'post-from-creation',
+        title: 'Hero product image',
+        description: null,
+        body: '',
+        postFormat: 'media',
+        generationId: 'gen-1',
+        category: 'image',
+        visibility: 'public',
+        sourceTool: 'magicbooklet',
+        sourceToolSlug: 'magicbooklet',
+        // As the owner read gives it: the catalog names the app in lower case.
+        sourceTools: [{ toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: 'Nano Banana Pro', modelSlug: 'nano-banana-pro' }],
+        mediaUrl: 'https://cdn.example.com/output.png',
+        mediaKind: 'image',
+        mediaItems: [],
+        resourceBundleInput: null,
+        hasPaidOrders: false,
+      };
+      const tree = await renderScreen();
+      expect(madeWithSummary(tree)).toBe('Magicbooklet · Nano Banana Pro');
+    });
+  });
+
   // The category used to follow only the first media added; a reorder kept it,
   // and the create route refused the mismatch with a message about a control
   // this app does not have.
