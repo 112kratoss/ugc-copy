@@ -1,5 +1,7 @@
 (global as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -119,6 +121,33 @@ describe('useVideoStills', () => {
     expect(row.last()).toEqual({ a: still('https://cdn.test/a.mp4') });
   });
 
+  it('reads a clip again from its renewed link when its card opened mid-read and that read gave none', async () => {
+    let answerFirst: (value: unknown) => void = () => undefined;
+    stills.answer = () => new Promise((resolve) => { answerFirst = resolve; });
+    const row = await mount([clip('a')]);
+
+    // The card is opened before its still is in: the open renews its link and asks again.
+    await row.update([clip('a', 'https://cdn.test/renewed/a.mp4')]);
+    await row.readAgain('a');
+    expect(stills.made).toEqual(['https://cdn.test/a.mp4']);
+
+    stills.answer = async (url) => still(url);
+    await renderer.act(async () => { answerFirst(null); });
+    expect(stills.made).toEqual(['https://cdn.test/a.mp4', 'https://cdn.test/renewed/a.mp4']);
+    expect(row.last()).toEqual({ a: still('https://cdn.test/renewed/a.mp4') });
+  });
+
+  it('reads nothing more for a card opened mid-read whose read then gives a still', async () => {
+    let answerFirst: (value: unknown) => void = () => undefined;
+    stills.answer = () => new Promise((resolve) => { answerFirst = resolve; });
+    const row = await mount([clip('a')]);
+
+    await row.readAgain('a');
+    await renderer.act(async () => { answerFirst(still('first')); });
+    expect(stills.made).toEqual(['https://cdn.test/a.mp4']);
+    expect(row.last()).toEqual({ a: still('first') });
+  });
+
   it('reads a file named twice under two links once, whatever it gives', async () => {
     stills.answer = async () => null;
     const row = await mount([clip('a', 'https://cdn.test/one/a.mp4'), clip('a', 'https://cdn.test/two/a.mp4')]);
@@ -219,10 +248,32 @@ describe('useVideoStills', () => {
     expect(again.last()).toEqual({ a: still('https://cdn.test/a.mp4') });
   });
 
+  it('puts no still back in the cache once a sign-out has cleared it, from a read begun before', async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    stills.answer = () => new Promise((resolve) => { answer = resolve; });
+    await mount([clip('a')]);
+
+    // The person signs out while a row that is still mounted is reading.
+    clearVideoStills();
+    await renderer.act(async () => { answer(still('theirs')); });
+
+    expect(cachedVideoStill('a')).toBeUndefined();
+  });
+
   it('reads nothing where this binary reads no stills', async () => {
     stills.read = false;
     const row = await mount([clip('a')]);
     expect(stills.grab.mock.calls).toHaveLength(0);
     expect(row.last()).toEqual({});
+  });
+});
+
+describe('the still cache', () => {
+  it('is cleared everywhere the signed-in session is cleared from the device', () => {
+    const auth = readFileSync(resolve(__dirname, '..', 'lib/auth.tsx'), 'utf8');
+    const count = (needle: string) => auth.split(needle).length - 1;
+
+    expect(count('clearPersistedSupabaseAuthSession()')).toBeGreaterThan(0);
+    expect(count('clearVideoStills()')).toBe(count('clearPersistedSupabaseAuthSession()'));
   });
 });

@@ -2,7 +2,7 @@ import type { VideoThumbnail } from 'expo-video';
 import { useEffect, useRef, useState } from 'react';
 
 import { grabVideoFrame, VIDEO_STILLS_READ } from '@/lib/video-frame';
-import { cachedVideoStill, cacheVideoStill } from '@/lib/video-still-cache';
+import { cachedVideoStill, cacheVideoStill, videoStillClears } from '@/lib/video-still-cache';
 
 /**
  * A clip a card can draw a still for. `key` names the clip's file apart from
@@ -36,7 +36,8 @@ function cachedStills(clips: readonly StillClip[]) {
  * - A clip whose read gave none is read again only once its card opens it
  *   (`readAgain`), from the link the open renewed: a record read again for any
  *   other reason renews every link, and every clip that missed would be read
- *   at once on what may well be a slow link.
+ *   at once on what may well be a slow link. A card opened while its read is
+ *   under way has it read again if that read gives none.
  * - Nothing is read while `read` is false (under the mature plate, or with the
  *   reel's Details page off screen): reads under way are called off, and asked
  *   again when it turns true. Stills already read are still returned; whether
@@ -50,6 +51,8 @@ export function useVideoStills(clips: readonly StillClip[], { read = true }: { r
   // that has not seen a still drawn yet must not ask for the clip a second time.
   const landed = useRef(new Map<string, VideoThumbnail | null>());
   const reading = useRef(new Map<string, AbortController>());
+  // Clips whose card was opened while their read was under way.
+  const openedMidRead = useRef(new Set<string>());
 
   useEffect(() => {
     const requests = reading.current;
@@ -71,6 +74,8 @@ export function useVideoStills(clips: readonly StillClip[], { read = true }: { r
     if (!read) {
       for (const request of reading.current.values()) request.abort();
       reading.current.clear();
+      // Asked again from the links they have when reading resumes.
+      openedMidRead.current.clear();
       return;
     }
     // A file is read once, whatever links its cards give it: one read under
@@ -80,13 +85,19 @@ export function useVideoStills(clips: readonly StillClip[], { read = true }: { r
 
       const request = new AbortController();
       reading.current.set(key, request);
+      const clearsWhenRead = videoStillClears();
       // A file another row is reading too is read once: whichever read comes
       // second in the queue takes the first one's still instead.
       void grabVideoFrame(url, { signal: request.signal, alreadyRead: () => cachedVideoStill(key) }).then((frame) => {
         if (request.signal.aborted) return;
         reading.current.delete(key);
         const still = frame ?? cachedVideoStill(key) ?? null;
-        if (still) cacheVideoStill(key, still);
+        if (still) cacheVideoStill(key, still, clearsWhenRead);
+        if (openedMidRead.current.delete(key) && !still) {
+          // Left unlanded, so this effect reads it again, from the link its card has now.
+          setStills((current) => ({ ...current, [key]: null }));
+          return;
+        }
         landed.current.set(key, still);
         setStills((current) => (current[key] === still && key in current ? current : { ...current, [key]: still }));
       });
@@ -96,6 +107,10 @@ export function useVideoStills(clips: readonly StillClip[], { read = true }: { r
 
   /** Asks again for a clip whose read gave no still, from the link it has now. */
   const readAgain = (key: string) => {
+    if (reading.current.has(key)) {
+      openedMidRead.current.add(key);
+      return;
+    }
     if (landed.current.get(key) !== null) return;
     landed.current.delete(key);
     setStills((current) => {

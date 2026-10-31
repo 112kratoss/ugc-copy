@@ -442,6 +442,18 @@ describe('a guest bootstrap that failed (audit 02-6)', () => {
     unmount();
   });
 
+  it('lets go of the clip stills read on this phone when the stored session was refused', async () => {
+    cacheVideoStill('generation_inputs/account-a/clip.mp4', { width: 405, height: 720 } as never);
+    state.getSession.mockResolvedValueOnce({
+      data: { session: null },
+      error: Object.assign(new Error('Invalid Refresh Token: Refresh Token Not Found'), { code: 'refresh_token_not_found' }),
+    });
+    const { unmount } = await mount();
+
+    expect(cachedVideoStill('generation_inputs/account-a/clip.mp4')).toBeUndefined();
+    unmount();
+  });
+
   it('lets a bootstrap under way finish before a sign-in starts, so its guest is the one carried across', async () => {
     let landGuest: (value: unknown) => void = () => undefined;
     state.signInAnonymously.mockImplementation(() => new Promise((resolve) => {

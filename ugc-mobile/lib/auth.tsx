@@ -1919,6 +1919,7 @@ async function recoverInvalidAuthSession(error: unknown) {
   await clearPersistedHomeFeed();
   await clearSearchHistory();
   await clearPersistedAccountState();
+  clearVideoStills();
   return true;
 }
 

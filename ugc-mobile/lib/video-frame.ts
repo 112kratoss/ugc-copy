@@ -79,7 +79,10 @@ const FRAME_PLAYER_BUFFER: BufferOptions = { preferredForwardBufferDuration: 1 }
 
 let queue: Promise<void> = Promise.resolve();
 
-/** Reads with no player under way, by link: asking again for a clip being read joins its read. */
+/**
+ * Reads with no player under way, by link: asking again within its deadline
+ * for a clip being read joins its read.
+ */
 const playerlessReads = new Map<string, Promise<VideoThumbnail>>();
 
 type GrabOptions = {
@@ -113,8 +116,8 @@ export function grabVideoFrame(url: string, { signal, alreadyRead }: GrabOptions
       const ready = alreadyRead?.();
       if (ready) return ready;
       if (!playerlessReader) return readFromPlayer(url, signal);
-      const read = readWithoutPlayer(playerlessReader, url);
-      held = settledWithin(read, PLAYERLESS_READ_DEADLINE_MS);
+      const { read, over } = readWithoutPlayer(playerlessReader, url);
+      held = over;
       return untilCalledOff(signal, PLAYERLESS_READ_DEADLINE_MS, () => read);
     })
     .catch(() => null);
@@ -124,14 +127,19 @@ export function grabVideoFrame(url: string, { signal, alreadyRead }: GrabOptions
   return signal ? Promise.race([turn, calledOff(signal)]) : turn;
 }
 
+/**
+ * The native read, and `over`: when it settles, or when its deadline passes
+ * first. Its card and the queue give it up then, and so does a later ask for
+ * the same link, which opens the clip afresh: a read over a connection that
+ * stalled may never end.
+ */
 function readWithoutPlayer(reader: PlayerlessStillReader, url: string) {
   const read = reader.generateThumbnailFromUrlAsync(url, VIDEO_FRAME_TIME_SECONDS, FRAME_SIZE);
   playerlessReads.set(url, read);
-  const forget = () => {
+  const over = settledWithin(read, PLAYERLESS_READ_DEADLINE_MS).then(() => {
     if (playerlessReads.get(url) === read) playerlessReads.delete(url);
-  };
-  read.then(forget, forget);
-  return read;
+  });
+  return { read, over };
 }
 
 /** Resolves once `read` settles, or after `ms` if it has not by then. */

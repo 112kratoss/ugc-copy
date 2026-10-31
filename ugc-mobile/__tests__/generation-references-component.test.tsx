@@ -284,6 +284,8 @@ describe('GenerationOutputs', () => {
 
     renderer.act(() => cards(tree)[1].props.onPress());
     expect(lightbox(tree).props.items[1]).toMatchObject({ url: 'https://signed.test/out-1.mp4', mediaKind: 'video' });
+    // Opened while its still was being read: one that gives none is read again, which belongs to no later case.
+    renderer.act(() => tree.unmount());
   });
 
   it('draws a video output that has no poster by a still read from its file, under the play mark', async () => {

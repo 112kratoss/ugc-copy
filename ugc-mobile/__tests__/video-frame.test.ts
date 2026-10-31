@@ -233,6 +233,23 @@ describe('grabVideoFrame', () => {
       expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
     });
 
+    it('opens a clip afresh once a read of its link has gone a minute without ending', async () => {
+      vi.useFakeTimers();
+      generateThumbnailFromUrlAsync.mockImplementationOnce(() => new Promise(() => undefined));
+      const { grabVideoFrame, PLAYERLESS_READ_DEADLINE_MS } = await load();
+
+      // A connection that stalled: the native read never ends, and its card gives up after a minute.
+      const stalled = grabVideoFrame('https://cdn.test/clip.mp4');
+      await vi.advanceTimersByTimeAsync(PLAYERLESS_READ_DEADLINE_MS);
+      await expect(stalled).resolves.toBeNull();
+
+      // Its card is opened, which asks for the same link again: a new read, not a wait on one that will not end.
+      const again = grabVideoFrame('https://cdn.test/clip.mp4');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(2);
+      await expect(again).resolves.toBe(STILL);
+    });
+
     it('makes no read for a clip another card read while this one waited its turn', async () => {
       const { grabVideoFrame } = await load();
       const other = { width: 1, height: 1 };

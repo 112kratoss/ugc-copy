@@ -12,6 +12,13 @@ import type { VideoThumbnail } from 'expo-video';
  */
 const CACHED_STILLS = 8;
 const stills = new Map<string, VideoThumbnail>();
+/** How many times the cache was cleared: a still read across a clear belongs to a session that has left. */
+let clears = 0;
+
+/** What a read hands back to `cacheVideoStill` with its still: taken as the read starts. */
+export function videoStillClears() {
+  return clears;
+}
 
 /** The still kept for `key`, which then counts as the most recently drawn. */
 export function cachedVideoStill(key: string) {
@@ -23,7 +30,9 @@ export function cachedVideoStill(key: string) {
   return still;
 }
 
-export function cacheVideoStill(key: string, still: VideoThumbnail) {
+export function cacheVideoStill(key: string, still: VideoThumbnail, clearsWhenRead = clears) {
+  // Begun before a sign-out cleared the cache: not the next person's to draw.
+  if (clearsWhenRead !== clears) return;
   stills.delete(key);
   stills.set(key, still);
   for (const oldest of stills.keys()) {
@@ -34,5 +43,6 @@ export function cacheVideoStill(key: string, still: VideoThumbnail) {
 
 /** On every way a session leaves the phone: the stills are of that person's clips. Between tests too. */
 export function clearVideoStills() {
+  clears += 1;
   stills.clear();
 }
