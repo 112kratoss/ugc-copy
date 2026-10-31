@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(42);
+select plan(43);
 
 create function pg_temp.finds(p_query text, p_bundle_id uuid)
 returns boolean
@@ -64,12 +64,12 @@ insert into public.posts (
    'Nano Banana', 'nano-banana', now(), now()),
   ('0000f5d0-0000-4000-9000-000000000012'::uuid, '0000f5d0-0000-4000-9000-000000000001'::uuid, null,
    'public', 'image', 'magicbooklet', 'media', 'visible',
-   'Harbour dusk post', 'Public caption for the harbour at dusk.', 'showcase/f5d-two.png',
+   null, 'Public caption for the harbour at dusk.', 'showcase/f5d-two.png',
    'Nano Banana', 'nano-banana', now(), now()),
   ('0000f5d0-0000-4000-9000-000000000013'::uuid, '0000f5d0-0000-4000-9000-000000000001'::uuid,
    '0000f5d0-0000-4000-9000-000000000030'::uuid,
    'public', 'image', 'magicbooklet', 'media', 'visible',
-   'Lantern alley post', 'Public caption for the lantern alley, shot neo_noir at 100% scale.', 'showcase/f5d-creation.png',
+   'Lantern alley post', 'Public caption for the lantern alley, shot neo_noir at 100% scale, file c:\lantern.', 'showcase/f5d-creation.png',
    'Nano Banana', 'nano-banana', now(), now());
 
 insert into public.post_resource_bundles (
@@ -174,10 +174,12 @@ select is(
     || 'nano banana prompt notes',
   'the paid recipe''s search document holds its visible fields and its kinds, nothing more'
 );
+-- The app shows this untitled post under its caption's first line; the
+-- document holds the caption once (the one difference the migration names).
 select is(
   pg_temp.document('0000f5d0-0000-4000-9000-000000000022'::uuid),
   'recipe a preview long enough to pass the marketplace quality gate. '
-    || 'aurora-seller aurora seller harbour dusk post public caption for the harbour at dusk. '
+    || 'aurora-seller aurora seller public caption for the harbour at dusk. '
     || 'nano banana workflow files remix',
   'an ''Attached unlock'' title is held as the card''s ''Recipe'', and an empty summary is left out'
 );
@@ -211,8 +213,10 @@ select ok(pg_temp.finds('at 100% scale', '0000f5d0-0000-4000-9000-000000000023':
   'a percent sign finds itself');
 select ok(pg_temp.finds('shot neo_noir', '0000f5d0-0000-4000-9000-000000000023'::uuid),
   'an underscore finds itself');
-select ok(not pg_temp.finds('shot neo noir', '0000f5d0-0000-4000-9000-000000000023'::uuid),
-  'and only itself');
+select ok(not pg_temp.finds('golden\ portrait', '0000f5d0-0000-4000-9000-000000000021'::uuid),
+  'a backslash is not an escape');
+select ok(pg_temp.finds('file c:\lantern', '0000f5d0-0000-4000-9000-000000000023'::uuid),
+  'a backslash finds itself');
 
 -- ─── The document follows every column it reads ─────────────────────────────
 
