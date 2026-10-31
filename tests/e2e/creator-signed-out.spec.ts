@@ -22,9 +22,13 @@ import { expect, test, type Page } from '@playwright/test';
 const PROMPT = 'A paper boat drifting across a sunlit pond, gentle ripples, soft morning light, slow push-in.';
 const COLD_PAGE = { timeout: 45_000 };
 
-/** Offline the quote cannot be priced, so the page is given one. Returns the quotes the page has asked for. */
+// Two cold page loads, either of which the dev server can hold for seconds (the fifth gotcha in
+// .claude/rules/e2e.md): more than the config's 60 s once both are held on a slow runner.
+test.describe.configure({ timeout: 180_000 });
+
+/** Offline the quote cannot be priced, so the page is given one. Returns the quote requests the page has sent. */
 async function answerQuote(page: Page, costCredits: number) {
-  const asked: Array<{ modelId?: string; catalogRevision?: string }> = [];
+  const asked: unknown[] = [];
   await page.route('**/api/generation-models/quote', async (route) => {
     const request = (route.request().postDataJSON() ?? {}) as { modelId?: string; catalogRevision?: string };
     asked.push(request);
@@ -76,12 +80,10 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   await expect(page.getByText('Try it before you sign up')).toBeVisible();
   // What a new account starts with, under the bar (the server stub's welcome grant).
   await expect(page.locator('[data-creator-bar-note]')).toContainText('New accounts get 25 free credits');
-  // Typed and pressed only once the page's script runs: before then a fill is reset by hydration and
-  // a press is dropped. All of the above is in the server's HTML, the price under the bar too (the
-  // server's own, for the run the page opens on), so the sign is the page's own quote, which only its
-  // script asks for. Under `next dev` that can take seconds: a compile that ends while the page
-  // hydrates has the dev client refetch the page, and hydration waits for the answer (6 to 8 s on CI).
-  await expect.poll(() => quotes.length, COLD_PAGE).toBeGreaterThan(0);
+  // Typed and pressed only once the page's script runs (the fifth gotcha in .claude/rules/e2e.md). All
+  // of the above is in the server's HTML, the price under the bar too (the server's own, for the run
+  // the page opens on), so the sign is the page's own quote request, which only its script sends.
+  await expect.poll(() => quotes.length, { ...COLD_PAGE, message: 'the page asks for its quote once its script runs' }).toBeGreaterThan(0);
   await prompt.fill(PROMPT);
 
   await page.getByRole('button', { name: 'Sign up to generate' }).click();
