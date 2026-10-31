@@ -4,6 +4,17 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export const PRIVATE_POST_MEDIA_BUCKET = 'post_media';
 export const PRIVATE_POST_MEDIA_PREFIX = 'private-posts/';
 
+/** Every column of a post_media row that names a stored object. */
+export const POST_MEDIA_PATH_COLUMNS = [
+  'storage_path',
+  'preview_storage_path',
+  'display_storage_path',
+  'rendition_storage_path',
+  'teaser_storage_path',
+] as const;
+
+export type PostMediaPathColumn = (typeof POST_MEDIA_PATH_COLUMNS)[number];
+
 export function postMediaStorageBucket(path: string): 'post_media' | 'showcase_media' {
   return path.startsWith(PRIVATE_POST_MEDIA_PREFIX) ? PRIVATE_POST_MEDIA_BUCKET : 'showcase_media';
 }
