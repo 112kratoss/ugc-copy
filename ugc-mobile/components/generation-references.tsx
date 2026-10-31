@@ -1,17 +1,20 @@
 import { useQuery } from '@tanstack/react-query';
-import { FileText, ImageIcon, Play } from 'lucide-react-native';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { FileText, ImageIcon } from 'lucide-react-native';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Linking, Pressable, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
 import { PagerRowScrollView } from '@/components/pager-row-scroll-view';
 import { SecondaryButton } from '@/components/ui';
+import { VideoPlayMark } from '@/components/video-play-mark';
+import { VideoStill } from '@/components/video-still';
 import { useAuth } from '@/lib/auth';
 import { getGenerationKind, getGenerationRenderableMediaKind } from '@/lib/generation-media';
 import { generationReferences } from '@/lib/generation-references';
-import { appTheme, mediaColors } from '@/lib/theme';
+import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
+import { useVideoStills } from '@/lib/use-video-stills';
 
 /**
  * Full owner data is fetched only on the details slide, never for every grid
@@ -42,7 +45,14 @@ export function GenerationReferences({ generationId }: { generationId: string })
   const requestSequence = useRef(0);
   useEffect(() => () => { requestSequence.current++; }, []);
 
-  const references = generationReferences(query.data?.input_media);
+  const inputMedia = query.data?.input_media;
+  const references = useMemo(() => generationReferences(inputMedia), [inputMedia]);
+  // An input clip's still, by its file where the record names one: a recipe that lists the creation's saved inputs
+  // as they are names the same file on the same page, and draws the same still.
+  const clips = useMemo(() => references.flatMap((item) => (
+    item.mediaKind === 'video' ? [{ key: stillKey(generationId, item), url: item.url }] : []
+  )), [generationId, references]);
+  const { stills, readAgain } = useVideoStills(clips);
   if (!user) return null;
   if (query.data && !references.length && !query.isError) return null;
 
@@ -69,6 +79,8 @@ export function GenerationReferences({ generationId }: { generationId: string })
         delete next[id];
         return next;
       });
+      // A clip that gave no still is read again from the link just renewed.
+      if (selected.mediaKind === 'video') readAgain(stillKey(generationId, selected));
       if (selected.mediaKind === 'audio') {
         await Linking.openURL(selected.url);
       } else {
@@ -103,6 +115,8 @@ export function GenerationReferences({ generationId }: { generationId: string })
       <PagerRowScrollView keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: appTheme.spacing.gap }}>
         {references.map((item) => {
           const failed = !item.url || failedUrls[item.id] === item.url;
+          // Not for a clip the record no longer links: its card says it is unavailable.
+          const still = item.url ? stills[stillKey(generationId, item)] : null;
           return (
             <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`Open reference ${item.label}`}
               disabled={openingId !== null} onPress={() => void openReference(item.id)}
@@ -115,6 +129,13 @@ export function GenerationReferences({ generationId }: { generationId: string })
                       imageContentFit="contain" style={{ width: '100%', height: '100%' }}
                       onImageError={() => setFailedUrls((current) => ({ ...current, [item.id]: item.url! }))} />
                   ) : item.mediaKind === 'image' ? <ImageIcon size={32} color={theme.colors.muted} />
+                    // A clip reads as one: its still under a play mark, or the mark alone, where a document icon read as a file.
+                    : item.mediaKind === 'video' ? (
+                      <>
+                        {still ? <VideoStill still={still} /> : null}
+                        <VideoPlayMark onPicture={Boolean(still)} />
+                      </>
+                    )
                     : <FileText size={32} color={theme.colors.muted} />}
               </View>
               <View style={{ padding: appTheme.spacing.gap, gap: 4 }}>
@@ -154,18 +175,25 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
   const record = query.data;
   const urls = record?.output_urls ?? [];
   const mediaKind = record ? getGenerationRenderableMediaKind(getGenerationKind(record)) : null;
-  if (!user) return null;
-  // Sound and words have no place on the lightbox, and a single file is the slide itself.
-  if (record && (!mediaKind || urls.length < 2)) return null;
-
   // The poster is the primary output's, which is the first in every run the
   // server saves now and was not always in older ones.
   const primaryIndex = Math.max(0, urls.indexOf(record?.media?.url ?? record?.output_url ?? ''));
   const poster = record?.media?.previewUrl ?? record?.previewUrl ?? record?.preview_url ?? null;
-  // A video is drawn by its poster or not at all: its file is not a picture.
+  // A video is drawn by its poster, or by a still read from its file where it has none or its poster failed: its file
+  // is not a picture.
   const thumbnailUrl = (url: string, index: number) => (
     index === primaryIndex && poster ? poster : mediaKind === 'image' ? url : null
   );
+  const posterFailed = Boolean(poster) && failedUrls[primaryIndex] === poster;
+  // Nothing is read for a row that is not drawn (below).
+  const drawn = Boolean(user) && mediaKind === 'video' && urls.length >= 2;
+  const clips = useMemo(() => (drawn
+    ? urls.flatMap((url, index) => (index === primaryIndex && poster && !posterFailed ? [] : [{ key: outputStillKey(generationId, index), url }]))
+    : []), [drawn, generationId, poster, posterFailed, primaryIndex, urls]);
+  const { stills, readAgain } = useVideoStills(clips);
+  if (!user) return null;
+  // Sound and words have no place on the lightbox, and a single file is the slide itself.
+  if (record && (!mediaKind || urls.length < 2)) return null;
 
   const rereadOutputUrl = async (index: number) => {
     const result = await query.refetch({ throwOnError: true });
@@ -181,6 +209,8 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
       delete next[index];
       return next;
     });
+    // A clip that gave no still is read again, as a picture that failed is loaded again.
+    readAgain(outputStillKey(generationId, index));
     setPreview({
       index,
       items: urls.map((url, position) => ({
@@ -208,6 +238,7 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
           {record ? urls.map((url, index) => {
             const thumbnail = thumbnailUrl(url, index);
             const failed = Boolean(thumbnail) && failedUrls[index] === thumbnail;
+            const still = thumbnail && !failed ? null : stills[outputStillKey(generationId, index)];
             return (
               <OutputCard key={index} accessibilityLabel={`Open output ${index + 1} of ${urls.length}`}
                 label={`Output ${index + 1}`}
@@ -219,8 +250,9 @@ export function GenerationOutputs({ count, generationId }: { count: number; gene
                   <FeedMediaFrame kind="image" url={thumbnail} cacheKey={`generation-output:${generationId}:${index}`}
                     imageContentFit="cover" style={{ position: 'absolute', inset: 0 }}
                     onImageError={() => setFailedUrls((current) => ({ ...current, [index]: thumbnail }))} />
-                ) : mediaKind === 'image' ? <ImageIcon size={appTheme.icon.hero} color={theme.colors.muted} /> : null}
-                {mediaKind === 'video' ? <OutputPlayMark onPicture={Boolean(thumbnail && !failed)} /> : null}
+                ) : still ? <VideoStill still={still} />
+                  : mediaKind === 'image' ? <ImageIcon size={appTheme.icon.hero} color={theme.colors.muted} /> : null}
+                {mediaKind === 'video' ? <VideoPlayMark onPicture={Boolean((thumbnail && !failed) || still)} /> : null}
               </OutputCard>
             );
           }) : Array.from({ length: count }, (_, index) => (
@@ -262,15 +294,12 @@ function OutputCard({ accessibilityLabel, caption, children, label, onPress }: {
   );
 }
 
-/** On a poster, the dark layer the app draws over pictures; on a plate, the video accent. */
-function OutputPlayMark({ onPicture }: { onPicture: boolean }) {
-  const theme = useAppTheme();
-  const glyph = onPicture ? mediaColors.onMedia : theme.colors.video;
-  return (
-    <View pointerEvents="none" style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
-      backgroundColor: onPicture ? mediaColors.mediaScrimStrong : `${theme.colors.video}1f`,
-      borderWidth: onPicture ? 0 : 1, borderColor: `${theme.colors.video}66` }}>
-      <Play size={appTheme.icon.default} color={glyph} fill={glyph} />
-    </View>
-  );
+/** A creation input's still, by its file where the record names one, so the recipe's row can draw it too. */
+function stillKey(generationId: string, item: { id: string; storagePath: string | null }) {
+  return item.storagePath ?? `generation-input:${generationId}:${item.id}`;
+}
+
+/** An output's still, by its place in its run: an output's link is signed anew with each read of the record. */
+function outputStillKey(generationId: string, index: number) {
+  return `generation-output:${generationId}:${index}`;
 }

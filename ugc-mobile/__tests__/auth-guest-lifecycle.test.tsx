@@ -195,6 +195,7 @@ import {
   storeGuestMergeTicket,
 } from '../lib/guest-merge-ticket-storage';
 import { supabase } from '../lib/supabase';
+import { cachedVideoStill, cacheVideoStill } from '../lib/video-still-cache';
 
 const OLD_GUEST_TICKET = 'a'.repeat(64);
 const GUEST_TICKET = 'b'.repeat(64);
@@ -438,6 +439,18 @@ describe('a guest bootstrap that failed (audit 02-6)', () => {
 
     expect(state.signInAnonymously).toHaveBeenCalledTimes(1);
     expect(latest.current?.identityUserId).toBe('guest-1');
+    unmount();
+  });
+
+  it('lets go of the clip stills read on this phone when the stored session was refused', async () => {
+    cacheVideoStill('generation_inputs/account-a/clip.mp4', { width: 405, height: 720 } as never);
+    state.getSession.mockResolvedValueOnce({
+      data: { session: null },
+      error: Object.assign(new Error('Invalid Refresh Token: Refresh Token Not Found'), { code: 'refresh_token_not_found' }),
+    });
+    const { unmount } = await mount();
+
+    expect(cachedVideoStill('generation_inputs/account-a/clip.mp4')).toBeUndefined();
     unmount();
   });
 
@@ -738,6 +751,21 @@ describe('guest merge tickets (audit 02-7, 04-8)', () => {
     await expect(readGuestMergeTickets()).resolves.toEqual([
       expect.objectContaining({ ticket: GUEST_TICKET, redeemedForUserId: 'account-a' }),
     ]);
+    unmount();
+  });
+
+  it('lets go of the clip stills read on this phone with a sign-out', async () => {
+    cacheVideoStill('generation_inputs/account-a/clip.mp4', { width: 405, height: 720 } as never);
+    const { latest, unmount } = await mount(accountA());
+
+    state.getSession.mockResolvedValue({ data: { session: null }, error: null });
+    await renderer.act(async () => {
+      await latest.current?.signOut();
+    });
+    await flush();
+
+    expect(latest.current?.user).toBeNull();
+    expect(cachedVideoStill('generation_inputs/account-a/clip.mp4')).toBeUndefined();
     unmount();
   });
 

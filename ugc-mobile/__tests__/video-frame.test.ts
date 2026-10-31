@@ -22,6 +22,8 @@ type FakePlayer = {
 const native = vi.hoisted(() => {
   const state = {
     platform: { OS: 'ios' },
+    /** expo-video's native module as `requireOptionalNativeModule` finds it; an Android binary built with the parked patch has the playerless read. */
+    expoVideo: null as Record<string, unknown> | null,
     players: [] as unknown[],
     /**
      * Whether a new player is given its item as iOS gives it: once the asset
@@ -66,6 +68,7 @@ const native = vi.hoisted(() => {
 
 vi.mock('react-native', () => ({ Platform: native.platform }));
 vi.mock('expo-video', () => ({ createVideoPlayer: (source: { uri: string }) => native.makePlayer(source) }));
+vi.mock('expo', () => ({ requireOptionalNativeModule: (name: string) => (name === 'ExpoVideo' ? native.expoVideo : null) }));
 
 const players = () => native.players as FakePlayer[];
 const answerWith = (answer: (player: FakePlayer) => Promise<unknown[]>) => {
@@ -85,6 +88,7 @@ const STILL = { width: 405, height: 720 };
 
 beforeEach(() => {
   native.platform.OS = 'ios';
+  native.expoVideo = null;
   native.players.length = 0;
   native.attachItems = true;
   answerWith(async () => [STILL]);
@@ -114,16 +118,182 @@ describe('grabVideoFrame', () => {
     expect(player.released).toBe(true);
   });
 
-  // expo-video opens an Android clip for a still on the one thread every Expo
-  // module's async calls share: a slow link there held up session reads,
-  // haptics and the clipboard.
-  it('reads nothing on Android, and makes no player there', async () => {
+  // Stock expo-video opens an Android clip for a still on the one thread every
+  // Expo module's async calls share: a slow link there held up session reads,
+  // haptics and the clipboard. The binaries in phones today have only that.
+  it.each([
+    ['no expo-video module', null],
+    ['expo-video without the playerless read', { generateThumbnailsAsync: () => undefined }],
+  ])('reads nothing on an Android binary with %s, and makes no player there', async (_case, expoVideo) => {
     native.platform.OS = 'android';
+    native.expoVideo = expoVideo;
     const { grabVideoFrame, VIDEO_STILLS_READ } = await load();
 
     expect(VIDEO_STILLS_READ).toBe(false);
     await expect(grabVideoFrame('https://cdn.test/clip.mp4')).resolves.toBeNull();
     expect(players()).toHaveLength(0);
+  });
+
+  it('never asks for the playerless read on iOS, whose binary reads from a player', async () => {
+    const generateThumbnailFromUrlAsync = vi.fn(async () => STILL);
+    native.expoVideo = { generateThumbnailFromUrlAsync };
+    const { grabVideoFrame } = await load();
+
+    await expect(grabVideoFrame('https://cdn.test/clip.mp4')).resolves.toBe(STILL);
+    expect(generateThumbnailFromUrlAsync).not.toHaveBeenCalled();
+    expect(players()).toHaveLength(1);
+  });
+
+  describe('on an Android binary that reads a still with no player', () => {
+    const generateThumbnailFromUrlAsync = vi.fn<(url: string, time: number, options: unknown) => Promise<unknown>>();
+
+    beforeEach(() => {
+      native.platform.OS = 'android';
+      native.expoVideo = { generateThumbnailFromUrlAsync };
+      generateThumbnailFromUrlAsync.mockReset();
+      generateThumbnailFromUrlAsync.mockResolvedValue(STILL);
+    });
+
+    it('reads the still from the clip’s link at the moment and size iOS reads, and makes no player', async () => {
+      const { grabVideoFrame, VIDEO_FRAME_MAX_SIDE, VIDEO_FRAME_TIME_SECONDS, VIDEO_STILLS_READ } = await load();
+      expect(VIDEO_STILLS_READ).toBe(true);
+
+      await expect(grabVideoFrame('https://cdn.test/clip.mp4')).resolves.toBe(STILL);
+      expect(generateThumbnailFromUrlAsync.mock.calls).toEqual([
+        ['https://cdn.test/clip.mp4', VIDEO_FRAME_TIME_SECONDS, { maxWidth: VIDEO_FRAME_MAX_SIDE, maxHeight: VIDEO_FRAME_MAX_SIDE }],
+      ]);
+      expect(players()).toHaveLength(0);
+    });
+
+    it('reads one still at a time, and waits up to a minute for one, where iOS gives up at 15 s', async () => {
+      vi.useFakeTimers();
+      let answerSlow: (still: unknown) => void = () => undefined;
+      generateThumbnailFromUrlAsync.mockImplementation((url) => (url.endsWith('stuck.mp4')
+        ? new Promise(() => undefined)
+        : url.endsWith('slow.mp4') ? new Promise((resolve) => { answerSlow = resolve; }) : Promise.resolve(STILL)));
+      const { grabVideoFrame, PLAYERLESS_READ_DEADLINE_MS, VIDEO_FRAME_DEADLINE_MS } = await load();
+
+      // A still that comes after iOS's deadline is still taken.
+      const slow = grabVideoFrame('https://cdn.test/slow.mp4');
+      await vi.advanceTimersByTimeAsync(VIDEO_FRAME_DEADLINE_MS + 5_000);
+      answerSlow(STILL);
+      await expect(slow).resolves.toBe(STILL);
+
+      const stuck = grabVideoFrame('https://cdn.test/stuck.mp4');
+      const next = grabVideoFrame('https://cdn.test/next.mp4');
+      await vi.advanceTimersByTimeAsync(PLAYERLESS_READ_DEADLINE_MS - 1);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(stuck).resolves.toBeNull();
+      await expect(next).resolves.toBe(STILL);
+      expect(generateThumbnailFromUrlAsync.mock.calls.map(([url]) => url)).toEqual([
+        'https://cdn.test/slow.mp4', 'https://cdn.test/stuck.mp4', 'https://cdn.test/next.mp4',
+      ]);
+    });
+
+    it('opens no clip beside a read called off that is still reading, until it ends', async () => {
+      let answerFirst: (still: unknown) => void = () => undefined;
+      generateThumbnailFromUrlAsync.mockImplementation((url) => (url.endsWith('first.mp4')
+        ? new Promise((resolve) => { answerFirst = resolve; })
+        : Promise.resolve(STILL)));
+      const { grabVideoFrame } = await load();
+      const page = new AbortController();
+
+      const first = grabVideoFrame('https://cdn.test/first.mp4', { signal: page.signal });
+      await settle();
+      page.abort();
+      await expect(first).resolves.toBeNull();
+
+      // The card stopped waiting, but the native read goes on: the next waits for it.
+      const next = grabVideoFrame('https://cdn.test/next.mp4');
+      await settle();
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
+
+      answerFirst(STILL);
+      await expect(next).resolves.toBe(STILL);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(2);
+    });
+
+    it('joins a read of the same link under way rather than opening the clip again', async () => {
+      let answer: (still: unknown) => void = () => undefined;
+      generateThumbnailFromUrlAsync.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+      const { grabVideoFrame } = await load();
+      const page = new AbortController();
+
+      // The page leaves mid-read and comes back: the same link is asked for again.
+      const left = grabVideoFrame('https://cdn.test/clip.mp4', { signal: page.signal });
+      await settle();
+      page.abort();
+      await expect(left).resolves.toBeNull();
+      const back = grabVideoFrame('https://cdn.test/clip.mp4');
+
+      answer(STILL);
+      await expect(back).resolves.toBe(STILL);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it('opens a clip afresh once a read of its link has gone a minute without ending', async () => {
+      vi.useFakeTimers();
+      generateThumbnailFromUrlAsync.mockImplementationOnce(() => new Promise(() => undefined));
+      const { grabVideoFrame, PLAYERLESS_READ_DEADLINE_MS } = await load();
+
+      // A connection that stalled: the native read never ends, and its card gives up after a minute.
+      const stalled = grabVideoFrame('https://cdn.test/clip.mp4');
+      await vi.advanceTimersByTimeAsync(PLAYERLESS_READ_DEADLINE_MS);
+      await expect(stalled).resolves.toBeNull();
+
+      // Its card is opened, which asks for the same link again: a new read, not a wait on one that will not end.
+      const again = grabVideoFrame('https://cdn.test/clip.mp4');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(2);
+      await expect(again).resolves.toBe(STILL);
+    });
+
+    it('makes no read for a clip another card read while this one waited its turn', async () => {
+      const { grabVideoFrame } = await load();
+      const other = { width: 1, height: 1 };
+      let readMeanwhile: unknown;
+
+      const first = grabVideoFrame('https://cdn.test/first/clip.mp4');
+      const second = grabVideoFrame('https://cdn.test/second/clip.mp4', { alreadyRead: () => readMeanwhile as never });
+      readMeanwhile = other;
+
+      await expect(first).resolves.toBe(STILL);
+      await expect(second).resolves.toBe(other);
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks nothing for a read called off before its turn, and gives none for one called off midway', async () => {
+      let answerLate: (still: unknown) => void = () => undefined;
+      generateThumbnailFromUrlAsync.mockImplementation(() => new Promise((resolve) => { answerLate = resolve; }));
+      const { grabVideoFrame } = await load();
+      const midway = new AbortController();
+      const waiting = new AbortController();
+
+      const firstStill = grabVideoFrame('https://cdn.test/first.mp4', { signal: midway.signal });
+      const secondStill = grabVideoFrame('https://cdn.test/second.mp4', { signal: waiting.signal });
+      await settle();
+      waiting.abort();
+      midway.abort();
+
+      await expect(firstStill).resolves.toBeNull();
+      await expect(secondStill).resolves.toBeNull();
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
+      answerLate(STILL);
+      await settle();
+      expect(generateThumbnailFromUrlAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives no still when the clip cannot be read, and the next read still runs', async () => {
+      generateThumbnailFromUrlAsync.mockImplementation((url) => (url.endsWith('broken.mp4')
+        ? Promise.reject(new Error('setDataSource failed: status = 0x80000000'))
+        : Promise.resolve(STILL)));
+      const { grabVideoFrame } = await load();
+
+      await expect(grabVideoFrame('https://cdn.test/broken.mp4')).resolves.toBeNull();
+      await expect(grabVideoFrame('https://cdn.test/next.mp4')).resolves.toBe(STILL);
+    });
   });
 
   it('waits until the player has its item, before which it answers with no still, and no longer', async () => {

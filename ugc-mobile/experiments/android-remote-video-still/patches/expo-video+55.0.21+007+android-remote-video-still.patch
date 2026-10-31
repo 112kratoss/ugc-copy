@@ -1,0 +1,74 @@
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
+index 0987c7c..0217c31 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/VideoModule.kt
+@@ -1,5 +1,6 @@
+ package expo.modules.video
+ 
++import android.media.MediaMetadataRetriever
+ import android.net.Uri
+ import androidx.media3.common.PlaybackParameters
+ import androidx.media3.common.Player.REPEAT_MODE_OFF
+@@ -27,10 +28,12 @@ import expo.modules.video.records.VideoSource
+ import expo.modules.video.records.VideoThumbnailOptions
+ import expo.modules.video.utils.runWithPiPMisconfigurationSoftHandling
+ import expo.modules.video.managers.VideoManager
++import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.async
+ import kotlinx.coroutines.awaitAll
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.runBlocking
++import kotlinx.coroutines.withContext
+ import kotlin.time.Duration
+ 
+ // https://developer.android.com/guide/topics/media/media3/getting-started/migration-guide#improvements_in_media3
+@@ -64,6 +67,24 @@ class VideoModule : Module() {
+       VideoManager.cache.clear()
+     }
+ 
++    // A still from the clip at `url`, read with no player, so nothing is prepared or buffered for it.
++    // MediaMetadataRetriever opens the link itself and blocks until the clip's header has arrived, so the
++    // open, the read and the release run on the IO dispatcher: an async function's body runs on the one
++    // thread every module's async calls share (`expo.modules.AsyncFunctionQueue`) until it first suspends,
++    // and a slow link held them all there.
++    AsyncFunction("generateThumbnailFromUrlAsync") Coroutine { url: String, time: Duration, options: VideoThumbnailOptions? ->
++      return@Coroutine withContext(Dispatchers.IO) {
++        val retriever = MediaMetadataRetriever()
++        try {
++          retriever.setDataSource(url, emptyMap())
++          retriever.generateThumbnailAtTime(time, options)
++        } finally {
++          // `release`, not `close`: the retriever is AutoCloseable only from API 29.
++          runCatching { retriever.release() }
++        }
++      }
++    }
++
+     View(SurfaceVideoView::class) {
+       VideoViewComponent<SurfaceVideoView>()
+     }
+@@ -342,14 +363,18 @@ class VideoModule : Module() {
+       }
+ 
+       AsyncFunction("generateThumbnailsAsync") Coroutine { ref: VideoPlayer, times: List<Duration>, options: VideoThumbnailOptions? ->
+-        return@Coroutine ref.toMetadataRetriever().safeUse {
+-          val bitmaps = times.map { time ->
+-            appContext.backgroundCoroutineScope.async {
+-              generateThumbnailAtTime(time, options)
++        // The retriever opens a remote clip itself and blocks until its header has arrived: opened and closed on the IO
++        // dispatcher, not on the one thread every module's async calls share.
++        return@Coroutine withContext(Dispatchers.IO) {
++          ref.toMetadataRetriever().safeUse {
++            val bitmaps = times.map { time ->
++              appContext.backgroundCoroutineScope.async {
++                generateThumbnailAtTime(time, options)
++              }
+             }
+-          }
+ 
+-          bitmaps.awaitAll()
++            bitmaps.awaitAll()
++          }
+         }
+       }
+ 

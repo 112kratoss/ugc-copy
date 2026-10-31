@@ -23,7 +23,7 @@ vi.mock('react-native', () => ({
   Platform: { OS: 'android' },
 }));
 vi.mock('lucide-react-native', () => ({
-  FileText: () => null,
+  FileText: (p: Props) => React.createElement('file-icon', p),
   ImageIcon: () => null,
   Play: (p: Props) => React.createElement('play-icon', p),
 }));
@@ -35,8 +35,20 @@ vi.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => {
   state.queryOptions(options);
   return { data: state.data, isError: state.isError, refetch: state.refetch };
 } }));
+// The still a clip's link gives, decided per case; by default none.
+const stills = vi.hoisted(() => ({
+  grab: vi.fn<(url: string, options: { signal: AbortSignal }) => Promise<unknown>>(),
+}));
+vi.mock('@/lib/video-frame', () => ({ grabVideoFrame: stills.grab, VIDEO_STILLS_READ: true }));
 
 import { GenerationOutputs, GenerationReferences } from '@/components/generation-references';
+import { clearVideoStills } from '@/lib/video-still-cache';
+
+beforeEach(() => {
+  stills.grab.mockReset();
+  stills.grab.mockResolvedValue(null);
+  clearVideoStills();
+});
 
 function generation(url: string | null): GenerationListItem {
   return { id: 'gen-1', model: 'nano-banana-2', category: 'image', status: 'succeeded',
@@ -114,6 +126,80 @@ describe('GenerationReferences', () => {
     expect(tree.root.findAllByType('media-frame' as never)).toHaveLength(0);
     await renderer.act(async () => { tree.root.findByType('pressable' as never).props.onPress(); });
     expect(tree.root.findByType('media-frame' as never).props.url).toBe('https://signed.test/image');
+  });
+
+  describe('a video input', () => {
+    function withClip(url: string | null, storagePath: string | null = 'inputs/owner-1/clip.mp4'): GenerationListItem {
+      return { ...generation(null), input_media: [{ id: 'clip-1', mediaType: 'video', role: 'motion_reference_video', storagePath, url }] };
+    }
+    const images = (tree: renderer.ReactTestRenderer) => tree.root.findAllByType('image' as never);
+
+    it('draws its still under the play mark, read once from its link', async () => {
+      const STILL = { width: 405, height: 720 };
+      stills.grab.mockResolvedValueOnce(STILL);
+      state.data = withClip('https://signed.test/clip.mp4');
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
+
+      expect(stills.grab).toHaveBeenCalledTimes(1);
+      expect(stills.grab).toHaveBeenCalledWith('https://signed.test/clip.mp4', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      expect(images(tree).map((node) => node.props.source)).toEqual([STILL]);
+      expect(tree.root.findAllByType('play-icon' as never)).toHaveLength(1);
+      expect(tree.root.findAllByType('file-icon' as never)).toHaveLength(0);
+    });
+
+    it('reads as a clip with no still, and is read again from the link that opening it renews', async () => {
+      state.data = withClip('https://signed.test/clip.mp4');
+      const fresh = withClip('https://signed.test/fresh/clip.mp4');
+      state.refetch.mockImplementation(async () => {
+        state.data = fresh;
+        return { data: fresh };
+      });
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
+      // A play mark, where it was a file's icon.
+      expect(tree.root.findAllByType('play-icon' as never)).toHaveLength(1);
+      expect(tree.root.findAllByType('file-icon' as never)).toHaveLength(0);
+      expect(images(tree)).toHaveLength(0);
+
+      const STILL = { width: 720, height: 405 };
+      stills.grab.mockResolvedValueOnce(STILL);
+      await renderer.act(async () => { tree.root.findByType('pressable' as never).props.onPress(); });
+      await renderer.act(async () => { tree.update(<GenerationReferences generationId="gen-1" />); });
+      expect(stills.grab).toHaveBeenCalledTimes(2);
+      expect(stills.grab).toHaveBeenLastCalledWith('https://signed.test/fresh/clip.mp4', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      expect(images(tree).map((node) => node.props.source)).toEqual([STILL]);
+    });
+
+    it('keeps a still by its file from one visit to the next, under a newly signed link', async () => {
+      const STILL = { width: 405, height: 720 };
+      stills.grab.mockResolvedValueOnce(STILL);
+      state.data = withClip('https://signed.test/clip.mp4');
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
+      renderer.act(() => tree.unmount());
+
+      // Another visit, with a newly signed link: drawn at once, and not read again.
+      state.data = withClip('https://signed.test/again/clip.mp4');
+      await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
+      expect(images(tree).map((node) => node.props.source)).toEqual([STILL]);
+      expect(stills.grab).toHaveBeenCalledTimes(1);
+    });
+    it('draws no still for an input the record no longer links, though one was read before', async () => {
+      const STILL = { width: 405, height: 720 };
+      stills.grab.mockResolvedValueOnce(STILL);
+      state.data = withClip('https://signed.test/clip.mp4');
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
+      expect(images(tree)).toHaveLength(1);
+      renderer.act(() => tree.unmount());
+
+      state.data = withClip(null);
+      await renderer.act(async () => { tree = renderer.create(<GenerationReferences generationId="gen-1" />); });
+      expect(images(tree)).toHaveLength(0);
+      expect(tree.root.findAllByType('play-icon' as never)).toHaveLength(1);
+      expect(tree.root.findAllByType('text' as never).map((node) => node.props.children)).toContain('Unavailable · Tap to retry');
+    });
   });
 
   it('hides cached owner data when signed out', () => {
@@ -198,6 +284,64 @@ describe('GenerationOutputs', () => {
 
     renderer.act(() => cards(tree)[1].props.onPress());
     expect(lightbox(tree).props.items[1]).toMatchObject({ url: 'https://signed.test/out-1.mp4', mediaKind: 'video' });
+    // Opened while its still was being read: one that gives none is read again, which belongs to no later case.
+    renderer.act(() => tree.unmount());
+  });
+
+  it('draws a video output that has no poster by a still read from its file, under the play mark', async () => {
+    stills.grab.mockImplementation(async (url) => ({ from: url }));
+    state.data = run('video');
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<GenerationOutputs generationId="gen-1" count={3} />); });
+
+    // The primary output has its poster; the other two are read, each once.
+    expect(stills.grab.mock.calls.map(([url]) => url)).toEqual(['https://signed.test/out-1.mp4', 'https://signed.test/out-2.mp4']);
+    expect(frames(tree).map((frame) => frame.props.url)).toEqual(['https://signed.test/out-0.poster.webp']);
+    expect(tree.root.findAllByType('image' as never).map((node) => node.props.source)).toEqual([
+      { from: 'https://signed.test/out-1.mp4' }, { from: 'https://signed.test/out-2.mp4' },
+    ]);
+    expect(tree.root.findAllByType('play-icon' as never)).toHaveLength(3);
+  });
+
+  it('reads no still for a run of pictures', async () => {
+    state.data = run('image');
+    await renderer.act(async () => { renderer.create(<GenerationOutputs generationId="gen-1" count={3} />); });
+    expect(stills.grab).not.toHaveBeenCalled();
+  });
+
+  it('reads no still for a run it does not draw, as one with a single file', async () => {
+    state.data = run('video', { output_urls: ['https://signed.test/out-1.mp4'], preview_url: null, media: null } as Partial<GenerationListItem>);
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<GenerationOutputs generationId="gen-1" count={3} />); });
+    expect(tree.toJSON()).toBeNull();
+    expect(stills.grab).not.toHaveBeenCalled();
+  });
+
+  it('reads a still for the main output when its poster fails to load', async () => {
+    stills.grab.mockImplementation(async (url) => ({ from: url }));
+    state.data = run('video');
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<GenerationOutputs generationId="gen-1" count={3} />); });
+    expect(stills.grab.mock.calls.map(([url]) => url)).toEqual(['https://signed.test/out-1.mp4', 'https://signed.test/out-2.mp4']);
+
+    await renderer.act(async () => { frames(tree)[0].props.onImageError(); });
+    expect(stills.grab.mock.calls.map(([url]) => url)).toContain('https://signed.test/out-0.mp4');
+    expect(tree.root.findAllByType('image' as never).map((node) => node.props.source)).toEqual([
+      { from: 'https://signed.test/out-0.mp4' }, { from: 'https://signed.test/out-1.mp4' }, { from: 'https://signed.test/out-2.mp4' },
+    ]);
+  });
+
+  it('reads a video output that gave no still again when it is opened', async () => {
+    state.data = run('video');
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(<GenerationOutputs generationId="gen-1" count={3} />); });
+    expect(stills.grab).toHaveBeenCalledTimes(2);
+
+    stills.grab.mockImplementation(async (url) => ({ from: url }));
+    await renderer.act(async () => { cards(tree)[1].props.onPress(); });
+    expect(stills.grab).toHaveBeenCalledTimes(3);
+    expect(stills.grab).toHaveBeenLastCalledWith('https://signed.test/out-1.mp4', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(tree.root.findAllByType('image' as never).map((node) => node.props.source)).toEqual([{ from: 'https://signed.test/out-1.mp4' }]);
   });
 
   it('gives the poster to the primary output where an older run listed it later', () => {

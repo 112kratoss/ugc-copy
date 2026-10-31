@@ -9,10 +9,10 @@ describe('owner generation reference presentation', () => {
       { id: 'frame', mediaType: 'image', role: 'start_frame', sortOrder: 1 },
       { id: 'motion', mediaType: 'video', role: 'motion_reference_video', sortOrder: 2 },
     ])).toEqual([
-      { id: 'image', mediaKind: 'image', label: '@alisa', caption: 'Reference image', url: 'https://signed.test/image' },
-      { id: 'frame', mediaKind: 'image', label: 'Start frame', caption: 'Start frame', url: null },
-      { id: 'motion', mediaKind: 'video', label: 'Motion reference video', caption: 'Motion reference video', url: null },
-      { id: 'audio', mediaKind: 'audio', label: 'Reference audio', caption: 'Reference audio', url: null },
+      { id: 'image', mediaKind: 'image', label: '@alisa', caption: 'Reference image', url: 'https://signed.test/image', storagePath: null },
+      { id: 'frame', mediaKind: 'image', label: 'Start frame', caption: 'Start frame', url: null, storagePath: null },
+      { id: 'motion', mediaKind: 'video', label: 'Motion reference video', caption: 'Motion reference video', url: null, storagePath: null },
+      { id: 'audio', mediaKind: 'audio', label: 'Reference audio', caption: 'Reference audio', url: null, storagePath: null },
     ]);
   });
 
@@ -24,14 +24,14 @@ describe('owner generation reference presentation', () => {
       { id: 'subject-1', mediaType: 'image', role: 'subject_image', metadata: { handle: '@hero' }, sortOrder: 0 },
       { id: 'subject-2', mediaType: 'image', role: 'subject_image', sortOrder: 1 },
     ])).toEqual([
-      { id: 'subject-1', mediaKind: 'image', label: '@hero', caption: 'Subject image', url: null },
-      { id: 'subject-2', mediaKind: 'image', label: 'Subject image', caption: 'Subject image', url: null },
+      { id: 'subject-1', mediaKind: 'image', label: '@hero', caption: 'Subject image', url: null, storagePath: null },
+      { id: 'subject-2', mediaKind: 'image', label: 'Subject image', caption: 'Subject image', url: null, storagePath: null },
     ]);
   });
 
   it('keeps unavailable references visible and supports legacy kind values', () => {
     expect(generationReferences([{ storagePath: 'uploads/owner/file', kind: 'video', label: 'My reference', url: null }]))
-      .toEqual([{ id: 'uploads/owner/file', mediaKind: 'video', label: 'My reference', caption: 'Reference video', url: null }]);
+      .toEqual([{ id: 'uploads/owner/file', mediaKind: 'video', label: 'My reference', caption: 'Reference video', url: null, storagePath: 'uploads/owner/file' }]);
     expect(generationReferences()).toEqual([]);
   });
 });

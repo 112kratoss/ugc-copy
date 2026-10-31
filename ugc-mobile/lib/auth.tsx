@@ -93,6 +93,7 @@ import {
 } from './supabase-auth-recovery';
 import { probeSupabaseSession } from './supabase-session-probe';
 import type { ProfileResponse } from './types';
+import { clearVideoStills } from './video-still-cache';
 
 export type AuthMode = 'login' | 'signup';
 export type {
@@ -1494,6 +1495,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearPersistedHomeFeed(),
       clearSearchHistory(),
       clearPersistedAccountState(),
+      // So are the stills read of clips this person could see.
+      clearVideoStills(),
       // A sign-out unregistered from push on the server. No other way out can
       // reach the server, so the registration on the phone goes instead. Guests
       // never register.
@@ -1916,6 +1919,7 @@ async function recoverInvalidAuthSession(error: unknown) {
   await clearPersistedHomeFeed();
   await clearSearchHistory();
   await clearPersistedAccountState();
+  clearVideoStills();
   return true;
 }
 
