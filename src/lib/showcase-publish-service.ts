@@ -26,7 +26,12 @@ import {
   isMissingPostResourceBundlesSchemaError,
 } from '@/lib/posts-server';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
-import { normalizeSourceToolInputWithCatalog } from '@/lib/source-tools';
+import {
+  normalizeSourceToolInputWithCatalog,
+  normalizeSourceToolSelectionsWithCatalog,
+} from '@/lib/source-tools';
+import { insertPostSourceTools } from '@/lib/post-source-tools-server';
+import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
 import { MAGICBOOKLET_SOURCE_KIND } from '@/lib/showcase';
 import {
   fetchWithProviderTimeout,
@@ -1035,6 +1040,33 @@ export async function publishGenerationToShowcaseForRoute({
       // A thrown client error must not escape either: everything the caller
       // asked for is already committed.
       logBackendError('failed_to_record_generation_post_cover_media', { error: coverMediaError });
+    }
+  }
+
+  if (postId) {
+    // The post's Made with row: the app, and the creation's model by the name
+    // its post shows (a model with none is left out rather than printed as its
+    // id). Both composers show this row locked and send it, but it is written
+    // from the creation, not read from the request: the media is the
+    // creation's output, which is why an edit drops a creation post's source
+    // fields too. Every publish writes it, a visibility change included, so a
+    // post published before this was written gets its row. Logged like the
+    // cover row on failure: the post is committed and keeps its source.
+    const modelName = getPostModelDisplayName(generation.model);
+    try {
+      await insertPostSourceTools({
+        supabase: adminSupabase,
+        postId,
+        ownerUserId: userId,
+        mediaKind: postPayload.category,
+        sourceTools: normalizeSourceToolSelectionsWithCatalog(sourceToolCatalog, [{
+          toolLabel: postPayload.source_tool,
+          toolSlug: postPayload.source_tool_slug,
+          ...(modelName ? { modelLabel: modelName, modelSlug: generation.model } : {}),
+        }]),
+      });
+    } catch (sourceToolsError) {
+      logBackendError('failed_to_save_generation_post_source_tools', { error: sourceToolsError });
     }
   }
 

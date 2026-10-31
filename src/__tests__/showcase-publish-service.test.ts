@@ -16,8 +16,10 @@ vi.mock('@/lib/backend-logger', () => ({
 import {
   getCanonicalGenerationShowcaseAssetPath,
   publishGenerationToShowcaseForRoute,
+  type ShowcasePublishRequestBody,
   type ShowcasePublishServiceDependencies,
 } from '@/lib/showcase-publish-service';
+import { FALLBACK_SOURCE_TOOLS } from '@/lib/source-tools';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import type { PostResourceBundleInput, PostResourceItem } from '@/lib/post-resource-bundles';
@@ -107,8 +109,11 @@ function createAdminClientMock(
     /** The creation's existing post and its stored recipe row. */
     storedPost?: Record<string, unknown> | null;
     storedBundle?: Record<string, unknown> | null;
+    /** What every RPC answers with, for the Made with save. */
+    rpcError?: { message: string } | null;
   } = {},
 ) {
+  const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   const removeMock = vi.fn(async () => ({ data: null, error: null }));
   const downloadMock = vi.fn(async () => ({
     data: new Blob(['media-bytes'], { type: 'image/jpeg' }),
@@ -195,11 +200,16 @@ function createAdminClientMock(
           upload: uploadMock,
         })),
       },
+      rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
+        rpcCalls.push({ fn, args });
+        return { data: null, error: options.rpcError ?? null };
+      }),
     } as unknown as SupabaseClient,
     deletedMediaRowIds,
     downloadMock,
     eqs,
     removeMock,
+    rpcCalls,
     selects,
     uploadMock,
   };
@@ -2232,5 +2242,182 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(dependencies.loadGenerationInputOrigins).not.toHaveBeenCalled();
+  });
+});
+
+// Both composers show a creation's Made with locked to the app and the
+// creation's model, and send that row; the publish route stored none, so both
+// editors opened the post on the app alone, its model gone. A creation's media
+// is its output, so the row is the creation's own, never the request's: the
+// edit path drops the source fields of a post made from a creation for the same
+// reason (post-update-service.ts, GENERATION_DERIVED_FIELDS).
+describe('the Made with row of a published creation', () => {
+  const generation = {
+    id: 'gen-made-with',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'nano-banana-pro',
+    category: 'image',
+    creation_mode: null,
+    output_url: 'generated_images/user-1/harbour.jpg',
+    showcase_asset_path: null,
+    title: 'Harbour at dawn',
+    description: null,
+    prompt: 'A harbour at dawn, fog over the water',
+  };
+  const madeWithApp = { toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', createTool: false, createModel: false };
+
+  function publishDependencies(visibility: 'public' | 'private') {
+    return {
+      ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+        outputUrl: mediaGeneration.outputUrl,
+        createdLocation: null,
+      })),
+      listSourceToolsCatalog: vi.fn(async () => FALLBACK_SOURCE_TOOLS),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+        postId: 'post-made-with',
+        visibility,
+        bundleId: null,
+        bundleStatus: null,
+      })),
+      ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+      requestPostEmbedding: vi.fn(async () => undefined),
+    } satisfies Partial<ShowcasePublishServiceDependencies>;
+  }
+
+  async function publish(
+    body: Record<string, unknown>,
+    { creation = generation, rpcError = null }: { creation?: Record<string, unknown>; rpcError?: { message: string } | null } = {},
+  ) {
+    const visibility = body.visibility === 'public' ? 'public' : 'private';
+    const adminClient = createAdminClientMock(creation, null, { rpcError });
+    const dependencies = publishDependencies(visibility);
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-made-with', ...body } as ShowcasePublishRequestBody,
+      userId: 'user-1',
+      dependencies,
+    });
+    return { result, rpcCalls: adminClient.rpcCalls, dependencies };
+  }
+
+  function savedRows(rpcCalls: Array<{ fn: string; args: Record<string, unknown> }>) {
+    return rpcCalls.filter((call) => call.fn === 'save_post_source_tools_with_catalog');
+  }
+
+  it('stores the row the web composer sends: the app, then the model as the post names it', async () => {
+    const { result, rpcCalls } = await publish({
+      visibility: 'public',
+      isNsfw: false,
+      title: 'Harbour at dawn',
+      category: 'image',
+      sourceTools: [{ toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: 'Nano Banana Pro', modelSlug: 'nano-banana-pro' }],
+      resourceBundle: { accessMode: 'none' },
+    });
+
+    expect(result).toMatchObject({ ok: true, body: { postId: 'post-made-with', visibility: 'public' } });
+    expect(savedRows(rpcCalls)).toEqual([{
+      fn: 'save_post_source_tools_with_catalog',
+      args: {
+        p_post_id: 'post-made-with',
+        p_owner_user_id: 'user-1',
+        p_media_kind: 'image',
+        p_source_tools: [{ ...madeWithApp, modelLabel: 'Nano Banana Pro', modelSlug: 'nano-banana-pro' }],
+      },
+    }]);
+  });
+
+  // The app sends the creation's model id as the row's model, and a dotted id
+  // never meets the catalog's slug (slugifying "veo-3.1" gives "veo-3-1"), so
+  // storing what was sent would print the id in both editors.
+  it('stores the app composer’s row under the model’s name, not its id', async () => {
+    const { rpcCalls } = await publish({
+      visibility: 'private',
+      title: 'Harbour at dawn',
+      category: 'video',
+      sourceTool: 'Magicbooklet',
+      sourceToolSlug: 'magicbooklet',
+      sourceTools: [{ toolLabel: 'Magicbooklet', toolSlug: 'magicbooklet', modelLabel: 'veo-3.1', modelSlug: 'veo-3-1' }],
+      resourceBundle: { accessMode: 'none' },
+    }, {
+      creation: { ...generation, model: 'veo-3.1', category: 'video', output_url: 'generated_videos/user-1/harbour.mp4' },
+    });
+
+    expect(savedRows(rpcCalls)).toEqual([expect.objectContaining({
+      args: expect.objectContaining({
+        p_media_kind: 'video',
+        p_source_tools: [{ ...madeWithApp, modelLabel: 'Veo 3.1', modelSlug: 'veo-3.1' }],
+      }),
+    })]);
+  });
+
+  it('takes no tool or model from the request, and keeps the app as the post’s source', async () => {
+    const { rpcCalls, dependencies } = await publish({
+      visibility: 'private',
+      title: 'Harbour at dawn',
+      sourceTool: 'Adobe Photoshop',
+      sourceToolSlug: 'adobe-photoshop',
+      sourceTools: [
+        { toolLabel: 'Adobe Photoshop', toolSlug: 'adobe-photoshop' },
+        { toolLabel: 'magicbooklet', toolSlug: 'magicbooklet', modelLabel: 'Kling 3.0', modelSlug: 'kling-3.0' },
+      ],
+      resourceBundle: { accessMode: 'none' },
+    });
+
+    expect(savedRows(rpcCalls)).toEqual([expect.objectContaining({
+      args: expect.objectContaining({
+        p_source_tools: [{ ...madeWithApp, modelLabel: 'Nano Banana Pro', modelSlug: 'nano-banana-pro' }],
+      }),
+    })]);
+    expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ source_tool: 'magicbooklet', source_tool_slug: 'magicbooklet' }),
+    }));
+  });
+
+  // Studio's visibility switch sends the creation and the visibility alone. The
+  // row is the creation's, so writing it again changes nothing on a post that
+  // has it, and gives one published before this fix its row.
+  it('stores the row on a visibility change too', async () => {
+    const { result, rpcCalls } = await publish({ visibility: 'private' });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(savedRows(rpcCalls)).toEqual([expect.objectContaining({
+      args: expect.objectContaining({
+        p_post_id: 'post-made-with',
+        p_source_tools: [{ ...madeWithApp, modelLabel: 'Nano Banana Pro', modelSlug: 'nano-banana-pro' }],
+      }),
+    })]);
+  });
+
+  // As the post page and the feed card do (getPostModelDisplayName).
+  it('leaves out a model the app has no name for rather than print its id', async () => {
+    const { rpcCalls } = await publish(
+      { visibility: 'private', title: 'Harbour at dawn' },
+      { creation: { ...generation, model: 'retired-model-9' } },
+    );
+
+    expect(savedRows(rpcCalls)).toEqual([expect.objectContaining({
+      args: expect.objectContaining({
+        p_source_tools: [{ ...madeWithApp, modelLabel: null, modelSlug: null }],
+      }),
+    })]);
+  });
+
+  // The post is committed by then, as with its cover media row: reporting the
+  // publish as failed would tell the creator nothing was posted. The post keeps
+  // its source, the app, and the next publish of the creation writes the row.
+  it('logs a failed save and still answers the publish as done', async () => {
+    const { result, rpcCalls } = await publish(
+      { visibility: 'public', title: 'Harbour at dawn', resourceBundle: { accessMode: 'none' } },
+      { rpcError: { message: 'connection reset' } },
+    );
+
+    expect(savedRows(rpcCalls)).toHaveLength(1);
+    expect(result).toMatchObject({ ok: true, body: { postId: 'post-made-with', visibility: 'public' } });
+    expect(logBackendErrorMock).toHaveBeenCalledWith(
+      'failed_to_save_generation_post_source_tools',
+      { error: expect.anything() },
+    );
   });
 });
