@@ -16,6 +16,7 @@ import {
   buildPromptEnhancementArtifacts,
   callPromptEnhancer,
   getPlannerResponseSchema,
+  PROMPT_ENHANCER_MAX_DEADLINE_MS,
   type EnhancerContext,
   type Medium,
 } from '../../src/lib/prompt-enhancer';
@@ -197,15 +198,18 @@ async function main() {
 
     const responseSchema = getPlannerResponseSchema(evalCase.selectedModel);
     let result;
+    // No caller is waiting on an eval run, so Kie gets the whole budget.
     try {
       result = await callPromptEnhancer(systemPrompt, evalCase.prompt, {
         ...(responseSchema ? { responseSchema } : {}),
+        deadlineMs: PROMPT_ENHANCER_MAX_DEADLINE_MS,
       });
     } catch {
       // One retry — Kie intermittently 524s; a second attempt usually lands.
       try {
         result = await callPromptEnhancer(systemPrompt, evalCase.prompt, {
           ...(responseSchema ? { responseSchema } : {}),
+          deadlineMs: PROMPT_ENHANCER_MAX_DEADLINE_MS,
         });
       } catch (secondError) {
         warnings += 1;

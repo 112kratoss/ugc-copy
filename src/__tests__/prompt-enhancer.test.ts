@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   applyPromptEnhancementSafeguards,
   applyPromptEnhancementSafeguardsWithMetadata,
@@ -8,7 +9,13 @@ import {
   buildWorkflowPromptFieldGuidance,
   callPromptEnhancer,
   getPromptEnhancementCost,
+  PROMPT_ENHANCER_CALLER_MARGIN_MS,
+  PROMPT_ENHANCER_DEFAULT_DEADLINE_MS,
+  PROMPT_ENHANCER_HEDGE_AFTER_MS,
+  PROMPT_ENHANCER_MAX_DEADLINE_MS,
+  PROMPT_ENHANCER_WAIT_HEADER,
   resolvePromptEnhancementAgent,
+  resolvePromptEnhancerDeadlineMs,
   resolvePromptScenario,
 } from '@/lib/prompt-enhancer';
 import { inspectPromptQuality } from '@/lib/prompt-quality';
@@ -28,33 +35,238 @@ describe('prompt enhancement price', () => {
   });
 });
 
-describe('prompt enhancer strategy', () => {
-  it('bounds KIE prompt enhancer requests with a timeout signal', async () => {
+describe('how long the enhancer waits for Kie', () => {
+  const answer = (content: string) => new Response(
+    JSON.stringify({ choices: [{ message: { content } }] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  );
+
+  /** An ask Kie never answers: it ends only when its signal is aborted. */
+  const hangUntilAborted = (init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+  });
+
+  let deadlines: AbortController[];
+  let timeoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // The clock the deadline is read from and the hedge timer move only when a test moves them.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     vi.stubEnv('KIE_AI_API_KEY', 'test-key');
-    const timeoutSignal = AbortSignal.abort();
-    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // Each send's deadline is a signal the test ends by hand.
+    deadlines = [];
+    timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => {
+      const deadline = new AbortController();
+      deadlines.push(deadline);
+      return deadline.signal;
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('bounds a send by its caller’s deadline and lets it go when the deadline passes', async () => {
     let requestInit: RequestInit | undefined;
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       requestInit = init;
-      return {
-        ok: true,
-        json: async () => ({
-          choices: [{
-            message: {
-              content: 'Enhanced product prompt',
-            },
-          }],
-        }),
-      } as Response;
+      return answer('Enhanced product prompt');
     }));
 
-    await expect(callPromptEnhancer('system prompt', 'user prompt')).resolves.toEqual({
+    await expect(callPromptEnhancer('system prompt', 'user prompt', { deadlineMs: 25_000 })).resolves.toEqual({
       enhancedPrompt: 'Enhanced product prompt',
     });
-    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
-    expect(requestInit?.signal).toBe(timeoutSignal);
+    expect(timeoutSpy).toHaveBeenCalledWith(25_000);
+    expect(requestInit?.signal?.aborted).toBe(false);
+    deadlines[0].abort();
+    expect(requestInit?.signal?.aborted).toBe(true);
   });
 
+  it('asks Kie again when it has not answered in 12 s, keeps the first answer and lets the stuck ask go', async () => {
+    const signals: AbortSignal[] = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init!.signal!);
+      return signals.length === 1 ? hangUntilAborted(init) : answer('Answered on the second ask');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const enhanced = callPromptEnhancer('system prompt', 'user prompt', { deadlineMs: 45_000 });
+    await vi.advanceTimersByTimeAsync(PROMPT_ENHANCER_HEDGE_AFTER_MS - 1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(enhanced).resolves.toEqual({ enhancedPrompt: 'Answered on the second ask' });
+    expect(PROMPT_ENHANCER_HEDGE_AFTER_MS).toBe(12_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // The second ask gets what is left of the same deadline, not a new one.
+    expect(timeoutSpy.mock.calls).toEqual([[45_000], [33_000]]);
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // 501 is Kie's own "Generation Failed"; 524 is Cloudflare's timeout in front of Kie.
+  it.each([500, 501, 503, 524])('asks again at once when Kie answers %i', async (status) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('internal error, please try again later', { status }))
+      .mockResolvedValueOnce(answer('Answered on the second ask'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(callPromptEnhancer('system prompt', 'user prompt', { deadlineMs: 45_000 })).resolves.toEqual({
+      enhancedPrompt: 'Answered on the second ask',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks again at once when Kie wraps a server error in a 200', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 500, msg: 'internal error' }), { status: 200 }))
+      .mockResolvedValueOnce(answer('Answered on the second ask'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(callPromptEnhancer('system prompt', 'user prompt', { deadlineMs: 45_000 })).resolves.toEqual({
+      enhancedPrompt: 'Answered on the second ask',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { what: 'an empty balance', response: () => new Response('insufficient balance', { status: 402 }), error: 'Kie API returned 402' },
+    { what: 'a rate limit, which a second ask would meet again', response: () => new Response('rate limited', { status: 429 }), error: 'Kie API returned 429' },
+    { what: 'a field it rejects', response: () => new Response('bad field', { status: 422 }), error: 'Kie API returned 422' },
+    {
+      what: 'an answer with no content and no code',
+      response: () => new Response(JSON.stringify({ choices: [{ message: { content: null } }] }), { status: 200 }),
+      error: 'Invalid response from Kie API: no content in choices',
+    },
+  ])('does not ask again after $what, however long is left', async ({ response, error }) => {
+    const fetchMock = vi.fn(async () => response());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const failure = expect(callPromptEnhancer('system prompt', 'user prompt', { deadlineMs: 45_000 }))
+      .rejects.toThrow(error);
+    await vi.advanceTimersByTimeAsync(45_000);
+    await failure;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks at most twice, and reports what the first ask met', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('first failure', { status: 503 }))
+      .mockResolvedValueOnce(new Response('second failure', { status: 502 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(callPromptEnhancer('system prompt', 'user prompt', { deadlineMs: 45_000 }))
+      .rejects.toThrow('Kie API returned 503: first failure');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends nothing more once too little of the deadline is left to be answered', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('internal error', { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(callPromptEnhancer('system prompt', 'user prompt', { deadlineMs: 1_500 }))
+      .rejects.toThrow('Kie API returned 500: internal error');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up at the deadline when neither ask is answered, naming the whole wait', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => hangUntilAborted(init));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const failure = expect(callPromptEnhancer('system prompt', 'user prompt', { deadlineMs: 25_000 }))
+      .rejects.toMatchObject({
+        name: 'ExternalServiceTimeoutError',
+        message: 'KIE prompt enhancer request timed out after 25000ms.',
+      });
+    await vi.advanceTimersByTimeAsync(PROMPT_ENHANCER_HEDGE_AFTER_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(25_000 - PROMPT_ENHANCER_HEDGE_AFTER_MS);
+    for (const deadline of deadlines) {
+      deadline.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+    }
+
+    await failure;
+    expect(timeoutSpy.mock.calls).toEqual([[25_000], [13_000]]);
+  });
+
+  it('falls back to an unconstrained completion when Kie rejects response_format, within the same deadline', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return bodies.length === 1
+        ? new Response('response_format is not supported', { status: 400 })
+        : answer('Answered without the schema');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const enhanced = callPromptEnhancer('system prompt', 'user prompt', {
+      deadlineMs: 45_000,
+      responseSchema: { type: 'object' },
+    });
+
+    await expect(enhanced).resolves.toEqual({ enhancedPrompt: 'Answered without the schema' });
+    expect(bodies[0]).toHaveProperty('response_format');
+    expect(bodies[1]).not.toHaveProperty('response_format');
+    expect(timeoutSpy.mock.calls).toEqual([[45_000], [45_000]]);
+  });
+
+  it('reports the rejection itself when too little is left to fall back', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('response_format is not supported', { status: 400 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(callPromptEnhancer('system prompt', 'user prompt', {
+      deadlineMs: 1_500,
+      responseSchema: { type: 'object' },
+    })).rejects.toThrow('Kie API returned 400: response_format is not supported');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the deadline each caller gets', () => {
+  const headers = (entries: Record<string, string>) => new Headers(entries);
+
+  it('holds a caller that states no wait to the 30 s every app gives a request', () => {
+    expect(PROMPT_ENHANCER_DEFAULT_DEADLINE_MS).toBe(30_000 - PROMPT_ENHANCER_CALLER_MARGIN_MS);
+    expect(resolvePromptEnhancerDeadlineMs(headers({}))).toBe(PROMPT_ENHANCER_DEFAULT_DEADLINE_MS);
+    expect(resolvePromptEnhancerDeadlineMs(headers({ 'x-magicbooklet-client': 'mobile' })))
+      .toBe(PROMPT_ENHANCER_DEFAULT_DEADLINE_MS);
+  });
+
+  it('never waits longer than the caller states, nor longer than the budget', () => {
+    expect(resolvePromptEnhancerDeadlineMs(headers({ [PROMPT_ENHANCER_WAIT_HEADER]: '20000' })))
+      .toBe(20_000 - PROMPT_ENHANCER_CALLER_MARGIN_MS);
+    expect(resolvePromptEnhancerDeadlineMs(headers({ [PROMPT_ENHANCER_WAIT_HEADER]: '600000' })))
+      .toBe(PROMPT_ENHANCER_MAX_DEADLINE_MS);
+  });
+
+  // An iPhone may stop waiting at 60 s whatever the app's timer says.
+  it('keeps the whole budget well under the 60 s an iPhone may wait', () => {
+    expect(PROMPT_ENHANCER_MAX_DEADLINE_MS).toBe(45_000);
+  });
+
+  it('reads a wait that is not a whole positive number of ms as no wait at all', () => {
+    // AbortSignal.timeout throws on a fractional delay.
+    for (const stated of ['', 'soon', '-5', '0', '20000.5', 'Infinity', '1e400']) {
+      expect(resolvePromptEnhancerDeadlineMs(headers({ [PROMPT_ENHANCER_WAIT_HEADER]: stated })))
+        .toBe(PROMPT_ENHANCER_DEFAULT_DEADLINE_MS);
+    }
+  });
+
+  it('gives the app, which states the wait the contract pins, the whole budget with time to spare', () => {
+    const { clientWait } = mobileApiContract.endpoints.enhancePrompt;
+    expect(clientWait.header).toBe(PROMPT_ENHANCER_WAIT_HEADER);
+    expect(resolvePromptEnhancerDeadlineMs(headers({
+      'x-magicbooklet-client': 'mobile',
+      [clientWait.header]: String(clientWait.timeoutMs),
+    }))).toBe(PROMPT_ENHANCER_MAX_DEADLINE_MS);
+    expect(PROMPT_ENHANCER_MAX_DEADLINE_MS + PROMPT_ENHANCER_CALLER_MARGIN_MS).toBeLessThanOrEqual(clientWait.timeoutMs);
+  });
+});
+
+describe('prompt enhancer strategy', () => {
   it.each(PROMPT_ENHANCER_FIXTURES)('resolves scenario for $name', (fixture) => {
     expect(resolvePromptScenario(fixture.medium, fixture.selectedModel, fixture.context)).toBe(
       fixture.expectedScenario
