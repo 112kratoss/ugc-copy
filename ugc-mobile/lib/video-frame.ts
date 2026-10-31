@@ -1,16 +1,43 @@
+import { requireOptionalNativeModule } from 'expo';
 import { createVideoPlayer, type BufferOptions, type VideoPlayer, type VideoThumbnail } from 'expo-video';
 import { Platform } from 'react-native';
 
+type FrameSize = { maxWidth: number; maxHeight: number };
+
 /**
- * Whether this platform reads stills at all. Android does not, yet: expo-video
- * 55 opens the clip's link for a still with a MediaMetadataRetriever on the one
- * thread every Expo module's async calls share (`expo.modules.AsyncFunctionQueue`),
- * so a slow or stalled link would hold up session reads, haptics, the clipboard
- * and the viewer's own clip for as long as the open took, and a deadline here
- * cannot free that thread. Moving the open off it is a native change, so it
- * waits for a store build. iOS reads the still in Swift's own concurrency.
+ * expo-video's read of a still with no player, which only an Android binary
+ * built with `experiments/android-remote-video-still/` carries (its README).
+ * Stock expo-video 55 opens the clip's link for a still with a
+ * MediaMetadataRetriever on the one thread every Expo module's async calls
+ * share (`expo.modules.AsyncFunctionQueue`), so a slow or stalled link held
+ * up session reads, haptics, the clipboard and the viewer's own clip for as
+ * long as the open took, and a deadline here cannot free that thread. This
+ * one opens it on the IO dispatcher.
  */
-export const VIDEO_STILLS_READ = Platform.OS === 'ios';
+type PlayerlessStillReader = {
+  generateThumbnailFromUrlAsync(url: string, timeSeconds: number, options: FrameSize): Promise<VideoThumbnail>;
+};
+
+/**
+ * Looked for once, on Android, by the function rather than by a build number:
+ * a dev client built with the patch has it as a store build will, and an
+ * update reaching a binary without it finds nothing.
+ */
+function findPlayerlessStillReader(): PlayerlessStillReader | null {
+  if (Platform.OS !== 'android') return null;
+  const expoVideo = requireOptionalNativeModule<Partial<PlayerlessStillReader>>('ExpoVideo');
+  return typeof expoVideo?.generateThumbnailFromUrlAsync === 'function' ? (expoVideo as PlayerlessStillReader) : null;
+}
+
+const playerlessReader = findPlayerlessStillReader();
+
+/**
+ * Whether this binary reads stills at all. iOS reads them from a player that
+ * is never shown, in Swift's own concurrency; Android only where the binary
+ * reads them without one, off the shared thread (above). Elsewhere a clip
+ * keeps its plain play mark.
+ */
+export const VIDEO_STILLS_READ = Platform.OS === 'ios' || playerlessReader !== null;
 
 /**
  * Where in the clip the still is taken. The web's reference gallery asks the
@@ -25,6 +52,8 @@ export const VIDEO_FRAME_TIME_SECONDS = 0.1;
  * about 1.3 MB of bitmap a still.
  */
 export const VIDEO_FRAME_MAX_SIDE = 720;
+
+const FRAME_SIZE: FrameSize = { maxWidth: VIDEO_FRAME_MAX_SIDE, maxHeight: VIDEO_FRAME_MAX_SIDE };
 
 /** How long one still may take before the next read starts anyway. */
 export const VIDEO_FRAME_DEADLINE_MS = 15_000;
@@ -43,24 +72,39 @@ let queue: Promise<void> = Promise.resolve();
  * none, failed to load, took longer than the deadline, or the read was called
  * off.
  *
- * expo-video reads it with no view on screen, with AVAssetImageGenerator on
- * the player's item; it is in every binary, so this needs no new native
- * module. Reads run one at a time across the app, since each holds a player
- * beside whatever the reel is playing; a read called off before its turn
- * makes none.
+ * On iOS expo-video reads it with no view on screen, with
+ * AVAssetImageGenerator on the item of a player that is never played; on
+ * Android with a MediaMetadataRetriever and no player at all. Reads run one at
+ * a time across the app, since each opens a clip beside whatever the reel is
+ * playing; a read called off before its turn makes none.
  */
 export function grabVideoFrame(url: string, { signal }: { signal?: AbortSignal } = {}): Promise<VideoThumbnail | null> {
   if (!VIDEO_STILLS_READ) return Promise.resolve(null);
   const turn = queue
-    .then(() => (signal?.aborted ? null : readWithDeadline(url, signal)))
+    .then(() => (signal?.aborted ? null : readStill(url, signal)))
     .catch(() => null);
   // The queue keeps the turn, not the still it read.
   queue = turn.then(() => undefined);
   return turn;
 }
 
-async function readWithDeadline(url: string, outer: AbortSignal | undefined) {
+function readStill(url: string, outer: AbortSignal | undefined) {
+  if (!playerlessReader) return readFromPlayer(url, outer);
+  // Nothing native to let go: a read called off finishes on its own thread, and its still is dropped.
+  return untilCalledOff(outer, () => playerlessReader.generateThumbnailFromUrlAsync(url, VIDEO_FRAME_TIME_SECONDS, FRAME_SIZE));
+}
+
+async function readFromPlayer(url: string, outer: AbortSignal | undefined) {
   const player = createVideoPlayer({ uri: url });
+  try {
+    return await untilCalledOff(outer, (signal) => readFrame(player, signal));
+  } finally {
+    player.release();
+  }
+}
+
+/** The read's still, or null once it is called off or its deadline passes, whichever comes first. */
+async function untilCalledOff(outer: AbortSignal | undefined, read: (signal: AbortSignal) => Promise<VideoThumbnail | null>) {
   const controller = new AbortController();
   const callOff = () => controller.abort();
   outer?.addEventListener('abort', callOff);
@@ -68,11 +112,10 @@ async function readWithDeadline(url: string, outer: AbortSignal | undefined) {
   try {
     // A still request already sent cannot be taken back, so the queue moves
     // on when the read is called off rather than when it returns.
-    return await Promise.race([readFrame(player, controller.signal), calledOff(controller.signal)]);
+    return await Promise.race([read(controller.signal), calledOff(controller.signal)]);
   } finally {
     clearTimeout(deadline);
     outer?.removeEventListener('abort', callOff);
-    player.release();
   }
 }
 
@@ -84,10 +127,7 @@ async function readFrame(player: VideoPlayer, signal: AbortSignal) {
   // iOS gives the player its item only once the asset has loaded, and until
   // then answers a request for stills with none at all.
   await itemAttached(player, signal);
-  const [frame] = await player.generateThumbnailsAsync(VIDEO_FRAME_TIME_SECONDS, {
-    maxWidth: VIDEO_FRAME_MAX_SIDE,
-    maxHeight: VIDEO_FRAME_MAX_SIDE,
-  });
+  const [frame] = await player.generateThumbnailsAsync(VIDEO_FRAME_TIME_SECONDS, FRAME_SIZE);
   return frame ?? null;
 }
 

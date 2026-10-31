@@ -62,9 +62,12 @@ beforeEach(() => {
   stills.read = true;
   stills.grab.mockReset();
   stills.grab.mockResolvedValue(null);
+  // Stills read in one case are kept for the next mount, by storage path, and every case uses the same few paths.
+  resetVideoStillsForTests();
 });
 
 import { MatureMediaCovered } from '@/components/mature-cover';
+import { resetVideoStillsForTests } from '@/lib/use-video-stills';
 import { PostResourceReferences } from '../components/post-resource-references';
 import { createPostResourceFileUrlResolver } from '../lib/api-client';
 
@@ -585,8 +588,12 @@ describe('PostResourceReferences', () => {
       expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([again]);
       expect(signals).toHaveLength(2);
 
+      // Nothing is left under way: the first read was called off with the row
+      // hidden, and the second has landed. A read under way as the row goes is
+      // the next case.
       renderer.act(() => tree?.unmount());
-      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      expect(signals[0].aborted).toBe(true);
+      expect(signals).toHaveLength(2);
     });
 
     it('lets a read under way go when the row unmounts', async () => {

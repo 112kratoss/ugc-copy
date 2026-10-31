@@ -15,6 +15,6 @@ export function generationReferences(media: GenerationInputMediaItem[] = []) {
     const handle = typeof item.metadata?.handle === 'string' ? item.metadata.handle.trim() : '';
     const label = handle || item.label?.trim() || roleLabel;
     return { id: item.id ?? item.storagePath ?? `reference-${index}`, url: item.url ?? null,
-      mediaKind, label, caption: roleLabel };
+      storagePath: item.storagePath ?? null, mediaKind, label, caption: roleLabel };
   });
 }
