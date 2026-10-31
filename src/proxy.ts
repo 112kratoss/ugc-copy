@@ -94,6 +94,7 @@ const mobileCorsAllowedHeaders = [
   'X-Magicbooklet-Api-Version',
   'X-Magicbooklet-Catalog-Schema-Version',
   'X-Magicbooklet-Installation-Id',
+  'X-Magicbooklet-Wait-Ms',
 ].join(', ');
 
 const mobileCorsExposedHeaders = [

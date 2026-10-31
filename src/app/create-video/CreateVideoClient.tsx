@@ -225,6 +225,7 @@ import { openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 import {
     inspectPromptQuality,
     type PromptEnhancementWarning,
@@ -1598,6 +1599,49 @@ export default function CreateVideoClient({
                 }))
         );
     };
+
+    /**
+     * Reads the length of each clip and track that holds its file but no length, and writes it on
+     * the reference it belongs to. Until 2026-10-31 the reader skipped every .mov on Chrome, so a
+     * draft saved then came back with clips the quote could not price and Kling 3.0 could not
+     * hold. Each reference is found by its file: one taken off or replaced meanwhile is left alone.
+     */
+    const measureUnreadLengths = async () => {
+        const unread = [...referenceVideosRef.current, ...referenceAudiosRef.current, ...klingVideoElementsRef.current]
+            .flatMap((item) => (item.file && item.durationSeconds == null ? [item.file] : []));
+        if (unread.length === 0) return;
+        const lengths = new Map<File, number>();
+        await Promise.all(unread.map(async (file) => {
+            const seconds = await readVideoDurationSeconds(file);
+            if (seconds !== null) lengths.set(file, seconds);
+        }));
+        const measured = <T extends { file: File | null; durationSeconds?: number | null }>(items: T[]) => {
+            let changed = false;
+            const next = items.map((item) => {
+                const length = item.file && item.durationSeconds == null ? lengths.get(item.file) : undefined;
+                if (length === undefined) return item;
+                changed = true;
+                return { ...item, durationSeconds: length };
+            });
+            return changed ? next : null;
+        };
+
+        const nextVideos = measured(referenceVideosRef.current);
+        if (nextVideos) {
+            commitReferenceVideos(nextVideos);
+            await persistReferenceVideos(nextVideos);
+        }
+        const nextAudios = measured(referenceAudiosRef.current);
+        if (nextAudios) {
+            commitReferenceAudios(nextAudios);
+            await persistReferenceAudios(nextAudios);
+        }
+        const nextKlingElements = measured(klingVideoElementsRef.current);
+        if (nextKlingElements) {
+            commitKlingVideoElements(nextKlingElements);
+            await persistKlingVideoElements(nextKlingElements);
+        }
+    };
     const persistKlingSubjects = async (nextSubjects: KlingSubjectDraft[]) => {
         const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoKlingSubjects);
         if (!key) {
@@ -2808,6 +2852,10 @@ export default function CreateVideoClient({
 	                    }))));
 	                }
                 if (isMounted) setMediaRestoredFor({ owner: draftOwner, complete: true });
+                // A clip saved without its length is read now, behind the restored draft.
+                if (isMounted) {
+                    void measureUnreadLengths().catch((err) => console.error('Error measuring restored video media:', err));
+                }
             } catch (err) {
                 console.error('Error loading persisted video media:', err);
                 // A store that cannot say what it holds keeps the saved draft's model.
@@ -2826,6 +2874,8 @@ export default function CreateVideoClient({
             isMounted = false;
             window.clearTimeout(giveUp);
         };
+    // Restored once per account; measureUnreadLengths reads the lists as they are when it runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [remixId, draftOwner]);
 
     // The saved text draft, read back before the catalog checks the settings against a
@@ -2834,6 +2884,9 @@ export default function CreateVideoClient({
     useEffect(() => {
         if (remixId || !draftOwner) return;
         let cancelled = false;
+        // A prompt typed while the draft is read is the newer one, as is one typed before the page's
+        // script ran when the read starts as the page mounts (a sign-up's hand-over starts it later).
+        const promptWhenRestoreStarted = promptRef.current;
         // The catalog waits for the draft, so a store that never answers must not hold
         // it: past this the page goes on without the draft, and a late one is ignored.
         let settled = false;
@@ -2849,7 +2902,8 @@ export default function CreateVideoClient({
                     && !draft.shots?.some((shot) => shot.prompt.trim())
                     ? draft
                     : null;
-                if (draft.prompt !== undefined && !prefillPrompt) setPrompt(draft.prompt);
+                const keepsTypedPrompt = !prefillPrompt && hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRestoreStarted);
+                if (draft.prompt !== undefined && !prefillPrompt && !keepsTypedPrompt) setPrompt(draft.prompt);
                 if (draft.modelId) {
                     restoredDraftSettingsRef.current = true;
                     setModelSettled(true);
@@ -2871,7 +2925,8 @@ export default function CreateVideoClient({
                 if (changed(draft.sound, drawnThen?.sound)) setSound(draft.sound);
                 if (changed(draft.resolution, drawnThen?.resolution)) setResolution(draft.resolution);
                 if (changed(draft.fixedLens, drawnThen?.fixedLens)) setFixedLens(draft.fixedLens);
-                if (changed(draft.isMultiShot, drawnThen?.isMultiShot)) setIsMultiShot(draft.isMultiShot);
+                // A kept prompt stays in sight: a saved multi-shot form would hide its box. Its shots still come back.
+                if (!keepsTypedPrompt && changed(draft.isMultiShot, drawnThen?.isMultiShot)) setIsMultiShot(draft.isMultiShot);
                 if (draft.shots) setMultiPrompts(draft.shots);
                 if (changed(draft.duration, drawnThen?.duration) && !prefillDuration) setSingleDuration(draft.duration);
                 if (draft.additionalSettings) pendingAdditionalSettingsRef.current = draft.additionalSettings;
@@ -3671,6 +3726,9 @@ export default function CreateVideoClient({
         setPromptQualityWarnings([]);
         updateMentionState(value, caretIndex);
     };
+
+    // Typed into the server's HTML before this page's script ran, where no React heard it.
+    useTypedBeforeHydration(promptTextareaRef, { drawn: prompt, enabled: !remixId && !prefillPrompt, onTyped: handlePromptChange });
 
     const syncPromptCaretState = () => {
         updateMentionState(prompt);

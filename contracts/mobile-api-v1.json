@@ -542,6 +542,10 @@
       "path": "/api/enhance-prompt",
       "auth": "required",
       "cacheControl": "private, no-store",
+      "clientWait": {
+        "header": "x-magicbooklet-wait-ms",
+        "timeoutMs": 70000
+      },
       "response": {
         "enhancedPrompt": "A premium, high-detail product launch frame with clean lighting.",
         "remainingCredits": 119,

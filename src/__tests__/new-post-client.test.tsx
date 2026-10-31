@@ -43,6 +43,18 @@ vi.mock('@/lib/temporary-media-upload', () => ({
   uploadMediaToTemporaryStorage: temporaryUploadMock,
 }));
 
+// A picked video's length, as the browser reads it (its own test file). A jsdom
+// media element never loads, so the real reader would hold every video pick
+// until its 4 s timeout; unread (null) leaves the length to the server, as these
+// tests always had it, and a test that needs a length answers it once.
+const readVideoDurationMock = vi.hoisted(() => vi.fn(async (source: File | string): Promise<number | null> => {
+  void source;
+  return null;
+}));
+vi.mock('@/lib/video-metadata-probe', () => ({
+  readVideoDurationSeconds: readVideoDurationMock,
+}));
+
 // The composer reads the profile up front to ask for a name and handle before
 // a public post. Unread (null) leaves the decision to the server, as these
 // tests always had it; the identity tests answer it themselves.
@@ -216,6 +228,7 @@ describe('NewPostClient', () => {
     loadOwnProfileMock.mockResolvedValue(null);
     claimPublicIdentityMock.mockReset();
     temporaryUploadMock.mockReset();
+    readVideoDurationMock.mockReset();
     directResourceUploadMock.mockReset();
     directResourceUploadMock.mockResolvedValue({ error: null });
     temporaryUploadMock.mockImplementation(async (file: File) => ({
@@ -2846,6 +2859,22 @@ describe('NewPostClient', () => {
       expect.objectContaining({ originalName: 'cover.png', contentType: 'image/png' }),
       expect.objectContaining({ originalName: 'clip.mp4', contentType: 'video/mp4' }),
     ]);
+  });
+
+  it('refuses a picked video measured over the limit before uploading it', async () => {
+    // Since 2026-10-31 a .mov is measured on Chrome too (the reader skipped every one before),
+    // so an iPhone clip over the limit is refused at the pick, as an MP4 always was.
+    readVideoDurationMock.mockResolvedValueOnce(601);
+    const { container } = render(<NewPostClient />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const clip = new File(['clip'], 'long-take.mov', { type: 'video/quicktime' });
+
+    fireEvent.change(fileInput, { target: { files: [clip] } });
+
+    expect(await screen.findByText('Videos must be 10 minutes or shorter.')).toBeInTheDocument();
+    expect(readVideoDurationMock.mock.calls.at(-1)?.[0]).toBe(clip);
+    expect(temporaryUploadMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/media added/)).toBeNull();
   });
 
   it('prefills generated paid unlocks and focuses the price field', async () => {

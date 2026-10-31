@@ -68,14 +68,30 @@ const traverse = (delta: number) => act(async () => {
 const pressBack = () => traverse(-1);
 
 const pageLinks: HTMLAnchorElement[] = [];
-/** A plain link elsewhere in the document, as the app shell's are. */
-const addLink = (href: string) => {
+/** A plain link elsewhere in the document, as the app shell's are, naming its tab as theirs do. */
+const addLink = (href: string, tab?: string) => {
   const link = document.createElement('a');
   link.href = href;
   link.textContent = 'Elsewhere';
+  if (tab) link.dataset.appNavTab = tab;
   document.body.append(link);
   pageLinks.push(link);
   return link;
+};
+
+/** Clicks `link` and says whether the click reached it: the guard did not hold it. */
+const pressLink = (link: HTMLAnchorElement) => {
+  let reached = false;
+  const onClick = (event: MouseEvent) => {
+    reached = !event.defaultPrevented;
+    // jsdom would try to navigate this document.
+    event.preventDefault();
+  };
+  link.addEventListener('click', onClick);
+  fireEvent.click(link);
+  // A click the guard held never reached it: off before the next press.
+  link.removeEventListener('click', onClick);
+  return reached;
 };
 
 /** Dispatches `beforeunload` as the browser does, and says whether the page asked to stay. */
@@ -122,17 +138,7 @@ describe('useLeaveGuard', () => {
         <FeedbackViewport />
       </>
     );
-    const link = addLink('/showcase');
-    let heldBeforeTheLink: boolean | null = null;
-    link.addEventListener('click', (event) => {
-      heldBeforeTheLink = event.defaultPrevented;
-      // jsdom would try to navigate this document.
-      event.preventDefault();
-    });
-
-    fireEvent.click(link);
-
-    expect(heldBeforeTheLink).toBe(false);
+    expect(pressLink(addLink('/showcase'))).toBe(true);
     expect(holdForLeaveGuard(navigate)).toBe(false);
     expect(unloadIsHeld()).toBe(false);
     expect(pushState).not.toHaveBeenCalled();
@@ -226,6 +232,33 @@ describe('useLeaveGuard', () => {
     expect(click.defaultPrevented).toBe(false);
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(routerMocks.push).not.toHaveBeenCalled();
+  });
+
+  // The app shell's tab that is open, pressed again, returns the page to its
+  // top and goes nowhere (AppShellClient): a first profile opened from the
+  // composer keeps its `?next=` and its edits.
+  it("lets the shell's open tab through whatever the page's query, and asks for any other link there", async () => {
+    window.history.pushState(null, '', '/profile?next=%2Fpost%2Fnew');
+    render(
+      <>
+        <DraftPage />
+        <FeedbackViewport />
+      </>
+    );
+    typeDraft('A first line');
+
+    expect(pressLink(addLink('/profile', 'profile'))).toBe(true);
+    await act(async () => {});
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+
+    // The same address from anything but the tab is a leave: it drops `?next=`.
+    expect(pressLink(addLink('/profile'))).toBe(false);
+    fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Leave this draft?' })).getByRole('button', { name: 'Stay' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+
+    // So is a tab that is not the one open.
+    expect(pressLink(addLink('/showcase', 'showcase'))).toBe(false);
+    await screen.findByRole('alertdialog', { name: 'Leave this draft?' });
   });
 
   it('asks with the words of its latest render', async () => {

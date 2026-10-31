@@ -20,6 +20,7 @@ import {
   callPromptEnhancer,
   getPlannerResponseSchema,
   getPromptEnhancementCost,
+  resolvePromptEnhancerDeadlineMs,
   type EnhancerContext,
   type Medium,
 } from '@/lib/prompt-enhancer';
@@ -192,6 +193,9 @@ export async function enhancePromptForUser({
   request,
   client,
 }: EnhancePromptForUserInput): Promise<PromptEnhancementResult> {
+  // The caller's clock has been running since it sent the request, so Kie's
+  // deadline counts from here, before the rate limit and the ledger hold.
+  const answerBy = Date.now() + resolvePromptEnhancerDeadlineMs(request.headers);
   const validated = validatePromptEnhancementBody(body);
   if ('error' in validated) {
     return {
@@ -257,6 +261,7 @@ export async function enhancePromptForUser({
     const result = await callPromptEnhancer(systemPrompt, validated.prompt, {
       ...(validated.context?.frameImageUrls?.length ? { imageUrls: validated.context.frameImageUrls } : {}),
       ...(responseSchema ? { responseSchema } : {}),
+      deadlineMs: Math.max(0, answerBy - Date.now()),
     });
     const artifacts = buildPromptEnhancementArtifacts(
       validated.medium,
