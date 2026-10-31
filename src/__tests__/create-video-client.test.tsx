@@ -502,7 +502,7 @@ describe('CreateVideoClient Kling video elements', () => {
     getPersistedValueMock.mockResolvedValue(null);
     refreshTemporaryMediaUrlMock.mockReset();
     refreshTemporaryMediaUrlMock.mockImplementation(async (storagePath: string) => `https://signed.example.com/refreshed/${storagePath}`);
-    readDurationMock.mockClear();
+    readDurationMock.mockReset();
     mockPush.mockClear();
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
@@ -1714,6 +1714,62 @@ describe('CreateVideoClient Kling video elements', () => {
         label: 'Camera move',
         durationSeconds: 5,
       })]);
+    });
+
+    // Until 2026-10-31 the page's reader skipped every .mov on Chrome, so drafts saved then hold
+    // clips without a length, and a model that needs every clip's length could not price the run.
+    it('reads a saved clip that came back without a length, and keeps the length', async () => {
+      const lengthKnown = new File(['video-bytes'], 'camera-move.mp4', { type: 'video/mp4' });
+      const lengthUnread = new File(['video-bytes'], 'harbour.mov', { type: 'video/quicktime' });
+      getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
+        key === 'create-video:reference-videos:user-1'
+          ? [
+            { id: 'saved-clip', displayName: 'Camera move', durationSeconds: 5, file: lengthKnown },
+            { id: 'unread-clip', displayName: 'Harbour', durationSeconds: null, file: lengthUnread },
+          ]
+          : []
+      ));
+      render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+
+      expect(await screen.findByText('4.2s clip')).toBeInTheDocument();
+      expect(screen.getByText('5.0s clip')).toBeInTheDocument();
+      // A clip saved with its length is not read again.
+      expect(readDurationMock).toHaveBeenCalledTimes(1);
+      expect(readDurationMock.mock.calls[0][0]).toBe(lengthUnread);
+      await waitFor(() => {
+        expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences)
+          .toEqual({ count: 2, durationsSeconds: [5, 4.2] });
+      });
+      expect(setPersistedMediaRecordsMock.mock.calls.filter(([key]) => key === 'create-video:reference-videos:user-1').at(-1)?.[1])
+        .toEqual([
+          expect.objectContaining({ id: 'saved-clip', durationSeconds: 5 }),
+          expect.objectContaining({ id: 'unread-clip', durationSeconds: 4.2 }),
+        ]);
+    });
+
+    it('leaves out a saved clip taken off while its length is read', async () => {
+      const lengthUnread = new File(['video-bytes'], 'harbour.mov', { type: 'video/quicktime' });
+      getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
+        key === 'create-video:reference-videos:user-1'
+          ? [{ id: 'unread-clip', displayName: 'Harbour', durationSeconds: null, file: lengthUnread }]
+          : []
+      ));
+      let answer: (seconds: number) => void = () => undefined;
+      readDurationMock.mockImplementationOnce(() => new Promise<number>((resolve) => { answer = resolve; }));
+      render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+      expect(await screen.findByText('Duration unavailable')).toBeInTheDocument();
+      await waitFor(() => expect(readDurationMock.mock.calls.at(-1)?.[0]).toBe(lengthUnread));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Harbour' }));
+      await waitFor(() => expect(screen.queryByText('Harbour')).toBeNull());
+      setPersistedMediaRecordsMock.mockClear();
+      await act(async () => {
+        answer(4.2);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(screen.queryByText('Harbour')).toBeNull();
+      expect(setPersistedMediaRecordsMock.mock.calls.filter(([key]) => key === 'create-video:reference-videos:user-1')).toEqual([]);
     });
 
     it('keeps the note about prepared assets on a Seedance 2.5 track', async () => {
@@ -4309,6 +4365,23 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(await screen.findByText('take.webm can’t be used: Kling video elements are MP4 or MOV files up to 50 MB.')).toBeInTheDocument();
         expect(screen.getByText(SHORT_CLIP)).toBeInTheDocument();
+        expect(generateButton()).toBeDisabled();
+      });
+
+      it('holds a saved clip that came back without a length, once it is read', async () => {
+        // A .mov saved before 2026-10-31 has none: the reader skipped every .mov on Chrome.
+        getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
+          key === 'create-video:kling-video-elements:user-1'
+            ? [{ id: 'saved-kling-clip', displayName: 'Saved Kling clip', handle: '@saved_kling_clip', file: new File(['clip'], 'saved-kling-clip.mov', { type: 'video/quicktime' }), durationSeconds: null }]
+            : []
+        ));
+        readDurationMock.mockResolvedValueOnce(2.16);
+        render(<CreateVideoClient prefill={{}} />);
+        await restored();
+        writePrompt();
+
+        expect(await screen.findByText(SHORT_CLIP)).toBeInTheDocument();
+        expect(screen.getByText('2.1s clip, under the 3s minimum')).toBeInTheDocument();
         expect(generateButton()).toBeDisabled();
       });
 

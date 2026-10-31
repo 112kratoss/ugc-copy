@@ -6,7 +6,6 @@ beforeEach(() => {
   video = document.createElement('video');
   vi.spyOn(document, 'createElement').mockReturnValue(video);
   vi.spyOn(video, 'load').mockImplementation(() => {});
-  vi.spyOn(video, 'canPlayType').mockReturnValue('probably');
   vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:probe'), revokeObjectURL: vi.fn() }));
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -37,8 +36,21 @@ it('cancels stale source probes and rejects non-finite metadata', async () => {
   expect(await second).toBeNull();
   expect(vi.getTimerCount()).toBe(0);
 });
-it('skips unsupported local codecs without creating a blob URL', async () => {
-  vi.mocked(video.canPlayType).mockReturnValue('');
-  expect(await readVideoDurationSeconds(new File([''], 'x.mp4', { type: 'video/mp4' }))).toBeNull();
-  expect(URL.createObjectURL).not.toHaveBeenCalled();
+it('reads a QuickTime clip whose type canPlayType disowns, as Chrome does', async () => {
+  vi.spyOn(video, 'canPlayType').mockReturnValue('');
+  Object.defineProperty(video, 'duration', { configurable: true, value: 2 });
+  const clip = new File(['fixture'], 'clip.mov', { type: 'video/quicktime' });
+  const result = readVideoDurationSeconds(clip);
+  expect(video.getAttribute('src')).toBe('blob:probe');
+  video.dispatchEvent(new Event('loadedmetadata'));
+  expect(await result).toBe(2);
+  expect(URL.createObjectURL).toHaveBeenCalledWith(clip);
+});
+it('settles a file the browser cannot read on its error and releases its blob URL', async () => {
+  const result = readVideoDurationSeconds(new File(['fixture'], 'prores.mov', { type: 'video/quicktime' }));
+  expect(video.getAttribute('src')).toBe('blob:probe');
+  video.dispatchEvent(new Event('error'));
+  expect(await result).toBeNull();
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:probe');
+  expect(vi.getTimerCount()).toBe(0);
 });
