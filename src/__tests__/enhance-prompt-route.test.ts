@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
 const buildEnhancerSystemPromptMock = vi.fn();
 const callPromptEnhancerMock = vi.fn();
 const rawCreateClientMock = vi.hoisted(() => vi.fn());
@@ -73,6 +75,18 @@ function createAdminClient(options?: {
           return {
             data: {
               status: 'in_progress',
+              event_id: existingUsageEvent.id,
+              remaining_credits: remainingCredits,
+              cost: existingUsageEvent.cost,
+            },
+            error: null,
+          };
+        }
+
+        if (existingUsageEvent?.status === 'refunded') {
+          return {
+            data: {
+              status: 'key_already_used',
               event_id: existingUsageEvent.id,
               remaining_credits: remainingCredits,
               cost: existingUsageEvent.cost,
@@ -363,6 +377,43 @@ describe('/api/enhance-prompt route', () => {
     expect(currentAdminClient.rpcCalls.map((call) => call.fn)).not.toContain('deduct_credits');
     expect(currentAdminClient.inserts).toHaveLength(0);
     expect(buildEnhancerSystemPromptMock).not.toHaveBeenCalled();
+    expect(callPromptEnhancerMock).not.toHaveBeenCalled();
+  });
+
+  // A client asks again under its press's key when it lost the first answer. It
+  // must be told, in the contract's words and code, whether that first ask is still
+  // running (ask again) or failed and was refunded (the press is over).
+  it.each([
+    { state: 'still running', status: 'pending', expected: mobileApiContract.endpoints.enhancePrompt.errors.stillRunning },
+    { state: 'refunded', status: 'refunded', expected: mobileApiContract.endpoints.enhancePrompt.errors.refunded },
+  ])('answers a second ask whose first is $state as the contract says, and charges nothing', async ({ status, expected }) => {
+    currentAdminClient = createAdminClient({
+      existingUsageEvent: {
+        id: 'event-existing',
+        user_id: 'user-1',
+        feature: 'prompt_enhancement',
+        client_request_key_hash: testKeyHash('user-1', 'prompt_enhancement', 'enhance:press-1'),
+        status,
+        cost: 2,
+      },
+    });
+
+    const { POST } = await import('@/app/api/enhance-prompt/route');
+    const response = await POST(
+      new Request('http://localhost/api/enhance-prompt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'Idempotency-Key': 'enhance:press-1',
+        },
+        body: JSON.stringify({ medium: 'image', selectedModel: 'nano-banana-pro', prompt: 'Create a product poster' }),
+      }) as never
+    );
+
+    expect(response.status).toBe(expected.status);
+    await expect(response.json()).resolves.toEqual(expected.response);
+    expect(currentAdminClient.rpcCalls.map((call) => call.fn)).not.toContain('settle_ai_usage_event');
     expect(callPromptEnhancerMock).not.toHaveBeenCalled();
   });
 

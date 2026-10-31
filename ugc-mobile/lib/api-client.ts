@@ -541,6 +541,21 @@ const POST_CREATE_REQUEST_OPTIONS: RequestOptions = { timeoutMs: POST_CREATE_TIM
 export const PROMPT_ENHANCE_TIMEOUT_MS = 70_000;
 const PROMPT_ENHANCE_WAIT_HEADER = 'x-magicbooklet-wait-ms';
 const PROMPT_ENHANCE_REQUEST_OPTIONS: RequestOptions = { timeoutMs: PROMPT_ENHANCE_TIMEOUT_MS };
+/**
+ * A press is one paid request: every ask it makes carries the same key, and the
+ * ledger answers a second ask with the answer the first one settled, or says it
+ * is still running, instead of charging again. So a lost answer is asked for
+ * again: after a dropped connection twice at most, since that fails fast and
+ * may be a moment's loss of signal; after an ask that got nothing in the whole
+ * wait once, since the server is done with the key by then. A still-running
+ * first ask is asked after again until the wait has passed since it was sent,
+ * the longest the server works on one key. Each ask spends one of the
+ * enhancer's rate-limit allowance (src/lib/backend-rate-limit.ts).
+ */
+export const PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS = 5_000;
+export const PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE = 2;
+export const PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT = 1;
+const PROMPT_ENHANCE_STILL_RUNNING_CODE = 'AI_USAGE_IN_PROGRESS';
 const REQUEST_ID_HEADER = 'x-request-id';
 const FEED_INSTALLATION_ID_HEADER = 'x-magicbooklet-installation-id';
 
@@ -1085,6 +1100,40 @@ export function createApiClient({
     return promise;
   }
 
+  // One press, one key, asked again by the rule at PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS.
+  async function enhancePrompt(body: PromptEnhancementRequest): Promise<PromptEnhancementResponse> {
+    const init: RequestInit = {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: {
+        [PROMPT_ENHANCE_WAIT_HEADER]: String(PROMPT_ENHANCE_TIMEOUT_MS),
+        'Idempotency-Key': createGenerationIdempotencyKey('enhance'),
+      },
+    };
+    const firstAskAt = Date.now();
+    let connectionFailures = 0;
+    let timeouts = 0;
+    const asksAgain = (error: unknown) => {
+      if (!(error instanceof ApiError)) return false;
+      if (error.status === 409 && error.code === PROMPT_ENHANCE_STILL_RUNNING_CODE) {
+        return Date.now() - firstAskAt < PROMPT_ENHANCE_TIMEOUT_MS;
+      }
+      if (isRequestTimeoutError(error)) return ++timeouts <= PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT;
+      // A request that never left the device (a session token that never came) reached nothing to ask after.
+      const neverSent = typeof error.details === 'object' && error.details !== null
+        && (error.details as { sent?: unknown }).sent === false;
+      return error.status === 0 && !neverSent && ++connectionFailures <= PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE;
+    };
+    for (;;) {
+      try {
+        return await request<PromptEnhancementResponse>('/api/enhance-prompt', init, PROMPT_ENHANCE_REQUEST_OPTIONS);
+      } catch (error) {
+        if (!asksAgain(error)) throw error;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS));
+    }
+  }
+
   // `disposition` goes only when asked for, so a plain call keeps the body
   // every server build has always taken.
   const fileUrlBody = (paths: { storagePath: string } | { storagePaths: string[] }, options: PostResourceFileUrlOptions) => (
@@ -1277,12 +1326,7 @@ export function createApiClient({
       request<GenerationStartResponse>('/api/generate', generationStartInit(body, 'motion', idempotencyKey), GENERATION_START_REQUEST_OPTIONS),
     getMotionGeneration: (predictionId: string) =>
       request<GenerationStatusResponse>(`/api/generate${buildQuery({ id: predictionId })}`),
-    enhancePrompt: (body: PromptEnhancementRequest) =>
-      request<PromptEnhancementResponse>('/api/enhance-prompt', {
-        method: 'POST',
-        body: JSON.stringify(body),
-        headers: { [PROMPT_ENHANCE_WAIT_HEADER]: String(PROMPT_ENHANCE_TIMEOUT_MS) },
-      }, PROMPT_ENHANCE_REQUEST_OPTIONS),
+    enhancePrompt,
     getShowcaseFeed: (params?: Record<string, QueryValue>, options: RequestOptions = {}) =>
       request<ShowcaseFeedResponse>(`/api/showcase/feed${buildQuery(params)}`, {}, {
         ...(options.auth === false ? { cacheTtlMs: CONTENT_CACHE_TTL_MS } : {}),

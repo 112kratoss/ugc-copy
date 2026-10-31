@@ -8164,6 +8164,16 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     describe('Enhance', () => {
+      // An answer the case hands over when it is ready, as a slow enhancer would.
+      const answerLater = () => {
+        let answer: (result: { enhancedPrompt: string; remainingCredits?: number }) => void = () => undefined;
+        authState.api.enhancePrompt.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+        return (result: { enhancedPrompt: string; remainingCredits?: number }) => renderer.act(async () => {
+          answer(result);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+      };
+
       it.each([
         ['image', 'Generation prompt'],
         ['video', 'Generation prompt'],
@@ -8309,6 +8319,67 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
             .toContain('Insufficient credits. Enhancing a prompt costs 2 credits.');
           expect(authState.updateCredits).toHaveBeenCalledWith(1);
         });
+
+        it('keeps a shot rewritten during the wait, and offers that shot its answer', async () => {
+          const answer = answerLater();
+          const tree = await openStory();
+
+          await pressAndLook(labelled(tree.root, 'Enhance shot 2 · 2 credits'));
+          renderer.act(() => { tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.onChangeText('She runs in'); });
+          await settle();
+          await answer({ enhancedPrompt: 'She walks in slowly, lit from the hall.', remainingCredits: 900 });
+
+          expect(shotPrompt(tree)).toBe('She runs in');
+          expect(authState.updateCredits).toHaveBeenCalledWith(900);
+          expect(text(tree)).toContain('Your edits were kept.');
+
+          renderer.act(() => { labelled(tree.root, 'Use enhanced prompt').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('She walks in slowly, lit from the hall.');
+          renderer.act(() => { labelled(tree.root, 'Undo enhancement').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('She runs in');
+          renderer.act(() => { labelled(tree.root, 'Edit shot 1').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('A door opens');
+        });
+      });
+
+      // The prompt box stays open while the enhancer works, for up to 45 s, so an answer
+      // can land on words typed since the press.
+      it('keeps a prompt rewritten during the wait, and offers the answer beside it', async () => {
+        const answer = answerLater();
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        const prompt = () => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value as string;
+        await typePrompt(tree, 'A bottle on linen');
+
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        await typePrompt(tree, 'A bottle on oak');
+        await answer({ enhancedPrompt: 'A bottle on linen, morning light.', remainingCredits: 900 });
+
+        expect(prompt()).toBe('A bottle on oak');
+        expect(authState.updateCredits).toHaveBeenCalledWith(900);
+        expect(text(tree)).toContain('Your edits were kept.');
+        expect(hasLabel(tree.root, 'Undo enhancement')).toBe(false);
+
+        renderer.act(() => { labelled(tree.root, 'Use enhanced prompt').props.onPress(); });
+        expect(prompt()).toBe('A bottle on linen, morning light.');
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+        expect(text(tree)).not.toContain('Your edits were kept.');
+
+        // Undo goes back to the words typed, not to the ones sent.
+        renderer.act(() => { labelled(tree.root, 'Undo enhancement').props.onPress(); });
+        expect(prompt()).toBe('A bottle on oak');
+      });
+
+      it('still replaces a prompt left as it was sent', async () => {
+        const answer = answerLater();
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        await answer({ enhancedPrompt: 'A bottle on linen, morning light.' });
+
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('A bottle on linen, morning light.');
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+        expect(hasLabel(tree.root, 'Undo enhancement')).toBe(true);
       });
 
       it('applies the balance a failed enhancement returns with its refund', async () => {

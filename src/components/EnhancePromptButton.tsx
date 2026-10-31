@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Sparkles, Loader2, AlertCircle, Undo2 } from 'lucide-react';
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { EnhancerContext, Medium, PromptEnhancementLevel } from '@/lib/prompt-enhancer';
@@ -77,11 +77,29 @@ export default function EnhancePromptButton({
     const [warnings, setWarnings] = useState<PromptEnhancementResult['warnings']>(undefined);
     const [level, setLevel] = useState<PromptEnhancementLevel>('cinematic');
     const [undoState, setUndoState] = useState<{ previous: string; enhanced: string } | null>(null);
+    // An answer that came back after the prompt was typed over, kept beside the person's words.
+    const [offer, setOffer] = useState<PromptEnhancementResult | null>(null);
     const loadingLabel = label === 'Polish' ? 'Polishing...' : 'Enhancing...';
+    // The prompt and the parent's callbacks as they are now. The box stays open while
+    // the enhancer works, so an answer is applied only to the words it was asked about,
+    // and through the newest callback: the one drawn at the press would write a shot
+    // list as it stood then, over edits made to the other shots during the wait.
+    const latest = useRef({ prompt, onEnhanced, onResult, onCreditsUpdate });
+    useLayoutEffect(() => {
+        latest.current = { prompt, onEnhanced, onResult, onCreditsUpdate };
+    });
 
     const canEnhance = prompt.trim().length > 0 && !isEnhancing && !disabled;
     // The undo chip only makes sense while the textbox still holds the enhancement.
     const canUndo = undoState !== null && undoState.enhanced === prompt && !isEnhancing;
+    const canUseOffer = offer !== null && offer.enhancedPrompt !== prompt && !isEnhancing;
+
+    const applyEnhancement = (result: PromptEnhancementResult, previous: string) => {
+        setUndoState({ previous, enhanced: result.enhancedPrompt });
+        latest.current.onEnhanced(result.enhancedPrompt, result);
+        latest.current.onResult?.(result);
+        setWarnings(result.warnings?.filter((warning) => warning.severity !== 'blocking'));
+    };
 
     const handleEnhance = async () => {
         if (!canEnhance) return;
@@ -90,9 +108,11 @@ export default function EnhancePromptButton({
             return;
         }
 
+        const sentPrompt = prompt;
         setIsEnhancing(true);
         setError(null);
         setWarnings(undefined);
+        setOffer(null);
 
         try {
             let requestContext = context;
@@ -107,22 +127,23 @@ export default function EnhancePromptButton({
             const result = await requestPromptEnhancement({
                 medium,
                 selectedModel,
-                prompt,
+                prompt: sentPrompt,
                 context: { ...requestContext, enhancementLevel: level },
             });
 
-            setUndoState({ previous: prompt, enhanced: result.enhancedPrompt });
-            onEnhanced(result.enhancedPrompt, result);
-            onResult?.(result);
-            setWarnings(result.warnings?.filter((warning) => warning.severity !== 'blocking'));
+            if (latest.current.prompt === sentPrompt) {
+                applyEnhancement(result, sentPrompt);
+            } else {
+                setOffer(result);
+            }
             if (result.remainingCredits !== undefined) {
-                onCreditsUpdate(result.remainingCredits);
+                latest.current.onCreditsUpdate(result.remainingCredits);
             }
         } catch (err) {
             console.error('Enhance prompt error:', err);
             if (err instanceof PromptEnhancementError) {
                 if (err.remainingCredits !== undefined) {
-                    onCreditsUpdate(err.remainingCredits);
+                    latest.current.onCreditsUpdate(err.remainingCredits);
                 }
                 setError(err.message);
             } else {
@@ -131,6 +152,13 @@ export default function EnhancePromptButton({
         } finally {
             setIsEnhancing(false);
         }
+    };
+
+    // Undo then goes back to the words typed meanwhile, not to the ones sent.
+    const handleUseOffer = () => {
+        if (!canUseOffer || !offer) return;
+        applyEnhancement(offer, prompt);
+        setOffer(null);
     };
 
     const handleUndo = () => {
@@ -185,8 +213,23 @@ export default function EnhancePromptButton({
         </button>
     ) : null;
 
+    const offerButton = canUseOffer ? (
+        <button
+            type="button"
+            onClick={handleUseOffer}
+            className={`flex items-center gap-1 rounded-lg border border-brand-coral/30 bg-brand-coral/10 font-medium text-[#ffb09c] transition-colors hover:border-brand-coral/50 hover:bg-brand-coral/15 ${isToolbar ? 'min-h-9 px-3 text-xs' : 'px-2 py-1 text-[11px]'}`}
+        >
+            <Sparkles className="w-3 h-3" />
+            <span>Use enhanced</span>
+        </button>
+    ) : null;
+
     const notes = (
         <>
+            {canUseOffer && (
+                <p className="px-1 text-xs text-zinc-500" role="status">Your edits were kept.</p>
+            )}
+
             {!error && helperText && (
                 <p className="px-1 text-xs text-zinc-500">{helperText}</p>
             )}
@@ -237,10 +280,11 @@ export default function EnhancePromptButton({
                         )}
                     </button>
                 </div>
-                {levelToggle || undoButton ? (
+                {levelToggle || undoButton || offerButton ? (
                     <div className="flex items-center gap-2">
                         {levelToggle}
                         {undoButton}
+                        {offerButton}
                     </div>
                 ) : null}
                 {notes}
@@ -273,6 +317,8 @@ export default function EnhancePromptButton({
                 {levelToggle}
 
                 {undoButton}
+
+                {offerButton}
             </div>
 
             {notes}

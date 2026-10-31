@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import EnhancePromptButton from '@/components/EnhancePromptButton';
+import { requestPromptEnhancement, type PromptEnhancementResult } from '@/components/enhancePromptClient';
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 vi.mock('@/components/enhancePromptClient', () => ({
@@ -70,6 +71,71 @@ describe('EnhancePromptButton', () => {
         />,
       );
       expect(screen.getByRole('button', { name: /^Enhance, / })).toBeDisabled();
+    });
+  });
+
+  // The prompt box stays open while the enhancer works, for up to 45 s, so an answer
+  // can land on words the person has typed since.
+  describe('an answer that lands after the press', () => {
+    const shared = { onCreditsUpdate: vi.fn(), medium: 'image' as const, selectedModel: 'nano-banana-2' };
+
+    function answerLater() {
+      let answer: (result: PromptEnhancementResult) => void = () => undefined;
+      vi.mocked(requestPromptEnhancement).mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+      return (result: PromptEnhancementResult) => act(async () => { answer(result); });
+    }
+
+    it('replaces the prompt that was sent', async () => {
+      const answer = answerLater();
+      const onEnhanced = vi.fn();
+      render(<EnhancePromptButton prompt="A red fox" onEnhanced={onEnhanced} {...shared} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+      await answer({ enhancedPrompt: 'A red fox at dawn, rim light.' });
+
+      expect(onEnhanced).toHaveBeenCalledWith('A red fox at dawn, rim light.', expect.objectContaining({ enhancedPrompt: 'A red fox at dawn, rim light.' }));
+      expect(screen.queryByRole('button', { name: 'Use enhanced' })).toBeNull();
+    });
+
+    it('keeps words typed meanwhile, and offers the answer beside them', async () => {
+      const answer = answerLater();
+      const onEnhanced = vi.fn();
+      const onCreditsUpdate = vi.fn();
+      const view = render(<EnhancePromptButton prompt="A red fox" onEnhanced={onEnhanced} {...shared} onCreditsUpdate={onCreditsUpdate} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+      view.rerender(<EnhancePromptButton prompt="A red fox in snow" onEnhanced={onEnhanced} {...shared} onCreditsUpdate={onCreditsUpdate} />);
+      await answer({ enhancedPrompt: 'A red fox at dawn, rim light.', remainingCredits: 40 });
+
+      expect(onEnhanced).not.toHaveBeenCalled();
+      expect(onCreditsUpdate).toHaveBeenCalledWith(40);
+      expect(screen.getByText('Your edits were kept.')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Use enhanced' }));
+      expect(onEnhanced).toHaveBeenCalledWith('A red fox at dawn, rim light.', expect.objectContaining({ enhancedPrompt: 'A red fox at dawn, rim light.' }));
+
+      // Undo goes back to the words typed, not to the ones sent.
+      view.rerender(<EnhancePromptButton prompt="A red fox at dawn, rim light." onEnhanced={onEnhanced} {...shared} onCreditsUpdate={onCreditsUpdate} />);
+      expect(screen.queryByRole('button', { name: 'Use enhanced' })).toBeNull();
+      expect(screen.queryByText('Your edits were kept.')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+      expect(onEnhanced).toHaveBeenLastCalledWith('A red fox in snow');
+    });
+
+    // A shot's callback writes the shots it was drawn with: the press-time one would
+    // undo edits made to the other shots during the wait.
+    it('hands the answer to the newest callback', async () => {
+      const answer = answerLater();
+      const drawnAtPress = vi.fn();
+      const drawnLatest = vi.fn();
+      const view = render(<EnhancePromptButton prompt="A red fox" onEnhanced={drawnAtPress} {...shared} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+      view.rerender(<EnhancePromptButton prompt="A red fox" onEnhanced={drawnLatest} {...shared} />);
+      await answer({ enhancedPrompt: 'A red fox at dawn, rim light.' });
+
+      expect(drawnAtPress).not.toHaveBeenCalled();
+      expect(drawnLatest).toHaveBeenCalledWith('A red fox at dawn, rim light.', expect.anything());
     });
   });
 });
