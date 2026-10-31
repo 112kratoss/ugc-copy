@@ -502,7 +502,7 @@ describe('CreateVideoClient Kling video elements', () => {
     getPersistedValueMock.mockResolvedValue(null);
     refreshTemporaryMediaUrlMock.mockReset();
     refreshTemporaryMediaUrlMock.mockImplementation(async (storagePath: string) => `https://signed.example.com/refreshed/${storagePath}`);
-    readDurationMock.mockClear();
+    readDurationMock.mockReset();
     mockPush.mockClear();
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
@@ -1734,7 +1734,8 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(await screen.findByText('4.2s clip')).toBeInTheDocument();
       expect(screen.getByText('5.0s clip')).toBeInTheDocument();
       // A clip saved with its length is not read again.
-      expect(readDurationMock.mock.calls).toEqual([[lengthUnread]]);
+      expect(readDurationMock).toHaveBeenCalledTimes(1);
+      expect(readDurationMock.mock.calls[0][0]).toBe(lengthUnread);
       await waitFor(() => {
         expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences)
           .toEqual({ count: 2, durationsSeconds: [5, 4.2] });
@@ -1757,7 +1758,7 @@ describe('CreateVideoClient Kling video elements', () => {
       readDurationMock.mockImplementationOnce(() => new Promise<number>((resolve) => { answer = resolve; }));
       render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
       expect(await screen.findByText('Duration unavailable')).toBeInTheDocument();
-      await waitFor(() => expect(readDurationMock).toHaveBeenCalledWith(lengthUnread));
+      await waitFor(() => expect(readDurationMock.mock.calls.at(-1)?.[0]).toBe(lengthUnread));
 
       fireEvent.click(screen.getByRole('button', { name: 'Remove Harbour' }));
       await waitFor(() => expect(screen.queryByText('Harbour')).toBeNull());

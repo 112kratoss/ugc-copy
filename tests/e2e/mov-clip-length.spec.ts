@@ -20,6 +20,8 @@ const COLD_PAGE = { timeout: 45_000 };
 // table says of .mov.
 const CLIP = { name: 'clip-2s.mov', mimeType: 'video/quicktime', buffer: fs.readFileSync(path.join(__dirname, 'fixtures/clip-2s.mov')) };
 
+type QuoteRequest = { inputMetadata?: { slots?: Record<string, { durationsSeconds?: number[] }> } };
+
 test.describe.configure({ timeout: 120_000 });
 
 test.beforeEach(async ({ context }) => {
@@ -29,23 +31,30 @@ test.beforeEach(async ({ context }) => {
   ]);
 });
 
+/** Every price question the page asks, as it asked it. */
+function recordQuotes(page: Page) {
+  const asked: QuoteRequest[] = [];
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/generation-models/quote') asked.push(request.postDataJSON() ?? {});
+  });
+  return asked;
+}
+
 /**
- * Picks the clip once React owns its input. A file set before hydration is dropped, and one set
- * again while the first is still being read (up to the reader's 4 s) would be added twice.
+ * Waits for the page's first price question. Only the page's script asks it, once the model's
+ * catalog details are in, so a press or a pick after it is not dropped by a hydration a compile
+ * still holds (.claude/rules/e2e.md), and the clip's slot already knows its shortest length.
  */
-async function pickClip(page: Page, input: string) {
-  await page.waitForFunction((selector) => {
-    const element = document.querySelector(selector);
-    return Boolean(element && Object.keys(element).some((key) => key.startsWith('__reactProps$')));
-  }, input, COLD_PAGE);
-  await page.locator(input).setInputFiles(CLIP);
+async function pageAsked(asked: readonly QuoteRequest[]) {
+  await expect.poll(() => asked.length, { ...COLD_PAGE, message: 'the page asks for its quote once its script runs' }).toBeGreaterThan(0);
 }
 
 test('a 2 s .mov video element holds Kling 3.0 before Generate', async ({ page }) => {
+  const asked = recordQuotes(page);
   await page.goto('/create-video?model=kling-3.0-video', COLD_PAGE);
-  await expect(page.getByRole('group', { name: 'Inputs' })).toBeVisible(COLD_PAGE);
+  await pageAsked(asked);
 
-  await pickClip(page, 'input[type="file"][accept="video/mp4,video/quicktime,.mp4,.mov"]');
+  await page.locator('input[type="file"][accept="video/mp4,video/quicktime,.mp4,.mov"]').setInputFiles(CLIP);
 
   // Unread, the card said "MP4 or MOV, 50MB max" and nothing held the run.
   await expect(page.getByRole('button', { name: 'Preview Video element 1', exact: true })).toBeVisible();
@@ -57,27 +66,18 @@ test('a 2 s .mov video element holds Kling 3.0 before Generate', async ({ page }
 });
 
 test('a .mov reference clip gives Seedance 2 its length to price', async ({ page }) => {
-  // The length each price question carried for the reference clips.
-  const asked: unknown[] = [];
-  page.on('request', (request) => {
-    if (new URL(request.url()).pathname !== '/api/generation-models/quote') return;
-    const body = request.postDataJSON() as { inputMetadata?: { slots?: { videoReferences?: { durationsSeconds?: number[] } } } };
-    asked.push(body.inputMetadata?.slots?.videoReferences?.durationsSeconds ?? null);
-  });
+  const asked = recordQuotes(page);
   await page.goto('/create-video?model=seedance-2', COLD_PAGE);
-  const inputs = page.getByRole('group', { name: 'Inputs' });
-  await expect(inputs).toBeVisible(COLD_PAGE);
-  await expect(async () => {
-    await inputs.getByText('References', { exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Reference videos' })).toBeVisible({ timeout: 2_000 });
-  }).toPass({ timeout: 30_000 });
+  await pageAsked(asked);
+  await page.getByRole('group', { name: 'Inputs' }).getByText('References', { exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Reference videos' })).toBeVisible();
 
-  await pickClip(page, 'input[type="file"][accept="video/*"][multiple]');
+  await page.locator('input[type="file"][accept="video/*"][multiple]').setInputFiles(CLIP);
 
   // Unread, the card said "Duration unavailable" and the quote refused the run: "Reference videos
   // requires duration metadata for every asset." The clip's name shows twice (its card and the
   // Seedance assets panel); the remove button is the card's.
   await expect(page.getByRole('button', { name: 'Remove Video reference 1', exact: true })).toBeVisible();
   await expect(page.getByText('2.0s clip', { exact: true })).toBeVisible();
-  await expect.poll(() => asked.at(-1)).toEqual([2]);
+  await expect.poll(() => asked.at(-1)?.inputMetadata?.slots?.videoReferences?.durationsSeconds ?? null).toEqual([2]);
 });

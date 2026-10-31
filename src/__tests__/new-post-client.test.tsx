@@ -228,6 +228,7 @@ describe('NewPostClient', () => {
     loadOwnProfileMock.mockResolvedValue(null);
     claimPublicIdentityMock.mockReset();
     temporaryUploadMock.mockReset();
+    readVideoDurationMock.mockReset();
     directResourceUploadMock.mockReset();
     directResourceUploadMock.mockResolvedValue({ error: null });
     temporaryUploadMock.mockImplementation(async (file: File) => ({
@@ -2871,7 +2872,7 @@ describe('NewPostClient', () => {
     fireEvent.change(fileInput, { target: { files: [clip] } });
 
     expect(await screen.findByText('Videos must be 10 minutes or shorter.')).toBeInTheDocument();
-    expect(readVideoDurationMock).toHaveBeenCalledWith(clip);
+    expect(readVideoDurationMock.mock.calls.at(-1)?.[0]).toBe(clip);
     expect(temporaryUploadMock).not.toHaveBeenCalled();
     expect(screen.queryByText(/media added/)).toBeNull();
   });

@@ -2873,6 +2873,8 @@ export default function CreateVideoClient({
             isMounted = false;
             window.clearTimeout(giveUp);
         };
+    // Restored once per account; measureUnreadLengths reads the lists as they are when it runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [remixId, draftOwner]);
 
     // The saved text draft, read back before the catalog checks the settings against a
