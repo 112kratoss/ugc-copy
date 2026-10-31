@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { UNDERSCORE_NOT_FOUND_ROUTE } from 'next/dist/shared/lib/entry-constants';
 import { NOT_FOUND_SEGMENT_KEY } from 'next/dist/shared/lib/segment';
 import Link from 'next/link';
@@ -995,10 +995,10 @@ describe('AppShellClient', () => {
       </>
     );
 
-    function renderPostDraft() {
-      mockedPathname = '/post/new';
+    function renderPostDraft(address = '/post/new') {
+      mockedPathname = new URL(address, window.location.origin).pathname;
       // An entry of the page's own, for its guard to mark.
-      window.history.pushState(null, '', '/post/new');
+      window.history.pushState(null, '', address);
       return render(shellWith(<PostDraft />));
     }
 
@@ -1087,6 +1087,38 @@ describe('AppShellClient', () => {
 
       expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
       expect(document.body.style.overflow).toBe('');
+    });
+
+    // Pressed again, the open tab takes the page to its top and goes nowhere,
+    // whatever the page's query (a first profile opened from the composer).
+    // Every control of the shell that names the tab is pressed (the account
+    // menu's Profile is app-shell-account.test.tsx's): one named without the
+    // shell's click would navigate here unasked.
+    it.each([
+      ['/profile?next=%2Fpost%2Fnew', 'profile', 3],
+      ['/notifications?filter=unread', 'alerts', 2],
+    ])('lets every control of the open tab at %s take a page with unsaved work to its top without asking', async (address, tab, count) => {
+      renderPostDraft(address);
+      writePost();
+      fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+      const controls = document.querySelectorAll<HTMLAnchorElement>(`a[data-app-nav-tab="${tab}"]`);
+      // The side navigation's, the drawer's and the bottom navigation's
+      // Profile; the bottom navigation's Alerts and the bell.
+      expect(controls).toHaveLength(count);
+
+      for (const control of controls) {
+        scrollToMock.mockClear();
+        fireEvent.click(control);
+        expect(scrollToMock).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+      }
+
+      await act(async () => {});
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(navigations).toEqual([]);
+
+      // Any other tab is still a leave.
+      fireEvent.click(within(screen.getByRole('complementary', { name: 'Primary navigation' })).getByRole('link', { name: 'Explore' }));
+      await answer('Keep editing');
     });
   });
 });

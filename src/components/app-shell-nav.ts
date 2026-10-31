@@ -29,6 +29,8 @@ export interface AppNavItem {
  * The shell's click on every control that names a tab (the navigation's, the
  * top bar's bell, the account menu's Profile): pressed on the tab already open,
  * it scrolls the page to its top instead of navigating (`AppShellClient`).
+ * Such a control names its tab in `data-app-nav-tab`, and only one that takes
+ * this click may: a page's leave guard lets that press through.
  */
 export type AppNavClickHandler = (
   event: ReactMouseEvent<HTMLAnchorElement>,
@@ -168,6 +170,34 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
 
 export function getActiveAppNavItem(pathname: string) {
   return APP_NAV_ITEMS.find((item) => item.match(pathname)) ?? null;
+}
+
+/**
+ * The tabs that scroll back to the top when pressed while already open, as a
+ * phone's tab bar does. A tab opened from another page always starts at the
+ * top: the shell used to bring back where each of these was left, and a
+ * Profile that opened at its last row read as a page that loaded wrong.
+ */
+const RESELECT_TO_TOP_TAB_IDS = new Set<AppNavItem['id']>([
+  'home',
+  'showcase',
+  'alerts',
+  'profile',
+]);
+
+/**
+ * The tab open at `pathname` that its controls, pressed, take to its top
+ * instead of navigating (`AppShellClient`), whatever the address's query.
+ * Those controls name their tab in `data-app-nav-tab`, so that a page's leave
+ * guard lets such a press through (`src/lib/use-leave-guard.ts`).
+ */
+export function getReselectableTabId(pathname: string) {
+  if (pathname === '/' || pathname === '/home') return 'home';
+
+  const item = APP_NAV_ITEMS.find(
+    (candidate) => RESELECT_TO_TOP_TAB_IDS.has(candidate.id) && candidate.href === pathname
+  );
+  return item?.id ?? null;
 }
 
 /**

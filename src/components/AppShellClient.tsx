@@ -30,6 +30,7 @@ import {
   getActiveAppNavItem,
   getAppShellTitle,
   getCreateMenuHref,
+  getReselectableTabId,
   hidesBottomNav,
   isMinimalAppChromePath,
   isNotFoundRouteSegment,
@@ -110,28 +111,6 @@ const subscribeToHydration = () => () => undefined;
 const getHydratedSnapshot = () => true;
 const getServerHydratedSnapshot = () => false;
 
-/**
- * The tabs that scroll back to the top when pressed while already open, as a
- * phone's tab bar does. A tab opened from another page always starts at the
- * top: the shell used to bring back where each of these was left, and a
- * Profile that opened at its last row read as a page that loaded wrong.
- */
-const RESELECT_TO_TOP_TAB_IDS = new Set<AppNavItem['id']>([
-  'home',
-  'showcase',
-  'alerts',
-  'profile',
-]);
-
-function getReselectableTabId(pathname: string) {
-  if (pathname === '/' || pathname === '/home') return 'home';
-
-  const item = APP_NAV_ITEMS.find(
-    (candidate) => RESELECT_TO_TOP_TAB_IDS.has(candidate.id) && candidate.href === pathname
-  );
-  return item?.id ?? null;
-}
-
 function prefersReducedMotion() {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }
@@ -188,6 +167,9 @@ function DesktopNavItem({
       href={item.href}
       prefetch={false}
       aria-current={active ? 'page' : undefined}
+      // Every control of a tab names it, for a page's leave guard: pressed
+      // while the tab is open, it goes nowhere (getReselectableTabId).
+      data-app-nav-tab={item.id}
       onClick={(event) => onNavigate(event, item)}
       className={`ui-focus-ring group relative flex min-h-11 items-center gap-3 rounded-[14px] border px-3 py-2 text-[13px] font-semibold transition ${
         active
@@ -228,6 +210,7 @@ function DrawerNavItem({
       href={item.href}
       prefetch={false}
       aria-current={active ? 'page' : undefined}
+      data-app-nav-tab={item.id}
       onClick={(event) => {
         onClick();
         onNavigate(event, item);
@@ -280,6 +263,7 @@ function BottomNavItem({
       href={item.href}
       prefetch={false}
       aria-current={active ? 'page' : undefined}
+      data-app-nav-tab={item.id}
       onClick={(event) => onNavigate(event, item)}
       className={`ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-[18px] px-1 py-2 text-[11px] font-bold transition ${
         active
@@ -579,6 +563,7 @@ const AppShellFrame = memo(function AppShellFrame({
               prefetch={false}
               aria-label="Open alerts"
               aria-current={activeItem?.id === 'alerts' ? 'page' : undefined}
+              data-app-nav-tab={ALERTS_NAV_ITEM.id}
               onClick={(event) => handleAppNavClick(event, ALERTS_NAV_ITEM)}
               className={`ui-focus-ring relative hidden h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] sm:inline-flex ${
                 activeItem?.id === 'alerts' ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)]'
