@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.json';
+import productionMotion from '../../contracts/production-motion-descriptors-v1.json';
 import type {
   CatalogControl,
   CatalogInputMode,
@@ -1005,6 +1006,42 @@ describe('a clip shorter than its slot takes', () => {
     const draft = videoDraft(kling30, { prompt: 'Open on @one.', referenceVideos: clips });
 
     expect(validateCatalogCreationDraft(draft, kling30, ready).errors).toEqual(['Video elements supports up to 3 inputs.']);
+  });
+
+  // Release slot-min-durations-20261031 publishes the minimum on Seedance's, MiniMax's and Wan's clip and
+  // track slots and on the motion clip slot. The app's check reads any slot's, so it holds a short clip
+  // too, in the start's words, with no app change: the words name the slot by its label. A track it
+  // cannot hold: its picker reads no length (uploadReferenceAudio sends none), so the start judges it.
+  it('holds a Seedance 2 clip under 2 seconds in the start’s words, and leaves a track of no known length to the start', () => {
+    const published = structuredClone(seedance2);
+    for (const slot of (published.inputModes ?? []).flatMap((mode) => mode.slots)) {
+      if (slot.key === 'videoReferences' || slot.key === 'audioReferences') slot.minDurationSeconds = 2;
+    }
+    const clipOf = (seconds: number) => upload('wave.mp4', 'video', { durationSeconds: seconds });
+    const pickedTrack = upload('beat.mp3', 'audio');
+
+    expect(validateCatalogCreationDraft(videoDraft(published, { referenceVideos: [clipOf(1.86)] }), published, ready).errors)
+      .toEqual(['Seedance 2 reference videos must be at least 2 seconds long. wave runs 1.8 seconds.']);
+    expect(pickedTrack.durationSeconds ?? null).toBeNull();
+    expect(validateCatalogCreationDraft(videoDraft(published, { referenceVideos: [clipOf(4)], referenceAudios: [pickedTrack] }), published, ready).errors)
+      .toEqual([]);
+    expect(validateCatalogCreationDraft(videoDraft(published, { referenceVideos: [clipOf(1.95)] }), published, ready).errors)
+      .toEqual([]);
+  });
+
+  it('holds a Kling 2.6 motion clip under 3 seconds as the release publishes it, in the start’s words', () => {
+    // Kling 2.6 as production serves it once the release is out (the contract both suites read).
+    const kling26 = parseModelCatalogDetail(productionMotion.models.find((model) => model.id === 'kling-2.6'));
+    const motionDraftOf = (seconds: number) => applyCatalogModelDefaults({
+      ...createDefaultCreationDraft('motion'),
+      model: 'kling-2.6',
+      characterImage: upload('hero.png', 'image'),
+      referenceVideo: { ...upload('dance.mp4', 'video', { durationSeconds: seconds }), displayName: 'Reference Motion' },
+    }, kling26);
+
+    expect(validateCatalogCreationDraft(motionDraftOf(2.16), kling26, ready).errors)
+      .toEqual(['Kling 2.6 reference video must be at least 3 seconds long. Reference Motion runs 2.1 seconds.']);
+    expect(validateCatalogCreationDraft(motionDraftOf(2.95), kling26, ready).errors).toEqual([]);
   });
 });
 

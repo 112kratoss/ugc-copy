@@ -99,9 +99,9 @@ export type VideoInputAffordances = {
   /** Condition-filtered constraints; their `message` is the copy the UI should show. */
   activeConstraints: CatalogInputConstraint[];
   /**
-   * The slots the run fills that take a shortest clip or track (`minDurationSeconds`; Kling 3.0's
-   * video elements, 3 s), by key: the page holds the run in words built from the slot. None
-   * before the descriptor arrives.
+   * The slots the run fills that take a shortest clip or track (`minDurationSeconds`: Kling 3.0's
+   * video elements 3 s, Seedance 2's clips and tracks 2 s), by key: the page holds the run in
+   * words built from the slot. None before the descriptor arrives.
    */
   minimumLengths: ReadonlyMap<string, CatalogInputSlot>;
   /** True when these values came from the descriptor rather than the fallback tables. */

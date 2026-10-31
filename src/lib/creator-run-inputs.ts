@@ -1,5 +1,7 @@
 import {
+  catalogMotionInputSlotChoices,
   catalogMotionInputSlots,
+  lengthInTenthsRoundedDown,
   SUBJECT_IMAGES_SLOT_KEY,
   type CatalogConditionPrimitive,
   type CatalogMotionInputsDescriptor,
@@ -121,6 +123,8 @@ export function planImageRunInputs<Element>(elements: readonly Element[], maxIma
 export type MotionRunDescriptor = CatalogMotionInputsDescriptor;
 
 export type MotionRunInputs = readonly [{ slot: string; kind: 'image' }, { slot: string; kind: 'video' }];
+type MotionRunMode = NonNullable<MotionRunDescriptor['inputModes']>[number];
+type MotionRunSlot = MotionRunMode['slots'][number];
 
 /**
  * The inputs a motion run sends, in this order: the character to animate and the clip whose
@@ -138,4 +142,48 @@ export function planMotionRunInputs(
     { slot: slots.image, kind: 'image' },
     { slot: slots.video, kind: 'video' },
   ];
+}
+
+/**
+ * The slot a motion run sends its clip in (`planMotionRunInputs`), as its model's descriptor
+ * declares it in the mode the run's settings open, or null before the descriptor is in or where no
+ * open slot takes a clip. Its `minDurationSeconds` is the shortest clip the provider takes there:
+ * Kie's motion control refuses one under 3 seconds, which the start refused only once Generate was
+ * pressed.
+ */
+export function motionRunClipSlot<Slot extends MotionRunSlot>(
+  descriptor: { inputModes?: readonly { conditions?: MotionRunMode['conditions']; slots: readonly Slot[] }[] } | null | undefined,
+  settings: Record<string, CatalogConditionPrimitive | undefined>,
+): Slot | null {
+  return catalogMotionInputSlotChoices(descriptor, settings).video;
+}
+
+/**
+ * A clip's or track's length as a creator shows it, in tenths of a second: rounded down under its
+ * slot's shortest, as the start's refusal gives it (a 1.97 s clip under 2 s runs "1.9 seconds" to
+ * it), rounded up over its longest (a 15.04 s clip on a 15 s cap must not read 15.0), and to the
+ * nearest tenth otherwise. Rounded one way throughout, a length reads as on the wrong side of one
+ * limit or the other.
+ */
+export function lengthReading(
+  durationSeconds: number,
+  limits: { minDurationSeconds?: number | null; maxDurationSeconds?: number | null } | null | undefined,
+): string {
+  const { minDurationSeconds, maxDurationSeconds } = limits ?? {};
+  if (typeof minDurationSeconds === 'number' && durationSeconds < minDurationSeconds) {
+    return lengthInTenthsRoundedDown(durationSeconds).toFixed(1);
+  }
+  if (typeof maxDurationSeconds === 'number' && durationSeconds > maxDurationSeconds) {
+    return (Math.ceil(durationSeconds * 10) / 10).toFixed(1);
+  }
+  return durationSeconds.toFixed(1);
+}
+
+/**
+ * What a creator shows as the length of a clip or track its run holds for being too short
+ * (`catalogInputTooShort`): its reading, which under the minimum is the length the held line gives,
+ * and the shortest the slot takes.
+ */
+export function heldLengthNote(durationSeconds: number, minimumSeconds: number, noun?: 'clip' | 'track'): string {
+  return `${lengthReading(durationSeconds, { minDurationSeconds: minimumSeconds })}s${noun ? ` ${noun}` : ''}, under the ${minimumSeconds}s minimum`;
 }

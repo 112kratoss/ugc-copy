@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  lengthReading,
+  motionRunClipSlot,
   planImageRunInputs,
   planMotionRunInputs,
   planVideoRunInputs,
@@ -335,5 +337,50 @@ describe('planMotionRunInputs', () => {
     expect(quote(asProduction, 'kling-3.0', planMotionRunInputs(kling3, motionSettings)).costCredits).toEqual(expect.any(Number));
     expect(() => quote(asProduction, 'kling-3.0', [{ slot: 'characterImage', kind: 'image' }, { slot: 'referenceVideo', kind: 'video' }]))
       .toThrow(expect.objectContaining({ fieldErrors: expect.objectContaining({ characterImage: 'Kling 3.0 does not support the characterImage input.' }) }));
+  });
+});
+
+/**
+ * The slot whose shortest clip the motion page holds a run to is the one the run sends its clip in: a
+ * slot of a mode the run's settings open, that takes something. A key repeated in a closed mode, a slot
+ * that takes nothing, or no open clip slot at all must not lend its minimum (or its words) to the run.
+ */
+describe('motionRunClipSlot', () => {
+  const clip = (minDurationSeconds?: number, extra: Record<string, unknown> = {}) => ({
+    key: 'referenceVideo', kind: 'video' as const, role: 'reference' as const, label: 'Reference video', min: 1, max: 1,
+    ...(minDurationSeconds === undefined ? {} : { minDurationSeconds }), ...extra,
+  });
+  const imageOnly = { conditions: [{ source: 'setting' as const, key: 'characterOrientation', operator: 'equals' as const, value: 'image' }] };
+
+  it('reads the open mode’s slot where a closed mode declares the same key first', () => {
+    const descriptor = { inputModes: [{ ...imageOnly, slots: [clip(3)] }, { slots: [clip()] }] };
+    expect(motionRunClipSlot(descriptor, motionSettings)).toEqual(clip());
+    expect(motionRunClipSlot(descriptor, { ...motionSettings, characterOrientation: 'image' })).toEqual(clip(3));
+  });
+
+  it('reads no slot where no open slot takes a clip, though the run falls back to the motion-inputs key', () => {
+    expect(slotsOf({ inputModes: [{ ...imageOnly, slots: [clip(3)] }] })).toEqual(['characterImage:image', 'referenceVideo:video']);
+    expect(motionRunClipSlot({ inputModes: [{ ...imageOnly, slots: [clip(3)] }] }, motionSettings)).toBeNull();
+    expect(motionRunClipSlot({ inputModes: [{ slots: [clip(3, { max: 0 })] }] }, motionSettings)).toBeNull();
+    expect(motionRunClipSlot({ inputModes: [{ slots: [clip(3, { conditions: imageOnly.conditions })] }] }, motionSettings)).toBeNull();
+  });
+});
+
+/**
+ * A clip's or track's length as the creators show it: rounded down under its slot's shortest, as the
+ * start's refusal gives it (a 1.97 s clip under 2 s is refused as running 1.9 seconds), rounded up over
+ * its longest (a 15.04 s clip over 15 s must not read 15.0), and to the nearest tenth between.
+ */
+describe('lengthReading', () => {
+  it('reads a length toward the limit it is past, and to the nearest tenth otherwise', () => {
+    expect(lengthReading(1.97, { minDurationSeconds: 2 })).toBe('1.9');
+    expect(lengthReading(1.86, { minDurationSeconds: 2, maxDurationSeconds: 15 })).toBe('1.8');
+    expect(lengthReading(2, { minDurationSeconds: 2 })).toBe('2.0');
+    expect(lengthReading(2.16, { minDurationSeconds: 2 })).toBe('2.2');
+    expect(lengthReading(15.04, { minDurationSeconds: 2, maxDurationSeconds: 15 })).toBe('15.1');
+    expect(lengthReading(15, { maxDurationSeconds: 15 })).toBe('15.0');
+    expect(lengthReading(14.96, { maxDurationSeconds: 15 })).toBe('15.0');
+    expect(lengthReading(1.97, {})).toBe('2.0');
+    expect(lengthReading(1.97, null)).toBe('2.0');
   });
 });

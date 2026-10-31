@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "description": "The motion models as production publishes them to the app, read on 2026-10-20 (release kie-checkup-20261020; the same shape since wan-start-frame-apart-20261019): Kling 2.6 in the motion-inputs slots (characterImage, referenceVideo), and Kling 3.0 in one default mode of plain reference slots (imageReferences, videoReferences, min 0, max 1), the shape the compatibility release gave a model no later release re-emitted. The web motion page, the workflow runner and the app motion creator are tested against it; production-motion-descriptors-contract.test.ts fails once a newer release re-emits either model, when it is read again.",
-  "revision": "kie-checkup-20261020",
+  "description": "The motion models as production publishes them to the app at release slot-min-durations-20261031: Kling 2.6 in the motion-inputs slots (characterImage, referenceVideo, the clip's shortest 3 s), as that release publishes it (its emitted entry through the server's own read and schema-3 projection, 2026-10-31, before it was published; read from production on 2026-10-20 at kie-checkup-20261020 it was the same but for minDurationSeconds), and Kling 3.0 in one default mode of plain reference slots (imageReferences, videoReferences, min 0, max 1), the shape the compatibility release gave a model no later release re-emitted (read on 2026-10-20). The web motion page, the workflow runner and the app motion creator are tested against it; production-motion-descriptors-contract.test.ts fails once a newer release re-emits either model, when it is read again.",
+  "revision": "slot-min-durations-20261031",
   "models": [
     {
       "id": "kling-2.6",
@@ -92,7 +92,8 @@
               "min": 1,
               "max": 1,
               "durationMetadata": "optional",
-              "maxDurationSeconds": 30
+              "maxDurationSeconds": 30,
+              "minDurationSeconds": 3
             }
           ]
         }

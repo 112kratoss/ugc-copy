@@ -11,6 +11,7 @@ import {
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
 import { descriptorBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+import { descriptorBeforeSlotMinDurations } from './fixtures/slot-min-durations-2026-10-31';
 
 /**
  * Release 2026-09-03-video-reference-caps: seedance-2-5 and minimax-h3 refreshed against
@@ -79,7 +80,7 @@ describe('video reference caps track Kie', () => {
   it.each(['seedance-2-5', 'minimax-h3'])(
     '%s: the manifest and the app agree on every reference cap',
     (modelId) => {
-      const built = descriptorBeforeKieCheckup(descriptor(modelId));
+      const built = descriptorBeforeKieCheckup(descriptorBeforeSlotMinDurations(descriptor(modelId)));
       expect(built.inputs).toEqual(entry(modelId).publicDescriptor.inputs);
       for (const slotKey of ['imageReferences', 'videoReferences', 'audioReferences']) {
         expect(slot(built as unknown as ManifestDescriptor, 'references', slotKey), `${modelId}.${slotKey}`)

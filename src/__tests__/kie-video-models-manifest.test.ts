@@ -12,6 +12,7 @@ import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runti
 
 import { descriptorBeforeKieCatalogInputs, operationBeforeKieCatalogInputs } from './fixtures/kie-catalog-inputs-2026-10-29';
 import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+import { descriptorBeforeSlotMinDurations } from './fixtures/slot-min-durations-2026-10-31';
 
 /**
  * Release 2026-10-08-kie-video-models: Gemini Omni 1.1 Flash, Wan 3.0, Wan 3.0 Prime, Grok
@@ -137,7 +138,7 @@ describe('kie-video-models release', () => {
     expect(schemaVersion).toBe(2);
     // PixVerse shipped web-only in this release; release pixverse-mobile-20261008 turned
     // mobile on once the apps named its maker, so the code build differs there and only there.
-    const built = descriptorBeforeKieCheckup(descriptorBeforeKieCatalogInputs(descriptor(modelId)));
+    const built = descriptorBeforeKieCheckup(descriptorBeforeKieCatalogInputs(descriptorBeforeSlotMinDurations(descriptor(modelId))));
     expect(publicDescriptor).toEqual(modelId === 'pixverse-v6'
       ? { ...built, availability: { web: true, mobile: false } }
       : built);

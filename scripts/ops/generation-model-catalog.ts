@@ -1,5 +1,5 @@
 import { measureModelCatalogRelease } from '../../src/lib/model-catalog-release-policy';
-import { referenceMediaMinSeconds, referenceMediaRole } from '../../src/lib/provider-input-limits';
+import { referenceMediaSlotMinSeconds, referenceMediaSlotNoun } from '../../src/lib/provider-input-limits';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -504,13 +504,18 @@ function assertInputModes(
         }
         // The creators hold a run to it, and the start refuses by its own table: a minimum the
         // start does not hold would have them refuse runs it takes, in words it never says.
-        const startMinimum = referenceMediaMinSeconds(
-          owner.modelId,
-          referenceMediaRole(owner.kind, slotKey, kind as 'video' | 'audio'),
-        );
+        const startMinimum = referenceMediaSlotMinSeconds(owner.modelId, owner.kind, slotKey, kind as 'video' | 'audio');
         if (minimumDuration !== startMinimum) {
           throw new Error(
             `${field} must be the minimum the start holds ${owner.modelId}'s ${slotKey} to (${startMinimum ?? 'none'}).`,
+          );
+        }
+        // And they say it in words built from the slot's label (catalogInputTooShort), which must be
+        // what the start calls the slot's files, or the line before Generate and the refusal differ.
+        const noun = referenceMediaSlotNoun(owner.kind, slotKey, kind as 'video' | 'audio');
+        if (String(slot.label).toLowerCase() !== noun) {
+          throw new Error(
+            `${context}[${modeIndex}].slots[${slotIndex}].label must be "${noun.charAt(0).toUpperCase()}${noun.slice(1)}", the start's words for ${owner.modelId}'s ${slotKey}.`,
           );
         }
       }

@@ -6884,18 +6884,18 @@ describe('generation services', () => {
       it('is refused by its measured length', async () => {
         await expectRefusedBeforeHold(
           motion({ referenceVideoSeconds: 2.47 }),
-          'Kling 2.6 motion reference videos must be at least 3 seconds long. The reference video runs 2.4 seconds.',
+          'Kling 2.6 reference video must be at least 3 seconds long. The reference video runs 2.4 seconds.',
         );
         await expectRefusedBeforeHold(
           motion({ model: 'kling-3.0', mode: '1080p', referenceVideoSeconds: 1.2, duration: 2 }),
-          'Kling 3.0 motion reference videos must be at least 3 seconds long. The reference video runs 1.2 seconds.',
+          'Kling 3.0 reference video must be at least 3 seconds long. The reference video runs 1.2 seconds.',
         );
       });
 
       it('is refused by the whole seconds it is priced at, when that is all the caller knows', async () => {
         await expectRefusedBeforeHold(
           motion({ duration: 2 }),
-          'Kling 2.6 motion reference videos must be at least 3 seconds long.',
+          'Kling 2.6 reference video must be at least 3 seconds long.',
         );
       });
 

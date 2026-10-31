@@ -4066,7 +4066,7 @@ describe('CreateVideoClient Kling video elements', () => {
     const picture = (name: string) => new File(['image'], `${name}.png`, { type: 'image/png' });
 
     /** What the browser holds when the page opens. */
-    function saveInTheBrowser(saved: { images?: number; clip?: boolean; clips?: number; track?: boolean; klingClip?: boolean; klingClipSeconds?: number; startFrame?: boolean }) {
+    function saveInTheBrowser(saved: { images?: number; clip?: boolean; clips?: number; clipSeconds?: number; track?: boolean; trackSeconds?: number; klingClip?: boolean; klingClipSeconds?: number; startFrame?: boolean }) {
       getPersistedImageElementRecordsMock.mockResolvedValue(Array.from({ length: saved.images ?? 0 }, (_, index) => ({
         id: `saved-image-${index + 1}`,
         displayName: `Saved image ${index + 1}`,
@@ -4078,11 +4078,11 @@ describe('CreateVideoClient Kling video elements', () => {
             id: `saved-clip-${index + 1}`,
             displayName: index === 0 ? 'Saved clip' : `Saved clip ${index + 1}`,
             file: new File(['clip'], `saved-clip-${index + 1}.mp4`, { type: 'video/mp4' }),
-            durationSeconds: 4,
+            durationSeconds: saved.clipSeconds ?? 4,
           }));
         }
         if (key === 'create-video:reference-audios:user-1' && saved.track) {
-          return [{ id: 'saved-track', displayName: 'Saved track', file: new File(['track'], 'saved-track.mp3', { type: 'audio/mpeg' }), durationSeconds: 6 }];
+          return [{ id: 'saved-track', displayName: 'Saved track', file: new File(['track'], 'saved-track.mp3', { type: 'audio/mpeg' }), durationSeconds: saved.trackSeconds ?? 6 }];
         }
         if (key === 'create-video:kling-video-elements:user-1' && saved.klingClip) {
           return [{ id: 'saved-kling-clip', displayName: 'Saved Kling clip', handle: '@saved_kling_clip', file: new File(['clip'], 'saved-kling-clip.mp4', { type: 'video/mp4' }), durationSeconds: saved.klingClipSeconds ?? 4 }];
@@ -4277,8 +4277,9 @@ describe('CreateVideoClient Kling video elements', () => {
         writePrompt();
 
         expect(await screen.findByText(SHORT_CLIP)).toBeInTheDocument();
-        // The clip's card gives its length as the line does, rounded down: 2.16 s never reads as 2.2.
-        expect(screen.getByText('2.1s clip')).toBeInTheDocument();
+        // The clip's card gives its length as the line does, rounded down (2.16 s never reads as 2.2),
+        // and says it is under the minimum.
+        expect(screen.getByText('2.1s clip, under the 3s minimum')).toBeInTheDocument();
         // The run's price is still shown; the run waits on the clip.
         await waitFor(() => expect(costShown()).toMatch(/credits$/));
         expect(generateButton()).toBeDisabled();
@@ -4340,6 +4341,87 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(postedRun().modelId).toBe('seedance-2-mini');
         expect(runInputs('videoElements')).toEqual([]);
         expect(postedRun().inputs.filter((input: { kind: string }) => input.kind === 'video')).toEqual([]);
+      });
+    });
+
+    /**
+     * Kie refuses a Seedance 2 clip or track under 2 seconds, which the start refused before any
+     * hold but only once Generate was pressed. The descriptor publishes each slot's shortest
+     * (`minDurationSeconds`), and the page holds the run with the start's words. A card gives a
+     * length to the nearest tenth, so a clip over a cap never reads as within it; the card of a
+     * held clip or track says it is under the minimum, with the length the line gives.
+     */
+    describe('a Seedance 2 clip or track shorter than its slot takes', () => {
+      function writePrompt() {
+        fireEvent.change(screen.getByPlaceholderText(/^Describe the /), {
+          target: { value: 'A dancer crosses a bright studio in the rhythm of the reference clip, slow push in, soft daylight.' },
+        });
+      }
+
+      it('says so beside Generate, marks the clip’s card and sends nothing, in the start’s own words', async () => {
+        const SHORT_CLIP = 'Seedance 2 reference videos must be at least 2 seconds long. Saved clip runs 1.8 seconds.';
+        saveInTheBrowser({ clip: true, clipSeconds: 1.86 });
+        render(<CreateVideoClient prefill={{ model: 'seedance-2' }} />);
+        await restored();
+        writePrompt();
+
+        expect(await screen.findByText(SHORT_CLIP)).toBeInTheDocument();
+        // Rounded down as the line rounds, where the nearest tenth would read 1.9s.
+        expect(screen.getByText('1.8s clip, under the 2s minimum')).toBeInTheDocument();
+        await waitFor(() => expect(costShown()).toMatch(/credits$/));
+        expect(generateButton()).toBeDisabled();
+        fireEvent.click(generateButton());
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(postedRun()).toBeUndefined();
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+
+        expect(referenceMediaLengthViolation('seedance-2', [
+          { role: 'video', durationSeconds: 1.86, label: 'Saved clip' },
+        ])).toBe(SHORT_CLIP);
+      });
+
+      it('holds a short track the same way', async () => {
+        const SHORT_TRACK = 'Seedance 2 reference audio must be at least 2 seconds long. Saved track runs 1.5 seconds.';
+        saveInTheBrowser({ clip: true, track: true, trackSeconds: 1.5 });
+        render(<CreateVideoClient prefill={{ model: 'seedance-2' }} />);
+        await restored();
+        writePrompt();
+
+        expect(await screen.findByText(SHORT_TRACK)).toBeInTheDocument();
+        expect(screen.getByText('1.5s track, under the 2s minimum')).toBeInTheDocument();
+        // The note takes the place of the track's asset status, which matters again once a long enough
+        // track replaces it.
+        expect(screen.queryByText(/^(Prepared asset available|Uses URL fallback until prepared)$/)).toBeNull();
+        // The clip beside it is long enough, and its card keeps its own length.
+        expect(screen.getByText('4.0s clip')).toBeInTheDocument();
+        expect(generateButton()).toBeDisabled();
+        expect(referenceMediaLengthViolation('seedance-2', [
+          { role: 'audio', durationSeconds: 1.5, label: 'Saved track' },
+        ])).toBe(SHORT_TRACK);
+      });
+
+      it('reads a clip over the cap as over it', async () => {
+        // Seedance 2 takes clips of up to 15 seconds: to the nearest tenth, 15.04 s would read as 15.0.
+        saveInTheBrowser({ clip: true, clipSeconds: 15.04 });
+        render(<CreateVideoClient prefill={{ model: 'seedance-2' }} />);
+        await restored();
+
+        expect(screen.getByText('15.1s clip')).toBeInTheDocument();
+        expect(screen.queryByText(/under the 2s minimum/)).toBeNull();
+      });
+
+      it('reads a clip just under the minimum as the start would refuse it, without holding it', async () => {
+        // Inside the slack the page lets through to the start (it measures to the hundredth): 1.97 s reads
+        // 1.9, as the start's refusal would give it, not 2.0. It is not held, so it carries no mark.
+        saveInTheBrowser({ clip: true, clipSeconds: 1.97 });
+        render(<CreateVideoClient prefill={{ model: 'seedance-2' }} />);
+        await restored();
+
+        expect(screen.getByText('1.9s clip')).toBeInTheDocument();
+        expect(screen.queryByText(/under the 2s minimum/)).toBeNull();
+        expect(screen.queryByText(/must be at least 2 seconds long/)).toBeNull();
       });
     });
 

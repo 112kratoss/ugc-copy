@@ -351,6 +351,19 @@ describe('generation-model catalog release CLI', () => {
       },
       message,
     })),
+    // The creators say a clip is too short in words built from its slot's label, the start in its own
+    // (provider-input-limits): a slot the start names otherwise would have them refuse in other words.
+    {
+      name: 'a shortest clip on a slot the start names otherwise',
+      change: (manifest: Record<string, unknown>) => {
+        const descriptor = changedSeedance(manifest).publicDescriptor as Record<string, unknown>;
+        const modes = descriptor.inputModes as Array<Record<string, unknown>>;
+        const slot = (modes[1].slots as Array<Record<string, unknown>>).find((candidate) => candidate.key === 'videoReferences')!;
+        slot.minDurationSeconds = 2;
+        slot.label = 'Clips';
+      },
+      message: /slots\[1\]\.label must be "Reference videos", the start's words for seedance-2's videoReferences/,
+    },
     {
       name: 'unknown adapter',
       change: (manifest: Record<string, unknown>) => {

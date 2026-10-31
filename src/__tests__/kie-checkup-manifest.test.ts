@@ -19,6 +19,7 @@ import {
 
 import { descriptorBeforeMiniDefault } from './fixtures/mini-default-video-2026-10-28';
 import { descriptorBeforeVeoQualityReferences } from './fixtures/veo-quality-references-2026-10-30';
+import { descriptorBeforeSlotMinDurations } from './fixtures/slot-min-durations-2026-10-31';
 
 /**
  * Release 2026-10-20-kie-checkup: the Kie check-up of 2026-10-20
@@ -151,7 +152,7 @@ describe('kie-checkup release', () => {
     const { schemaVersion, ...publicDescriptor } = released.publicDescriptor;
     expect(schemaVersion).toBe(2);
     expect(publicDescriptor).toEqual(descriptorBeforeMiniDefault(descriptorBeforeVeoQualityReferences(
-      catalog.models.find((model) => model.id === modelId)!,
+      descriptorBeforeSlotMinDurations(catalog.models.find((model) => model.id === modelId)!),
     )));
     expect(released.webEnabled).toBe(true);
     expect(released.mobileEnabled).toBe(true);

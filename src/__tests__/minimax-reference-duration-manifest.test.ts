@@ -7,6 +7,7 @@ import { buildGenerationModelCatalog, quoteGenerationModel } from '@/lib/generat
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
 import { descriptorBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+import { descriptorBeforeSlotMinDurations } from './fixtures/slot-min-durations-2026-10-31';
 
 /**
  * Release 2026-09-04-minimax-reference-duration moved minimax-h3 to reference-adjustment
@@ -51,7 +52,7 @@ describe('minimax reference-duration release', () => {
     expect(schemaVersion).toBe(2);
     const descriptor = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 })
       .models.find((model) => model.id === 'minimax-h3')!;
-    expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptor));
+    expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptorBeforeSlotMinDurations(descriptor)));
   });
 
   it('bills input clip seconds at the same rate as output', () => {

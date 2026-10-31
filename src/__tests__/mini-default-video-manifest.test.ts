@@ -19,6 +19,7 @@ import {
 
 import { descriptorBeforeKlingElementMinimum } from './fixtures/kling-element-min-duration-2026-10-30';
 import { descriptorBeforeMiniDefault } from './fixtures/mini-default-video-2026-10-28';
+import { descriptorBeforeSlotMinDurations } from './fixtures/slot-min-durations-2026-10-31';
 
 /**
  * Release 2026-10-28-mini-default-video: Seedance 2 Mini becomes the default video model on
@@ -138,7 +139,7 @@ describe('mini-default-video release', () => {
     const operation = operations.find((candidate) => candidate.modelId === modelId)!;
     const { schemaVersion, ...publicDescriptor } = released.publicDescriptor;
     expect(schemaVersion).toBe(2);
-    expect(publicDescriptor).toEqual(descriptorBeforeKlingElementMinimum(catalog.models.find((model) => model.id === modelId)!));
+    expect(publicDescriptor).toEqual(descriptorBeforeKlingElementMinimum(descriptorBeforeSlotMinDurations(catalog.models.find((model) => model.id === modelId)!)));
     expect(released.webEnabled).toBe(true);
     expect(released.mobileEnabled).toBe(true);
     expect(released.adapterKey).toBe(operation.adapterKey);

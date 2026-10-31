@@ -300,8 +300,25 @@ export function catalogMotionInputSlots(
   descriptor: CatalogMotionInputsDescriptor | null | undefined,
   settings: Record<string, CatalogConditionPrimitive | undefined>,
 ): { image: string; video: string } {
+  const chosen = catalogMotionInputSlotChoices(descriptor, settings);
+  return {
+    image: chosen.image?.key ?? MOTION_INPUTS_FALLBACK_SLOTS.image,
+    video: chosen.video?.key ?? MOTION_INPUTS_FALLBACK_SLOTS.video,
+  };
+}
+type CatalogMotionInputsSlot = NonNullable<CatalogMotionInputsDescriptor['inputModes']>[number]['slots'][number];
+/**
+ * The slots `catalogMotionInputSlots` names, as the descriptor declares them (so with every key the
+ * caller's descriptor carries, a shortest clip among them), or null for a kind no open slot takes,
+ * where the run falls back to the motion-inputs name. A key a closed mode also declares is read from
+ * the mode the run opens.
+ */
+export function catalogMotionInputSlotChoices<Slot extends CatalogMotionInputsSlot>(
+  descriptor: { inputModes?: readonly { conditions?: readonly CatalogConditionLike[]; slots: readonly Slot[] }[] } | null | undefined,
+  settings: Record<string, CatalogConditionPrimitive | undefined>,
+): { image: Slot | null; video: Slot | null } {
   const modes = descriptor?.inputModes ?? [];
-  const isReference = (slot: (typeof modes)[number]['slots'][number]) =>
+  const isReference = (slot: Slot) =>
     slot.role === 'reference' && (slot.kind === 'image' || slot.kind === 'video');
   const inputCounts: Record<string, number> = { images: 1, videos: 1 };
   for (const slot of modes.flatMap((mode) => mode.slots)) {
@@ -318,12 +335,9 @@ export function catalogMotionInputSlots(
     );
   const slotFor = (kind: 'image' | 'video') => {
     const ofKind = open.filter((slot) => slot.kind === kind);
-    return (ofKind.find((slot) => (slot.min ?? 0) > 0) ?? ofKind[0])?.key;
+    return ofKind.find((slot) => (slot.min ?? 0) > 0) ?? ofKind[0] ?? null;
   };
-  return {
-    image: slotFor('image') ?? MOTION_INPUTS_FALLBACK_SLOTS.image,
-    video: slotFor('video') ?? MOTION_INPUTS_FALLBACK_SLOTS.video,
-  };
+  return { image: slotFor('image'), video: slotFor('video') };
 }
 /** "1 second", "2.1 seconds". */
 function secondsLong(value: number): string {
@@ -353,6 +367,12 @@ export function mediaTooShortMessage(
     ? `${refusal} ${item.label} runs ${secondsLong(lengthInTenthsRoundedDown(item.durationSeconds))}.`
     : refusal;
 }
+/**
+ * What the start calls a motion run's clip when it refuses one for being short: the motion start
+ * names it no other way ("… The reference video runs 2.4 seconds."). The web motion page holds a
+ * run in the same words.
+ */
+export const MOTION_CLIP_NAME = 'The reference video';
 /**
  * How far a creator's reading of a file's length may fall short of the start's own. The browser
  * and the phone read the container; the start reads ffmpeg's duration to the hundredth, which

@@ -334,7 +334,7 @@ describe('startMotionGenerationForRoute', () => {
     expect(refusal).toBeInstanceOf(MotionGenerationStartValidationError);
     expect(refusal).toMatchObject({
       status: 400,
-      message: 'Kling 2.6 motion reference videos must be at least 3 seconds long. The reference video runs 2.4 seconds.',
+      message: 'Kling 2.6 reference video must be at least 3 seconds long. The reference video runs 2.4 seconds.',
     });
     expect(startMotionGenerationMock).not.toHaveBeenCalled();
   });

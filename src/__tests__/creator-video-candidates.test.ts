@@ -113,6 +113,14 @@ describe('the video run moved to another model', () => {
     expect(takesSameVideoInputs(withSound, run('seedance-2-mini', { ...miniForm, sound: true }))).toBe(true);
     expect(takesSameVideoInputs(withSound, run('wan-2.7', { ...miniForm, sound: true }))).toBe(false);
 
+    // A clip the original's model takes but another's published minimum holds (Wan 3.0 takes 1 s and up,
+    // Seedance 2 Mini 2 s): fitted there, the run would be held as soon as the page moved.
+    const shortClip = held({ videoReferences: [{ id: 'clip-1', durationSeconds: 1.4 }] });
+    const onWan = run('wan-3.0', miniForm, shortClip);
+    expect(takesSameVideoInputs(onWan, run('wan-3.0-prime', miniForm, shortClip))).toBe(true);
+    expect(takesSameVideoInputs(onWan, run('seedance-2-mini', miniForm, shortClip))).toBe(false);
+    expect(takesSameVideoInputs(onWan, run('seedance-2-mini', miniForm, held({ videoReferences: [{ id: 'clip-1', durationSeconds: 2.4 }] })))).toBe(true);
+
     const shots = run('kling-3.0-video', { ...miniForm, isMultiShot: true }, held({ multiShotSeconds: 9 }));
     expect(shots.durationSeconds).toBe(9);
     expect(takesSameVideoInputs(shots, run('kling-o3', { ...miniForm, isMultiShot: true }, held({ multiShotSeconds: 9 })))).toBe(true);

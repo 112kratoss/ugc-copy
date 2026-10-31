@@ -16,6 +16,7 @@ import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixture
 import { descriptorBeforeKlingElementMinimum } from './fixtures/kling-element-min-duration-2026-10-30';
 import { descriptorBeforeMiniDefault } from './fixtures/mini-default-video-2026-10-28';
 import { descriptorBeforeVeoQualityReferences } from './fixtures/veo-quality-references-2026-10-30';
+import { descriptorBeforeSlotMinDurations } from './fixtures/slot-min-durations-2026-10-31';
 
 /**
  * Release 2026-09-04-reference-audit: the fixes from
@@ -123,7 +124,7 @@ describe('reference-audit release', () => {
       const { schemaVersion, ...publicDescriptor } = entry.publicDescriptor;
       expect(schemaVersion).toBe(2);
       expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptorBeforeMiniDefault(descriptorBeforeKieCatalogInputs(
-        descriptorBeforeVeoQualityReferences(descriptorBeforeKlingElementMinimum(descriptor(modelId))),
+        descriptorBeforeVeoQualityReferences(descriptorBeforeKlingElementMinimum(descriptorBeforeSlotMinDurations(descriptor(modelId)))),
       ))));
       const operation = operationBeforeKieCheckup(operationBeforeKieCatalogInputs(operations.get(modelId)!));
       expect(entry.pricingStrategy).toBe(operation.pricingStrategy);
