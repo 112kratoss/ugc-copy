@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 const MIGRATION_PATH = path.join(
   process.cwd(),
-  'supabase/migrations/20261031070617_deleted_post_queues_its_media_rows.sql',
+  'supabase/migrations/20261031174744_deleted_post_queues_its_media_rows.sql',
 );
 
 const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
