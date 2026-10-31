@@ -236,12 +236,25 @@ describe('pictures among a purchase\'s resources', () => {
     expect(hasResourcePictures(resources({ items: [item({ type: 'source_file', contentType: 'image/png' })] }))).toBe(true);
   });
 
-  it('ignores clips, sounds, and pictures that are only links', () => {
+  // A mature purchase whose only visual references were clips kept no plate,
+  // and once a clip's card drew its still that still showed uncovered.
+  it('counts a stored clip, whose card draws its still and whose viewer plays it', () => {
+    expect(hasResourcePictures(resources({
+      items: [item({ type: 'reference_video', storagePath: 'references/clip.mp4', contentType: 'video/mp4' })],
+    }))).toBe(true);
+    expect(hasResourcePictures(resources({ items: [item({ type: 'source_file', storagePath: 'references/source.mov', contentType: 'video/quicktime' })] }))).toBe(true);
+    expect(hasResourcePictures(resources({ items: [item({ type: 'reference_video', storagePath: 'references/clip', contentType: null })] }))).toBe(true);
+    expect(hasResourcePictures(resources({
+      attachments: [{ label: 'Take', kind: 'file', storagePath: 'references/take.mp4', contentType: 'video/mp4' }],
+    }))).toBe(true);
+  });
+
+  it('ignores sounds, and pictures and clips that are only links', () => {
     expect(hasResourcePictures(resources({
       items: [
-        item({ type: 'reference_video', storagePath: 'references/clip.mp4', contentType: 'video/mp4' }),
         item({ type: 'reference_audio', storagePath: 'references/track.mp3', contentType: 'audio/mpeg' }),
         item({ storagePath: null, externalUrl: 'https://example.com/board.jpg' }),
+        item({ type: 'reference_video', storagePath: null, contentType: 'video/mp4', externalUrl: 'https://example.com/take.mp4' }),
       ],
     }))).toBe(false);
     expect(hasResourcePictures(resources())).toBe(false);

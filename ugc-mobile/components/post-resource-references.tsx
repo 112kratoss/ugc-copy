@@ -1,3 +1,5 @@
+import { Image } from 'expo-image';
+import type { VideoThumbnail } from 'expo-video';
 import { AudioLines, ExternalLink, FileText, ImageIcon, Play } from 'lucide-react-native';
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
@@ -7,9 +9,10 @@ import { MatureCover, MatureMediaCovered } from '@/components/mature-cover';
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
 import { PagerRowScrollView } from '@/components/pager-row-scroll-view';
 import { isRecipeMediaItem } from '@/lib/recipe-reading/recipe-reading';
-import { appTheme } from '@/lib/theme';
+import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { PostResourceItem } from '@/lib/types';
+import { grabVideoFrame, VIDEO_STILLS_READ } from '@/lib/video-frame';
 
 type PostResourceReferencesProps = {
   /**
@@ -25,6 +28,8 @@ type PostResourceReferencesProps = {
   label?: string | null;
   onError?: (message: string) => void;
   onOpenUrl: (url: string) => Promise<void>;
+  /** Whether the clips' stills are read now (PostResourceBundleContent says when not); stills already read stay drawn. */
+  readStills?: boolean;
   resolveFileUrl: (storagePath: string) => Promise<string>;
 };
 
@@ -34,6 +39,7 @@ export function PostResourceReferences({
   label = 'References',
   onError,
   onOpenUrl,
+  readStills = true,
   resolveFileUrl,
 }: PostResourceReferencesProps) {
   const theme = useAppTheme();
@@ -48,10 +54,13 @@ export function PostResourceReferences({
   const [openingPath, setOpeningPath] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [failedPreviewPaths, setFailedPreviewPaths] = useState<Record<string, boolean>>({});
+  // A clip's still, by storage path; null when the read gave none, asked again only once opening the clip renews its link.
+  const [videoFrames, setVideoFrames] = useState<Record<string, VideoThumbnail | null>>({});
   // Keyed by item, not by position: signed URLs resolve in any order, so the
   // list of viewable items can grow while the lightbox is open.
   const [lightboxKey, setLightboxKey] = useState<string | null>(null);
   const requestedPaths = useRef(new Set<string>());
+  const frameRequests = useRef(new Map<string, AbortController>());
   const mounted = useRef(true);
   const openRequest = useRef(0);
   const openingTarget = useRef<string | null>(null);
@@ -97,6 +106,46 @@ export function PostResourceReferences({
     }
   }, [covered, referenceItems, resolveFileUrl]);
 
+  useEffect(() => {
+    const requests = frameRequests.current;
+    // A read still under way when the row is hidden or goes is called off,
+    // and asked for again if the row comes back.
+    return () => {
+      for (const request of requests.values()) request.abort();
+      requests.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    // React Native has no <video preload="metadata"> to draw a clip's first
+    // frame, so each clip is asked for one still from the link it has: a still
+    // read stays when opening the clip renews the link, and a read called off
+    // or given none is asked again (below, and in openItem).
+    if (!VIDEO_STILLS_READ) return;
+    if (covered || !readStills) {
+      // Nothing under the plate is read, nor while the page is off screen:
+      // reads still under way are called off, and asked for again when the
+      // plate lifts or the page comes back.
+      for (const request of frameRequests.current.values()) request.abort();
+      frameRequests.current.clear();
+      return;
+    }
+    for (const item of referenceItems) {
+      const storagePath = item.storagePath;
+      const url = storagePath ? fileUrls[storagePath] : undefined;
+      if (!storagePath || !url || referenceMediaKind(item) !== 'video') continue;
+      if (videoFrames[storagePath] !== undefined || frameRequests.current.has(storagePath)) continue;
+
+      const request = new AbortController();
+      frameRequests.current.set(storagePath, request);
+      // The request stays recorded once it lands: a run of this effect that
+      // has not seen the still yet must not ask for the clip a second time.
+      void grabVideoFrame(url, { signal: request.signal }).then((frame) => {
+        if (!request.signal.aborted) setVideoFrames((current) => ({ ...current, [storagePath]: frame }));
+      });
+    }
+  }, [covered, fileUrls, readStills, referenceItems, videoFrames]);
+
   // Everything the app can show itself: storage-backed images and videos
   // whose signed URL has arrived. External links stay links, and audio has
   // no in-app player, so both still hand off to the browser.
@@ -134,6 +183,17 @@ export function PostResourceReferences({
         if (!mounted.current || request !== openRequest.current) return;
         setFileUrls((current) => ({ ...current, [storagePath]: url }));
         setFailedPreviewPaths((current) => ({ ...current, [storagePath]: false }));
+        // A clip that gave no still, its link having run out or its read the
+        // deadline, is asked again from the renewed link, as a picture is.
+        if (videoFrames[storagePath] === null) {
+          frameRequests.current.delete(storagePath);
+          setVideoFrames((current) => {
+            if (current[storagePath] !== null) return current;
+            const next = { ...current };
+            delete next[storagePath];
+            return next;
+          });
+        }
         setLightboxKey(referenceKey(item, index));
         return;
       }
@@ -184,6 +244,8 @@ export function PostResourceReferences({
               : 'Open media';
           const isLoading = Boolean(storagePath && (loadingPaths[storagePath] || openingPath === storagePath));
           const previewFailed = Boolean(storagePath && failedPreviewPaths[storagePath]);
+          // Never drawn under the plate, even when it was read before the plate came back.
+          const videoFrame = !covered && storagePath ? videoFrames[storagePath] : null;
           const isOpenable = Boolean(item.externalUrl || storagePath);
 
           return (
@@ -220,15 +282,26 @@ export function PostResourceReferences({
                     transition={120}
                     url={signedUrl}
                   />
+                ) : videoFrame ? (
+                  // Ahead of the spinner, as a picture is: renewing the link to open the clip keeps its still.
+                  <>
+                    <Image
+                      accessible={false}
+                      contentFit="cover"
+                      source={videoFrame}
+                      style={{ position: 'absolute', inset: 0 }}
+                      // The same synchronous swap on Android as StableMediaImage, for the same reason.
+                      transition={Platform.OS === 'android' ? 0 : 120}
+                    />
+                    <ReferencePlayMark onPicture />
+                  </>
                 ) : isLoading ? (
                   <ActivityIndicator color={theme.colors.primary} />
                 ) : isImage ? (
                   <ImageIcon size={appTheme.icon.hero} color={theme.colors.faint} />
                 ) : referenceMediaKind(item) === 'video' ? (
                   // A clip reads as one: a play mark, where a document icon read as a file.
-                  <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
-                    <Play size={appTheme.icon.compact} color={theme.colors.text} fill={theme.colors.text} />
-                  </View>
+                  <ReferencePlayMark onPicture={false} />
                 ) : item.contentType?.startsWith('audio/') || item.type === 'reference_audio' ? (
                   <AudioLines size={appTheme.icon.hero} color={theme.colors.faint} />
                 ) : (
@@ -276,6 +349,18 @@ export function PostResourceReferences({
           if (referenceIndex >= 0) void openItem(referenceItems[referenceIndex], referenceIndex);
         }}
       />
+    </View>
+  );
+}
+
+/** On a clip's still, the dark layer the app draws over pictures; on the card's own panel, a plain disc. */
+function ReferencePlayMark({ onPicture }: { onPicture: boolean }) {
+  const theme = useAppTheme();
+  const glyph = onPicture ? mediaColors.onMedia : theme.colors.text;
+  return (
+    <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: onPicture ? mediaColors.mediaScrimStrong : theme.colors.surfaceStrong }}>
+      <Play size={appTheme.icon.compact} color={glyph} fill={glyph} />
     </View>
   );
 }

@@ -64,6 +64,12 @@ type PostResourceBundleContentProps = {
   onError?: (message: string) => void;
   onOpenFile?: (file: ResourceFileInput) => Promise<void> | void;
   onOpenUrl?: (url: string) => Promise<void> | void;
+  /**
+   * Whether the clips' stills are read now. The reel mounts a slide's Details
+   * page beside its playing clip, so that page reads them only while it is the
+   * page on screen.
+   */
+  readStills?: boolean;
   resolveFileUrl?: (storagePath: string) => Promise<string>;
   resources: PostResourceBundleResources | null;
 };
@@ -87,6 +93,7 @@ export function PostResourceBundleContent({
   onError,
   onOpenFile,
   onOpenUrl,
+  readStills = true,
   resolveFileUrl,
   resources,
 }: PostResourceBundleContentProps) {
@@ -208,6 +215,7 @@ export function PostResourceBundleContent({
           onError={onError}
           onOpenFile={onOpenFile}
           onOpenUrl={onOpenUrl}
+          readStills={readStills}
           resolveFileUrl={resolveFileUrl}
         />
       )) : (
@@ -390,6 +398,7 @@ function UnlockedResourceGroup({
   onError,
   onOpenFile,
   onOpenUrl,
+  readStills,
   resolveFileUrl,
 }: {
   card: ResourceCard;
@@ -399,6 +408,7 @@ function UnlockedResourceGroup({
   onError?: (message: string) => void;
   onOpenFile?: (file: ResourceFileInput) => Promise<void> | void;
   onOpenUrl?: (url: string) => Promise<void> | void;
+  readStills: boolean;
   resolveFileUrl?: (storagePath: string) => Promise<string>;
 }) {
   const theme = useAppTheme();
@@ -452,6 +462,7 @@ function UnlockedResourceGroup({
           onOpenUrl={async (url) => {
             await onOpenUrl(url);
           }}
+          readStills={readStills}
           resolveFileUrl={resolveFileUrl}
         />
       ) : null}

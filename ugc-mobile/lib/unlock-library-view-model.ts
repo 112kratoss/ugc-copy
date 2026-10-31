@@ -165,17 +165,22 @@ export function getUnlockCover(post: ViewerUnlockDetail['post']): UnlockCover {
 }
 
 /**
- * Whether a purchase's resources hold a picture its references draw as a
- * thumbnail: a stored image among the items, or among a legacy bundle's
- * attachments when it has no items, which is how PostResourceBundleContent
- * reads the bundle.
+ * Whether a purchase's resources hold a picture or a clip its references show
+ * in the app: a stored image, drawn as a thumbnail, or a stored clip, drawn as
+ * its still (lib/video-frame.ts) and played in the app's own viewer; among the
+ * items, or among a legacy bundle's attachments when it has no items, which is
+ * how PostResourceBundleContent reads the bundle.
  */
 export function hasResourcePictures(resources: PostResourceBundleResources | null): boolean {
   if (!resources) return false;
-  const files: Array<{ storagePath?: string | null; contentType?: string | null }> = resources.items?.length
+  const files: Array<{ storagePath?: string | null; contentType?: string | null; type?: string | null }> = resources.items?.length
     ? resources.items
     : resources.attachments;
-  return files.some((file) => Boolean(file.storagePath && file.contentType?.startsWith('image/')));
+  return files.some((file) => Boolean(file.storagePath && (
+    file.contentType?.startsWith('image/')
+    || file.contentType?.startsWith('video/')
+    || file.type === 'reference_video'
+  )));
 }
 
 /**

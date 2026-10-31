@@ -58,6 +58,7 @@ const EXEMPT: Record<string, string> = {
   'lib/use-viewer-video-player.ts': "the reel's hook: app/viewer.tsx hands it a cached source",
   'lib/use-viewer-video-player.ios.ts': "the reel's hook: app/viewer.tsx hands it a cached source",
   'lib/audio-creation-native-player.ts': "an audio creation's player: it never loops, so no copy queues behind another, and expo-video's iOS cache refuses a response that is not video/*",
+  'lib/video-frame.ts': "a still's player: it never plays or loops, its item buffers no more than a second ahead, and it is let go once the still is read",
 };
 
 /**
@@ -124,6 +125,16 @@ describe('video player cache coverage', () => {
       path.join(mobileRoot, 'node_modules/expo-video/ios/Cache/ResourceLoaderDelegate.swift'), 'utf8',
     );
     expect(iosCache).toMatch(/func isSupported\(mimeType: String\?\) -> Bool \{\s*return mimeType\?\.starts\(with: "video\/"\) \?\? false/);
+  });
+
+  it("holds the uncached still's player to the three things its exemption rests on", () => {
+    const still = stripComments(readFileSync(path.join(mobileRoot, 'lib/video-frame.ts'), 'utf8'));
+    // It never plays or loops, so nothing queues behind it.
+    expect(still).not.toMatch(/\.play\(\)|\.loop = true/);
+    // Its item buffers no more than a second ahead.
+    expect(still).toMatch(/preferredForwardBufferDuration: 1 \}/);
+    // And it is let go whatever the read did.
+    expect(still).toMatch(/finally \{[^}]*player\.release\(\);\s*\}/);
   });
 
   it('keeps no exemption for a file that no longer makes a player', () => {
