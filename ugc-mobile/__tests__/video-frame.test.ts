@@ -4,13 +4,10 @@ type Payload = Record<string, unknown>;
 
 /** What the module asked of one player, and the native answers a case decides. */
 type FakePlayer = {
-  source: unknown;
+  source: { uri: string };
   muted: boolean;
   audioMixingMode?: string;
   bufferOptions: unknown;
-  status: string;
-  /** iOS: whether the player has its item yet. */
-  loaded: boolean;
   played: boolean;
   released: boolean;
   thumbnailRequests: unknown[][];
@@ -24,18 +21,21 @@ type FakePlayer = {
 
 const native = vi.hoisted(() => {
   const state = {
-    platform: { OS: 'android' },
+    platform: { OS: 'ios' },
     players: [] as unknown[],
+    /**
+     * Whether a new player is given its item as iOS gives it: once the asset
+     * has loaded, after the code that made the player has run.
+     */
+    attachItems: true,
     /** The stills a player's request is answered with, decided per case. */
     answer: (async () => []) as (player: never) => Promise<unknown[]>,
-    makePlayer(source: unknown) {
+    makePlayer(source: { uri: string }) {
       const listeners = new Map<string, Set<(payload: Record<string, unknown>) => void>>();
       const player = {
         source,
         muted: false,
         bufferOptions: undefined as unknown,
-        status: 'loading',
-        loaded: false,
         played: false,
         released: false,
         thumbnailRequests: [] as unknown[][],
@@ -57,6 +57,7 @@ const native = vi.hoisted(() => {
         release() { player.released = true; },
       };
       state.players.push(player);
+      if (state.attachItems) void Promise.resolve().then(() => player.emit('sourceChange', { source }));
       return player;
     },
   };
@@ -64,7 +65,7 @@ const native = vi.hoisted(() => {
 });
 
 vi.mock('react-native', () => ({ Platform: native.platform }));
-vi.mock('expo-video', () => ({ createVideoPlayer: (source: unknown) => native.makePlayer(source) }));
+vi.mock('expo-video', () => ({ createVideoPlayer: (source: { uri: string }) => native.makePlayer(source) }));
 
 const players = () => native.players as FakePlayer[];
 const answerWith = (answer: (player: FakePlayer) => Promise<unknown[]>) => {
@@ -73,7 +74,8 @@ const answerWith = (answer: (player: FakePlayer) => Promise<unknown[]>) => {
 /** Every queued step that can run now has run. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-// A fresh module per case: reads queue across the app, so one case's read must not hold the next case's.
+// A fresh module per case: reads queue across the app, so one case's read must
+// not hold the next case's, and the platform is read when the module loads.
 async function load() {
   vi.resetModules();
   return import('../lib/video-frame');
@@ -82,8 +84,9 @@ async function load() {
 const STILL = { width: 405, height: 720 };
 
 beforeEach(() => {
-  native.platform.OS = 'android';
+  native.platform.OS = 'ios';
   native.players.length = 0;
+  native.attachItems = true;
   answerWith(async () => [STILL]);
 });
 
@@ -92,8 +95,9 @@ afterEach(() => {
 });
 
 describe('grabVideoFrame', () => {
-  it('reads a still on Android straight away, from a muted player held to the least buffer, and lets it go', async () => {
-    const { grabVideoFrame, VIDEO_FRAME_MAX_SIDE, VIDEO_FRAME_TIME_SECONDS } = await load();
+  it('reads a still from a muted player held to a second of buffer, and lets it go', async () => {
+    const { grabVideoFrame, VIDEO_FRAME_MAX_SIDE, VIDEO_FRAME_TIME_SECONDS, VIDEO_STILLS_READ } = await load();
+    expect(VIDEO_STILLS_READ).toBe(true);
 
     await expect(grabVideoFrame('https://cdn.test/clip.mp4')).resolves.toBe(STILL);
 
@@ -101,34 +105,52 @@ describe('grabVideoFrame', () => {
     expect(player.source).toEqual({ uri: 'https://cdn.test/clip.mp4' });
     expect(player.muted).toBe(true);
     expect(player.audioMixingMode).toBe('auto');
-    expect(player.bufferOptions).toMatchObject({ maxBufferBytes: 1, prioritizeTimeOverSizeThreshold: false });
+    expect(player.bufferOptions).toEqual({ preferredForwardBufferDuration: 1 });
     expect(player.thumbnailRequests).toEqual([
       [VIDEO_FRAME_TIME_SECONDS, { maxWidth: VIDEO_FRAME_MAX_SIDE, maxHeight: VIDEO_FRAME_MAX_SIDE }],
     ]);
     expect(player.played).toBe(false);
+    expect(player.listenerCount()).toBe(0);
     expect(player.released).toBe(true);
   });
 
-  it('waits on iOS until the player has its item, before which it answers with no still', async () => {
-    native.platform.OS = 'ios';
-    answerWith(async (player) => (player.loaded ? [STILL] : []));
+  // expo-video opens an Android clip for a still on the one thread every Expo
+  // module's async calls share: a slow link there held up session reads,
+  // haptics and the clipboard.
+  it('reads nothing on Android, and makes no player there', async () => {
+    native.platform.OS = 'android';
+    const { grabVideoFrame, VIDEO_STILLS_READ } = await load();
+
+    expect(VIDEO_STILLS_READ).toBe(false);
+    await expect(grabVideoFrame('https://cdn.test/clip.mp4')).resolves.toBeNull();
+    expect(players()).toHaveLength(0);
+  });
+
+  it('waits until the player has its item, before which it answers with no still, and no longer', async () => {
+    native.attachItems = false;
+    const attached = new Set<FakePlayer>();
+    answerWith(async (player) => (attached.has(player) ? [STILL] : []));
     const { grabVideoFrame } = await load();
 
     const still = grabVideoFrame('https://cdn.test/clip.mp4');
     await settle();
     const [player] = players();
+    // A change to no source is not the item arriving.
+    player.emit('sourceChange', { source: null });
+    await settle();
     expect(player.thumbnailRequests).toHaveLength(0);
 
-    player.loaded = true;
-    player.emit('sourceLoad', { duration: 4 });
+    // The item is all a still needs: nothing has to buffer first.
+    attached.add(player);
+    player.emit('sourceChange', { source: { uri: 'https://cdn.test/clip.mp4' } });
 
     await expect(still).resolves.toBe(STILL);
     expect(player.listenerCount()).toBe(0);
     expect(player.released).toBe(true);
   });
 
-  it('gives no still for an iOS clip that will not load, and lets its player go', async () => {
-    native.platform.OS = 'ios';
+  it('gives no still for a clip that will not load, and lets its player go', async () => {
+    native.attachItems = false;
     const { grabVideoFrame } = await load();
 
     const still = grabVideoFrame('https://cdn.test/expired.mp4');
@@ -145,7 +167,7 @@ describe('grabVideoFrame', () => {
   it('reads one still at a time, in the order asked', async () => {
     let answerFirst: (stills: unknown[]) => void = () => undefined;
     const second = { width: 720, height: 405 };
-    answerWith((player) => ((player.source as { uri: string }).uri.endsWith('first.mp4')
+    answerWith((player) => (player.source.uri.endsWith('first.mp4')
       ? new Promise((resolve) => { answerFirst = resolve; })
       : Promise.resolve([second])));
     const { grabVideoFrame } = await load();
@@ -158,7 +180,7 @@ describe('grabVideoFrame', () => {
     answerFirst([STILL]);
     await expect(firstStill).resolves.toBe(STILL);
     await expect(secondStill).resolves.toBe(second);
-    expect(players().map((player) => (player.source as { uri: string }).uri)).toEqual([
+    expect(players().map((player) => player.source.uri)).toEqual([
       'https://cdn.test/first.mp4',
       'https://cdn.test/second.mp4',
     ]);
@@ -189,9 +211,9 @@ describe('grabVideoFrame', () => {
     expect(players()).toHaveLength(1);
   });
 
-  it('starts the next read when a read on Android never returns', async () => {
+  it('starts the next read when a read never returns', async () => {
     vi.useFakeTimers();
-    answerWith((player) => ((player.source as { uri: string }).uri.endsWith('stuck.mp4')
+    answerWith((player) => (player.source.uri.endsWith('stuck.mp4')
       ? new Promise(() => undefined)
       : Promise.resolve([STILL])));
     const { grabVideoFrame, VIDEO_FRAME_DEADLINE_MS } = await load();
@@ -208,7 +230,7 @@ describe('grabVideoFrame', () => {
   });
 
   it('gives no still when the clip cannot be read, and the next read still runs', async () => {
-    answerWith((player) => ((player.source as { uri: string }).uri.endsWith('broken.mp4')
+    answerWith((player) => (player.source.uri.endsWith('broken.mp4')
       ? Promise.reject(new Error('Failed to generate a thumbnail'))
       : Promise.resolve([STILL])));
     const { grabVideoFrame } = await load();

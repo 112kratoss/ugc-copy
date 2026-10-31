@@ -45,9 +45,9 @@ vi.mock('@/components/feed-media-frame', () => ({
 }));
 
 vi.mock('@/components/post-resource-references', () => ({
-  PostResourceReferences: ({ items, label }: { items: PostResourceItem[]; label?: string | null }) => React.createElement(
+  PostResourceReferences: ({ items, label, readStills }: { items: PostResourceItem[]; label?: string | null; readStills?: boolean }) => React.createElement(
     'references',
-    { label },
+    { label, readStills },
     items.map((item) => React.createElement('text', { key: item.id ?? item.title }, item.title))
   ),
 }));
@@ -509,6 +509,30 @@ describe('PostResourceBundleContent', () => {
   // adds when the recipe is read. An app talking to a server from before the
   // clip was typed a reference still receives it as a source file: it gave the
   // clip a card of its own, "Source assets", under a document icon.
+  it("passes the page's word on reading clips' stills to its References card, reading them unless told not to", () => {
+    const resources: PostResourceBundleResources = {
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      workflowSnapshot: null,
+      attachments: [],
+      allowRemix: true,
+      items: [
+        item({ id: 'prompt', type: 'prompt', title: 'Exact generation prompt', textContent: 'Swap the first person', sortOrder: 0 }),
+        item({ id: 'clip', type: 'reference_video', title: 'Video reference 1', storagePath: 'generation_inputs/u/g/03.mp4', contentType: 'video/mp4', sortOrder: 1 }),
+      ],
+    };
+    const readStills = (tree: renderer.ReactTestRenderer) => tree.root
+      .findAll((node) => String(node.type) === 'references')
+      .map((node) => node.props.readStills);
+    const content = (props: { readStills?: boolean }) => renderContent(
+      <PostResourceBundleContent onOpenUrl={vi.fn()} resolveFileUrl={async () => 'https://signed.example.com/clip'} resources={resources} {...props} />
+    );
+
+    expect(readStills(content({}))).toEqual([true]);
+    expect(readStills(content({ readStills: false }))).toEqual([false]);
+  });
+
   it('reads the prompt, then every picture and clip it names in one References card', () => {
     const resources: PostResourceBundleResources = {
       promptText: null,

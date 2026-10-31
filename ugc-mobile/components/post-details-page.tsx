@@ -285,6 +285,7 @@ export function PostDetailsPage({
             onError={setResourceError}
             onOpenFile={openResourceFile}
             onOpenUrl={openResourceUrl}
+            readStills={active}
             resolveFileUrl={resolveResourceFileUrl}
             resources={prepared.resources}
           />

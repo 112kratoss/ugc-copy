@@ -615,6 +615,16 @@ describe('the unlocked card', () => {
     authState.api.resolvePostResourceFileUrl.mockReset();
   });
 
+  // The reel mounts a slide's Details page beside its playing clip.
+  it("lets the references read their clips' stills only while the page is the one on screen", () => {
+    queryState.current = unlocked();
+    const tree = render(page({ active: false }));
+    expect((bundleContentProps.mock.calls.at(-1)?.[0] as { readStills?: boolean }).readStills).toBe(false);
+
+    renderer.act(() => tree.update(page({ active: true })));
+    expect((bundleContentProps.mock.calls.at(-1)?.[0] as { readStills?: boolean }).readStills).toBe(true);
+  });
+
   it("calls the creator's own recipe owner access, not an unlock", () => {
     queryState.current = unlocked({ viewerIsOwner: true });
     const tree = render(page());

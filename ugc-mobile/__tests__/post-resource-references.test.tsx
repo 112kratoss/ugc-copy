@@ -49,10 +49,17 @@ vi.mock('@/components/mature-cover', async () => {
 });
 
 // The still a clip gives, decided per case; by default the clip gives none.
-const stills = vi.hoisted(() => ({ grab: vi.fn<(url: string, options: { signal: AbortSignal }) => Promise<unknown>>() }));
-vi.mock('@/lib/video-frame', () => ({ grabVideoFrame: stills.grab }));
+const stills = vi.hoisted(() => ({
+  read: true,
+  grab: vi.fn<(url: string, options: { signal: AbortSignal }) => Promise<unknown>>(),
+}));
+vi.mock('@/lib/video-frame', () => ({
+  grabVideoFrame: stills.grab,
+  get VIDEO_STILLS_READ() { return stills.read; },
+}));
 
 beforeEach(() => {
+  stills.read = true;
   stills.grab.mockReset();
   stills.grab.mockResolvedValue(null);
 });
@@ -300,7 +307,7 @@ describe('PostResourceReferences', () => {
     expect(tree!.root.findByType('media-lightbox' as never).props.items).toEqual([]);
   });
 
-  it('renders openable non-image reference media without an inline preview', async () => {
+  it('renders an openable clip that gives no still without an inline preview', async () => {
     const sourceVideo: PostResourceItem = {
       ...referenceImage,
       type: 'source_file',
@@ -470,20 +477,79 @@ describe('PostResourceReferences', () => {
       renderer.act(() => tree?.unmount());
     });
 
-    it('keeps the plain play mark when the clip gives no still, and does not ask again', async () => {
+    it('keeps the plain play mark when the clip gives no still, until opening it renews the link', async () => {
+      const resolveFileUrl = vi.fn(async (path: string) => `https://cdn.example.com/${path}`);
+      let tree: renderer.ReactTestRenderer | undefined;
+      await renderer.act(async () => {
+        tree = renderer.create(<PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />);
+      });
+      expect(byType(tree!, 'image')).toHaveLength(0);
+      expect(byType(tree!, 'play-icon')).toHaveLength(1);
+      // Re-rendering asks nothing again.
+      await renderer.act(async () => {
+        tree!.update(<PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />);
+      });
+      expect(stills.grab).toHaveBeenCalledTimes(1);
+
+      // The first link can have run out, or its read missed the deadline:
+      // opening the clip renews the link, and the still is read from that.
+      stills.grab.mockResolvedValueOnce(STILL);
+      resolveFileUrl.mockResolvedValueOnce('https://cdn.example.com/renewed/clip.mp4');
+      await renderer.act(async () => {
+        await tree!.root.findByProps({ accessibilityLabel: 'Open reference Video reference 1' }).props.onPress();
+      });
+
+      expect(stills.grab).toHaveBeenCalledTimes(2);
+      expect(stills.grab).toHaveBeenLastCalledWith('https://cdn.example.com/renewed/clip.mp4', { signal: expect.any(AbortSignal) });
+      expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([STILL]);
+      renderer.act(() => tree?.unmount());
+    });
+
+    // The reel mounts a slide's Details page beside its playing clip.
+    it('reads no still while the page is off screen, calls off one under way when it leaves, and keeps one read', async () => {
+      const signals: AbortSignal[] = [];
+      stills.grab
+        .mockImplementationOnce((_url, { signal }) => {
+          signals.push(signal);
+          return new Promise(() => undefined);
+        })
+        .mockImplementationOnce((_url, { signal }) => {
+          signals.push(signal);
+          return Promise.resolve(STILL);
+        });
+      const references = (readStills: boolean) => (
+        <PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} readStills={readStills} resolveFileUrl={async (path) => `https://cdn.example.com/${path}`} />
+      );
+      let tree: renderer.ReactTestRenderer | undefined;
+      await renderer.act(async () => { tree = renderer.create(references(false)); });
+      expect(stills.grab).not.toHaveBeenCalled();
+
+      await renderer.act(async () => { tree!.update(references(true)); });
+      expect(signals).toHaveLength(1);
+      await renderer.act(async () => { tree!.update(references(false)); });
+      expect(signals[0].aborted).toBe(true);
+
+      await renderer.act(async () => { tree!.update(references(true)); });
+      expect(signals).toHaveLength(2);
+      expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([STILL]);
+      await renderer.act(async () => { tree!.update(references(false)); });
+      expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([STILL]);
+      expect(stills.grab).toHaveBeenCalledTimes(2);
+      renderer.act(() => tree?.unmount());
+    });
+
+    it('reads no still where the platform does not read them, and keeps the play mark', async () => {
+      stills.read = false;
       let tree: renderer.ReactTestRenderer | undefined;
       await renderer.act(async () => {
         tree = renderer.create(
           <PostResourceReferences items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={async (path) => `https://cdn.example.com/${path}`} />
         );
       });
-      await renderer.act(async () => {
-        await tree!.root.findByProps({ accessibilityLabel: 'Open reference Video reference 1' }).props.onPress();
-      });
 
+      expect(stills.grab).not.toHaveBeenCalled();
       expect(byType(tree!, 'image')).toHaveLength(0);
       expect(byType(tree!, 'play-icon')).toHaveLength(1);
-      expect(stills.grab).toHaveBeenCalledTimes(1);
       renderer.act(() => tree?.unmount());
     });
 
@@ -517,9 +583,10 @@ describe('PostResourceReferences', () => {
       const again = { width: 406, height: 720 };
       await renderer.act(async () => { answers[1](again); });
       expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([again]);
+      expect(signals).toHaveLength(2);
 
       renderer.act(() => tree?.unmount());
-      expect(signals[1].aborted).toBe(false);
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
     });
 
     it('lets a read under way go when the row unmounts', async () => {
@@ -649,6 +716,34 @@ describe('PostResourceReferences in a mature purchase', () => {
     expect(byType(tree!, 'image')).toHaveLength(0);
     expect(byType(tree!, 'play-icon')).toHaveLength(1);
     expect(stills.grab).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('calls off a still being read when the plate comes back, and reads it again when it lifts', async () => {
+    const signals: AbortSignal[] = [];
+    const still = { width: 405, height: 720 };
+    stills.grab
+      .mockImplementationOnce((_url, { signal }) => {
+        signals.push(signal);
+        return new Promise(() => undefined);
+      })
+      .mockImplementationOnce((_url, { signal }) => {
+        signals.push(signal);
+        return Promise.resolve(still);
+      });
+    const references = (coverMedia: boolean) => (
+      <PostResourceReferences coverMedia={coverMedia} items={[videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={async (path) => `https://cdn.example.com/${path}`} />
+    );
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => { tree = renderer.create(references(false)); });
+    expect(signals).toHaveLength(1);
+
+    await renderer.act(async () => { tree!.update(references(true)); });
+    expect(signals[0].aborted).toBe(true);
+
+    await renderer.act(async () => { tree!.update(references(false)); });
+    expect(signals).toHaveLength(2);
+    expect(byType(tree!, 'image').map((node) => node.props.source)).toEqual([still]);
     renderer.act(() => tree?.unmount());
   });
 

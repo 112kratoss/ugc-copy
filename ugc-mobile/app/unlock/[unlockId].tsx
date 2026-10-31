@@ -69,7 +69,7 @@ export default function ViewerUnlockScreen() {
   const cover = getUnlockCover(detail?.post ?? null);
   // The plate stands in the cover's place whenever there is mature media to
   // keep back, the outputs' thumbnails and the resources' reference pictures
-  // included, so Show is always on screen.
+  // and clips included, so Show is always on screen.
   const matureMedia = Boolean(detail?.isNsfw)
     && (cover.kind !== 'none' || activeMediaItems.length > 0 || hasResourcePictures(resources));
   const reveal = useMatureReveal(matureMedia);
