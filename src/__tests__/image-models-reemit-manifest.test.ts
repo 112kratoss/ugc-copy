@@ -72,7 +72,9 @@ function read(name: string): Manifest {
 }
 
 const manifest = read('2026-11-01-image-models-reemit.json');
-const base = read('2026-10-31-slot-min-durations.json');
+// Kling 3.0 motion's release, which re-emits that model only, so production's rows for these eight are the ones
+// slot-min-durations-20261031 served.
+const base = read('2026-11-01-kling-3-motion-inputs.json');
 
 const LEGACY_IDS = ['grok-imagine-image', 'ideogram-v3', 'seedream-5-lite', 'seedream-5-pro', 'wan-2.7-image', 'wan-2.7-image-pro'];
 const QWEN_IDS = ['qwen3', 'qwen3-pro'];

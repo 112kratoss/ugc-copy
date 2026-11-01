@@ -4,7 +4,7 @@
   "release": {
     "schemaVersion": 2,
     "revision": "image-models-reemit-20261101",
-    "basedOnRevision": "slot-min-durations-20261031",
+    "basedOnRevision": "kling-3-motion-inputs-20261101",
     "changeNote": "Grok Imagine, Ideogram V3, Seedream 5 Lite and 5 Pro, and Wan 2.7 Image and Image Pro, which production served as the July compatibility release wrote them (one default input mode, the image-v1 pricing and validation strategies, no rules), and Qwen Image 3.0 and 3.0 Pro, re-emitted from the code build. The six publish their reference pictures in a references input mode (the same imageReferences slot, cap and naming), price by lookup (Grok Imagine by a conditional on reference pictures) from the same values, and validate by descriptor rules. Wan 2.7 Image Pro now refuses 4K with a reference picture at the quote, in the words the start already refused it with before any hold. Qwen Image 3.0 and 3.0 Pro drop the price rows for 4 to 10 reference pictures, which their 3-picture cap has refused since enhancer-reference-caps-20260824. Every run priced before is priced the same, and no adapter, provider mapping, availability, control or default changes.",
     "createdBy": "catalog-operations"
   },

@@ -1,6 +1,6 @@
 {
-  "source": "Production catalog release slot-min-durations-20261031, the stored rows of these eight image models, read with the release CLI's loadActiveCatalog (read-only) on 2026-11-01. The July compatibility release wrote the six image-v1 rows (Wan 2.7 Image and Image Pro last carried by wan-provider-id-fix-20260725) and enhancer-reference-caps-20260824 the two Qwen rows; no release re-emitted any of them before image-models-reemit-20261101.",
-  "revision": "slot-min-durations-20261031",
+  "source": "Production catalog release kling-3-motion-inputs-20261101, the stored rows of these eight image models, read with the release CLI's loadActiveCatalog (read-only) on 2026-11-01; equal to the rows read at slot-min-durations-20261031 the same day. The July compatibility release wrote the six image-v1 rows (Wan 2.7 Image and Image Pro last carried by wan-provider-id-fix-20260725) and enhancer-reference-caps-20260824 the two Qwen rows; no release re-emitted any of them before image-models-reemit-20261101.",
+  "revision": "kling-3-motion-inputs-20261101",
   "entries": [
     {
       "modelId": "grok-imagine-image",
