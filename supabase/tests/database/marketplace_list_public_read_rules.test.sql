@@ -5,15 +5,17 @@
 --     recipe's search document does not hold that body. Whether the recipe is
 --     listed is still judged on its post as stored, as every quality check
 --     judges it;
---   - a recipe on an NSFW-labelled post is not listed, as search_public_posts
---     leaves the post out, so a page never holds a row the app then drops.
+--   - a recipe on a post public reads do not show is not listed: an
+--     NSFW-labelled post, as search_public_posts leaves it out, or a reported
+--     one ('flagged'), as the post page and the app's marketplace read show
+--     only 'visible' posts. So a page never holds a row the app then drops.
 
 begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(39);
+select plan(43);
 
 create function pg_temp.finds(p_query text, p_bundle_id uuid)
 returns boolean
@@ -288,6 +290,29 @@ where id = '0000f5e1-0000-4000-9000-000000000017'::uuid;
 
 select ok(pg_temp.finds(null, '0000f5e1-0000-4000-9000-000000000027'::uuid),
   'removing the label lists it again');
+
+-- A reported post waits for review as 'flagged'. Public reads show only
+-- 'visible' posts, so its recipe leaves the list until the report is cleared.
+update public.posts
+set review_status = 'flagged'
+where id = '0000f5e1-0000-4000-9000-000000000017'::uuid;
+
+select ok(not pg_temp.finds(null, '0000f5e1-0000-4000-9000-000000000027'::uuid),
+  'a reported post''s recipe leaves the list while the report waits');
+select ok(not pg_temp.finds('cobalt fern', '0000f5e1-0000-4000-9000-000000000027'::uuid),
+  'and its post''s words do not find it');
+select is(
+  (select status from public.post_resource_bundles where id = '0000f5e1-0000-4000-9000-000000000027'::uuid),
+  'published',
+  'the report does not unpublish the recipe'
+);
+
+update public.posts
+set review_status = 'visible'
+where id = '0000f5e1-0000-4000-9000-000000000017'::uuid;
+
+select ok(pg_temp.finds(null, '0000f5e1-0000-4000-9000-000000000027'::uuid),
+  'clearing the report lists it again');
 
 -- An NSFW post's recipe stays its owner's: the label leaves the recipe itself
 -- alone, so the creator and its buyers keep reading it on their own pages.

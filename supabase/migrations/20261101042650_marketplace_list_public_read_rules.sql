@@ -13,15 +13,18 @@
 --    access_mode. Whether a recipe is listed is still judged on its post as
 --    stored, as every other quality check judges it: the publish and
 --    promotion checks, both seller pages, and the app's re-check of a page.
--- 2. A recipe on an NSFW-labelled post is not listable. The list is the same
---    for every viewer, and the app left these recipes out only after the list
---    function had paged them, so a page could hold rows nobody was shown.
---    search_public_posts leaves NSFW posts out before its limit the same way.
---    The listing's posts trigger follows is_nsfw, so a label takes the recipe
---    off the list in the transaction that sets it, and removing the label
---    lists it again. The recipe itself is untouched: its creator and its
---    buyers read it on their own pages, behind the owner, reveal and purchase
---    checks.
+-- 2. A recipe on a post public reads do not show is not listable: an
+--    NSFW-labelled post, which search_public_posts leaves out before its
+--    limit too, or a reported one waiting for review (review_status
+--    'flagged'), which the post page and the app's marketplace read leave out
+--    as they leave out anything not 'visible'. The list is the same for every
+--    viewer, and the app left these recipes out only after the list function
+--    had paged them, so a page could hold rows nobody was shown. The
+--    listing's posts trigger follows is_nsfw and already follows
+--    review_status, so a label or a report takes the recipe off the list in
+--    the transaction that sets it, and clearing it lists the recipe again. The
+--    recipe itself is untouched: its creator and its buyers read it on their
+--    own pages, behind the owner, reveal and purchase checks.
 --
 -- Each function and trigger is re-created as the migration before this one
 -- left it but for the lines above;
@@ -29,10 +32,10 @@
 -- to that, and the rule to the app's.
 --
 -- Only the rows these rules can change are re-projected at the end: listings
--- of recipes on NSFW-labelled posts, and documents of paid recipes. Production
--- on 2026-11-01 (read-only counts): 17 recipes, 12 listed; one post with a
--- setup caption, under a free recipe; no NSFW-labelled post. Neither rule
--- changes a row there.
+-- of recipes on posts that are NSFW-labelled or not 'visible', and documents
+-- of paid recipes. Production on 2026-11-01 (read-only counts): 17 recipes,
+-- 12 listed, every post 'visible'; one post with a setup caption, under a free
+-- recipe; no NSFW-labelled post. Neither rule changes a row there.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
@@ -154,8 +157,9 @@ CREATE OR REPLACE TRIGGER post_resource_bundles_refresh_marketplace_search_updat
 
 -- ─── The listing ─────────────────────────────────────────────────────────────
 --
--- As 20261101040316 left it, but for one line of `listable`: a recipe on an
--- NSFW-labelled post is not listable.
+-- As 20261101040316 left it, but for two lines of `listable`: a recipe is
+-- listable only on a post whose review status is 'visible' (it was any but
+-- 'hidden') and that is not NSFW-labelled.
 CREATE OR REPLACE FUNCTION public.refresh_marketplace_bundle_listings(
   p_bundle_ids uuid[] DEFAULT NULL
 )
@@ -175,7 +179,7 @@ AS $function$
       AND bundles.status = 'published'
       AND posts.visibility = 'public'
       AND posts.archived_at IS NULL
-      AND coalesce(posts.review_status, 'visible') <> 'hidden'
+      AND coalesce(posts.review_status, 'visible') = 'visible'
       AND posts.is_nsfw = false
       AND public.marketplace_resource_bundle_quality_issue(
         bundles.title,
@@ -276,6 +280,9 @@ REVOKE ALL ON FUNCTION public.refresh_marketplace_bundle_listings(uuid[])
 GRANT EXECUTE ON FUNCTION public.refresh_marketplace_bundle_listings(uuid[])
   TO service_role;
 
+COMMENT ON COLUMN public.marketplace_bundle_listings.listable IS
+  'Bundle status + post visibility/archive + post review status ''visible'' + not NSFW-labelled + marketplace_resource_bundle_quality_issue() IS NULL. This is a moderation gate: if it goes stale, taken-down content stays listed.';
+
 -- Every post column the listing reads, is_nsfw now among them. Hot counters
 -- stay out (see 20260809210000).
 CREATE OR REPLACE TRIGGER posts_refresh_marketplace_listing
@@ -296,14 +303,14 @@ CREATE OR REPLACE TRIGGER posts_refresh_marketplace_listing
   )
   EXECUTE FUNCTION public.trg_refresh_marketplace_listing_for_post();
 
--- Re-project the rows these rules can change: the listings of recipes on
--- NSFW-labelled posts and the documents of paid recipes. Only the rows whose
--- values change are written.
+-- Re-project the rows these rules can change: the listings of recipes on posts
+-- that are NSFW-labelled or not 'visible', and the documents of paid recipes.
+-- Only the rows whose values change are written.
 SELECT public.refresh_marketplace_bundle_listings(ARRAY(
   SELECT bundles.id
   FROM public.post_resource_bundles AS bundles
   JOIN public.posts AS posts ON posts.id = bundles.post_id
-  WHERE posts.is_nsfw
+  WHERE posts.is_nsfw OR posts.review_status IS DISTINCT FROM 'visible'
 ));
 SELECT public.refresh_marketplace_bundle_search_documents(ARRAY(
   SELECT bundles.id

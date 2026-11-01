@@ -157,13 +157,20 @@ describe('marketplace list public read rules migration', () => {
     expect(columnsFollowed(trigger)).toEqual(columnsRead('bundles', current('FUNCTION', 'refresh_marketplace_bundle_search_documents')));
   });
 
-  it('keeps the listing as the migration before it left it, but for the NSFW label', () => {
+  it('keeps the listing as the migration before it left it, but for the posts public reads do not show', () => {
     const previous = latest('FUNCTION', 'refresh_marketplace_bundle_listings', migrationFile);
     const listing = current('FUNCTION', 'refresh_marketplace_bundle_listings');
-    const gate = "      AND coalesce(posts.review_status, 'visible') <> 'hidden'\n";
 
-    expect(comparable(listing)).toBe(comparable(previous).replace(gate, `${gate}      AND posts.is_nsfw = false\n`));
+    expect(comparable(listing)).toBe(comparable(previous).replace(
+      "      AND coalesce(posts.review_status, 'visible') <> 'hidden'\n",
+      "      AND coalesce(posts.review_status, 'visible') = 'visible'\n      AND posts.is_nsfw = false\n",
+    ));
     expect(listing).not.toBe(previous);
+    // The app's marketplace read shows only visible, unarchived public posts.
+    expect(serverSource).toContain("query = query.eq('visibility', 'public').is('archived_at', null).eq('review_status', 'visible');");
+    expect(statements).toMatch(
+      /COMMENT ON COLUMN public\.marketplace_bundle_listings\.listable IS\s+'[^']*post review status ''visible'' \+ not NSFW-labelled \+/,
+    );
   });
 
   it('recomputes a listing on every post column it reads, the label among them, and on no hot counter', () => {
@@ -205,9 +212,10 @@ describe('marketplace list public read rules migration', () => {
     // DROP TRIGGER takes ACCESS EXCLUSIVE, which would stop every read of posts.
     expect(statements).not.toMatch(/DROP (?:TRIGGER|FUNCTION)/i);
     expect(statements.match(/CREATE (?:OR REPLACE )?TRIGGER/g)).toEqual(['CREATE OR REPLACE TRIGGER', 'CREATE OR REPLACE TRIGGER']);
-    // The listings of recipes on NSFW-labelled posts, then the documents of paid recipes.
+    // The listings of recipes on posts that are NSFW-labelled or not visible,
+    // then the documents of paid recipes.
     expect(statements.trim()).toMatch(
-      /SELECT public\.refresh_marketplace_bundle_listings\(ARRAY\(\s+SELECT bundles\.id\s+FROM public\.post_resource_bundles AS bundles\s+JOIN public\.posts AS posts ON posts\.id = bundles\.post_id\s+WHERE posts\.is_nsfw\s+\)\);\s+SELECT public\.refresh_marketplace_bundle_search_documents\(ARRAY\(\s+SELECT bundles\.id\s+FROM public\.post_resource_bundles AS bundles\s+WHERE bundles\.access_mode = 'paid'\s+\)\);\s+COMMIT;$/,
+      /SELECT public\.refresh_marketplace_bundle_listings\(ARRAY\(\s+SELECT bundles\.id\s+FROM public\.post_resource_bundles AS bundles\s+JOIN public\.posts AS posts ON posts\.id = bundles\.post_id\s+WHERE posts\.is_nsfw OR posts\.review_status IS DISTINCT FROM 'visible'\s+\)\);\s+SELECT public\.refresh_marketplace_bundle_search_documents\(ARRAY\(\s+SELECT bundles\.id\s+FROM public\.post_resource_bundles AS bundles\s+WHERE bundles\.access_mode = 'paid'\s+\)\);\s+COMMIT;$/,
     );
   });
 });
