@@ -60,6 +60,7 @@ const EXEMPT: Record<string, string> = {
   'lib/audio-creation-native-player.ts': "an audio creation's player: it never loops, so no copy queues behind another, and expo-video's iOS cache refuses a response that is not video/*",
   'lib/video-frame.ts': "a still's player: it never plays or loops, its item buffers no more than a second ahead, and it is let go once the still is read",
   'components/launch-splash.tsx': "the launch sting: a clip bundled with the app, read from its own files, played once and never looped, so there is nothing to download again",
+  'lib/media-file-length.ts': "a picked track's player: it reads a file already on the phone, never plays or loops, and is let go once the length is read",
 };
 
 /**
