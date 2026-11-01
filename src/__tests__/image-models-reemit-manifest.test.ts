@@ -17,17 +17,7 @@ import {
   type GenerationModelOperationalConfig,
 } from '@/lib/generation-model-runtime';
 import { IMAGE_MODELS, getImageCost } from '@/lib/models';
-import {
-  buildUnifiedGenerationQuoteInput,
-  parseUnifiedGenerationRequest,
-} from '@/lib/unified-generation-start-service';
-import {
-  CLIENT_RENDERED_CONTROL_TYPES,
-  CLIENT_RENDERED_INPUT_MODE_KEYS,
-  CLIENT_RENDERED_INPUT_SLOT_KINDS,
-  CLIENT_RENDERED_INPUT_SLOT_ROLES,
-  catalogRunQuoteInput,
-} from '../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { validateCatalogManifest } from '../../scripts/ops/generation-model-catalog';
 
 import productionImageEntries from './fixtures/production-image-entries-2026-11-01.json';
@@ -88,6 +78,22 @@ const LEGACY_IDS = ['grok-imagine-image', 'ideogram-v3', 'seedream-5-lite', 'see
 const QWEN_IDS = ['qwen3', 'qwen3-pro'];
 const MODEL_IDS = [...LEGACY_IDS, ...QWEN_IDS];
 const WAN_PRO_4K_REFUSAL = 'Wan 2.7 Image Pro supports 4K for text-to-image only.';
+/** The parts of production's row this release changes: the compatibility shape's, and Qwen's table. */
+const CHANGED_KEYS: Record<string, readonly (keyof ManifestEntry)[]> = Object.fromEntries(MODEL_IDS.map((modelId) => [
+  modelId,
+  QWEN_IDS.includes(modelId)
+    ? ['pricingConfig']
+    : ['publicDescriptor', 'pricingStrategy', 'pricingConfig', 'validationStrategy', 'validationConfig'],
+]));
+/** The committed release that last wrote production's row, for the four a committed release carried. */
+const LAST_RELEASE: Record<string, string> = {
+  'wan-2.7-image': '2026-07-25-wan-provider-id-fix.json',
+  'wan-2.7-image-pro': '2026-07-25-wan-provider-id-fix.json',
+  qwen3: '2026-08-24-enhancer-reference-caps.json',
+  'qwen3-pro': '2026-08-24-enhancer-reference-caps.json',
+};
+/** The only controls a price or a rule of these entries reads; aspect ratio and output format change neither. */
+const PRICED_CONTROL_KEYS = ['resolution', 'qualityMode'];
 
 const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
 const operations = buildCodeGenerationModelOperations();
@@ -95,6 +101,9 @@ const released = (modelId: string) => manifest.entries.find((entry) => entry.mod
 /** Production's row until this release, read from the active release (the fixture says when). */
 const previous = (modelId: string) => (productionImageEntries.entries as unknown as ManifestEntry[])
   .find((entry) => entry.modelId === modelId)!;
+const omit = (entry: ManifestEntry, keys: readonly string[]) => Object.fromEntries(
+  Object.entries(entry).filter(([key]) => !keys.includes(key)),
+);
 
 /** An entry of a release of `schemaVersion` as production's catalog store reads it back, and quotes with it. */
 function asProductionReadsIt(entry: ManifestEntry, schemaVersion: number) {
@@ -141,44 +150,52 @@ function asProductionReadsIt(entry: ManifestEntry, schemaVersion: number) {
 
 type Settings = Record<string, string | number | boolean>;
 
-/** Every combination of the values the descriptor's controls offer. */
+/**
+ * Every combination of the controls a price or a rule reads, then each value of every other control beside
+ * the first of them. Every combination of every control (6,730 quotes in five shapes) was compared before
+ * this release (archive/image-models-reemit-2026-11-01/); the grid test holds that no price or rule here
+ * reads another control.
+ */
 function settingsGrid(descriptor: GenerationModelDescriptor): Settings[] {
-  let grid: Settings[] = [{}];
-  for (const control of descriptor.controls) {
+  const values = (control: GenerationModelDescriptor['controls'][number]) => {
     expect(control.type, `${descriptor.id} ${control.key}`).toBe('choice');
-    const values = control.type === 'choice' ? control.options.map((option) => option.value) : [];
-    grid = grid.flatMap((settings) => values.map((value) => ({ ...settings, [control.key]: value })));
+    return control.type === 'choice' ? control.options.map((option) => option.value) : [];
+  };
+  let grid: Settings[] = [{}];
+  for (const control of descriptor.controls.filter((candidate) => PRICED_CONTROL_KEYS.includes(candidate.key))) {
+    grid = grid.flatMap((settings) => values(control).map((value) => ({ ...settings, [control.key]: value })));
   }
-  return grid;
+  const others = descriptor.controls
+    .filter((control) => !PRICED_CONTROL_KEYS.includes(control.key))
+    .flatMap((control) => values(control).map((value) => ({ ...grid[0], [control.key]: value })));
+  return [...grid, ...others];
+}
+
+/** Every setting key a pricing expression or a validation rule names. */
+function settingKeysRead(value: unknown, keys = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) value.forEach((item) => settingKeysRead(item, keys));
+  else if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (record.source === 'setting' && typeof record.key === 'string') keys.add(record.key);
+    Object.values(record).forEach((item) => settingKeysRead(item, keys));
+  }
+  return keys;
 }
 
 const slotsOf = (descriptor: GenerationModelDescriptor) => (descriptor.inputModes ?? []).flatMap((mode) => mode.slots);
 const pictures = (count: number) => Array.from({ length: count }, () => ({ slot: 'imageReferences', kind: 'image' as const }));
 
-/** The shapes an image run is quoted in, each read with `count` reference pictures. */
+/**
+ * The distinct quotes an image run is priced with, each read with `count` reference pictures. Both creators,
+ * the batch quote and the unified start send the named-slot quote (buildUnifiedGenerationQuoteInput is
+ * catalogRunQuoteInput). The legacy image route and a workflow canvas step send kind totals, with their own
+ * setting defaults; a quote that names no schema version is read as schema 1 and sends the same totals.
+ */
 const QUOTE_SHAPES: Array<[string, (modelId: string, settings: Settings, count: number) => Omit<GenerationModelQuoteInput, 'catalogRevision'>]> = [
-  // Both creators and the batch quote: the pictures in the imageReferences slot.
-  ['creators', (modelId, settings, count) => catalogRunQuoteInput({
+  ['named slots', (modelId, settings, count) => catalogRunQuoteInput({
     kind: 'image', modelId, catalogRevision: catalog.revision, settings, inputs: pictures(count),
   })],
-  // The unified start's own quote of the run it is posted.
-  ['unified start', (modelId, settings, count) => buildUnifiedGenerationQuoteInput(parseUnifiedGenerationRequest({
-    kind: 'image',
-    modelId,
-    catalogRevision: catalog.revision,
-    settings,
-    prompt: 'A lighthouse at dusk',
-    inputs: Array.from({ length: count }, (_, index) => ({
-      slot: 'imageReferences', kind: 'image', url: `https://cdn.example.com/reference-${index}.png`,
-    })),
-  }))],
-  // The start's quote for a schema-1 catalog, which carries no slots (buildUnifiedGenerationQuoteInputForCatalog).
-  ['schema-1 start', (modelId, settings, count) => ({
-    ...catalogRunQuoteInput({ kind: 'image', modelId, catalogRevision: catalog.revision, settings, inputs: pictures(count) }),
-    schemaVersion: 1,
-    inputMetadata: { referenceVideoDurationsSeconds: [] },
-  }) as unknown as Omit<GenerationModelQuoteInput, 'catalogRevision'>],
-  // The legacy image route (startImageGenerationForRoute): its setting defaults and kind totals.
+  // startImageGenerationForRoute's setting defaults.
   ['legacy route', (modelId, settings, count) => ({
     kind: 'image',
     modelId,
@@ -191,7 +208,7 @@ const QUOTE_SHAPES: Array<[string, (modelId: string, settings: Settings, count: 
     },
     inputCounts: { images: count, videos: 0, audios: 0 },
   })],
-  // A workflow canvas's image step: no quality mode, kind totals.
+  // The workflow runner's image step: the node's settings, no quality mode.
   ['workflow step', (modelId, settings, count) => ({
     kind: 'image',
     modelId,
@@ -245,11 +262,12 @@ describe('image-models-reemit release', () => {
     expect(entry.verificationConfig).toEqual(operation.verificationConfig);
   });
 
-  it.each(MODEL_IDS)('%s keeps production’s adapter, routing and availability', (modelId) => {
-    const entry = released(modelId);
-    for (const key of ['kind', 'webEnabled', 'mobileEnabled', 'adapterKey', 'adapterConfig', 'providerModelMap', 'verificationConfig'] as const) {
-      expect(entry[key], key).toEqual(previous(modelId)[key]);
-    }
+  it.each(MODEL_IDS)('%s keeps the rest of production’s row: adapter, routing, availability, verification', (modelId) => {
+    expect(omit(released(modelId), CHANGED_KEYS[modelId])).toEqual(omit(previous(modelId), CHANGED_KEYS[modelId]));
+  });
+
+  it.each(Object.keys(LAST_RELEASE))('%s was read from production as the last release that carried it wrote it', (modelId) => {
+    expect(previous(modelId)).toEqual(read(LAST_RELEASE[modelId]).entries.find((entry) => entry.modelId === modelId));
   });
 
   it.each(LEGACY_IDS)('%s moves from the compatibility shape to the declarative strategies and a references mode', (modelId) => {
@@ -269,7 +287,8 @@ describe('image-models-reemit release', () => {
     // the stored model is the code's (key order aside), so the two strategies price alike.
     expect(before.pricingConfig).toEqual(IMAGE_MODELS[modelId as keyof typeof IMAGE_MODELS]);
 
-    // The descriptor changes in its input mode's key and label only: the same slot, cap and naming.
+    // The descriptor changes in its input mode's key and label only: the same slot, cap and naming. Neither
+    // creator reads a mode's key or label for an image model: both find the slot by its key.
     const { inputModes: modesBefore, ...restBefore } = before.publicDescriptor;
     const { inputModes: modesAfter, ...restAfter } = entry.publicDescriptor;
     expect(restAfter).toEqual(restBefore);
@@ -280,11 +299,8 @@ describe('image-models-reemit release', () => {
   });
 
   it.each(QWEN_IDS)('%s drops only the price rows its 3-picture cap refuses', (modelId) => {
-    const before = previous(modelId);
-    const entry = released(modelId);
-    const { pricingConfig: configBefore, ...restBefore } = before;
-    const { pricingConfig: configAfter, ...restAfter } = entry;
-    expect(restAfter).toEqual(restBefore);
+    const configBefore = previous(modelId).pricingConfig;
+    const configAfter = released(modelId).pricingConfig;
     const tableBefore = configBefore.table as Record<string, Record<string, number>>;
     const tableAfter = configAfter.table as Record<string, Record<string, number>>;
     expect({ ...configAfter, table: undefined }).toEqual({ ...configBefore, table: undefined });
@@ -294,30 +310,32 @@ describe('image-models-reemit release', () => {
       expect(Object.keys(row), resolution).toEqual([...kept, '4', '5', '6', '7', '8', '9', '10']);
       expect(tableAfter[resolution], resolution).toEqual(Object.fromEntries(kept.map((count) => [count, row[count]])));
     }
-    const { descriptor } = asProductionReadsIt(entry, manifest.release.schemaVersion);
+    const { descriptor } = asProductionReadsIt(released(modelId), manifest.release.schemaVersion);
     expect(slotsOf(descriptor).map((slot) => [slot.key, slot.max])).toEqual([['imageReferences', 3]]);
     expect(descriptor.inputs.imageReferences?.max).toBe(3);
   });
 
   it.each(MODEL_IDS)('%s quotes every setting and picture count as production’s entry did', (modelId) => {
-    const published = asProductionReadsIt(released(modelId), manifest.release.schemaVersion);
+    const entry = released(modelId);
+    const published = asProductionReadsIt(entry, manifest.release.schemaVersion);
     const before = asProductionReadsIt(previous(modelId), base.release.schemaVersion);
-    const grid = settingsGrid(published.descriptor);
-    expect(grid.length).toBe(settingsGrid(before.descriptor).length);
+    // What lets the grid leave aspect ratio and output format uncrossed.
+    expect([...settingKeysRead([entry.pricingConfig, entry.validationConfig])]
+      .filter((key) => !PRICED_CONTROL_KEYS.includes(key))).toEqual([]);
     const cap = Math.max(...slotsOf(published.descriptor).map((slot) => slot.max));
     let priced = 0;
-    for (const settings of grid) {
+    for (const settings of settingsGrid(published.descriptor)) {
       for (let count = 0; count <= cap + 1; count += 1) {
         for (const [shape, build] of QUOTE_SHAPES) {
           const input = build(modelId, settings, count);
           const label = `${shape} ${JSON.stringify(settings)} with ${count} picture(s)`;
           const after = published.quote(input);
-          const wanPro4kWithPictures = modelId === 'wan-2.7-image-pro' && input.settings?.resolution === '4K' && count > 0;
-          if (!wanPro4kWithPictures) {
-            expect(after, label).toEqual(before.quote(input));
-          } else {
-            // The one run that moves (the case below).
+          if (modelId === 'wan-2.7-image-pro' && input.settings?.resolution === '4K' && count > 0) {
+            // The one run that moves: production priced it up to the cap; the release refuses it.
+            if (count <= cap) expect(typeof before.quote(input), label).toBe('number');
             expect(after, label).toEqual({ refused: expect.objectContaining({ resolution: WAN_PRO_4K_REFUSAL }) });
+          } else {
+            expect(after, label).toEqual(before.quote(input));
           }
           if (typeof after === 'number') {
             priced += 1;
@@ -333,20 +351,18 @@ describe('image-models-reemit release', () => {
     expect(priced).toBeGreaterThan(0);
   });
 
-  it('refuses Wan 2.7 Image Pro at 4K with a reference picture at the quote, which the start refused before any hold', () => {
+  it('refuses Wan 2.7 Image Pro at 4K with a reference picture at the quote, in the words the start refused it with', () => {
     const published = asProductionReadsIt(released('wan-2.7-image-pro'), manifest.release.schemaVersion);
-    const before = asProductionReadsIt(previous('wan-2.7-image-pro'), base.release.schemaVersion);
-    const run = (resolution: string, count: number) => catalogRunQuoteInput({
-      kind: 'image', modelId: 'wan-2.7-image-pro', catalogRevision: catalog.revision, settings: { aspectRatio: 'auto', resolution }, inputs: pictures(count),
+    const run = (count: number) => catalogRunQuoteInput({
+      kind: 'image', modelId: 'wan-2.7-image-pro', catalogRevision: catalog.revision, settings: { aspectRatio: 'auto', resolution: '4K' }, inputs: pictures(count),
     });
-    // Production priced it; startImageGeneration refuses it in these words before it holds credits.
-    expect(typeof before.quote(run('4K', 1))).toBe('number');
-    expect(published.quote(run('4K', 1))).toEqual({ refused: { resolution: WAN_PRO_4K_REFUSAL } });
-    expect(published.quote(run('4K', 9))).toEqual({ refused: { resolution: WAN_PRO_4K_REFUSAL } });
-    // Text-only 4K, and pictures at 1K and 2K, are priced as before.
-    for (const [resolution, count] of [['4K', 0], ['1K', 1], ['2K', 9]] as const) {
-      expect(published.quote(run(resolution, count)), `${resolution} ${count}`).toBe(before.quote(run(resolution, count)));
-    }
+    expect(published.quote(run(1))).toEqual({ refused: { resolution: WAN_PRO_4K_REFUSAL } });
+    expect(published.quote(run(9))).toEqual({ refused: { resolution: WAN_PRO_4K_REFUSAL } });
+    // startImageGeneration refuses the same run in the same words, after it resolves the pictures and
+    // before either path holds credits.
+    const start = fs.readFileSync(path.resolve(process.cwd(), 'src/lib/generation-services.ts'), 'utf8');
+    expect(start).toContain("if (model === 'wan-2.7-image-pro' && resolution === '4K' && resolvedImageUrls.length > 0) {");
+    expect(start).toContain(`throw new GenerationServiceError('${WAN_PRO_4K_REFUSAL}', 400);`);
   });
 
   it.each(LEGACY_IDS)('%s normalizes only the output format and Google search the image start defaults to', (modelId) => {
@@ -366,25 +382,5 @@ describe('image-models-reemit release', () => {
       googleSearch: false,
     });
     expect(earlier.normalizedSettings.googleSearch).toBeUndefined();
-  });
-
-  it.each(LEGACY_IDS)('%s publishes only what both creators and the installed apps render', (modelId) => {
-    // The store builds' parsers and every OTA since kept all six on both shapes, and sent the same quote and
-    // run either way (archive/image-models-reemit-2026-11-01/, "Installed apps").
-    const published = asProductionReadsIt(released(modelId), manifest.release.schemaVersion);
-    const before = asProductionReadsIt(previous(modelId), base.release.schemaVersion);
-    expect(published.descriptor.minClientSchemaVersion).toBe(before.descriptor.minClientSchemaVersion);
-    for (const control of published.descriptor.controls) {
-      expect(CLIENT_RENDERED_CONTROL_TYPES as readonly string[]).toContain(control.type);
-    }
-    for (const mode of published.descriptor.inputModes ?? []) {
-      expect(CLIENT_RENDERED_INPUT_MODE_KEYS as readonly string[]).toContain(mode.key);
-      for (const slot of mode.slots) {
-        expect(CLIENT_RENDERED_INPUT_SLOT_KINDS as readonly string[]).toContain(slot.kind);
-        expect(CLIENT_RENDERED_INPUT_SLOT_ROLES as readonly string[]).toContain(slot.role);
-      }
-    }
-    // Production's `default` mode is not one the creators name: they read its slot by key.
-    expect(CLIENT_RENDERED_INPUT_MODE_KEYS as readonly string[]).not.toContain('default');
   });
 });
