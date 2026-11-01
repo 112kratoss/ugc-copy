@@ -1039,6 +1039,8 @@ function IdentityCreationScreen({
   const [enhanceUndo, setEnhanceUndo] = useState<{ previous: string; enhanced: string; shotId?: string } | null>(null);
   // What the enhancer said about the prompt it wrote, shown while that prompt (or that shot's words) stands.
   const [enhanceNotes, setEnhanceNotes] = useState<{ tool: CreatorToolId; prompt: string; warnings: PromptEnhancementWarning[]; shotId?: string } | null>(null);
+  // An answer that came back after its words were rewritten: kept beside the words it found (`kept`), never over them.
+  const [enhanceOffer, setEnhanceOffer] = useState<{ tool: CreatorToolId; enhanced: string; kept: string; warnings: PromptEnhancementWarning[]; shotId?: string } | null>(null);
   const [status, setStatus] = useState<GenerationStatusResponse | null>(null);
   const [lastGenerationId, setLastGenerationId] = useState<string | null>(null);
   const [lastPredictionId, setLastPredictionId] = useState<string | null>(null);
@@ -2262,6 +2264,11 @@ function IdentityCreationScreen({
     haptic.error();
   };
 
+  // A new press replaces the offer to its own words; one waiting with other words (another shot's) stays.
+  const dropEnhanceOffer = (tool: CreatorToolId, shotId?: string) => {
+    setEnhanceOffer((offer) => (offer && offer.tool === tool && offer.shotId === shotId ? null : offer));
+  };
+
   const enhancePrompt = async () => {
     if (!currentDraft.prompt.trim()) {
       setPromptMessage('Add a prompt before enhancing.');
@@ -2280,14 +2287,22 @@ function IdentityCreationScreen({
     setMessage(null);
     setPromptMessage(null);
     setEnhanceNotes(null);
+    dropEnhanceOffer(currentDraft.tool);
     setIsEnhancing(true);
     try {
-      const previousPrompt = currentDraft.prompt;
+      const { tool, prompt: previousPrompt } = currentDraft;
       const result = await api.enhancePrompt(promptEnhancementRequest(currentDraft));
-      updatePrompt(result.enhancedPrompt);
-      setEnhanceUndo({ previous: previousPrompt, enhanced: result.enhancedPrompt });
-      const warnings = enhancementNotes(result);
-      if (warnings.length > 0) setEnhanceNotes({ tool: currentDraft.tool, prompt: result.enhancedPrompt, warnings });
+      // The box stays open while the enhancer works, for up to 45 s: the answer replaces
+      // only the words it was asked about, and is offered beside any typed since.
+      const promptNow = latestDrafts.current[tool].prompt;
+      if (promptNow === previousPrompt) {
+        updatePrompt(result.enhancedPrompt);
+        setEnhanceUndo({ previous: previousPrompt, enhanced: result.enhancedPrompt });
+        const warnings = enhancementNotes(result);
+        if (warnings.length > 0) setEnhanceNotes({ tool, prompt: result.enhancedPrompt, warnings });
+      } else {
+        setEnhanceOffer({ tool, enhanced: result.enhancedPrompt, kept: promptNow, warnings: enhancementNotes(result) });
+      }
       if (typeof result.remainingCredits === 'number') updateCredits(result.remainingCredits);
       haptic.success();
     } catch (error) {
@@ -2315,14 +2330,23 @@ function IdentityCreationScreen({
     setMessage(null);
     setPromptMessage(null);
     setEnhanceNotes(null);
+    dropEnhanceOffer('video', shotId);
     setIsEnhancing(true);
     try {
       const result = await api.enhancePrompt(request);
-      setVideoDraft((draft) => replaceShotPrompt(draft, shotId, result.enhancedPrompt));
-      setEnhanceUndo({ previous: request.prompt, enhanced: result.enhancedPrompt, shotId });
-      const warnings = enhancementNotes(result);
-      if (warnings.length > 0) setEnhanceNotes({ tool: 'video', prompt: result.enhancedPrompt, warnings, shotId });
       if (typeof result.remainingCredits === 'number') updateCredits(result.remainingCredits);
+      // As for the prompt: the shot's words are replaced only if they are the ones sent. A shot
+      // removed during the wait leaves the answer nowhere to go, and nothing says it went.
+      const shotNow = latestDrafts.current.video.multiPrompts.find((shot) => shot.id === shotId);
+      if (!shotNow) return;
+      if (shotNow.prompt === request.prompt) {
+        setVideoDraft((draft) => replaceShotPrompt(draft, shotId, result.enhancedPrompt));
+        setEnhanceUndo({ previous: request.prompt, enhanced: result.enhancedPrompt, shotId });
+        const warnings = enhancementNotes(result);
+        if (warnings.length > 0) setEnhanceNotes({ tool: 'video', prompt: result.enhancedPrompt, warnings, shotId });
+      } else {
+        setEnhanceOffer({ tool: 'video', enhanced: result.enhancedPrompt, kept: shotNow.prompt, warnings: enhancementNotes(result), shotId });
+      }
       haptic.success();
     } catch (error) {
       showEnhancementFailure(error);
@@ -2371,6 +2395,23 @@ function IdentityCreationScreen({
       updatePrompt(enhanceUndo.previous);
     }
     setEnhanceUndo(null);
+  };
+
+  // Undo then goes back to the words typed meanwhile, not to the ones sent.
+  const handleUseEnhanceOffer = () => {
+    if (!enhanceOffer) return;
+    const { tool, enhanced, warnings, shotId } = enhanceOffer;
+    if (shotId !== undefined) {
+      const shot = currentDraft.tool === 'video' ? currentDraft.multiPrompts.find((candidate) => candidate.id === shotId) : undefined;
+      if (!shot) return;
+      setVideoDraft((draft) => replaceShotPrompt(draft, shotId, enhanced));
+      setEnhanceUndo({ previous: shot.prompt, enhanced, shotId });
+    } else {
+      setEnhanceUndo({ previous: currentDraft.prompt, enhanced });
+      updatePrompt(enhanced);
+    }
+    if (warnings.length > 0) setEnhanceNotes({ tool, prompt: enhanced, warnings, ...(shotId !== undefined ? { shotId } : {}) });
+    setEnhanceOffer(null);
   };
 
   const pollGenerationForTool = (
@@ -2875,6 +2916,17 @@ function IdentityCreationScreen({
     ? enhanceUndo.enhanced === currentDraft.prompt
     : currentDraft.tool === 'video'
       && currentDraft.multiPrompts.some((shot) => shot.id === enhanceUndo.shotId && shot.prompt === enhanceUndo.enhanced));
+  // A late answer is offered on its own tool while the words it found stand: written on or over, they are no
+  // longer what it was offered beside. The prompt's offer sits under the prompt; a shot's goes to the shot
+  // editor, which shows it with that shot, as it does the shot's notes.
+  const canUseEnhanceOffer = !isEnhancing && enhanceOffer !== null && enhanceOffer.shotId === undefined
+    && enhanceOffer.tool === activeTool && enhanceOffer.kept === currentDraft.prompt
+    // A multi-shot run hides the prompt, so the offer waits with it.
+    && !(currentDraft.tool === 'video' && currentDraft.isMultiShot);
+  const shotOfferId = !isEnhancing && enhanceOffer?.shotId !== undefined && enhanceOffer.tool === activeTool && currentDraft.tool === 'video'
+    && currentDraft.multiPrompts.some((shot) => shot.id === enhanceOffer.shotId && shot.prompt === enhanceOffer.kept)
+    ? enhanceOffer.shotId
+    : null;
   // The parameter sheet is a Modal, which would stay over the pricing page.
   const openCreditsFromParameters = () => {
     setParametersVisible(false);
@@ -3022,10 +3074,13 @@ function IdentityCreationScreen({
               onEnhance={enhancePrompt}
               onEnhanceShot={(shotId) => void enhanceShotPrompt(shotId)}
               shotNotes={shotNotes}
+              shotOfferId={shotOfferId}
               enhanceLevel={enhanceLevel}
               onEnhanceLevelChange={setEnhanceLevel}
               canUndoEnhance={canUndoEnhance}
               onUndoEnhance={handleUndoEnhance}
+              canUseEnhanced={canUseEnhanceOffer}
+              onUseEnhanced={handleUseEnhanceOffer}
               onChange={updateVideoDraft}
               onUploadImages={() => uploadImageReferences('video')}
               onUploadStart={() => uploadSingleImage('start')}
@@ -3063,6 +3118,8 @@ function IdentityCreationScreen({
               onEnhanceLevelChange={setEnhanceLevel}
               canUndoEnhance={canUndoEnhance}
               onUndoEnhance={handleUndoEnhance}
+              canUseEnhanced={canUseEnhanceOffer}
+              onUseEnhanced={handleUseEnhanceOffer}
               onChange={(draft) => replaceDraft(draft)}
               onUploadCharacter={() => uploadSingleImage('character')}
               onUploadMotion={() => uploadReferenceVideo('motion')}
@@ -3310,6 +3367,8 @@ function IdentityCreationScreen({
             onEnhanceLevelChange={setEnhanceLevel}
             canUndoEnhance={canUndoEnhance}
             onUndoEnhance={handleUndoEnhance}
+            canUseEnhanced={canUseEnhanceOffer}
+            onUseEnhanced={handleUseEnhanceOffer}
             onUploadReferences={() => uploadImageReferences('image')}
             onRenameReference={(id, displayName) => setImageDraft((draft) => {
               const currentReference = draft.references.find((media) => media.id === id);
@@ -3677,6 +3736,8 @@ function ImagePromptComposer({
   onEnhanceLevelChange,
   canUndoEnhance,
   onUndoEnhance,
+  canUseEnhanced,
+  onUseEnhanced,
   onUploadReferences,
   onRenameReference,
   onReplaceReference,
@@ -3717,6 +3778,8 @@ function ImagePromptComposer({
   onEnhanceLevelChange: (level: PromptEnhancementLevel) => void;
   canUndoEnhance: boolean;
   onUndoEnhance: () => void;
+  canUseEnhanced: boolean;
+  onUseEnhanced: () => void;
   onUploadReferences: () => void;
   onRenameReference: (id: string, displayName: string) => void;
   onReplaceReference: (id: string) => void;
@@ -3926,6 +3989,8 @@ function ImagePromptComposer({
           onLevelChange={onEnhanceLevelChange}
           canUndo={canUndoEnhance}
           onUndo={onUndoEnhance}
+          canUseEnhanced={canUseEnhanced}
+          onUseEnhanced={onUseEnhanced}
           disabled={isEnhancing}
           polishes={enhanceVerb === 'Polish'}
         />
@@ -4118,6 +4183,8 @@ function CompactShotEditor({
   isEnhancing,
   promptMessage,
   notes,
+  offerShotId,
+  onUseOffer,
   onEnhanceShot,
   onChange,
   onFocus,
@@ -4129,6 +4196,9 @@ function CompactShotEditor({
   /** In a multi-shot run the prompt box is the shot's, so what is said about a prompt is said here. */
   promptMessage: string | null;
   notes: ShotEnhancementNotes | null;
+  /** The shot a late answer is offered to, shown with that shot as its notes are. */
+  offerShotId: string | null;
+  onUseOffer: () => void;
   onEnhanceShot: (shotId: string) => void;
   /** The video composer's: a change made to the draft as it is when it is applied. */
   onChange: (update: (draft: VideoCreationDraft) => VideoCreationDraft) => void;
@@ -4230,6 +4300,11 @@ function CompactShotEditor({
           {shotMeters[selectedShot.id] ? <PromptLengthCounter testID="shot-prompt-length" meter={shotMeters[selectedShot.id]} /> : null}
           {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 15, paddingBottom: 10 }}>{promptMessage}</Text> : null}
           {notes && notes.shotId === selectedShot.id && notes.prompt === selectedShot.prompt ? <PromptQualityNotes warnings={notes.warnings} /> : null}
+          {offerShotId === selectedShot.id ? (
+            <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
+              <EnhanceOffer onUse={onUseOffer} />
+            </View>
+          ) : null}
           <View style={{ paddingHorizontal: 12, paddingBottom: 4 }}>
             <Pressable
               accessibilityRole="button"
@@ -4286,10 +4361,13 @@ function VideoCreatorComposer({
   onEnhance,
   onEnhanceShot,
   shotNotes,
+  shotOfferId,
   enhanceLevel,
   onEnhanceLevelChange,
   canUndoEnhance,
   onUndoEnhance,
+  canUseEnhanced,
+  onUseEnhanced,
   onChange,
   onUploadImages,
   onUploadStart,
@@ -4325,10 +4403,14 @@ function VideoCreatorComposer({
   /** A multi-shot run's Enhance for one shot. */
   onEnhanceShot: (shotId: string) => void;
   shotNotes: ShotEnhancementNotes | null;
+  /** The shot a late answer is offered to; `onUseEnhanced` puts it in. */
+  shotOfferId: string | null;
   enhanceLevel: PromptEnhancementLevel;
   onEnhanceLevelChange: (level: PromptEnhancementLevel) => void;
   canUndoEnhance: boolean;
   onUndoEnhance: () => void;
+  canUseEnhanced: boolean;
+  onUseEnhanced: () => void;
   /**
    * A change to the draft, made to it as it is when it is applied: a handler that answers later, as a
    * confirmed Remove does, would otherwise hand back the draft this composer was drawn with.
@@ -4677,6 +4759,8 @@ function VideoCreatorComposer({
           isEnhancing={isEnhancing}
           promptMessage={promptMessage}
           notes={shotNotes}
+          offerShotId={shotOfferId}
+          onUseOffer={onUseEnhanced}
           onEnhanceShot={onEnhanceShot}
           onChange={onChange}
           onFocus={onFocus}
@@ -4745,6 +4829,8 @@ function VideoCreatorComposer({
           onLevelChange={onEnhanceLevelChange}
           canUndo={canUndoEnhance}
           onUndo={onUndoEnhance}
+          canUseEnhanced={canUseEnhanced}
+          onUseEnhanced={onUseEnhanced}
           disabled={isEnhancing}
         />
 
@@ -5062,6 +5148,8 @@ function MotionCreatorComposer({
   onEnhanceLevelChange,
   canUndoEnhance,
   onUndoEnhance,
+  canUseEnhanced,
+  onUseEnhanced,
   onChange,
   onUploadCharacter,
   onUploadMotion,
@@ -5085,6 +5173,8 @@ function MotionCreatorComposer({
   onEnhanceLevelChange: (level: PromptEnhancementLevel) => void;
   canUndoEnhance: boolean;
   onUndoEnhance: () => void;
+  canUseEnhanced: boolean;
+  onUseEnhanced: () => void;
   onChange: (draft: MotionCreationDraft) => void;
   onUploadCharacter: () => void;
   /** Picks a clip; with one attached, the new one takes its place. */
@@ -5190,6 +5280,8 @@ function MotionCreatorComposer({
           onLevelChange={onEnhanceLevelChange}
           canUndo={canUndoEnhance}
           onUndo={onUndoEnhance}
+          canUseEnhanced={canUseEnhanced}
+          onUseEnhanced={onUseEnhanced}
           disabled={isEnhancing}
         />
 
@@ -5307,6 +5399,8 @@ function EnhanceControlsRow({
   onLevelChange,
   canUndo,
   onUndo,
+  canUseEnhanced,
+  onUseEnhanced,
   disabled,
   polishes = false,
 }: {
@@ -5314,12 +5408,15 @@ function EnhanceControlsRow({
   onLevelChange: (level: PromptEnhancementLevel) => void;
   canUndo: boolean;
   onUndo: () => void;
+  /** An answer that came back after its words were rewritten, which a press puts in their place. */
+  canUseEnhanced: boolean;
+  onUseEnhanced: () => void;
   disabled?: boolean;
   /** The prompt names a reference, so a press polishes around it and no level applies, as on the web. */
   polishes?: boolean;
 }) {
   const theme = useAppTheme();
-  return (
+  const row = (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
       {polishes ? (
         <Text testID="polish-note" style={{ flex: 1, color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>
@@ -5373,6 +5470,46 @@ function EnhanceControlsRow({
           <Text style={{ color: theme.colors.muted, fontWeight: '700', fontSize: 12 }}>Undo</Text>
         </Pressable>
       ) : null}
+    </View>
+  );
+  // Always wrapped, so the row is not drawn anew when an offer comes and goes.
+  return (
+    <View style={{ gap: 6 }}>
+      {row}
+      {canUseEnhanced ? <EnhanceOffer onUse={onUseEnhanced} /> : null}
+    </View>
+  );
+}
+
+/**
+ * A late enhancement answer, offered beside the words typed while it was on its way: the prompt's
+ * under the controls row, a shot's in the shot editor with that shot. The line says why the
+ * answer is beside the words and not in them.
+ */
+function EnhanceOffer({ onUse }: { onUse: () => void }) {
+  const theme = useAppTheme();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Use enhanced prompt"
+        onPress={onUse}
+        hitSlop={verticalHitSlop(32)}
+        style={({ pressed }) => ({
+          minHeight: 32,
+          paddingHorizontal: 12,
+          borderRadius: appTheme.radii.pill,
+          borderWidth: 1,
+          borderColor: hexWithAlpha(theme.colors.primary, 0.3),
+          backgroundColor: hexWithAlpha(theme.colors.primary, 0.11),
+          alignItems: 'center',
+          justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      >
+        <Text style={{ color: theme.colors.primary, fontWeight: '700', fontSize: 12 }}>Use enhanced</Text>
+      </Pressable>
+      <Text accessibilityLiveRegion="polite" style={{ flex: 1, color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>
+        Your edits were kept.
+      </Text>
     </View>
   );
 }

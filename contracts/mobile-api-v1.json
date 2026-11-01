@@ -613,6 +613,28 @@
         "header": "x-magicbooklet-wait-ms",
         "timeoutMs": 70000
       },
+      "askAgain": {
+        "keyHeader": "Idempotency-Key",
+        "delayMs": 5000,
+        "afterConnectionFailure": 2,
+        "afterTimeout": 1
+      },
+      "errors": {
+        "stillRunning": {
+          "status": 409,
+          "response": {
+            "code": "AI_USAGE_IN_PROGRESS",
+            "error": "Prompt enhancement is still running. Try again in a moment."
+          }
+        },
+        "refunded": {
+          "status": 409,
+          "response": {
+            "code": "AI_USAGE_KEY_ALREADY_USED",
+            "error": "Prompt enhancement failed. Your credits have been refunded."
+          }
+        }
+      },
       "response": {
         "enhancedPrompt": "A premium, high-detail product launch frame with clean lighting.",
         "remainingCredits": 119,
