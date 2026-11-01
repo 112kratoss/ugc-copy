@@ -154,6 +154,21 @@ describe('EnhancePromptButton', () => {
       expect(onCreditsUpdate).toHaveBeenCalledWith(40);
     });
 
+    // Frames go up before the request: a button gone by then sends nothing to pay for.
+    it('asks nothing for a button gone while its frames were going up', async () => {
+      let framesUp: () => void = () => undefined;
+      const prepareContext = vi.fn(() => new Promise<undefined>((resolve) => { framesUp = () => resolve(undefined); }));
+      vi.mocked(requestPromptEnhancement).mockClear();
+      const view = render(<EnhancePromptButton prompt="A red fox" onEnhanced={vi.fn()} {...shared} prepareContext={prepareContext} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+      view.unmount();
+      await act(async () => { framesUp(); });
+
+      expect(prepareContext).toHaveBeenCalledTimes(1);
+      expect(requestPromptEnhancement).not.toHaveBeenCalled();
+    });
+
     it('offers the answer only while the words it was offered beside stand', async () => {
       const answer = answerLater();
       const onEnhanced = vi.fn();

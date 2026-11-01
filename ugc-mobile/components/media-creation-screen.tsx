@@ -2264,6 +2264,11 @@ function IdentityCreationScreen({
     haptic.error();
   };
 
+  // A new press replaces the offer to its own words; one waiting with other words (another shot's) stays.
+  const dropEnhanceOffer = (tool: CreatorToolId, shotId?: string) => {
+    setEnhanceOffer((offer) => (offer && offer.tool === tool && offer.shotId === shotId ? null : offer));
+  };
+
   const enhancePrompt = async () => {
     if (!currentDraft.prompt.trim()) {
       setPromptMessage('Add a prompt before enhancing.');
@@ -2282,7 +2287,7 @@ function IdentityCreationScreen({
     setMessage(null);
     setPromptMessage(null);
     setEnhanceNotes(null);
-    setEnhanceOffer(null);
+    dropEnhanceOffer(currentDraft.tool);
     setIsEnhancing(true);
     try {
       const { tool, prompt: previousPrompt } = currentDraft;
@@ -2325,7 +2330,7 @@ function IdentityCreationScreen({
     setMessage(null);
     setPromptMessage(null);
     setEnhanceNotes(null);
-    setEnhanceOffer(null);
+    dropEnhanceOffer('video', shotId);
     setIsEnhancing(true);
     try {
       const result = await api.enhancePrompt(request);
@@ -2915,7 +2920,9 @@ function IdentityCreationScreen({
   // longer what it was offered beside. The prompt's offer sits under the prompt; a shot's goes to the shot
   // editor, which shows it with that shot, as it does the shot's notes.
   const canUseEnhanceOffer = !isEnhancing && enhanceOffer !== null && enhanceOffer.shotId === undefined
-    && enhanceOffer.tool === activeTool && enhanceOffer.kept === currentDraft.prompt;
+    && enhanceOffer.tool === activeTool && enhanceOffer.kept === currentDraft.prompt
+    // A multi-shot run hides the prompt, so the offer waits with it.
+    && !(currentDraft.tool === 'video' && currentDraft.isMultiShot);
   const shotOfferId = !isEnhancing && enhanceOffer?.shotId !== undefined && enhanceOffer.tool === activeTool && currentDraft.tool === 'video'
     && currentDraft.multiPrompts.some((shot) => shot.id === enhanceOffer.shotId && shot.prompt === enhanceOffer.kept)
     ? enhanceOffer.shotId

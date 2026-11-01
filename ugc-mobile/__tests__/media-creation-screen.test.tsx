@@ -8360,6 +8360,26 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
         });
 
+        // One offer at a time: a press elsewhere must not take away an answer still waiting with its shot.
+        it('keeps a shot’s offer through a press on another shot', async () => {
+          const answer = answerLater();
+          const tree = await openStory();
+
+          await pressAndLook(labelled(tree.root, 'Enhance shot 2 · 2 credits'));
+          renderer.act(() => { tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.onChangeText('She runs in'); });
+          await settle();
+          renderer.act(() => { labelled(tree.root, 'Edit shot 1').props.onPress(); });
+          await answer({ enhancedPrompt: 'She walks in slowly, lit from the hall.' });
+
+          authState.api.enhancePrompt.mockResolvedValueOnce({ enhancedPrompt: 'A door opens onto a dark hall.' });
+          await renderer.act(async () => { await labelled(tree.root, 'Enhance shot 1 · 2 credits').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('A door opens onto a dark hall.');
+
+          renderer.act(() => { labelled(tree.root, 'Edit shot 2').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('She runs in');
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
+        });
+
         it('lets an answer go whose shot was removed during the wait', async () => {
           const answer = answerLater();
           const tree = await openStory();
@@ -8377,6 +8397,25 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           // Nothing was put anywhere, so nothing says it was.
           expect(Haptics.notificationAsync).not.toHaveBeenCalledWith('success');
         });
+      });
+
+      // A multi-shot run hides the prompt the answer was offered beside, so the offer waits with it.
+      it('keeps the prompt’s offer out of a multi-shot run', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video', catalogRevision: 'parity-rev', isMultiShot: false, prompt: 'A door opens',
+        } }));
+        const answer = answerLater();
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        await typePrompt(tree, 'A door opens slowly');
+        renderer.act(() => { labelled(tree.root, 'Multi-shot').props.onPress(); });
+        await answer({ enhancedPrompt: 'A door opens onto a dark hall.' });
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+
+        renderer.act(() => { labelled(tree.root, 'Single shot').props.onPress(); });
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
       });
 
       it('offers a late answer only while the words it was offered beside stand', async () => {

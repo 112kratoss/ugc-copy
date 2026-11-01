@@ -132,6 +132,8 @@ export default function EnhancePromptButton({
                 } catch {
                     requestContext = context;
                 }
+                // Gone while its frames went up: its answer would have nowhere to go, so nothing is paid for.
+                if (!mounted.current) return;
             }
 
             const result = await requestPromptEnhancement({
