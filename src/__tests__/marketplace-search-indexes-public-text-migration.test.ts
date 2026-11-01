@@ -71,9 +71,24 @@ function quotedItems(source: string): string[] {
   return [...source.matchAll(/'([a-z_]+)'/g)].map((match) => match[1]);
 }
 
-function columnsRead(alias: string): string[] {
-  const columns = [...projection.matchAll(new RegExp(`\\b${alias}\\.([a-z_]+)`, 'g'))].map((match) => match[1]);
+function columnsRead(alias: string, source = projection): string[] {
+  const columns = [...source.matchAll(new RegExp(`\\b${alias}\\.([a-z_]+)`, 'g'))].map((match) => match[1]);
   return [...new Set(columns)].filter((column) => column !== 'id').sort();
+}
+
+/** The last definition in any migration of the named function, comments left out. */
+function latestFunction(name: string): string {
+  const definitions = readdirSync(migrationsDirectory)
+    .filter((file) => file.endsWith('.sql'))
+    .sort()
+    .flatMap((file) => {
+      const source = readMigration(file).replace(/--.*$/gm, '');
+      return new RegExp(`CREATE (?:OR REPLACE )?FUNCTION public\\.${name}\\(`).test(source)
+        ? [functionDefinition(source, name)]
+        : [];
+    });
+  expect(definitions.length, `${name} is never made`).toBeGreaterThan(0);
+  return definitions[definitions.length - 1];
 }
 
 function columnsFollowed(trigger: string): string[] {
@@ -132,8 +147,10 @@ describe('marketplace search indexes public text migration', () => {
     expect(getCreatorDisplayName({ displayName: '  ', username: ' maya ' })).toBe('maya');
     expect(getCreatorDisplayName({ displayName: null, username: null })).toBe('Creator');
     // The post's title and caption, trimmed. A post with no title is shown under
-    // a fallback the document does not hold (the header says why).
-    expect(serverSource).toContain("title: row.title?.trim() || deriveTitleFromBody(row.body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),");
+    // a fallback the document does not hold (the header says why). The caption
+    // is read as public reads show it since 20261101042650, whose test holds
+    // that rule.
+    expect(serverSource).toContain("title: row.title?.trim() || deriveTitleFromBody(body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),");
     expect(serverSource).toContain("body: row.body?.trim() || '',");
   });
 
@@ -186,17 +203,20 @@ describe('marketplace search indexes public text migration', () => {
   });
 
   it('refreshes a document whenever a column it reads changes', () => {
+    // The latest triggers against the latest projection, whichever file made
+    // each: a later file that reads another column must follow it too.
+    const latestProjection = latestFunction('refresh_marketplace_bundle_search_documents');
     const recipeTrigger = latestTrigger('post_resource_bundles_refresh_marketplace_search_update');
     const postTrigger = latestTrigger('posts_refresh_marketplace_search');
     const profileTrigger = latestTrigger('profiles_refresh_marketplace_search');
 
     expect(recipeTrigger).toMatch(/AFTER UPDATE ON public\.post_resource_bundles\s+FOR EACH ROW/);
     expect(recipeTrigger).toContain('EXECUTE FUNCTION public.trg_refresh_marketplace_search_for_bundle();');
-    expect(columnsFollowed(recipeTrigger)).toEqual(columnsRead('bundles'));
+    expect(columnsFollowed(recipeTrigger)).toEqual(columnsRead('bundles', latestProjection));
     expect(postTrigger).toMatch(/AFTER UPDATE ON public\.posts\s+FOR EACH ROW/);
     expect(postTrigger).toContain('EXECUTE FUNCTION public.trg_refresh_marketplace_search_for_post();');
-    expect(columnsFollowed(postTrigger)).toEqual(columnsRead('posts'));
-    expect(columnsFollowed(profileTrigger)).toEqual(columnsRead('profiles'));
+    expect(columnsFollowed(postTrigger)).toEqual(columnsRead('posts', latestProjection));
+    expect(columnsFollowed(profileTrigger)).toEqual(columnsRead('profiles', latestProjection));
   });
 
   it('keeps the listing as it was but for a literal search pattern', () => {

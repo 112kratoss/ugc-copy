@@ -31,6 +31,7 @@ import {
   type PostMediaRow,
 } from '@/lib/posts-server';
 import { getCreatorDisplayName } from '@/lib/profile';
+import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import {
   createServiceClient,
@@ -812,11 +813,12 @@ function normalizeMarketplaceSearchQuery(value: string | null | undefined): stri
 
 // What a visitor who has not unlocked the recipe sees. The database's search
 // document holds the same text in this order, its title and seller name as
-// shown here (refresh_marketplace_bundle_search_documents, 20261031100330),
-// and the list matches the query literally, so the two find the same recipes.
-// They differ only on a post with no title, shown here under its caption's
-// first line or a fixed label. The migration's test holds the two lists
-// together.
+// shown here (refresh_marketplace_bundle_search_documents, 20261031100330) and
+// its post's caption as the feed shows it (20261101042650: none under a paid
+// recipe when it is the saved generation setup), and the list matches the
+// query literally, so the two find the same recipes. They differ only on a
+// post with no title, shown here under its caption's first line or a fixed
+// label. The migrations' tests hold the two lists together.
 function marketplaceItemMatchesQuery(item: MarketplaceResourceListItem, normalizedQuery: string): boolean {
   const searchableText = [
     item.title,
@@ -1461,6 +1463,11 @@ async function loadLinkedPostMap(
   scope: LinkedPostScope = 'public',
   includeMediaPreviews = false,
   throwOnReadError = false,
+  // The access mode of each post's recipe. A post with one is read as the feed
+  // and the post page show it (sanitizePublicPostContent): under a paid
+  // recipe, a body that is the saved generation setup it sells is blank, and an
+  // untitled post is not named after it.
+  recipeAccessModes: ReadonlyMap<string, string> = new Map(),
 ) {
   const uniquePostIds = Array.from(new Set(postIds.filter(Boolean)));
   if (uniquePostIds.length === 0) {
@@ -1654,13 +1661,21 @@ async function loadLinkedPostMap(
     rows.map(async (row) => {
       const coverMedia = mediaItemsMap.get(row.id)?.[0] ?? null;
       const mediaUrl = coverMedia?.url ?? await resolvePostMediaUrl(adminSupabase, row);
+      const recipeAccessMode = recipeAccessModes.get(row.id);
+      const { body } = sanitizePublicPostContent({
+        body: row.body?.trim() || '',
+        description: '',
+        prompt: '',
+        hasRecipe: recipeAccessMode !== undefined,
+        isPaidRecipe: recipeAccessMode === 'paid',
+      });
 
       return {
         id: row.id,
         generationId: row.generation_id,
-        title: row.title?.trim() || deriveTitleFromBody(row.body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),
+        title: row.title?.trim() || deriveTitleFromBody(body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),
         category: row.category,
-        body: row.body?.trim() || '',
+        body,
         postFormat: row.post_format,
         visibility: row.visibility,
         archivedAt: row.archived_at,
@@ -1750,7 +1765,16 @@ async function hydrateBundleRows(
   const storedResourcesByBundleId = new Map(rows.map((row) => [row.id, normalizeResources(row)]));
   const [profilesMap, postMap, contentUpdatedAtMap, creationReferenceCounts] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
-    loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews, throwOnPostReadError),
+    // Every read of a recipe, its owner's included, shows its post as the feed
+    // shows it to everyone: what the marketplace lists, searches and judges
+    // (its quality gate, the seller's "what keeps it off sale") is that post.
+    loadLinkedPostMap(
+      rows.map((row) => row.post_id),
+      postScope,
+      includeMediaPreviews,
+      throwOnPostReadError,
+      new Map(rows.map((row) => [row.post_id, row.access_mode])),
+    ),
     loadLatestContentRevisionTimes(rows.map((row) => row.id)),
     creationReferencesFor
       ? countListedRecipeReferences(
