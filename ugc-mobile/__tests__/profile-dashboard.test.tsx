@@ -1324,6 +1324,9 @@ describe('ProfileDashboard media tiles routing', () => {
     const trees: renderer.ReactTestRenderer[] = [];
     const act = (work: () => void) => renderer.act(async () => { work(); });
     const askedFor = () => queryState.fetchNextGenerations.mock.calls.length;
+    const archivedRuns = (count: number) => readyRuns(count).map((run) => ({
+      ...run, id: `archived-${run.id}`, archived_at: '2026-10-13T10:00:00Z',
+    }));
     const listOf = (tree: renderer.ReactTestRenderer) => tree.root.find((node) => String(node.type) === 'flash-list');
     const show = (tree: renderer.ReactTestRenderer) => act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
     const mount = async () => {
@@ -1358,6 +1361,7 @@ describe('ProfileDashboard media tiles routing', () => {
       queryState.generationsHasNextPage = false;
       queryState.generationPages = null;
       queryState.generationsIsFetchNextPageError = false;
+      queryState.ownerPostsHasNextPage = false;
     });
 
     it('has the fill ask for the next page as the cooldown ends', async () => {
@@ -1418,12 +1422,7 @@ describe('ProfileDashboard media tiles routing', () => {
         stats: { creations: PROFILE_MEDIA_MIN_FILL_COUNT, failedCreations: 0, archivedCreations: archived, posts: 0, archivedPosts: 0, saved: 0 },
       } as never;
       queryState.generationsHasNextPage = true;
-      queryState.generationPages = [{
-        generations: [
-          ...readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT),
-          ...readyRuns(archived).map((run) => ({ ...run, id: `archived-${run.id}`, archived_at: '2026-10-13T10:00:00Z' })),
-        ],
-      }];
+      queryState.generationPages = [{ generations: [...readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT), ...archivedRuns(archived)] }];
       const tree = await mount();
       expect(askedFor()).toBe(0);
 
@@ -1432,6 +1431,49 @@ describe('ProfileDashboard media tiles routing', () => {
       await act(() => { vi.advanceTimersByTime(cooldown * 2); });
 
       expect(askedFor()).toBe(0);
+    });
+
+    // Active and Archived read one query, so its failed page showed under both,
+    // and a Retry under a whole scope asked for nothing.
+    it('offers no Retry under a whole scope for a page the other scope failed to read', async () => {
+      queryState.profileData = {
+        ...queryState.profileData!,
+        stats: { creations: 30, failedCreations: 0, archivedCreations: 2, posts: 0, archivedPosts: 0, saved: 0 },
+      } as never;
+      queryState.generationsHasNextPage = true;
+      queryState.generationsIsFetchNextPageError = true;
+      queryState.generationPages = [{ generations: [...readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT), ...archivedRuns(2)] }];
+      const tree = await mount();
+      const retries = () => tree.root.findAllByProps({ accessibilityLabel: "Couldn't load more. Retry" });
+      expect(retries().length).toBeGreaterThan(0);
+
+      await act(() => { findPressableByText(tree.root, 'Archived (2)').props.onPress(); });
+
+      expect(retries()).toHaveLength(0);
+    });
+
+    // The new tab's own fill does not run over a full grid, so a request put
+    // off for the old tab would have asked for a page of the new one.
+    it('drops the request it put off when another tab is shown, full and with pages of its own', async () => {
+      queryState.ownerPosts = Array.from({ length: PROFILE_MEDIA_MIN_FILL_COUNT }, (_, index) => ({
+        id: `post-${index}`,
+        title: `Post ${index}`,
+        createdAt: '2026-06-10T00:00:00Z',
+        visibility: 'public',
+        mediaUrl: `post-${index}.png`,
+        mediaKind: 'image',
+        mediaItems: [{ id: `post-${index}-media`, url: `post-${index}.png`, previewUrl: `post-${index}.webp`, mediaKind: 'image', gridReady: true }],
+        category: 'image',
+      }));
+      queryState.ownerPostsHasNextPage = true;
+      const tree = await landInsideTheCooldown(readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT));
+      await act(() => { listOf(tree).props.onEndReached(); });
+
+      await act(() => { tabSegment(tree, 'Posts').props.onPress(); });
+      await act(() => { vi.advanceTimersByTime(cooldown * 2); });
+
+      expect(askedFor()).toBe(1);
+      expect(queryState.fetchNextOwnerPosts).not.toHaveBeenCalled();
     });
 
     // A failed page keeps the page latch shut, so only the footer's Retry asks

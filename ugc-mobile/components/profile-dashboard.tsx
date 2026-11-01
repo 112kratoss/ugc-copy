@@ -438,6 +438,9 @@ export function ProfileDashboard({
   // read every page of a large library to show what its chip already said.
   const scopeTotal = getProfileScopeTotal(profile?.stats, ...tabScope);
   const scopeIsWhole = scopeTotal !== null && scopeTotal < PROFILE_MEDIA_MIN_FILL_COUNT && tabCards.length >= scopeTotal;
+  // A whole scope asks for no page, so a page that failed for the tab's other
+  // scope (they share a query) offers it no Retry: one would ask for nothing.
+  const scopeNextPageFailed = activeIsFetchNextPageError && !scopeIsWhole;
 
   // The shown tab's next page, asked for only while Profile is in front. A page
   // that lands inside the gate's cooldown is refused at the very render that
@@ -700,7 +703,7 @@ export function ProfileDashboard({
       horizontalPadding={horizontalPadding}
       highlightedPostId={highlightedPostId}
       justPublishedPostId={justPublishedPostId}
-      isFetchNextPageError={activeIsFetchNextPageError}
+      isFetchNextPageError={scopeNextPageFailed}
       isFetchingNextPage={activeIsFetchingNextPage}
       isLoading={isMediaLoading}
       isRefreshing={pullRefreshing}
