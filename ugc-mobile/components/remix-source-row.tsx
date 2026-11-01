@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Text, useWindowDimensions, View } from 'react-native';
 
 import { StableMediaImage } from '@/components/media-preview';
@@ -49,20 +50,25 @@ export function RemixSourceRow({ source }: { source: RemixSourceSeed }) {
   const theme = useAppTheme();
   const { fontScale } = useWindowDimensions();
   const { api, user } = useAuth();
+  // The poster the image gave up on (its retries are StableMediaImage's): its failure plate takes a
+  // whole preview's frame, so the row goes on without a picture instead.
+  const [failedPoster, setFailedPoster] = useState<string | null>(null);
   const postId = source.postId?.trim() || undefined;
   const brought = Boolean(source.title?.trim() && source.creatorLabel?.trim());
+  const reads = Boolean(postId && POST_ID.test(postId)) && !brought;
   const read = useQuery({
     queryKey: createShowcasePostQueryKey(postId, user?.id),
     queryFn: () => api.getShowcasePost(postId!),
-    enabled: Boolean(postId && POST_ID.test(postId)) && !brought,
+    enabled: reads,
     staleTime: Infinity,
     retry: retryUnlessRefused,
     retryOnMount: false,
     refetchOnWindowFocus: false,
   });
 
-  // Only the first read: one that failed and is read again leaves the plain row in place.
-  if (read.isLoading && read.errorUpdateCount === 0) {
+  // Only this row's own first read: a disabled query still reports the entry another screen is
+  // reading, and one that failed and is read again leaves the plain row in place.
+  if (reads && read.isLoading && read.errorUpdateCount === 0) {
     return (
       <View accessibilityLabel="Remix source post" style={ROW_STYLE}>
         <SkeletonBone width={POSTER_SIZE} height={POSTER_SIZE} radius={POSTER_RADIUS} strong />
@@ -85,10 +91,11 @@ export function RemixSourceRow({ source }: { source: RemixSourceSeed }) {
   const thumbnailUrl = row?.thumbnailUrl?.trim();
   return (
     <View accessibilityLabel="Remix source post" style={ROW_STYLE}>
-      {thumbnailUrl ? (
+      {thumbnailUrl && thumbnailUrl !== failedPoster ? (
         <StableMediaImage
           url={thumbnailUrl}
           cacheKey={`remix-source:${thumbnailUrl}`}
+          onError={() => setFailedPoster(thumbnailUrl)}
           style={{ width: POSTER_SIZE, height: POSTER_SIZE, borderRadius: POSTER_RADIUS }}
         />
       ) : null}

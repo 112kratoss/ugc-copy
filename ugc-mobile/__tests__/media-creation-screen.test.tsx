@@ -8859,6 +8859,36 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(collectText(row(tree))).toEqual(['Source creation', 'Make your own version']);
       });
 
+      const brought = () => (
+        <MediaCreationScreen
+          initialTool="image"
+          remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Kung fu cats', creatorLabel: '@fluffy', thumbnailUrl: 'https://cdn.example.com/post-9/poster.webp' }}
+        />
+      );
+
+      // StableMediaImage's failure plate takes a preview's frame, the width of the screen,
+      // whatever the image's own 40pt style says.
+      it('drops a poster that cannot be drawn, and keeps the words', async () => {
+        const tree = await open(brought());
+        const image = row(tree).find((node) => String(node.type) === 'stable-media-image');
+        renderer.act(() => { image.props.onError?.({ error: 'HTTP 404' }); });
+
+        expect(poster(tree)).toEqual([]);
+        expect(collectText(row(tree))).toEqual(['Kung fu cats', 'By @fluffy']);
+      });
+
+      // A disabled query still reports the shared entry's state, so the post page reading the
+      // same post turned a row the link had brought into bones.
+      it('keeps the row a link brought while something else is reading its post', async () => {
+        // Never answered; the next case's setup removes it, which rejects this with a CancelledError.
+        testQueryClient.fetchQuery({ queryKey: ['showcase-post', 'post-9', 'user-123'], queryFn: () => new Promise(() => {}) }).catch(() => undefined);
+        const tree = await open(brought());
+
+        expect(row(tree).findAllByType(SkeletonBone)).toHaveLength(0);
+        expect(collectText(row(tree))).toEqual(['Kung fu cats', 'By @fluffy']);
+        expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
+      });
+
       it('sizes the bones to the phone\'s text size, so the row does not grow when the post lands', async () => {
         windowState.fontScale = 1.5;
         authState.api.getShowcasePost.mockReturnValue(new Promise(() => {}));
