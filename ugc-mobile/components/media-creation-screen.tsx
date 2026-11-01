@@ -666,9 +666,9 @@ function unavailableRunInputMessage(
 /**
  * Shown in place of a motion quote the server would refuse (it needs both inputs to price), asking
  * for the inputs by what the composer's slots are called (`catalogMotionDraftSlotLabels`): production
- * publishes Kling 3.0's as "Reference images" and "Reference videos", and a line asking for a
- * character image and a motion clip named neither (2026-10-21). The motion-inputs pair keeps its
- * own line, which says what the clip is for.
+ * published Kling 3.0's as "Reference images" and "Reference videos" until release
+ * kling-3-motion-inputs-20261101, and a line asking for a character image and a motion clip named
+ * neither (2026-10-21). The motion-inputs pair keeps its own line, which says what the clip is for.
  */
 function motionInputsHint(labels: { image: string; video: string }, missing: { image: boolean; video: boolean }): string {
   // Only what is still missing: an empty slot has no line of its own under it.
@@ -5206,8 +5206,8 @@ function MotionCreatorComposer({
   const characterError = draft.characterImage ? validationErrors.find((error) => slotNamedBy(error) === labels.image) : undefined;
   const motionError = draft.referenceVideo ? validationErrors.find((error) => slotNamedBy(error) === labels.video) : undefined;
   const clipUploading = upload?.target === 'motion-clip' && upload.cancellable;
-  // The slots the run sends its picture and its clip in, found by kind: Kling 3.0's are plain
-  // reference slots, where Kling 2.6 has the motion-inputs pair.
+  // The slots the run sends its picture and its clip in, found by kind: Kling 3.0's were plain
+  // reference slots until release kling-3-motion-inputs-20261101, beside Kling 2.6's motion-inputs pair.
   const slotKeys = catalogMotionDraftSlotKeys(draft, model);
   const characterSlot = catalogInputSlot(model, draft, slotKeys.image);
   const motionSlot = catalogInputSlot(model, draft, slotKeys.video);
@@ -5222,7 +5222,8 @@ function MotionCreatorComposer({
           <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>Choose the character to preserve and the movement to transfer.</Text>
         </View>
         {/* Both are required whatever a slot's min says: a motion run starts with both or not at
-            all, as the server's start says (Kling 3.0's slots have a min of 0). The panel's title and
+            all, as the server's start says (Kling 3.0's slots had a min of 0 until release
+            kling-3-motion-inputs-20261101). The panel's title and
             the bar say so; a slot carries no badge, and an empty slot no line of its own. */}
         <View style={{ flexDirection: 'row', gap: 9 }}>
           {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}

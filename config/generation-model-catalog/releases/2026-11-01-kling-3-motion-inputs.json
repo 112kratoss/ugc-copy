@@ -1,0 +1,229 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "kling-3-motion-inputs-20261101",
+    "basedOnRevision": "slot-min-durations-20261031",
+    "changeNote": "Kling 3.0 motion moves off the compatibility release's motion-v1 entry onto the code build: the motion-inputs slots (characterImage, referenceVideo with the 3 s shortest clip the start refuses by and the 30 s cap), per-second pricing and descriptor rules. Prices unchanged: every resolution, orientation and duration quotes as before.",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-1.1-flash",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "grok-imagine-video-1.5",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "pixverse-v6",
+    "qwen-image-2.1",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-flash",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "wan-3.0",
+    "wan-3.0-prime",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "seedance-2-mini",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "seedance-2-mini",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "kling-3.0",
+      "kind": "motion",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "kling-3.0",
+        "kind": "motion",
+        "displayName": "Kling 3.0",
+        "description": "Latest model — enhanced fidelity and motion accuracy",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 10,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "720p",
+            "options": [
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              }
+            ]
+          },
+          {
+            "key": "characterOrientation",
+            "label": "Character orientation",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "video",
+            "options": [
+              {
+                "value": "video",
+                "label": "video"
+              },
+              {
+                "value": "image",
+                "label": "image"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 10,
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "unit": "seconds"
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 1,
+            "supportsNaming": false
+          },
+          "videoReferences": {
+            "max": 1
+          },
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "motion-inputs",
+            "label": "Motion inputs",
+            "default": true,
+            "slots": [
+              {
+                "key": "characterImage",
+                "kind": "image",
+                "role": "reference",
+                "label": "Character image",
+                "min": 1,
+                "max": 1
+              },
+              {
+                "key": "referenceVideo",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference video",
+                "min": 1,
+                "max": 1,
+                "durationMetadata": "optional",
+                "maxDurationSeconds": 30,
+                "minDurationSeconds": 3
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "motion-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "kling-3.0/motion-control"
+      },
+      "pricingStrategy": "per-second",
+      "pricingConfig": {
+        "durationSettingKey": "duration",
+        "rate": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "720p"
+              }
+            ],
+            "table": {
+              "720p": 20,
+              "1080p": 27
+            }
+          }
+        },
+        "rounding": "ceil"
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {},
+        "rules": []
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ]
+}

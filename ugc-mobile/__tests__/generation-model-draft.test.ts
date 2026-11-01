@@ -1029,19 +1029,28 @@ describe('a clip shorter than its slot takes', () => {
       .toEqual([]);
   });
 
-  it('holds a Kling 2.6 motion clip under 3 seconds as the release publishes it, in the start’s words', () => {
-    // Kling 2.6 as production serves it once the release is out (the contract both suites read).
-    const kling26 = parseModelCatalogDetail(productionMotion.models.find((model) => model.id === 'kling-2.6'));
-    const motionDraftOf = (seconds: number) => applyCatalogModelDefaults({
-      ...createDefaultCreationDraft('motion'),
-      model: 'kling-2.6',
-      characterImage: upload('hero.png', 'image'),
-      referenceVideo: { ...upload('dance.mp4', 'video', { durationSeconds: seconds }), displayName: 'Reference Motion' },
-    }, kling26);
+  /** A motion draft on `model` with a picture and a clip of `seconds`, as the composer holds one. */
+  const motionDraftOf = (model: ReturnType<typeof parseModelCatalogDetail>, seconds: number) => applyCatalogModelDefaults({
+    ...createDefaultCreationDraft('motion'),
+    model: model.id,
+    characterImage: upload('hero.png', 'image'),
+    referenceVideo: { ...upload('dance.mp4', 'video', { durationSeconds: seconds }), displayName: 'Reference Motion' },
+  }, model);
 
-    expect(validateCatalogCreationDraft(motionDraftOf(2.16), kling26, ready).errors)
-      .toEqual(['Kling 2.6 reference video must be at least 3 seconds long. Reference Motion runs 2.1 seconds.']);
-    expect(validateCatalogCreationDraft(motionDraftOf(2.95), kling26, ready).errors).toEqual([]);
+  it.each([['kling-2.6', 'Kling 2.6'], ['kling-3.0', 'Kling 3.0']] as const)('holds a %s motion clip under 3 seconds as production publishes it, in the start’s words', (id, name) => {
+    // The model as production serves it (the contract both suites read): Kling 2.6 since release
+    // slot-min-durations-20261031, Kling 3.0 since kling-3-motion-inputs-20261101.
+    const model = parseModelCatalogDetail(productionMotion.models.find((entry) => entry.id === id));
+
+    expect(validateCatalogCreationDraft(motionDraftOf(model, 2.16), model, ready).errors)
+      .toEqual([`${name} reference video must be at least 3 seconds long. Reference Motion runs 2.1 seconds.`]);
+    expect(validateCatalogCreationDraft(motionDraftOf(model, 2.95), model, ready).errors).toEqual([]);
+  });
+
+  it('leaves a short Kling 3.0 motion clip to the start on a rollback, whose slots publish no minimum', () => {
+    const model = parseModelCatalogDetail(productionMotion.rollback.models.find((entry) => entry.id === 'kling-3.0'));
+
+    expect(validateCatalogCreationDraft(motionDraftOf(model, 2.16), model, ready).errors).toEqual([]);
   });
 });
 

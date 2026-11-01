@@ -7,8 +7,8 @@ import productionMotion from '../../contracts/production-motion-descriptors-v1.j
 /**
  * The motion descriptors both suites test against were read from production at one release. A
  * release that re-emits either model may publish another shape (Kling 3.0's plain reference slots
- * came from the compatibility release, which no later release touched), and nothing else would
- * tell the two suites they now test a shape production no longer sends.
+ * came from the compatibility release, which no release touched until kling-3-motion-inputs-20261101),
+ * and nothing else would tell the two suites they now test a shape production no longer sends.
  */
 
 type Manifest = {
@@ -25,13 +25,19 @@ function readReleases(): Manifest[] {
 }
 
 describe('the production motion descriptors contract', () => {
-  it('holds Kling 2.6 in the motion-inputs slots and Kling 3.0 in plain reference slots', () => {
-    const slotsOf = (id: string) => productionMotion.models
+  it('holds both models in the motion-inputs slots, and Kling 3.0’s plain reference slots for a rollback', () => {
+    const slotsOf = (models: typeof productionMotion.models, id: string) => models
       .find((model) => model.id === id)?.inputModes.flatMap((mode) => mode.slots.map((slot) => slot.key));
 
     expect(productionMotion.models.map((model) => model.id)).toEqual(['kling-2.6', 'kling-3.0']);
-    expect(slotsOf('kling-2.6')).toEqual(['characterImage', 'referenceVideo']);
-    expect(slotsOf('kling-3.0')).toEqual(['imageReferences', 'videoReferences']);
+    expect(slotsOf(productionMotion.models, 'kling-2.6')).toEqual(['characterImage', 'referenceVideo']);
+    expect(slotsOf(productionMotion.models, 'kling-3.0')).toEqual(['characterImage', 'referenceVideo']);
+    // What production serves again if the release that re-emitted Kling 3.0 is rolled back.
+    expect(productionMotion.rollback.models.map((model) => model.id)).toEqual(['kling-3.0']);
+    expect(slotsOf(productionMotion.rollback.models, 'kling-3.0')).toEqual(['imageReferences', 'videoReferences']);
+    const releases = readReleases();
+    expect(releases.find((manifest) => manifest.release.revision === productionMotion.revision)?.release.basedOnRevision)
+      .toBe(productionMotion.rollback.revision);
   });
 
   it('was read at a release no later release re-emits either model after', () => {

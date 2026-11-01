@@ -29,7 +29,7 @@ import {
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 import { GenerationServiceError } from '@/lib/generation-service-core';
 import { createSeedanceAssetMetadata } from '@/lib/seedance-assets';
-import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
+import { ROLLBACK_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
 // The runner reads generations service-role (authenticated has no SELECT on
 // the table), so the service client must serve the same state-backed
@@ -1091,7 +1091,9 @@ describe('workflow-runner recovery', () => {
     // A catalog motion step places its picture and clip by the motion rule the web motion page
     // places its own by (protocol's catalogMotionInputSlots). It used to rename each standard
     // handle to the model's one slot of its kind, which agreed on every published model, and
-    // left `characterImage`, a slot such a model does not declare, beside two image slots.
+    // left `characterImage`, a slot such a model does not declare, beside two image slots. These
+    // run the step on the catalog path (`kie-task-v1`) with the slots each case publishes; Kling 3.0
+    // itself runs on `motion-v1`, whose step quotes by kind totals and sends no slots.
     describe('a catalog motion step’s slots', () => {
       async function slotsSent(inputModes?: CatalogInputMode[]) {
         const { graph, node } = createSingleStepGraph('motion-generate');
@@ -1133,8 +1135,10 @@ describe('workflow-runner recovery', () => {
         expect(planned).toEqual(['characterImage', 'referenceVideo']);
       });
 
-      it('sends production Kling 3.0’s reference slots, as the web motion page does', async () => {
-        const { sent, planned } = await slotsSent(PRODUCTION_KLING_3_MOTION_MODES);
+      // Production's Kling 3.0 publishes the code catalog's slots (the case above) since release
+      // kling-3-motion-inputs-20261101; a rollback of it serves the plain reference slots again.
+      it('sends the plain reference slots Kling 3.0 has on a rollback, as the web motion page does', async () => {
+        const { sent, planned } = await slotsSent(ROLLBACK_KLING_3_MOTION_MODES);
         expect(sent).toEqual(['imageReferences:image:https://cdn.example.com/character.png', 'videoReferences:video:https://cdn.example.com/reference.mp4']);
         expect(planned).toEqual(['imageReferences', 'videoReferences']);
       });
