@@ -1,5 +1,5 @@
 -- The marketplace's resource filter lists a recipe under the kinds its card
--- shows.
+-- reads from what the recipe stores.
 --
 -- list_marketplace_resource_bundles filters ?resource=prompt|workflow|files|
 -- notes|remix on marketplace_bundle_listings.has_*. Those flags were
@@ -8,10 +8,19 @@
 -- with Remix only for the stored switch or a Remix item. The card reads its
 -- kinds with getPostResourceKinds, as hydrateBundleRows calls it
 -- (src/lib/post-resource-bundles-server.ts):
---   - from its items' types. The legacy columns are read only for a recipe
---     with no item, and the write path stores items for every resource;
+--   - from the types of its valid items (a known type, trimmed). The legacy
+--     columns are read only for a recipe with no valid item, which the write
+--     path never stores: it stores items, with trimmed types, for every
+--     resource, and production had no recipe without one (2026-11-01). This
+--     rule reads items alone and trims spaces alone, so only a row written
+--     around the app (no valid item, or a type padded with a tab) differs;
 --   - Remix when its stored switch is on, when an item is a Remix, or when it
 --     is published on a post made from a creation (resolveRecipeAllowRemix).
+-- A tile can also show Files that an unlock adds from a creation's shared
+-- inputs: counted after the list, for the page it serves, on a recipe whose
+-- stored switch is on. They are not stored, so no filter lists a recipe for
+-- them, as before this file and as the app's own fallback filters (at most 4
+-- listed recipes in production on 2026-11-01).
 -- The marketplace serves what the list returns without checking the kind
 -- again. In production on 2026-11-01 (read-only count: 17 recipes, every one
 -- with items, 12 listed), the workflow filter listed 10 recipes whose cards
@@ -20,10 +29,12 @@
 -- filter left out 1 creation recipe whose card shows Remix.
 --
 -- The rule is now one function, public.post_resource_bundle_kinds, and both
--- projections call it: the listing's flags, and the search document's kind
--- words. It holds the search document's expression
+-- marketplace projections call it: the listing's flags, and the search
+-- document's kind words. It holds the search document's expression
 -- (20261031100330_marketplace_search_indexes_public_text.sql) unchanged, so
--- no document's text changes.
+-- no document's text changes. get_owner_post_bundle_summaries (the owner's
+-- post lists, 20261017145444) keeps its own copy of the older rule, which
+-- differs only on rows the write path never stores; it is not changed here.
 --
 -- The listing's posts trigger now follows the post's creation, which decides
 -- Remix. Its recipe trigger already follows the status, items and switch, and
@@ -36,7 +47,11 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 
 -- posts first, then the recipes, as 20261031100330 takes them: the order the
--- publish and edit routes lock in, so this cannot deadlock with them. A post
+-- publish and edit routes lock in. No order avoids every writer: a paid
+-- recipe's save writes the recipe, then the post (its clear-prompt trigger,
+-- 20261031055009), and a post's exposure change writes its recipes. Against
+-- those, the lock timeout or a deadlock aborts this whole file, one
+-- transaction with nothing applied, and the release step is run again. A post
 -- or recipe written while this file runs waits for it, and its triggers then
 -- use the new projections. profiles is not locked, for the reason that file
 -- gives: a seller's rename that runs alongside this file can still project
@@ -45,10 +60,12 @@ SET LOCAL lock_timeout = '5s';
 LOCK TABLE public.posts IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.post_resource_bundles IN SHARE ROW EXCLUSIVE MODE;
 
--- A recipe's kinds as its card shows them, in the app's order
--- (POST_RESOURCE_KIND_ORDER): getPostResourceKinds on its items' types, with
--- Remix as resolveRecipeAllowRemix resolves it for hydrateBundleRows. Takes
--- the recipe's post's generation_id; NULL for a post without a creation.
+-- A recipe's kinds as its card reads them from what it stores, in the app's
+-- order (POST_RESOURCE_KIND_ORDER): getPostResourceKinds on its items'
+-- types, with Remix as resolveRecipeAllowRemix resolves it for
+-- hydrateBundleRows. Takes the recipe's post's generation_id; NULL for a post
+-- without a creation. Not read: the legacy columns of a recipe with no valid
+-- item, and the Files an unlock adds from a creation's shared inputs (header).
 CREATE OR REPLACE FUNCTION public.post_resource_bundle_kinds(
   p_resource_items jsonb,
   p_allow_remix boolean,
@@ -97,7 +114,7 @@ GRANT EXECUTE ON FUNCTION public.post_resource_bundle_kinds(jsonb, boolean, text
   TO service_role;
 
 COMMENT ON FUNCTION public.post_resource_bundle_kinds(jsonb, boolean, text, uuid) IS
-  'A recipe''s kinds as its card shows them (getPostResourceKinds, with Remix as resolveRecipeAllowRemix resolves it), in the app''s order. The one rule the marketplace listing''s filter flags and its search document read.';
+  'A recipe''s kinds as its card reads them from its stored items (getPostResourceKinds, with Remix as resolveRecipeAllowRemix resolves it), in the app''s order. Not the legacy columns of a recipe with no valid item, nor Files an unlock adds from a creation''s shared inputs. The one rule the marketplace listing''s filter flags and its search document read.';
 
 -- The search document (latest: 20261031100330), as it was but for its kinds,
 -- which the function above now holds.

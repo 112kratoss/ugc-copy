@@ -1,9 +1,12 @@
 -- The marketplace's resource filter (?resource=prompt|workflow|files|notes|
--- remix) lists a recipe under the kinds its card shows: getPostResourceKinds
--- on its items, with Remix as hydrateBundleRows resolves it
--- (resolveRecipeAllowRemix). The marketplace route serves what
+-- remix) lists a recipe under the kinds its card reads from what the recipe
+-- stores: getPostResourceKinds on its items, with Remix as hydrateBundleRows
+-- resolves it (resolveRecipeAllowRemix). The marketplace route serves what
 -- list_marketplace_resource_bundles returns without checking the kind again,
 -- so a filter that reads anything else lists recipes the card contradicts.
+-- (Files an unlock adds from a creation's shared inputs are counted onto the
+-- tile after the list and are no stored kind; the migration's header says
+-- so.)
 --
 -- The search document holds the same kinds as words (since
 -- 20261031100330_marketplace_search_indexes_public_text.sql), so each recipe
