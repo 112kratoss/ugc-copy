@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { showcaseToHomeFeedCard } from '@/lib/home-feed-view-model';
 import { buildImmersiveShowcaseItems } from '@/lib/immersive-preview-view-model';
-import { REMIX_UNLOCK_REQUIRED_CODE, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
+import { REMIX_UNLOCK_REQUIRED_CODE, showcasePostRemixSourceContext, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import type { ShowcaseFeedItem } from '@/lib/types';
 
 const REMIX_RESPONSE = { success: true, redirectTo: '/create-video?remix=gen-1&remixPost=post-1' };
@@ -183,5 +184,45 @@ describe('showcaseRemixCreateHref', () => {
       pathname: '/create/motion',
       params: { prompt: 'A dancer on a rooftop' },
     });
+  });
+
+  // The row read "Untitled Creation" where the post's Home card shows its prompt.
+  it('names an untitled post by its prompt, as its Home card does', () => {
+    const [untitled] = buildImmersiveShowcaseItems('showcase-feed', [{ ...motionPost(), title: 'Untitled Creation' }]);
+    expect(route(showcaseRemixCreateHref(untitled, { success: true, redirectTo: '/create-motion?remix=gen-1&remixPost=post-1' })).params)
+      .toMatchObject({ sourceTitle: 'A dancer on a rooftop' });
+  });
+});
+
+// What the creator draws when its link names the post by id alone: a guest's
+// Make this after sign-in, a notification, a deep link.
+describe('showcasePostRemixSourceContext', () => {
+  it('names a post read by id as the reel and Home name it', () => {
+    expect(showcasePostRemixSourceContext(motionPost())).toEqual({
+      postId: 'post-1',
+      title: 'Dance loop',
+      creatorLabel: '@mover',
+      thumbnailUrl: 'https://cdn.example.test/post-1/poster.webp',
+    });
+  });
+
+  it("gives an untitled post its Home card's title", () => {
+    const untitled = { ...motionPost(), title: 'Untitled Creation' };
+    expect(showcasePostRemixSourceContext(untitled).title).toBe('A dancer on a rooftop');
+    expect(showcasePostRemixSourceContext(untitled).title).toBe(showcaseToHomeFeedCard(untitled).title);
+  });
+
+  // The row and the Home card name a post through one ladder (`postName`); these are the
+  // shapes an untitled post arrives in (the server titles any post with a body from its body).
+  it.each([
+    ['an image with a prompt', { creationMode: null, category: 'image', mediaKind: 'image', prompt: 'A red bicycle' }, 'A red bicycle'],
+    ['an image whose prompt is hidden', { creationMode: null, category: 'image', mediaKind: 'image', prompt: '' }, 'Image creation'],
+    ['a video whose prompt is hidden', { creationMode: null, category: 'video', mediaKind: 'video', prompt: '' }, 'Video creation'],
+    ['a video upload filed as an image', { creationMode: null, category: 'image', mediaKind: 'video', prompt: '' }, 'Video creation'],
+    ['a motion run whose prompt is hidden', { creationMode: 'motion', category: 'video', mediaKind: 'video', prompt: '' }, 'Motion creation'],
+  ] as const)('names %s as its Home card does', (_shape, fields, expected) => {
+    const post = { ...motionPost(), ...fields, title: 'Untitled Creation' } as ShowcaseFeedItem;
+    expect(showcasePostRemixSourceContext(post).title).toBe(expected);
+    expect(showcaseToHomeFeedCard(post).title).toBe(expected);
   });
 });

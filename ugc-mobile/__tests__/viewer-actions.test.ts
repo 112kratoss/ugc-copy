@@ -16,6 +16,7 @@ import {
   getThemedSaveHeartIconProps,
   getDeleteCreationConfirmation,
   getProfileFeedCardSlots,
+  getRemixSourceContext,
   getRemixSourceThumbnailUrl,
   getViewerActionGroupLabel,
   getViewerActionLabel,
@@ -31,8 +32,9 @@ import {
 } from '../lib/viewer-actions';
 import { contrastRatio } from '../lib/color-contrast';
 import { hexWithAlpha } from '../lib/eased-fade';
-import type { ImmersivePreviewItem, PreviewViewerSource } from '../lib/immersive-preview-view-model';
+import { buildImmersiveGenerationItems, type ImmersivePreviewItem, type PreviewViewerSource } from '../lib/immersive-preview-view-model';
 import { appTheme, themes } from '../lib/theme';
+import type { GenerationListItem } from '../lib/types';
 
 function railItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
   return {
@@ -641,5 +643,63 @@ describe("a remix source's thumbnail", () => {
       mediaUrl: 'https://cdn.test/original.mp4',
       mediaItems: [cover('video', null)],
     }))).toBeNull();
+  });
+
+  // A picture without a poster drew its original instead: 1.2 MB on average, up to
+  // about 8 MB, for 40pt (2026-11-01 review). The row has no picture until a poster exists.
+  it('is no picture for an image that has no poster, never its full-size original', () => {
+    expect(getRemixSourceThumbnailUrl(railItem({ mediaUrl: 'https://cdn.test/original.png', mediaItems: [cover('image', null)] })))
+      .toBeNull();
+    expect(getRemixSourceThumbnailUrl(railItem({ mediaUrl: 'https://cdn.test/original.png', mediaItems: [] }))).toBeNull();
+  });
+
+  // A creation without a preview yet names its own output as one (getGenerationMediaItemsList), and
+  // the server does the same for a legacy creation-backed post.
+  it('is no picture when the media names itself as its preview', () => {
+    expect(getRemixSourceThumbnailUrl(railItem({ mediaItems: [cover('image', 'https://cdn.test/original.png')] }))).toBeNull();
+    const [creation] = buildImmersiveGenerationItems('profile-creations', [{
+      id: 'gen-1',
+      output_url: 'https://cdn.test/gen-1/output.png',
+      status: 'succeeded',
+      created_at: '2026-11-01T09:00:00.000Z',
+      completed_at: '2026-11-01T09:01:00.000Z',
+      cost: 2,
+      model: 'nano-banana-2',
+      category: 'image',
+      title: 'Lighthouse',
+      prompt: 'A lighthouse at dusk',
+    } satisfies GenerationListItem], { creatorLabel: '@me' });
+    expect(creation.mediaItems[0]?.previewUrl).toBe('https://cdn.test/gen-1/output.png');
+    expect(getRemixSourceThumbnailUrl(creation)).toBeNull();
+  });
+
+  it("prefers the media's own descriptor, as every grid does (getShowcaseMediaPreviewUrl)", () => {
+    expect(getRemixSourceThumbnailUrl(railItem({
+      mediaItems: [{ ...cover('image', 'https://cdn.test/flat.webp'), preview: { previewUrl: 'https://cdn.test/descriptor.webp' } as never }],
+    }))).toBe('https://cdn.test/descriptor.webp');
+  });
+});
+
+describe("a remix source's title", () => {
+  const titleOf = (overrides: Partial<ImmersivePreviewItem>) => getRemixSourceContext(railItem(overrides)).title;
+
+  it("is the post's own title", () => {
+    expect(titleOf({ title: 'Rooftop sparring', recreatePrompt: 'Two cats sparring on a rooftop' })).toBe('Rooftop sparring');
+  });
+
+  // The server names a post nobody named "Untitled Creation" (src/lib/showcase-feed.ts),
+  // and the row said so where the post's Home card shows its prompt.
+  it.each(['Untitled Creation', 'Untitled Note', 'Untitled', 'Community post'])(
+    'is the prompt in place of "%s", as the Home card reads it',
+    (title) => {
+      expect(titleOf({ title, recreatePrompt: 'Two cats sparring on a rooftop' })).toBe('Two cats sparring on a rooftop');
+    },
+  );
+
+  it('names the kind of creation when the post has no words of its own', () => {
+    expect(titleOf({ title: 'Untitled Creation', recreatePrompt: 'Untitled Creation', recreateTool: 'image' })).toBe('Image creation');
+    expect(titleOf({ title: 'Untitled Creation', recreatePrompt: '', recreateTool: 'video' })).toBe('Video creation');
+    expect(titleOf({ title: '', recreatePrompt: '  ', recreateTool: 'motion' })).toBe('Motion creation');
+    expect(titleOf({ title: 'Untitled Note', recreatePrompt: '', previewKind: 'text' })).toBe('Creator note');
   });
 });

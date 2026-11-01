@@ -1,6 +1,7 @@
 import type { MagicbookletApiClient } from './api-client';
-import type { ImmersivePreviewItem } from './immersive-preview-view-model';
-import { getNativeRemixCreateHref, getRemixSourceContext } from './viewer-actions';
+import { buildImmersiveShowcaseItems, type ImmersivePreviewItem } from './immersive-preview-view-model';
+import type { ShowcaseFeedItem } from './types';
+import { getNativeRemixCreateHref, getRemixSourceContext, type RemixSourceContext } from './viewer-actions';
 
 /** The remix endpoint's answer for a post whose remix sits behind an unlock. */
 export const REMIX_UNLOCK_REQUIRED_CODE = 'REMIX_UNLOCK_REQUIRED';
@@ -66,6 +67,15 @@ export function showcaseRemixCreateHref(item: ImmersivePreviewItem, response: Re
     prompt: response.prefill?.prompt ?? item.recreatePrompt,
     context: getRemixSourceContext(item),
   });
+}
+
+/**
+ * The row for a post read by id (`api.getShowcasePost`), for a creator whose
+ * link named the post alone. Read as the reel reads the post, as Home's links
+ * are, so the row says what it would have said opened from either.
+ */
+export function showcasePostRemixSourceContext(post: ShowcaseFeedItem): RemixSourceContext {
+  return getRemixSourceContext(buildImmersiveShowcaseItems('showcase-feed', [post])[0]);
 }
 
 function isRemixUnlockRequired(error: unknown) {
