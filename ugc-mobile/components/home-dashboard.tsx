@@ -55,7 +55,7 @@ import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dia
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
-import { startShowcaseRemix } from '@/lib/remix-start';
+import { showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcaseRemixAccess } from '@/lib/showcase-remix-access';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
@@ -115,7 +115,7 @@ import type {
   ShowcaseFeedResponse,
   ShowcasePostResponse,
 } from '@/lib/types';
-import { buildShareUrl, getNativeRemixCreateHref, getRemixSourceContext } from '@/lib/viewer-actions';
+import { buildShareUrl } from '@/lib/viewer-actions';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { useActiveGenerationCount } from '@/lib/use-active-generations';
 import { newPostsProbeCategory, newestFeedPostIn, useNewPostsProbe } from '@/lib/use-new-posts-probe';
@@ -754,13 +754,9 @@ export function HomeDashboard() {
       }
       const result = started.response;
       recordFeedEvent(item, 'remix_start');
-      const href = getNativeRemixCreateHref({
-        redirectTo: result.redirectTo,
-        recreateTool: item.category === 'video' ? 'video' : 'image',
-        prompt: item.prompt || item.body,
-        // The creator names its source as it does from the reel.
-        context: getRemixSourceContext(buildImmersiveShowcaseItems('home-community', [item])[0]),
-      });
+      // Read as the reel reads the post, so the creator opens as it does from
+      // the reel: the same tool and prompt, and the row naming the source.
+      const href = showcaseRemixCreateHref(buildImmersiveShowcaseItems('showcase-feed', [item])[0], result);
       if (href) {
         router.push(href as never);
       } else if (result.redirectTo) {

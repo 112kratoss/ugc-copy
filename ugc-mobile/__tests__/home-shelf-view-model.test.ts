@@ -70,27 +70,11 @@ describe('readHomeShelfItems', () => {
 describe('homeShelfGuestReturnTo', () => {
   it("brings a guest back to this remix's editor after sign-in, as the web's card does", () => {
     const [video, , motion] = creations;
-    const route = (href: string) => {
-      const url = new URL(href, 'https://magicbooklet.test');
-      return { pathname: url.pathname, params: Object.fromEntries(url.searchParams) };
-    };
 
-    // With the row the creator draws above the prompt, as a signed-in Make
-    // this opens it.
-    expect(route(homeShelfGuestReturnTo(video))).toEqual({
-      pathname: '/create/video',
-      params: {
-        remix: 'generation-1',
-        remixPost: 'post-1',
-        sourceTitle: 'Paper boat on a sunlit pond',
-        sourceCreator: '@magicbooklet',
-        sourceThumbnail: 'https://cdn.example.test/post-1/poster.webp',
-      },
-    });
-    expect(route(homeShelfGuestReturnTo(motion))).toMatchObject({
-      pathname: '/create/motion',
-      params: { remixPost: 'post-3', sourceTitle: 'Make anyone dance', sourceCreator: '@magicbooklet' },
-    });
+    // Ids only: the sign-in hands its returnTo back decoded twice, so no
+    // title or creator may ride in it.
+    expect(homeShelfGuestReturnTo(video)).toBe('/create/video?remix=generation-1&remixPost=post-1');
+    expect(homeShelfGuestReturnTo(motion)).toMatch(/^\/create\/motion\?remix=[^&]+&remixPost=post-3$/);
   });
 
   it('falls back to the post when the card has no create link it can map', () => {

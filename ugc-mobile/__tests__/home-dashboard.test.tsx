@@ -527,6 +527,18 @@ function pushedCreatorRoute() {
   return { pathname: url.pathname, params: Object.fromEntries(url.searchParams) };
 }
 
+/** Where a remix of `shelfPost('post-1')` opens: the server's link, and the row naming the post. */
+const POST_1_REMIX_ROUTE = {
+  pathname: '/create/video',
+  params: {
+    remix: 'generation-1',
+    remixPost: 'post-1',
+    sourceTitle: 'Post post-1',
+    sourceCreator: '@creatorpost-1',
+    sourceThumbnail: 'https://cdn.example.com/post-1.preview.webp',
+  },
+};
+
 /** FlashList reporting these cards at one viewability config's threshold. */
 function reportViewable(tree: renderer.ReactTestRenderer, config: unknown, indexes: number[]) {
   const props = listProps(tree);
@@ -1348,16 +1360,7 @@ describe('Home screen', () => {
 
     expect(authState.api.remixShowcasePost).toHaveBeenCalledWith('post-1');
     expect(authState.api.unlockFreeBundle).not.toHaveBeenCalled();
-    expect(pushedCreatorRoute()).toEqual({
-      pathname: '/create/video',
-      params: {
-        remix: 'generation-1',
-        remixPost: 'post-1',
-        sourceTitle: 'Post post-1',
-        sourceCreator: '@creatorpost-1',
-        sourceThumbnail: 'https://cdn.example.com/post-1.preview.webp',
-      },
-    });
+    expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
     expect(authState.api.recordShowcaseFeedEvent).not.toHaveBeenCalled();
 
     renderer.act(() => header.unmount());
@@ -1380,16 +1383,7 @@ describe('Home screen', () => {
     });
 
     expect(authState.api.remixShowcasePost).toHaveBeenCalledWith('post-1');
-    expect(pushedCreatorRoute()).toEqual({
-      pathname: '/create/video',
-      params: {
-        remix: 'generation-1',
-        remixPost: 'post-1',
-        sourceTitle: 'Post post-1',
-        sourceCreator: '@creatorpost-1',
-        sourceThumbnail: 'https://cdn.example.com/post-1.preview.webp',
-      },
-    });
+    expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
 
     renderer.act(() => tree.unmount());
   });
