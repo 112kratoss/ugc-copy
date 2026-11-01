@@ -2307,6 +2307,39 @@ describe('ProfileDashboard media tiles routing', () => {
       }
     });
 
+    it('opens another account’s Posts on Active, though Archived was chosen', () => {
+      queryState.ownerPosts = [
+        {
+          id: 'ready-post', title: 'Ready media post', createdAt: '2026-06-10T00:00:00Z', visibility: 'public',
+          mediaUrl: 'ready-post.png', mediaKind: 'image', body: 'Post body', category: 'image', postFormat: 'media',
+          mediaItems: [{ id: 'ready-post-media', url: 'ready-post.png', previewUrl: 'ready-post.preview.webp', mediaKind: 'image', gridReady: true }],
+        },
+        {
+          id: 'archived-post', title: 'Archived post', createdAt: '2026-06-10T00:00:00Z', visibility: 'public',
+          mediaUrl: 'archived-post.png', mediaKind: 'image', body: 'Archived body', category: 'image', postFormat: 'media',
+          archivedAt: '2026-06-11T00:00:00Z',
+        },
+      ];
+      const selectedChips = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && node.props.accessibilityRole === 'radio' && node.props.accessibilityState?.selected
+      )).map((node) => node.props.accessibilityLabel);
+      const tree = renderDashboard('Posts');
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (1)').props.onPress(); });
+      expect(selectedChips(tree)).toEqual(['Archived (1)']);
+
+      const signedIn = authState.user;
+      try {
+        authState.user = { id: 'user-456', email: 'other@example.com' };
+        renderer.act(() => { tree.update(<ProfileDashboard initialTab="Posts" />); });
+
+        expect(selectedChips(tree)).toEqual(['Active (1)']);
+        expect(tree.root.findByProps({ accessibilityLabel: 'Post, Ready media post, Public' })).toBeTruthy();
+        expect(tree.root.findAllByProps({ accessibilityLabel: 'Post, Archived post, Public' })).toHaveLength(0);
+      } finally {
+        authState.user = signedIn;
+      }
+    });
+
     it('sets the scope of the tab it is pressed on, and each tab keeps its own', () => {
       queryState.ownerPosts = [
         {
