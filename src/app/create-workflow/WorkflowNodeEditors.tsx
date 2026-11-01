@@ -8,7 +8,7 @@ import EnhancePromptButton from '@/components/EnhancePromptButton';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import Image from 'next/image';
 import { AlertCircle, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Video, Volume2, X } from 'lucide-react';
-import { useContext, useRef, useState, type ReactNode } from 'react';
+import { useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
   PromptEnhancementError,
@@ -1439,11 +1439,21 @@ function PromptNodeEnhancer({
   const [error, setError] = useState<string | null>(null);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [isTargetPickerOpen, setIsTargetPickerOpen] = useState(false);
+  // An answer that came back after the prompt was typed over, kept beside the words it found there.
+  const [offer, setOffer] = useState<{ enhanced: string; kept: string } | null>(null);
   const prompt = (node.data as TextInputNodeData).text ?? '';
+  // The prompt as it is now. The field stays open while the enhancer works, so an
+  // answer goes in only over the words it was asked about.
+  const latestPrompt = useRef(prompt);
+  useLayoutEffect(() => {
+    latestPrompt.current = prompt;
+  });
   const targetOptions = getPromptEnhancementTargets(graph, node.id)
     .map((target) => getPromptEnhancementTargetOption(graph, target))
     .filter((target): target is PromptEnhancementTargetOption => Boolean(target));
   const canEnhance = prompt.trim().length > 0 && targetOptions.length > 0 && !isEnhancing;
+  // The offer stands while the words it found stand.
+  const canUseOffer = offer !== null && offer.kept === prompt && !isEnhancing;
 
   const handleEnhance = async (target: PromptEnhancementTargetOption) => {
     if (isEnhancing) {
@@ -1456,22 +1466,28 @@ function PromptNodeEnhancer({
       return;
     }
 
+    const sentPrompt = prompt;
     setIsEnhancing(true);
     setError(null);
+    setOffer(null);
     setIsTargetPickerOpen(false);
 
     try {
       const result = await requestPromptEnhancement({
         medium: request.medium,
         selectedModel: request.selectedModel,
-        prompt,
+        prompt: sentPrompt,
         context: request.context,
       });
 
-      onUpdateNode(node.id, {
-        ...node.data,
-        text: result.enhancedPrompt,
-      } as Partial<WorkflowNodeData>);
+      // Only the text goes in: the rest of the node may have changed during the wait,
+      // and the update is merged into the node as it is then.
+      const current = latestPrompt.current;
+      if (current === sentPrompt) {
+        onUpdateNode(node.id, { text: result.enhancedPrompt } as Partial<WorkflowNodeData>);
+      } else {
+        setOffer({ enhanced: result.enhancedPrompt, kept: current });
+      }
 
       if (result.remainingCredits !== undefined) {
         onCreditsUpdate?.(result.remainingCredits);
@@ -1568,6 +1584,23 @@ function PromptNodeEnhancer({
         <div className="mt-3 flex items-center gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
           <span>{error}</span>
+        </div>
+      )}
+
+      {canUseOffer && offer && (
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              onUpdateNode(node.id, { text: offer.enhanced } as Partial<WorkflowNodeData>);
+              setOffer(null);
+            }}
+            className="inline-flex items-center gap-1 rounded-lg border border-brand-coral/30 bg-brand-coral/10 px-2 py-1 text-[11px] font-medium text-[#ffb09c] transition-colors hover:border-brand-coral/50 hover:bg-brand-coral/15"
+          >
+            <Sparkles className="h-3 w-3" />
+            <span>Use enhanced</span>
+          </button>
+          <span className="text-xs text-zinc-500" role="status">Your edits were kept.</span>
         </div>
       )}
     </div>

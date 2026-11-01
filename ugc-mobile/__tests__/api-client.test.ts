@@ -7,6 +7,9 @@ import {
   ApiError,
   GENERATION_START_TIMEOUT_MS,
   POST_CREATE_TIMEOUT_MS,
+  PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS,
+  PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE,
+  PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT,
   PROMPT_ENHANCE_TIMEOUT_MS,
   SessionMergedError,
   SessionRejectedError,
@@ -589,10 +592,9 @@ describe('mobile api client caching', () => {
   // answer was given up on here, then charged on the server and never shown.
   it('waits out the enhancer’s budget and tells the server how long it waits', async () => {
     vi.useFakeTimers();
-    const sent: { headers: Headers | null; signal: AbortSignal | null } = { headers: null, signal: null };
+    const sent: Array<{ headers: Headers; signal: AbortSignal | null }> = [];
     const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-      sent.headers = new Headers(init?.headers);
-      sent.signal = init?.signal ?? null;
+      sent.push({ headers: new Headers(init?.headers), signal: init?.signal ?? null });
       init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')), { once: true });
     }));
     const api = createApiClient({
@@ -606,17 +608,160 @@ describe('mobile api client caching', () => {
         .catch((error: unknown) => error);
 
       await vi.advanceTimersByTimeAsync(PROMPT_ENHANCE_TIMEOUT_MS - 1);
-      const { clientWait } = mobileApiContract.endpoints.enhancePrompt;
+      const { clientWait, askAgain } = mobileApiContract.endpoints.enhancePrompt;
       expect(PROMPT_ENHANCE_TIMEOUT_MS).toBe(clientWait.timeoutMs);
-      expect(sent.headers?.get(clientWait.header)).toBe(String(clientWait.timeoutMs));
-      expect(sent.signal?.aborted).toBe(false);
+      expect(sent[0].headers.get(clientWait.header)).toBe(String(clientWait.timeoutMs));
+      expect(sent[0].signal?.aborted).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
-      expect(sent.signal?.aborted).toBe(true);
+      expect(sent[0].signal?.aborted).toBe(true);
+
+      // The server is done with the key by now, so it is asked once more for the answer
+      // it kept, under the same key and with the same wait; a second silence ends the press.
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs);
+      expect(sent).toHaveLength(2);
+      expect(sent[1].headers.get(askAgain.keyHeader)).toBe(sent[0].headers.get(askAgain.keyHeader));
+      expect(sent[1].headers.get(clientWait.header)).toBe(String(clientWait.timeoutMs));
+
+      await vi.advanceTimersByTimeAsync(PROMPT_ENHANCE_TIMEOUT_MS + askAgain.delayMs);
+      expect(sent).toHaveLength(1 + askAgain.afterTimeout);
       expect(isRequestTimeoutError(await enhanced)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // The ledger keeps a settled answer under the press's key and hands it to a second
+  // ask, so an answer lost on the way back is fetched again instead of paid for twice.
+  describe('one Enhance press, one key', () => {
+    const { askAgain, clientWait, errors } = mobileApiContract.endpoints.enhancePrompt;
+    const poster = { medium: 'image' as const, selectedModel: 'nano-banana', prompt: 'Make it premium.' };
+
+    type Step = Response | Error | 'hang';
+
+    // Each ask takes the next step: an answer, a dropped connection, or no answer at all.
+    function stubAsks(steps: Step[]) {
+      const asks: Array<{ key: string | null }> = [];
+      const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+        asks.push({ key: new Headers(init?.headers).get(askAgain.keyHeader) });
+        const step = steps.shift() ?? 'hang';
+        if (step === 'hang') {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')), { once: true });
+          });
+        }
+        return step instanceof Error ? Promise.reject(step) : Promise.resolve(step);
+      });
+      const api = createApiClient({
+        baseUrl: 'https://magicbooklet.test',
+        getAccessToken: async () => 'token-1',
+        fetcher: fetcher as unknown as typeof fetch,
+      });
+      return { api, asks };
+    }
+
+    const refusal = ({ status, response }: { status: number; response: object }) => new Response(JSON.stringify(response), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const dropped = () => new TypeError('Network request failed');
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('asks again by the contract’s rule', () => {
+      expect(PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS).toBe(askAgain.delayMs);
+      expect(PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE).toBe(askAgain.afterConnectionFailure);
+      expect(PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT).toBe(askAgain.afterTimeout);
+    });
+
+    it('sends a key of its own with each press', async () => {
+      const { api, asks } = stubAsks([jsonResponse({ enhancedPrompt: 'One' }), jsonResponse({ enhancedPrompt: 'Two' })]);
+
+      await api.enhancePrompt(poster);
+      await api.enhancePrompt(poster);
+
+      expect(asks[0].key).toMatch(/\S/);
+      expect(asks[1].key).toMatch(/\S/);
+      expect(asks[1].key).not.toBe(asks[0].key);
+    });
+
+    it('asks again under the same key when the connection drops, twice at most', async () => {
+      vi.useFakeTimers();
+      const kept = stubAsks([dropped(), dropped(), jsonResponse({ enhancedPrompt: 'The answer the first ask paid for' })]);
+
+      const pressed = kept.api.enhancePrompt(poster);
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs * askAgain.afterConnectionFailure);
+
+      await expect(pressed).resolves.toMatchObject({ enhancedPrompt: 'The answer the first ask paid for' });
+      expect(kept.asks.map((ask) => ask.key)).toEqual(Array(3).fill(kept.asks[0].key));
+
+      // One more drop in a row ends the press with the connection fault.
+      const lost = stubAsks([dropped(), dropped(), dropped(), jsonResponse({ enhancedPrompt: 'Never asked for' })]);
+      const outcome = lost.api.enhancePrompt(poster).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs * (askAgain.afterConnectionFailure + 1));
+
+      expect(await outcome).toMatchObject({ name: 'ApiError', status: 0 });
+      expect(lost.asks).toHaveLength(1 + askAgain.afterConnectionFailure);
+    });
+
+    it('waits while the first ask is still running, then takes the answer it settled', async () => {
+      vi.useFakeTimers();
+      const { api, asks } = stubAsks([
+        dropped(),
+        refusal(errors.stillRunning),
+        refusal(errors.stillRunning),
+        jsonResponse({ enhancedPrompt: 'Settled answer', idempotentReplay: true }),
+      ]);
+
+      const pressed = api.enhancePrompt(poster);
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs * 3);
+
+      await expect(pressed).resolves.toMatchObject({ enhancedPrompt: 'Settled answer' });
+      expect(asks).toHaveLength(4);
+      expect(new Set(asks.map((ask) => ask.key)).size).toBe(1);
+    });
+
+    // The server never works on one key for longer than the wait the ask states.
+    it('stops waiting on a running ask once the wait it states has passed since the first', async () => {
+      vi.useFakeTimers();
+      const { api, asks } = stubAsks(Array.from({ length: 40 }, () => refusal(errors.stillRunning)));
+
+      const outcome = api.enhancePrompt(poster).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(clientWait.timeoutMs + askAgain.delayMs * 2);
+
+      expect(await outcome).toMatchObject({
+        name: 'ApiError',
+        status: errors.stillRunning.status,
+        code: errors.stillRunning.response.code,
+        message: errors.stillRunning.response.error,
+      });
+      expect(asks).toHaveLength(clientWait.timeoutMs / askAgain.delayMs + 1);
+    });
+
+    it('reads a refunded first ask as the refund, and asks no more', async () => {
+      const { api, asks } = stubAsks([refusal(errors.refunded), jsonResponse({ enhancedPrompt: 'Never asked for' })]);
+
+      expect(await api.enhancePrompt(poster).catch((error: unknown) => error)).toMatchObject({
+        name: 'ApiError',
+        status: errors.refunded.status,
+        code: errors.refunded.response.code,
+        message: errors.refunded.response.error,
+      });
+      expect(asks).toHaveLength(1);
+    });
+
+    it.each([
+      { status: 402, response: { error: 'Insufficient credits', required: 2 } },
+      { status: 429, response: { error: 'Too many prompt enhancements. Try again shortly.', code: 'RATE_LIMITED' } },
+      { status: 502, response: { error: 'Prompt enhancement failed. Your credits have been refunded.', remainingCredits: 40 } },
+    ])('asks no more after a $status', async (answered) => {
+      const { api, asks } = stubAsks([refusal(answered), jsonResponse({ enhancedPrompt: 'Never asked for' })]);
+
+      expect(await api.enhancePrompt(poster).catch((error: unknown) => error)).toMatchObject({ name: 'ApiError', status: answered.status });
+      expect(asks).toHaveLength(1);
+    });
   });
 
   it('times out a media-link response that sends headers but stalls while sending its body', async () => {

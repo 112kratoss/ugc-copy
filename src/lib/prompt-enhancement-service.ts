@@ -180,6 +180,27 @@ function mapLedgerError(error: AiUsageLedgerError, cost: number): PromptEnhancem
     };
   }
 
+  // A second ask under a press's key comes from a client that lost the first
+  // answer (contracts/mobile-api-v1.json, enhancePrompt). By the code it asks
+  // again while the first is running; a refunded first ends the press, in the
+  // words the lost answer would have used.
+  if (error.code === 'AI_USAGE_IN_PROGRESS') {
+    return {
+      ok: false,
+      status: 409,
+      code: error.code,
+      error: 'Prompt enhancement is still running. Try again in a moment.',
+    };
+  }
+  if (error.code === 'AI_USAGE_KEY_ALREADY_USED') {
+    return {
+      ok: false,
+      status: 409,
+      code: error.code,
+      error: 'Prompt enhancement failed. Your credits have been refunded.',
+    };
+  }
+
   return {
     ok: false,
     status: error.status,

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1022,6 +1022,33 @@ describe('WorkflowNodeEditors', () => {
 
     expect(screen.getByDisplayValue('Refined still-image prompt')).toBeInTheDocument();
     expect(onCreditsUpdate).toHaveBeenCalledWith(48);
+  });
+
+  // The prompt stays open while the enhancer works, for up to 45 s, so an answer can
+  // land on words typed since.
+  it('keeps a prompt rewritten while the enhancer worked, and offers the answer beside it', async () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [promptNode, imageNode],
+      edges: [
+        { id: 'prompt-image', source: promptNode.id, target: imageNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+      ],
+    });
+    let answer: (result: { enhancedPrompt: string }) => void = () => undefined;
+    requestPromptEnhancementMock.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+
+    renderInteractiveInspector(graph, { selectedNodeId: promptNode.id });
+    fireEvent.click(screen.getByRole('button', { name: /enhance prompt/i }));
+    fireEvent.change(screen.getByDisplayValue('Describe the scene, offer, or instruction here.'), { target: { value: 'A bottle on oak' } });
+    await act(async () => { answer({ enhancedPrompt: 'Refined still-image prompt' }); });
+
+    expect(screen.getByDisplayValue('A bottle on oak')).toBeInTheDocument();
+    expect(screen.getByText('Your edits were kept.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use enhanced' }));
+    expect(screen.getByDisplayValue('Refined still-image prompt')).toBeInTheDocument();
+    expect(screen.queryByText('Your edits were kept.')).toBeNull();
   });
 
   it('opens a target picker for multiple supported branches and enhances against the chosen branch', async () => {

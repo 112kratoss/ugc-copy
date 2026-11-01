@@ -274,6 +274,7 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
 }));
 
 import { AppState, PanResponder } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { normalizeCreationDraftForCatalog } from '../lib/generation-model-draft';
 import { MediaCreationScreen } from '../components/media-creation-screen';
@@ -8164,6 +8165,16 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     describe('Enhance', () => {
+      // An answer the case hands over when it is ready, as a slow enhancer would.
+      const answerLater = () => {
+        let answer: (result: { enhancedPrompt: string; remainingCredits?: number }) => void = () => undefined;
+        authState.api.enhancePrompt.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+        return (result: { enhancedPrompt: string; remainingCredits?: number }) => renderer.act(async () => {
+          answer(result);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+      };
+
       it.each([
         ['image', 'Generation prompt'],
         ['video', 'Generation prompt'],
@@ -8309,6 +8320,158 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
             .toContain('Insufficient credits. Enhancing a prompt costs 2 credits.');
           expect(authState.updateCredits).toHaveBeenCalledWith(1);
         });
+
+        it('keeps a shot rewritten during the wait, and offers that shot its answer', async () => {
+          const answer = answerLater();
+          const tree = await openStory();
+
+          await pressAndLook(labelled(tree.root, 'Enhance shot 2 · 2 credits'));
+          renderer.act(() => { tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.onChangeText('She runs in'); });
+          await settle();
+          await answer({ enhancedPrompt: 'She walks in slowly, lit from the hall.', remainingCredits: 900 });
+
+          expect(shotPrompt(tree)).toBe('She runs in');
+          expect(authState.updateCredits).toHaveBeenCalledWith(900);
+          expect(text(tree)).toContain('Your edits were kept.');
+
+          renderer.act(() => { labelled(tree.root, 'Use enhanced prompt').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('She walks in slowly, lit from the hall.');
+          renderer.act(() => { labelled(tree.root, 'Undo enhancement').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('She runs in');
+          renderer.act(() => { labelled(tree.root, 'Edit shot 1').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('A door opens');
+        });
+
+        // The offer sits with the words it was offered beside, as the shot's notes do.
+        it('offers a shot its answer beside that shot only', async () => {
+          const answer = answerLater();
+          const tree = await openStory();
+
+          await pressAndLook(labelled(tree.root, 'Enhance shot 2 · 2 credits'));
+          renderer.act(() => { tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.onChangeText('She runs in'); });
+          await settle();
+          await answer({ enhancedPrompt: 'She walks in slowly, lit from the hall.' });
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
+
+          renderer.act(() => { labelled(tree.root, 'Edit shot 1').props.onPress(); });
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+          expect(text(tree)).not.toContain('Your edits were kept.');
+          renderer.act(() => { labelled(tree.root, 'Edit shot 2').props.onPress(); });
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
+        });
+
+        // One offer at a time: a press elsewhere must not take away an answer still waiting with its shot.
+        it('keeps a shot’s offer through a press on another shot', async () => {
+          const answer = answerLater();
+          const tree = await openStory();
+
+          await pressAndLook(labelled(tree.root, 'Enhance shot 2 · 2 credits'));
+          renderer.act(() => { tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.onChangeText('She runs in'); });
+          await settle();
+          renderer.act(() => { labelled(tree.root, 'Edit shot 1').props.onPress(); });
+          await answer({ enhancedPrompt: 'She walks in slowly, lit from the hall.' });
+
+          authState.api.enhancePrompt.mockResolvedValueOnce({ enhancedPrompt: 'A door opens onto a dark hall.' });
+          await renderer.act(async () => { await labelled(tree.root, 'Enhance shot 1 · 2 credits').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('A door opens onto a dark hall.');
+
+          renderer.act(() => { labelled(tree.root, 'Edit shot 2').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('She runs in');
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
+        });
+
+        it('lets an answer go whose shot was removed during the wait', async () => {
+          const answer = answerLater();
+          const tree = await openStory();
+
+          await pressAndLook(labelled(tree.root, 'Enhance shot 2 · 2 credits'));
+          renderer.act(() => { labelled(tree.root, 'Remove shot 2').props.onPress(); });
+          await settle();
+          vi.mocked(Haptics.notificationAsync).mockClear();
+          await answer({ enhancedPrompt: 'She walks in slowly, lit from the hall.', remainingCredits: 900 });
+
+          expect(hasLabel(tree.root, 'Edit shot 2')).toBe(false);
+          expect(shotPrompt(tree)).toBe('A door opens');
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+          expect(authState.updateCredits).toHaveBeenCalledWith(900);
+          // Nothing was put anywhere, so nothing says it was.
+          expect(Haptics.notificationAsync).not.toHaveBeenCalledWith('success');
+        });
+      });
+
+      // A multi-shot run hides the prompt the answer was offered beside, so the offer waits with it.
+      it('keeps the prompt’s offer out of a multi-shot run', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video', catalogRevision: 'parity-rev', isMultiShot: false, prompt: 'A door opens',
+        } }));
+        const answer = answerLater();
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        await typePrompt(tree, 'A door opens slowly');
+        renderer.act(() => { labelled(tree.root, 'Multi-shot').props.onPress(); });
+        await answer({ enhancedPrompt: 'A door opens onto a dark hall.' });
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+
+        renderer.act(() => { labelled(tree.root, 'Single shot').props.onPress(); });
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
+      });
+
+      it('offers a late answer only while the words it was offered beside stand', async () => {
+        const answer = answerLater();
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        await typePrompt(tree, 'A bottle on oak');
+        await answer({ enhancedPrompt: 'A bottle on linen, morning light.' });
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
+
+        // Written on, or over with something else: the answer no longer belongs beside it.
+        await typePrompt(tree, 'A white hare');
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+        expect(text(tree)).not.toContain('Your edits were kept.');
+      });
+
+      // The prompt box stays open while the enhancer works, for up to 45 s, so an answer
+      // can land on words typed since the press.
+      it('keeps a prompt rewritten during the wait, and offers the answer beside it', async () => {
+        const answer = answerLater();
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        const prompt = () => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value as string;
+        await typePrompt(tree, 'A bottle on linen');
+
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        await typePrompt(tree, 'A bottle on oak');
+        await answer({ enhancedPrompt: 'A bottle on linen, morning light.', remainingCredits: 900 });
+
+        expect(prompt()).toBe('A bottle on oak');
+        expect(authState.updateCredits).toHaveBeenCalledWith(900);
+        expect(text(tree)).toContain('Your edits were kept.');
+        expect(hasLabel(tree.root, 'Undo enhancement')).toBe(false);
+
+        renderer.act(() => { labelled(tree.root, 'Use enhanced prompt').props.onPress(); });
+        expect(prompt()).toBe('A bottle on linen, morning light.');
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+        expect(text(tree)).not.toContain('Your edits were kept.');
+
+        // Undo goes back to the words typed, not to the ones sent.
+        renderer.act(() => { labelled(tree.root, 'Undo enhancement').props.onPress(); });
+        expect(prompt()).toBe('A bottle on oak');
+      });
+
+      it('still replaces a prompt left as it was sent', async () => {
+        const answer = answerLater();
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        await answer({ enhancedPrompt: 'A bottle on linen, morning light.' });
+
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('A bottle on linen, morning light.');
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+        expect(hasLabel(tree.root, 'Undo enhancement')).toBe(true);
       });
 
       it('applies the balance a failed enhancement returns with its refund', async () => {
