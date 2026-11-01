@@ -104,6 +104,13 @@ export interface ProfileResponse {
 
 export interface ProfileStatsResponse {
   creations: number;
+  /**
+   * The Creations Failed scope's total. Missing from a server that predates
+   * it; the chip then counts the failed runs it has loaded.
+   */
+  failedCreations?: number;
+  /** The Creations Archived scope's total, missing as `failedCreations` is. */
+  archivedCreations?: number;
   posts: number;
   archivedPosts: number;
   saved: number;

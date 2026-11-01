@@ -73,6 +73,10 @@ export interface ProfileApiResponse {
 
 export interface OwnerProfileStats {
   creations: number;
+  /** Profile ▸ Creations' Failed scope. Absent until the database counts it. */
+  failedCreations?: number;
+  /** Profile ▸ Creations' Archived scope. Absent until the database counts it. */
+  archivedCreations?: number;
   posts: number;
   archivedPosts: number;
   saved: number;

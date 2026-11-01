@@ -14,6 +14,8 @@ import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/fe
 import { buildHomeFeedCards } from '../lib/home-feed-view-model';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildPostDetailsMeta } from '../lib/post-details-view-model';
+import { profileFailedGenerationsQueryOptions, selectFailedCreations } from '../lib/profile-media-query';
+import { getOwnerCreationScopeCounts } from '../lib/profile-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
 import { getShowcaseRemixAccess } from '../lib/showcase-remix-access';
 import type {
@@ -597,6 +599,53 @@ describe('mobile shared API v1 contract fixture', () => {
     // The wire carries private playback as a relative authenticated-route URL;
     // the client absolutizes it against its base, so the expectation does too.
     await expect(call(api)).resolves.toEqual(withAbsoluteMediaRoutes(contract.endpoints[key].response, 'https://magicbooklet.test'));
+  });
+
+  // The Creations Failed scope pages failed runs alone: the request it makes is
+  // the variant's query, word for word, and its page reaches the scope whole.
+  it("asks for the Failed scope's pages as the contract pins, and reads them as sent", async () => {
+    const variant = mobileApiContract.endpoints.listGenerations.responseVariants.failedOnly;
+    const asked: URL[] = [];
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async (input: RequestInfo | URL) => {
+        asked.push(new URL(String(input)));
+        return jsonResponse(variant.response);
+      }) as unknown as typeof fetch,
+    });
+
+    const page = await profileFailedGenerationsQueryOptions(api, 'user-1').queryFn({ pageParam: null });
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0].pathname).toBe(mobileApiContract.endpoints.listGenerations.path);
+    expect(Object.fromEntries(asked[0].searchParams)).toEqual(variant.query);
+    expect(page).toEqual(variant.response);
+    expect(selectFailedCreations(page.generations).map((item) => item.id)).toEqual(['failed-video-1']);
+  });
+
+  it('reads a refused status filter as a typed API error with the server\'s words', async () => {
+    const refusal = mobileApiContract.endpoints.listGenerations.errors.invalidStatusFilter;
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => jsonResponse(refusal.response, refusal.status)) as unknown as typeof fetch,
+    });
+
+    const error = await api.listGenerations(false, { status: 'failed' }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: refusal.status, message: refusal.response.error });
+  });
+
+  it("counts the Creations scope chips from the profile read's totals", () => {
+    const stats = mobileApiContract.endpoints.getProfile.response.stats;
+
+    expect(getOwnerCreationScopeCounts(stats, { active: 0, failed: 0, archived: 0 })).toEqual({
+      active: stats.creations,
+      failed: stats.failedCreations,
+      archived: stats.archivedCreations,
+    });
   });
 
   it('parses the shared update-required response as a typed API error', async () => {

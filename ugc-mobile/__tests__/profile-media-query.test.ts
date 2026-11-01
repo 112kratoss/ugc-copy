@@ -11,6 +11,10 @@ import {
   getNextProfileOwnerPostsOffset,
   getNextProfileSavedMediaOffset,
   invalidateProfileCreations,
+  PROFILE_MEDIA_PAGE_SIZE,
+  profileFailedGenerationsQueryKey,
+  profileFailedGenerationsQueryOptions,
+  profileGenerationsQueryOptions,
   selectFailedCreations,
   selectRenderingCreations,
   truncateInfiniteDataToFirstPage,
@@ -201,6 +205,31 @@ describe('the Failed scope', () => {
   });
 });
 
+describe('the Failed scope query', () => {
+  it('pages unarchived failed runs alone, a page at a time, through the cursor the server hands back', async () => {
+    const listGenerations = vi.fn(async () => generationPage(['failed-1'], { hasMore: true, nextCursor: '24' }));
+    const options = profileFailedGenerationsQueryOptions({ listGenerations } as never, 'user-1');
+
+    await options.queryFn({ pageParam: null });
+    await options.queryFn({ pageParam: '24' });
+
+    expect(listGenerations).toHaveBeenNthCalledWith(1, false, { cursor: undefined, limit: PROFILE_MEDIA_PAGE_SIZE, status: 'failed' });
+    expect(listGenerations).toHaveBeenNthCalledWith(2, false, { cursor: '24', limit: PROFILE_MEDIA_PAGE_SIZE, status: 'failed' });
+    expect(options.getNextPageParam(generationPage(['failed-1'], { hasMore: true, nextCursor: '24' }))).toBe('24');
+  });
+
+  it('keeps a cache of its own beside the library’s, refreshed the way the library is', () => {
+    const library = profileGenerationsQueryOptions({ listGenerations: vi.fn() } as never, 'user-1');
+    const failed = profileFailedGenerationsQueryOptions({ listGenerations: vi.fn() } as never, 'user-1');
+
+    expect(failed.queryKey).toEqual(profileFailedGenerationsQueryKey('user-1'));
+    expect(failed.queryKey).not.toEqual(library.queryKey);
+    // Not under the library's key, so collapsing the library to one page leaves these pages alone.
+    expect(failed.queryKey[0]).not.toBe(library.queryKey[0]);
+    expect({ ...failed, queryKey: undefined, queryFn: undefined }).toEqual({ ...library, queryKey: undefined, queryFn: undefined });
+  });
+});
+
 describe('invalidateProfileCreations', () => {
   const key = (userId: string) => ['profile-generations', userId];
   const library = { pages: [{ generations: [] }], pageParams: [null] };
@@ -224,6 +253,19 @@ describe('invalidateProfileCreations', () => {
     expect(queryClient.getQueryState(key('user-1'))?.isInvalidated).toBe(true);
     expect(queryFn).not.toHaveBeenCalled();
     expect(queryClient.getQueryState(key('user-2'))?.isInvalidated).toBe(false);
+    unsubscribe();
+  });
+
+  it('marks the Failed scope’s pages stale with them, since a finished run may have failed', async () => {
+    const { queryClient, queryFn, unsubscribe } = watchedLibrary('user-1');
+    queryClient.setQueryData(profileFailedGenerationsQueryKey('user-1'), library);
+    queryClient.setQueryData(profileFailedGenerationsQueryKey('user-2'), library);
+
+    await invalidateProfileCreations(queryClient, 'user-1');
+
+    expect(queryClient.getQueryState(profileFailedGenerationsQueryKey('user-1'))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(profileFailedGenerationsQueryKey('user-2'))?.isInvalidated).toBe(false);
+    expect(queryFn).not.toHaveBeenCalled();
     unsubscribe();
   });
 

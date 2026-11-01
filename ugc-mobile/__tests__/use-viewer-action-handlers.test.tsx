@@ -520,14 +520,30 @@ describe('Delete creation', () => {
     expect(onSourceRefresh).not.toHaveBeenCalled();
   });
 
-  it('leaves the count alone for a run the library never counted', async () => {
+  it('leaves the counts alone for a run no total counts', async () => {
     mocks.showConfirmDialog.mockResolvedValue(true);
     mocks.auth.api.deleteGeneration.mockResolvedValueOnce({ success: true, deleted: true, linkedPostRetained: false, message: '' });
-    mountHandlers(creationItem({ availability: 'failed', availableActions: ['recreate', 'archive', 'delete-creation', 'view-details'] }))
+    // Finished with nothing to draw: neither a creation nor a failure.
+    mountHandlers(creationItem({ availability: 'no-output', runStatus: 'succeeded', availableActions: ['delete-creation', 'view-details'] }))
       .handleAction('delete-creation');
 
     await vi.waitFor(() => expect(removeGenerationFromCaches).toHaveBeenCalledTimes(1));
     expect(mocks.queryClient.setQueryData).not.toHaveBeenCalled();
+  });
+
+  it('takes a deleted failure out of the Failed total the scope chip reads', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.deleteGeneration.mockResolvedValueOnce({ success: true, deleted: true, linkedPostRetained: false, message: '' });
+    mountHandlers(creationItem({
+      availability: 'failed',
+      runStatus: 'failed',
+      availableActions: ['recreate', 'archive', 'delete-creation', 'view-details'],
+    })).handleAction('delete-creation');
+
+    await vi.waitFor(() => expect(mocks.queryClient.setQueryData).toHaveBeenCalledWith(['profile', 'viewer-1'], expect.any(Function)));
+    const update = mocks.queryClient.setQueryData.mock.calls[0][1] as (profile: unknown) => { stats: Record<string, number> };
+    expect(update({ stats: { creations: 6, failedCreations: 4, archivedCreations: 2, posts: 0, archivedPosts: 0, saved: 0 } }).stats)
+      .toMatchObject({ creations: 6, failedCreations: 3, archivedCreations: 2 });
   });
 
   it("keeps everything as it was and says the server's reason when the delete is refused", async () => {
@@ -575,6 +591,27 @@ describe('Archive and Restore of a creation', () => {
       archivedAt: null,
     })));
     expect(mocks.auth.api.restoreGeneration).toHaveBeenCalledWith('gen-1');
+  });
+
+  it('moves the scope totals the chips read: a creation to Archived, a failure out of Failed', async () => {
+    const totals = { stats: { creations: 6, failedCreations: 4, archivedCreations: 2, posts: 0, archivedPosts: 0, saved: 0 } };
+    const archiveAndRead = async (item: ImmersivePreviewItem) => {
+      mocks.queryClient.setQueryData.mockClear();
+      vi.mocked(applyGenerationArchiveToCaches).mockClear();
+      mocks.showConfirmDialog.mockResolvedValue(true);
+      mocks.auth.api.archiveGeneration.mockResolvedValueOnce({ success: true });
+      mountHandlers(item).handleAction('archive');
+      await vi.waitFor(() => expect(applyGenerationArchiveToCaches).toHaveBeenCalledTimes(1));
+      const update = mocks.queryClient.setQueryData.mock.calls[0][1] as (profile: unknown) => { stats: Record<string, number> };
+      return update(totals).stats;
+    };
+
+    await expect(archiveAndRead(creationItem())).resolves.toMatchObject({ creations: 5, archivedCreations: 3, failedCreations: 4 });
+    await expect(archiveAndRead(creationItem({
+      availability: 'failed',
+      runStatus: 'failed',
+      availableActions: ['recreate', 'archive', 'delete-creation', 'view-details'],
+    }))).resolves.toMatchObject({ creations: 6, archivedCreations: 2, failedCreations: 3 });
   });
 
   // The app said "Could not update media / Please try again." to a refusal

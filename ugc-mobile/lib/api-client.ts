@@ -407,6 +407,12 @@ export interface GenerationListOptions {
    * needs (id, status, times, model), which the in-flight ring polls every 10 s.
    */
   detail?: 'summary' | 'status';
+  /**
+   * Only runs in this state: `failed` is the Creations Failed scope, whose pages
+   * the server cuts from failed runs alone. A server released before the filter
+   * ignores it and answers the whole library, so the scope filters again.
+   */
+  status?: 'failed';
 }
 
 export interface SaveShowcasePostResponse {
@@ -1283,6 +1289,7 @@ export function createApiClient({
         id: options.id,
         limit: options.limit,
         cursor: options.cursor,
+        status: options.status,
       })}`);
       return {
         ...response,

@@ -34,7 +34,8 @@ const user: ProfileRouteUser = {
   user_metadata: { full_name: 'Creator Metadata', avatar_url: 'https://example.test/avatar.png' },
 };
 
-const COUNTS = { creations: 6, posts: 3, archivedPosts: 1, saved: 2 };
+// The RPC's jsonb since 2026-10-31: the Failed and Archived creations beside the Active ones.
+const COUNTS = { creations: 6, failedCreations: 4, archivedCreations: 2, posts: 3, archivedPosts: 1, saved: 2 };
 // The RPC's jsonb since 2026-10-17: paid sales and free unlocks apart.
 const SALES = { earningsUsdCents: 1250, listingCount: 3, salesCount: 4, freeUnlockCount: 9 };
 
@@ -465,7 +466,7 @@ describe('profile route service', () => {
   it('keeps every total a whole, non-negative number whatever the database sends', async () => {
     const client = createClient({
       profiles: [storedProfile()],
-      counts: { creations: '7', posts: -2, archivedPosts: 1.6, saved: null },
+      counts: { creations: '7', failedCreations: '3', archivedCreations: -1, posts: -2, archivedPosts: 1.6, saved: null },
       sales: { earningsUsdCents: '90', listingCount: undefined },
     });
 
@@ -474,10 +475,27 @@ describe('profile route service', () => {
     expect(result).toMatchObject({
       ok: true,
       response: {
-        stats: { creations: 7, posts: 0, archivedPosts: 2, saved: 0 },
+        stats: { creations: 7, failedCreations: 3, archivedCreations: 0, posts: 0, archivedPosts: 2, saved: 0 },
         sales: { earningsUsdCents: 90, listingCount: 0, salesCount: 0, freeUnlockCount: 0 },
       },
     });
+  });
+
+  it('leaves the creation scope totals out while the database does not count them', async () => {
+    // The function as it was before 20261031231029: a 0 here would read as
+    // "no failed runs" and hide the app's Failed chip.
+    const client = createClient({
+      profiles: [storedProfile()],
+      counts: { creations: 6, posts: 3, archivedPosts: 1, saved: 2 },
+    });
+
+    const result = await getProfileForRoute({ user, client: client.client });
+
+    expect(result.ok).toBe(true);
+    const stats = result.ok ? (result.response as { stats?: Record<string, unknown> }).stats : undefined;
+    expect(stats).toEqual({ creations: 6, posts: 3, archivedPosts: 1, saved: 2 });
+    expect(stats).not.toHaveProperty('failedCreations');
+    expect(stats).not.toHaveProperty('archivedCreations');
   });
 
   it('rate limits profile updates before validation and persistence', async () => {

@@ -6,6 +6,7 @@ import {
   FALLBACK_PROFILE_MEDIA,
   OWN_PROFILE_SHARE_SOURCE,
   generationToProfileMediaCard,
+  getOwnerCreationScopeCounts,
   getOwnerPostScopeCounts,
   getProfileCreationsScopeOptions,
   getProfileMediaEmptyBody,
@@ -527,6 +528,30 @@ describe('the Posts scope counts', () => {
   it('counts the loaded tiles without totals', () => {
     expect(getOwnerPostScopeCounts(null, { active: 2, archived: 1 })).toEqual({ active: 2, archived: 1 });
     expect(getOwnerPostScopeCounts(undefined, { active: 0, archived: 0 })).toEqual({ active: 0, archived: 0 });
+  });
+});
+
+describe('the Creations scope counts', () => {
+  it('reads the server totals, failures on pages nobody has loaded included', () => {
+    // 2026-11-01's largest library: one page loaded showed Failed (11) of 17.
+    expect(getOwnerCreationScopeCounts(
+      { creations: 46, failedCreations: 17, archivedCreations: 0 },
+      { active: 13, failed: 11, archived: 0 },
+    )).toEqual({ active: 46, failed: 17, archived: 0 });
+  });
+
+  it('counts what is loaded for a total the server does not send', () => {
+    // A server from before the Failed and Archived totals sends Creations alone.
+    expect(getOwnerCreationScopeCounts({ creations: 46 }, { active: 13, failed: 11, archived: 2 }))
+      .toEqual({ active: 46, failed: 11, archived: 2 });
+    expect(getOwnerCreationScopeCounts(null, { active: 13, failed: 11, archived: 2 }))
+      .toEqual({ active: 13, failed: 11, archived: 2 });
+  });
+
+  it('shows the Failed chip whenever the total names a failure', () => {
+    const counts = getOwnerCreationScopeCounts({ creations: 46, failedCreations: 1, archivedCreations: 0 }, { active: 13, failed: 0, archived: 0 });
+    expect(getProfileCreationsScopeOptions('active', counts).map((option) => option.label))
+      .toEqual(['Active (46)', 'Failed (1)', 'Archived (0)']);
   });
 });
 

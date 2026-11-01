@@ -2,6 +2,7 @@ import type { InfiniteData, QueryClient, QueryKey } from '@tanstack/react-query'
 
 import { selectCreationLibraryItems } from '@/lib/creation-library';
 import { dedupeInFlight } from '@/lib/in-flight';
+import { profileFailedGenerationsQueryKey } from '@/lib/profile-media-query';
 import {
   buildImmersiveGenerationItems,
   buildImmersiveOwnerPostItems,
@@ -255,7 +256,7 @@ export function readCachedImmersiveSourceSnapshot(
 ): ImmersiveSourceSnapshot | undefined {
   if (source === 'creator-profile') return undefined;
   const snapshot = isGenerationSource(source)
-    ? cachedGenerations(queryClient, userId)
+    ? cachedGenerations(queryClient, userId, initialId)
     : source === 'profile-posts'
       ? cachedOwnerPosts(queryClient, userId)
       : cachedShowcaseItems(queryClient, source, userId, identityUserId, initialId, feedSessionId);
@@ -338,15 +339,30 @@ function cachedShowcaseItems(
  * `profile-generations` is paginated; `generations` stays single-page. Owner
  * posts are not merged in: generation viewers load linked-post details as
  * separate enrichment.
+ *
+ * The Failed scope's pages join only for a run those two lack: a failure past
+ * the library's loaded pages then opens from them at once, and the library
+ * rule keeps every other failure out of the reel. Read for every open, they
+ * would date it: they are refreshed only while that scope is shown, so their
+ * age would send a viewer opened from an alert back to the network for runs
+ * the fresh library already holds.
  */
-function cachedGenerations(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceSnapshot | undefined {
-  return mergeCachedEntities(
+function cachedGenerations(
+  queryClient: QueryClient,
+  userId: string | undefined,
+  initialId: string,
+): ImmersiveSourceSnapshot | undefined {
+  const read = (keys: QueryKey[]) => mergeCachedEntities(
     queryClient,
-    [['profile-generations', userId], ['generations', userId]],
+    keys,
     (data) => readCachedPages(data as CachedPages<GenerationListResponse> | undefined)
       .flatMap((page) => page.generations ?? []),
     (generations) => ({ generations })
   );
+  const libraryKeys: QueryKey[] = [['profile-generations', userId], ['generations', userId]];
+  const library = read(libraryKeys);
+  if (!initialId || (library && sourceDataContains(library.data, initialId))) return library;
+  return read([...libraryKeys, profileFailedGenerationsQueryKey(userId)]) ?? library;
 }
 
 /** `profile-owner-posts` is paginated. */

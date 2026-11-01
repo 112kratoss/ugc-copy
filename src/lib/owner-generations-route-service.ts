@@ -120,6 +120,29 @@ const MAX_GENERATIONS_PAGE_LIMIT = 100;
 const MAX_GENERATION_STATUS_IDS = 50;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/**
+ * The statuses a library read can be narrowed to (`status=`). The app's Failed
+ * scope pages only failed runs with it, where it used to page the whole
+ * library and keep the failures, reading every success on the way.
+ */
+const OWNER_GENERATIONS_STATUS_FILTERS = ['failed'] as const;
+type OwnerGenerationsStatusFilter = typeof OWNER_GENERATIONS_STATUS_FILTERS[number];
+
+/** A library read the route refuses before it reads anything; the adapter answers it 400. */
+export class OwnerGenerationsQueryError extends Error {
+  readonly code = 'INVALID_GENERATIONS_QUERY';
+}
+
+function parseStatusFilter(value: string | null): OwnerGenerationsStatusFilter | null {
+  if (value === null) return null;
+  const candidate = value.trim();
+  if ((OWNER_GENERATIONS_STATUS_FILTERS as readonly string[]).includes(candidate)) {
+    return candidate as OwnerGenerationsStatusFilter;
+  }
+  // Ignoring it would answer `status=succeeded` with every run as if it were filtered.
+  throw new OwnerGenerationsQueryError(`status must be one of: ${OWNER_GENERATIONS_STATUS_FILTERS.join(', ')}.`);
+}
+
 function withoutWorkflowSettings<T extends { workflow_settings?: unknown }>(value: T): Omit<T, 'workflow_settings'> {
   const nextValue = { ...value };
   delete nextValue.workflow_settings;
@@ -421,6 +444,7 @@ async function fetchOwnerGenerations({
   includeArchived,
   requestedGenerationId,
   requestedGenerationIds,
+  statusFilter,
   statusOnly,
   cursorOffset,
   pageLimit,
@@ -430,6 +454,7 @@ async function fetchOwnerGenerations({
   includeArchived: boolean;
   requestedGenerationId: string | null;
   requestedGenerationIds: string[] | null;
+  statusFilter: OwnerGenerationsStatusFilter | null;
   statusOnly: boolean;
   cursorOffset: number;
   pageLimit: number;
@@ -461,6 +486,13 @@ async function fetchOwnerGenerations({
 
   if (!includeArchived) {
     query = query.is('archived_at', null);
+  }
+
+  if (statusFilter === 'failed') {
+    // Template-run steps are left out in the query: the projection below
+    // admits only succeeded ones, and a page cut before it drops them would
+    // come back short of the limit it was asked for.
+    query = query.eq('status', 'failed').is('template_run_id', null).is('template_run_step_id', null);
   }
 
   if (requestedGenerationId) {
@@ -591,6 +623,7 @@ export async function listOwnerGenerationsForRoute({
   const requestedGenerationIds = requestedGenerationId
     ? null
     : parseRequestedGenerationIds(searchParams.get('ids'));
+  const statusFilter = parseStatusFilter(searchParams.get('status'));
   const detailMode = searchParams.get('detail');
   const summaryOnly = detailMode === 'summary';
   const statusOnly = detailMode === 'status';
@@ -612,6 +645,7 @@ export async function listOwnerGenerationsForRoute({
     includeArchived,
     requestedGenerationId,
     requestedGenerationIds,
+    statusFilter,
     statusOnly,
     cursorOffset,
     pageLimit,

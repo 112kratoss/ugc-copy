@@ -257,9 +257,9 @@ function scopeOptionLabel(name: string, count: number | undefined) {
  * The scope chips over Creations, in order. Failed runs have a chip of their
  * own beside Active: as a strip above the Active grid, an account with a run of
  * failures saw rows of them before its first creation. The chip shows while a
- * run on the loaded pages failed, and stays while it is the one chosen, so
- * clearing the last failure from it leaves its empty state in place rather than
- * moving the page under the reader.
+ * run failed (the server's total, `getOwnerCreationScopeCounts`), and stays
+ * while it is the one chosen, so clearing the last failure from it leaves its
+ * empty state in place rather than moving the page under the reader.
  */
 export function getProfileCreationsScopeOptions(
   value: ProfileCreationsScope,
@@ -301,6 +301,29 @@ export function getOwnerPostScopeCounts(
   return {
     active: typeof posts === 'number' && Number.isFinite(posts) ? posts : loaded.active,
     archived: typeof archivedPosts === 'number' && Number.isFinite(archivedPosts) ? archivedPosts : loaded.archived,
+  };
+}
+
+/**
+ * The Active, Failed and Archived counts on the Creations scope control: the
+ * server's totals, counted by the rules the lists apply (`owner_profile_counts`),
+ * as the Posts chips and the header's Creations figure read theirs. The loaded
+ * runs used to be counted instead, so failures past the first page went
+ * unnamed until the reader scrolled to them. A total the server does not send
+ * falls back to the loaded count, and archiving moves the totals locally
+ * (`creationStatsDelta`).
+ */
+export function getOwnerCreationScopeCounts(
+  totals: Pick<ProfileStatsResponse, 'creations' | 'failedCreations' | 'archivedCreations'> | null | undefined,
+  loaded: Record<ProfileCreationsScope, number>,
+): Record<ProfileCreationsScope, number> {
+  const total = (value: number | undefined, fallback: number) => (
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  );
+  return {
+    active: total(totals?.creations, loaded.active),
+    failed: total(totals?.failedCreations, loaded.failed),
+    archived: total(totals?.archivedCreations, loaded.archived),
   };
 }
 
