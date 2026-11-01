@@ -1,11 +1,12 @@
 -- A media sweep uploads a derivative (preview, display, feed rendition or
 -- teaser) beside a creation's public copy, in showcase/<creation>/, before the
--- row update that names it. When that update matches no row (the post was
--- deleted or made private, its cover row repointed, or the sweep's lease taken
--- over while it worked), the object stayed in the public bucket named by
--- nothing: no row, no queue entry, nothing that would remove it. #619 queues
--- what a deleted post's rows name before the delete, which cannot include an
--- upload that lands after it.
+-- row update that names it. When no update records it (the update matched no
+-- row because the post was deleted or made private, its cover row repointed,
+-- or the sweep's lease taken over while it worked; or the attempt failed after
+-- the upload), the object stayed in the public bucket named by nothing: no
+-- row, no queue entry, nothing that would remove it. #619 queues what a
+-- deleted post's rows name before the delete, which cannot include an upload
+-- that lands after it.
 --
 -- The sweeps now hand such paths to the revocation queue through this
 -- function, since the queue takes no INSERT from service_role. The
@@ -32,10 +33,12 @@ AS $$
 DECLARE
   v_queued integer;
 BEGIN
-  -- One sweep run uploads two objects at most: a preview and a display, or a
-  -- feed rendition and a teaser.
-  IF cardinality(p_paths) > 8 THEN
-    RAISE EXCEPTION 'queue_unrecorded_showcase_media takes at most 8 paths, got %', cardinality(p_paths)
+  -- A hand-off carries what one sweep run uploaded (a preview and a display,
+  -- or a feed rendition and a teaser), or what the rows a removal deleted named
+  -- beyond what it removed: a handful either way. The cap only refuses a caller
+  -- using this as a bulk entry.
+  IF cardinality(p_paths) > 50 THEN
+    RAISE EXCEPTION 'queue_unrecorded_showcase_media takes at most 50 paths, got %', cardinality(p_paths)
       USING ERRCODE = '22023';
   END IF;
 
@@ -60,4 +63,7 @@ GRANT EXECUTE ON FUNCTION public.queue_unrecorded_showcase_media(text[])
   TO service_role;
 
 COMMENT ON FUNCTION public.queue_unrecorded_showcase_media(text[]) IS
-  'Trusted entry to the showcase revocation queue for the media sweeps: queues what a sweep uploaded in a creation''s public folder when the row update that was to name it matched no row. The showcase-media-revocations job decides what is removed.';
+  'Trusted entry to the showcase revocation queue for the media sweeps: queues what a sweep uploaded in a creation''s public folder and no update recorded. The showcase-media-revocations job decides what is removed.';
+
+COMMENT ON TABLE public.showcase_media_revocations IS
+  'Public showcase derivatives nothing may need any more: queued by the posts triggers in the post write''s own transaction, and by the media sweeps for uploads no update recorded. A row is deleted once its object is verified gone or still in use; the showcase-media-revocations job retries the rest.';

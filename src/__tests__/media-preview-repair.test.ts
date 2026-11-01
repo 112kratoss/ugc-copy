@@ -93,20 +93,22 @@ function createSelectChain(result: { data: unknown[] | null; error: Error | null
 
 /**
  * An update as PostgREST answers it: filters chain, awaiting the chain answers
- * `{ error }`, and `.select()` answers the rows the update matched (an Error
- * stands for a failed request).
+ * `{ error }`, and `.select()` answers the rows the update matched, decided
+ * from the filters it was given (an Error stands for a failed request).
  */
 function createUpdateQuery(
-  matched: () => unknown[] | Error = () => [{ id: 'matched' }],
+  matched: (filters: Array<[string, unknown]>) => unknown[] | Error = () => [{ id: 'matched' }],
   onEq?: (column: string, value: unknown) => void,
 ) {
+  const filters: Array<[string, unknown]> = [];
   const query = {
     eq: vi.fn((column: string, value: unknown) => {
+      filters.push([column, value]);
       onEq?.(column, value);
       return query;
     }),
     select: vi.fn(async () => {
-      const rows = matched();
+      const rows = matched(filters);
       return rows instanceof Error ? { data: null, error: rows } : { data: rows, error: null };
     }),
     then: (
@@ -117,8 +119,12 @@ function createUpdateQuery(
   return query;
 }
 
-/** The admission fallback, plus a record of what the sweeps hand the revocation queue. */
-function withQueueRecorder<T extends object>(client: T) {
+/**
+ * A record of what the sweeps hand the revocation queue. Claim RPCs named in
+ * `claims` answer their rows, as the leased path sees them; every other RPC
+ * is the admission fallback's missing function.
+ */
+function withQueueRecorder<T extends object>(client: T, claims: Record<string, unknown[]> = {}) {
   const queued: unknown[] = [];
   const fallback = withAdmissionFallback(client);
   return {
@@ -126,6 +132,7 @@ function withQueueRecorder<T extends object>(client: T) {
     supabase: {
       ...fallback,
       rpc: async (name: string, args?: unknown) => {
+        if (name in claims) return { data: claims[name], error: null };
         if (name !== 'queue_unrecorded_showcase_media') return fallback.rpc(name);
         queued.push(args);
         return { data: 1, error: null };
@@ -851,8 +858,8 @@ function createRenditionClient(
     matched = () => [{ id: 'matched' }],
   }: {
     posts?: Array<Record<string, unknown>>;
-    /** The rows an update matches, by its payload. */
-    matched?: (payload: Record<string, unknown>) => unknown[] | Error;
+    /** The rows an update matches, by its payload and filters. */
+    matched?: (payload: Record<string, unknown>, filters: Array<[string, unknown]>) => unknown[] | Error;
   } = {},
 ) {
   const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
@@ -869,7 +876,7 @@ function createRenditionClient(
       })),
       update: vi.fn((payload: Record<string, unknown>) => {
         updates.push({ table, payload });
-        return createUpdateQuery(() => matched(payload));
+        return createUpdateQuery((filters) => matched(payload, filters));
       }),
     })),
     storage: { from: storageFrom },
@@ -1336,22 +1343,33 @@ describe('per-post media repair', () => {
 
 /**
  * A sweep uploads a derivative beside its source before the row update that
- * names it. When that update matches no row (the post was deleted or made
- * private, its row repointed, the lease taken over), nothing names the upload
- * again: what landed in a creation's public folder goes to the revocation
- * queue, whose job keeps whatever something still names.
+ * names it. Whatever no update records (the update matched no row: the post
+ * was deleted or made private, the row repointed, the lease taken over; or the
+ * attempt failed after the upload) is named by nothing again: what landed in a
+ * creation's public folder goes to the revocation queue, whose job keeps
+ * whatever something still names.
  */
-describe('a sweep whose row update matches no row', () => {
+describe('a sweep whose update does not record what it uploaded', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    previewMocks.createPostMediaPreview.mockClear();
-    renditionMocks.createPostMediaRendition.mockClear();
+    previewMocks.createPostMediaPreview.mockReset();
+    renditionMocks.createPostMediaRendition.mockReset();
+    renditionMocks.createPostMediaRendition.mockResolvedValue({
+      status: 'ready' as const,
+      renditionStoragePath: 'posts/user/clip.feed.abc123.mp4',
+      renditionBytes: 2_031_616,
+      width: 610,
+      height: 1280,
+      durationSeconds: 11.4,
+    });
   });
 
   const creationPost = { id: 'post-1', generation_id: 'gen-1' };
   const queuedPaths = (queued: unknown[]) => queued
     .flatMap((args) => (args as { p_paths: string[] }).p_paths)
     .sort();
+  const leaseFilter = (filters: Array<[string, unknown]>, column: string) => filters
+    .find(([name]) => name === column)?.[1];
 
   describe('preview and display', () => {
     const coverRow = {
@@ -1370,28 +1388,46 @@ describe('a sweep whose row update matches no row', () => {
       height: 2048,
       displayStoragePath: 'showcase/gen-1/creation.abcdef123456.display.d1.webp',
     };
+    /** Uploads as createPostMediaPreview does, telling the caller each path, then `finish` decides the outcome. */
+    const uploading = (paths: string[], finish: () => unknown = () => preview) => (async (params: {
+      onUploaded?: (path: string) => void;
+    }) => {
+      for (const path of paths) params.onUploaded?.(path);
+      return finish();
+    }) as never;
+    const both = [preview.previewStoragePath, preview.displayStoragePath];
     const rowGone = (payload: Record<string, unknown>) => (payload.preview_status === 'ready' ? [] : [{ id: 'media-1' }]);
 
     function createPreviewClient(
       rows: Array<Record<string, unknown>>,
-      matched: (payload: Record<string, unknown>) => unknown[],
+      matched: (payload: Record<string, unknown>, filters: Array<[string, unknown]>) => unknown[] | Error,
+      claims: Record<string, unknown[]> = {},
     ) {
       const download = vi.fn(async () => ({ data: new Blob(['image'], { type: 'image/png' }), error: null }));
-      return withQueueRecorder({
+      const updates: Array<{ payload: Record<string, unknown>; filters: Array<[string, unknown]> }> = [];
+      const recorder = withQueueRecorder({
         from: vi.fn((table: string) => ({
           select: vi.fn(() => createSelectChain({
             data: table === 'post_media' ? rows : table === 'posts' ? [creationPost] : [],
             error: null,
           })),
-          update: vi.fn((payload: Record<string, unknown>) => createUpdateQuery(() => matched(payload))),
+          update: vi.fn((payload: Record<string, unknown>) => {
+            const update = { payload, filters: [] as Array<[string, unknown]> };
+            updates.push(update);
+            return createUpdateQuery((filters) => {
+              update.filters = [...filters];
+              return matched(payload, filters);
+            });
+          }),
         })),
         storage: { from: vi.fn(() => ({ download })) },
-      });
+      }, claims);
+      return { ...recorder, updates };
     }
 
     it("queues the preview and display of a creation's cover row that is gone", async () => {
       const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
-      previewMocks.createPostMediaPreview.mockResolvedValueOnce(preview);
+      previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(both));
       const { supabase, queued } = createPreviewClient([coverRow], rowGone);
       const invalidateFeedCache = vi.fn();
 
@@ -1399,13 +1435,64 @@ describe('a sweep whose row update matches no row', () => {
 
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       expect(queued).toHaveLength(1);
-      expect(queuedPaths(queued)).toEqual([preview.displayStoragePath, preview.previewStoragePath].sort());
+      expect(queuedPaths(queued)).toEqual([...both].sort());
       expect(invalidateFeedCache).not.toHaveBeenCalled();
+    });
+
+    it('queues them when another worker holds the row now, and the update carried this run\'s lease', async () => {
+      const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+      previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(both));
+      // The lease moved on: only an update fenced to the new holder would match.
+      const { supabase, queued, updates } = createPreviewClient(
+        [],
+        (_payload, filters) => (leaseFilter(filters, 'preview_locked_by') === 'sweep-b:post' ? [{ id: 'media-1' }] : []),
+        {
+          claim_generation_preview_repairs: [],
+          claim_post_media_preview_repairs: [{ ...coverRow, preview_attempt_count: 1 }],
+          claim_media_rendition_repairs: [],
+          claim_post_media_teaser_repair: [],
+        },
+      );
+
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, lockedBy: 'sweep-a', invalidateFeedCache: vi.fn() });
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      const ready = updates.find((update) => update.payload.preview_status === 'ready');
+      expect(leaseFilter(ready?.filters ?? [], 'preview_locked_by')).toBe('sweep-a:post');
+      expect(queuedPaths(queued)).toEqual([...both].sort());
+    });
+
+    it('queues what uploaded before the preview work threw, though the failure update names the row', async () => {
+      const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+      previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(both, () => {
+        throw new Error('Stored preview differs from the encoded bytes.');
+      }));
+      const { supabase, queued, updates } = createPreviewClient([coverRow], () => [{ id: 'media-1' }]);
+
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache: vi.fn() });
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(updates.at(-1)?.payload).toMatchObject({ preview_status: 'failed' });
+      expect(queuedPaths(queued)).toEqual([...both].sort());
+    });
+
+    it('queues them when the ready update itself fails', async () => {
+      const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+      previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(both));
+      const { supabase, queued } = createPreviewClient(
+        [coverRow],
+        (payload) => (payload.preview_status === 'ready' ? new Error('fetch failed') : [{ id: 'media-1' }]),
+      );
+
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache: vi.fn() });
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(queuedPaths(queued)).toEqual([...both].sort());
     });
 
     it('queues nothing when the update names the row', async () => {
       const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
-      previewMocks.createPostMediaPreview.mockResolvedValueOnce(preview);
+      previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(both));
       const { supabase, queued } = createPreviewClient([coverRow], () => [{ id: 'media-1' }]);
 
       const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache: vi.fn() });
@@ -1414,13 +1501,12 @@ describe('a sweep whose row update matches no row', () => {
       expect(queued).toEqual([]);
     });
 
-    it("leaves an upload outside a creation's public folder to its own cleanup", async () => {
+    it("leaves an upload under a post's own prefix alone: this queue only takes a creation's public folder", async () => {
       const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
-      previewMocks.createPostMediaPreview.mockResolvedValueOnce({
-        ...preview,
-        previewStoragePath: 'posts/post-1/photo.preview.p1.webp',
-        displayStoragePath: null,
-      } as never);
+      previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(
+        ['posts/post-1/photo.preview.p1.webp'],
+        () => ({ ...preview, previewStoragePath: 'posts/post-1/photo.preview.p1.webp', displayStoragePath: null }),
+      ));
       const { supabase, queued } = createPreviewClient(
         [{ ...coverRow, storage_path: 'posts/post-1/photo.png' }],
         rowGone,
@@ -1455,36 +1541,83 @@ describe('a sweep whose row update matches no row', () => {
       height: 1280,
       durationSeconds: 95.5,
     };
-    /** The teaser lands first, as in createPostMediaRendition, then `finish` decides the attempt. */
-    const teaserThen = (finish: () => unknown) => (async (params: {
+    /**
+     * As createPostMediaRendition does: the teaser lands (or fails) first, then
+     * `finish` decides the attempt; a ready rendition is uploaded before it returns.
+     */
+    const teaserThen = (finish: () => unknown, teaser: 'ready' | 'failed' = 'ready') => (async (params: {
       onTeaserOutcome?: (outcome: unknown) => void;
+      onUploaded?: (path: string) => void;
     }) => {
-      params.onTeaserOutcome?.({ status: 'ready', teaserStoragePath: teaserPath, teaserBytes: 900_000 });
-      return finish();
+      params.onUploaded?.(teaserPath);
+      params.onTeaserOutcome?.(teaser === 'ready'
+        ? { status: 'ready', teaserStoragePath: teaserPath, teaserBytes: 900_000 }
+        : { status: 'failed', error: 'upstream connect error' });
+      const outcome = finish() as { status?: string; renditionStoragePath?: string };
+      if (outcome?.status === 'ready' && outcome.renditionStoragePath) params.onUploaded?.(outcome.renditionStoragePath);
+      return outcome;
     }) as never;
+    const matchedUnless = (status: string) => (payload: Record<string, unknown>) => (
+      payload.rendition_status === status ? [] : [{ id: 'media-video-1' }]
+    );
 
-    async function runRendition(matched: (payload: Record<string, unknown>) => unknown[] | Error) {
+    async function runRendition(
+      matched: (payload: Record<string, unknown>, filters: Array<[string, unknown]>) => unknown[] | Error,
+      options: { leased?: boolean } = {},
+    ) {
       const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
-      const { supabase } = createRenditionClient([videoRow], { posts: [creationPost], matched });
-      const recorder = withQueueRecorder(supabase);
-      const summary = await repairPostMediaRenditions(recorder.supabase as never);
-      return { summary, queued: recorder.queued };
+      const filtersByStatus = new Map<unknown, Array<[string, unknown]>>();
+      const { supabase } = createRenditionClient(options.leased ? [] : [videoRow], {
+        posts: [creationPost],
+        matched: (payload, filters) => {
+          filtersByStatus.set(payload.rendition_status, [...filters]);
+          return matched(payload, filters);
+        },
+      });
+      const recorder = withQueueRecorder(
+        supabase,
+        options.leased ? { claim_media_rendition_repairs: [{ ...videoRow, rendition_attempt_count: 1 }] } : {},
+      );
+      const summary = await repairPostMediaRenditions(recorder.supabase as never, { lockedBy: 'sweep-a' });
+      return { summary, queued: recorder.queued, filtersByStatus };
     }
 
     it('queues the rendition and the teaser when the ready update matches no row', async () => {
       renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => readyRendition));
 
-      const { summary, queued } = await runRendition((payload) => (payload.rendition_status === 'ready' ? [] : [{ id: 'media-video-1' }]));
+      const { summary, queued } = await runRendition(matchedUnless('ready'));
 
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       expect(queued).toHaveLength(1);
       expect(queuedPaths(queued)).toEqual([renditionPath, teaserPath].sort());
     });
 
+    it("queues them when another worker holds the row now, and the update carried this run's lease", async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => readyRendition));
+
+      const { summary, queued, filtersByStatus } = await runRendition(
+        (_payload, filters) => (leaseFilter(filters, 'rendition_locked_by') === 'sweep-b' ? [{ id: 'media-video-1' }] : []),
+        { leased: true },
+      );
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(leaseFilter(filtersByStatus.get('ready') ?? [], 'rendition_locked_by')).toBe('sweep-a');
+      expect(queuedPaths(queued)).toEqual([renditionPath, teaserPath].sort());
+    });
+
+    it('queues nothing when the skip update records the teaser', async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => ({ status: 'skipped', reason: 'not-smaller' })));
+
+      const { summary, queued } = await runRendition(() => [{ id: 'media-video-1' }]);
+
+      expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+      expect(queued).toEqual([]);
+    });
+
     it('queues the teaser when the skip update matches no row', async () => {
       renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => ({ status: 'skipped', reason: 'not-smaller' })));
 
-      const { summary, queued } = await runRendition((payload) => (payload.rendition_status === 'skipped' ? [] : [{ id: 'media-video-1' }]));
+      const { summary, queued } = await runRendition(matchedUnless('skipped'));
 
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       expect(queuedPaths(queued)).toEqual([teaserPath]);
@@ -1495,13 +1628,24 @@ describe('a sweep whose row update matches no row', () => {
         throw new Error('ffmpeg terminated by SIGKILL after 120000ms.');
       }));
 
-      const { summary, queued } = await runRendition((payload) => (payload.rendition_status === 'failed' ? [] : [{ id: 'media-video-1' }]));
+      const { summary, queued } = await runRendition(matchedUnless('failed'));
 
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       expect(queuedPaths(queued)).toEqual([teaserPath]);
     });
 
-    it('queues the rendition too when the ready update fails and the failure update matches no row', async () => {
+    it('queues the rendition the failure never records, while the failure update keeps the teaser', async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => readyRendition));
+
+      const { summary, queued } = await runRendition((payload) => (
+        payload.rendition_status === 'ready' ? new Error('fetch failed') : [{ id: 'media-video-1' }]
+      ));
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(queuedPaths(queued)).toEqual([renditionPath]);
+    });
+
+    it('queues both when the ready update fails and the failure update matches no row either', async () => {
       renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => readyRendition));
 
       const { summary, queued } = await runRendition((payload) => {
@@ -1513,14 +1657,21 @@ describe('a sweep whose row update matches no row', () => {
       expect(queuedPaths(queued)).toEqual([renditionPath, teaserPath].sort());
     });
 
-    it('queues nothing when an update names the row', async () => {
-      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => {
-        throw new Error('ffmpeg exited with code 1');
-      }));
+    it('queues a teaser upload that reported failure, which no update records', async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => readyRendition, 'failed'));
 
       const { summary, queued } = await runRendition(() => [{ id: 'media-video-1' }]);
 
-      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+      expect(queuedPaths(queued)).toEqual([teaserPath]);
+    });
+
+    it('queues nothing when the update records everything it uploaded', async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => readyRendition));
+
+      const { summary, queued } = await runRendition(() => [{ id: 'media-video-1' }]);
+
+      expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
       expect(queued).toEqual([]);
     });
   });

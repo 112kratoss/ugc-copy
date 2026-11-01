@@ -203,6 +203,26 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     expect((await db.query('select id from public.showcase_media_revocations where generation_id=$1',[generationId])).rows).toEqual([]);
   });
 
+  // The removal reads a private post's rows, removes what they name, then deletes the rows. A sweep that records in between
+  // named its upload only on a row about to go.
+  it('removes a derivative a sweep recorded while the removal was underway',async()=>{
+    let late:string|null=null;
+    intercept=async(url,method)=>{
+      if(late||method!=='DELETE'||url.pathname!=='/rest/v1/post_media')return null;
+      late=`showcase/${generationId}/source.preview.late.webp`;paths.push(late);
+      expect((await admin.storage.from('showcase_media').upload(late,new Blob([bytes],{type:'image/webp'}),{contentType:'image/webp'})).error).toBeNull();
+      await db.query('update public.post_media set preview_storage_path=$2 where post_id=$1',[postId,late]);
+      return null;
+    };
+    expect(await processShowcaseMediaRevocations(admin,{now:new Date()})).toMatchObject({due:1,removed:1,rescheduled:0});
+    intercept=null;
+    expect(late,'The removal never deleted the rows').not.toBeNull();
+    expect((await db.query('select reason from public.showcase_media_revocations where generation_id=$1 and showcase_asset_path=$2',[generationId,late])).rows).toEqual([{reason:'sweep_unrecorded'}]);
+    await db.query("update public.showcase_media_revocations set next_attempt_at=now()-interval '1 minute' where generation_id=$1",[generationId]);
+    expect(await processShowcaseMediaRevocations(admin,{now:new Date()})).toMatchObject({due:1,removed:1,rescheduled:0});
+    await assertRemoved();
+  });
+
   // The sweep uploads before its row update names the object. A post deleted in between left the upload named by nothing.
   it('removes a preview the sweep uploaded while its post was being deleted',async()=>{
     await db.query("update public.posts set visibility='public',showcase_asset_path=$2 where id=$1",[postId,paths[0]]);

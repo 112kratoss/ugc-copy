@@ -19,7 +19,7 @@ import { POST_MEDIA_PATH_COLUMNS, type PostMediaPathColumn } from '@/lib/post-me
  * unexposed post drops it or a post is deleted outright,
  * `posts_queue_deleted_post_media` queues what a deleted post's media rows
  * named beside it before the delete cascades to them, and the media sweeps
- * queue what they uploaded when their row update then matched no row
+ * queue what they uploaded that no update recorded
  * (`queueUnrecordedShowcaseMedia`). The routes still delete
  * the copy inline; this drains what they missed, so a failed or skipped delete
  * can no longer leave a private post's media public.

@@ -41,8 +41,8 @@ describe('the sweeps queue what no row update recorded', () => {
     );
   });
 
-  it('refuses more paths than one sweep run uploads', () => {
-    expect(code(functionBody)).toContain('IF cardinality(p_paths) > 8 THEN RAISE EXCEPTION');
+  it('refuses a bulk hand-off', () => {
+    expect(code(functionBody)).toContain('IF cardinality(p_paths) > 50 THEN RAISE EXCEPTION');
     expect(code(functionBody)).toContain("USING ERRCODE = '22023';");
   });
 
@@ -56,6 +56,11 @@ describe('the sweeps queue what no row update recorded', () => {
     expect(code(sql)).toContain(
       'GRANT EXECUTE ON FUNCTION public.queue_unrecorded_showcase_media(text[]) TO service_role;',
     );
+  });
+
+  it("names the sweeps among the queue's sources", () => {
+    expect(code(sql)).toContain('COMMENT ON TABLE public.showcase_media_revocations IS');
+    expect(sql).toContain('and by the media sweeps for uploads no update recorded');
   });
 
   it('changes nothing else: no new grant on the queue, no replaced function', () => {

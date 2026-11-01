@@ -95,9 +95,9 @@ select is(
 );
 select is(public.queue_unrecorded_showcase_media(null), 0, 'no paths queue nothing');
 select throws_ok(
-  $$select public.queue_unrecorded_showcase_media(array_fill('showcase/ee200000-0000-4000-8000-000000000001/a.webp'::text, array[9]))$$,
+  $$select public.queue_unrecorded_showcase_media(array_fill('showcase/ee200000-0000-4000-8000-000000000001/a.webp'::text, array[51]))$$,
   '22023', null,
-  'refuses more paths than one sweep run uploads'
+  'refuses a bulk hand-off'
 );
 reset role;
 

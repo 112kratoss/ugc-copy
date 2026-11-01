@@ -8,7 +8,14 @@ describe('queueUnrecordedShowcaseMedia', () => {
   afterEach(() => {
     restoreLogSink?.();
     restoreLogSink = null;
+    vi.useRealTimers();
   });
+
+  function captureLogs() {
+    const logs: BackendLogRecord[] = [];
+    restoreLogSink = setBackendLogSink((record) => logs.push(record));
+    return logs;
+  }
 
   it("hands the queue each upload in a creation's public folder once", async () => {
     const rpc = vi.fn(async () => ({ data: 2, error: null }));
@@ -26,7 +33,7 @@ describe('queueUnrecordedShowcaseMedia', () => {
     });
   });
 
-  it("calls nothing for uploads under a post's own prefix", async () => {
+  it("calls nothing for uploads under a post's own prefixes, which this queue does not take", async () => {
     const rpc = vi.fn();
 
     await queueUnrecordedShowcaseMedia({ rpc } as never, [
@@ -38,18 +45,40 @@ describe('queueUnrecordedShowcaseMedia', () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
-  it('logs a failed hand-off instead of failing the sweep', async () => {
-    const logs: BackendLogRecord[] = [];
-    restoreLogSink = setBackendLogSink((record) => logs.push(record));
-    const rpc = vi.fn(async () => ({ data: null, error: { message: 'permission denied for function' } }));
+  it('tries again after a failed or thrown call, since nothing else can work the paths out again', async () => {
+    vi.useFakeTimers();
+    const logs = captureLogs();
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: null, error: { message: 'upstream connect error' } })
+      .mockRejectedValueOnce(new Error('fetch failed'))
+      .mockResolvedValueOnce({ data: 1, error: null });
 
-    await expect(queueUnrecordedShowcaseMedia({ rpc } as never, ['showcase/gen-1/clip.feed.r1.mp4']))
-      .resolves.toBeUndefined();
+    const handOff = queueUnrecordedShowcaseMedia({ rpc } as never, ['showcase/gen-1/clip.feed.r1.mp4']);
+    await vi.runAllTimersAsync();
 
+    await expect(handOff).resolves.toBeUndefined();
+    expect(rpc).toHaveBeenCalledTimes(3);
+    expect(logs).toEqual([]);
+  });
+
+  it('logs a hand-off that fails every try instead of failing the sweep', async () => {
+    vi.useFakeTimers();
+    const logs = captureLogs();
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: null, error: { message: 'permission denied for function' } })
+      .mockResolvedValueOnce({ data: null, error: { message: 'permission denied for function' } })
+      .mockRejectedValueOnce(new Error('fetch failed'));
+
+    const handOff = queueUnrecordedShowcaseMedia({ rpc } as never, ['showcase/gen-1/clip.feed.r1.mp4']);
+    await vi.runAllTimersAsync();
+
+    await expect(handOff).resolves.toBeUndefined();
+    expect(rpc).toHaveBeenCalledTimes(3);
     expect(logs).toEqual([expect.objectContaining({
       level: 'error',
       msg: 'failed_to_queue_unrecorded_showcase_media',
       paths: ['showcase/gen-1/clip.feed.r1.mp4'],
+      errorMessage: 'fetch failed',
     })]);
   });
 });
