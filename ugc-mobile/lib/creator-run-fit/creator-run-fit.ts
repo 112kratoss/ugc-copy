@@ -1,12 +1,13 @@
 /**
  * How a creator fits a run to a model and to a balance, on the web and, once it adopts
  * it, in the app: which settings a model opens on when a creator switches to it, how the
- * model list is split by what the balance covers, which model a remix opens on when the
- * original costs more than the balance, and how an option's price is read against the
- * balance ("23 · +1"). Each side brings its own facts (its descriptors, its form, the
- * prices its server quoted); the decisions are made here, so the two cannot decide
- * differently. The web bundle compiles this file too: keep it free of React Native, Expo
- * and Node imports.
+ * model list is split by what the balance covers, and how an option's price is read
+ * against the balance ("23 · +1"). A remix is never fitted: it opens on its original's
+ * model and settings whatever the balance, and a balance short of it is offered a top-up
+ * (owner, 2026-11-01: another model would not make what the creator came to remake).
+ * Each side brings its own facts (its descriptors, its form, the prices its server
+ * quoted); the decisions are made here, so the two cannot decide differently. The web
+ * bundle compiles this file too: keep it free of React Native, Expo and Node imports.
  */
 
 export type FitSettingValue = string | number | boolean;
@@ -122,119 +123,6 @@ export function groupModelsByBalance<T>(
     .sort((left, right) => Number(right.id === selectedId) - Number(left.id === selectedId) || byCost(left, right));
   const needsMore = priced.filter((model) => (model.cost as number) > balance).sort(byCost);
   return { fits, needsMore, unpriced: models.filter((model) => model.cost === null) };
-}
-
-/** A model a remix could open on: the original run moved to it, and its price. */
-export type RemixCandidate = {
-  modelId: string;
-  /** The run's price on this model at its fitted settings; null while unknown or refused. */
-  cost: number | null;
-  /** The run's length on this model, as fitted: the original's when the model offers it. */
-  durationSeconds: number;
-  /** Whether the model takes every input the original run sends, its shots and its sound. */
-  takesInputs: boolean;
-};
-
-export type RemixFit =
-  /** Open the original: the balance covers it, or no other model fits it either. */
-  | { kind: 'original' }
-  /** Open this model at its fitted settings. */
-  | { kind: 'fitted'; modelId: string; sameLength: boolean }
-  /**
-   * Not even this model, the cheapest, fits at its length: price its shorter lengths
-   * (`longestLengthWithin`); when none fits, `otherwise` is the cheapest model that fits at
-   * a length of its own (null when none does, and the original opens).
-   */
-  | {
-    kind: 'shorten';
-    modelId: string;
-    durationSeconds: number;
-    otherwise: { modelId: string; sameLength: boolean } | null;
-  };
-
-/** The candidates a remix may move to: they take every input the original sends, and are priced. */
-function eligibleRemixCandidates(originalModelId: string, candidates: readonly RemixCandidate[]) {
-  return candidates.filter((candidate): candidate is RemixCandidate & { cost: number } => (
-    candidate.takesInputs && candidate.cost !== null && candidate.modelId !== originalModelId
-  ));
-}
-
-/**
- * The cheapest candidate the remix may move to, at the original's length while any model
- * can make it, whatever the balance: the model whose shorter lengths are priced when even
- * it is past the balance (`fitRemixToBalance`'s `shorten`). Null when none may.
- */
-export function cheapestRemixCandidate(
-  original: { modelId: string; durationSeconds: number },
-  candidates: readonly RemixCandidate[],
-): (RemixCandidate & { cost: number }) | null {
-  const eligible = eligibleRemixCandidates(original.modelId, candidates);
-  const atLength = eligible.filter((candidate) => candidate.durationSeconds === original.durationSeconds);
-  const pool = atLength.length > 0 ? atLength : eligible;
-  // The first of the cheapest, so the list's order settles a tie.
-  return pool.reduce<(typeof pool)[number] | null>(
-    (best, candidate) => (!best || candidate.cost < best.cost ? candidate : best),
-    null,
-  );
-}
-
-/**
- * Which model a remix opens on (owner, 2026-10-28): the original while the balance
- * covers it; otherwise the preferred model, the catalog's default video (Seedance 2 Mini),
- * whenever it takes the same inputs and its run fits the balance ("Seedance 2 Mini first");
- * otherwise the cheapest model that takes the same inputs, at the same length when that
- * fits. A model that cannot make the original's length is weighed only when none that can
- * is left; when even the cheapest is short of the balance, its shorter lengths are priced
- * next. A creator without a known balance gets the original.
- */
-export function fitRemixToBalance({
-  original,
-  candidates,
-  balance,
-  preferredModelId,
-}: {
-  original: { modelId: string; cost: number | null; durationSeconds: number };
-  candidates: readonly RemixCandidate[];
-  balance: number | null;
-  /** The model weighed before the cheapest: the catalog's default video; null for none. */
-  preferredModelId: string | null;
-}): RemixFit {
-  if (balance === null || original.cost === null || original.cost <= balance) return { kind: 'original' };
-  const eligible = eligibleRemixCandidates(original.modelId, candidates);
-  const preferred = eligible.find((candidate) => candidate.modelId === preferredModelId);
-  if (preferred && preferred.cost <= balance) {
-    return { kind: 'fitted', modelId: preferred.modelId, sameLength: preferred.durationSeconds === original.durationSeconds };
-  }
-  const cheapest = cheapestRemixCandidate(original, candidates);
-  if (!cheapest) return { kind: 'original' };
-  if (cheapest.cost <= balance) {
-    return { kind: 'fitted', modelId: cheapest.modelId, sameLength: cheapest.durationSeconds === original.durationSeconds };
-  }
-  // Every model at the length is past the balance: one that fits at another length, the cheapest.
-  const otherwise = eligible.reduce<(typeof eligible)[number] | null>(
-    (best, candidate) => (candidate.cost <= balance && (!best || candidate.cost < best.cost) ? candidate : best),
-    null,
-  );
-  return {
-    kind: 'shorten',
-    modelId: cheapest.modelId,
-    durationSeconds: cheapest.durationSeconds,
-    otherwise: otherwise
-      ? { modelId: otherwise.modelId, sameLength: otherwise.durationSeconds === original.durationSeconds }
-      : null,
-  };
-}
-
-/** The longest length, below `belowSeconds`, whose price the balance covers; null when none does. */
-export function longestLengthWithin(
-  prices: ReadonlyArray<{ durationSeconds: number; cost: number | null }>,
-  balance: number,
-  belowSeconds: number,
-): number | null {
-  const fitting = prices.filter((price) => (
-    price.durationSeconds < belowSeconds && price.cost !== null && price.cost <= balance
-  ));
-  return fitting.length > 0 ? Math.max(...fitting.map((price) => price.durationSeconds)) : null;
 }
 
 /**

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { VideoRunMedia } from '@/lib/creator-run-inputs';
-import { startPostRemix } from '@/lib/creator-start-posts';
+import { startPostRemixCost } from '@/lib/creator-start-posts';
 import { buildStartPostRemixForecasts, loadCreatorStartPosts } from '@/lib/creator-start-posts-server';
 import {
   fitVideoFormToModel,
@@ -103,99 +103,74 @@ function pageRegistryFrom(schemaVersion: 2 | 3): VideoModelLookup {
 }
 
 describe('the start posts\' remix forecasts', () => {
-  it('prices a video post\'s remix on every other model the web offers, at the run\'s settings moved to each', async () => {
-    const forecast = await forecastOf(KLING_RUN);
-    expect(forecast.original).toEqual({ modelId: 'kling-3.0-video', cost: 70, durationSeconds: 5 });
-    expect(forecast.preferredModelId).toBe('seedance-2-mini');
-    expect(forecast.candidates.map((candidate) => candidate.modelId)).not.toContain('kling-3.0-video');
-    expect(forecast.candidates.find((candidate) => candidate.modelId === 'seedance-2-mini'))
-      .toEqual({ modelId: 'seedance-2-mini', cost: 19, durationSeconds: 5, takesInputs: true });
-    expect(forecast.modelNames['seedance-2-mini']).toBe('Seedance 2 Mini');
-    // What the card then says for the welcome credits: Mini first.
-    expect(startPostRemix({ ...cardOf('post-1'), remix: forecast }, 25)).toMatchObject({ cost: 19, fitted: { modelId: 'seedance-2-mini', sameLength: true } });
+  // Owner, 2026-11-01: a remix opens on its original's model and settings whatever the
+  // balance, so its card is priced on that model alone.
+  it('prices a video post\'s remix on its own model, and asks for no other model\'s price', async () => {
+    const asked: GenerationModelQuoteInput[] = [];
+    const forecasts = await buildStartPostRemixForecasts(
+      [{ postId: 'post-1', generationId: 'gen-1' }, { postId: 'post-2', generationId: 'gen-2' }],
+      deps([row('gen-1', KLING_RUN), row('gen-2', { ...KLING_RUN, model: 'seedance-2-mini', mode: '' })], async (inputs) => {
+        asked.push(...inputs);
+        return quoteAll(inputs);
+      }),
+    );
+    expect(forecasts['post-1']).toEqual({ cost: 70 });
+    expect(forecasts['post-2']).toEqual({ cost: 19 });
+    expect(asked.map((input) => input.modelId)).toEqual(['kling-3.0-video', 'seedance-2-mini']);
+    // The card says that price, whatever the balance.
+    expect(startPostRemixCost({ ...cardOf('post-1'), remix: forecasts['post-1'] })).toBe(70);
   });
 
-  it('sends only the models a fitted remix can open on, each named', async () => {
-    const forecast = await forecastOf({ ...KLING_RUN, sound: true });
-    expect(forecast.candidates.length).toBeGreaterThan(0);
-    expect(forecast.candidates.every((candidate) => candidate.takesInputs && candidate.cost !== null)).toBe(true);
-    expect(Object.keys(forecast.modelNames).sort()).toEqual(forecast.candidates.map((candidate) => candidate.modelId).sort());
-  });
-
-  // The server's runs are the page's: a card can only say what the page will once it opens.
+  // The server's run is the page's: a card can only say what the page will once it opens.
   it.each([
     ['standard, silent', KLING_RUN],
-    // Pro costs more than standard, and sound narrows the models that can take the run.
     ['pro, with sound, 9:16, 8s', { ...KLING_RUN, mode: 'pro', sound: true, aspectRatio: '9:16', duration: 8 }],
-  ])('builds every model\'s run as the page builds it from the same catalog (%s)', async (_name, stored) => {
+  ])('builds the run as the page builds it from the same catalog (%s)', async (_name, stored) => {
     const forecast = await forecastOf(stored);
     const models = pageRegistryFrom(3);
     // The form the page restores from the run (`fetchRemixData`).
     const form: VideoFormSettings = fitVideoFormToModel('kling-3.0-video', {
       mode: stored.mode, aspectRatio: stored.aspectRatio, resolution: '', duration: stored.duration, sound: stored.sound, fixedLens: false, isMultiShot: false,
     }, models);
-    const revision = CATALOG.revision;
-    const original = videoRunOnModel({ modelId: 'kling-3.0-video', catalogRevision: revision, settings: form, held: HOLDS_NOTHING, models });
-    const [originalAnswer] = quoteAll([original!.quoteInput]);
-    expect(forecast.original).toEqual({
-      modelId: 'kling-3.0-video',
-      cost: originalAnswer.status === 'fulfilled' ? originalAnswer.value.costCredits : null,
-      durationSeconds: stored.duration,
-    });
-    for (const candidate of forecast.candidates) {
-      const pageRun = videoRunOnModel({ modelId: candidate.modelId, catalogRevision: revision, settings: fitVideoFormToModel(candidate.modelId, form, models), held: HOLDS_NOTHING, models });
-      const [answer] = quoteAll([pageRun!.quoteInput]);
-      expect({ id: candidate.modelId, cost: answer.status === 'fulfilled' ? answer.value.costCredits : null, seconds: pageRun!.durationSeconds })
-        .toEqual({ id: candidate.modelId, cost: candidate.cost, seconds: candidate.durationSeconds });
-    }
+    const original = videoRunOnModel({ modelId: 'kling-3.0-video', catalogRevision: CATALOG.revision, settings: form, held: HOLDS_NOTHING, models });
+    const [answer] = quoteAll([original!.quoteInput]);
+    expect(answer.status).toBe('fulfilled');
+    expect(forecast).toEqual({ cost: answer.status === 'fulfilled' ? answer.value.costCredits : null });
   });
 
   it('opens a setting the model no longer offers on the model\'s default, as the page does', async () => {
     const unoffered = await forecastOf({ ...KLING_RUN, aspectRatio: '21:9', duration: 40 });
     const defaults = await forecastOf({ model: KLING_RUN.model, mode: KLING_RUN.mode, sound: KLING_RUN.sound });
-    expect(unoffered.original).toEqual(defaults.original);
-    expect(unoffered.candidates).toEqual(defaults.candidates);
+    expect(unoffered).toEqual(defaults);
   });
 
   it('holds Gemini Omni\'s prepared voices and characters, which every remix keeps', async () => {
-    const bare = await forecastOf({ model: 'gemini-omni-video' });
-    const prepared = await forecastOf({ model: 'gemini-omni-video', preparedAudioIds: ['voice-1', ' '], characterIds: ['character-1'] });
-    expect(bare.candidates.length).toBeGreaterThan(0);
-    expect(prepared.original.modelId).toBe('gemini-omni-video');
-    // No other model takes them, so a short balance leaves the remix on Omni.
-    expect(prepared.candidates).toEqual([]);
-    expect(prepared.shorter).toBeNull();
-    expect(startPostRemix({ ...cardOf('post-1'), remix: prepared }, 1)).toEqual({ cost: prepared.original.cost, fitted: null });
+    const asked: GenerationModelQuoteInput[] = [];
+    const forecasts = await buildStartPostRemixForecasts(
+      [{ postId: 'post-1', generationId: 'gen-1' }],
+      deps([row('gen-1', { model: 'gemini-omni-video', preparedAudioIds: ['voice-1', ' '], characterIds: ['character-1'] })], async (inputs) => {
+        asked.push(...inputs);
+        return quoteAll(inputs);
+      }),
+    );
+    expect(forecasts['post-1']?.cost).toEqual(expect.any(Number));
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ modelId: 'gemini-omni-video', inputCounts: { preparedAudios: 1, characters: 1 } });
   });
 
-  it('prices the shorter lengths of the cheapest model that takes the run', async () => {
-    const forecast = await forecastOf({ ...KLING_RUN, duration: 12 });
-    expect(forecast.shorter).not.toBeNull();
-    const cheapest = forecast.candidates.find((candidate) => candidate.modelId === forecast.shorter!.modelId)!;
-    expect(cheapest.durationSeconds).toBe(12);
-    expect(forecast.shorter!.prices.length).toBeGreaterThan(0);
-    expect(forecast.shorter!.prices.every((price) => price.durationSeconds < 12)).toBe(true);
-  });
-
-  it('leaves out a model the catalog refuses the run, and fails the build on any other answer', async () => {
-    const refusing = deps([row('gen-1', KLING_RUN)], async (inputs) => quoteAll(inputs).map((answer, index) => (
-      inputs[index].modelId === 'seedance-2-mini'
-        ? { status: 'rejected', reason: new CatalogError('Unsupported settings', 'INVALID_MODEL_SETTINGS', 422) }
-        : answer
+  it('has no forecast where the catalog refuses the run, and fails the build on any other answer', async () => {
+    const refusing = deps([row('gen-1', KLING_RUN)], async (inputs) => inputs.map(() => (
+      { status: 'rejected', reason: new CatalogError('Unsupported settings', 'INVALID_MODEL_SETTINGS', 422) }
     )));
-    const forecast = (await buildStartPostRemixForecasts([{ postId: 'post-1', generationId: 'gen-1' }], refusing))['post-1'];
-    expect(forecast.candidates.map((candidate) => candidate.modelId)).not.toContain('seedance-2-mini');
-    expect(forecast.candidates.length).toBeGreaterThan(0);
+    expect(await buildStartPostRemixForecasts([{ postId: 'post-1', generationId: 'gen-1' }], refusing)).toEqual({});
 
-    const changed = deps([row('gen-1', KLING_RUN)], async (inputs) => quoteAll(inputs).map((answer, index) => (
-      index === inputs.length - 1
-        ? { status: 'rejected', reason: new CatalogError('The catalog changed', 'CATALOG_CHANGED', 409) }
-        : answer
+    const changed = deps([row('gen-1', KLING_RUN)], async (inputs) => inputs.map(() => (
+      { status: 'rejected', reason: new CatalogError('The catalog changed', 'CATALOG_CHANGED', 409) }
     )));
     await expect(buildStartPostRemixForecasts([{ postId: 'post-1', generationId: 'gen-1' }], changed)).rejects.toMatchObject({ code: 'CATALOG_CHANGED' });
 
-    const unreadable = deps([row('gen-1', KLING_RUN)], async (inputs) => quoteAll(inputs).map((answer, index) => (
-      index === 0 ? { status: 'rejected', reason: new Error('price table unreadable') } : answer
+    const unreadable = deps([row('gen-1', KLING_RUN)], async (inputs) => inputs.map(() => (
+      { status: 'rejected', reason: new Error('price table unreadable') }
     )));
     await expect(buildStartPostRemixForecasts([{ postId: 'post-1', generationId: 'gen-1' }], unreadable)).rejects.toThrow('price table unreadable');
   });
@@ -268,7 +243,7 @@ describe('the creators\' start posts', () => {
     expect(creationsMock).toHaveBeenCalledWith(viewer);
     expect(posts.map((item) => item.id)).toEqual(['video-1', 'image-1']);
     expect(posts.every((item) => !('post' in item))).toBe(true);
-    expect(posts[0].remix?.original).toEqual({ modelId: 'kling-3.0-video', cost: 70, durationSeconds: 5 });
+    expect(posts[0].remix).toEqual({ cost: 70 });
     expect(posts[1].remix).toBeNull();
   });
 
@@ -284,7 +259,7 @@ describe('the creators\' start posts', () => {
       JSON.stringify([{ postId: 'video-1', generationId: 'gen-of-video-1' }, { postId: 'video-2', generationId: 'gen-of-video-2' }]),
       CATALOG.revision,
     ]]);
-    expect(posts.map((item) => [item.id, item.remix?.original.cost])).toEqual([['video-2', 70]]);
+    expect(posts.map((item) => [item.id, item.remix?.cost])).toEqual([['video-2', 70]]);
   });
 
   it('keeps the shelf\'s price on a viewer\'s own post, whose remix brings their media back', async () => {

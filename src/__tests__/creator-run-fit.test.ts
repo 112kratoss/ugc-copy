@@ -2,16 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   cheapestCost,
-  fitRemixToBalance,
   fitSettingsToControls,
   groupModelsByBalance,
-  longestLengthWithin,
   optionPriceLabel,
   referenceKeepWords,
   resolutionRank,
   samePriceForEach,
   type FitControl,
-  type RemixCandidate,
 } from '../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 
 /**
@@ -127,94 +124,6 @@ describe('the model list split by the balance', () => {
     const split = groupModelsByBalance(models, 19, 'seedance-2-5');
     expect(ids(split.fits)).toEqual(['seedance-1.5-pro', 'grok-imagine-video', 'seedance-2-mini']);
     expect(ids(split.needsMore).at(-1)).toBe('seedance-2-5');
-  });
-});
-
-describe('the model a remix opens on', () => {
-  const candidate = (modelId: string, cost: number | null, durationSeconds = 5, takesInputs = true): RemixCandidate => ({
-    modelId, cost, durationSeconds, takesInputs,
-  });
-  // The artboard's: "intense" by @fluffy, on Seedance 2.5 at 5s with two references, at
-  // production's prices (release mini-default-video-20261028).
-  const original = { modelId: 'seedance-2-5', cost: 140, durationSeconds: 5 };
-  const MINI = 'seedance-2-mini';
-  const candidates = [
-    candidate('seedance-1.5-pro', 7, 4),
-    candidate('grok-imagine-video-1.5', 12),
-    candidate(MINI, 19),
-    candidate('grok-imagine-video', 15, 6, false),
-    candidate('minimax-h3', 48),
-    candidate('seedance-2-fast', 59),
-    candidate('seedance-2-5', 140),
-  ];
-  const fit = (balance: number | null, changes: Partial<Parameters<typeof fitRemixToBalance>[0]> = {}) => (
-    fitRemixToBalance({ original, candidates, balance, preferredModelId: MINI, ...changes })
-  );
-
-  it('opens the original while the balance covers it', () => {
-    expect(fit(140)).toEqual({ kind: 'original' });
-  });
-
-  // Owner, 2026-10-28: "Seedance 2 Mini first".
-  it('opens the catalog\'s default video whenever it takes the inputs and fits, though another is cheaper', () => {
-    expect(fit(22)).toEqual({ kind: 'fitted', modelId: MINI, sameLength: true });
-  });
-
-  it('opens the cheapest that takes the same inputs at the same length when the default does not take them', () => {
-    const miniTakesLess = candidates.map((model) => (model.modelId === MINI ? { ...model, takesInputs: false } : model));
-    expect(fit(22, { candidates: miniTakesLess }))
-      .toEqual({ kind: 'fitted', modelId: 'grok-imagine-video-1.5', sameLength: true });
-  });
-
-  it('opens the cheapest that fits when the default does not fit the balance', () => {
-    expect(fit(15)).toEqual({ kind: 'fitted', modelId: 'grok-imagine-video-1.5', sameLength: true });
-  });
-
-  it('opens the cheapest when the original is on the default, or there is none', () => {
-    // A remix of a Mini run at 720p (41 credits): the default is the original itself.
-    expect(fit(22, { original: { modelId: MINI, cost: 41, durationSeconds: 5 } }))
-      .toEqual({ kind: 'fitted', modelId: 'grok-imagine-video-1.5', sameLength: true });
-    expect(fit(22, { preferredModelId: null })).toEqual({ kind: 'fitted', modelId: 'grok-imagine-video-1.5', sameLength: true });
-  });
-
-  it('weighs a model that cannot make the length only when none that can is left', () => {
-    const noneAtLength = candidates.filter((model) => model.durationSeconds !== 5 || model.modelId === 'seedance-2-5');
-    expect(fit(22, { candidates: noneAtLength })).toEqual({ kind: 'fitted', modelId: 'seedance-1.5-pro', sameLength: false });
-  });
-
-  it('prices the cheapest model\'s shorter lengths when neither the default nor it fits at the length', () => {
-    // Seedance 1.5 Pro makes 4s, not 5s, for 7: the model to open when no shorter length fits.
-    expect(fit(10)).toEqual({
-      kind: 'shorten',
-      modelId: 'grok-imagine-video-1.5',
-      durationSeconds: 5,
-      otherwise: { modelId: 'seedance-1.5-pro', sameLength: false },
-    });
-    expect(fit(5)).toMatchObject({ kind: 'shorten', otherwise: null });
-  });
-
-  it('opens the original when no other model takes its inputs, or its price or the balance is not known', () => {
-    const takesNothing = candidates.map((model) => ({ ...model, takesInputs: model.modelId === 'seedance-2-5' }));
-    expect(fit(22, { candidates: takesNothing })).toEqual({ kind: 'original' });
-    expect(fit(null)).toEqual({ kind: 'original' });
-    expect(fit(22, { original: { ...original, cost: null } })).toEqual({ kind: 'original' });
-    expect(fit(22, { candidates: candidates.map((model) => ({ ...model, cost: null })) })).toEqual({ kind: 'original' });
-  });
-
-  it('settles a tie by the list\'s order', () => {
-    const tied = [candidate('wan-3.0', 19), candidate('seedance-2-mini', 19)];
-    expect(fit(22, { candidates: tied, preferredModelId: null }))
-      .toEqual({ kind: 'fitted', modelId: 'wan-3.0', sameLength: true });
-  });
-
-  it('finds the longest shorter length the balance covers', () => {
-    const miniLengths = [4, 5, 6, 7, 8, 9, 10].map((durationSeconds) => ({
-      durationSeconds, cost: [16, 19, 23, 27, 31, 35, 38][durationSeconds - 4],
-    }));
-    expect(longestLengthWithin(miniLengths, 22, 10)).toBe(5);
-    expect(longestLengthWithin(miniLengths, 40, 10)).toBe(9);
-    expect(longestLengthWithin(miniLengths, 15, 10)).toBeNull();
-    expect(longestLengthWithin([{ durationSeconds: 4, cost: null }], 40, 10)).toBeNull();
   });
 });
 

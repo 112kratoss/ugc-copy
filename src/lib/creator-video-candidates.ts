@@ -3,20 +3,19 @@ import {
   type FitControl,
 } from '../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import { videoRunShortSummary } from '../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
-import { catalogInputTooShort, catalogRunQuoteInput, catalogRunInputFacts, SUBJECT_IMAGES_SLOT_KEY } from '../../ugc-mobile/lib/model-catalog/protocol';
-import { VIDEO_MODELS, videoLengthOptions, type VideoModelId } from '@/lib/client-generation-models';
+import { catalogRunQuoteInput, SUBJECT_IMAGES_SLOT_KEY } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { VIDEO_MODELS, type VideoModelId } from '@/lib/client-generation-models';
 import { planVideoRunInputs, type VideoRunInput, type VideoRunMedia, type VideoRunSubject } from '@/lib/creator-run-inputs';
 import { getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor, GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 
 /**
  * The video creator's run moved to another model: what the model list prices each model
- * at, what a remix fitted to the balance opens on, and what picking a model sets. One
- * reading of the form for all three, the page's own: the settings carried over by the
- * shared fitting rule (`fitSettingsToControls`), then the inputs the model takes read off
- * its descriptor (`getVideoRunAffordances`, `planVideoRunInputs`) as the page reads them
- * for the run it sends, so the price on a model's row is the price Generate shows once
- * the creator is on it.
+ * at, and what picking a model sets. One reading of the form for both, the page's own:
+ * the settings carried over by the shared fitting rule (`fitSettingsToControls`), then
+ * the inputs the model takes read off its descriptor (`getVideoRunAffordances`,
+ * `planVideoRunInputs`) as the page reads them for the run it sends, so the price on a
+ * model's row is the price Generate shows once the creator is on it.
  */
 
 export type VideoRegistryEntry = (typeof VIDEO_MODELS)[VideoModelId] & { catalogDescriptor?: GenerationModelDescriptor };
@@ -77,12 +76,6 @@ export function makesVideoLength(entry: VideoRegistryEntry, durationSeconds: num
     : (entry.durations as readonly number[]).includes(durationSeconds);
 }
 
-/** A model's single-shot lengths below `belowSeconds`, as its settings offer them: what a remix the balance is short of is shortened to. */
-export function videoLengthsBelow(modelId: string, belowSeconds: number, models: VideoModelLookup = pageModels): number[] {
-  const entry = models(modelId);
-  return entry ? videoLengthOptions(durationRangeOf(entry), entry.durations).filter((length) => length < belowSeconds) : [];
-}
-
 /** A model's settings as the fitting rule reads them: its descriptor's, or before that its options as the page draws them. */
 export function videoFitControls(modelId: string, models: VideoModelLookup = pageModels): FitControl[] {
   const entry = models(modelId);
@@ -131,11 +124,6 @@ export function fitVideoFormToModel(modelId: string, form: VideoFormSettings, mo
   };
 }
 
-/** Whether two forms set the same run: what a remix being fitted reads as the creator not having moved. */
-export function sameVideoFormSettings(left: VideoFormSettings, right: VideoFormSettings): boolean {
-  return (Object.keys(left) as Array<keyof VideoFormSettings>).every((key) => left[key] === right[key]);
-}
-
 /** How many references and frames a run sends. */
 export function videoRunInputTally(inputs: ReadonlyArray<{ slot: string }>): { references: number; frames: number } {
   return {
@@ -151,13 +139,6 @@ export type VideoRunOnModel<M extends VideoRunMedia> = {
   /** The run's whole length: a multi-shot run's shots together. */
   durationSeconds: number;
   inputs: VideoRunInput<M>[];
-  /**
-   * A clip or track the run sends that is shorter than the model's published minimum for it
-   * (`catalogInputTooShort`, as the page holds a run): the run would wait on it from the moment the
-   * page moved to the model. Kling 3.0's named elements are not read here; a run moves to that
-   * model with none it can send.
-   */
-  holdsAnInput: boolean;
   quoteInput: GenerationModelQuoteInput;
   /** What the price on the model's row is for: "480P · 5s". */
   summary: string;
@@ -226,17 +207,11 @@ export function videoRunOnModel<M extends VideoRunMedia>({
     isMultiShot,
     referenceMode: subjectsActive ? 'subjects' : affordances.activeMode,
   };
-  const holdsAnInput = inputs.some((input) => {
-    if (input.slot !== 'videoReferences' && input.slot !== 'audioReferences') return false;
-    const slot = affordances.minimumLengths.get(input.slot);
-    return Boolean(slot && catalogInputTooShort(entry.displayName, slot, { label: '', durationSeconds: input.durationSeconds }));
-  });
   return {
     modelId,
     settings,
     durationSeconds,
     inputs,
-    holdsAnInput,
     quoteInput: catalogRunQuoteInput({ kind: 'video' as const, modelId, catalogRevision, settings: runSettings, inputs }),
     summary: videoRunShortSummary({
       modeLabel: entry.modeOptions.find((option) => option.value === settings.mode)?.label ?? settings.mode,
@@ -244,26 +219,4 @@ export function videoRunOnModel<M extends VideoRunMedia>({
       durationSeconds,
     }),
   };
-}
-
-/**
- * Whether a run on another model takes everything the original run sends: the same
- * inputs of every kind, none shorter than that model's minimum for it, its shots, and its
- * sound. What a remix fitted to the balance may move to.
- */
-export function takesSameVideoInputs(
-  original: { inputs: ReadonlyArray<{ slot: string; kind: string }>; settings: VideoFormSettings },
-  candidate: { inputs: ReadonlyArray<{ slot: string; kind: string }>; settings: VideoFormSettings; holdsAnInput?: boolean },
-): boolean {
-  const facts = (inputs: ReadonlyArray<{ slot: string; kind: string }>) => catalogRunInputFacts(
-    inputs.map((input) => ({ slot: input.slot, kind: input.kind as 'image' })),
-  ).inputCounts;
-  const left = facts(original.inputs);
-  const right = facts(candidate.inputs);
-  const sameInputs = (Object.keys(left) as Array<keyof typeof left>).every((kind) => left[kind] === right[kind])
-    && videoRunInputTally(original.inputs).frames === videoRunInputTally(candidate.inputs).frames;
-  return sameInputs
-    && !candidate.holdsAnInput
-    && (!original.settings.isMultiShot || candidate.settings.isMultiShot)
-    && (!original.settings.sound || candidate.settings.sound);
 }

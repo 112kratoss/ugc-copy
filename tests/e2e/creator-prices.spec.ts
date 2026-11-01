@@ -7,7 +7,8 @@ import { expect, test, type Page } from '@playwright/test';
  *   Generate's place for a run past it;
  * - the model list prices every model at this run's settings and splits it by the balance;
  * - a picked model opens on this run's settings where it offers them;
- * - a remix the balance cannot cover opens fitted to it, the original one press away;
+ * - a remix the balance cannot cover stays on its original's model and settings, with
+ *   Top up in Generate's place (owner, 2026-11-01);
  * - a balance short of every video is offered an image first.
  *
  * Offline nothing can be priced, so both quote routes are answered here, at production's
@@ -97,7 +98,7 @@ test('every setting and every model is priced against the balance, and a picked 
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue(PROMPT);
 });
 
-test('a remix the balance cannot cover opens fitted to it, with the original one press away', async ({ page }) => {
+test('a remix the balance cannot cover stays on its original, with Top up in Generate\'s place', async ({ page }) => {
   await signIn(page);
   await answerQuotes(page, pricesNearProduction);
   await page.route('**/api/remix-source**', (route) => route.fulfill({
@@ -112,16 +113,13 @@ test('a remix the balance cannot cover opens fitted to it, with the original one
 
   await page.goto('/create-video?remix=gen-intense&remixPost=post-intense', COLD_PAGE);
 
-  await expect(page.getByText(/Fitted to your 25 credits: Seedance 2 Mini instead of Seedance 2\.5, at the same 5s\./)).toBeVisible(COLD_PAGE);
-  await expect(page.getByRole('button', { name: 'Generate · 19 credits' })).toBeEnabled();
+  await expect(page.getByText('Settings pre-filled from "intense".')).toBeVisible(COLD_PAGE);
+  await expect(page.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing', COLD_PAGE);
+  await expect(page.locator('[data-creator-bar-status]')).toContainText('This run costs 140 credits but you only have 25.');
   await expect(settingsChip(page)).toHaveAccessibleName('Generation settings: 480P · 9:16 · 5s · Sound off');
-
-  await page.getByRole('button', { name: 'Use the original · 140 credits' }).click();
-  await expect(page.getByText('On the original settings: Seedance 2.5 at 5s.')).toBeVisible();
-  await expect(page.locator('[data-creator-bar-status]'))
-    .toContainText('Seedance 2.5 needs 140 credits; you have 25. Seedance 2 Mini runs the same prompt and 5s for 19.');
-  await page.getByRole('button', { name: 'Switch back to Seedance 2 Mini' }).click();
-  await expect(page.getByRole('button', { name: 'Generate · 19 credits' })).toBeEnabled();
+  await expect(page.locator('button[aria-haspopup="listbox"]')).toContainText('Seedance 2.5');
+  await expect(page.getByRole('button', { name: /^Generate · / })).toHaveCount(0);
+  await expect(page.getByText(/Fitted to your/)).toHaveCount(0);
 });
 
 test('a balance short of every video is offered an image first, with the prompt', async ({ page }) => {

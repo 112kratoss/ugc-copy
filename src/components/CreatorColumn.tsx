@@ -457,7 +457,7 @@ export function CreatorColumnBar({
   action: ReactNode;
   /** A quiet line under the buttons: the balance and what the run leaves of it, or what signing up gives a visitor. */
   note?: ReactNode;
-  /** The action's words need the bar's width ("Switch back to Seedance 2 Mini"): the chip goes above it at every width. */
+  /** The action's words need the bar's width ("Make an image instead · from 1 credit"): the chip goes above it at every width. */
   stacked?: boolean;
   /**
    * Under the column's width the bar keeps to the window's foot. Off while a done run's
@@ -782,11 +782,10 @@ export function creditsWords(count: number): string {
   return `${count} ${count === 1 ? 'credit' : 'credits'}`;
 }
 
-/** The smallest credit pack, as a top-up names it: "500 credits for ₹415", or "500 for ₹415" `short`. */
-export function smallestCreditPackLabel({ short = false }: { short?: boolean } = {}): string {
+/** The smallest credit pack, as a top-up names it: "500 for ₹415". */
+function smallestCreditPackLabel(): string {
   const pack = PRICING_PLANS.reduce((smallest, plan) => (plan.credits < smallest.credits ? plan : smallest));
-  const credits = pack.credits.toLocaleString('en-IN');
-  return `${short ? credits : `${credits} credits`} for ₹${pack.priceInr.toLocaleString('en-IN')}`;
+  return `${pack.credits.toLocaleString('en-IN')} for ₹${pack.priceInr.toLocaleString('en-IN')}`;
 }
 
 const NOTE_STRONG_CLASS = 'font-bold text-[var(--ui-text-secondary)]';
@@ -870,7 +869,7 @@ export function CreatorLowBalanceNote({ balance, videosFrom }: { balance: number
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
       <span>Balance <strong className={NOTE_STRONG_CLASS}>{balance}</strong> · videos from {videosFrom}</span>
       <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>
-        Top up: {smallestCreditPackLabel({ short: true })}
+        Top up: {smallestCreditPackLabel()}
       </Link>
     </div>
   );
@@ -894,24 +893,6 @@ export function CreatorLowBalanceNotice({ balance, videosFrom, image }: {
         {image ? ` ${image.name} makes a picture for ${image.cost}, and you can turn a picture into a video later.` : ''}
       </p>
     </div>
-  );
-}
-
-/**
- * Over the bar on a remix moved back to its original model when the balance is short
- * of it: what the original needs, and what the run fitted to the balance would cost.
- */
-export function CreatorFitNotice({ original, balance, fitted }: {
-  original: { name: string; cost: number };
-  balance: number;
-  fitted: { name: string; cost: number; keeps: string };
-}) {
-  const strong = 'font-bold text-[var(--ui-text-primary)]';
-  return (
-    <p className="text-[var(--ui-text-secondary)]">
-      {original.name} needs <strong className={strong}>{creditsWords(original.cost)}</strong>; you have <strong className={strong}>{balance}</strong>.
-      {' '}{fitted.name} runs {fitted.keeps} for <strong className={strong}>{fitted.cost}</strong>.
-    </p>
   );
 }
 
@@ -1587,7 +1568,7 @@ export function CreatorRunFailed({ cause, returnedCredits, retryLabel, retryDisa
   returnedCredits: number | null;
   /** "Try again · 19 credits". */
   retryLabel: string;
-  /** Where the bar offers something else than Generate (a top-up, the fitted remix), Try again waits too. */
+  /** Where the bar offers something else than Generate (a top-up, an image instead), Try again waits too. */
   retryDisabled: boolean;
   onRetry: () => void;
   retryable?: boolean;
