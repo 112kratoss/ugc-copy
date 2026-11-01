@@ -19,7 +19,7 @@ import {
   CREATOR_LENGTH_READING_SLACK_SECONDS,
   catalogInputTooShort,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
-import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
+import { PRODUCTION_KLING_3_MOTION_MODES, ROLLBACK_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
 /**
  * The shortest clip or track a slot takes (`minDurationSeconds`). Kie refuses a Kling 3.0 video
@@ -149,14 +149,17 @@ describe('the shortest clip a slot takes', () => {
 
   it('reaches the motion pages through the slot a motion run sends its clip in', () => {
     // The motion pages place the clip with the shared motion rule (planMotionRunInputs), and read the
-    // slot it lands in. Production's Kling 3.0 motion keeps the plain reference slots of the
-    // compatibility release, which publish no minimum: the start judges its clips, as before.
+    // slot it lands in. Production's Kling 3.0 motion publishes the code build's since release
+    // kling-3-motion-inputs-20261101; on a rollback it keeps the plain reference slots of the
+    // compatibility release, which publish no minimum, and the start alone judges its clips.
     for (const id of ['kling-2.6', 'kling-3.0']) {
       const motion = catalog.models.find((model) => model.id === id)!;
       expect(motionRunClipSlot(motion, {}), id).toMatchObject({ key: 'referenceVideo', label: 'Reference video', minDurationSeconds: 3 });
     }
-    expect(motionRunClipSlot({ inputModes: PRODUCTION_KLING_3_MOTION_MODES }, {})).toMatchObject({ key: 'videoReferences' });
-    expect(motionRunClipSlot({ inputModes: PRODUCTION_KLING_3_MOTION_MODES }, {})?.minDurationSeconds).toBeUndefined();
+    expect(motionRunClipSlot({ inputModes: PRODUCTION_KLING_3_MOTION_MODES }, {}))
+      .toMatchObject({ key: 'referenceVideo', label: 'Reference video', minDurationSeconds: 3 });
+    expect(motionRunClipSlot({ inputModes: ROLLBACK_KLING_3_MOTION_MODES }, {})).toMatchObject({ key: 'videoReferences' });
+    expect(motionRunClipSlot({ inputModes: ROLLBACK_KLING_3_MOTION_MODES }, {})?.minDurationSeconds).toBeUndefined();
     expect(motionRunClipSlot(null, {})).toBeNull();
   });
 });

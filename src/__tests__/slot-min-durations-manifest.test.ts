@@ -245,8 +245,10 @@ describe('slot-min-durations release', () => {
   });
 
   it('is the Kling 2.6 the production motion contract gives both suites', () => {
-    // contracts/production-motion-descriptors-v1.json names this release: its Kling 2.6 must be this
-    // entry as the server serves it (the published row read back, the schema-3 projection, no `inputs`).
+    // contracts/production-motion-descriptors-v1.json names the next release, which re-emits Kling 3.0
+    // motion only (kling-3-motion-inputs-manifest.test.ts holds its revision): its Kling 2.6 must still
+    // be this entry as the server serves it (the published row read back, the schema-3 projection, no
+    // `inputs`).
     const entry = released('kling-2.6');
     const served = projectGenerationModelDescriptor(parsePublishedModelDescriptor(
       entry.publicDescriptor,
@@ -255,7 +257,7 @@ describe('slot-min-durations release', () => {
       { web: entry.webEnabled, mobile: entry.mobileEnabled },
     ), 3) as unknown as Record<string, unknown>;
     delete served.inputs;
-    expect(productionMotion.revision).toBe(manifest.release.revision);
+    expect(productionMotion.rollback.revision).toBe(manifest.release.revision);
     expect(productionMotion.models.find((model) => model.id === 'kling-2.6')).toEqual(served);
   });
 });

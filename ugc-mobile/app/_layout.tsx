@@ -19,6 +19,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
+import { LaunchSplash } from '@/components/launch-splash';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer } from '@/components/media-zoom';
 import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
@@ -48,6 +49,7 @@ import { readPlaybackDevice, readPlaybackNetwork } from '@/lib/playback-device';
 import { setPlaybackMetricsReporter } from '@/lib/playback-metrics';
 import { hasAppleZoomParam } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
+import { markLaunchRouteSettled } from '@/lib/launch-splash';
 import { isReelBackdropShown, subscribeToReelBackdrop } from '@/lib/reel-backdrop';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
@@ -57,7 +59,14 @@ import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/med
 import { preloadPersistedAccountState } from '@/lib/persisted-account-state';
 import { restorePersistedHomeFeed } from '@/lib/persisted-home-feed';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
-import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
+import {
+  isOnboardingRedirectDue,
+  ONBOARDING_LAUNCH_ENTRY,
+  onboardingAnimation,
+  STARTUP_REDIRECT_FALLBACK_MS,
+  STARTUP_VERSION_CHECK_FALLBACK_MS,
+  type StartupVersionCheckStatus,
+} from '@/lib/startup-readiness';
 import { hydrateAiDataConsent } from '@/lib/ai-data-consent';
 import { hydrateContentPolicy } from '@/lib/content-policy';
 import { hydrateAppearancePreference, useResolvedColorScheme } from '@/lib/appearance';
@@ -76,11 +85,20 @@ export const unstable_settings = {
   initialRouteName: '(tabs)',
 };
 
-// The display face arrives from the bundle in a few frames; holding the splash
-// until then means the first screen never swaps fonts in front of the user.
-// FONT_SPLASH_FALLBACK_MS guarantees the splash can never hang on it.
+// The display face arrives from the bundle in a few frames; the launch splash
+// holds the app back until then (see RootLayoutNav), and
+// FONT_SPLASH_FALLBACK_MS guarantees it never hangs on it. The native splash
+// stays up until components/launch-splash.tsx has drawn its own first frame.
 const FONT_SPLASH_FALLBACK_MS = 1200;
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
+// Android fades the native splash out over 400 ms by default, and iOS cuts.
+// The launch splash draws the same picture beneath it and then moves, so the
+// hand-over has to be a cut on both, or the clip plays under a ghost of it.
+try {
+  SplashScreen.setOptions({ duration: 0, fade: false });
+} catch {
+  // A native module without setOptions keeps its own exit.
+}
 
 /** A post's rail, caption and controls, drawn in the window it grows in (`ZoomStill.post`). */
 function renderZoomPost(post: ImmersivePreviewItem) {
@@ -138,8 +156,8 @@ AppState.addEventListener('change', (state) => {
 });
 
 // The saved Settings → Appearance choice is read while the splash is still up
-// (the layout holds the splash on it beside the fonts), so an app set to Light
-// on a dark phone never shows a dark first frame.
+// (the launch splash holds the app back on it beside the fonts), so an app set
+// to Light on a dark phone never shows a dark first frame.
 const appearanceHydration = hydrateAppearancePreference();
 
 // Read at launch, so a person who has already allowed AI data sharing gets no
@@ -204,10 +222,12 @@ function RootLayoutNav() {
     };
   }, []);
 
-  useEffect(() => {
-    if ((!fontsLoaded && !fontError) || !appearanceReady) return;
-    void SplashScreen.hideAsync().catch(() => undefined);
-  }, [appearanceReady, fontError, fontsLoaded]);
+  // The launch splash holds the app back until the faces and the stored
+  // appearance are in, as the native splash used to: the first screen never
+  // swaps fonts or schemes in front of anyone. A face that never arrives holds
+  // it no longer than FONT_SPLASH_FALLBACK_MS.
+  const [fontWaitOver, setFontWaitOver] = useState(false);
+  const shellReady = appearanceReady && (fontsLoaded || Boolean(fontError) || fontWaitOver);
 
   // The screens below render before the faces load. Text drawn by then is in
   // the system face, and on Android stays so until it is drawn again: what is
@@ -217,11 +237,10 @@ function RootLayoutNav() {
   }, [fontsLoaded]);
 
   useEffect(() => {
-    const fallback = setTimeout(() => {
-      void SplashScreen.hideAsync().catch(() => undefined);
-    }, FONT_SPLASH_FALLBACK_MS);
+    if (fontsLoaded || fontError) return;
+    const fallback = setTimeout(() => setFontWaitOver(true), FONT_SPLASH_FALLBACK_MS);
     return () => clearTimeout(fallback);
-  }, []);
+  }, [fontError, fontsLoaded]);
 
   return (
     <ThemeScope scheme={scheme}>
@@ -274,7 +293,17 @@ function RootLayoutNav() {
                 }}
               >
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false, animation: reducedMotion ? 'none' : 'fade' }} />
+                {/* A fresh install is sent here from home at launch, where a
+                    fade would only show home beneath it: that entry carries
+                    its own param and arrives without one. */}
+                <Stack.Screen
+                  name="onboarding"
+                  options={({ route }) => ({
+                    headerShown: false,
+                    gestureEnabled: false,
+                    animation: reducedMotion ? 'none' : onboardingAnimation(route.params),
+                  })}
+                />
                 <Stack.Screen name="update-required" options={{ headerShown: false, gestureEnabled: false, animation: 'none' }} />
                 <Stack.Screen
                   name="auth"
@@ -397,6 +426,11 @@ function RootLayoutNav() {
               </GestureHandlerRootView>
             </ThemeProvider>
           </SafeAreaProvider>
+          {/* Last, and a sibling of the app rather than inside it, so it is
+              drawn above everything, StartupCoordinator's cover included: the
+              clip that continues the native splash, over the app until its
+              first screen is on screen (lib/launch-splash.ts). */}
+          <LaunchSplash shellReady={shellReady} />
         </OnboardingProvider>
       </AuthProvider>
       </LucideProvider>
@@ -460,21 +494,36 @@ function StartupCoordinator() {
     }
   }, [pathname, versionCheckStatus]);
 
-  useEffect(() => {
-    if (
-      !isHydrated ||
-      isLoading ||
-      user ||
-      !storageAvailable ||
-      versionCheckStatus === 'redirecting'
-    ) return;
-    if (pathname !== '/') return;
-    if (state.status === 'not_started' || state.status === 'in_progress') {
-      router.replace('/onboarding' as never);
-    }
-  }, [isHydrated, isLoading, pathname, state.status, storageAvailable, user, versionCheckStatus]);
+  const redirectDue = isOnboardingRedirectDue({
+    isHydrated,
+    isAuthLoading: isLoading,
+    hasUser: Boolean(user),
+    storageAvailable,
+    versionCheckStatus,
+    pathname,
+    onboardingStatus: state.status,
+  });
+  // A redirect that has not landed after STARTUP_REDIRECT_FALLBACK_MS stops
+  // holding the cover, so nothing can leave the screen blank.
+  const [redirectStalled, setRedirectStalled] = useState(false);
+  const holdingForRedirect = redirectDue && !redirectStalled;
 
-  if ((!isHydrated || isLoading) && pathname === '/') {
+  useEffect(() => {
+    if (!isHydrated || isLoading) return;
+    if (holdingForRedirect) {
+      router.replace({ pathname: '/onboarding', params: { entry: ONBOARDING_LAUNCH_ENTRY } } as never);
+      const fallback = setTimeout(() => setRedirectStalled(true), STARTUP_REDIRECT_FALLBACK_MS);
+      return () => clearTimeout(fallback);
+    }
+    // The first screen is on screen now: nothing had to move, or the redirect
+    // has landed (the path has left home). The launch splash may leave once
+    // its clip has played.
+    markLaunchRouteSettled();
+  }, [holdingForRedirect, isHydrated, isLoading]);
+
+  // Home stays covered until the redirect away from it has landed: dropped any
+  // sooner, home was drawn for a moment before onboarding came over it.
+  if (pathname === '/' && (!isHydrated || isLoading || holdingForRedirect)) {
     return <View pointerEvents="none" style={{ position: 'absolute', inset: 0, zIndex: 100, backgroundColor: theme.colors.background }} />;
   }
   return null;
