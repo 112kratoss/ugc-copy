@@ -500,4 +500,25 @@ describe('immersive preview source data', () => {
     // The library rule keeps the other failure out of the reel the status page sits in.
     expect(buildViewerItems('studio-creations', data!, owner, 'failed-40').map((item) => item.id)).toEqual(['gen-1', 'failed-40']);
   });
+
+  it('leaves the Failed pages out, and their age with them, for a run the library already holds', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(
+      ['profile-generations', 'user-1'],
+      { pages: [{ generations: [generation('gen-1')] }], pageParams: [null] },
+      { updatedAt: 2_000 },
+    );
+    // Read long before, while the Failed scope was last shown.
+    queryClient.setQueryData(
+      profileFailedGenerationsQueryKey('user-1'),
+      { pages: [{ generations: [generation('failed-40', { status: 'failed', output_url: null })] }], pageParams: [null] },
+      { updatedAt: 1_000 },
+    );
+
+    const snapshot = readCachedImmersiveSourceSnapshot(queryClient, 'studio-creations', 'user-1', 'gen-1');
+
+    expect(snapshot?.data.generations?.map((item) => item.id)).toEqual(['gen-1']);
+    // A viewer opened on it is as fresh as the library, not as old as the Failed pages.
+    expect(snapshot?.updatedAt).toBe(2_000);
+  });
 });

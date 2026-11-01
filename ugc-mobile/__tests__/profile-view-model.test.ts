@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { mediaItemAspectRatio } from '../lib/media-zoom-transition';
@@ -8,9 +8,10 @@ import {
   generationToProfileMediaCard,
   getOwnerCreationScopeCounts,
   getOwnerPostScopeCounts,
+  getProfileCreationsScopeOptions,
   getProfileMediaEmptyBody,
   getProfileMediaEmptyTitle,
-  getProfileScopeOptions,
+  getProfilePostsScopeOptions,
   PROFILE_MEDIA_EMPTY_BODY,
   getProfileStats,
   getWalletCardContent,
@@ -18,6 +19,9 @@ import {
   ownProfileShareUrl,
   ownerPostToProfileMediaCard,
   showcaseToSavedProfileMediaCard,
+  type ProfileCreationsScope,
+  type ProfilePostsScope,
+  type ProfileScopeOption,
 } from '../lib/profile-view-model';
 import type { GenerationListItem, OwnerPostListItem, ShowcaseFeedItem, ShowcaseMediaItem } from '../lib/types';
 
@@ -546,29 +550,31 @@ describe('the Creations scope counts', () => {
 
   it('shows the Failed chip whenever the total names a failure', () => {
     const counts = getOwnerCreationScopeCounts({ creations: 46, failedCreations: 1, archivedCreations: 0 }, { active: 13, failed: 0, archived: 0 });
-    expect(getProfileScopeOptions('active', counts).map((option) => option.label))
+    expect(getProfileCreationsScopeOptions('active', counts).map((option) => option.label))
       .toEqual(['Active (46)', 'Failed (1)', 'Archived (0)']);
   });
 });
 
 describe('the scope chips', () => {
   it('puts Failed between Active and Archived while a run failed', () => {
-    expect(getProfileScopeOptions('active', { active: 27, failed: 7, archived: 2 })).toEqual([
+    expect(getProfileCreationsScopeOptions('active', { active: 27, failed: 7, archived: 2 })).toEqual([
       { value: 'active', label: 'Active (27)' },
       { value: 'failed', label: 'Failed (7)' },
       { value: 'archived', label: 'Archived (2)' },
     ]);
   });
 
-  it('leaves Failed out when nothing failed, and over Posts, which count no failures', () => {
-    expect(getProfileScopeOptions('active', { active: 3, failed: 0, archived: 1 }).map((option) => option.value))
+  it('leaves Failed out when nothing failed, and Posts have no Failed to offer', () => {
+    expect(getProfileCreationsScopeOptions('active', { active: 3, failed: 0, archived: 1 }).map((option) => option.value))
       .toEqual(['active', 'archived']);
-    expect(getProfileScopeOptions('archived', { active: 3, archived: 1 }).map((option) => option.value))
-      .toEqual(['active', 'archived']);
+    expect(getProfilePostsScopeOptions({ active: 3, archived: 1 })).toEqual([
+      { value: 'active', label: 'Active (3)' },
+      { value: 'archived', label: 'Archived (1)' },
+    ]);
   });
 
   it('keeps Failed while it is the one chosen, after its last run is cleared', () => {
-    expect(getProfileScopeOptions('failed', { active: 3, failed: 0, archived: 1 })).toEqual([
+    expect(getProfileCreationsScopeOptions('failed', { active: 3, failed: 0, archived: 1 })).toEqual([
       { value: 'active', label: 'Active (3)' },
       { value: 'failed', label: 'Failed (0)' },
       { value: 'archived', label: 'Archived (1)' },
@@ -576,7 +582,22 @@ describe('the scope chips', () => {
   });
 
   it('names the chips without a count when none is known', () => {
-    expect(getProfileScopeOptions('active').map((option) => option.label)).toEqual(['Active', 'Archived']);
+    expect(getProfileCreationsScopeOptions('active').map((option) => option.label)).toEqual(['Active', 'Archived']);
+    expect(getProfilePostsScopeOptions().map((option) => option.label)).toEqual(['Active', 'Archived']);
+  });
+
+  it('gives Posts no Failed scope, in their chips or their empty state', () => {
+    // Held by the mobile typecheck, not at run time: each tab's scopes are its
+    // own type, so handing Posts a Failed scope no longer compiles.
+    expectTypeOf<'failed'>().not.toExtend<ProfilePostsScope>();
+    expectTypeOf(getProfilePostsScopeOptions()).toEqualTypeOf<ProfileScopeOption<ProfilePostsScope>[]>();
+    expectTypeOf(getProfileCreationsScopeOptions('failed')).not.toExtend<readonly ProfileScopeOption<ProfilePostsScope>[]>();
+    expectTypeOf<['Posts', 'failed']>().not.toExtend<Parameters<typeof getProfileMediaEmptyTitle>>();
+    expectTypeOf<['Posts', 'failed']>().not.toExtend<Parameters<typeof getProfileMediaEmptyBody>>();
+    // And none of that is vacuous: Creations hold Failed, Posts their own two.
+    expectTypeOf(getProfileCreationsScopeOptions('failed')).toEqualTypeOf<ProfileScopeOption<ProfileCreationsScope>[]>();
+    expectTypeOf<['Creations', 'failed']>().toExtend<Parameters<typeof getProfileMediaEmptyTitle>>();
+    expectTypeOf<['Posts', 'archived']>().toExtend<Parameters<typeof getProfileMediaEmptyBody>>();
   });
 
   it('names the empty Failed scope apart from the empty library', () => {

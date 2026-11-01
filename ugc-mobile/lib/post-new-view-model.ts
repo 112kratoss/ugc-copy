@@ -22,6 +22,7 @@ import type {
 } from '@/lib/types';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { formatCreditAmount } from '@/lib/pricing';
+import { homeModelLabel } from '@/lib/home-feed-view-model';
 import {
   describeTitleSuggestion,
   followTitleForPromptPrivacy,
@@ -2030,6 +2031,29 @@ export function createMadeWithRow(partial: Partial<PostComposerMadeWithRow> = {}
     createTool: partial.createTool ?? false,
     createModel: partial.createModel ?? false,
   };
+}
+
+/**
+ * A creation's Made with, the row publishing stores for its post (the web's
+ * `buildGenerationPostSourceTools`): the app, then the creation's model by the
+ * name its post shows (`homeModelLabel`), or none where the catalog names it
+ * none, as for a template result, whose model is its author's
+ * (`template-workflow`). The composer shows it locked.
+ */
+export function buildCreationMadeWithRow(model: string | null | undefined): PostComposerMadeWithRow {
+  const modelLabel = homeModelLabel(model);
+  return createMadeWithRow({
+    id: 'mw-generation',
+    toolLabel: 'Magicbooklet',
+    toolSlug: 'magicbooklet',
+    modelLabel: modelLabel ?? '',
+    modelSlug: modelLabel && model ? model : '',
+  });
+}
+
+/** A Made with row's tool as the app names it: its own by the app's spelling, which the catalog stores in lower case. */
+export function getMadeWithToolLabel(row: Pick<PostComposerMadeWithRow, 'toolLabel' | 'toolSlug'>): string {
+  return row.toolSlug === 'magicbooklet' ? 'Magicbooklet' : row.toolLabel.trim();
 }
 
 function buildSourceToolsPayload(
