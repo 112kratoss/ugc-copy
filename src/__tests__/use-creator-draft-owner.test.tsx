@@ -178,3 +178,49 @@ describe('whose draft a creator keeps', () => {
     expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true });
   });
 });
+
+// The creators draw their body under this key: a new key is a new body, so nothing of the earlier
+// owner's form or run stays on the page (owner, 2026-11-01).
+describe('the form a creator holds', () => {
+  const owned = (owner: string | null, keepsVisitorForm = false) => ({ owner, carriedDraft: false, keepsVisitorForm });
+  type Owned = ReturnType<typeof owned>;
+
+  it.each<[string, Owned[], number[]]>([
+    ['the first owner learned after the page opened, a hand-over’s', [owned(null), owned('user-1')], [0, 0]],
+    ['a session that lapses and comes back', [owned('user-1'), owned(null), owned('user-1')], [0, 0, 0]],
+    ['the account a hand-over that gave up leaves the visitor’s form to', [owned('visitor'), owned(null), owned('user-1', true)], [0, 0, 0]],
+  ])('stays the same form for %s', async (_case, drafts, keys) => {
+    const { nextCreatorFormHolder } = await import('@/lib/use-creator-draft-owner');
+    let holder = { owner: drafts[0].owner, key: 0 };
+    const seen = drafts.map((draft) => (holder = nextCreatorFormHolder(holder, draft)).key);
+    expect(seen).toEqual(keys);
+  });
+
+  it.each<[string, Owned[], number[]]>([
+    ['another account signing in from another tab', [owned('user-1'), owned('user-2')], [0, 1]],
+    ['another account after a sign-out', [owned('user-1'), owned(null), owned('user-2')], [0, 0, 1]],
+    ['an account signing in on a visitor’s page without the sign-up sheet', [owned('visitor'), owned('user-1')], [0, 1]],
+    ['a hand-over that carried the visitor’s draft', [owned('visitor'), owned(null), owned('user-1')], [0, 0, 1]],
+    ['the visitor, and then another account, after the hand-over’s account left', [owned('visitor'), owned('user-1', true), owned('visitor'), owned('user-2')], [0, 0, 1, 2]],
+  ])('is a new form for %s', async (_case, drafts, keys) => {
+    const { nextCreatorFormHolder } = await import('@/lib/use-creator-draft-owner');
+    let holder = { owner: drafts[0].owner, key: 0 };
+    const seen = drafts.map((draft) => (holder = nextCreatorFormHolder(holder, draft)).key);
+    expect(seen).toEqual(keys);
+  });
+
+  it('moves the key in the render that brings the next owner, under Strict Mode too', async () => {
+    const { useCreatorFormKey } = await import('@/lib/use-creator-draft-owner');
+    const { result, rerender } = renderHook(({ draft }) => useCreatorFormKey(draft), {
+      initialProps: { draft: owned('user-1') },
+      wrapper: ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>,
+    });
+    expect(result.current).toBe(0);
+    rerender({ draft: owned(null) });
+    expect(result.current).toBe(0);
+    rerender({ draft: owned('user-2') });
+    expect(result.current).toBe(1);
+    rerender({ draft: owned('user-2') });
+    expect(result.current).toBe(1);
+  });
+});

@@ -188,7 +188,12 @@ vi.mock('@/lib/use-deployment-refresh', async (importOriginal) => ({
 
 // Signed in as user-1 with 10,000 credits, unless a test signs out to use the page as a
 // visitor or sets a balance of its own.
-const authState = vi.hoisted(() => ({ signedIn: true, credits: 10_000, token: 'test-token' }));
+const authState = vi.hoisted(() => ({ signedIn: true, credits: 10_000, token: 'test-token', userId: 'user-1' }));
+// The session the browser's auth client holds, which it has before the page does when another
+// account signs in from another tab.
+const authClient = vi.hoisted(() => ({
+  session: { access_token: 'test-token', user: { id: 'user-1' } } as { access_token: string; user: { id: string } } | null,
+}));
 
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
@@ -197,7 +202,7 @@ vi.mock('@/components/AuthProvider', () => ({
     session: authState.signedIn
       ? {
         access_token: authState.token,
-        user: { id: 'user-1' },
+        user: { id: authState.userId },
       }
       : null,
     updateCredits: mockUpdateCredits,
@@ -268,10 +273,7 @@ vi.mock('@/lib/supabase', () => ({
     auth: {
       getSession: vi.fn(async () => ({
         data: {
-          session: {
-            access_token: 'test-token',
-            user: { id: 'user-1' },
-          },
+          session: authClient.session,
         },
       })),
       getUser: vi.fn(async () => ({
@@ -463,6 +465,9 @@ function startPost(id: string): CreatorStartPost {
   };
 }
 
+/** How a run's upload goes: for the account signed in (user-1), and stopped if the creator goes. */
+const pressedForUser1 = expect.objectContaining({ userId: 'user-1', signal: expect.any(AbortSignal) });
+
 /** What the server answers a start it accepted. */
 function startedRunBody(overrides: Record<string, unknown> = {}) {
   return {
@@ -513,6 +518,8 @@ describe('CreateVideoClient Kling video elements', () => {
     authState.signedIn = true;
     authState.credits = 10_000;
     authState.token = 'test-token';
+    authState.userId = 'user-1';
+    authClient.session = { access_token: 'test-token', user: { id: 'user-1' } };
     priceListStandIn.reset();
     // A start kept from another test would be replayed when the page opens.
     window.sessionStorage.clear();
@@ -1089,7 +1096,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(postedRun()).toBeDefined());
       expect(postedRun().settings.referenceMode).toBe('elements');
       expect(postedRun().inputs.map((input: { slot: string }) => input.slot)).toEqual(['imageReferences']);
-      expect(temporaryUploadMock).toHaveBeenCalledWith(start);
+      expect(temporaryUploadMock).toHaveBeenCalledWith(start, pressedForUser1);
     });
 
     it('asks the mirror question going back to frames, and brings the first pictures along as the start and end images', async () => {
@@ -1370,7 +1377,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
         fireEvent.click(generateButton());
         await waitFor(() => expect(postedRun()).toBeDefined());
-        expect(temporaryUploadMock).toHaveBeenCalledWith(mine);
+        expect(temporaryUploadMock).toHaveBeenCalledWith(mine, pressedForUser1);
         const sent = postedRun().inputs as Array<Record<string, unknown>>;
         expect(sent[0]).toMatchObject({ slot: 'imageReferences', handle: '@lead', label: 'Hero shot', url: 'https://signed.example.com/uploads/user-1/me.png' });
         expect(String(sent[0].storagePath)).not.toContain(KEPT);
@@ -1391,7 +1398,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
         fireEvent.click(generateButton());
         await waitFor(() => expect(postedRun()).toBeDefined());
-        expect(temporaryUploadMock).toHaveBeenCalledWith(mine);
+        expect(temporaryUploadMock).toHaveBeenCalledWith(mine, pressedForUser1);
         expect((postedRun().inputs as Array<Record<string, unknown>>).find((input) => input.slot === 'videoReferences'))
           .toMatchObject({ url: 'https://signed.example.com/uploads/user-1/mine.mp4', label: 'Camera move', durationSeconds: 4.2 });
       });
@@ -1698,8 +1705,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
       await generate('MiniMax H3');
 
-      expect(temporaryUploadMock).toHaveBeenCalledWith(clip);
-      expect(temporaryUploadMock).toHaveBeenCalledWith(track);
+      expect(temporaryUploadMock).toHaveBeenCalledWith(clip, pressedForUser1);
+      expect(temporaryUploadMock).toHaveBeenCalledWith(track, pressedForUser1);
       expect(postedRun().modelId).toBe('minimax-h3');
       expect(postedRun().settings.referenceMode).toBe('elements');
       expect(postedInputs('videoReferences')).toEqual([expect.objectContaining({
@@ -1879,7 +1886,7 @@ describe('CreateVideoClient Kling video elements', () => {
     fireEvent.click(generateButton());
 
     // The session is read before anything is uploaded, so a lapsed one uploads nothing.
-    await waitFor(() => expect(temporaryUploadMock).toHaveBeenCalledWith(file));
+    await waitFor(() => expect(temporaryUploadMock).toHaveBeenCalledWith(file, pressedForUser1));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -5162,10 +5169,12 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.change(screen.getByRole('textbox', { name: 'Shot 1 prompt' }), { target: { value: 'A lamp lights on the quay' } });
         await waitFor(() => expect(draftsSavedFor('user-1').at(-1)?.shots[0]?.prompt).toBe('A lamp lights on the quay'), { timeout: 2_000 });
 
-        // Another account signs in on this page from another tab; it has no draft.
+        // Another account signs in on this page from another tab; it has no draft, so it has the
+        // page's own form: one shot, no words.
         ownDraftAs('user-2');
         view.rerender(<CreateVideoClient prefill={{}} />);
-        expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('');
+        expect(screen.getByRole('radio', { name: 'Multi-shot' })).toHaveAttribute('aria-checked', 'false');
+        expect(promptBox()).toHaveValue('');
         await waitFor(() => expect(draftsSavedFor('user-2').length).toBeGreaterThan(0), { timeout: 2_000 });
         expect(draftsSavedFor('user-2').every((draft) => draft.prompt === '' && draft.shots.every((shot) => shot.prompt === ''))).toBe(true);
 
@@ -5273,7 +5282,9 @@ describe('CreateVideoClient Kling video elements', () => {
           shotButtonBenPressed.current.onEnhanced('A lamp lights on the quay, one by one.', note);
           shotButtonBenPressed.current.onCreditsUpdate(37);
         });
-        expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('');
+        // Cleo has the page's own form: one shot, and none of Ben's words.
+        expect(screen.getByRole('radio', { name: 'Multi-shot' })).toHaveAttribute('aria-checked', 'false');
+        expect(screen.queryByDisplayValue(/A lamp lights on the quay/)).toBeNull();
         expect(screen.queryByText('Name the camera move.')).toBeNull();
         expect(mockUpdateCredits).not.toHaveBeenCalledWith(39);
         expect(mockUpdateCredits).not.toHaveBeenCalledWith(37);
@@ -5380,7 +5391,8 @@ describe('CreateVideoClient Kling video elements', () => {
         await readMediaOf('user-2');
         expect(ashasShown()).toEqual([]);
 
-        // A picture Ben adds is saved alone under him.
+        // A picture Ben adds is saved alone under him. His form opens on the frames, as the page does.
+        await chooseInputs('References');
         fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]')!, {
           target: { files: [image('lighthouse')] },
         });
@@ -5541,13 +5553,251 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(screen.queryByDisplayValue('Asha in red')).toBeNull();
         const subjectWrites = setPersistedSubjectRecordsMock.mock.calls.length;
         await act(async () => finishUpload());
-        await waitFor(() => expect(temporaryUploadMock).toHaveBeenCalledTimes(2));
         await act(async () => {
           await new Promise((resolve) => setTimeout(resolve, 0));
         });
 
+        // The press went with Asha's form: her second picture is not uploaded, and nothing of hers is kept.
+        expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
         expect(screen.queryByDisplayValue('Asha in red')).toBeNull();
         expect(setPersistedSubjectRecordsMock.mock.calls.slice(subjectWrites).map(([key]) => key)).toEqual([]);
+      });
+    });
+
+    // The run follows the form: when another account takes the page (from another tab, or after a
+    // sign-out), the earlier account's unanswered start, a press of theirs still under way, their
+    // result and their remix's inputs go with their form, and nothing is sent under the next.
+    describe('when another account takes the page', () => {
+      const page = () => <CreateVideoClient prefill={{}} />;
+      const START_UNCONFIRMED = 'We couldn’t confirm your generation started. Check again — that can’t start a second run.';
+      const BENS_PROMPT = 'A glasshouse at dawn, a slow dolly through the ferns as the mist lifts off the panes.';
+      const sessionOf = (userId: string) => ({ access_token: `token-${userId}`, user: { id: userId } });
+      /** Another account signs in from another tab: the browser's auth client has its session, then the page. */
+      function signInAs(userId: string, redraw?: () => void) {
+        authClientSignsInAs(userId);
+        authState.userId = userId;
+        authState.token = `token-${userId}`;
+        draftOwnerOverride.current = { owner: userId, carriedDraft: false, keepsVisitorForm: false };
+        redraw?.();
+      }
+      /** The browser's auth client holds another account's session while the page still checks it. */
+      function authClientSignsInAs(userId: string) {
+        authClient.session = sessionOf(userId);
+      }
+      const authorizationOf = (init: RequestInit | undefined) => new Headers(init?.headers).get('Authorization');
+      const startsSent = () => fetchMock.mock.calls.filter(([input, init]) => String(input).includes('/api/generations') && init?.method === 'POST');
+      async function settle() {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      }
+      async function pressForAsha() {
+        signInAs('user-1');
+        const view = render(page());
+        await settle();
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+        return view;
+      }
+
+      // Each creator is drawn for one owner and stops what it started as it goes: development's
+      // Strict Mode mounts it twice, and the second mount's presses go on.
+      it('still sends a press on a page that development’s Strict Mode mounts twice', async () => {
+        render(<StrictMode><CreateVideoClient prefill={{}} /></StrictMode>);
+        await settle();
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+        expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
+        expect(postedStarts()).toHaveLength(1);
+        expect(mockUpdateCredits).toHaveBeenCalledWith(900);
+      });
+
+      it('drops the earlier account’s unanswered start, and the next account’s press sends its own run', async () => {
+        answerStarts(async () => {
+          throw new TypeError('Failed to fetch');
+        });
+        const view = await pressForAsha();
+        expect(await screen.findByText(START_UNCONFIRMED)).toBeInTheDocument();
+
+        signInAs('user-2', () => view.rerender(page()));
+        await settle();
+        expect(screen.queryByText(START_UNCONFIRMED)).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
+
+        fireEvent.change(promptBox(), { target: { value: BENS_PROMPT } });
+        fireEvent.click(generateButton());
+        expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
+        const [ashas, bens] = postedStarts();
+        expect(bens.body).toMatchObject({ prompt: BENS_PROMPT });
+        expect(bens.key).not.toBe(ashas.key);
+        expect(authorizationOf(startsSent()[1][1])).toBe('Bearer token-user-2');
+      });
+
+      it('checks no start again under a session another account has taken, while the page still checks it', async () => {
+        answerStarts(async () => {
+          throw new TypeError('Failed to fetch');
+        });
+        await pressForAsha();
+        expect(await screen.findByText(START_UNCONFIRMED)).toBeInTheDocument();
+
+        authClientSignsInAs('user-2');
+        fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+        await settle();
+
+        expect(postedStarts()).toHaveLength(1);
+        // Still Asha's, to check under her session.
+        expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+      });
+
+      it.each([
+        ['once the page knows', true],
+        ['while the page still checks the session', false],
+      ])('sends nothing for a press still uploading when another account signs in, %s', async (_when, pageKnows) => {
+        getPersistedFileMock.mockImplementation(async (key: string) => (
+          key === 'create-video:start-image:user-1' ? new File(['harbour'], 'harbour.png', { type: 'image/png' }) : null
+        ));
+        let finishUpload: () => void = () => undefined;
+        temporaryUploadMock.mockImplementationOnce((file: File) => new Promise((resolve) => {
+          finishUpload = () => resolve({ signedUrl: `https://signed.example.com/uploads/user-1/${file.name}`, storagePath: `uploads/user-1/${file.name}` });
+        }));
+        signInAs('user-1');
+        const view = render(page());
+        await waitFor(() => expect(screen.getByAltText('Start image')).toBeInTheDocument());
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(temporaryUploadMock).toHaveBeenCalled());
+
+        if (pageKnows) signInAs('user-2', () => view.rerender(page()));
+        else authClientSignsInAs('user-2');
+        await settle();
+        await act(async () => finishUpload());
+        await settle();
+
+        expect(startsSent()).toEqual([]);
+        expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+        expect(mockUpdateCredits).not.toHaveBeenCalled();
+        // Uploaded for Asha alone: under another account's session the upload refuses to go.
+        expect(temporaryUploadMock).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'harbour.png' }),
+          expect.objectContaining({ userId: 'user-1' }),
+        );
+      });
+
+      it('uploads and sends nothing for a press made after another account took the session, before the page heard', async () => {
+        getPersistedFileMock.mockImplementation(async (key: string) => (
+          key === 'create-video:start-image:user-1' ? new File(['harbour'], 'harbour.png', { type: 'image/png' }) : null
+        ));
+        signInAs('user-1');
+        render(page());
+        await waitFor(() => expect(screen.getByAltText('Start image')).toBeInTheDocument());
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+        authClientSignsInAs('user-2');
+        fireEvent.click(generateButton());
+        await settle();
+
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+        expect(startsSent()).toEqual([]);
+      });
+
+      it('takes the earlier account’s result, its caption and its Post form off the canvas', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+          String(input).startsWith('/api/generations?') && !String(input).includes('detail=')
+            ? { ok: true, status: 200, json: async () => ({ generations: [{ id: 'gen-run-1', title: 'Harbour at dusk', paywallPrefill: null }] }) } as Response
+            : defaultResponse(input, init)
+        ));
+        const view = await pressForAsha();
+        expect(await screen.findByRole('link', { name: 'Download video' })).toBeInTheDocument();
+        expect(screen.getByText(PROMPT, { selector: 'p' })).toBeInTheDocument();
+        expect(await screen.findByRole('form', { name: 'Post it to the feed' })).toBeInTheDocument();
+
+        signInAs('user-2', () => view.rerender(page()));
+        await settle();
+
+        expect(screen.queryByRole('link', { name: 'Download video' })).toBeNull();
+        expect(screen.queryByText(PROMPT, { selector: 'p' })).toBeNull();
+        expect(screen.queryByRole('form', { name: 'Post it to the feed' })).toBeNull();
+      });
+
+      it('takes the earlier account’s failed run off the canvas', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+          String(input).includes('/api/generate-video?id=')
+            ? { ok: true, status: 200, json: async () => ({ status: 'failed', error: 'The provider could not render Asha’s harbour.' }) } as Response
+            : defaultResponse(input, init)
+        ));
+        const view = await pressForAsha();
+        expect(await screen.findByRole('alert')).toHaveTextContent('The provider could not render Asha’s harbour.');
+
+        signInAs('user-2', () => view.rerender(page()));
+        await settle();
+
+        expect(screen.queryByText(/could not render Asha’s harbour/)).toBeNull();
+        expect(screen.queryByRole('heading', { name: 'It didn’t finish' })).toBeNull();
+      });
+
+      it('takes the server’s refusal of the earlier account’s start off the page', async () => {
+        answerStarts(refusal(402, { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 12 credits.' }));
+        const view = await pressForAsha();
+        expect(await screen.findByText('Insufficient credits. This action costs 12 credits.')).toBeInTheDocument();
+
+        signInAs('user-2', () => view.rerender(page()));
+        await settle();
+
+        expect(screen.queryByText('Insufficient credits. This action costs 12 credits.')).toBeNull();
+        expect(screen.queryByRole('link', { name: /Top Up Credits/ })).toBeNull();
+      });
+
+      it('drops the earlier account’s remix inputs and its own, and reads the remix again for the next', async () => {
+        const remixPage = () => <CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />;
+        const ashasRemix: RemixSourceBundle = {
+          generation: { id: 'gen-1', title: 'Tide', prompt: 'The dancer follows the tide', category: 'video', model: 'seedance-2-5' },
+          result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+          inputs: {
+            video: {
+              referenceMode: 'elements',
+              startFrame: null,
+              endFrame: null,
+              elements: [],
+              referenceVideos: [{
+                kind: 'video',
+                label: 'Video reference 1',
+                storagePath: 'generation_inputs/user-1/gen-1/00-reference_video.mp4',
+                sourceGenerationId: 'gen-1',
+                url: 'https://signed.example.com/generation_inputs/user-1/gen-1/00-reference_video.mp4',
+                durationSeconds: 6,
+              }],
+            },
+          },
+          workflowSettings: { model: 'seedance-2-5' },
+          restoreIssues: [],
+        };
+        // A remix gives a run's own inputs to the account that made it; another reads the post alone.
+        const bensRemix: RemixSourceBundle = {
+          ...ashasRemix,
+          inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [] } },
+        };
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+          String(input).includes('/api/remix-source')
+            ? { ok: true, status: 200, json: async () => (authorizationOf(init) === 'Bearer token-user-1' ? ashasRemix : bensRemix) } as Response
+            : defaultResponse(input, init)
+        ));
+        signInAs('user-1');
+        const view = render(remixPage());
+        expect((await screen.findAllByText('Video reference 1')).length).toBeGreaterThan(0);
+        fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]')!, {
+          target: { files: [new File(['selfie'], 'selfie.png', { type: 'image/png' })] },
+        });
+        await waitFor(() => expect(screen.queryAllByDisplayValue('Element 1').length).toBeGreaterThan(0));
+
+        signInAs('user-2', () => view.rerender(remixPage()));
+        await waitFor(() => expect(fetchMock.mock.calls
+          .filter(([input]) => String(input).includes('/api/remix-source'))
+          .map(([, init]) => authorizationOf(init))).toEqual(['Bearer token-user-1', 'Bearer token-user-2']));
+        await settle();
+
+        expect(screen.queryAllByText('Video reference 1')).toEqual([]);
+        expect(screen.queryAllByDisplayValue('Element 1')).toEqual([]);
+        expect(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/)).toHaveValue('The dancer follows the tide');
       });
     });
 
@@ -6323,7 +6573,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(postedStarts()).toHaveLength(2));
 
       expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
-      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledWith('uploads/user-1/walk.mp4');
+      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledWith('uploads/user-1/walk.mp4', pressedForUser1);
       const clipOf = (index: number) => postedStarts()[index].body.inputs.find((input) => input.slot === 'videoReferences');
       expect(clipOf(0)).toMatchObject({ url: 'https://signed.example.com/uploads/user-1/walk.mp4', storagePath: 'uploads/user-1/walk.mp4' });
       expect(clipOf(1)).toMatchObject({ url: 'https://signed.example.com/refreshed/uploads/user-1/walk.mp4', storagePath: 'uploads/user-1/walk.mp4' });
@@ -6366,7 +6616,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(postedStarts()).toHaveLength(1));
 
       expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
-      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledWith('uploads/user-1/hero.png');
+      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledWith('uploads/user-1/hero.png', pressedForUser1);
       expect(postedStarts()[0].body.inputs.find((input) => input.slot === 'imageReferences')).toMatchObject({
         url: 'https://signed.example.com/refreshed/uploads/user-1/hero.png',
         storagePath: 'uploads/user-1/hero.png',

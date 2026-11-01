@@ -76,7 +76,7 @@ import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/Creat
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
-import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
+import { useCreatorDraftOwner, useCreatorFormKey, type CreatorDraftOwner } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
@@ -170,11 +170,14 @@ import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh }
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
 import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
+import { useUnmountSignal } from '@/lib/use-unmount-signal';
 import {
     refreshTemporaryMediaUrl,
     TEMPORARY_MEDIA_UPLOAD_LIMITS,
     uploadMediaToTemporaryStorage,
+    type TemporaryMediaUploadOptions,
 } from '@/lib/temporary-media-upload';
+import { isUploadCancelledError, UploadCancelledError } from '@/lib/upload-queue';
 
 type ModelId = ImageModelId;
 
@@ -281,17 +284,22 @@ function getLoginPathForThisPage(): string {
 /**
  * The element's copy in `uploads`: the one this page staged, while the sweep
  * still keeps it, under a fresh link; else a new upload of the file. Each run
- * used to upload every element again.
+ * used to upload every element again. `press`: the account it goes up for, and
+ * the creator whose going stops it.
  */
-async function stageElementFile(file: File, staged: StagedElementUpload | null): Promise<StagedElementUpload & { signedUrl: string }> {
+async function stageElementFile(
+    file: File,
+    staged: StagedElementUpload | null,
+    press: TemporaryMediaUploadOptions,
+): Promise<StagedElementUpload & { signedUrl: string }> {
     if (staged && Date.now() - staged.uploadedAt < STAGED_UPLOAD_REUSE_MS) {
         try {
-            return { ...staged, signedUrl: await refreshTemporaryMediaUrl(staged.storagePath) };
+            return { ...staged, signedUrl: await refreshTemporaryMediaUrl(staged.storagePath, press) };
         } catch {
             // Gone from storage, or the link could not be renewed: the file goes up again.
         }
     }
-    const upload = await uploadMediaToTemporaryStorage(file);
+    const upload = await uploadMediaToTemporaryStorage(file, press);
     return { storagePath: upload.storagePath, signedUrl: upload.signedUrl, uploadedAt: Date.now() };
 }
 
@@ -336,14 +344,7 @@ function imageModelName(modelId: unknown): string | null {
     return typeof modelId === 'string' ? (IMAGE_MODELS as Record<string, { displayName: string } | undefined>)[modelId]?.displayName ?? null : null;
 }
 
-export default function CreateImageClient({
-    prefill,
-    welcome = null,
-    handoverNonce = null,
-    visitorWelcomeCredits = null,
-    opening = null,
-    startPosts = null,
-}: {
+type CreateImageClientProps = {
     prefill: CreateImagePrefill;
     /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
     welcome?: CreatorWelcome | null;
@@ -358,13 +359,33 @@ export default function CreateImageClient({
     opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
-}) {
+};
+
+/**
+ * The image creator, drawn for one owner's form at a time: the visitor's until someone signs in,
+ * then the account's, which takes the visitor's when sign-up was opened here. Another account's
+ * form is a creator drawn anew (`useCreatorFormKey`): the earlier owner's unanswered start, run,
+ * result and remix go with theirs, and nothing still under way for them is sent under the next.
+ */
+export default function CreateImageClient(props: CreateImageClientProps) {
+    const { session } = useAuth();
+    const draft = useCreatorDraftOwner('image', session?.user?.id ?? null, props.handoverNonce ?? null);
+    const formKey = useCreatorFormKey(draft);
+    return <ImageCreator key={formKey} {...props} draft={draft} />;
+}
+
+function ImageCreator({
+    prefill,
+    welcome = null,
+    visitorWelcomeCredits = null,
+    opening = null,
+    startPosts = null,
+    draft,
+}: CreateImageClientProps & { draft: CreatorDraftOwner }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
-    // The visitor's draft until someone signs in, then the account's, which takes
-    // the visitor's when sign-up was opened here.
-    const { owner: draftOwner, carriedDraft, keepsVisitorForm } = useCreatorDraftOwner('image', userId, handoverNonce);
+    const { owner: draftOwner, carriedDraft, keepsVisitorForm } = draft;
     // A page that opened signed out works up to Generate, which asks for an account
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
@@ -419,6 +440,9 @@ export default function CreateImageClient({
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     // The look, as the page opens, for a run already at work.
     const activeRunLookupRef = useRef<AbortController | null>(null);
+    // Aborted as this creator goes, another owner's form drawn in its place: a press, a check or
+    // an answer of its own still out then sends, shows and saves nothing more.
+    const unmountSignal = useUnmountSignal();
     const elementRefs = useRef<ImageElementDraft[]>([]);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
     // Bumped once a run the creator started is under way: the canvas then comes into view.
@@ -1417,20 +1441,32 @@ export default function CreateImageClient({
     /**
      * Sends a kept start, the first time or again under its own key. An answer
      * that leaves it open keeps the key, so "Check again" finds the run it started
-     * or starts it once; a refusal or a started run settles it.
+     * or starts it once; a refusal or a started run settles it. It goes only under
+     * the session of the account it is for: one another account has taken since
+     * (signed in from another tab, before the page has heard) sends nothing, and a
+     * start being checked again stays, to be checked under its own.
      */
     const runStart = async (
         start: PendingWebStart,
         timing: { startedAtMs: number; estimatedTotalMs: number | null },
         { reveal }: { reveal: boolean },
     ) => {
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        if (unmountSignal.current.aborted) return;
+        if (start.userId && currentSession && currentSession.user.id !== start.userId) {
+            setGenerationTiming(null);
+            return;
+        }
+        // Kept before it is sent: an answer that never arrives is replayed under this key.
+        savePendingWebStart(start);
         let started: WebGenerationStartResponse;
         try {
             started = await requestWebGenerationStart(start.body as CatalogGenerationRequestPayload, {
-                accessToken: await readAccessToken(),
+                accessToken: currentSession?.access_token ?? null,
                 idempotencyKey: start.idempotencyKey,
             });
         } catch (startError) {
+            if (unmountSignal.current.aborted) return;
             setGenerationTiming(null);
             if (isAmbiguousWebStartFailure(startError)) {
                 setPendingStart(start);
@@ -1442,6 +1478,15 @@ export default function CreateImageClient({
             }
             forgetPendingStart();
             handleStartRefusal(startError, start.body as CatalogGenerationRequestPayload);
+            return;
+        }
+        if (unmountSignal.current.aborted) {
+            // The creator went while the start was out: the page was left, or another owner's form
+            // took its place. The run is the server's. The balance is read again for whoever holds
+            // the session now, rather than set to the one this start answered, and nothing here
+            // follows the run.
+            announceGenerationStarted();
+            window.dispatchEvent(new Event('credits_updated'));
             return;
         }
         forgetPendingStart();
@@ -1502,7 +1547,9 @@ export default function CreateImageClient({
         activeRunLookupRef.current = lookup;
         const resumePendingGeneration = async () => {
             const { data: { session } } = await supabase.auth.getSession();
-            if (!session) return;
+            // Another account's session the page has not heard of yet picks up nothing: the creator
+            // is drawn anew for that account once it has.
+            if (!session || (userId && session.user.id !== userId)) return;
 
             // A start this tab sent and never heard back about goes first: sending it
             // again finds the run it started, or starts it once.
@@ -1556,6 +1603,7 @@ export default function CreateImageClient({
         requestInputs: ImageRunInput<ImageElementDraft>[],
         startedAtMs: number,
         estimatedTotalMs: number | null,
+        press: TemporaryMediaUploadOptions,
     ): Promise<NonNullable<CatalogGenerationRequestPayload['inputs']>> => {
         if (requestInputs.length === 0) return [];
         const requestElements = requestInputs.map((input) => input.element);
@@ -1573,7 +1621,7 @@ export default function CreateImageClient({
 
         const results = await Promise.allSettled(requestElements.map(async (element) => {
             if (element.file) {
-                const staged = await stageElementFile(element.file, element.staged);
+                const staged = await stageElementFile(element.file, element.staged, press);
                 return {
                     element,
                     staged,
@@ -1595,6 +1643,8 @@ export default function CreateImageClient({
                 sourceGenerationId: element.sourceGenerationId ?? null,
             };
         }));
+        // The creator went while the files went up: its form is no one's to keep a copy on.
+        if (unmountSignal.current.aborted) throw new UploadCancelledError();
 
         // Every file that went up stays on its element, so the next press sends the
         // staged copy instead of uploading it again, even when another file failed.
@@ -1684,14 +1734,24 @@ export default function CreateImageClient({
         try {
             // Before any upload, which would fail first and hide the way back.
             const { data: { session: currentSession } } = await supabase.auth.getSession();
+            if (unmountSignal.current.aborted) return;
             if (!currentSession) {
                 await saveDraftNow();
                 setGenerationTiming(null);
                 router.push(getLoginPathForThisPage());
                 return;
             }
+            // The press is the page's account's: under a session another account has taken since
+            // (signed in from another tab, before the page has heard), nothing goes up or out.
+            if (userId && currentSession.user.id !== userId) {
+                setGenerationTiming(null);
+                return;
+            }
 
-            const inputs = await stageReferenceInputs(runInputs, startedAtMs, estimatedTotalMs);
+            const inputs = await stageReferenceInputs(runInputs, startedAtMs, estimatedTotalMs, {
+                userId: currentSession.user.id,
+                signal: unmountSignal.current,
+            });
 
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'image',
@@ -1719,12 +1779,12 @@ export default function CreateImageClient({
                 createdAt: new Date().toISOString(),
                 userId: currentSession.user.id,
             };
-            // Kept before it is sent: an answer that never arrives is replayed under this key.
-            savePendingWebStart(start);
             await runStart(start, { startedAtMs, estimatedTotalMs }, { reveal: true });
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Something went wrong');
             setGenerationTiming(null);
+            // An upload the press gave up, for the creator going or for another account's
+            // session, is no failure of the creator's to show.
+            if (!isUploadCancelledError(err)) setError(err instanceof Error ? err.message : 'Something went wrong');
         } finally {
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
@@ -2139,10 +2199,10 @@ export default function CreateImageClient({
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
                             onEnhanced={(text) => {
-                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) setPrompt(text);
+                                if (!unmountSignal.current.aborted && !isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) setPrompt(text);
                             }}
                             onCreditsUpdate={(credits) => {
-                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
+                                if (!unmountSignal.current.aborted && !isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
                             }}
                             onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
                             medium="image"

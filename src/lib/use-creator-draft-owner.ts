@@ -108,3 +108,36 @@ export function useCreatorDraftOwner(
     keepsVisitorForm: !handOverLeft && (moved.answer === 'gave-up' || moved.answer === 'failed'),
   };
 }
+
+/** Whose form a creator holds, and the key its body is drawn under while it holds it. */
+export type CreatorFormHolder = { owner: string | null; key: number };
+
+/**
+ * Whose form the creator holds once the draft is `draft.owner`'s. It keeps the same form, under
+ * the same key:
+ * - while the draft has no owner: a hand-over on its way, or a session that lapsed or signed out
+ *   on a page that opened signed in, whose form waits for its account as it always has;
+ * - for the page's first owner, learned after it opened (a hand-over that answered);
+ * - for the account a hand-over that gave up or failed leaves the visitor's form to
+ *   (`keepsVisitorForm`).
+ * Any other owner gets a form of their own under a new key: the creator's body is drawn anew, so
+ * the earlier owner's form, unanswered start, result and remix go with it.
+ */
+export function nextCreatorFormHolder(holder: CreatorFormHolder, draft: CreatorDraftOwner): CreatorFormHolder {
+  if (draft.owner === null || draft.owner === holder.owner) return holder;
+  if (holder.owner === null || draft.keepsVisitorForm) return { owner: draft.owner, key: holder.key };
+  return { owner: draft.owner, key: holder.key + 1 };
+}
+
+/**
+ * The key a creator draws its body under (`nextCreatorFormHolder`). Another owner's form is a new
+ * body, so nothing of the earlier owner's stays on the page, and what was still under way for them
+ * stops with the body that started it (`useUnmountSignal`).
+ */
+export function useCreatorFormKey(draft: CreatorDraftOwner): number {
+  const [holder, setHolder] = useState<CreatorFormHolder>(() => ({ owner: draft.owner, key: 0 }));
+  const next = nextCreatorFormHolder(holder, draft);
+  // Moved as the page draws, so the earlier owner's body is never drawn for the next owner.
+  if (next !== holder) setHolder(next);
+  return next.key;
+}

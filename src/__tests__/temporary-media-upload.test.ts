@@ -154,6 +154,19 @@ describe('uploadMediaToTemporaryStorage', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  // A creator's press uploads for the account it was pressed for: another account signing in from
+  // another tab meanwhile would have the file staged in that account's folder.
+  it('goes up only under the session of the account it is for', async () => {
+    stubXhr();
+    const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
+    await expect(uploadMediaToTemporaryStorage(new File(['image'], 'image.png', { type: 'image/png' }), { userId: 'user-2' }))
+      .rejects.toMatchObject({ name: 'UploadCancelledError' });
+    expect(fetch).not.toHaveBeenCalled();
+
+    await expect(uploadMediaToTemporaryStorage(new File(['image'], 'image.png', { type: 'image/png' }), { userId: 'user-1' }))
+      .resolves.toMatchObject({ storagePath: 'uploads/user-1/reference.png' });
+  });
+
   it('carries cancellation through preparation, finalization and preview signing', async () => {
     stubXhr();
     const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
@@ -305,6 +318,16 @@ describe('refreshTemporaryMediaUrl', () => {
     const { refreshTemporaryMediaUrl } = await import('@/lib/temporary-media-upload');
 
     await expect(refreshTemporaryMediaUrl('uploads/user-1/reference.png')).rejects.toThrow('Please log in to upload files.');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('signs nothing again under a session another account has taken since the press', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const { refreshTemporaryMediaUrl } = await import('@/lib/temporary-media-upload');
+
+    await expect(refreshTemporaryMediaUrl('uploads/user-1/reference.png', { userId: 'user-2' }))
+      .rejects.toMatchObject({ name: 'UploadCancelledError' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
