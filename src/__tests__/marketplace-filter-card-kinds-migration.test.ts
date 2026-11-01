@@ -11,7 +11,7 @@ import {
 } from '@/lib/post-resource-bundles';
 
 const migrationsDirectory = 'supabase/migrations';
-const migrationFile = '20261101040316_marketplace_filter_card_kinds.sql';
+const migrationFile = '20261101071826_marketplace_filter_card_kinds.sql';
 const sql = readFileSync(join(migrationsDirectory, migrationFile), 'utf8');
 // The statements alone: the header names the legacy columns the flags no longer read.
 const statements = sql.replace(/--.*$/gm, '');
