@@ -440,7 +440,7 @@ async function unknownMentionLine() {
   return (await screen.findByText(/^Unknown element mention/)).textContent;
 }
 
-/** A shelf post as the page is handed it: a 42-credit Kling 3.0 run. */
+/** A shelf post as the page is handed it: a Kling 3.0 run the page prices at 42 (the shelf's quote said 40). */
 function startPost(id: string): CreatorStartPost {
   return {
     kind: 'creation',
@@ -451,7 +451,7 @@ function startPost(id: string): CreatorStartPost {
     posterThumbhash: null,
     clipUrl: null,
     modelName: 'Kling 3.0 Cinematic',
-    price: { kind: 'credits', credits: 42 },
+    price: { kind: 'credits', credits: 40 },
     fitsWelcomeCredits: false,
     badge: null,
     creator: { id: 'creator-1', username: 'fluffy', name: 'Fluffy' },
@@ -7719,6 +7719,12 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.getByRole('link', { name: 'Top up: 500 for ₹415' })).toHaveAttribute('href', '/pricing');
       expect(screen.getByText('3 credits: enough for images')).toBeInTheDocument();
       expect(screen.getByText(/Videos start at 7 credits\. Z-Image makes a picture for 1/)).toBeInTheDocument();
+
+      // The bar offers the image, not Top up: the "+N" line says only that options stay selectable.
+      fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
+      const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+      await waitFor(() => expect(settings).toHaveTextContent(/more than your balance of 3\. Those options stay selectable\./));
+      expect(settings).not.toHaveTextContent('show Top up in place of Generate');
     });
 
     // A settings press asks for the run's price again (a debounce and a round trip): the bar
@@ -7798,8 +7804,33 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(queryGenerateButton()).toBeNull();
         expect(screen.queryByText(/Fitted to your/)).toBeNull();
         expect(screen.queryByRole('button', { name: /^Switch back to/ })).toBeNull();
-        // Nothing is weighed against it: no other model, and no image, is priced.
-        expect(priceListStandIn.askedRuns()).toEqual([]);
+        // Nothing is weighed against it: no other video model is priced. The image models are,
+        // as on any page short of its run, for what Posted offers once the remix is made.
+        const asked = priceListStandIn.askedRuns();
+        expect(asked.filter((run) => run.kind === 'video')).toEqual([]);
+        expect(asked.some((run) => run.kind === 'image')).toBe(true);
+      });
+
+      // A settings press prices the run again (a debounce and a round trip): Top up keeps its place meanwhile.
+      it('keeps Top up in place while a changed setting is being priced', async () => {
+        authState.credits = 22;
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
+        const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+        await waitFor(() => expect(settings).toHaveTextContent(/more than your balance of 22\. Those options stay selectable, and show Top up in place of Generate\./));
+        const ratios = within(screen.getByRole('radiogroup', { name: /^Aspect ratio/ })).getAllByRole('radio');
+        const other = ratios.find((radio) => radio.getAttribute('aria-checked') === 'false')!;
+        const otherRatio = other.textContent;
+        quoteStandIn.priceFor = (request) => (request.settings?.aspectRatio === otherRatio ? 'pending' : videoPrice(request));
+        fireEvent.click(other);
+
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.settings?.aspectRatio).toBe(otherRatio));
+        expect(screen.getByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(document.querySelector('[data-creator-bar-status]')).toHaveTextContent('This run costs 140 credits but you only have 22.');
+        expect(queryGenerateButton()).toBeNull();
       });
 
       // Seedance 2.5 at 10 s is 280: past the 22, as every model's 10 s is but Seedance 1.5 Pro's 8 s.
@@ -7813,7 +7844,7 @@ describe('CreateVideoClient Kling video elements', () => {
         await act(async () => {});
         expect(document.querySelector('[data-creator-bar-status]')).toHaveTextContent('This run costs 280 credits but you only have 22.');
         expect(quoteStandIn.lastRequest()).toMatchObject({ modelId: 'seedance-2-5', settings: expect.objectContaining({ duration: 10 }) });
-        expect(priceListStandIn.askedRuns()).toEqual([]);
+        expect(priceListStandIn.askedRuns().filter((run) => run.kind === 'video')).toEqual([]);
       });
 
       it('offers a top-up, never an image, when the balance is short of every video', async () => {

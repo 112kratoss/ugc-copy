@@ -1944,7 +1944,6 @@ function VideoCreator({
         hasSound: currentSound,
         hasReferenceVideo: hasReferenceVideoForRun,
     });
-    const insufficientCredits = userCredits !== null && estimatedCost !== null && userCredits < estimatedCost;
     // The balance and price a refusal answers, read when it comes: that can be long after
     // the render that sent it (a replay on mount).
     const creditContextRef = useRef({ credits: userCredits, cost: estimatedCost });
@@ -1954,7 +1953,6 @@ function VideoCreator({
     const creditRefusalApplies = creditRefusal !== null
         && creditRefusal.credits === userCredits
         && creditRefusal.cost === estimatedCost;
-    const showTopUp = insufficientCredits || creditRefusalApplies;
 
     // The creator's lists priced (owner, 2026-10-28): every model at this run's settings, every
     // option of the settings, and what a balance short of every video can make instead. Read
@@ -1992,10 +1990,13 @@ function VideoCreator({
     }
     const affordCost = estimatedCost
         ?? (quoteState.status === 'pending' && lastCost?.modelId === selectedModel ? lastCost.cost : null);
+    // Top up stands in Generate's place while the balance is short of this run, read from the
+    // held price as well, so a re-priced setting does not swap it out and back.
+    const showTopUp = (userCredits !== null && affordCost !== null && userCredits < affordCost) || creditRefusalApplies;
     // Every model is priced while the list is open, and while the balance is short of this run,
-    // to tell a balance short of every video. A remix is not weighed against other runs: it
+    // to tell a balance short of every video. A remix is not weighed against other models: it
     // stays on its original's model and settings, and a short balance is offered a top-up
-    // (owner, 2026-11-01), never another model or an image.
+    // (owner, 2026-11-01), never another model, nor an image in Generate's place.
     const balanceShort = !isVisitor && userCredits !== null && affordCost !== null && userCredits < affordCost;
     const weighsOtherRuns = balanceShort && !remixId;
     const pricesModelList = isModelDropdownOpen || weighsOtherRuns;
@@ -2046,12 +2047,13 @@ function VideoCreator({
             return run && slotsFilled(run.inputs) !== filled ? run.quoteInput : null;
         });
     }, [settingsOpen, quoteRequest, settingsAxes, modelCatalog.catalog?.revision, runInputs, currentMode, selectedModel, pageForm, formHeld]);
-    // While the balance is short of this run, the image models too, for a balance short of every video.
+    // While the balance is short of this run, the image models too: for a balance short of every
+    // video, and for what Posted offers next ("make an image or top up"), after a remix too.
     const imageRuns = useMemo(() => {
         const revision = modelCatalog.catalog?.revision;
-        if (!weighsOtherRuns || !revision) return [];
+        if (!balanceShort || !revision) return [];
         return Object.keys(IMAGE_MODELS).map((id) => catalogRunQuoteInput({ kind: 'image' as const, modelId: id, catalogRevision: revision, settings: {}, inputs: [] }));
-    }, [weighsOtherRuns, modelCatalog.catalog?.revision]);
+    }, [balanceShort, modelCatalog.catalog?.revision]);
     const priceOf = useQuotePrices([
         ...[...modelRuns.values()].map((run) => run.quoteInput),
         ...variants.values(),
@@ -5233,7 +5235,7 @@ function VideoCreator({
     // A remix short of its original lands here too: it says what the original costs, with
     // Top up in Generate's place, and the run stays the original's (owner, 2026-11-01).
     const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating && !shortOfEveryVideoShown ? (
-        <CreatorTopUpNotice cost={estimatedCost} balance={userCredits} message={creditRefusal?.message ?? null} />
+        <CreatorTopUpNotice cost={affordCost} balance={userCredits} message={creditRefusal?.message ?? null} />
     ) : null;
     // A line of its own, so no other status (a pick's notice, an unanswered start) hides why
     // Generate is off. It names the clip as the creator named it, which can be a word no line holds.

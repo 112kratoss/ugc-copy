@@ -117,8 +117,8 @@ describe('the start posts\' remix forecasts', () => {
     expect(forecasts['post-1']).toEqual({ cost: 70 });
     expect(forecasts['post-2']).toEqual({ cost: 19 });
     expect(asked.map((input) => input.modelId)).toEqual(['kling-3.0-video', 'seedance-2-mini']);
-    // The card says that price, whatever the balance.
-    expect(startPostRemixCost({ ...cardOf('post-1'), remix: forecasts['post-1'] })).toBe(70);
+    // The card says that price, over the shelf's own quote of the stored settings.
+    expect(startPostRemixCost({ ...cardOf('post-1'), price: { kind: 'credits', credits: 64 }, remix: forecasts['post-1'] })).toBe(70);
   });
 
   // The server's run is the page's: a card can only say what the page will once it opens.
@@ -141,6 +141,7 @@ describe('the start posts\' remix forecasts', () => {
   it('opens a setting the model no longer offers on the model\'s default, as the page does', async () => {
     const unoffered = await forecastOf({ ...KLING_RUN, aspectRatio: '21:9', duration: 40 });
     const defaults = await forecastOf({ model: KLING_RUN.model, mode: KLING_RUN.mode, sound: KLING_RUN.sound });
+    expect(defaults).toEqual({ cost: expect.any(Number) });
     expect(unoffered).toEqual(defaults);
   });
 
@@ -173,6 +174,20 @@ describe('the start posts\' remix forecasts', () => {
       { status: 'rejected', reason: new Error('price table unreadable') }
     )));
     await expect(buildStartPostRemixForecasts([{ postId: 'post-1', generationId: 'gen-1' }], unreadable)).rejects.toThrow('price table unreadable');
+  });
+
+  // One request prices every post: a refused run costs only its own card, any other failure the whole build.
+  it('keeps the other posts\' forecasts beside a refused run, and keeps no half-priced build', async () => {
+    const posts = [{ postId: 'post-1', generationId: 'gen-1' }, { postId: 'post-2', generationId: 'gen-2' }];
+    const rows = [row('gen-1', KLING_RUN), row('gen-2', { ...KLING_RUN, model: 'seedance-2-mini', mode: '' })];
+    const failingMini = (reason: Error) => deps(rows, async (inputs) => quoteAll(inputs).map((answer, index) => (
+      inputs[index].modelId === 'seedance-2-mini' ? { status: 'rejected', reason } : answer
+    )));
+
+    expect(await buildStartPostRemixForecasts(posts, failingMini(new CatalogError('Unsupported settings', 'INVALID_MODEL_SETTINGS', 422))))
+      .toEqual({ 'post-1': { cost: 70 } });
+    await expect(buildStartPostRemixForecasts(posts, failingMini(new CatalogError('The catalog changed', 'CATALOG_CHANGED', 409))))
+      .rejects.toMatchObject({ code: 'CATALOG_CHANGED' });
   });
 
   it('has nothing to forecast where the page would not read the run alone', async () => {

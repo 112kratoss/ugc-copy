@@ -137,7 +137,8 @@ export function optionPriceLabel(cost: number, balance: number | null): { text: 
 /**
  * The lowest of the known prices, or null. A balance under it is short of every model's
  * run, the cheapest included: then the video creator offers an image first and a top-up
- * second (owner, 2026-10-28). Unknown prices say nothing.
+ * second (owner, 2026-10-28), except on a remix, which is offered the top-up alone
+ * (owner, 2026-11-01). Unknown prices say nothing.
  */
 export function cheapestCost(costs: ReadonlyArray<number | null>): number | null {
   const known = costs.filter((cost): cost is number => cost !== null);

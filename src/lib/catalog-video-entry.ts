@@ -4,8 +4,8 @@ import type { CatalogControl, GenerationModelDescriptor } from '@/lib/generation
  * What a model's registry entry takes from its catalog descriptor. The browser lays it
  * over the built-in tables once the catalog is in (`applyGenerationModelCatalogToRegistries`);
  * the server builds video entries from the published catalog the same way, to price a
- * remix on each model as the page will (`creator-start-posts-server.ts`). Kept out of the
- * client module so the server can read it.
+ * remix on its own model as the page will (`creator-start-posts-server.ts`). Kept out of
+ * the client module so the server can read it.
  */
 
 function catalogChoiceControl(model: GenerationModelDescriptor, key: string) {

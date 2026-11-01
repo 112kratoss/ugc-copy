@@ -20,7 +20,7 @@ import { applyGenerationModelCatalogToRegistries } from '@/lib/generation-model-
  */
 applyGenerationModelCatalogToRegistries(buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 }));
 
-type Media = VideoRunMedia & { imageReference: { id: string }; reference: { id: string; durationSeconds: number | null } };
+type Media = VideoRunMedia & { imageReference: { id: string }; reference: { id: string } };
 
 const miniForm: VideoFormSettings = {
   mode: '', aspectRatio: '9:16', resolution: '480p', duration: 5, sound: false, fixedLens: false, isMultiShot: false,
@@ -95,5 +95,16 @@ describe('the video run moved to another model', () => {
     expect(videoRunInputTally(onKling?.inputs ?? []).references).toBe(0);
     expect(onKling?.quoteInput.settings).toMatchObject({ referenceMode: 'frames', mode: 'std' });
     expect(onKling?.summary).toBe('720P · 5s');
+  });
+
+  // A model's row prices a multi-shot run at its shots' whole length, not the single shot's.
+  it('prices a multi-shot run on another model at its shots together', () => {
+    const shots = videoRunOnModel<Media>({
+      modelId: 'kling-3.0-video',
+      catalogRevision: 'rev-1',
+      settings: fitVideoFormToModel('kling-3.0-video', { ...miniForm, isMultiShot: true }),
+      held: held({ multiShotSeconds: 9 }),
+    });
+    expect(shots?.quoteInput.settings).toMatchObject({ duration: 9, isMultiShot: true });
   });
 });

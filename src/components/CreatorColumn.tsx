@@ -853,7 +853,8 @@ export function CreatorOverBalanceLegend({ over, balance, isVisitor, offersTopUp
 
 /**
  * In Generate's place while the balance is short of every video model's run (owner,
- * 2026-10-28): an image first, on the image model that costs least, with the prompt.
+ * 2026-10-28): an image first, on the image model that costs least, with the prompt. Never
+ * on a remix, which is offered a top-up alone (owner, 2026-11-01).
  */
 export function CreatorMakeImageInstead({ href, fromCost }: { href: string; fromCost: number }) {
   return (

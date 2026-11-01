@@ -111,13 +111,29 @@ test('a remix the balance cannot cover stays on its original, with Top up in Gen
     },
   }));
 
+  // Every run the page asks a price list for: a remix weighed against other models asks for theirs.
+  const listed: Run[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/generation-models/quotes') {
+      listed.push(...(request.postDataJSON() as { quotes: Run[] }).quotes);
+    }
+  });
+
   await page.goto('/create-video?remix=gen-intense&remixPost=post-intense', COLD_PAGE);
 
   await expect(page.getByText('Settings pre-filled from "intense".')).toBeVisible(COLD_PAGE);
   await expect(page.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing', COLD_PAGE);
   await expect(page.locator('[data-creator-bar-status]')).toContainText('This run costs 140 credits but you only have 25.');
+  // The settings' options are priced by a price list, so once their "+N" line shows, a list has
+  // been asked and answered. The fitting this replaced moved a short remix within a second of
+  // its price: by the end of this wait it would have asked for other models and moved.
+  await settingsChip(page).click();
+  await expect(page.getByRole('dialog', { name: 'Generation settings' })).toContainText('show Top up in place of Generate', COLD_PAGE);
+  await page.waitForTimeout(3_000);
+  expect([...new Set(listed.filter((run) => run.kind === 'video').map((run) => run.modelId))]).toEqual(['seedance-2-5']);
   await expect(settingsChip(page)).toHaveAccessibleName('Generation settings: 480P · 9:16 · 5s · Sound off');
   await expect(page.locator('button[aria-haspopup="listbox"]')).toContainText('Seedance 2.5');
+  await expect(page.getByRole('link', { name: /Top Up Credits/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Generate · / })).toHaveCount(0);
   await expect(page.getByText(/Fitted to your/)).toHaveCount(0);
 });

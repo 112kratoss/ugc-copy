@@ -23,7 +23,7 @@ export type VideoRegistryEntry = (typeof VIDEO_MODELS)[VideoModelId] & { catalog
 /**
  * Where a run reads its models: the page's registry, or on the server entries built from
  * the published catalog (`catalogVideoEntryFields`), which price a shelf post's remix on
- * each model as the page will once it opens.
+ * its own model as the page will once it opens.
  */
 export type VideoModelLookup = (modelId: string) => VideoRegistryEntry | undefined;
 
@@ -133,11 +133,8 @@ export function videoRunInputTally(inputs: ReadonlyArray<{ slot: string }>): { r
 }
 
 export type VideoRunOnModel<M extends VideoRunMedia> = {
-  modelId: string;
   /** The settings the model opens on (what picking it sets). */
   settings: VideoFormSettings;
-  /** The run's whole length: a multi-shot run's shots together. */
-  durationSeconds: number;
   inputs: VideoRunInput<M>[];
   quoteInput: GenerationModelQuoteInput;
   /** What the price on the model's row is for: "480P · 5s". */
@@ -208,9 +205,7 @@ export function videoRunOnModel<M extends VideoRunMedia>({
     referenceMode: subjectsActive ? 'subjects' : affordances.activeMode,
   };
   return {
-    modelId,
     settings,
-    durationSeconds,
     inputs,
     quoteInput: catalogRunQuoteInput({ kind: 'video' as const, modelId, catalogRevision, settings: runSettings, inputs }),
     summary: videoRunShortSummary({
