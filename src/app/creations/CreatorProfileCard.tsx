@@ -1256,7 +1256,7 @@ export default function CreatorProfileCard({
         </div>
       ) : null}
 
-      <form ref={formRef} id="creator-profile-form" onSubmit={handleSubmit} noValidate className="space-y-6">
+      <form ref={formRef} id="creator-profile-form" method="post" onSubmit={handleSubmit} noValidate className="space-y-6">
         <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
           <div className="mb-6 flex flex-col gap-1">
             <h3 className="text-lg font-semibold text-white">Your public identity</h3>

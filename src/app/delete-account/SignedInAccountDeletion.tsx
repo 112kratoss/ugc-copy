@@ -485,7 +485,7 @@ export default function SignedInAccountDeletion() {
             For your security, deleting the account needs a fresh sign-in.
           </p>
           {canUsePassword ? (
-            <form onSubmit={(event) => void handlePasswordSubmit(event)} className="mt-4 space-y-3">
+            <form method="post" onSubmit={(event) => void handlePasswordSubmit(event)} className="mt-4 space-y-3">
               <label htmlFor="delete-account-password" className="block text-sm font-semibold text-zinc-200">
                 Current password
               </label>
@@ -520,7 +520,7 @@ export default function SignedInAccountDeletion() {
           ) : null}
         </div>
       ) : (
-        <form onSubmit={(event) => void handleDelete(event)} className="mt-6 space-y-3">
+        <form method="post" onSubmit={(event) => void handleDelete(event)} className="mt-6 space-y-3">
           <label htmlFor="delete-account-confirmation" className="block text-sm font-semibold text-zinc-200">
             Type DELETE to confirm
           </label>

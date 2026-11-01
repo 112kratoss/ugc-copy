@@ -187,7 +187,10 @@ export default function LoginClient({
                                     </div>
                                 ) : null}
 
-                                <form onSubmit={handleSignIn} className="space-y-4">
+                                {/* A post, not the default GET: until the page's script has run, Enter
+                                    submits the form the browser's own way, and a GET wrote the
+                                    password into the address. The server answers with this page. */}
+                                <form method="post" onSubmit={handleSignIn} className="space-y-4">
                                     <div>
                                         <label htmlFor="login-email" className="mb-1.5 block text-sm font-bold text-[var(--ui-text-secondary)]">
                                             Email address

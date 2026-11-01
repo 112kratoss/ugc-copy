@@ -63,8 +63,10 @@ export function ContactForm() {
     );
   }
 
+  // A post, not the default GET: Enter pressed before the page's script has run submits the
+  // form the browser's own way, and a GET wrote the name, email and message into the address.
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
+    <form method="post" onSubmit={handleSubmit} className="space-y-6">
       <div>
         <label htmlFor="name" className="mb-2 block text-sm font-bold">
           Your Name

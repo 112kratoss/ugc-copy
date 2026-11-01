@@ -162,7 +162,7 @@ function ResetPasswordContent() {
               Password updated. Continuing…
             </div>
           ) : (
-            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+            <form method="post" onSubmit={handleSubmit} className="mt-6 space-y-4">
               <div>
                 <label className="mb-1.5 block text-sm font-bold text-[var(--ui-text-secondary)]" htmlFor="new-password">
                   New password
