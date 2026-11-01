@@ -74,7 +74,7 @@ const persistedMediaMocks = vi.hoisted(() => ({
 const savedDrafts = vi.hoisted(() => new Map<string, unknown>());
 // Whose draft the page keeps, where a test moves it as `useCreatorDraftOwner` would: a sign-up's
 // hand-over finishing, another account. Null leaves the hook's own answer.
-const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean } | null }));
+const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean; keepsVisitorForm: boolean } | null }));
 const draftMocks = vi.hoisted(() => ({
   loadCreatorDraft: vi.fn(async (tool: string, userId: string) => savedDrafts.get(`${tool}:${userId}`) ?? null),
   saveCreatorDraft: vi.fn(async (tool: string, userId: string, draft: unknown) => {
@@ -1359,8 +1359,9 @@ describe('CreateMotionClient drafts and media', () => {
   describe('read back after the page opened', () => {
     const OPENING = "No distortion, the character's movements are consistent with the video.";
     const box = () => screen.getByPlaceholderText(/Describe the kind of movement/);
-    function ownDraftAs(owner: string | null, carriedDraft = false) {
-      draftOwnerOverride.current = { owner, carriedDraft };
+    // keepsVisitorForm: the sign-up sheet's hand-over led here and its move gave up or failed.
+    function ownDraftAs(owner: string | null, carriedDraft = false, keepsVisitorForm = false) {
+      draftOwnerOverride.current = { owner, carriedDraft, keepsVisitorForm };
     }
     const promptsSavedFor = (owner: string) => draftMocks.saveCreatorDraft.mock.calls
       .filter(([, savedFor]) => savedFor === owner)
@@ -1596,6 +1597,27 @@ describe('CreateMotionClient drafts and media', () => {
       await readFilesOf('user-1');
       expect(imageShown()).toBe(true);
       expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+    });
+
+    it('keeps the visitor’s picture, clip and words when the sign-up sheet’s hand-over gives up', async () => {
+      const page = () => <CreateMotionClient prefill={{}} handoverNonce="nonce-1" />;
+      // The page opened before its session came, on the visitor's files and words.
+      keepFiles('visitor', { image: characterImage(), clip: motionClip() });
+      ownDraftAs('visitor');
+      const view = render(page());
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      fireEvent.change(box(), { target: { value: 'A slow spin with both arms wide' } });
+
+      // The move to the account the visitor signed up with does not answer in time, so the
+      // page goes on with the account, which has nothing saved yet.
+      ownDraftAs(null);
+      view.rerender(page());
+      ownDraftAs('user-1', false, true);
+      view.rerender(page());
+      await readFilesOf('user-1');
+      expect(imageShown()).toBe(true);
+      expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(box()).toHaveValue('A slow spin with both arms wide');
     });
   });
 

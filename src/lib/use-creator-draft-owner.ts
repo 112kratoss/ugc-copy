@@ -31,6 +31,12 @@ export type CreatorDraftOwner = {
   owner: string | null;
   /** The visitor's draft was moved to this account on the way back from sign-up. */
   carriedDraft: boolean;
+  /**
+   * The page came back from this creator's sign-up and the move of the visitor's draft gave up
+   * or failed. The form the page holds is the person's own and, until the move lands, the only
+   * copy the page has, so it stays as it is rather than going as another owner's.
+   */
+  keepsVisitorForm: boolean;
 };
 
 /**
@@ -39,6 +45,8 @@ export type CreatorDraftOwner = {
  * - A signed-in page keeps the account's. When it came back from this creator's
  *   sign-up with the hand-over nonce, it waits until the visitor's draft has
  *   moved to the account, so it reads its draft back only once the move is done.
+ *   That is the first account to sign in on the page; one signing in after it is
+ *   an ordinary sign-in.
  * - A page that opened signed in and then lost its session keeps nothing, so the
  *   account's form never lands in the browser's visitor slot, where the next
  *   person would open it.
@@ -54,10 +62,11 @@ export function useCreatorDraftOwner(
   const [moved, setMoved] = useState<{ userId: string; carried: boolean } | null>(null);
 
   useEffect(() => {
-    if (!userId || !awaitsHandover || !handoverNonce) return;
+    if (!userId || !awaitsHandover || !handoverNonce || moved) return;
     let cancelled = false;
     // The first answer stands: a move that lands after the give-up has already let
-    // the page read its draft, so it cannot be told the draft came back.
+    // the page read its draft, so it cannot be told the draft came back. The page
+    // keeps the visitor's form instead.
     let answered = false;
     const done = (carried: boolean) => {
       if (cancelled || answered) return;
@@ -73,11 +82,11 @@ export function useCreatorDraftOwner(
       cancelled = true;
       window.clearTimeout(giveUp);
     };
-  }, [awaitsHandover, handoverNonce, tool, userId]);
+  }, [awaitsHandover, handoverNonce, moved, tool, userId]);
 
-  if (!userId) return { owner: openedSignedIn ? null : VISITOR_DRAFT_OWNER, carriedDraft: false };
-  if (!awaitsHandover) return { owner: userId, carriedDraft: false };
-  return moved?.userId === userId
-    ? { owner: userId, carriedDraft: moved.carried }
-    : { owner: null, carriedDraft: false };
+  if (!userId) return { owner: openedSignedIn ? null : VISITOR_DRAFT_OWNER, carriedDraft: false, keepsVisitorForm: false };
+  if (!awaitsHandover || (moved && moved.userId !== userId)) return { owner: userId, carriedDraft: false, keepsVisitorForm: false };
+  return moved
+    ? { owner: userId, carriedDraft: moved.carried, keepsVisitorForm: !moved.carried }
+    : { owner: null, carriedDraft: false, keepsVisitorForm: false };
 }

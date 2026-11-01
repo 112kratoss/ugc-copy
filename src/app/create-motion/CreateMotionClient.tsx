@@ -258,7 +258,7 @@ export default function CreateMotionClient({
     const userId = session?.user?.id ?? null;
     // The visitor's draft until someone signs in, then the account's, which takes
     // the visitor's when sign-up was opened here.
-    const { owner: draftOwner, carriedDraft } = useCreatorDraftOwner('motion', userId, handoverNonce);
+    const { owner: draftOwner, carriedDraft, keepsVisitorForm } = useCreatorDraftOwner('motion', userId, handoverNonce);
     // A page that opened signed out works up to Generate, which asks for an account
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
@@ -726,7 +726,7 @@ export default function CreateMotionClient({
     useEffect(() => {
         if (remixId || !draftOwner) return;
         let cancelled = false;
-        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
+        if (!keepsVisitorForm && isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
             // The words are another owner's: not this one's to see, nor to save.
             const openingPrompt = prefillPrompt ?? MOTION_OPENING_PROMPT;
             promptRef.current = openingPrompt;
@@ -767,7 +767,7 @@ export default function CreateMotionClient({
         };
         // Once per owner: applySavedDraft and the opening prompt read this page's prefill, which does not change.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remixId, draftOwner, carriedDraft]);
+    }, [remixId, draftOwner, carriedDraft, keepsVisitorForm]);
 
     // Prompt, model and settings per owner, a moment after each edit. A remix
     // page saves none: it restores from its source.

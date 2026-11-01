@@ -32,14 +32,14 @@ describe('whose draft a creator keeps', () => {
   it('keeps the visitor’s on a page that opened signed out', async () => {
     const useCreatorDraftOwner = await loadHook();
     const { result } = renderHook(() => useCreatorDraftOwner('video', null, null));
-    expect(result.current).toEqual({ owner: 'visitor', carriedDraft: false });
+    expect(result.current).toEqual({ owner: 'visitor', carriedDraft: false, keepsVisitorForm: false });
     expect(mocks.adoptVisitorDraft).not.toHaveBeenCalled();
   });
 
   it('has the account’s at once on a page no sign-up of this creator led to', async () => {
     const useCreatorDraftOwner = await loadHook();
     const { result } = renderHook(() => useCreatorDraftOwner('video', 'user-1', null));
-    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: false });
     expect(mocks.adoptVisitorDraft).not.toHaveBeenCalled();
   });
 
@@ -51,7 +51,7 @@ describe('whose draft a creator keeps', () => {
     expect(result.current.owner).toBe('user-1');
 
     rerender({ userId: null });
-    expect(result.current).toEqual({ owner: null, carriedDraft: false });
+    expect(result.current).toEqual({ owner: null, carriedDraft: false, keepsVisitorForm: false });
   });
 
   it('waits for the visitor’s draft to move to the account on the way back from this creator’s sign-up', async () => {
@@ -69,7 +69,7 @@ describe('whose draft a creator keeps', () => {
     expect(mocks.adoptVisitorDraft).toHaveBeenCalledWith('image', 'user-1', 'nonce-1234');
 
     await act(async () => finish(true));
-    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: true });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: true, keepsVisitorForm: false });
   });
 
   it('moves once when React runs the effect twice, and waits for that one move', async () => {
@@ -86,7 +86,7 @@ describe('whose draft a creator keeps', () => {
     expect(mocks.adoptVisitorDraft).toHaveBeenCalledTimes(1);
     expect(result.current.owner).toBeNull();
     await act(async () => finish(true));
-    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: true });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: true, keepsVisitorForm: false });
   });
 
   it('goes on with the account’s draft when the hand-over fails', async () => {
@@ -94,7 +94,7 @@ describe('whose draft a creator keeps', () => {
     mocks.hasVisitorDraftHandover.mockReturnValue(true);
     mocks.adoptVisitorDraft.mockRejectedValue(new Error('storage refused'));
     const { result } = renderHook(() => useCreatorDraftOwner('motion', 'user-1', 'nonce-9999'));
-    await waitFor(() => expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false }));
+    await waitFor(() => expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true }));
   });
 
   it('keeps the first answer when a slow move lands after the give-up', async () => {
@@ -110,9 +110,29 @@ describe('whose draft a creator keeps', () => {
     await act(async () => {
       vi.advanceTimersByTime(10_000);
     });
-    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true });
     await act(async () => finish(true));
-    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true });
+  });
+
+  it('hands the page over once, to the first account: a later one signs in as on any other page', async () => {
+    const useCreatorDraftOwner = await loadHook();
+    mocks.hasVisitorDraftHandover.mockReturnValue(true);
+    mocks.adoptVisitorDraft.mockResolvedValue(false);
+    const { result, rerender } = renderHook(({ userId }) => useCreatorDraftOwner('image', userId, 'nonce-2468'), {
+      initialProps: { userId: null as string | null },
+    });
+    expect(result.current).toEqual({ owner: 'visitor', carriedDraft: false, keepsVisitorForm: false });
+
+    rerender({ userId: 'user-1' });
+    await waitFor(() => expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true }));
+
+    // That account signs out in another tab and another signs in: the visitor's form is not theirs.
+    rerender({ userId: null });
+    expect(result.current).toEqual({ owner: 'visitor', carriedDraft: false, keepsVisitorForm: false });
+    rerender({ userId: 'user-2' });
+    expect(result.current).toEqual({ owner: 'user-2', carriedDraft: false, keepsVisitorForm: false });
+    expect(mocks.adoptVisitorDraft).toHaveBeenCalledTimes(1);
   });
 
   it('goes on without a hand-over that never answers', async () => {
@@ -126,6 +146,6 @@ describe('whose draft a creator keeps', () => {
     await act(async () => {
       vi.advanceTimersByTime(10_000);
     });
-    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true });
   });
 });

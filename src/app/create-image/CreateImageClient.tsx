@@ -364,7 +364,7 @@ export default function CreateImageClient({
     const userId = session?.user?.id ?? null;
     // The visitor's draft until someone signs in, then the account's, which takes
     // the visitor's when sign-up was opened here.
-    const { owner: draftOwner, carriedDraft } = useCreatorDraftOwner('image', userId, handoverNonce);
+    const { owner: draftOwner, carriedDraft, keepsVisitorForm } = useCreatorDraftOwner('image', userId, handoverNonce);
     // A page that opened signed out works up to Generate, which asks for an account
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
@@ -541,7 +541,7 @@ export default function CreateImageClient({
         if (remixId || !draftOwner) return;
         let cancelled = false;
         const openingPrompt = prefillPrompt ?? '';
-        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
+        if (!keepsVisitorForm && isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
             // The words are another owner's: not this one's to see, nor to save.
             promptRef.current = openingPrompt;
             setPrompt(openingPrompt);
@@ -587,7 +587,7 @@ export default function CreateImageClient({
         return () => {
             cancelled = true;
         };
-    }, [carriedDraft, prefillAspectRatio, prefillModel, prefillPrompt, remixId, draftOwner]);
+    }, [carriedDraft, keepsVisitorForm, prefillAspectRatio, prefillModel, prefillPrompt, remixId, draftOwner]);
 
     useEffect(() => {
         // What the creators saved before media was kept per account belonged to no one in particular.
@@ -595,7 +595,9 @@ export default function CreateImageClient({
     }, []);
 
     const persistUploadedImageElements = useCallback(async (nextElements: ImageElementDraft[]) => {
-        if (remixId || !draftOwner) {
+        // Only while the form holds this owner's pictures: a run pressed for an owner the page
+        // has left since would write the next owner's under them, or an empty list that removes theirs.
+        if (remixId || !draftOwner || restoredPersistedMediaForUserRef.current !== draftOwner) {
             return;
         }
 
@@ -791,7 +793,7 @@ export default function CreateImageClient({
 
     useEffect(() => {
         if (!draftOwner || restoredPersistedMediaForUserRef.current === draftOwner) return;
-        if (!remixId && isAnotherDraftOwner(restoredPersistedMediaForUserRef.current, draftOwner)) {
+        if (!remixId && !keepsVisitorForm && isAnotherDraftOwner(restoredPersistedMediaForUserRef.current, draftOwner)) {
             // The pictures are another owner's, the names of those refused too: not this one's to
             // see, send or save. What is saved for them stays theirs, and the new owner's own come
             // back below.
@@ -803,7 +805,7 @@ export default function CreateImageClient({
         restoredPersistedMediaForUserRef.current = draftOwner;
 
         void loadPersistedElements();
-    }, [commitElements, loadPersistedElements, draftOwner, remixId]);
+    }, [commitElements, keepsVisitorForm, loadPersistedElements, draftOwner, remixId]);
 
     useEffect(() => {
         if (remixId) return;
