@@ -38,6 +38,10 @@ vi.mock('expo-router', () => ({
   Link: (props: MockProps) => React.createElement('link', props),
 }));
 
+vi.mock('@react-navigation/native', () => ({
+  useRoute: () => ({ key: 'auth-1', name: 'auth', params: {} }),
+}));
+
 vi.mock('expo-apple-authentication', () => ({
   AppleAuthenticationButton: (props: MockProps) => React.createElement('apple-authentication-button', props),
   AppleAuthenticationButtonStyle: { WHITE: 'WHITE' },

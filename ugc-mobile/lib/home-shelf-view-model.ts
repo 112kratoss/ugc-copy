@@ -59,11 +59,8 @@ export function readHomeShelfItems(response: HomeShelfResponse | null | undefine
  * editor (the web's create link, as the app's route, as the web's own card
  * carries it through sign-in), or the post when the card has no such link.
  *
- * Ids only, never the source row's words: a sign-in's `returnTo` comes back
- * decoded once more than it was encoded (expo-router's `useLocalSearchParams`
- * decodes what the URL parse already decoded), so a title with &, # or + would
- * arrive cut and one with a backslash would send the guest Home instead. The
- * creator reads the post for its row after sign-in (`RemixSourceRow`).
+ * Ids only: a shelf creation always has a post, and the creator reads it for
+ * its source row after sign-in (`RemixSourceRow`), named as the reel names it.
  */
 export function homeShelfGuestReturnTo(creation: HomeShelfCreation): string {
   const href = creation.makeHref

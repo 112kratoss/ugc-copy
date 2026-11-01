@@ -64,6 +64,11 @@ vi.mock('expo-router', () => ({
   useNavigation: () => ({ addListener: navigationState.addListener }),
 }));
 
+// The screen reads its return from the route's own params (auth-screen-return-to.test.tsx).
+vi.mock('@react-navigation/native', () => ({
+  useRoute: () => ({ key: 'auth-1', name: 'auth', params: paramsState.params }),
+}));
+
 vi.mock('expo-apple-authentication', () => ({
   AppleAuthenticationButton: ({ ...props }: MockProps) => React.createElement('apple-authentication-button', props),
   AppleAuthenticationButtonStyle: { WHITE: 'WHITE', BLACK: 'BLACK' },
