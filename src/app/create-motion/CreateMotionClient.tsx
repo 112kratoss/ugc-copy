@@ -66,6 +66,7 @@ import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
+import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
@@ -1596,6 +1597,8 @@ function MotionCreator({
             awaitingCheck={isAwaitingStartCheck}
             onCheckAgain={() => void handleGenerate()}
             showTopUp={showTopUp}
+            // A remix keeps no draft: Pricing is told the remix, to bring the creator back to it.
+            topUpHref={remixId ? buildRemixTopUpHref('/create-motion', remixId, remixPostId) : undefined}
             isGenerating={isGenerating}
             // A visitor's press needs no price: it checks the form, then asks for an account.
             disabled={!canGenerate || (!isVisitor && quotePending) || canvasPublish.inFlight}

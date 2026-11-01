@@ -51,6 +51,21 @@ async function signIn(page: Page) {
   await page.context().addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
 }
 
+/** "intense": a Seedance 2.5 run of 140 credits at 5 s, past the account's 25. */
+const INTENSE_REMIX_PATH = '/create-video?remix=gen-intense&remixPost=post-intense';
+
+async function answerIntenseRemix(page: Page) {
+  await page.route('**/api/remix-source**', (route) => route.fulfill({
+    json: {
+      generation: { id: 'gen-intense', title: 'intense', prompt: PROMPT, category: 'video', model: 'seedance-2-5' },
+      result: { mediaType: 'video', url: 'https://example.com/intense.mp4' },
+      inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+      workflowSettings: { model: 'seedance-2-5', aspectRatio: '9:16', resolution: '480p', duration: 5, sound: false },
+      restoreIssues: [],
+    },
+  }));
+}
+
 function settingsChip(page: Page) {
   return page.getByRole('button', { name: /^Generation settings: / });
 }
@@ -101,15 +116,7 @@ test('every setting and every model is priced against the balance, and a picked 
 test('a remix the balance cannot cover stays on its original, with Top up in Generate\'s place', async ({ page }) => {
   await signIn(page);
   await answerQuotes(page, pricesNearProduction);
-  await page.route('**/api/remix-source**', (route) => route.fulfill({
-    json: {
-      generation: { id: 'gen-intense', title: 'intense', prompt: PROMPT, category: 'video', model: 'seedance-2-5' },
-      result: { mediaType: 'video', url: 'https://example.com/intense.mp4' },
-      inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
-      workflowSettings: { model: 'seedance-2-5', aspectRatio: '9:16', resolution: '480p', duration: 5, sound: false },
-      restoreIssues: [],
-    },
-  }));
+  await answerIntenseRemix(page);
 
   // Every run the page asks a price list for: a remix weighed against other models asks for theirs.
   const listed: Run[] = [];
@@ -119,10 +126,11 @@ test('a remix the balance cannot cover stays on its original, with Top up in Gen
     }
   });
 
-  await page.goto('/create-video?remix=gen-intense&remixPost=post-intense', COLD_PAGE);
+  await page.goto(INTENSE_REMIX_PATH, COLD_PAGE);
 
   await expect(page.getByText('Settings pre-filled from "intense".')).toBeVisible(COLD_PAGE);
-  await expect(page.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing', COLD_PAGE);
+  await expect(page.getByRole('link', { name: /Top Up Credits/ }))
+    .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent(INTENSE_REMIX_PATH)}`, COLD_PAGE);
   await expect(page.locator('[data-creator-bar-status]')).toContainText('This run costs 140 credits but you only have 25.');
   // The settings' options are priced by a price list, so once their "+N" line shows, a list has
   // been asked and answered. The fitting this replaced moved a short remix within a second of
@@ -136,6 +144,30 @@ test('a remix the balance cannot cover stays on its original, with Top up in Gen
   await expect(page.getByRole('link', { name: /Top Up Credits/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Generate · / })).toHaveCount(0);
   await expect(page.getByText(/Fitted to your/)).toHaveCount(0);
+});
+
+// A remix keeps no draft, so its Top up tells Pricing the remix, and Pricing's way back opens it
+// again on its original (2026-11-02). Offline, Pricing's server render first waits about 9 seconds
+// for the referral terms read to give up.
+test('a remix\'s Top up leads to Pricing and back to the remix', async ({ page }) => {
+  test.setTimeout(120_000);
+  await signIn(page);
+  await answerQuotes(page, pricesNearProduction);
+  await answerIntenseRemix(page);
+
+  await page.goto(INTENSE_REMIX_PATH, COLD_PAGE);
+  await expect(page.getByText('Settings pre-filled from "intense".')).toBeVisible(COLD_PAGE);
+  await page.getByRole('link', { name: /Top Up Credits/ }).click();
+
+  await expect(page).toHaveURL(new RegExp(`/pricing\\?returnTo=${encodeURIComponent(INTENSE_REMIX_PATH)}$`), COLD_PAGE);
+  const back = page.getByRole('link', { name: 'Back to your remix' });
+  await expect(back).toHaveAttribute('href', INTENSE_REMIX_PATH, COLD_PAGE);
+  await back.click();
+
+  await expect(page).toHaveURL(new RegExp(`${INTENSE_REMIX_PATH.replace('?', '\\?')}$`), COLD_PAGE);
+  await expect(page.getByText('Settings pre-filled from "intense".')).toBeVisible(COLD_PAGE);
+  await expect(page.locator('button[aria-haspopup="listbox"]')).toContainText('Seedance 2.5');
+  await expect(page.getByRole('link', { name: /Top Up Credits/ })).toBeVisible();
 });
 
 test('a balance short of every video is offered an image first, with the prompt', async ({ page }) => {

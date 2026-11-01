@@ -36,8 +36,9 @@ export function buildRecipeTopUpHref(recipePath: string): string {
 }
 
 /**
- * The recipe Pricing was sent from, if it is a path on this site; anything
- * else (another origin, a scheme, Pricing itself) is no way back.
+ * The page Pricing was sent from (a recipe, or a remix: `buildRemixTopUpHref`
+ * in `src/lib/pricing-return.ts`), if it is a path on this site; anything else
+ * (another origin, a scheme, Pricing itself) is no way back.
  */
 export function resolvePricingReturnTo(value: string | string[] | null | undefined): string | null {
   if (typeof value !== 'string') return null;

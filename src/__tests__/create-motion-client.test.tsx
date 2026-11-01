@@ -859,6 +859,18 @@ describe('CreateMotionClient price of the run it sends', () => {
     expect(uploadMocks.uploadMediaToTemporaryStorage).not.toHaveBeenCalled();
   });
 
+  // A remix keeps no draft: its top-up tells Pricing the remix, which offers it back once the credits are in.
+  it('sends a remix short of its price to Pricing with the way back to it', async () => {
+    authState.credits = 10;
+    remixSourceBody = ROOFTOP_REMIX;
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source', remixPostId: 'post-1' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+
+    expect(await screen.findByRole('link', { name: /Top Up Credits/ }))
+      .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-motion?remix=generation-source&remixPost=post-1')}`);
+    expect(screen.queryByRole('button', { name: /^Generate · / })).toBeNull();
+  });
+
   it('replays a start saved on another visit with the price it was sent with', async () => {
     const saved = pendingStart();
     saved.body = { ...saved.body, expectedCostCredits: 9 };

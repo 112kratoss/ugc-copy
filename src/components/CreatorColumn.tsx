@@ -676,10 +676,13 @@ export function CreatorBarAction({
   hasPrice,
   onGenerate,
   signUp = false,
+  topUpHref = '/pricing',
 }: {
   awaitingCheck: boolean;
   onCheckAgain: () => void;
   showTopUp: boolean;
+  /** Where Top up leads: Pricing, told on a remix to bring the creator back to it (`buildRemixTopUpHref`). */
+  topUpHref?: string;
   isGenerating: boolean;
   disabled: boolean;
   costLabel: string;
@@ -707,7 +710,7 @@ export function CreatorBarAction({
   }
   if (showTopUp && !isGenerating) {
     return (
-      <Link href="/pricing" className={CREATOR_BAR_PRIMARY_CLASS}>
+      <Link href={topUpHref} className={CREATOR_BAR_PRIMARY_CLASS}>
         <Sparkles aria-hidden className="h-4 w-4" />
         Top Up Credits
       </Link>

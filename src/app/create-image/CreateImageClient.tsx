@@ -87,6 +87,7 @@ import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
+import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRemixElementSeeds,
     getRemixReferenceCapWarning,
@@ -1949,6 +1950,8 @@ function ImageCreator({
                 if (pendingStart) void replayPendingStart(pendingStart, { reveal: true });
             }}
             showTopUp={showTopUp}
+            // A remix keeps no draft: Pricing is told the remix, to bring the creator back to it.
+            topUpHref={remixId ? buildRemixTopUpHref('/create-image', remixId, remixPostId) : undefined}
             isGenerating={isGenerating}
             disabled={generateBlocked || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
