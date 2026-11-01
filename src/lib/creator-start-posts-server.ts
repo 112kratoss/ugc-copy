@@ -2,7 +2,6 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
-import { cheapestRemixCandidate, type RemixCandidate } from '../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import { logBackendError } from '@/lib/backend-logger';
 import { catalogVideoEntryFields } from '@/lib/catalog-video-entry';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
@@ -11,8 +10,6 @@ import type { CreatorStartPost, StartPostRemixForecast } from '@/lib/creator-sta
 import {
   fitVideoFormToModel,
   makesVideoLength,
-  takesSameVideoInputs,
-  videoLengthsBelow,
   videoRunOnModel,
   type VideoFormHeld,
   type VideoFormSettings,
@@ -41,15 +38,16 @@ import { createServiceClient } from '@/lib/server-helpers';
 
 /**
  * Server side of the creators' "Start from a post" (`creator-start-posts.ts`): the Home
- * shelf's creations for this viewer, each video post with its remix's run priced on every
- * model the web offers. The runs are the page's own (`videoRunOnModel` over entries built
- * from the published catalog as the browser builds them), so a card's fitted price is the
- * one the page shows once the remix opens. What they cost does not depend on who asks, so
- * one build per catalog release serves every viewer; the balance is read on the page.
+ * shelf's creations for this viewer, each video post with its remix's run priced on the
+ * post's own model and settings, where the remix opens whatever the balance. The run is the
+ * page's own (`videoRunOnModel` over entries built from the published catalog as the
+ * browser builds them), so a card's price is the one the page shows once the remix opens.
+ * What it costs does not depend on who asks, so one build per catalog release serves every
+ * viewer.
  */
 
 /** Part of the cache key: bump it whenever what a build holds changes. */
-const START_POST_REMIX_BUILD_VERSION = 'creator-start-post-remixes-v2';
+const START_POST_REMIX_BUILD_VERSION = 'creator-start-post-remixes-v3';
 
 type StoredGeneration = Pick<ShelfGenerationRow, 'id' | 'workflow_settings' | 'share_input_media_for_remix'>;
 
@@ -138,7 +136,7 @@ function restoredForm(settings: Record<string, unknown>, entry: VideoRegistryEnt
 }
 
 type Run = VideoRunOnModel<VideoRunMedia>;
-type PlannedPost = { postId: string; held: VideoFormHeld<VideoRunMedia>; original: Run; candidates: Array<{ run: Run; takesInputs: boolean }> };
+type PlannedPost = { postId: string; run: Run };
 
 /**
  * Each run's price, by run. A run the catalog refuses (the model cannot take it) has none;
@@ -164,10 +162,10 @@ async function pricesOf(runs: readonly Run[], quote: StartPostRemixDependencies[
 }
 
 /**
- * Each video post's remix priced on every model (`StartPostRemixForecast`), by post id. A
- * post whose run cannot be read as the page reads it (shared media, which the page brings
- * and prices; a multi-shot run; a model the web no longer offers; an original the catalog
- * will not price) has none, and its card keeps the shelf's own price.
+ * Each video post's remix priced on its own model and settings (`StartPostRemixForecast`),
+ * by post id. A post whose run cannot be read as the page reads it (shared media, which the
+ * page brings and prices; a multi-shot run; a model the web no longer offers; an original
+ * the catalog will not price) has none, and its card keeps the shelf's own price.
  */
 export async function buildStartPostRemixForecasts(
   posts: ReadonlyArray<{ postId: string; generationId: string }>,
@@ -186,13 +184,6 @@ export async function buildStartPostRemixForecasts(
   } as unknown as VideoRegistryEntry]));
   const models: VideoModelLookup = (modelId) => entries.get(modelId);
   const generationById = new Map(generations.map((generation) => [generation.id, generation]));
-  const runOn = (modelId: string, settings: VideoFormSettings, held: VideoFormHeld<VideoRunMedia>) => videoRunOnModel({
-    modelId,
-    catalogRevision: catalog.revision,
-    settings,
-    held,
-    models,
-  });
 
   const planned = posts.flatMap((post): PlannedPost[] => {
     const generation = generationById.get(post.generationId);
@@ -204,51 +195,22 @@ export async function buildStartPostRemixForecasts(
     const visible = remixQuoteSettings(descriptor, stored);
     if (!visible || visible.isMultiShot === true) return [];
 
-    const held = heldOnRemix(stored);
-    const form = fitVideoFormToModel(modelId, restoredForm(visible, entry), models);
-    const original = runOn(modelId, form, held);
-    if (!original) return [];
-    const candidates = videoModels.filter((model) => model.id !== modelId).flatMap((model) => {
-      const run = runOn(model.id, fitVideoFormToModel(model.id, form, models), held);
-      return run ? [{ run, takesInputs: takesSameVideoInputs({ inputs: original.inputs, settings: form }, run) }] : [];
+    const run = videoRunOnModel({
+      modelId,
+      catalogRevision: catalog.revision,
+      settings: fitVideoFormToModel(modelId, restoredForm(visible, entry), models),
+      held: heldOnRemix(stored),
+      models,
     });
-    return [{ postId: post.postId, held, original, candidates }];
+    return run ? [{ postId: post.postId, run }] : [];
   });
 
-  // Every post's runs in one request; then the shorter lengths of each one's cheapest model.
-  const firstPrices = await pricesOf(planned.flatMap((post) => [post.original, ...post.candidates.map((candidate) => candidate.run)]), resolved.quote);
-  const priced = planned.map((post) => {
-    // Only a model the run may move to can be picked (`fitRemixToBalance`), so only those are sent.
-    const candidates: RemixCandidate[] = post.candidates
-      .map(({ run, takesInputs }) => ({ modelId: run.modelId, cost: firstPrices.get(run) ?? null, durationSeconds: run.durationSeconds, takesInputs }))
-      .filter((candidate) => candidate.takesInputs && candidate.cost !== null);
-    const cheapest = cheapestRemixCandidate({ modelId: post.original.modelId, durationSeconds: post.original.durationSeconds }, candidates);
-    const cheapestRun = cheapest ? post.candidates.find(({ run }) => run.modelId === cheapest.modelId)?.run : undefined;
-    // The lengths the page prices, the cheapest model's under the original's.
-    const shorterRuns = cheapestRun
-      ? videoLengthsBelow(cheapestRun.modelId, cheapestRun.durationSeconds, models).flatMap((duration) => {
-        const run = runOn(cheapestRun.modelId, { ...cheapestRun.settings, duration }, post.held);
-        return run ? [run] : [];
-      })
-      : [];
-    return { post, candidates, cheapestModelId: cheapest?.modelId ?? null, shorterRuns };
-  });
-  const shorterPrices = await pricesOf(priced.flatMap((post) => post.shorterRuns), resolved.quote);
-
-  const displayName = new Map(videoModels.map((model) => [model.id, model.displayName]));
+  // Every post's run in one request.
+  const prices = await pricesOf(planned.map((post) => post.run), resolved.quote);
   const forecasts: Record<string, StartPostRemixForecast> = {};
-  for (const { post, candidates, cheapestModelId, shorterRuns } of priced) {
-    const originalCost = firstPrices.get(post.original) ?? null;
-    if (originalCost === null) continue;
-    forecasts[post.postId] = {
-      original: { modelId: post.original.modelId, cost: originalCost, durationSeconds: post.original.durationSeconds },
-      candidates,
-      shorter: cheapestModelId
-        ? { modelId: cheapestModelId, prices: shorterRuns.map((run) => ({ durationSeconds: run.durationSeconds, cost: shorterPrices.get(run) ?? null })) }
-        : null,
-      preferredModelId: catalog.defaults.video ?? null,
-      modelNames: Object.fromEntries(candidates.map(({ modelId }) => [modelId, displayName.get(modelId) ?? modelId])),
-    };
+  for (const { postId, run } of planned) {
+    const cost = prices.get(run) ?? null;
+    if (cost !== null) forecasts[postId] = { cost };
   }
   return forecasts;
 }

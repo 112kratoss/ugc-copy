@@ -10,7 +10,7 @@ import { CREATOR_NOTE_LINK_CLASS, creditsWords, SIDEWAYS_TRACK_CLASS } from '@/c
 import { HoverVideo } from '@/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/components/useMediaLoadingPreferences';
-import { orderStartPosts, startPostRemix, type CreatorStartPost } from '@/lib/creator-start-posts';
+import { orderStartPosts, startPostRemixCost, type CreatorStartPost } from '@/lib/creator-start-posts';
 import { homeShelfCreatorLabel } from '@/lib/home-shelf-copy';
 import type { RemixTool } from '@/lib/remix-tools';
 import { buildShowcaseDetailPath } from '@/lib/share';
@@ -19,10 +19,10 @@ import { buildShowcaseDetailPath } from '@/lib/share';
  * The shelf's posts on the creator pages (owner, 2026-10-28; artboards Main and
  * Generating): "Start from a post" in the empty canvas beside the column, a strip in the
  * column where the canvas sits under it, and "While you wait" under a run at work. Each
- * card's Remix says what its remix costs on this balance, fitted to it as the page will
- * fit it once open (`startPostRemix`). The page is handed the posts unawaited, so each
- * place reads them in a boundary of its own (`WithStartPosts`) and the creator never
- * waits on them.
+ * card's Remix says what its remix costs: the run on the post's own model and settings,
+ * where the page opens it whatever the balance (`startPostRemixCost`). The page is handed
+ * the posts unawaited, so each place reads them in a boundary of its own
+ * (`WithStartPosts`) and the creator never waits on them.
  */
 
 /** The posts the page was handed: none for a remix, which opens on its own post. */
@@ -78,20 +78,14 @@ function WithStartPosts({ source, tool, loading, failed, children }: {
   );
 }
 
-/** "Remix · 19", the words a screen reader hears for it, and where the run moved. */
-function remixWords(post: CreatorStartPost, balance: number | null) {
-  const remix = startPostRemix(post, balance);
+/** "Remix · 140", and the words a screen reader hears for it. */
+function remixWords(post: CreatorStartPost) {
+  const cost = startPostRemixCost(post);
   const creator = homeShelfCreatorLabel(post.creator);
   const of = `“${post.title}”${creator ? ` by ${creator}` : ''}`;
-  const on = remix.fitted ? ` on ${remix.fitted.modelName}${remix.fitted.sameLength ? '' : `, ${remix.fitted.durationSeconds} seconds`}` : '';
-  const price = remix.cost === null ? '' : `, ${creditsWords(remix.cost)}`;
   return {
-    face: remix.cost === null ? 'Remix' : `Remix · ${remix.cost}`,
-    label: `Remix ${of}${on}${price}`,
-    /** Said under the creator's name: "On Seedance 2 Mini · runs 5s". */
-    fit: remix.fitted
-      ? `On ${remix.fitted.modelName}${remix.fitted.sameLength ? '' : ` · runs ${remix.fitted.durationSeconds}s`}`
-      : null,
+    face: cost === null ? 'Remix' : `Remix · ${cost}`,
+    label: `Remix ${of}${cost === null ? '' : `, ${creditsWords(cost)}`}`,
   };
 }
 
@@ -124,9 +118,8 @@ function PostThumb({ post, playing, badge, sizes }: { post: CreatorStartPost; pl
 }
 
 /** One post: its picture and title (to the post), its creator, and its Remix with the price. */
-const StartPostCard = memo(function StartPostCard({ post, balance, compact = false, watchOnly = false, className }: {
+const StartPostCard = memo(function StartPostCard({ post, compact = false, watchOnly = false, className }: {
   post: CreatorStartPost;
-  balance: number | null;
   className?: string;
   /** The phone strip's: no model badge, the price alone on the button. */
   compact?: boolean;
@@ -136,7 +129,7 @@ const StartPostCard = memo(function StartPostCard({ post, balance, compact = fal
   const [hovered, setHovered] = useState(false);
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
   const creator = homeShelfCreatorLabel(post.creator);
-  const words = watchOnly ? null : remixWords(post, balance);
+  const words = watchOnly ? null : remixWords(post);
   return (
     <li
       className={clsx('flex min-w-0 flex-col gap-1.5', className)}
@@ -164,9 +157,6 @@ const StartPostCard = memo(function StartPostCard({ post, balance, compact = fal
         <span className="truncate text-sm font-bold text-[var(--ui-text-primary)] group-hover:underline">{post.title}</span>
       </Link>
       {creator ? <span className="-mt-1 truncate text-xs text-[var(--ui-text-muted)]">{creator}</span> : null}
-      {words?.fit ? (
-        <span data-testid="start-post-fit" className="-mt-1 truncate text-xs text-[var(--ui-text-faint)]">{words.fit}</span>
-      ) : null}
       {words ? (
         <Link href={post.makeHref} prefetch={false} aria-label={words.label} className="ui-button ui-button-secondary ui-focus-ring mt-auto w-full">
           {compact ? null : <Repeat2 aria-hidden className="h-3.5 w-3.5 shrink-0" />}
@@ -209,13 +199,13 @@ function CardPlaces({ count, className, slotClassName }: { count: number; classN
   );
 }
 
-function CanvasPostsSection({ posts, balance }: { posts: CreatorStartPost[] | null; balance: number | null }) {
+function CanvasPostsSection({ posts }: { posts: CreatorStartPost[] | null }) {
   return (
     <section aria-labelledby="creator-start-posts-title" className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
         <div className="min-w-0">
           <h3 id="creator-start-posts-title" className="text-base font-bold text-[var(--ui-text-primary)]">Start from a post</h3>
-          <p className="mt-0.5 text-sm text-[var(--ui-text-muted)]">A remix opens with the post’s prompt and settings, fitted to your balance.</p>
+          <p className="mt-0.5 text-sm text-[var(--ui-text-muted)]">A remix opens on the post’s model, with its prompt and settings.</p>
         </div>
         <Link href="/showcase" prefetch={false} className={clsx(CREATOR_NOTE_LINK_CLASS, 'text-sm')}>
           See all in Explore
@@ -223,7 +213,7 @@ function CanvasPostsSection({ posts, balance }: { posts: CreatorStartPost[] | nu
       </div>
       {posts ? (
         <ul className={CANVAS_GRID_CLASS}>
-          {posts.map((post) => <StartPostCard key={post.id} post={post} balance={balance} />)}
+          {posts.map((post) => <StartPostCard key={post.id} post={post} />)}
         </ul>
       ) : (
         <CardPlaces count={4} className={CANVAS_GRID_CLASS} />
@@ -232,13 +222,12 @@ function CanvasPostsSection({ posts, balance }: { posts: CreatorStartPost[] | nu
   );
 }
 
-function EmptyCanvasBody({ posts, icon, title, hint, frame, balance }: {
+function EmptyCanvasBody({ posts, icon, title, hint, frame }: {
   posts: CreatorStartPost[] | null;
   icon: LucideIcon;
   title: string;
   hint: string;
   frame: ReactNode;
-  balance: number | null;
 }) {
   if (posts && posts.length === 0) return <>{frame}</>;
   return (
@@ -247,7 +236,7 @@ function EmptyCanvasBody({ posts, icon, title, hint, frame, balance }: {
       <div className="flex flex-1 flex-col min-[1120px]:hidden">{frame}</div>
       <div data-testid="creator-start-posts" className="hidden min-w-0 flex-col gap-6 min-[1120px]:flex">
         <CanvasEmptyLine icon={icon} title={title} hint={hint} />
-        <CanvasPostsSection posts={posts} balance={balance} />
+        <CanvasPostsSection posts={posts} />
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[var(--ui-text-muted)]">
           <LayoutTemplate aria-hidden className="h-4 w-4 shrink-0" />
           Prefer a step-by-step start?
@@ -262,21 +251,19 @@ function EmptyCanvasBody({ posts, icon, title, hint, frame, balance }: {
 
 /**
  * The empty canvas beside the column: where the result will land, then the posts to
- * start from, each Remix priced on this balance (a visitor's: the welcome credits).
- * Under the column, and where there are no posts, the frame alone (`frame`, drawn in a
- * `CreatorCanvasStage`), as before.
+ * start from, each Remix priced as the run it opens. Under the column, and where there
+ * are no posts, the frame alone (`frame`, drawn in a `CreatorCanvasStage`), as before.
  */
-export function CreatorEmptyCanvas({ source, tool, balance, icon, title, hint, frame }: {
+export function CreatorEmptyCanvas({ source, tool, icon, title, hint, frame }: {
   source: StartPostsSource;
   tool: RemixTool;
-  balance: number | null;
   icon: LucideIcon;
   title: string;
   hint: string;
   frame: ReactNode;
 }) {
   if (!source) return <>{frame}</>;
-  const shared = { icon, title, hint, frame, balance };
+  const shared = { icon, title, hint, frame };
   return (
     <WithStartPosts
       source={source}
@@ -310,7 +297,7 @@ function StripSection({ children }: { children: ReactNode }) {
  * artboard Main at 390. Their places are held while they come, so the prompt under them
  * does not move down when they arrive.
  */
-export function CreatorStartPostsStrip({ source, tool, balance }: { source: StartPostsSource; tool: RemixTool; balance: number | null }) {
+export function CreatorStartPostsStrip({ source, tool }: { source: StartPostsSource; tool: RemixTool }) {
   if (!source) return null;
   return (
     <WithStartPosts
@@ -323,7 +310,7 @@ export function CreatorStartPostsStrip({ source, tool, balance }: { source: Star
         <StripSection>
           {/* Scrolled sideways by touch; the column keeps its width. */}
           <ul className={STRIP_TRACK_CLASS}>
-            {posts.map((post) => <StartPostCard key={post.id} post={post} balance={balance} compact className="snap-start" />)}
+            {posts.map((post) => <StartPostCard key={post.id} post={post} compact className="snap-start" />)}
           </ul>
         </StripSection>
       ))}
@@ -340,7 +327,7 @@ export function CreatorWhileYouWait({ source, tool }: { source: StartPostsSource
         <section aria-labelledby="creator-while-you-wait-title" className="space-y-3">
           <h3 id="creator-while-you-wait-title" className="ui-kicker">While you wait</h3>
           <ul className={CANVAS_GRID_CLASS}>
-            {posts.map((post) => <StartPostCard key={post.id} post={post} balance={null} watchOnly />)}
+            {posts.map((post) => <StartPostCard key={post.id} post={post} watchOnly />)}
           </ul>
         </section>
       ))}

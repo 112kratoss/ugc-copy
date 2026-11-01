@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   fitVideoFormToModel,
-  takesSameVideoInputs,
   videoFitControls,
   videoRunInputTally,
   videoRunOnModel,
@@ -15,13 +14,13 @@ import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { applyGenerationModelCatalogToRegistries } from '@/lib/generation-model-client';
 
 /**
- * The video run moved to another model: what the model list prices, what a fitted remix
- * opens on and what picking a model sets. The registry here holds the code catalog's
- * descriptors, as a page holds the published ones once their details are in.
+ * The video run moved to another model: what the model list prices and what picking a
+ * model sets. The registry here holds the code catalog's descriptors, as a page holds the
+ * published ones once their details are in.
  */
 applyGenerationModelCatalogToRegistries(buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 }));
 
-type Media = VideoRunMedia & { imageReference: { id: string }; reference: { id: string; durationSeconds: number | null } };
+type Media = VideoRunMedia & { imageReference: { id: string }; reference: { id: string } };
 
 const miniForm: VideoFormSettings = {
   mode: '', aspectRatio: '9:16', resolution: '480p', duration: 5, sound: false, fixedLens: false, isMultiShot: false,
@@ -98,32 +97,14 @@ describe('the video run moved to another model', () => {
     expect(onKling?.summary).toBe('720P · 5s');
   });
 
-  it('tells a model that takes everything the original sends from one that does not', () => {
-    const run = (modelId: string, form = miniForm, from = twoPictures) => {
-      const moved = videoRunOnModel<Media>({ modelId, catalogRevision: 'rev-1', settings: fitVideoFormToModel(modelId, form), held: from });
-      if (!moved) throw new Error(`no run on ${modelId}`);
-      return moved;
-    };
-    const original = run('seedance-2-5');
-    expect(takesSameVideoInputs(original, run('seedance-2-mini'))).toBe(true);
-    expect(takesSameVideoInputs(original, run('seedance-1.5-pro'))).toBe(true);
-    expect(takesSameVideoInputs(original, run('kling-3.0-video'))).toBe(false);
-
-    const withSound = run('seedance-2-5', { ...miniForm, sound: true });
-    expect(takesSameVideoInputs(withSound, run('seedance-2-mini', { ...miniForm, sound: true }))).toBe(true);
-    expect(takesSameVideoInputs(withSound, run('wan-2.7', { ...miniForm, sound: true }))).toBe(false);
-
-    // A clip the original's model takes but another's published minimum holds (Wan 3.0 takes 1 s and up,
-    // Seedance 2 Mini 2 s): fitted there, the run would be held as soon as the page moved.
-    const shortClip = held({ videoReferences: [{ id: 'clip-1', durationSeconds: 1.4 }] });
-    const onWan = run('wan-3.0', miniForm, shortClip);
-    expect(takesSameVideoInputs(onWan, run('wan-3.0-prime', miniForm, shortClip))).toBe(true);
-    expect(takesSameVideoInputs(onWan, run('seedance-2-mini', miniForm, shortClip))).toBe(false);
-    expect(takesSameVideoInputs(onWan, run('seedance-2-mini', miniForm, held({ videoReferences: [{ id: 'clip-1', durationSeconds: 2.4 }] })))).toBe(true);
-
-    const shots = run('kling-3.0-video', { ...miniForm, isMultiShot: true }, held({ multiShotSeconds: 9 }));
-    expect(shots.durationSeconds).toBe(9);
-    expect(takesSameVideoInputs(shots, run('kling-o3', { ...miniForm, isMultiShot: true }, held({ multiShotSeconds: 9 })))).toBe(true);
-    expect(takesSameVideoInputs(shots, run('seedance-2-mini', { ...miniForm, isMultiShot: true }, held({ multiShotSeconds: 9 })))).toBe(false);
+  // A model's row prices a multi-shot run at its shots' whole length, not the single shot's.
+  it('prices a multi-shot run on another model at its shots together', () => {
+    const shots = videoRunOnModel<Media>({
+      modelId: 'kling-3.0-video',
+      catalogRevision: 'rev-1',
+      settings: fitVideoFormToModel('kling-3.0-video', { ...miniForm, isMultiShot: true }),
+      held: held({ multiShotSeconds: 9 }),
+    });
+    expect(shots?.quoteInput.settings).toMatchObject({ duration: 9, isMultiShot: true });
   });
 });

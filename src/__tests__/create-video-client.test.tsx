@@ -442,7 +442,7 @@ async function unknownMentionLine() {
   return (await screen.findByText(/^Unknown element mention/)).textContent;
 }
 
-/** A shelf post as the page is handed it: a 42-credit Kling 3.0 run that Seedance 2 Mini makes for 19. */
+/** A shelf post as the page is handed it: a Kling 3.0 run the page prices at 42 (the shelf's quote said 40). */
 function startPost(id: string): CreatorStartPost {
   return {
     kind: 'creation',
@@ -453,18 +453,12 @@ function startPost(id: string): CreatorStartPost {
     posterThumbhash: null,
     clipUrl: null,
     modelName: 'Kling 3.0 Cinematic',
-    price: { kind: 'credits', credits: 42 },
+    price: { kind: 'credits', credits: 40 },
     fitsWelcomeCredits: false,
     badge: null,
     creator: { id: 'creator-1', username: 'fluffy', name: 'Fluffy' },
     makeHref: `/create-video?remix=gen-${id}&remixPost=${id}`,
-    remix: {
-      original: { modelId: 'kling-3.0-video', cost: 42, durationSeconds: 5 },
-      candidates: [{ modelId: 'seedance-2-mini', cost: 19, durationSeconds: 5, takesInputs: true }],
-      shorter: null,
-      preferredModelId: 'seedance-2-mini',
-      modelNames: { 'seedance-2-mini': 'Seedance 2 Mini' },
-    },
+    remix: { cost: 42 },
   };
 }
 
@@ -6561,14 +6555,16 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(promptBox()).toHaveFocus();
     });
 
-    it('prices the start posts as remixes fitted to the balance, Seedance 2 Mini first', async () => {
+    // Owner, 2026-11-01: a remix opens on its original's model whatever the balance, so a
+    // card the balance is short of still says that run's price.
+    it('prices each start post\'s remix on the post\'s own model, whatever the balance', async () => {
       authState.credits = 25;
       await act(async () => {
         render(<CreateVideoClient prefill={{}} startPosts={Promise.resolve([startPost('cats')])} />);
       });
-      const remixes = await screen.findAllByRole('link', { name: 'Remix “Kung fu cats” by @fluffy on Seedance 2 Mini, 19 credits' });
+      const remixes = await screen.findAllByRole('link', { name: 'Remix “Kung fu cats” by @fluffy, 42 credits' });
       expect(remixes).toHaveLength(2);
-      for (const remix of remixes) expect(remix).toHaveTextContent('Remix · 19');
+      for (const remix of remixes) expect(remix).toHaveTextContent('Remix · 42');
     });
 
     it('offers a top-up when the server says the credits are short, and reads the balance again', async () => {
@@ -7619,8 +7615,8 @@ describe('CreateVideoClient Kling video elements', () => {
   });
 
   // PR 2 of the creator redesign (owner, 2026-10-28): every model and every option priced, the
-  // balance read under the bar, a remix fitted to the balance and an image offered first when
-  // the balance is short of every video. Prices come from the price lists' stand-in.
+  // balance read under the bar, and an image offered first when the balance is short of every
+  // video. Prices come from the price lists' stand-in.
   describe('prices and affordability', () => {
     const MINI = { id: 'seedance-2-mini', kind: 'video', displayName: 'Seedance 2 Mini', description: 'Lower cost' };
     const summaries = [
@@ -7744,6 +7740,12 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.getByRole('link', { name: 'Top up: 500 for ₹415' })).toHaveAttribute('href', '/pricing');
       expect(screen.getByText('3 credits: enough for images')).toBeInTheDocument();
       expect(screen.getByText(/Videos start at 7 credits\. Z-Image makes a picture for 1/)).toBeInTheDocument();
+
+      // The bar offers the image, not Top up: the "+N" line says only that options stay selectable.
+      fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
+      const settings = screen.getByRole('dialog', { name: 'Generation settings' });
+      await waitFor(() => expect(settings).toHaveTextContent(/more than your balance of 3\. Those options stay selectable\./));
+      expect(settings).not.toHaveTextContent('show Top up in place of Generate');
     });
 
     // A settings press asks for the run's price again (a debounce and a round trip): the bar
@@ -7794,6 +7796,9 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByRole('link', { name: /Make an image instead/ })).toBeNull();
     });
 
+    // Owner, 2026-11-01: a remix stays on its original's model and settings whatever the
+    // balance, since another model would not make what the creator came to remake. A balance
+    // short of it is told so, with Top up in Generate's place.
     describe('a remix', () => {
       function remixOf(settings: Record<string, unknown>): RemixSourceBundle {
         return {
@@ -7805,140 +7810,114 @@ describe('CreateVideoClient Kling video elements', () => {
         } as unknown as RemixSourceBundle;
       }
 
-      it('opens on Seedance 2 Mini at the same length when the balance is short of the original', async () => {
+      it('stays on the original\'s model and settings when the balance is short of it, and offers a top-up', async () => {
         authState.credits = 22;
         stubRemix(remixOf({ duration: 5 }));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
-        expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
-        await waitFor(() => expect(costShown()).toBe('19 credits'));
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing');
+        const status = document.querySelector('[data-creator-bar-status]');
+        expect(status).toHaveTextContent('Not enough credits');
+        expect(status).toHaveTextContent('This run costs 140 credits but you only have 22.');
+        expect(quoteStandIn.lastRequest()).toMatchObject({ modelId: 'seedance-2-5', settings: expect.objectContaining({ duration: 5 }) });
         expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 480P · 9:16 · 5s · Sound off');
+        expect(queryGenerateButton()).toBeNull();
+        expect(screen.queryByText(/Fitted to your/)).toBeNull();
+        expect(screen.queryByRole('button', { name: /^Switch back to/ })).toBeNull();
+        // Nothing is weighed against it: no other video model is priced. The image models are,
+        // as on any page short of its run, for what Posted offers once the remix is made.
+        const asked = priceListStandIn.askedRuns();
+        expect(asked.filter((run) => run.kind === 'video')).toEqual([]);
+        expect(asked.some((run) => run.kind === 'image')).toBe(true);
+      });
 
-        // The original is one press away; short of it, the bar offers the fitted run back.
-        fireEvent.click(screen.getByRole('button', { name: 'Use the original · 140 credits' }));
-        expect(await screen.findByText('On the original settings: Seedance 2.5 at 5s.')).toBeInTheDocument();
-        await waitFor(() => expect(document.querySelector('[data-creator-bar-status]'))
-          .toHaveTextContent('Seedance 2.5 needs 140 credits; you have 22. Seedance 2 Mini runs the same prompt and 5s for 19.'));
-        expect(screen.getByRole('link', { name: 'Top up · 500 credits for ₹415' })).toHaveAttribute('href', '/pricing');
-        // Here the bar offers Switch back, not Top up: the "+N" line says only that options stay selectable.
+      // A settings press prices the run again (a debounce and a round trip): Top up keeps its place meanwhile.
+      it('keeps Top up in place while a changed setting is being priced', async () => {
+        authState.credits = 22;
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+
         fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
         const settings = screen.getByRole('dialog', { name: 'Generation settings' });
-        await waitFor(() => expect(settings).toHaveTextContent(/more than your balance of 22\. Those options stay selectable\./));
-        expect(settings).not.toHaveTextContent('show Top up in place of Generate');
-        fireEvent.click(within(settings).getByRole('button', { name: 'Done' }));
+        await waitFor(() => expect(settings).toHaveTextContent(/more than your balance of 22\. Those options stay selectable, and show Top up in place of Generate\./));
+        const ratios = within(screen.getByRole('radiogroup', { name: /^Aspect ratio/ })).getAllByRole('radio');
+        const other = ratios.find((radio) => radio.getAttribute('aria-checked') === 'false')!;
+        const otherRatio = other.textContent;
+        quoteStandIn.priceFor = (request) => (request.settings?.aspectRatio === otherRatio ? 'pending' : videoPrice(request));
+        fireEvent.click(other);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Switch back to Seedance 2 Mini' }));
-        await waitFor(() => expect(costShown()).toBe('19 credits'));
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.settings?.aspectRatio).toBe(otherRatio));
+        expect(screen.getByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(document.querySelector('[data-creator-bar-status]')).toHaveTextContent('This run costs 140 credits but you only have 22.');
+        expect(queryGenerateButton()).toBeNull();
       });
 
-      // Owner, 2026-10-28: "Seedance 2 Mini first", then the cheapest model that takes the inputs and fits.
-      describe('beside a model cheaper than Seedance 2 Mini', () => {
-        const klingCheaper = (request: GenerationModelQuoteInput) => (request.modelId === 'kling-3.0-video' ? 12 : videoPrice(request));
-        beforeEach(() => {
-          quoteStandIn.priceFor = klingCheaper;
-          priceListStandIn.price = pricedBy(klingCheaper);
-        });
-
-        it('opens on Seedance 2 Mini, the catalog default, while it fits the balance', async () => {
-          authState.credits = 22;
-          stubRemix(remixOf({ duration: 5 }));
-          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-
-          expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
-          await waitFor(() => expect(costShown()).toBe('19 credits'));
-        });
-
-        it('opens on the cheapest model that fits when Seedance 2 Mini does not', async () => {
-          authState.credits = 15;
-          stubRemix(remixOf({ duration: 5 }));
-          render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-
-          expect(await screen.findByText(/Fitted to your 15 credits: Kling 3\.0 Cinematic instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
-          await waitFor(() => expect(costShown()).toBe('12 credits'));
-        });
-      });
-
-      // A creator who moves off the original while it is being fitted has chosen.
-      it('keeps the model the creator picks while shorter lengths are being priced', async () => {
+      // Seedance 2.5 at 10 s is 280: past the 22, as every model's 10 s is but Seedance 1.5 Pro's 8 s.
+      it('keeps the original\'s length too', async () => {
         authState.credits = 22;
-        let shorterPriced = false;
-        priceListStandIn.price = (request) => (
-          request.modelId === 'seedance-2-mini' && Number(request.settings?.duration) < 10 && !shorterPriced
-            ? { status: 'pending' }
-            : pricedBy(videoPrice)(request)
-        );
         stubRemix(remixOf({ duration: 10 }));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-        // Seedance 2 Mini at 10 s is 38: past the 22, so its shorter lengths are asked for.
-        await waitFor(() => expect(priceListStandIn.askedRuns()
-          .some((run) => run.modelId === 'seedance-2-mini' && Number(run.settings?.duration) === 9)).toBe(true));
+
+        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        // Every price the page could ask for answers at once here: a page that weighed other runs has done so.
+        await act(async () => {});
+        expect(document.querySelector('[data-creator-bar-status]')).toHaveTextContent('This run costs 280 credits but you only have 22.');
+        expect(quoteStandIn.lastRequest()).toMatchObject({ modelId: 'seedance-2-5', settings: expect.objectContaining({ duration: 10 }) });
+        expect(priceListStandIn.askedRuns().filter((run) => run.kind === 'video')).toEqual([]);
+      });
+
+      it('offers a top-up, never an image, when the balance is short of every video', async () => {
+        authState.credits = 3;
+        priceListStandIn.price = pricedBy((request) => (request.kind === 'image' ? 1 : videoPrice(request)));
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        await act(async () => {});
+        expect(screen.queryByRole('link', { name: /Make an image instead/ })).toBeNull();
+        expect(screen.queryByText(/enough for images/)).toBeNull();
+        expect(document.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 3');
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5');
+
+        // The creator opens the list: every model is priced, and the page learns that the balance
+        // is short of every video. On a remix that still offers the top-up alone.
+        openModelList();
+        expect(await screen.findByRole('group', { name: 'Needs more credits' })).toBeInTheDocument();
+        await act(async () => {});
+        expect(screen.getByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /Make an image instead/ })).toBeNull();
+        expect(screen.queryByText(/enough for images/)).toBeNull();
+      });
+
+      // Another model is the creator's own choice: the list is priced as for any run once it is opened.
+      it('moves to a model the creator picks from the list', async () => {
+        authState.credits = 22;
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
 
         openModelList();
-        fireEvent.click(screen.getByRole('option', { name: /Kling 3\.0 Cinematic/ }));
-        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('kling-3.0-video'));
+        const fits = screen.getByRole('group', { name: 'Fits your 22 credits' });
+        fireEvent.click(within(fits).getByRole('option', { name: /Seedance 2 Mini/ }));
 
-        shorterPriced = true;
-        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Two figures face off in a dim hall, slowly.' } });
-        await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue('Two figures face off in a dim hall, slowly.'));
-        expect(quoteStandIn.lastRequest()?.modelId).toBe('kling-3.0-video');
-        expect(screen.queryByText(/Fitted to your/)).toBeNull();
+        await waitFor(() => expect(costShown()).toBe('19 credits'));
+        expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 480P · 9:16 · 5s · Sound off');
       });
 
-      it('opens on a model that fits at a length of its own when no shorter length does', async () => {
-        // Seedance 2 Mini is 19 at 5 s and 16 at 4 s, both past 15; Seedance 1.5 Pro makes 4 s for 7.
-        authState.credits = 15;
-        stubRemix(remixOf({ duration: 5 }));
-        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-
-        expect(await screen.findByText(/Fitted to your 15 credits: Seedance 1\.5 Pro instead of Seedance 2\.5, at 4s instead of 5s\./)).toBeInTheDocument();
-        await waitFor(() => expect(costShown()).toBe('7 credits'));
-      });
-
-      it('waits for a model list that could not be priced, and fits the remix once it is', async () => {
-        authState.credits = 22;
-        let listPriced = false;
-        priceListStandIn.price = (request) => (listPriced ? pricedBy(videoPrice)(request) : { status: 'unavailable' });
-        stubRemix(remixOf({ duration: 5 }));
-        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-        expect(await screen.findByText(/Settings pre-filled from "intense"/)).toBeInTheDocument();
-        // Weighed on a list with no price in it: it waits on the original.
-        await act(async () => {});
-        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5');
-        expect(screen.queryByText(/Fitted to your/)).toBeNull();
-
-        // Asked again half a minute later (useQuotePrices), the list is priced this time.
-        listPriced = true;
-        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Two figures face off in a dim hall, slowly.' } });
-        expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at the same 5s\./)).toBeInTheDocument();
-      });
-
-      // Supabase renews the session token about hourly: the remix is not loaded again over the fit.
-      it('stays fitted when the session token is renewed', async () => {
+      // Supabase renews the session token about hourly: the remix is not loaded again over the creator's edits.
+      it('is loaded once though the session token is renewed', async () => {
         authState.credits = 22;
         stubRemix(remixOf({ duration: 5 }));
         const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-        expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini/)).toBeInTheDocument();
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
 
         authState.token = 'renewed-token';
         view.rerender(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
         await act(async () => {});
 
         expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/remix-source'))).toHaveLength(1);
-        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini');
-        expect(screen.getByText(/Fitted to your 22 credits: Seedance 2 Mini/)).toBeInTheDocument();
-      });
-
-      it('waits for Seedance 2 Mini\'s price before fitting, though its details failed to load', async () => {
-        authState.credits = 22;
-        modelCatalogState.extraModels = [];
-        modelCatalogState.error = new Error('Could not load model details.');
-        stubRemix(remixOf({ duration: 5 }));
-        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-        expect(await screen.findByText(/Settings pre-filled from "intense"/)).toBeInTheDocument();
-        await act(async () => {});
-
-        // Fitted without it, the remix would have opened on Seedance 1.5 Pro at 4 s.
-        expect(screen.queryByText(/Fitted to your/)).toBeNull();
         expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5');
       });
 
@@ -7948,16 +7927,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(await screen.findByText(/Settings pre-filled from "intense"/)).toBeInTheDocument();
         await waitFor(() => expect(costShown()).toBe('140 credits'));
-        expect(screen.queryByText(/Fitted to your/)).toBeNull();
-      });
-
-      it('shortens the cheapest model when nothing fits at the original\'s length', async () => {
-        authState.credits = 22;
-        stubRemix(remixOf({ duration: 10 }));
-        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-
-        expect(await screen.findByText(/Fitted to your 22 credits: Seedance 2 Mini instead of Seedance 2\.5, at 5s instead of 10s\./)).toBeInTheDocument();
-        await waitFor(() => expect(costShown()).toBe('19 credits'));
+        expect(screen.queryByRole('link', { name: /Top Up Credits/ })).toBeNull();
       });
     });
   });

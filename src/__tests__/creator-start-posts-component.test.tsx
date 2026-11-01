@@ -24,16 +24,11 @@ vi.mock('@/components/OptimizedPreviewImage', () => ({
 
 /**
  * "Start from a post" and "While you wait" (owner, 2026-10-28; artboards Main and
- * Generating): the shelf's posts on the creator pages, each Remix priced on the balance.
+ * Generating): the shelf's posts on the creator pages, each Remix priced as the run it
+ * opens, on the post's own model (owner, 2026-11-01).
  */
 
-const FORECAST: StartPostRemixForecast = {
-  original: { modelId: 'kling-3.0-video', cost: 42, durationSeconds: 5 },
-  candidates: [{ modelId: 'seedance-2-mini', cost: 19, durationSeconds: 5, takesInputs: true }],
-  shorter: null,
-  preferredModelId: 'seedance-2-mini',
-  modelNames: { 'seedance-2-mini': 'Seedance 2 Mini' },
-};
+const FORECAST: StartPostRemixForecast = { cost: 140 };
 
 function post(id: string, overrides: Partial<CreatorStartPost> = {}): CreatorStartPost {
   return {
@@ -67,12 +62,11 @@ async function renderSettled(element: React.ReactElement) {
 }
 
 describe('the empty canvas\'s start posts', () => {
-  it('lists the shelf\'s posts, the creator\'s own tool first, each Remix priced on the balance', async () => {
+  it('lists the shelf\'s posts, the creator\'s own tool first, each Remix priced as the run it opens', async () => {
     await renderSettled(
       <CreatorEmptyCanvas
         source={Promise.resolve([IMAGE, post('cats')])}
         tool="video"
-        balance={25}
         icon={Video}
         title="Your video will appear here"
         hint="Write a prompt, then Generate. Or remix a post below."
@@ -83,11 +77,12 @@ describe('the empty canvas\'s start posts', () => {
     const section = screen.getByRole('region', { name: 'Start from a post' });
     const titles = within(section).getAllByRole('link').filter((link) => link.getAttribute('href')?.startsWith('/showcase/'));
     expect(titles.map((link) => link.getAttribute('href'))).toEqual(['/showcase/cats', '/showcase/giraffe']);
-    // Fitted to the 25 credits: Seedance 2 Mini first, at 19.
-    const remixCats = within(section).getByRole('link', { name: 'Remix “Post cats” by @fluffy on Seedance 2 Mini, 19 credits' });
-    expect(remixCats).toHaveTextContent('Remix · 19');
+    expect(section).toHaveTextContent('A remix opens on the post’s model, with its prompt and settings.');
+    // The run on the post's own model, as the server priced it: never another model's.
+    const remixCats = within(section).getByRole('link', { name: 'Remix “Post cats” by @fluffy, 140 credits' });
+    expect(remixCats).toHaveTextContent('Remix · 140');
     expect(remixCats).toHaveAttribute('href', '/create-video?remix=gen-cats&remixPost=cats');
-    expect(within(section).getByText('On Seedance 2 Mini')).toBeInTheDocument();
+    expect(within(section).queryByText(/^On /)).not.toBeInTheDocument();
     // An image keeps its own price, and opens its own creator.
     expect(within(section).getByRole('link', { name: 'Remix “Post giraffe” by @fluffy, 8 credits' }))
       .toHaveAttribute('href', '/create-image?remix=gen-g&remixPost=giraffe');
@@ -95,23 +90,15 @@ describe('the empty canvas\'s start posts', () => {
     expect(screen.getByRole('link', { name: 'Browse templates' })).toHaveAttribute('href', '/templates');
   });
 
-  it('opens on the original where the balance covers it', async () => {
-    await renderSettled(
-      <CreatorEmptyCanvas source={Promise.resolve([post('cats')])} tool="video" balance={50} icon={Video} title="t" hint="h" frame={FRAME} />,
-    );
-    expect(screen.getByRole('link', { name: 'Remix “Post cats” by @fluffy, 42 credits' })).toHaveTextContent('Remix · 42');
-    expect(screen.queryByText(/^On /)).not.toBeInTheDocument();
-  });
-
   it('keeps the frame alone where the shelf has no posts, and for a remix', async () => {
     const view = await renderSettled(
-      <CreatorEmptyCanvas source={Promise.resolve([])} tool="video" balance={25} icon={Video} title="t" hint="h" frame={FRAME} />,
+      <CreatorEmptyCanvas source={Promise.resolve([])} tool="video" icon={Video} title="t" hint="h" frame={FRAME} />,
     );
     expect(screen.getByTestId('empty-frame')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Start from a post' })).not.toBeInTheDocument();
     view.unmount();
 
-    await renderSettled(<CreatorEmptyCanvas source={null} tool="video" balance={25} icon={Video} title="t" hint="h" frame={FRAME} />);
+    await renderSettled(<CreatorEmptyCanvas source={null} tool="video" icon={Video} title="t" hint="h" frame={FRAME} />);
     expect(screen.getByTestId('empty-frame')).toBeInTheDocument();
   });
 });
@@ -124,8 +111,8 @@ describe('the posts the page could not get', () => {
     try {
       await renderSettled(
         <>
-          <CreatorEmptyCanvas source={lost()} tool="video" balance={25} icon={Video} title="t" hint="h" frame={FRAME} />
-          <CreatorStartPostsStrip source={lost()} tool="video" balance={25} />
+          <CreatorEmptyCanvas source={lost()} tool="video" icon={Video} title="t" hint="h" frame={FRAME} />
+          <CreatorStartPostsStrip source={lost()} tool="video" />
           <CreatorWhileYouWait source={lost()} tool="video" />
         </>,
       );
@@ -168,19 +155,19 @@ describe('a post\'s clip', () => {
 
 describe('the column\'s strip of start posts', () => {
   it('holds the posts\' places while they come, so the prompt under it does not move', async () => {
-    await renderSettled(<CreatorStartPostsStrip source={new Promise(() => {})} tool="video" balance={25} />);
+    await renderSettled(<CreatorStartPostsStrip source={new Promise(() => {})} tool="video" />);
     const strip = screen.getByRole('region', { name: 'Start from a post' });
     expect(strip.querySelector('ul[aria-hidden]')).not.toBeNull();
     expect(within(strip).queryByRole('link', { name: /^Remix/ })).not.toBeInTheDocument();
   });
 
   it('shows the posts with the price alone on each Remix, and nothing where there are none', async () => {
-    const view = await renderSettled(<CreatorStartPostsStrip source={Promise.resolve([post('cats')])} tool="video" balance={25} />);
+    const view = await renderSettled(<CreatorStartPostsStrip source={Promise.resolve([post('cats')])} tool="video" />);
     const strip = screen.getByRole('region', { name: 'Start from a post' });
-    expect(within(strip).getByRole('link', { name: /^Remix “Post cats”/ })).toHaveTextContent(/^Remix · 19$/);
+    expect(within(strip).getByRole('link', { name: /^Remix “Post cats”/ })).toHaveTextContent(/^Remix · 140$/);
     view.unmount();
 
-    const empty = await renderSettled(<CreatorStartPostsStrip source={Promise.resolve([])} tool="video" balance={25} />);
+    const empty = await renderSettled(<CreatorStartPostsStrip source={Promise.resolve([])} tool="video" />);
     expect(empty.container).toBeEmptyDOMElement();
   });
 });

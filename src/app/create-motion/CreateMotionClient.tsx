@@ -1753,7 +1753,7 @@ function MotionCreator({
                             </div>
                         </div>
                         {/* Until the first run this visit: back over the prompt after one, it pushed the field the creator went to. */}
-                        {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="motion" balance={listBalance} /> : null}
+                        {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="motion" /> : null}
 
                         <AnimatePresence>
                             {modelNotice ? (
@@ -2005,7 +2005,6 @@ function MotionCreator({
                             <CreatorEmptyCanvas
                                 source={startPosts}
                                 tool="motion"
-                                balance={listBalance}
                                 icon={Play}
                                 title={isVisitor ? 'Try it before you sign up' : 'Your motion clip will appear here'}
                                 hint={`${emptyCanvasHint} Or remix a post below.`}
