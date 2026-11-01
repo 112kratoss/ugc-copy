@@ -372,8 +372,8 @@ type CreateImageClientProps = {
  * sign in again (`useCreatorSignOut`); a session that lapses keeps the account's.
  */
 export default function CreateImageClient(props: CreateImageClientProps) {
-    const { session, signedOut } = useAuth();
-    const formToVisitor = useCreatorSignOut(Boolean(props.prefill.remixId), signedOut);
+    const { session, signedOut, signedOutHere } = useAuth();
+    const formToVisitor = useCreatorSignOut(Boolean(props.prefill.remixId), signedOut, signedOutHere);
     const draft = useCreatorDraftOwner('image', session?.user?.id ?? null, props.handoverNonce ?? null, formToVisitor);
     const form = useCreatorForm(draft);
     // What the server drew for the page's viewer (the sign-up's welcome, the posts to start from, read

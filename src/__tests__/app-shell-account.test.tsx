@@ -659,14 +659,16 @@ describe('AppShellAccount', () => {
       expect(markedAsItEnded).toBe(true);
     });
 
-    it('takes the mark back when the sign-out everywhere fails, so a later lapse of the session reads as one', async () => {
+    // An answer cut short may come after the server ended every session: the end this browser hears
+    // of later is then the sign-out the person asked for, not a lapse.
+    it('keeps the mark when the sign-out everywhere fails, since the sessions may have ended all the same', async () => {
       mocks.signOut.mockResolvedValue({ error: unreachable });
       const dialog = await chooseSignOutEverywhere();
 
       fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
 
       expect(await screen.findByText(SIGN_OUT_EVERYWHERE_FAILED)).toBeInTheDocument();
-      expect(wasSignedOutInBrowser(authenticatedSession.access_token)).toBe(false);
+      expect(wasSignedOutInBrowser(authenticatedSession.access_token)).toBe(true);
     });
 
     it('does nothing when the person cancels', async () => {

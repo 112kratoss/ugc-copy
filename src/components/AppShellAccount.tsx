@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { isSessionRefusal } from '@/lib/auth-error-copy';
-import { forgetBrowserSignOut, markBrowserSignOut } from '@/lib/browser-sign-out';
+import { markBrowserSignOut } from '@/lib/browser-sign-out';
 import {
   getAuthAvatarUrl,
   getCreatorDisplayName,
@@ -457,13 +457,15 @@ export default function AppShellAccount({
     setIsSigningOutEverywhere(true);
     const userId = session?.user?.id;
     await retireAccountPushTokens();
-    const ending = await sessionsEnding();
-    markBrowserSignOut(...ending);
+    markBrowserSignOut(...await sessionsEnding());
     const { error } = await supabase.auth.signOut({ scope: 'global' })
       .catch((thrown: unknown) => ({ error: thrown }));
     if (error) {
-      // The session stays: a later lapse of it is a lapse.
-      forgetBrowserSignOut(...ending);
+      // The marks stay: an answer cut short (the logout call gives up after
+      // 10 s) may come after the server ended every session, and the end this
+      // browser hears of later is then the sign-out the person asked for. A
+      // session that did stay only has a later lapse read as a sign-out, which
+      // clears an open creator page (its drafts are saved per account).
       setIsSigningOutEverywhere(false);
       pushToast({
         tone: 'error',

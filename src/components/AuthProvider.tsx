@@ -9,6 +9,7 @@ import {
     browserSignOutSnapshot,
     subscribeToBrowserSignOuts,
     wasSessionSignedOutInBrowser,
+    wasSessionSignedOutInThisTab,
 } from '@/lib/browser-sign-out';
 import type { SaverNoticeRecord } from '@/components/saver-notice';
 import {
@@ -60,6 +61,8 @@ interface AuthContextValue {
      * lapsed or was refused: Supabase reports all of them as the same sign-out.
      */
     signedOut: boolean;
+    /** Whether that sign-out was made in this tab, which goes on to the login page of its own accord. */
+    signedOutHere: boolean;
     isLoading: boolean;
     updateCredits: (nextCredits: number | null, options?: CreditUpdateOptions) => void;
     refreshSessionState: () => Promise<void>;
@@ -72,6 +75,7 @@ const anonymousAuthContext: AuthContextValue = {
     marketplaceSpendableCredits: null,
     saverNoticeRecord: null,
     signedOut: false,
+    signedOutHere: false,
     isLoading: false,
     updateCredits: () => undefined,
     refreshSessionState: async () => undefined,
@@ -542,6 +546,7 @@ export function AuthProvider({
         && !hasAuthCookieHint
         ? false
         : isLoading;
+    const signedOut = !session && wasSessionSignedOutInBrowser(heldSessionId, signOutMarks);
 
     return (
         <AuthContext.Provider
@@ -553,7 +558,8 @@ export function AuthProvider({
                 // Only ever the account signed in now's, the latest read first.
                 saverNoticeRecord: [readSaverNoticeRecord, pageSaverNoticeRecord]
                     .find((record) => record !== null && record.userId === session?.user?.id) ?? null,
-                signedOut: !session && wasSessionSignedOutInBrowser(heldSessionId, signOutMarks),
+                signedOut,
+                signedOutHere: signedOut && wasSessionSignedOutInThisTab(heldSessionId),
                 isLoading: resolvedIsLoading,
                 updateCredits,
                 refreshSessionState,

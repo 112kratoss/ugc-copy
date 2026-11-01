@@ -61,13 +61,14 @@ vi.mock('@/components/useSupabaseAuthCookieHint', () => ({
 }));
 
 function AuthProbe() {
-  const { isLoading, session, credits, marketplaceSpendableCredits, refreshSessionState, signedOut } = useAuth();
+  const { isLoading, session, credits, marketplaceSpendableCredits, refreshSessionState, signedOut, signedOutHere } = useAuth();
 
   return (
     <div>
       <span data-testid="loading">{String(isLoading)}</span>
       <span data-testid="session">{session ? 'signed-in' : 'signed-out'}</span>
       <span data-testid="signed-out">{String(signedOut)}</span>
+      <span data-testid="signed-out-here">{String(signedOutHere)}</span>
       <span data-testid="credits">{credits ?? 'none'}</span>
       <span data-testid="spendable">{marketplaceSpendableCredits ?? 'none'}</span>
       <span data-testid="user-name">{session?.user.user_metadata.display_name ?? 'none'}</span>
@@ -227,19 +228,37 @@ describe('AuthProvider', () => {
       await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-in'));
     }
 
+    /** Another tab of this browser marks its sign-out: the storage it shares, and the event it sends here. */
+    function markedByAnotherTab(sessionId: string) {
+      window.localStorage.setItem(BROWSER_SIGN_OUT_KEY, JSON.stringify([sessionId]));
+      window.dispatchEvent(new StorageEvent('storage', { key: BROWSER_SIGN_OUT_KEY }));
+    }
+
     afterEach(() => {
       window.localStorage.clear();
     });
 
     it('says a sign-out made in another tab of this browser ended the session', async () => {
-      const held = sessionWith('session-1');
+      await signedInWith(sessionWith('session-1'));
+
+      act(() => markedByAnotherTab('session-1'));
+      act(() => authStateCallback?.('SIGNED_OUT', null));
+
+      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
+      expect(screen.getByTestId('signed-out')).toHaveTextContent('true');
+      expect(screen.getByTestId('signed-out-here')).toHaveTextContent('false');
+    });
+
+    // The tab that signs out goes on to the login page of its own accord (the account menu).
+    it('says when the sign-out was made in this tab', async () => {
+      const held = sessionWith('session-9');
       await signedInWith(held);
 
       markBrowserSignOut(held.access_token);
       act(() => authStateCallback?.('SIGNED_OUT', null));
 
-      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
-      expect(screen.getByTestId('signed-out')).toHaveTextContent('true');
+      await waitFor(() => expect(screen.getByTestId('signed-out')).toHaveTextContent('true'));
+      expect(screen.getByTestId('signed-out-here')).toHaveTextContent('true');
     });
 
     it('says nothing of the kind for a session that lapsed', async () => {
@@ -283,10 +302,7 @@ describe('AuthProvider', () => {
       await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
       expect(screen.getByTestId('signed-out')).toHaveTextContent('false');
 
-      markBrowserSignOut(held.access_token);
-      act(() => {
-        window.dispatchEvent(new StorageEvent('storage', { key: BROWSER_SIGN_OUT_KEY }));
-      });
+      act(() => markedByAnotherTab('session-1'));
 
       expect(screen.getByTestId('signed-out')).toHaveTextContent('true');
     });

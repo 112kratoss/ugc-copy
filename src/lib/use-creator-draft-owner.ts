@@ -125,11 +125,12 @@ export function useCreatorDraftOwner(
  * How a creator page takes a sign-out made in this browser (`useAuth().signedOut`; owner,
  * 2026-11-01, "Yes, clear it"): its form goes to the visitor (`useCreatorDraftOwner`). A remix
  * takes an account (`RequireAuth`) and is never the visitor's, so that page goes to sign in
- * instead, back to the remix after, as its link does. Returns whether the form goes to the visitor.
+ * instead, back to the remix after, as its link does; in the tab that signed out (`signedOutHere`),
+ * the account menu already takes it to the login page. Returns whether the form goes to the visitor.
  */
-export function useCreatorSignOut(remix: boolean, signedOut: boolean): boolean {
+export function useCreatorSignOut(remix: boolean, signedOut: boolean, signedOutHere = false): boolean {
   const router = useRouter();
-  const signsInAgain = remix && signedOut;
+  const signsInAgain = remix && signedOut && !signedOutHere;
   useEffect(() => {
     if (!signsInAgain) return;
     router.replace(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);

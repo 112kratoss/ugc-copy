@@ -8,6 +8,7 @@ import {
   markBrowserSignOut,
   subscribeToBrowserSignOuts,
   wasSessionSignedOutInBrowser,
+  wasSessionSignedOutInThisTab,
   wasSignedOutInBrowser,
 } from '@/lib/browser-sign-out';
 import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
@@ -73,6 +74,18 @@ describe('a sign-out made in this browser', () => {
 
     forgetBrowserSignOut(tokenOf('user-1', 'session-1'));
     expect(browserSignOutSnapshot()).toBeNull();
+  });
+
+  it('knows the marks this tab wrote itself from another tab’s', () => {
+    markBrowserSignOut(tokenOf('user-1', 'session-here'));
+    window.localStorage.setItem(BROWSER_SIGN_OUT_KEY, JSON.stringify(['session-here', 'session-elsewhere']));
+
+    expect(wasSessionSignedOutInThisTab('session-here')).toBe(true);
+    expect(wasSessionSignedOutInThisTab('session-elsewhere')).toBe(false);
+    expect(wasSessionSignedOutInThisTab(null)).toBe(false);
+
+    forgetBrowserSignOut(tokenOf('user-1', 'session-here'));
+    expect(wasSessionSignedOutInThisTab('session-here')).toBe(false);
   });
 
   it('reads the marks of a snapshot given, the stored ones otherwise', () => {

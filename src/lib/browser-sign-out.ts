@@ -10,6 +10,8 @@
 export const BROWSER_SIGN_OUT_KEY = 'magicbooklet:browser-sign-out:v1';
 /** More sessions than a tab could still be catching up on. */
 const KEPT_MARKS = 10;
+/** The sessions this tab marked itself: a tab that signs out goes on to the login page of its own accord. */
+const markedInThisTab = new Set<string>();
 
 /** The Supabase session an access token belongs to (its `session_id` claim), or null. */
 export function accessTokenSessionId(accessToken: string | null | undefined): string | null {
@@ -73,6 +75,7 @@ function writeMarks(marks: string[]): void {
 export function markBrowserSignOut(...accessTokens: Array<string | null | undefined>): void {
   const sessionIds = sessionIdsOf(accessTokens);
   if (sessionIds.length === 0) return;
+  sessionIds.forEach((sessionId) => markedInThisTab.add(sessionId));
   const kept = readMarks(browserSignOutSnapshot()).filter((mark) => !sessionIds.includes(mark));
   writeMarks([...kept, ...sessionIds]);
 }
@@ -80,9 +83,15 @@ export function markBrowserSignOut(...accessTokens: Array<string | null | undefi
 /** Takes these sessions' marks back, for a sign-out that failed and left them as they were. */
 export function forgetBrowserSignOut(...accessTokens: Array<string | null | undefined>): void {
   const sessionIds = sessionIdsOf(accessTokens);
+  sessionIds.forEach((sessionId) => markedInThisTab.delete(sessionId));
   const marks = readMarks(browserSignOutSnapshot());
   const kept = marks.filter((mark) => !sessionIds.includes(mark));
   if (kept.length !== marks.length) writeMarks(kept);
+}
+
+/** Whether this tab marked the session with this id itself (`markBrowserSignOut`), not another tab. */
+export function wasSessionSignedOutInThisTab(sessionId: string | null): boolean {
+  return sessionId !== null && markedInThisTab.has(sessionId);
 }
 
 /**

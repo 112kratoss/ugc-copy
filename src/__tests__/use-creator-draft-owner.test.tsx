@@ -334,4 +334,12 @@ describe('a sign-out on a creator page', () => {
       `/login?returnUrl=${encodeURIComponent('/create-image?remix=gen-1&remixPost=post-1')}`,
     );
   });
+
+  // Two navigations would race: the account menu's own to the login page, and this one.
+  it('leaves a remix to the account menu in the tab that signed out', async () => {
+    const { useCreatorSignOut } = await import('@/lib/use-creator-draft-owner');
+    const { result } = renderHook(() => useCreatorSignOut(true, true, true));
+    expect(result.current).toBe(false);
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+  });
 });
