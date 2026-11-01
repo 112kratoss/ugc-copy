@@ -1,10 +1,11 @@
--- Post search holds a post's caption as public reads show it. Under a
+-- Post search holds a post's text as public reads show it
+-- (sanitizePublicPostContent, src/lib/post-public-content.ts). Under a
 -- published paid recipe, a body whose first line is "Saved generation setup"
--- shows as nothing (sanitizePublicPostContent and isGeneratedRecipeSetupText,
--- src/lib/post-public-content.ts), so the post's search document leaves it out
--- and its words do not find the post. A draft recipe sells nothing and public
--- reads show its post's caption, so search finds that one. The rule itself is
--- public.recipe_post_public_body, whose spellings
+-- (isGeneratedRecipeSetupText) shows as nothing, and under any published
+-- recipe the post's prompt does, so the post's search document leaves them out
+-- and their words do not find the post. A draft recipe sells nothing and
+-- public reads show its post's text, so search finds that. The caption rule
+-- itself is public.recipe_post_public_body, whose spellings
 -- marketplace_list_public_read_rules.test.sql covers.
 
 begin;
@@ -12,7 +13,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(25);
+select plan(34);
 
 create function pg_temp.finds(p_query text, p_post_id uuid)
 returns boolean
@@ -36,8 +37,8 @@ $$;
 
 -- ─── Fixture ─────────────────────────────────────────────────────────────────
 --
--- One creator. Posts …11–…21, recipes …31–…40 (each on the post with the same
--- last digit, but …40, which starts on …20):
+-- One creator (…01) and one buyer (…02). Posts …11–…23, recipes …31–…43 (each
+-- on the post with the same last digit, but …40, which starts on …20):
 --   …11 picture, setup caption, paid published; the most saved post;
 --   …12 untitled text post whose only text is its setup, paid published;
 --   …13 picture, ordinary caption, paid published;
@@ -50,11 +51,17 @@ $$;
 --       published;
 --   …19 picture, an ordinary caption sharing a word with …11's setup, no recipe;
 --   …20 picture, setup caption, paid published (its recipe moves to …21);
---   …21 picture, setup caption, no recipe.
+--   …21 picture, setup caption, no recipe;
+--   …22 picture with a stored prompt, no recipe (given a free one below);
+--   …23 picture, setup caption, paid published and sold (deleted, so retired,
+--       below).
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at)
-values ('0000c5ea-0000-4000-9000-000000000001'::uuid, 'c5ea-post-search-caption@example.invalid',
-        'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb, now());
+values
+  ('0000c5ea-0000-4000-9000-000000000001'::uuid, 'c5ea-post-search-caption@example.invalid',
+   'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb, now()),
+  ('0000c5ea-0000-4000-9000-000000000002'::uuid, 'c5ea-post-search-buyer@example.invalid',
+   'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb, now());
 
 update public.profiles
 set username = 'quorlith-creator', display_name = 'Quorlith Creator'
@@ -62,7 +69,7 @@ where id = '0000c5ea-0000-4000-9000-000000000001'::uuid;
 
 insert into public.posts (
   id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
-  title, body, showcase_asset_path, source_tool, source_tool_slug, save_count, created_at, updated_at
+  title, body, prompt, showcase_asset_path, source_tool, source_tool_slug, save_count, created_at, updated_at
 )
 select
   ('0000c5ea-0000-4000-9000-0000000000' || post.suffix)::uuid,
@@ -72,23 +79,25 @@ select
   case when post.title is null then 'external' else 'magicbooklet' end,
   case when post.title is null then 'text' else 'media' end,
   'visible', false,
-  post.title, post.body,
+  post.title, post.body, post.prompt,
   case when post.title is null then null else 'showcase/c5ea-' || post.suffix || '.png' end,
   'Nano Banana', 'nano-banana', post.save_count, now(), now()
 from (
   values
-    ('11', 'Harbour lights at dusk', E'Saved generation setup\nModel: Nano Banana 2\nLight: quorlith glow over the water', 1000),
-    ('12', null, E'Saved generation setup\nModel: Nano Banana 2\nGrade: vellmarrow teal', 0),
-    ('13', 'Larkspur ridge at noon', 'An ordinary caption about the brindlecove ridge.', 0),
-    ('14', 'Saltmarsh study', E'Saved generation setup\nGrade: tessoral silver', 0),
-    ('15', 'Cobalt fern study', E'Saved generation setup\nGrade: ombrival amber', 0),
-    ('16', 'Reed bank at dawn', E'Saved generation setup\nGrade: kestrimond green', 0),
-    ('17', 'Moss wall in rain', E'\n\n  Saved Generation Setup  \r\nModel: Nano Banana 2\r\nGrade: palvinthe', 0),
-    ('18', 'Moss wall in sun', E'Saved generation setup:\nGrade: corvalline', 0),
-    ('19', 'Spare harbour frame', 'A plain caption that mentions quorlith once.', 0),
-    ('20', 'Copper dune study', E'Saved generation setup\nGrade: gildercairn ochre', 0),
-    ('21', 'Slate dune study', E'Saved generation setup\nGrade: morrowfen grey', 0)
-) as post(suffix, title, body, save_count);
+    ('11', 'Harbour lights at dusk', E'Saved generation setup\nModel: Nano Banana 2\nLight: quorlith glow over the water', null, 1000),
+    ('12', null, E'Saved generation setup\nModel: Nano Banana 2\nGrade: vellmarrow teal', null, 0),
+    ('13', 'Larkspur ridge at noon', 'An ordinary caption about the brindlecove ridge.', null, 0),
+    ('14', 'Saltmarsh study', E'Saved generation setup\nGrade: tessoral silver', null, 0),
+    ('15', 'Cobalt fern study', E'Saved generation setup\nGrade: ombrival amber', null, 0),
+    ('16', 'Reed bank at dawn', E'Saved generation setup\nGrade: kestrimond green', null, 0),
+    ('17', 'Moss wall in rain', E'\n\n  Saved Generation Setup  \r\nModel: Nano Banana 2\r\nGrade: palvinthe', null, 0),
+    ('18', 'Moss wall in sun', E'Saved generation setup:\nGrade: corvalline', null, 0),
+    ('19', 'Spare harbour frame', 'A plain caption that mentions quorlith once.', null, 0),
+    ('20', 'Copper dune study', E'Saved generation setup\nGrade: gildercairn ochre', null, 0),
+    ('21', 'Slate dune study', E'Saved generation setup\nGrade: morrowfen grey', null, 0),
+    ('22', 'Lantern pier study', 'A caption about the pier.', 'fennoquill lanterns over a still pier', 0),
+    ('23', 'Tidal flat study', E'Saved generation setup\nGrade: wrenmarrow blue', null, 0)
+) as post(suffix, title, body, prompt, save_count);
 
 insert into public.post_resource_bundles (
   id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
@@ -117,8 +126,18 @@ from (
     ('35', '15', 'paid', 'draft'),
     ('37', '17', 'paid', 'published'),
     ('38', '18', 'paid', 'published'),
-    ('40', '20', 'paid', 'published')
+    ('40', '20', 'paid', 'published'),
+    ('43', '23', 'paid', 'published')
 ) as recipe(bundle_suffix, post_suffix, access_mode, status);
+
+-- A sale makes …43 a recipe its buyer keeps: deleting it retires it instead.
+insert into public.post_resource_bundle_purchases (
+  bundle_id, buyer_user_id, price_usd_cents, amount_subunits, currency
+) values (
+  '0000c5ea-0000-4000-9000-000000000043'::uuid,
+  '0000c5ea-0000-4000-9000-000000000002'::uuid,
+  300, 30000, 'INR'
+);
 
 -- ─── Indexed, so a miss below is the rule under test ────────────────────────
 
@@ -128,6 +147,8 @@ select ok(pg_temp.finds('brindlecove', '0000c5ea-0000-4000-9000-000000000013'::u
   'fixture: a paid recipe''s ordinary caption finds its post');
 select ok(pg_temp.search_text('0000c5ea-0000-4000-9000-000000000012'::uuid) is not null,
   'fixture: the untitled text post has a search document');
+select ok(pg_temp.finds('moss wall in rain', '0000c5ea-0000-4000-9000-000000000017'::uuid),
+  'fixture: the post whose heading is spelled loosely is found by its title');
 
 -- ─── A published paid recipe's setup caption ────────────────────────────────
 
@@ -161,6 +182,37 @@ select ok(pg_temp.finds('tessoral', '0000c5ea-0000-4000-9000-000000000014'::uuid
 select ok(pg_temp.finds('ombrival', '0000c5ea-0000-4000-9000-000000000015'::uuid),
   'so does a paid draft''s: a draft sells nothing and public reads show its post''s caption');
 
+-- ─── A post's prompt ─────────────────────────────────────────────────────────
+
+select ok(pg_temp.finds('fennoquill', '0000c5ea-0000-4000-9000-000000000022'::uuid),
+  'a post with no recipe is found by its prompt, as public reads show it');
+
+insert into public.post_resource_bundles (
+  id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
+  attachments, allow_remix, resource_items, resource_sections,
+  price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at
+) values (
+  '0000c5ea-0000-4000-9000-000000000042'::uuid, '0000c5ea-0000-4000-9000-000000000022'::uuid,
+  '0000c5ea-0000-4000-9000-000000000001'::uuid, 'free', 'published', 'Recipe 42',
+  'Three steps to the finished picture', 'A preview long enough to pass the marketplace quality gate.',
+  '[]'::jsonb, false,
+  jsonb_build_array(jsonb_build_object('id', 'item-1', 'type', 'prompt', 'title', 'Prompt',
+                                       'textContent', 'The prompt a visitor unlocks for this picture')),
+  '[]'::jsonb, 0, 0, 0, now(), now()
+);
+
+select ok(not pg_temp.finds('fennoquill', '0000c5ea-0000-4000-9000-000000000022'::uuid),
+  'under a published recipe, free as well, its prompt no longer finds it');
+select is(position('fennoquill' in pg_temp.search_text('0000c5ea-0000-4000-9000-000000000022'::uuid)), 0,
+  'and its search text does not hold the prompt');
+
+update public.post_resource_bundles
+set status = 'draft'
+where id = '0000c5ea-0000-4000-9000-000000000042'::uuid;
+
+select ok(pg_temp.finds('fennoquill', '0000c5ea-0000-4000-9000-000000000022'::uuid),
+  'with the recipe back to draft, public reads show the prompt and it finds the post again');
+
 -- ─── The recipe changes ─────────────────────────────────────────────────────
 
 update public.post_resource_bundles
@@ -190,6 +242,21 @@ where id = '0000c5ea-0000-4000-9000-000000000035'::uuid;
 select ok(pg_temp.finds('ombrival', '0000c5ea-0000-4000-9000-000000000015'::uuid),
   'a deleted recipe leaves its post''s caption to find it again');
 
+-- A sold recipe is retired, not deleted: a draft its buyer keeps.
+select ok(not pg_temp.finds('wrenmarrow', '0000c5ea-0000-4000-9000-000000000023'::uuid),
+  'a sold paid recipe''s setup caption is out of search');
+
+delete from public.post_resource_bundles
+where id = '0000c5ea-0000-4000-9000-000000000043'::uuid;
+
+select is(
+  (select status from public.post_resource_bundles where id = '0000c5ea-0000-4000-9000-000000000043'::uuid),
+  'draft',
+  'deleting the sold recipe retires it as a draft'
+);
+select ok(pg_temp.finds('wrenmarrow', '0000c5ea-0000-4000-9000-000000000023'::uuid),
+  'and its post''s caption finds it again, as public reads show a draft''s post');
+
 insert into public.post_resource_bundles (
   id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
   attachments, allow_remix, resource_items, resource_sections,
@@ -214,12 +281,15 @@ where id = '0000c5ea-0000-4000-9000-000000000036'::uuid;
 select ok(pg_temp.finds('kestrimond', '0000c5ea-0000-4000-9000-000000000016'::uuid),
   'a paid recipe taken back to draft shows its post''s caption to search again');
 
+select ok(pg_temp.finds('morrowfen', '0000c5ea-0000-4000-9000-000000000021'::uuid),
+  'a post with no recipe is found by its setup caption');
+
 update public.post_resource_bundles
 set post_id = '0000c5ea-0000-4000-9000-000000000021'::uuid
 where id = '0000c5ea-0000-4000-9000-000000000040'::uuid;
 
 select ok(not pg_temp.finds('morrowfen', '0000c5ea-0000-4000-9000-000000000021'::uuid),
-  'a paid recipe moved to another post takes that post''s setup caption out of search');
+  'a paid recipe moved to it takes that caption out of search');
 select ok(pg_temp.finds('gildercairn', '0000c5ea-0000-4000-9000-000000000020'::uuid),
   'and the post it left is found by its caption again');
 

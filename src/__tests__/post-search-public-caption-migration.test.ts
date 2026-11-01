@@ -60,18 +60,22 @@ function replaceOnce(text: string, from: string, to: string): string {
 
 const comparable = (definition: string) => definition.replace(/^CREATE (?:OR REPLACE )?(FUNCTION|TRIGGER)/, 'CREATE $1');
 const shownBody = 'public.recipe_post_public_body(posts.body, bundles.access_mode)';
+const shownPrompt = 'CASE WHEN bundles.id IS NULL THEN posts.prompt END';
 
 // supabase/tests/database/post_search_public_caption.test.sql runs the
-// projection, the recipe triggers and post search; this file holds them to the
-// definitions they replace and to the rule public reads apply, and pins how the
-// file takes its locks.
+// projection, the recipe triggers and post search, and
+// post_search_recipe_trigger_account_deletion.test.sql the trigger under an
+// account deletion; this file holds them to the definitions they replace and
+// to the rules public reads apply, and pins how the file takes its locks.
 describe('post search public caption migration', () => {
-  it('projects the document as the migration before it left it, but for the caption as public reads show it', () => {
+  it('projects the document as the migration before it left it, but for the text as public reads show it', () => {
     const previous = latest('FUNCTION', 'refresh_post_search_documents', migrationFile);
     const projection = current('FUNCTION', 'refresh_post_search_documents');
 
     let expected = replaceOnce(comparable(previous), '      posts.body,\n', `      ${shownBody},\n`);
     expected = replaceOnce(expected, "coalesce(posts.body, '')", `coalesce(${shownBody}, '')`);
+    expected = replaceOnce(expected, '      posts.prompt,\n', `      ${shownPrompt},\n`);
+    expected = replaceOnce(expected, "coalesce(posts.prompt, '')", `coalesce(${shownPrompt}, '')`);
     expected = replaceOnce(
       expected,
       '  FROM public.posts AS posts\n',
@@ -81,41 +85,54 @@ describe('post search public caption migration', () => {
         + "    AND bundles.status = 'published'\n",
     );
     expect(comparable(projection)).toBe(expected);
-    // Every read of the body goes through the rule.
+    // Every read of the body goes through the rule, and every read of the
+    // prompt through the recipe check.
     expect(projection.match(/posts\.body\b/g)).toHaveLength(2);
     expect(projection.split(shownBody)).toHaveLength(3);
+    expect(projection.match(/posts\.prompt\b/g)).toHaveLength(2);
+    expect(projection.split(shownPrompt)).toHaveLength(3);
   });
 
-  it('reuses the rule the marketplace document reads, unchanged', () => {
+  it('reuses the caption rule the marketplace document reads', () => {
     // 20261101072014 made it and its migration test holds it to the app's
     // isGeneratedRecipeSetupText; a copy here could drift from it.
     expect(definitionIn(statements, 'FUNCTION', 'recipe_post_public_body')).toBeNull();
-    expect(latest('FUNCTION', 'recipe_post_public_body')).toBe(
-      definitionIn(statementsOf('20261101072014_marketplace_list_public_read_rules.sql'), 'FUNCTION', 'recipe_post_public_body'),
-    );
   });
 
-  it('reads a recipe as paid only while it is published, as public reads do', () => {
-    // The feed and the post page take a post's recipe from these summaries,
-    // which answer for a published recipe only, and sanitize its post's
-    // caption when that recipe is paid.
+  it('reads a post’s text by its published recipe, as public reads do', () => {
+    // No prompt under any recipe, and under a paid one no setup caption.
+    const publicContent = readFileSync('src/lib/post-public-content.ts', 'utf8');
+    expect(publicContent).toContain("prompt: hasRecipe ? '' : prompt,");
+    expect(publicContent).toContain("body: isPaidRecipe && isGeneratedRecipeSetupText(body) ? '' : body,");
+    // The feed and search's own cards take a post's recipe from these
+    // summaries, which answer for a published recipe only.
     expect(latest('FUNCTION', 'get_public_post_resource_bundle_summaries')).toContain(
       "CASE WHEN bundles.status = 'published' THEN bundles.access_mode ELSE NULL END AS access_mode,",
     );
-    expect(readFileSync('src/lib/showcase.ts', 'utf8')).toContain("isPaidRecipe: asset?.accessMode === 'paid',");
+    const showcase = readFileSync('src/lib/showcase.ts', 'utf8');
+    expect(showcase).toContain('hasRecipe: Boolean(asset),');
+    expect(showcase).toContain("isPaidRecipe: asset?.accessMode === 'paid',");
+    // The post page reads the recipe itself, and shows a draft only to its
+    // owner and buyers; search answers everyone else's way.
+    const postPage = readFileSync('src/lib/public-posts.ts', 'utf8');
+    expect(postPage).toContain('hasRecipe: Boolean(resourceBundle),');
+    expect(postPage).toContain("isPaidRecipe: resourceBundle?.accessMode === 'paid',");
+    const bundles = readFileSync('src/lib/post-resource-bundles-server.ts', 'utf8');
+    expect(bundles).toContain("function isBundlePublishedForMarketplace(row: BundleRow): boolean {\n  return row.status === 'published';\n}");
+    expect(bundles).toContain('!isBundlePublishedForMarketplace(row)\n    && row.owner_user_id !== viewerUserId\n    && !viewerHasPurchased');
   });
 
   it('re-projects a post’s document on every recipe column the document reads, and on no other', () => {
     // Whichever later file re-creates either.
     const projection = latest('FUNCTION', 'refresh_post_search_documents');
     const update = latest('TRIGGER', 'post_resource_bundles_refresh_post_search_update');
-    const updateOf = /AFTER UPDATE OF ([a-z_, ]+) ON public\.post_resource_bundles/.exec(update)?.[1];
 
     expect(columnsRead('bundles', projection)).toEqual(['access_mode', 'post_id', 'status']);
     expect(columnsFollowed(update)).toEqual(columnsRead('bundles', projection));
-    expect(updateOf?.split(', ').sort()).toEqual(columnsRead('bundles', projection));
+    // No column list: it would miss a change a BEFORE trigger makes.
+    expect(update).toMatch(/AFTER UPDATE ON public\.post_resource_bundles\s+FOR EACH ROW\s+WHEN \(/);
     expect(update).toContain('EXECUTE FUNCTION public.trg_refresh_post_search_document_for_recipe();');
-    // A recipe added or deleted changes what its post shows, whatever it holds.
+    // A recipe added or deleted can change what its post shows.
     expect(current('TRIGGER', 'post_resource_bundles_refresh_post_search_insert_delete')).toBe(
       'CREATE OR REPLACE TRIGGER post_resource_bundles_refresh_post_search_insert_delete\n'
         + 'AFTER INSERT OR DELETE ON public.post_resource_bundles\n'
@@ -160,7 +177,7 @@ describe('post search public caption migration', () => {
     );
   });
 
-  it('runs as one transaction that gives up on a busy table, and re-projects the documents the rule can change last', () => {
+  it('runs as one transaction that gives up on a busy table, and re-projects the documents the rules change last', () => {
     // The CLI applies a file's statements outside a transaction block, where
     // SET LOCAL does nothing and LOCK TABLE is refused.
     expect(statements.trim()).toMatch(/^BEGIN;\s+SET LOCAL lock_timeout = '5s';/);
@@ -171,8 +188,9 @@ describe('post search public caption migration', () => {
     // DROP TRIGGER takes ACCESS EXCLUSIVE, which would stop every read of posts.
     expect(statements).not.toMatch(/DROP (?:TRIGGER|FUNCTION)/i);
     expect(statements.match(/CREATE (?:OR REPLACE )?TRIGGER/g)).toEqual(['CREATE OR REPLACE TRIGGER', 'CREATE OR REPLACE TRIGGER']);
+    // The posts with a published recipe whose document the rules change.
     expect(statements.trim()).toMatch(
-      /SELECT public\.refresh_post_search_documents\(ARRAY\(\s+SELECT bundles\.post_id\s+FROM public\.post_resource_bundles AS bundles\s+WHERE bundles\.access_mode = 'paid'\s+AND bundles\.status = 'published'\s+\)\);\s+COMMIT;$/,
+      /SELECT public\.refresh_post_search_documents\(ARRAY\(\s+SELECT posts\.id\s+FROM public\.posts AS posts\s+JOIN public\.post_resource_bundles AS bundles\s+ON bundles\.post_id = posts\.id\s+AND bundles\.status = 'published'\s+WHERE posts\.prompt IS NOT NULL\s+OR public\.recipe_post_public_body\(posts\.body, bundles\.access_mode\) IS DISTINCT FROM posts\.body\s+\)\);\s+COMMIT;$/,
     );
   });
 });

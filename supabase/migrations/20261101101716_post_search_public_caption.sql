@@ -1,31 +1,34 @@
--- Post search holds a post's caption as public reads show it.
+-- Post search holds a post's text as public reads show it.
 --
--- Under a published paid recipe, public reads show no caption that is the
--- saved generation setup the recipe sells: a body whose first line is "Saved
--- generation setup" (sanitizePublicPostContent and isGeneratedRecipeSetupText
--- in src/lib/post-public-content.ts). They see a post's recipe only while it
--- is published (get_public_post_resource_bundle_summaries): a draft sells
--- nothing, and its post shows its caption. refresh_post_search_documents put
--- the raw body into search_text and search_vector, and search_public_posts
--- matches on both, so a word of that caption still found the post, shown
--- with its caption blank.
+-- Public reads (sanitizePublicPostContent in src/lib/post-public-content.ts)
+-- show a post's text by its published recipe: no prompt under any published
+-- recipe, and under a paid one no caption that is the saved generation setup
+-- the recipe sells, a body whose first line is "Saved generation setup"
+-- (isGeneratedRecipeSetupText). They see a post's recipe only while it is
+-- published (get_public_post_resource_bundle_summaries, and the post page's
+-- own check): a draft sells nothing, and its post shows its caption and
+-- prompt. refresh_post_search_documents put the raw body and prompt into
+-- search_text and search_vector, and search_public_posts matches on both, so
+-- a word of either still found the post, shown without it.
 --
 -- 1. refresh_post_search_documents reads the body through
 --    public.recipe_post_public_body (20261101072014, the app's rule in SQL),
---    given the access mode of the post's published recipe. The stored caption
---    is untouched (the owner's decision, 2026-11-01: "Search index only"), so
---    a recipe made free, taken back to draft or deleted lets it find the post
---    again.
+--    given the access mode of the post's published recipe, and the prompt
+--    only when the post has no published recipe. The stored text is untouched
+--    (the owner's decision, 2026-11-01: "Search index only"), so a recipe made
+--    free, taken back to draft or deleted lets it find the post again.
 -- 2. Its posts trigger follows only posts columns, so a recipe now
 --    re-projects its post's document when it is added or deleted, and when
 --    its post, access mode or status changes (both posts, when it moves).
--- 3. The documents of posts whose published recipe is paid are re-projected
---    at the end. Production on 2026-11-01 had no paid recipe on a setup
---    caption, so none of them changes there.
+-- 3. The documents these rules change are re-projected at the end: posts
+--    with a published recipe and a stored prompt, or a paid one and a setup
+--    caption. Production had no paid published recipe on 2026-11-01, and none
+--    of its 7 posts with a prompt had a recipe on 2026-10-31
+--    (20261031055009).
 --
--- Only the FROM clause and the two reads of the body differ from the
--- 20260827110000_public_search.sql definition; its signature, eligibility,
--- weights, definer rights, search path and grants are kept.
+-- Only the FROM clause and the reads of the body and the prompt differ from
+-- the 20260827110000_public_search.sql definition; its signature,
+-- eligibility, weights, definer rights, search path and grants are kept.
 -- src/__tests__/post-search-public-caption-migration.test.ts holds it to that.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
@@ -40,7 +43,7 @@ SET LOCAL lock_timeout = '5s';
 LOCK TABLE public.posts IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.post_resource_bundles IN SHARE ROW EXCLUSIVE MODE;
 
--- ─── 1. The document holds the caption as public reads show it ──────────────
+-- ─── 1. The document holds the text as public reads show it ─────────────────
 
 CREATE OR REPLACE FUNCTION public.refresh_post_search_documents(p_post_ids uuid[])
 RETURNS void
@@ -74,13 +77,13 @@ BEGIN
       ' ',
       posts.title,
       public.recipe_post_public_body(posts.body, bundles.access_mode),
-      posts.prompt,
+      CASE WHEN bundles.id IS NULL THEN posts.prompt END,
       posts.source_tool,
       posts.source_tool_slug
     ))),
     setweight(to_tsvector('simple', coalesce(posts.title, '')), 'A')
       || setweight(to_tsvector('simple', coalesce(public.recipe_post_public_body(posts.body, bundles.access_mode), '')), 'B')
-      || setweight(to_tsvector('simple', coalesce(posts.prompt, '')), 'B')
+      || setweight(to_tsvector('simple', coalesce(CASE WHEN bundles.id IS NULL THEN posts.prompt END, '')), 'B')
       || setweight(to_tsvector(
         'simple',
         concat_ws(' ', posts.source_tool, posts.source_tool_slug)
@@ -124,8 +127,14 @@ BEGIN
   -- it, or commits first and this projects its caption. Without the lock, each
   -- could project the other's change as it was before, and the later write
   -- would leave that. The publish and edit routes hold the post already when
-  -- they write its recipe, so for them this takes nothing new. A post deleted
-  -- with its recipe is gone: nothing to lock or project.
+  -- they write its recipe, so for them this takes nothing new.
+  --
+  -- A recipe deleted with its post, or with its owner's account, finds the
+  -- post gone: a cascade's own triggers fire only after every cascade of the
+  -- statement that started it (posts' and recipes' from auth.users alike), so
+  -- there is nothing to lock or project, and no document for a deleted
+  -- account. post_search_recipe_trigger_account_deletion.test.sql holds that
+  -- with the recipes' cascade firing first.
   PERFORM 1
   FROM public.posts
   WHERE id = ANY (v_post_ids)
@@ -141,17 +150,19 @@ REVOKE ALL ON FUNCTION public.trg_refresh_post_search_document_for_recipe()
   FROM PUBLIC, anon, authenticated, service_role;
 
 COMMENT ON FUNCTION public.trg_refresh_post_search_document_for_recipe() IS
-  'Recipe trigger: re-projects the search document of the recipe''s post (both, when it moves), which reads the post''s caption as its published recipe shows it.';
+  'Recipe trigger: re-projects the search document of the recipe''s post (both, when it moves), which reads the post''s text as its published recipe shows it.';
 
 CREATE OR REPLACE TRIGGER post_resource_bundles_refresh_post_search_insert_delete
 AFTER INSERT OR DELETE ON public.post_resource_bundles
 FOR EACH ROW
 EXECUTE FUNCTION public.trg_refresh_post_search_document_for_recipe();
 
--- The columns the document reads; an edit of what the recipe sells, or a sale,
--- leaves the post's document alone.
+-- The recipe columns the document reads, whichever statement or trigger
+-- changes them (no column list, which would miss a change a BEFORE trigger
+-- makes); a sale, or an edit of what the recipe sells, leaves the post's
+-- document alone.
 CREATE OR REPLACE TRIGGER post_resource_bundles_refresh_post_search_update
-AFTER UPDATE OF post_id, access_mode, status ON public.post_resource_bundles
+AFTER UPDATE ON public.post_resource_bundles
 FOR EACH ROW
 WHEN (
   OLD.post_id IS DISTINCT FROM NEW.post_id
@@ -160,13 +171,16 @@ WHEN (
 )
 EXECUTE FUNCTION public.trg_refresh_post_search_document_for_recipe();
 
--- ─── 3. The documents the rule can change ───────────────────────────────────
+-- ─── 3. The documents the rules change ──────────────────────────────────────
 
 SELECT public.refresh_post_search_documents(ARRAY(
-  SELECT bundles.post_id
-  FROM public.post_resource_bundles AS bundles
-  WHERE bundles.access_mode = 'paid'
+  SELECT posts.id
+  FROM public.posts AS posts
+  JOIN public.post_resource_bundles AS bundles
+    ON bundles.post_id = posts.id
     AND bundles.status = 'published'
+  WHERE posts.prompt IS NOT NULL
+    OR public.recipe_post_public_body(posts.body, bundles.access_mode) IS DISTINCT FROM posts.body
 ));
 
 COMMIT;
