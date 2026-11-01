@@ -2269,6 +2269,23 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(scopeChips(tree)).toEqual(['Active (1)', 'Failed (2)', 'Archived (0)']);
     });
 
+    it("names each tab's chips as that tab's filter, and gives Saved none", () => {
+      const tree = renderDashboard();
+      const chipGroups = () => tree.root.findAll((node) => (
+        String(node.type) === 'view' && node.props.accessibilityRole === 'radiogroup'
+      )).map((node) => node.props.accessibilityLabel);
+      expect(chipGroups()).toEqual(['Filter creations']);
+
+      renderer.act(() => { tabSegment(tree, 'Posts').props.onPress(); });
+      expect(chipGroups()).toEqual(['Filter posts']);
+
+      const savedTab = tree.root.find((node) => (
+        String(node.type) === 'pressable' && node.props.accessibilityRole === 'tab' && node.props.accessibilityLabel === 'Saved'
+      ));
+      renderer.act(() => { savedTab.props.onPress(); });
+      expect(chipGroups()).toEqual([]);
+    });
+
     it('stays on Failed, empty, once its last run is cleared, and its chip goes when another is chosen', () => {
       const tree = renderDashboard();
       renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
