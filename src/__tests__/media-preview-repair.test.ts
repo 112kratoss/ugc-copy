@@ -91,6 +91,49 @@ function createSelectChain(result: { data: unknown[] | null; error: Error | null
   return chain;
 }
 
+/**
+ * An update as PostgREST answers it: filters chain, awaiting the chain answers
+ * `{ error }`, and `.select()` answers the rows the update matched (an Error
+ * stands for a failed request).
+ */
+function createUpdateQuery(
+  matched: () => unknown[] | Error = () => [{ id: 'matched' }],
+  onEq?: (column: string, value: unknown) => void,
+) {
+  const query = {
+    eq: vi.fn((column: string, value: unknown) => {
+      onEq?.(column, value);
+      return query;
+    }),
+    select: vi.fn(async () => {
+      const rows = matched();
+      return rows instanceof Error ? { data: null, error: rows } : { data: rows, error: null };
+    }),
+    then: (
+      onfulfilled?: ((value: { error: null }) => unknown) | null,
+      onrejected?: ((reason: unknown) => unknown) | null,
+    ) => Promise.resolve({ error: null }).then(onfulfilled, onrejected),
+  };
+  return query;
+}
+
+/** The admission fallback, plus a record of what the sweeps hand the revocation queue. */
+function withQueueRecorder<T extends object>(client: T) {
+  const queued: unknown[] = [];
+  const fallback = withAdmissionFallback(client);
+  return {
+    queued,
+    supabase: {
+      ...fallback,
+      rpc: async (name: string, args?: unknown) => {
+        if (name !== 'queue_unrecorded_showcase_media') return fallback.rpc(name);
+        queued.push(args);
+        return { data: 1, error: null };
+      },
+    },
+  };
+}
+
 function createRepairableProbeClient(results: Array<{ data: unknown[] | null; error: Error | null }>) {
   const limit = vi.fn(async () => {
     const result = results.shift();
@@ -199,7 +242,7 @@ describe('rendition byte admission (F14)', () => {
         select: () => createSelectChain({ data: [], error: null }),
         update: (payload: Record<string, unknown>) => {
           updates.push(payload);
-          return { eq: () => ({ eq: async () => ({ error: null }) }) };
+          return createUpdateQuery();
         },
       }),
       storage: {
@@ -235,7 +278,7 @@ describe('rendition byte admission (F14)', () => {
         }),
         update: (payload: Record<string, unknown>) => {
           updates.push(payload);
-          return { eq: async () => ({ error: null }) };
+          return createUpdateQuery();
         },
       }),
       storage: {
@@ -342,7 +385,7 @@ describe('media preview repair retries', () => {
         })),
         update: vi.fn((payload: unknown) => {
           updates.push({ table, payload });
-          return { eq: vi.fn(async () => ({ error: null })) };
+          return createUpdateQuery();
         }),
       })),
       storage: { from: storageFrom },
@@ -417,14 +460,9 @@ describe('media preview repair retries', () => {
         update: vi.fn((payload: Record<string, unknown>) => {
           const update = { id: undefined as unknown, payload };
           if (table === 'post_media') updates.push(update);
-          const query = {
-            eq: vi.fn((column: string, value: unknown) => {
-              if (column === 'id') update.id = value;
-              return query;
-            }),
-            then: (resolve: (result: { error: null }) => unknown) => Promise.resolve({ error: null }).then(resolve),
-          };
-          return query;
+          return createUpdateQuery(undefined, (column, value) => {
+            if (column === 'id') update.id = value;
+          });
         }),
       })),
       storage: {
@@ -675,7 +713,7 @@ describe('media preview repair retries', () => {
               : [],
           error: null,
         })),
-        update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+        update: vi.fn(() => createUpdateQuery()),
       })),
       storage: { from: vi.fn(() => ({ download })) },
     };
@@ -712,7 +750,7 @@ describe('media preview repair retries', () => {
               : [],
           error: null,
         })),
-        update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+        update: vi.fn(() => createUpdateQuery()),
       })),
       storage: { from: vi.fn(() => ({ download })) },
     };
@@ -806,35 +844,44 @@ describe('media preview repair retries', () => {
   });
 });
 
+function createRenditionClient(
+  rows: Array<Record<string, unknown>>,
+  {
+    posts = [],
+    matched = () => [{ id: 'matched' }],
+  }: {
+    posts?: Array<Record<string, unknown>>;
+    /** The rows an update matches, by its payload. */
+    matched?: (payload: Record<string, unknown>) => unknown[] | Error;
+  } = {},
+) {
+  const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
+  const download = vi.fn(async () => ({
+    data: new Blob(['video'], { type: 'video/mp4' }),
+    error: null,
+  }));
+  const storageFrom = vi.fn(() => ({ download }));
+  const supabase = {
+    from: vi.fn((table: string) => ({
+      select: vi.fn(() => createSelectChain({
+        data: table === 'post_media' ? rows : table === 'posts' ? posts : [],
+        error: null,
+      })),
+      update: vi.fn((payload: Record<string, unknown>) => {
+        updates.push({ table, payload });
+        return createUpdateQuery(() => matched(payload));
+      }),
+    })),
+    storage: { from: storageFrom },
+  };
+  return { supabase, updates, download, storageFrom };
+}
+
 describe('showcase feed rendition repair', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     renditionMocks.createPostMediaRendition.mockClear();
   });
-
-  function createRenditionClient(rows: Array<Record<string, unknown>>) {
-    const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
-    const download = vi.fn(async () => ({
-      data: new Blob(['video'], { type: 'video/mp4' }),
-      error: null,
-    }));
-    const storageFrom = vi.fn(() => ({ download }));
-    const supabase = {
-      from: vi.fn((table: string) => ({
-        select: vi.fn(() => createSelectChain({
-          data: table === 'post_media' ? rows : [],
-          error: null,
-        })),
-        update: vi.fn((payload: Record<string, unknown>) => {
-          updates.push({ table, payload });
-          const query = { eq: vi.fn(() => query), then: (resolve: (result: { error: null }) => unknown) => Promise.resolve({ error: null }).then(resolve) };
-          return query;
-        }),
-      })),
-      storage: { from: storageFrom },
-    };
-    return { supabase, updates, download, storageFrom };
-  }
 
   const pendingVideoRow = {
     id: 'media-video-1',
@@ -1187,7 +1234,7 @@ describe('per-post media repair', () => {
         }),
         update: vi.fn((payload: Record<string, unknown>) => {
           updates.push(payload);
-          return { eq: vi.fn(async () => ({ error: null })) };
+          return createUpdateQuery();
         }),
       })),
       storage: { from: vi.fn(() => ({ download })) },
@@ -1263,7 +1310,7 @@ describe('per-post media repair', () => {
         }),
         update: vi.fn((payload: Record<string, unknown>) => {
           updates.push(payload);
-          return { eq: vi.fn(async () => ({ error: null })) };
+          return createUpdateQuery();
         }),
       })),
       storage: {
@@ -1284,5 +1331,197 @@ describe('per-post media repair', () => {
       expect.objectContaining({ preview_status: 'ready' }),
     ]));
     expect(renditionMocks.createPostMediaRendition).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A sweep uploads a derivative beside its source before the row update that
+ * names it. When that update matches no row (the post was deleted or made
+ * private, its row repointed, the lease taken over), nothing names the upload
+ * again: what landed in a creation's public folder goes to the revocation
+ * queue, whose job keeps whatever something still names.
+ */
+describe('a sweep whose row update matches no row', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    previewMocks.createPostMediaPreview.mockClear();
+    renditionMocks.createPostMediaRendition.mockClear();
+  });
+
+  const creationPost = { id: 'post-1', generation_id: 'gen-1' };
+  const queuedPaths = (queued: unknown[]) => queued
+    .flatMap((args) => (args as { p_paths: string[] }).p_paths)
+    .sort();
+
+  describe('preview and display', () => {
+    const coverRow = {
+      id: 'media-1',
+      post_id: 'post-1',
+      storage_path: 'showcase/gen-1/creation.abcdef123456.png',
+      media_kind: 'image',
+      content_type: 'image/png',
+      preview_attempt_count: 0,
+    };
+    const preview = {
+      previewStoragePath: 'showcase/gen-1/creation.abcdef123456.preview.p1.webp',
+      previewThumbhash: 'thumbhash',
+      previewStatus: 'ready',
+      width: 2048,
+      height: 2048,
+      displayStoragePath: 'showcase/gen-1/creation.abcdef123456.display.d1.webp',
+    };
+    const rowGone = (payload: Record<string, unknown>) => (payload.preview_status === 'ready' ? [] : [{ id: 'media-1' }]);
+
+    function createPreviewClient(
+      rows: Array<Record<string, unknown>>,
+      matched: (payload: Record<string, unknown>) => unknown[],
+    ) {
+      const download = vi.fn(async () => ({ data: new Blob(['image'], { type: 'image/png' }), error: null }));
+      return withQueueRecorder({
+        from: vi.fn((table: string) => ({
+          select: vi.fn(() => createSelectChain({
+            data: table === 'post_media' ? rows : table === 'posts' ? [creationPost] : [],
+            error: null,
+          })),
+          update: vi.fn((payload: Record<string, unknown>) => createUpdateQuery(() => matched(payload))),
+        })),
+        storage: { from: vi.fn(() => ({ download })) },
+      });
+    }
+
+    it("queues the preview and display of a creation's cover row that is gone", async () => {
+      const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+      previewMocks.createPostMediaPreview.mockResolvedValueOnce(preview);
+      const { supabase, queued } = createPreviewClient([coverRow], rowGone);
+      const invalidateFeedCache = vi.fn();
+
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache });
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(queued).toHaveLength(1);
+      expect(queuedPaths(queued)).toEqual([preview.displayStoragePath, preview.previewStoragePath].sort());
+      expect(invalidateFeedCache).not.toHaveBeenCalled();
+    });
+
+    it('queues nothing when the update names the row', async () => {
+      const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+      previewMocks.createPostMediaPreview.mockResolvedValueOnce(preview);
+      const { supabase, queued } = createPreviewClient([coverRow], () => [{ id: 'media-1' }]);
+
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache: vi.fn() });
+
+      expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+      expect(queued).toEqual([]);
+    });
+
+    it("leaves an upload outside a creation's public folder to its own cleanup", async () => {
+      const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+      previewMocks.createPostMediaPreview.mockResolvedValueOnce({
+        ...preview,
+        previewStoragePath: 'posts/post-1/photo.preview.p1.webp',
+        displayStoragePath: null,
+      } as never);
+      const { supabase, queued } = createPreviewClient(
+        [{ ...coverRow, storage_path: 'posts/post-1/photo.png' }],
+        rowGone,
+      );
+
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache: vi.fn() });
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(queued).toEqual([]);
+    });
+  });
+
+  describe('feed rendition and teaser', () => {
+    const videoRow = {
+      id: 'media-video-1',
+      post_id: 'post-1',
+      storage_path: 'showcase/gen-1/clip.abcdef123456.mp4',
+      media_kind: 'video',
+      content_type: 'video/mp4',
+      rendition_status: 'pending',
+      rendition_attempt_count: 0,
+      teaser_storage_path: null,
+      duration_seconds: null,
+    };
+    const teaserPath = 'showcase/gen-1/clip.abcdef123456.teaser.t1.mp4';
+    const renditionPath = 'showcase/gen-1/clip.abcdef123456.feed.r1.mp4';
+    const readyRendition = {
+      status: 'ready' as const,
+      renditionStoragePath: renditionPath,
+      renditionBytes: 2_031_616,
+      width: 610,
+      height: 1280,
+      durationSeconds: 95.5,
+    };
+    /** The teaser lands first, as in createPostMediaRendition, then `finish` decides the attempt. */
+    const teaserThen = (finish: () => unknown) => (async (params: {
+      onTeaserOutcome?: (outcome: unknown) => void;
+    }) => {
+      params.onTeaserOutcome?.({ status: 'ready', teaserStoragePath: teaserPath, teaserBytes: 900_000 });
+      return finish();
+    }) as never;
+
+    async function runRendition(matched: (payload: Record<string, unknown>) => unknown[] | Error) {
+      const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+      const { supabase } = createRenditionClient([videoRow], { posts: [creationPost], matched });
+      const recorder = withQueueRecorder(supabase);
+      const summary = await repairPostMediaRenditions(recorder.supabase as never);
+      return { summary, queued: recorder.queued };
+    }
+
+    it('queues the rendition and the teaser when the ready update matches no row', async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => readyRendition));
+
+      const { summary, queued } = await runRendition((payload) => (payload.rendition_status === 'ready' ? [] : [{ id: 'media-video-1' }]));
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(queued).toHaveLength(1);
+      expect(queuedPaths(queued)).toEqual([renditionPath, teaserPath].sort());
+    });
+
+    it('queues the teaser when the skip update matches no row', async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => ({ status: 'skipped', reason: 'not-smaller' })));
+
+      const { summary, queued } = await runRendition((payload) => (payload.rendition_status === 'skipped' ? [] : [{ id: 'media-video-1' }]));
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(queuedPaths(queued)).toEqual([teaserPath]);
+    });
+
+    it('queues the teaser when the transcode fails and the failure update matches no row', async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => {
+        throw new Error('ffmpeg terminated by SIGKILL after 120000ms.');
+      }));
+
+      const { summary, queued } = await runRendition((payload) => (payload.rendition_status === 'failed' ? [] : [{ id: 'media-video-1' }]));
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(queuedPaths(queued)).toEqual([teaserPath]);
+    });
+
+    it('queues the rendition too when the ready update fails and the failure update matches no row', async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => readyRendition));
+
+      const { summary, queued } = await runRendition((payload) => {
+        if (payload.rendition_status === 'ready') return new Error('fetch failed');
+        return payload.rendition_status === 'failed' ? [] : [{ id: 'media-video-1' }];
+      });
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(queuedPaths(queued)).toEqual([renditionPath, teaserPath].sort());
+    });
+
+    it('queues nothing when an update names the row', async () => {
+      renditionMocks.createPostMediaRendition.mockImplementationOnce(teaserThen(() => {
+        throw new Error('ffmpeg exited with code 1');
+      }));
+
+      const { summary, queued } = await runRendition(() => [{ id: 'media-video-1' }]);
+
+      expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+      expect(queued).toEqual([]);
+    });
   });
 });

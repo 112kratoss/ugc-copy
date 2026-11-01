@@ -16,9 +16,11 @@ import { POST_MEDIA_PATH_COLUMNS, type PostMediaPathColumn } from '@/lib/post-me
  * The public bucket serves whatever is in it, so a copy stays fetchable until
  * its object is gone. The posts trigger `posts_sync_generation_exposure`
  * queues a derivative in the post write's own transaction whenever an
- * unexposed post drops it or a post is deleted outright, and
+ * unexposed post drops it or a post is deleted outright,
  * `posts_queue_deleted_post_media` queues what a deleted post's media rows
- * named beside it before the delete cascades to them. The routes still delete
+ * named beside it before the delete cascades to them, and the media sweeps
+ * queue what they uploaded when their row update then matched no row
+ * (`queueUnrecordedShowcaseMedia`). The routes still delete
  * the copy inline; this drains what they missed, so a failed or skipped delete
  * can no longer leave a private post's media public.
  */

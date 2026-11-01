@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { repairMediaPreviews } from '@/lib/media-preview-repair';
 import { processShowcaseMediaRevocations } from '@/lib/showcase-media-revocations';
 
 const configPath=process.env.AUDIT_STORAGE_CONFIG, connectionString=process.env.SUPABASE_TEST_DB_URL;
@@ -200,5 +201,35 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     expect((await admin.storage.from('showcase_media').download(foreign)).error).toBeNull();
     for(const path of paths.slice(0,-1))expect((await admin.storage.from('showcase_media').download(path)).data).toBeNull();
     expect((await db.query('select id from public.showcase_media_revocations where generation_id=$1',[generationId])).rows).toEqual([]);
+  });
+
+  // The sweep uploads before its row update names the object. A post deleted in between left the upload named by nothing.
+  it('removes a preview the sweep uploaded while its post was being deleted',async()=>{
+    await db.query("update public.posts set visibility='public',showcase_asset_path=$2 where id=$1",[postId,paths[0]]);
+    await db.query('delete from public.showcase_media_revocations where generation_id=$1',[generationId]);
+    // The cover row has no preview or display yet.
+    const unbuilt=[paths[2],paths[4]];
+    expect((await admin.storage.from('showcase_media').remove(unbuilt)).error).toBeNull();
+    paths=paths.filter(path=>!unbuilt.includes(path));
+    // The sweep decodes its source, which the fixture's bytes are not.
+    const source=await (await import('sharp')).default({create:{width:8,height:8,channels:3,background:'#808080'}}).png().toBuffer();
+    expect((await admin.storage.from('showcase_media').upload(paths[1],new Blob([new Uint8Array(source)],{type:'image/png'}),{contentType:'image/png',upsert:true})).error).toBeNull();
+    await db.query("update public.post_media set content_type='image/png',preview_storage_path=null,display_storage_path=null,preview_status='pending',preview_attempt_count=0,preview_locked_at=null,preview_locked_by=null where post_id=$1",[postId]);
+    const objectPrefix='/storage/v1/object/showcase_media/';
+    let uploaded:string|null=null;
+    intercept=async(url,method,target,init)=>{
+      if(uploaded||method!=='POST'||!url.pathname.startsWith(`${objectPrefix}showcase/${generationId}/source.preview.`))return null;
+      const response=await originalFetch(target,init);expect(response.ok).toBe(true);
+      uploaded=decodeURIComponent(url.pathname.slice(objectPrefix.length));paths.push(uploaded);
+      await db.query('delete from public.posts where id=$1',[postId]);
+      return response;
+    };
+    await repairMediaPreviews(admin,{batchSize:5,invalidateFeedCache:vi.fn()});
+    intercept=null;
+    expect(uploaded,'The sweep never uploaded a preview').not.toBeNull();
+    expect((await db.query('select reason from public.showcase_media_revocations where generation_id=$1 and showcase_asset_path=$2',[generationId,uploaded])).rows).toEqual([{reason:'sweep_unrecorded'}]);
+    await db.query("update public.showcase_media_revocations set next_attempt_at=now()-interval '1 minute' where generation_id=$1",[generationId]);
+    expect(await processShowcaseMediaRevocations(admin,{now:new Date()})).toMatchObject({due:paths.length,removed:paths.length,rescheduled:0});
+    await assertRemoved();
   });
 });

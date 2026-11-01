@@ -95,6 +95,17 @@ it('treats a changed source or lost lease as failure and releases only its own l
   await expect(repairPostMediaTeasers(f.db as never)).resolves.toMatchObject({ completed: 0, failed: 1 });
   expect(f.updates.at(-1)).toMatchObject({ teaser_locked_by: null });
   expect(f.guards.filter(([key]) => key === 'teaser_locked_by')).toHaveLength(2);
+  // A post's own prefix is not the revocation queue's.
+  expect(f.db.rpc).not.toHaveBeenCalledWith('queue_unrecorded_showcase_media', expect.anything());
+});
+
+it("queues the teaser it uploaded beside a creation's copy when the update matches no row", async () => {
+  // The post was deleted or made private, the row repointed, or the lease taken over: nothing names the upload.
+  const f = fixture({ path: 'showcase/gen-1/clip.feed.mp4', generationId: 'gen-1', stale: true });
+  await expect(repairPostMediaTeasers(f.db as never)).resolves.toMatchObject({ completed: 0, failed: 1 });
+  const uploaded = f.storage.upload.mock.calls[0][0] as string;
+  expect(uploaded).toMatch(/^showcase\/gen-1\/clip\.feed\.teaser\./);
+  expect(f.db.rpc).toHaveBeenCalledWith('queue_unrecorded_showcase_media', { p_paths: [uploaded] });
 });
 
 it('rejects a teaser longer than the preview cap before upload', async () => {

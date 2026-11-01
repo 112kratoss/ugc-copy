@@ -8,6 +8,7 @@ import { summarizeMediaToolError } from '@/lib/media-tool-error';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
+import { queueUnrecordedShowcaseMedia } from '@/lib/unrecorded-showcase-media';
 import { createVideoTeaserFromFile, withVideoInputFile, TEASER_SECONDS } from '@/lib/video-rendition';
 
 const MAX_ATTEMPTS = 3;
@@ -86,7 +87,12 @@ export async function repairPostMediaTeasers(supabase: SupabaseClient) {
     }).eq('id', row.id).eq('teaser_locked_by', lockedBy)
       .eq('rendition_storage_path', path).is('teaser_storage_path', null).select('id');
     if (updated.error) throw updated.error;
-    if (!updated.data?.length) throw new Error('Teaser source or lease changed before publication.');
+    if (!updated.data?.length) {
+      // Nothing will name the upload: the row is gone (its post deleted or made
+      // private), repointed, given a teaser meanwhile, or no longer this run's.
+      await queueUnrecordedShowcaseMedia(supabase, [teaserPath]);
+      throw new Error('Teaser source or lease changed before publication.');
+    }
     return { attempted: 1, completed: 1, failed: 0 };
   } catch (error) {
     if (await deferMediaRepairCapacity({ supabase, error, kind: 'teaser', id: row.id, lockedBy, source: row.rendition_storage_path })) {

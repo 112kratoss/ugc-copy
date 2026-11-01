@@ -23,6 +23,7 @@ import {
 } from '@/lib/storage-ownership';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
 import { summarizeMediaToolError, truncateMediaToolMessage } from '@/lib/media-tool-error';
+import { queueUnrecordedShowcaseMedia } from '@/lib/unrecorded-showcase-media';
 
 const MAX_PREVIEW_ATTEMPTS = 3;
 // Older motion/image generations can have no category despite a durable visual
@@ -500,8 +501,14 @@ async function repairPostMedia(
       preview_locked_by: null,
     }).eq('id', row.id);
     if (leaseOwner) resultQuery = resultQuery.eq('preview_locked_by', leaseOwner);
-    const result = await resultQuery;
+    const result = await resultQuery.select('id');
     if (result.error) throw result.error;
+    if (!result.data?.length) {
+      // The row is gone (its post deleted or made private) or another worker
+      // holds it now: nothing will name what this run uploaded.
+      await queueUnrecordedShowcaseMedia(supabase, [preview.previewStoragePath, preview.displayStoragePath]);
+      return false;
+    }
     return true;
   } catch (error) {
     const failure = supabase.from('post_media').update({
@@ -542,6 +549,13 @@ async function repairPostMediaRendition(
       ? { teaser_error: truncateMediaToolMessage(teaserOutcome.error) }
       : {}),
   });
+  // What this run uploaded, for an update that then matches no row: the row is
+  // gone (its post deleted or made private) or another worker holds it now.
+  let renditionStoragePath: string | null = null;
+  const uploadedPaths = () => [
+    renditionStoragePath,
+    teaserOutcome?.status === 'ready' ? teaserOutcome.teaserStoragePath : null,
+  ];
   try {
     if (!leaseOwner) {
       await supabase.from('post_media').update({
@@ -588,11 +602,16 @@ async function repairPostMediaRendition(
         rendition_locked_by: null,
       }).eq('id', row.id);
       if (leaseOwner) skipQuery = skipQuery.eq('rendition_locked_by', leaseOwner);
-      const skipResult = await skipQuery;
+      const skipResult = await skipQuery.select('id');
       if (skipResult.error) throw skipResult.error;
+      if (!skipResult.data?.length) {
+        await queueUnrecordedShowcaseMedia(supabase, uploadedPaths());
+        return false;
+      }
       return true;
     }
 
+    renditionStoragePath = rendition.renditionStoragePath;
     let resultQuery = supabase.from('post_media').update({
       rendition_storage_path: rendition.renditionStoragePath,
       rendition_status: 'ready',
@@ -610,8 +629,12 @@ async function repairPostMediaRendition(
       rendition_locked_by: null,
     }).eq('id', row.id);
     if (leaseOwner) resultQuery = resultQuery.eq('rendition_locked_by', leaseOwner);
-    const result = await resultQuery;
+    const result = await resultQuery.select('id');
     if (result.error) throw result.error;
+    if (!result.data?.length) {
+      await queueUnrecordedShowcaseMedia(supabase, uploadedPaths());
+      return false;
+    }
     return true;
   } catch (error) {
     const failure = supabase.from('post_media').update({
@@ -625,7 +648,10 @@ async function repairPostMediaRendition(
       rendition_locked_by: null,
     }).eq('id', row.id);
     if (leaseOwner) failure.eq('rendition_locked_by', leaseOwner);
-    await failure;
+    const failed = await failure.select('id');
+    if (!failed.error && !failed.data?.length) {
+      await queueUnrecordedShowcaseMedia(supabase, uploadedPaths());
+    }
     return false;
   }
 }
