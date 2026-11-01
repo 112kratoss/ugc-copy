@@ -1370,6 +1370,41 @@ describe('Home screen', () => {
   // A card's Remix names its post in the creator's row above the prompt
   // (poster, title, creator), as the reel's Remix does. Until 2026-11-01 the
   // card sent none of them and the creator read "Source creation".
+  // Where the server's link cannot be mapped, Home falls back as the reel does
+  // (one shared builder): the post's own tool, Motion for a motion post, and
+  // the server's prompt, still under the row naming the post.
+  it("falls back to the post's own tool and the server's prompt, as the reel does", async () => {
+    authState.api.remixShowcasePost.mockImplementationOnce(() => Promise.resolve({
+      success: true,
+      redirectTo: '/somewhere-else',
+      prefill: { prompt: 'A paper boat at dusk', settings: {} },
+    }));
+    queryState.pages = [page([{
+      ...shelfPost('post-1'),
+      creationMode: 'motion',
+      recommendation: { deliveryId: 'delivery-remix', position: 0, algorithmVersion: 'for-you-rules-v4' },
+    }])];
+    const { tree } = renderHome();
+
+    await renderer.act(async () => {
+      cardAt(tree, 0).onRemix();
+      await settlePromises();
+    });
+
+    expect(pushedCreatorRoute()).toEqual({
+      pathname: '/create/motion',
+      params: {
+        prompt: 'A paper boat at dusk',
+        remixPost: 'post-1',
+        sourceTitle: 'Post post-1',
+        sourceCreator: '@creatorpost-1',
+        sourceThumbnail: 'https://cdn.example.com/post-1.preview.webp',
+      },
+    });
+
+    renderer.act(() => tree.unmount());
+  });
+
   it("names the card's post in the creator its Remix opens", async () => {
     queryState.pages = [page([{
       ...shelfPost('post-1'),
