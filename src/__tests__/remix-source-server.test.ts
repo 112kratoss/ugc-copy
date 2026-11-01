@@ -447,9 +447,10 @@ describe('remixing a motion generation made through the catalog', () => {
   });
 
   // A catalog motion run sends its picture and clip in the slots its model declares
-  // (catalogMotionInputSlots): production publishes Kling 3.0 with imageReferences and
-  // videoReferences. A motion run holds one picture and one clip, so they are kept under
-  // the motion roles by kind: kept by the motion-inputs names, they came back as nothing.
+  // (catalogMotionInputSlots): production published Kling 3.0 with imageReferences and
+  // videoReferences until release kling-3-motion-inputs-20261101, and runs started then are
+  // stored so. A motion run holds one picture and one clip, so they are kept under the motion
+  // roles by kind: kept by the motion-inputs names, they came back as nothing.
   describe('in the slots its model declares', () => {
     const DECLARED_INPUTS = [
       { slot: 'imageReferences', kind: 'image', label: 'Character image', storagePath: 'uploads/creator-1/hero.png' },

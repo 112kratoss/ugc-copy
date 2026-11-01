@@ -7939,6 +7939,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         onMotionModel(model, motion, shape);
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
+        // The draft keeps its model: Kling 3.0's slots and words are now Kling 2.6's.
+        expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel)
+          .toContain(model === 'kling-3.0' ? 'Kling 3.0' : 'Kling 2.6');
         expect(blocker(tree)).toBe(hint);
         // And the empty slot has no line of its own under it.
         expect(slotText(tree, 'motion-required-inputs').filter((line) => /required|requires/i.test(line))).toEqual(['Required inputs']);
@@ -7961,6 +7964,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(labelled(tree.root, 'Open details for Reference Motion')).toBeTruthy();
 
         await pressGenerate(tree);
+        expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({ modelId: 'kling-3.0' });
         expect(sentInputs()).toEqual([
           expect.objectContaining({ slot: imageSlot, kind: 'image', url: 'https://cdn.example.com/dancer.png' }),
           expect.objectContaining({ slot: videoSlot, kind: 'video', url: 'https://cdn.example.com/moves.mp4', durationSeconds: 6 }),
@@ -8059,8 +8063,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           },
           openMode,
         ];
-        catalogState.catalog = { ...productionMotionCatalog(), models: [model] };
-        memory.set(ordinaryKey, savedDrafts({ motion: { model: 'kling-3.0', catalogRevision: productionMotion.revision } }));
+        catalogState.catalog = { ...motionCatalogOf('rollback'), models: [model] };
+        memory.set(ordinaryKey, savedDrafts({ motion: { model: 'kling-3.0', catalogRevision: productionMotion.rollback.revision } }));
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
         expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Who should move?']);

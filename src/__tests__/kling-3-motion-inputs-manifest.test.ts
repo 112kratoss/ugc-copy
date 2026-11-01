@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  CatalogError,
   buildGenerationModelCatalog,
   projectGenerationModelDescriptor,
   quoteGenerationModel,
@@ -17,6 +18,11 @@ import {
 } from '@/lib/generation-model-runtime';
 import { getMotionCost } from '@/lib/models';
 import { referenceMediaMinSeconds, referenceMediaSlotNoun } from '@/lib/provider-input-limits';
+import {
+  buildUnifiedGenerationQuoteInput,
+  buildUnifiedGenerationQuoteInputForCatalog,
+  parseUnifiedGenerationRequest,
+} from '@/lib/unified-generation-start-service';
 import {
   CLIENT_RENDERED_CONTROL_TYPES,
   CLIENT_RENDERED_INPUT_MODE_KEYS,
@@ -36,8 +42,10 @@ import productionKling3 from './fixtures/production-kling-3-motion-entry-2026-11
  * `videoReferences` with no lengths, on the motion-v1 pricing and validation strategies), re-emitted
  * from the code build: the `motion-inputs` slots Kling 2.6 already publishes (`characterImage`,
  * `referenceVideo` with the 3 s shortest clip the start refuses by and the 30 s cap), per-second
- * pricing and descriptor rules. Every run quotes as before; a run missing its picture or its clip is
- * refused at the quote instead of at the start, both before any hold.
+ * pricing and descriptor rules. Every run the creators, the starts and the workflow runner send
+ * quotes as before. Two runs are refused at the quote now: one missing its picture or its clip, which
+ * the start refused before any hold, and one whose quote names a clip over 30 s, which the start
+ * refused once it measured the clip (its duration then passes 30). Neither creator sends either.
  */
 
 interface ManifestEntry {
@@ -82,12 +90,12 @@ const released = manifest.entries.find((entry) => entry.modelId === ID)!;
 /** Production's row until this release, read from the active release (the fixture says when). */
 const previous = productionKling3.entry as unknown as ManifestEntry;
 
-/** An entry as production's catalog store reads it back, and quotes with it. */
-function asProductionReadsIt(entry: ManifestEntry) {
+/** An entry of a release of `schemaVersion` as production's catalog store reads it back, and quotes with it. */
+function asProductionReadsIt(entry: ManifestEntry, schemaVersion: number) {
   const descriptor = projectGenerationModelDescriptor(parsePublishedModelDescriptor(
     entry.publicDescriptor,
     entry.modelId,
-    2,
+    schemaVersion,
     { web: entry.webEnabled, mobile: entry.mobileEnabled },
   ), 2);
   const runtime: GenerationModelOperationalConfig = {
@@ -102,26 +110,28 @@ function asProductionReadsIt(entry: ManifestEntry) {
     validationConfig: entry.validationConfig,
     verificationConfig: entry.verificationConfig,
   };
+  const server = {
+    catalog: { ...catalog, models: catalog.models.map((model) => (model.id === entry.modelId ? descriptor : model)) },
+    operations: new Map([[entry.modelId, runtime]]),
+  };
   return {
     descriptor,
     /** Where the shared motion rule puts a run's picture and clip on this entry. */
     slots: catalogMotionInputSlots(descriptor, {}),
-    /** The run's price, or the quote's refusal by field. */
+    /** The run's price, or the quote's refusal by field; anything else the quote throws fails the test. */
     quote: (input: Omit<GenerationModelQuoteInput, 'catalogRevision'>) => {
       try {
-        return quoteGenerationModel({ ...input, catalogRevision: catalog.revision } as GenerationModelQuoteInput, {
-          catalog: { ...catalog, models: catalog.models.map((model) => (model.id === entry.modelId ? descriptor : model)) },
-          operations: new Map([[entry.modelId, runtime]]),
-        }).costCredits;
+        return quoteGenerationModel({ ...input, catalogRevision: catalog.revision } as GenerationModelQuoteInput, server).costCredits;
       } catch (error) {
-        return { refused: (error as { fieldErrors?: Record<string, string> }).fieldErrors ?? String(error) };
+        if (error instanceof CatalogError) return { refused: error.fieldErrors };
+        throw error;
       }
     },
   };
 }
 
-const published = asProductionReadsIt(released);
-const before = asProductionReadsIt(previous);
+const published = asProductionReadsIt(released, manifest.release.schemaVersion);
+const before = asProductionReadsIt(previous, base.release.schemaVersion);
 const settingsGrid = ['720p', '1080p'].flatMap((resolution) => ['video', 'image'].flatMap((characterOrientation) => (
   Array.from({ length: 30 }, (_, index) => ({ resolution, characterOrientation, duration: index + 1 }))
 )));
@@ -211,15 +221,13 @@ describe('kling-3-motion-inputs release', () => {
     }]);
   });
 
-  it('quotes every setting as production’s entry did, as the creators, the start and the workflow runner send it', () => {
-    // Each entry with the run in its own slots (the shared motion rule), with no length (the web page),
-    // with the clip's length (the app, and the start, which prices `duration` from the measured clip),
-    // and in kind totals alone (the workflow runner's motion step, the schema-1 starts and the legacy
-    // motion route).
+  it('quotes every setting at the code price on both entries, in each shape a run is quoted in', () => {
     expect(before.slots).toEqual({ image: 'imageReferences', video: 'videoReferences' });
     expect(published.slots).toEqual({ image: 'characterImage', video: 'referenceVideo' });
-    const runs = (slots: { image: string; video: string }, settings: Record<string, string | number>) => {
-      const clip = Math.max(0.6, Number(settings.duration) - 0.4);
+    /** The run of `settings` in each shape its quote takes, its picture and clip in the entry's own slots. */
+    const runs = (slots: { image: string; video: string }, settings: (typeof settingsGrid)[number]) => {
+      // A clip the start measures and prices at `duration`: Math.max(1, Math.ceil(seconds)).
+      const clip = settings.duration - 0.4;
       const named = (durationSeconds?: number) => catalogRunQuoteInput({
         kind: 'motion',
         modelId: ID,
@@ -227,24 +235,42 @@ describe('kling-3-motion-inputs release', () => {
         settings,
         inputs: [{ slot: slots.image, kind: 'image' }, { slot: slots.video, kind: 'video', durationSeconds }],
       });
-      return [
-        named(),
-        named(clip),
-        {
-          kind: 'motion' as const,
-          modelId: ID,
-          settings,
-          inputCounts: { images: 1, videos: 1, audios: 0 },
-          inputMetadata: { referenceVideoDurationsSeconds: [clip] },
-        },
-      ];
+      // The run the unified start is posted, the clip as it measured it.
+      const started = parseUnifiedGenerationRequest({
+        kind: 'motion',
+        modelId: ID,
+        catalogRevision: catalog.revision,
+        settings,
+        prompt: '',
+        inputs: [
+          { slot: slots.image, kind: 'image', url: 'https://cdn.example.com/hero.png' },
+          { slot: slots.video, kind: 'video', url: 'https://cdn.example.com/dance.mp4', durationSeconds: clip },
+        ],
+      });
+      return {
+        // The web motion page: each input in its slot, no length.
+        web: named(),
+        // The app: the same, with the clip's length.
+        app: named(clip),
+        // The unified start's own quote of the run it charges, on a schema-2 catalog.
+        start: buildUnifiedGenerationQuoteInput(started),
+        // The unified start on a schema-1 catalog: kind totals and the clip's length.
+        startSchema1: buildUnifiedGenerationQuoteInputForCatalog(
+          started,
+          { catalog: { schemaVersion: 1 } } as Parameters<typeof buildUnifiedGenerationQuoteInputForCatalog>[1],
+        ),
+        // The workflow runner's motion step and the legacy motion route: kind totals alone.
+        kindTotals: { kind: 'motion' as const, modelId: ID, settings, inputCounts: { images: 1, videos: 1, audios: 0 } },
+      };
     };
     expect(settingsGrid).toHaveLength(120);
     for (const settings of settingsGrid) {
-      const prices = runs(published.slots, settings).map((run) => published.quote(run));
-      expect(prices, JSON.stringify(settings)).toEqual(runs(before.slots, settings).map((run) => before.quote(run)));
-      expect(prices[0], JSON.stringify(settings))
-        .toBe(getMotionCost(ID, settings.resolution as '720p' | '1080p', settings.duration));
+      const cost = getMotionCost(ID, settings.resolution as '720p' | '1080p', settings.duration);
+      for (const [side, entry] of [['production', before], ['release', published]] as const) {
+        for (const [shape, run] of Object.entries(runs(entry.slots, settings))) {
+          expect(entry.quote(run), `${side} ${shape} ${JSON.stringify(settings)}`).toBe(cost);
+        }
+      }
     }
   });
 
@@ -296,19 +322,19 @@ describe('kling-3-motion-inputs release', () => {
     // contracts/production-motion-descriptors-v1.json names this release: its Kling 3.0 must be this
     // entry as the server serves it (the published row read back, the schema-3 projection, no
     // `inputs`), and its rollback member production's entry before it, served the same way.
-    const served = (entry: ManifestEntry) => {
+    const served = (entry: ManifestEntry, schemaVersion: number) => {
       const descriptor = projectGenerationModelDescriptor(parsePublishedModelDescriptor(
         entry.publicDescriptor,
         entry.modelId,
-        2,
+        schemaVersion,
         { web: entry.webEnabled, mobile: entry.mobileEnabled },
       ), 3) as unknown as Record<string, unknown>;
       delete descriptor.inputs;
       return descriptor;
     };
     expect(productionMotion.revision).toBe(manifest.release.revision);
-    expect(productionMotion.models.find((model) => model.id === ID)).toEqual(served(released));
+    expect(productionMotion.models.find((model) => model.id === ID)).toEqual(served(released, manifest.release.schemaVersion));
     expect(productionMotion.rollback.revision).toBe(base.release.revision);
-    expect(productionMotion.rollback.models.find((model) => model.id === ID)).toEqual(served(previous));
+    expect(productionMotion.rollback.models.find((model) => model.id === ID)).toEqual(served(previous, base.release.schemaVersion));
   });
 });

@@ -934,7 +934,6 @@ describe('CreateMotionClient slots the model declares', () => {
  * own words, on a line of its own above Generate.
  */
 describe('CreateMotionClient a clip shorter than its slot takes', () => {
-  const SHORT_CLIP = 'Kling 2.6 reference video must be at least 3 seconds long. The reference video runs 2.1 seconds.';
   /** Kling 2.6's motion slots as the code catalog publishes them, with the shortest clip they take. */
   const KLING_26_MODES = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 })
     .models.find((model) => model.id === 'kling-2.6')!.inputModes!;
@@ -946,12 +945,18 @@ describe('CreateMotionClient a clip shorter than its slot takes', () => {
     await waitFor(() => expect(screen.queryByText('Reference length will appear after upload.')).toBeNull());
   }
 
-  it('says so above Generate and sends nothing, in the start’s own words', async () => {
-    publishMotionModes('kling-2.6', KLING_26_MODES);
-    const view = render(<CreateMotionClient prefill={{ model: 'kling-2.6' }} />);
+  // Kling 2.6 and Kling 3.0 as production publishes them: the same motion-inputs slots, each model
+  // named as the start names it.
+  it.each([
+    ['kling-2.6', 'Kling 2.6', KLING_26_MODES],
+    ['kling-3.0', 'Kling 3.0', PRODUCTION_KLING_3_MOTION_MODES],
+  ] as const)('says so above Generate on %s and sends nothing, in the start’s own words', async (modelId, name, modes) => {
+    const shortClip = `${name} reference video must be at least 3 seconds long. The reference video runs 2.1 seconds.`;
+    publishMotionModes(modelId, modes);
+    const view = render(<CreateMotionClient prefill={{ model: modelId }} />);
     await attachClipOf(view.container, 2.16);
 
-    expect(await screen.findByText(SHORT_CLIP)).toBeInTheDocument();
+    expect(await screen.findByText(shortClip)).toBeInTheDocument();
     // The clip's length reads as the line gives it, rounded down, with the shortest the model takes.
     expect(screen.getByText('Reference length: 2.1s, under the 3s minimum')).toBeInTheDocument();
     expect(generateButton()).toBeDisabled();
@@ -963,7 +968,7 @@ describe('CreateMotionClient a clip shorter than its slot takes', () => {
     expect(uploadMocks.uploadMediaToTemporaryStorage).not.toHaveBeenCalled();
 
     // What the start answers for the same clip (it names none: "The reference video").
-    expect(referenceMediaLengthViolation('kling-2.6', [{ role: 'motion', durationSeconds: 2.16 }])).toBe(SHORT_CLIP);
+    expect(referenceMediaLengthViolation(modelId, [{ role: 'motion', durationSeconds: 2.16 }])).toBe(shortClip);
   });
 
   // 2.96 s: the start reads ffmpeg's length to the hundredth, and the browser's reading of a trimmed
@@ -978,19 +983,6 @@ describe('CreateMotionClient a clip shorter than its slot takes', () => {
     expect(screen.queryByText(/must be at least 3 seconds long/)).toBeNull();
     await pressGenerate();
     await waitFor(() => expect(startPosts()).toHaveLength(1));
-  });
-
-  it('holds a short Kling 3.0 clip in the start’s words, on the slots production publishes', async () => {
-    const shortClip = 'Kling 3.0 reference video must be at least 3 seconds long. The reference video runs 2.1 seconds.';
-    publishMotionModes('kling-3.0', PRODUCTION_KLING_3_MOTION_MODES);
-    const view = render(<CreateMotionClient prefill={{ model: 'kling-3.0' }} />);
-    await attachClipOf(view.container, 2.16);
-
-    expect(await screen.findByText(shortClip)).toBeInTheDocument();
-    expect(screen.getByText('Reference length: 2.1s, under the 3s minimum')).toBeInTheDocument();
-    expect(generateButton()).toBeDisabled();
-    expect(startPosts()).toHaveLength(0);
-    expect(referenceMediaLengthViolation('kling-3.0', [{ role: 'motion', durationSeconds: 2.16 }])).toBe(shortClip);
   });
 
   it('leaves a short clip to the start where the model publishes no minimum', async () => {

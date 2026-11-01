@@ -1029,32 +1029,28 @@ describe('a clip shorter than its slot takes', () => {
       .toEqual([]);
   });
 
+  /** A motion draft on `model` with a picture and a clip of `seconds`, as the composer holds one. */
+  const motionDraftOf = (model: ReturnType<typeof parseModelCatalogDetail>, seconds: number) => applyCatalogModelDefaults({
+    ...createDefaultCreationDraft('motion'),
+    model: model.id,
+    characterImage: upload('hero.png', 'image'),
+    referenceVideo: { ...upload('dance.mp4', 'video', { durationSeconds: seconds }), displayName: 'Reference Motion' },
+  }, model);
+
   it.each([['kling-2.6', 'Kling 2.6'], ['kling-3.0', 'Kling 3.0']] as const)('holds a %s motion clip under 3 seconds as production publishes it, in the start’s words', (id, name) => {
     // The model as production serves it (the contract both suites read): Kling 2.6 since release
     // slot-min-durations-20261031, Kling 3.0 since kling-3-motion-inputs-20261101.
     const model = parseModelCatalogDetail(productionMotion.models.find((entry) => entry.id === id));
-    const motionDraftOf = (seconds: number) => applyCatalogModelDefaults({
-      ...createDefaultCreationDraft('motion'),
-      model: id,
-      characterImage: upload('hero.png', 'image'),
-      referenceVideo: { ...upload('dance.mp4', 'video', { durationSeconds: seconds }), displayName: 'Reference Motion' },
-    }, model);
 
-    expect(validateCatalogCreationDraft(motionDraftOf(2.16), model, ready).errors)
+    expect(validateCatalogCreationDraft(motionDraftOf(model, 2.16), model, ready).errors)
       .toEqual([`${name} reference video must be at least 3 seconds long. Reference Motion runs 2.1 seconds.`]);
-    expect(validateCatalogCreationDraft(motionDraftOf(2.95), model, ready).errors).toEqual([]);
+    expect(validateCatalogCreationDraft(motionDraftOf(model, 2.95), model, ready).errors).toEqual([]);
   });
 
   it('leaves a short Kling 3.0 motion clip to the start on a rollback, whose slots publish no minimum', () => {
     const model = parseModelCatalogDetail(productionMotion.rollback.models.find((entry) => entry.id === 'kling-3.0'));
-    const draft = applyCatalogModelDefaults({
-      ...createDefaultCreationDraft('motion'),
-      model: 'kling-3.0',
-      characterImage: upload('hero.png', 'image'),
-      referenceVideo: { ...upload('dance.mp4', 'video', { durationSeconds: 2.16 }), displayName: 'Reference Motion' },
-    }, model);
 
-    expect(validateCatalogCreationDraft(draft, model, ready).errors).toEqual([]);
+    expect(validateCatalogCreationDraft(motionDraftOf(model, 2.16), model, ready).errors).toEqual([]);
   });
 });
 

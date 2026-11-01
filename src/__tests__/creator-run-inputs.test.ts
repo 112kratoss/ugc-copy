@@ -10,7 +10,9 @@ import {
   type VideoRunDraft,
 } from '@/lib/creator-run-inputs';
 import { buildGenerationModelCatalog, quoteGenerationModel } from '@/lib/generation-model-catalog';
+import type { GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import { catalogRunInputFacts, catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
+import productionKling3 from './fixtures/production-kling-3-motion-entry-2026-11-01.json';
 import { PRODUCTION_KLING_3_MOTION_MODES, ROLLBACK_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
 type Media = {
@@ -327,9 +329,14 @@ describe('planMotionRunInputs', () => {
 
   it('is a run the server prices for every code motion model and for Kling 3.0’s rollback shape, where the fixed slots were refused', () => {
     const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
-    const quote = (models: typeof catalog.models, modelId: string, inputs: readonly { slot: string; kind: 'image' | 'video' }[]) => quoteGenerationModel(
+    const quote = (
+      models: typeof catalog.models,
+      modelId: string,
+      inputs: readonly { slot: string; kind: 'image' | 'video' }[],
+      operations?: Map<string, GenerationModelOperationalConfig>,
+    ) => quoteGenerationModel(
       catalogRunQuoteInput({ kind: 'motion' as const, modelId, catalogRevision: catalog.revision, settings: motionSettings, inputs }),
-      { catalog: { ...catalog, models } },
+      { catalog: { ...catalog, models }, ...(operations ? { operations } : {}) },
     );
     for (const model of catalog.models.filter((candidate) => candidate.kind === 'motion')) {
       expect(quote(catalog.models, model.id, planMotionRunInputs(model, motionSettings)).costCredits).toEqual(expect.any(Number));
@@ -341,8 +348,10 @@ describe('planMotionRunInputs', () => {
       model.id === 'kling-3.0' && model.kind === 'motion' ? { ...model, inputModes: ROLLBACK_KLING_3_MOTION_MODES } : model
     ));
     const kling3 = asRollback.find((model) => model.id === 'kling-3.0' && model.kind === 'motion');
-    expect(quote(asRollback, 'kling-3.0', planMotionRunInputs(kling3, motionSettings)).costCredits).toEqual(expect.any(Number));
-    expect(() => quote(asRollback, 'kling-3.0', [{ slot: 'characterImage', kind: 'image' }, { slot: 'referenceVideo', kind: 'video' }]))
+    // With the operations that shape is served with: the stored row's motion-v1 pricing and validation.
+    const rollbackOperations = new Map([['kling-3.0', productionKling3.entry as unknown as GenerationModelOperationalConfig]]);
+    expect(quote(asRollback, 'kling-3.0', planMotionRunInputs(kling3, motionSettings), rollbackOperations).costCredits).toEqual(expect.any(Number));
+    expect(() => quote(asRollback, 'kling-3.0', [{ slot: 'characterImage', kind: 'image' }, { slot: 'referenceVideo', kind: 'video' }], rollbackOperations))
       .toThrow(expect.objectContaining({ fieldErrors: expect.objectContaining({ characterImage: 'Kling 3.0 does not support the characterImage input.' }) }));
   });
 });
