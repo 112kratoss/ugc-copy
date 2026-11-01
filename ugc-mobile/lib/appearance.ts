@@ -78,6 +78,14 @@ let preference: AppearancePreference = 'system';
 let systemScheme: ColorScheme = readSystemScheme();
 let resolvedScheme: ColorScheme = resolveColorScheme(preference, systemScheme, available);
 let hydration: Promise<void> | null = null;
+// A choice reaches the native layer only as the launch splash leaves
+// (components/launch-splash.tsx). Applied any earlier it redraws the native
+// splash in that scheme mid-launch: a light phone's splash snapped black under
+// an app set to Dark. `hideAsync()` settles when the hide is asked for, not
+// when the splash has gone, so the overlay's exit is the moment that is safe.
+// The JavaScript scheme resolves at once either way, so the app beneath the
+// launch splash is drawn in the choice.
+let nativeHeld = true;
 let nativeSubscriptions: Array<{ remove: () => void }> = [];
 const listeners = new Set<() => void>();
 
@@ -100,7 +108,7 @@ function recompute(preferenceChanged = false) {
  * dark: there the app must not move at all.
  */
 function applyNativePreference(next: AppearancePreference) {
-  if (!available) return;
+  if (!available || nativeHeld) return;
   try {
     Appearance.setColorScheme(next === 'system' ? 'unspecified' : next);
   } catch {
@@ -166,9 +174,9 @@ export function getAppearancePreference() {
 }
 
 /**
- * Restores the stored choice. The root layout holds the splash on this beside
- * the fonts, so an app set to Light on a dark phone draws its first frame
- * light. A read that fails keeps following the phone.
+ * Restores the stored choice. The launch splash holds the app back on this
+ * beside the fonts, so an app set to Light on a dark phone draws its first
+ * frame light. A read that fails keeps following the phone.
  */
 export function hydrateAppearancePreference() {
   if (hydration) return hydration;
@@ -181,6 +189,16 @@ export function hydrateAppearancePreference() {
     })
     .catch(() => undefined);
   return hydration;
+}
+
+/**
+ * Called as the launch splash leaves, long after the native splash went: the
+ * choice reaches the keyboard, alerts and system chrome.
+ */
+export function releaseNativeAppearance() {
+  if (!nativeHeld) return;
+  nativeHeld = false;
+  if (preference !== 'system') applyNativePreference(preference);
 }
 
 /**
@@ -205,11 +223,17 @@ export function useAppearancePreference() {
   return useSyncExternalStore(subscribeColorScheme, getAppearancePreference, getAppearancePreference);
 }
 
-/** Test seam: the module holds process state, so a suite has to be able to reset it. */
-export function resetAppearanceForTests(next: { preference?: AppearancePreference; systemScheme?: ColorScheme } = {}) {
+/**
+ * Test seam: the module holds process state, so a suite has to be able to reset
+ * it. The native layer starts released unless a suite asks for a launch.
+ */
+export function resetAppearanceForTests(
+  next: { preference?: AppearancePreference; systemScheme?: ColorScheme; nativeHeld?: boolean } = {},
+) {
   stopNativeSubscriptions();
   listeners.clear();
   hydration = null;
+  nativeHeld = next.nativeHeld ?? false;
   preference = next.preference ?? 'system';
   systemScheme = next.systemScheme ?? readSystemScheme();
   resolvedScheme = resolveColorScheme(preference, systemScheme, available);

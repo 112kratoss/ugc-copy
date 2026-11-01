@@ -226,6 +226,9 @@ describe('S6 — no player holds the audio session while it is silent', () => {
     // A clip's still for a reference card. Its player is never played, and is
     // let go once the still is read.
     'lib/video-frame.ts',
+    // The launch sting: a silent clip played once over the splash, so music
+    // already playing as the app opens carries on.
+    'components/launch-splash.tsx',
   ];
 
   it.each(playerFiles)('%s declares a mixing mode for every player it creates', (name) => {

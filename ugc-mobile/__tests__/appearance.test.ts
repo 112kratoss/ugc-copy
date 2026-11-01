@@ -50,6 +50,7 @@ import {
   getResolvedColorScheme,
   hydrateAppearancePreference,
   isAppearanceChoiceAvailable,
+  releaseNativeAppearance,
   resetAppearanceForTests,
   resolveColorScheme,
   setAppearancePreference,
@@ -193,7 +194,7 @@ describe('appearance store', () => {
 });
 
 describe('appearance hydration', () => {
-  it('restores a stored choice and applies it natively before the splash lifts', async () => {
+  it('restores a stored choice, natively too once the native splash has gone', async () => {
     storage.getItem.mockResolvedValue('light');
 
     await hydrateAppearancePreference();
@@ -202,6 +203,34 @@ describe('appearance hydration', () => {
     expect(getAppearancePreference()).toBe('light');
     expect(getResolvedColorScheme()).toBe('light');
     expect(native.setColorScheme).toHaveBeenCalledWith('light');
+  });
+
+  it('keeps a stored choice off the native layer while the native splash is up, then applies it', async () => {
+    // A launch: the native splash is drawn in the phone's scheme and would be
+    // redrawn in the choice the moment it reached the native layer.
+    resetAppearanceForTests({ nativeHeld: true });
+    storage.getItem.mockResolvedValue('dark');
+    native.scheme = 'light';
+
+    await hydrateAppearancePreference();
+    // The app beneath the launch splash is already drawn in the choice.
+    expect(getResolvedColorScheme()).toBe('dark');
+    expect(native.setColorScheme).not.toHaveBeenCalled();
+
+    releaseNativeAppearance();
+    releaseNativeAppearance();
+    expect(native.setColorScheme).toHaveBeenCalledTimes(1);
+    expect(native.setColorScheme).toHaveBeenCalledWith('dark');
+  });
+
+  it('applies a choice restored after the native splash went at once', async () => {
+    resetAppearanceForTests({ nativeHeld: true });
+    releaseNativeAppearance();
+    expect(native.setColorScheme).not.toHaveBeenCalled();
+
+    storage.getItem.mockResolvedValue('dark');
+    await hydrateAppearancePreference();
+    expect(native.setColorScheme).toHaveBeenCalledWith('dark');
   });
 
   it('leaves a stored System alone: the native layer already follows the phone', async () => {

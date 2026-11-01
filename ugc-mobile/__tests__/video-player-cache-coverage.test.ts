@@ -59,6 +59,7 @@ const EXEMPT: Record<string, string> = {
   'lib/use-viewer-video-player.ios.ts': "the reel's hook: app/viewer.tsx hands it a cached source",
   'lib/audio-creation-native-player.ts': "an audio creation's player: it never loops, so no copy queues behind another, and expo-video's iOS cache refuses a response that is not video/*",
   'lib/video-frame.ts': "a still's player: it never plays or loops, its item buffers no more than a second ahead, and it is let go once the still is read",
+  'components/launch-splash.tsx': "the launch sting: a clip bundled with the app, read from its own files, played once and never looped, so there is nothing to download again",
 };
 
 /**
@@ -135,6 +136,18 @@ describe('video player cache coverage', () => {
     expect(still).toMatch(/preferredForwardBufferDuration: 1 \}/);
     // And it is let go whatever the read did.
     expect(still).toMatch(/finally \{[^}]*player\.release\(\);\s*\}/);
+  });
+
+  it("holds the launch sting's uncached player to the two things its exemption rests on", () => {
+    const sting = stripComments(readFileSync(path.join(mobileRoot, 'components/launch-splash.tsx'), 'utf8'));
+    // It never loops, so Android never queues the clip behind itself.
+    expect(sting).toContain('instance.loop = false;');
+    expect(sting).not.toMatch(/\.loop = true/);
+    // And every clip it plays is bundled with the app, read from its own files.
+    const sources = [...sting.matchAll(/^import \w+ from '([^']+\.mp4)';$/gm)].map((match) => match[1]);
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.every((source) => source.startsWith('../assets/video/'))).toBe(true);
+    expect(sting).not.toMatch(/uri:/);
   });
 
   it('keeps no exemption for a file that no longer makes a player', () => {
