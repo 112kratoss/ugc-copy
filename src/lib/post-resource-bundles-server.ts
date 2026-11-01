@@ -824,7 +824,7 @@ function normalizeMarketplaceSearchQuery(value: string | null | undefined): stri
 // What a visitor who has not unlocked the recipe sees. The database's search
 // document holds the same text in this order, its title and seller name as
 // shown here (refresh_marketplace_bundle_search_documents, 20261031100330) and
-// its post's caption as the feed shows it (20261101042650: none under a paid
+// its post's caption as the feed shows it (20261101072014: none under a paid
 // recipe when it is the saved generation setup), and the list matches the
 // query literally, so the two find the same recipes. They differ only on a
 // post with no title, shown here under its caption's first line or a fixed

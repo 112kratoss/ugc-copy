@@ -95,7 +95,7 @@ COMMENT ON FUNCTION public.recipe_post_public_body(text, text) IS
 
 -- ─── The search document ─────────────────────────────────────────────────────
 --
--- As 20261101040316 left it, but for the post's caption, held as the card
+-- As 20261101071826 left it, but for the post's caption, held as the card
 -- shows it.
 CREATE OR REPLACE FUNCTION public.refresh_marketplace_bundle_search_documents(
   p_bundle_ids uuid[] DEFAULT NULL
@@ -157,7 +157,7 @@ CREATE OR REPLACE TRIGGER post_resource_bundles_refresh_marketplace_search_updat
 
 -- ─── The listing ─────────────────────────────────────────────────────────────
 --
--- As 20261101040316 left it, but for two lines of `listable`: a recipe is
+-- As 20261101071826 left it, but for two lines of `listable`: a recipe is
 -- listable only on a post whose review status is 'visible' (it was any but
 -- 'hidden') and that is not NSFW-labelled.
 CREATE OR REPLACE FUNCTION public.refresh_marketplace_bundle_listings(

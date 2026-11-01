@@ -149,7 +149,7 @@ describe('marketplace search indexes public text migration', () => {
     // The post's title and caption, trimmed. A post with no title is shown under
     // a fallback the document does not hold (the header says why). Under a paid
     // recipe the card shows the caption as public reads show it since
-    // 20261101042650, whose test holds that rule.
+    // 20261101072014, whose test holds that rule.
     expect(serverSource).toContain("title: row.title?.trim() || deriveTitleFromBody(row.body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),");
     expect(serverSource).toContain("body: row.body?.trim() || '',");
   });

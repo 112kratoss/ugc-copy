@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { isGeneratedRecipeSetupText, sanitizePublicPostContent } from '@/lib/post-public-content';
 
 const migrationsDirectory = 'supabase/migrations';
-const migrationFile = '20261101042650_marketplace_list_public_read_rules.sql';
+const migrationFile = '20261101072014_marketplace_list_public_read_rules.sql';
 // Every migration's statements, comments left out: a header may quote SQL.
 const statementsOf = (file: string) => readFileSync(join(migrationsDirectory, file), 'utf8').replace(/--.*$/gm, '');
 const statements = statementsOf(migrationFile);
