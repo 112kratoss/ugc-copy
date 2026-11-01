@@ -597,9 +597,20 @@ export function savePendingWebStart(start: PendingWebStart): boolean {
   }
 }
 
-export function clearPendingWebStart(tool: WebStartTool): void {
+/**
+ * Clears the tool's kept start. With `idempotencyKey`, only while the kept one is still that start:
+ * a page that has gone settles its own start without touching one kept since in its place.
+ */
+export function clearPendingWebStart(tool: WebStartTool, idempotencyKey?: string): void {
   try {
-    getPendingWebStartStorage()?.removeItem(pendingWebStartStorageKey(tool));
+    const storage = getPendingWebStartStorage();
+    if (!storage) return;
+    const key = pendingWebStartStorageKey(tool);
+    if (idempotencyKey) {
+      const raw = storage.getItem(key);
+      if (!raw || parsePendingWebStart(raw, tool)?.idempotencyKey !== idempotencyKey) return;
+    }
+    storage.removeItem(key);
   } catch {
     // Nothing to clear in a tab whose storage is unavailable.
   }

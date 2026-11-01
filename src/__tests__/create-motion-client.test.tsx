@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
@@ -56,10 +57,12 @@ const authState = vi.hoisted(() => ({
   session: {
     access_token: 'test-token',
     user: { id: 'user-1' },
-  },
+  } as { access_token: string; user: { id: string } } | null,
   updateCredits: vi.fn(),
 }));
-const sessionState = vi.hoisted(() => ({ signedIn: true }));
+// The browser's auth client: signed in or out, and as whom. It has another account's session before
+// the page does when that account signs in from another tab.
+const sessionState = vi.hoisted(() => ({ signedIn: true, session: { access_token: 'test-token', user: { id: 'user-1' } } }));
 const persistedFiles = vi.hoisted(() => new Map<string, File>());
 const persistedMediaMocks = vi.hoisted(() => ({
   getPersistedFile: vi.fn(async (key: string) => persistedFiles.get(key) ?? null),
@@ -195,9 +198,7 @@ vi.mock('@/lib/supabase', () => ({
     auth: {
       getSession: vi.fn(async () => ({
         data: {
-          session: sessionState.signedIn
-            ? { access_token: 'test-token', user: { id: 'user-1' } }
-            : null,
+          session: sessionState.signedIn ? sessionState.session : null,
         },
       })),
     },
@@ -372,8 +373,10 @@ beforeEach(() => {
   generationCatalogRefetchMock.mockClear();
   routerMock.push.mockClear();
   authState.credits = 10_000;
+  authState.session = { access_token: 'test-token', user: { id: 'user-1' } };
   authState.updateCredits.mockClear();
   sessionState.signedIn = true;
+  sessionState.session = { access_token: 'test-token', user: { id: 'user-1' } };
   persistedFiles.clear();
   Object.values(persistedMediaMocks).forEach((mock) => mock.mockClear());
   savedDrafts.clear();
@@ -1621,6 +1624,262 @@ describe('CreateMotionClient drafts and media', () => {
       expect(vi.mocked(URL.createObjectURL).mock.calls.map(([file]) => (file as File).name)).not.toContain('old-hero.png');
       expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
       expect(box()).toHaveValue('A slow spin with both arms wide');
+    });
+  });
+
+  // The run follows the form: when another account takes the page (from another tab, or after a
+  // sign-out), the earlier account's unanswered start, a press of theirs still under way, their
+  // result and their remix's inputs go with their form, and nothing is sent under the next.
+  describe('when another account takes the page', () => {
+    const page = () => <CreateMotionClient prefill={{}} />;
+    const PENDING_START_KEY = 'magicbooklet:pending-generation-start:v1:motion';
+    const box = () => screen.getByPlaceholderText(/Describe the kind of movement/);
+    const sessionOf = (userId: string) => ({ access_token: `token-${userId}`, user: { id: userId } });
+    /** Another account signs in from another tab: the browser's auth client has its session, then the page. */
+    function signInAs(userId: string, redraw?: () => void) {
+      authClientSignsInAs(userId);
+      authState.session = sessionOf(userId);
+      draftOwnerOverride.current = { owner: userId, carriedDraft: false, keepsVisitorForm: false };
+      redraw?.();
+    }
+    /** The browser's auth client holds another account's session while the page still checks it. */
+    function authClientSignsInAs(userId: string) {
+      sessionState.signedIn = true;
+      sessionState.session = sessionOf(userId);
+    }
+    /** The account signs out in another tab: a page that opened signed in keeps its form, owned by no one. */
+    function signOutHere(redraw: () => void) {
+      sessionState.signedIn = false;
+      authState.session = null;
+      draftOwnerOverride.current = { owner: null, carriedDraft: false, keepsVisitorForm: false };
+      redraw();
+    }
+    const authorizationOf = (init: RequestInit | undefined) => new Headers(init?.headers).get('Authorization');
+    async function settle() {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    const imageShown = () => screen.queryByText('Add the character image') === null;
+    const clipShown = () => screen.queryByText('Add the motion clip') === null;
+    async function pressForAsha() {
+      signInAs('user-1');
+      const view = render(page());
+      await attachBothInputs(view.container);
+      fireEvent.change(box(), { target: { value: 'Asha moonwalks across the roof' } });
+      await pressGenerate();
+      return view;
+    }
+
+    // Each creator is drawn for one owner and stops what it started as it goes: development's
+    // Strict Mode mounts it twice, and the second mount's presses go on.
+    it('still sends a press on a page that development’s Strict Mode mounts twice', async () => {
+      const view = render(<StrictMode><CreateMotionClient prefill={{}} /></StrictMode>);
+      await attachBothInputs(view.container);
+      await pressGenerate();
+      expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
+      expect(startPosts()).toHaveLength(1);
+      expect(authState.updateCredits).toHaveBeenCalledWith(9_980);
+    });
+
+    it('drops the earlier account’s unanswered start, and the next account’s press sends its own run', async () => {
+      startAnswers = [new TypeError('Failed to fetch')];
+      const view = await pressForAsha();
+      expect(await screen.findByRole('button', { name: 'Check again' })).toBeInTheDocument();
+
+      signInAs('user-2', () => view.rerender(page()));
+      await settle();
+      expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
+
+      await attachBothInputs(view.container);
+      fireEvent.change(box(), { target: { value: 'Ben spins on the spot' } });
+      await pressGenerate();
+      expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
+      expect(startBodies()[1]).toMatchObject({ prompt: 'Ben spins on the spot' });
+      expect(startKeys()[1]).not.toBe(startKeys()[0]);
+      expect(authorizationOf(startPosts()[1][1])).toBe('Bearer token-user-2');
+    });
+
+    it('checks no start again under a session another account has taken, while the page still checks it', async () => {
+      startAnswers = [new TypeError('Failed to fetch')];
+      await pressForAsha();
+      expect(await screen.findByRole('button', { name: 'Check again' })).toBeInTheDocument();
+
+      authClientSignsInAs('user-2');
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+      await settle();
+
+      expect(startPosts()).toHaveLength(1);
+      // Still Asha's, to check under her session.
+      expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+    });
+
+    it.each([
+      ['once the page knows', true],
+      ['while the page still checks the session', false],
+    ])('sends nothing for a press still uploading when another account signs in, %s', async (_when, pageKnows) => {
+      let finishUpload: () => void = () => undefined;
+      uploadMocks.uploadMediaToTemporaryStorage.mockImplementationOnce((file: File) => new Promise((resolve) => {
+        finishUpload = () => resolve({ signedUrl: `https://storage.example/uploads/${file.name}?token=first`, storagePath: `uploads/user-1/${file.name}` });
+      }));
+      const view = await pressForAsha();
+      await waitFor(() => expect(uploadMocks.uploadMediaToTemporaryStorage).toHaveBeenCalled());
+
+      if (pageKnows) signInAs('user-2', () => view.rerender(page()));
+      else authClientSignsInAs('user-2');
+      await settle();
+      await act(async () => finishUpload());
+      await settle();
+
+      expect(startPosts()).toEqual([]);
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+      expect(authState.updateCredits).not.toHaveBeenCalled();
+      // Uploaded for Asha alone: under another account's session the upload refuses to go.
+      expect(uploadMocks.uploadMediaToTemporaryStorage).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'hero.png' }),
+        expect.objectContaining({ userId: 'user-1' }),
+      );
+    });
+
+    it('uploads and sends nothing for a press made after another account took the session, before the page heard', async () => {
+      signInAs('user-1');
+      const view = render(page());
+      await attachBothInputs(view.container);
+
+      authClientSignsInAs('user-2');
+      await pressGenerate();
+      await settle();
+
+      expect(uploadMocks.uploadMediaToTemporaryStorage).not.toHaveBeenCalled();
+      expect(startPosts()).toEqual([]);
+    });
+
+    it('uploads and sends nothing for a press on a page signed out in another tab, once another account took the session', async () => {
+      signInAs('user-1');
+      const view = render(page());
+      await attachBothInputs(view.container);
+
+      // Asha signs out in another tab: the page keeps her form, owned by no one. Ben then signs in
+      // there, and the browser has his session before the page does.
+      signOutHere(() => view.rerender(page()));
+      authClientSignsInAs('user-2');
+      await pressGenerate();
+      await settle();
+
+      expect(uploadMocks.uploadMediaToTemporaryStorage).not.toHaveBeenCalled();
+      expect(startPosts()).toEqual([]);
+    });
+
+    it('forgets a start refused after the page was left, so the next visit does not send it again', async () => {
+      let answer: (response: Response) => void = () => undefined;
+      startAnswers = [() => new Promise<Response>((resolve) => { answer = resolve; })];
+      const view = await pressForAsha();
+      await waitFor(() => expect(startPosts()).toHaveLength(1));
+
+      view.unmount();
+      await act(async () => answer(jsonResponse({ code: 'insufficient_credits', error: 'Insufficient credits. This action costs 20 credits.' }, 402)));
+
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+    });
+
+    it('still sends a press whose page was left while its picture went up, under its own account', async () => {
+      let finishUpload: () => void = () => undefined;
+      uploadMocks.uploadMediaToTemporaryStorage.mockImplementationOnce((file: File) => new Promise((resolve) => {
+        finishUpload = () => resolve({ signedUrl: `https://storage.example/uploads/${file.name}?token=first`, storagePath: `uploads/user-1/${file.name}` });
+      }));
+      const view = await pressForAsha();
+      await waitFor(() => expect(uploadMocks.uploadMediaToTemporaryStorage).toHaveBeenCalled());
+
+      view.unmount();
+      await act(async () => finishUpload());
+
+      await waitFor(() => expect(startPosts()).toHaveLength(1));
+      expect(authorizationOf(startPosts()[0][1])).toBe('Bearer token-user-1');
+    });
+
+    it('takes the earlier account’s result, its caption and its Post form off the canvas', async () => {
+      generationLookupBody = { generations: [{ id: 'generation-1', title: 'Rooftop dance', paywallPrefill: null }] };
+      const view = await pressForAsha();
+      expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
+      expect(screen.getByText('Asha moonwalks across the roof', { selector: 'p' })).toBeInTheDocument();
+      expect(await screen.findByRole('form', { name: 'Post it to the feed' })).toBeInTheDocument();
+
+      signInAs('user-2', () => view.rerender(page()));
+      await settle();
+
+      expect(screen.queryByRole('link', { name: /Download video/ })).toBeNull();
+      expect(screen.queryByText('Asha moonwalks across the roof', { selector: 'p' })).toBeNull();
+      expect(screen.queryByRole('form', { name: 'Post it to the feed' })).toBeNull();
+    });
+
+    it('takes the earlier account’s failed run off the canvas', async () => {
+      statusMocks.fetchGenerationStatusWithRetry.mockResolvedValue({ status: 'failed', error: 'The provider could not render Asha’s clip' });
+      const view = await pressForAsha();
+      expect(await screen.findByRole('alert')).toHaveTextContent('The provider could not render Asha’s clip');
+
+      signInAs('user-2', () => view.rerender(page()));
+      await settle();
+
+      expect(screen.queryByText(/could not render Asha’s clip/)).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'It didn’t finish' })).toBeNull();
+    });
+
+    it('takes the server’s refusal of the earlier account’s start off the page', async () => {
+      startAnswers = [jsonResponse({ code: 'insufficient_credits', error: 'Insufficient credits. This action costs 20 credits.' }, 402)];
+      // Ben's own saved picture and clip, priced as Asha's run was.
+      persistedFiles.set('create-motion:character-image:user-2', new File(['ben'], 'ben.png', { type: 'image/png' }));
+      persistedFiles.set('create-motion:reference-video:user-2', new File(['spin'], 'spin.mp4', { type: 'video/mp4' }));
+      const view = await pressForAsha();
+      expect(await screen.findByText('Insufficient credits. This action costs 20 credits.')).toBeInTheDocument();
+
+      signInAs('user-2', () => view.rerender(page()));
+      await waitFor(() => expect(persistedMediaMocks.getPersistedFile).toHaveBeenCalledWith('create-motion:reference-video:user-2'));
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      await settle();
+
+      expect(screen.queryByText('Insufficient credits. This action costs 20 credits.')).toBeNull();
+      expect(screen.queryByRole('link', { name: /Top Up Credits/ })).toBeNull();
+    });
+
+    it('drops the earlier account’s remix inputs and its own, and reads the remix again for the next', async () => {
+      const remixPage = () => <CreateMotionClient prefill={{ remixId: 'generation-source' }} />;
+      // Asha's own run: its picture and clip are given back to her alone, and its source is refused to another account.
+      remixSourceBody = {
+        generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-3.0' },
+        result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
+        inputs: {
+          motion: {
+            characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'generation_inputs/user-1/generation-source/00.png', sourceGenerationId: 'generation-source' },
+            referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Reference video', storagePath: 'generation_inputs/user-1/generation-source/01.mp4', sourceGenerationId: 'generation-source' },
+          },
+        },
+        workflowSettings: { model: 'kling-3.0' },
+        restoreIssues: [],
+      };
+      const ashasRead = fetchMock.getMockImplementation()!;
+      onTestFinished(() => {
+        fetchMock.mockImplementation(ashasRead);
+      });
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).startsWith('/api/remix-source?') && authorizationOf(init) !== 'Bearer token-user-1'
+          ? jsonResponse({ error: 'Remix source not found' }, 404)
+          : ashasRead(input, init)
+      ));
+      signInAs('user-1');
+      const view = render(remixPage());
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      // She swaps the run's picture for one of her own.
+      pickFile(view.container, 'motion-character-image-input', new File(['selfie'], 'selfie.png', { type: 'image/png' }));
+      await waitFor(() => expect(vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0]).toMatchObject({ name: 'selfie.png' }));
+
+      signInAs('user-2', () => view.rerender(remixPage()));
+      await waitFor(() => expect(fetchMock.mock.calls
+        .filter(([input]) => String(input).startsWith('/api/remix-source?'))
+        .map(([, init]) => authorizationOf(init))).toEqual(['Bearer token-user-1', 'Bearer token-user-2']));
+      await settle();
+
+      expect(imageShown()).toBe(false);
+      expect(clipShown()).toBe(false);
     });
   });
 

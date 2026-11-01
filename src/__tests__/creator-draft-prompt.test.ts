@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isAnotherDraftOwner, keepsPromptOverSavedDraft, promptHoldsTyping } from '@/lib/creator-draft-prompt';
+import { keepsPromptOverSavedDraft, promptHoldsTyping } from '@/lib/creator-draft-prompt';
 
 const MOTION_OPENING = "No distortion, the character's movements are consistent with the video.";
 
@@ -41,17 +41,5 @@ describe('the prompt box against a saved draft read back (owner, 2026-11-01)', (
     const motionReturn = { boxPrompt: 'Moonwalk to the left, arms loose', openingPrompt: MOTION_OPENING, carried: true };
     expect(keepsPromptOverSavedDraft({ ...motionReturn, savedPrompt: MOTION_OPENING })).toBe(true);
     expect(keepsPromptOverSavedDraft({ ...motionReturn, savedPrompt: 'Moonwalk to the left, arms loose and slow' })).toBe(false);
-  });
-
-  it('calls a read for any other owner a change, and the same owner read again none', () => {
-    expect(isAnotherDraftOwner(null, 'user-1')).toBe(false);
-    expect(isAnotherDraftOwner('user-1', 'user-1')).toBe(false);
-    expect(isAnotherDraftOwner('user-1', 'user-2')).toBe(true);
-    // A visitor's words stay behind when an account signs in without the sign-up sheet, and an
-    // account's when it signs out.
-    expect(isAnotherDraftOwner('visitor', 'user-1')).toBe(true);
-    expect(isAnotherDraftOwner('user-1', 'visitor')).toBe(true);
-    // An Enhance pressed while a sign-up's hand-over was on its way was asked for nobody else.
-    expect(isAnotherDraftOwner('user-1', null)).toBe(false);
   });
 });

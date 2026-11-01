@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { adoptVisitorDraft, hasVisitorDraftHandover, VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import type { CreatorDraftTool } from '@/lib/persisted-media';
@@ -106,5 +106,73 @@ export function useCreatorDraftOwner(
     carriedDraft: moved.answer === 'moved',
     // Nothing to move means another tab moved it, or there was no draft: the form is not this page's to keep.
     keepsVisitorForm: !handOverLeft && (moved.answer === 'gave-up' || moved.answer === 'failed'),
+  };
+}
+
+/** Whose form a creator holds, and the key its body is drawn under while it holds it. */
+export type CreatorFormHolder = { owner: string | null; key: number };
+
+/**
+ * Whose form the creator holds once the draft is `draft.owner`'s. It keeps the same form, under
+ * the same key:
+ * - while the draft has no owner: a hand-over on its way, or a session that lapsed or signed out
+ *   on a page that opened signed in, whose form waits for its account as it always has;
+ * - for the page's first owner, learned after it opened (a hand-over that answered);
+ * - for the account a hand-over that gave up or failed leaves the visitor's form to
+ *   (`keepsVisitorForm`).
+ * Any other owner gets a form of their own under a new key: the creator's body is drawn anew, so
+ * the earlier owner's form, unanswered start, result and remix go with it.
+ */
+export function nextCreatorFormHolder(holder: CreatorFormHolder, draft: CreatorDraftOwner): CreatorFormHolder {
+  if (draft.owner === null || draft.owner === holder.owner) return holder;
+  if (holder.owner === null || draft.keepsVisitorForm) return { owner: draft.owner, key: holder.key };
+  return { owner: draft.owner, key: holder.key + 1 };
+}
+
+/**
+ * The form a creator draws its body for (`nextCreatorFormHolder`).
+ * - `key`: the body is drawn under it, so another owner's form is a new body and nothing of the
+ *   earlier owner's stays on the page.
+ * - `owner`: whose form it is, through a lapse too, when the draft has none. A press goes out only
+ *   under that account's session.
+ * - `replaced`: aborted once another owner's form takes this one's place, in the commit that swaps
+ *   them, so the earlier body's work still out (an upload, a save as it unmounts) stops there. A
+ *   page that is only left aborts nothing: what the body started for its owner goes on.
+ * - `pageViewer`: whether the form is the page's own viewer's, the visitor's before any account and
+ *   then the first account's. What the server drew for the page (the sign-up's welcome, the posts
+ *   to start from, read for that viewer) is theirs, and no later account's.
+ */
+export type CreatorForm = { key: number; owner: string | null; replaced: AbortSignal; pageViewer: boolean };
+
+const isAccount = (owner: string | null) => owner !== null && owner !== VISITOR_DRAFT_OWNER;
+
+export function useCreatorForm(draft: CreatorDraftOwner): CreatorForm {
+  const [held, setHeld] = useState(() => ({
+    owner: draft.owner,
+    key: 0,
+    replacement: new AbortController(),
+    // The key of the first account's form, once there is one.
+    viewerKey: isAccount(draft.owner) ? 0 : null as number | null,
+  }));
+  const next = nextCreatorFormHolder(held, draft);
+  // Moved as the page draws, so the earlier owner's body is never drawn for the next owner.
+  if (next !== held) {
+    setHeld({
+      ...next,
+      replacement: next.key === held.key ? held.replacement : new AbortController(),
+      viewerKey: held.viewerKey ?? (isAccount(next.owner) ? next.key : null),
+    });
+  }
+  // A layout effect, so the earlier body learns it was replaced before its own unmount effects run.
+  const drawn = useRef(held.replacement);
+  useLayoutEffect(() => {
+    if (drawn.current !== held.replacement) drawn.current.abort();
+    drawn.current = held.replacement;
+  }, [held.replacement]);
+  return {
+    key: held.key,
+    owner: held.owner,
+    replaced: held.replacement.signal,
+    pageViewer: held.viewerKey === null || held.viewerKey === held.key,
   };
 }

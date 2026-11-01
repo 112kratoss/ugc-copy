@@ -456,6 +456,18 @@ describe('pending web starts', () => {
     expect(loadPendingWebStart('image', 'user-1')).toBeNull();
   });
 
+  it('clears a kept start by its key only while it is still the start kept', () => {
+    const start = pendingStart();
+    savePendingWebStart(start);
+
+    // A page that has gone settles its own start, and leaves one kept since in its place.
+    clearPendingWebStart('image', 'key-0');
+    expect(loadPendingWebStart('image', 'user-1')).toEqual(start);
+
+    clearPendingWebStart('image', 'key-1');
+    expect(loadPendingWebStart('image', 'user-1')).toBeNull();
+  });
+
   it('replays the same body the server hashed', () => {
     const start = pendingStart({ body: { kind: 'image', settings: { aspectRatio: '1:1' }, inputs: [{ slot: 'imageReferences', url: 'https://cdn.test/a.png' }] } });
     savePendingWebStart(start);

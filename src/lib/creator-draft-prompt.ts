@@ -14,12 +14,12 @@
  * - A box holding nothing, or only what the page opened on, takes the saved prompt: an emptied
  *   box has nothing to lose.
  * - When the page's owner changes (another account, a sign-out, a visitor signing in from another
- *   tab), the box goes back to the page's opening prompt at once and then takes the new owner's
- *   saved one: one owner's words are never shown to another, nor saved under them. Only the
- *   sheet's hand-over moves a visitor's work into an account (`creator-visitor-draft.ts`), and
- *   where its move gave up or failed the page keeps the visitor's form as it is
- *   (`keepsVisitorForm`), words, pictures and clips. An Enhance answer still on its way is the
- *   earlier owner's too: its words, its notes and the balance it reports are dropped.
+ *   tab), the creator is drawn anew for the new owner (`useCreatorForm`): the box holds the page's
+ *   opening prompt and then takes the new owner's saved one. One owner's words are never shown to
+ *   another, nor saved under them; an Enhance answer still on its way goes with the earlier form.
+ *   Only the sheet's hand-over moves a visitor's work into an account (`creator-visitor-draft.ts`),
+ *   and where its move gave up or failed the page keeps the visitor's form as it is
+ *   (`keepsVisitorForm`), words, pictures and clips.
  */
 
 /** The box holds words typed on the page: something, and not what the page opened on. */
@@ -49,15 +49,4 @@ export function keepsPromptOverSavedDraft({
     || (savedShotPrompts ?? []).some((shot) => shot.trim().length > 0);
   if (carried && carriesWords) return false;
   return promptHoldsTyping(boxPrompt, openingPrompt);
-}
-
-/**
- * The box holds another owner's words than `owner`'s: as a read of `owner`'s draft starts, or as
- * an Enhance pressed for `owner` answers. `boxOwner` is whose draft the last read was for: none
- * before the page's first. The same owner read again (Strict Mode's second run, a session that
- * lapsed and came back) is no change, nor an answer asked for while a sign-up's hand-over was on
- * its way, when the page knew no owner yet.
- */
-export function isAnotherDraftOwner(boxOwner: string | null, owner: string | null): boolean {
-  return boxOwner !== null && owner !== null && boxOwner !== owner;
 }

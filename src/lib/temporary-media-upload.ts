@@ -31,6 +31,11 @@ type TemporaryMediaReadUrlResponse = {
 export type TemporaryMediaUploadOptions = {
   onProgress?: (progress: SignedUrlUploadProgress) => void;
   signal?: AbortSignal;
+  /**
+   * The account the file goes up for. Under a session another account has taken since (it signed
+   * in from another tab), the file does not go: it would be staged in that account's folder.
+   */
+  userId?: string;
 };
 
 export type TemporaryMediaUpload = { signedUrl: string; storagePath: string };
@@ -115,12 +120,13 @@ async function requestTemporaryMediaReadUrl(
  */
 export async function refreshTemporaryMediaUrl(
   storagePath: string,
-  { signal }: { signal?: AbortSignal } = {},
+  { signal, userId }: Pick<TemporaryMediaUploadOptions, 'signal' | 'userId'> = {},
 ): Promise<string> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.access_token) {
     throw new Error('Please log in to upload files.');
   }
+  if (userId && session.user.id !== userId) throw new UploadCancelledError();
   return requestTemporaryMediaReadUrl(session.access_token, storagePath, signal);
 }
 
@@ -134,6 +140,7 @@ export async function uploadMediaToTemporaryStorage(
   if (!session?.access_token) {
     throw new Error('Please log in to upload files.');
   }
+  if (options.userId && session.user.id !== options.userId) throw new UploadCancelledError();
 
   const mimeType = file.type || 'application/octet-stream';
   const response = await fetch('/api/uploads/media/sign', {

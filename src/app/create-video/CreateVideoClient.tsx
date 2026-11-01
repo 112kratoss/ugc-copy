@@ -63,7 +63,7 @@ import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/Creat
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
-import { useCreatorDraftOwner } from '@/lib/use-creator-draft-owner';
+import { useCreatorDraftOwner, useCreatorForm, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses, IconButton } from '@/components/DesignSystem';
 import { videoRunShortSummary, videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import {
@@ -178,7 +178,7 @@ import {
     setPersistedValue,
 } from '@/lib/persisted-media';
 import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
-import { isAnotherDraftOwner, keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
+import { keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
@@ -227,6 +227,8 @@ import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh }
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
 import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
+import { useUnmountSignal } from '@/lib/use-unmount-signal';
+import { isUploadCancelledError, UploadCancelledError } from '@/lib/upload-queue';
 import {
     inspectPromptQuality,
     type PromptEnhancementWarning,
@@ -237,6 +239,7 @@ import {
     TEMPORARY_MEDIA_UPLOAD_LIMITS,
     TemporaryMediaReadUrlError,
     uploadMediaToTemporaryStorage,
+    type TemporaryMediaUploadOptions,
 } from '@/lib/temporary-media-upload';
 import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
@@ -247,7 +250,7 @@ interface MultiShot {
     duration: number;
 }
 
-/** The shots the page opens on, and puts back when another owner's words are in them. */
+/** The shots the page opens on. */
 function openingShots(): MultiShot[] {
     return [{ id: '1', prompt: '', duration: 5 }];
 }
@@ -333,19 +336,28 @@ type StagedUpload = { storagePath: string; signedUrl: string; uploadedAt: number
  * fresh link, while it is younger than STAGED_UPLOAD_REUSE_MS, or a new upload. Every
  * press used to upload every reference again, each one a sign request against the
  * limit of 60 a user per 10 minutes. An object the sweep took anyway answers
- * MEDIA_OBJECT_NOT_FOUND, and the file goes up again.
+ * MEDIA_OBJECT_NOT_FOUND, and the file goes up again. `press`: the account it goes up
+ * for, and the signal that stops it (another owner's form taking this one's place),
+ * then or as it ends, so nothing keeps it.
  */
-async function stageReferenceFile(file: File, staged: StagedUpload | null | undefined): Promise<StagedUpload> {
+async function stageReferenceFile(
+    file: File,
+    staged: StagedUpload | null | undefined,
+    press: TemporaryMediaUploadOptions,
+): Promise<StagedUpload> {
     if (staged && Date.now() - staged.uploadedAt < STAGED_UPLOAD_REUSE_MS) {
         try {
-            return { ...staged, signedUrl: await refreshTemporaryMediaUrl(staged.storagePath) };
+            const signedUrl = await refreshTemporaryMediaUrl(staged.storagePath, press);
+            if (press.signal?.aborted) throw new UploadCancelledError();
+            return { ...staged, signedUrl };
         } catch (refreshError) {
             if (!(refreshError instanceof TemporaryMediaReadUrlError && refreshError.code === 'MEDIA_OBJECT_NOT_FOUND')) {
                 throw refreshError;
             }
         }
     }
-    const upload = await uploadMediaToTemporaryStorage(file);
+    const upload = await uploadMediaToTemporaryStorage(file, press);
+    if (press.signal?.aborted) throw new UploadCancelledError();
     return { storagePath: upload.storagePath, signedUrl: upload.signedUrl, uploadedAt: Date.now() };
 }
 
@@ -1194,14 +1206,7 @@ function standbyClipAndTrackNotice(modelName: string, clips: number, tracks: num
     return `Your saved ${saved} ${one ? 'stays' : 'stay'} saved. ${modelName} takes no reference ${slots}, so this run does not use ${one ? 'it' : 'them'}.`;
 }
 
-export default function CreateVideoClient({
-    prefill,
-    welcome = null,
-    handoverNonce = null,
-    visitorWelcomeCredits = null,
-    opening = null,
-    startPosts = null,
-}: {
+type CreateVideoClientProps = {
     prefill: CreateVideoPrefill;
     /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
     welcome?: CreatorWelcome | null;
@@ -1213,13 +1218,48 @@ export default function CreateVideoClient({
     opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
-}) {
+};
+
+/**
+ * The video creator, drawn for one owner's form at a time: the visitor's until someone signs in,
+ * then the account's, which takes the visitor's when sign-up was opened here. Another account's
+ * form is a creator drawn anew (`useCreatorForm`): the earlier owner's unanswered start, run,
+ * result and remix go with theirs, and nothing still under way for them is sent under the next.
+ */
+export default function CreateVideoClient(props: CreateVideoClientProps) {
+    const { session } = useAuth();
+    const draft = useCreatorDraftOwner('video', session?.user?.id ?? null, props.handoverNonce ?? null);
+    const form = useCreatorForm(draft);
+    // What the server drew for the page's viewer (the sign-up's welcome, the posts to start from, read
+    // for them) is theirs: a later account's form is drawn without it.
+    return (
+        <VideoCreator
+            key={form.key}
+            {...props}
+            welcome={form.pageViewer ? props.welcome : null}
+            startPosts={form.pageViewer ? props.startPosts : null}
+            draft={draft}
+            form={form}
+        />
+    );
+}
+
+function VideoCreator({
+    prefill,
+    welcome = null,
+    visitorWelcomeCredits = null,
+    opening = null,
+    startPosts = null,
+    draft,
+    form,
+}: CreateVideoClientProps & { draft: CreatorDraftOwner; form: CreatorForm }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
-    // The visitor's draft until someone signs in, then the account's, which takes
-    // the visitor's when sign-up was opened here.
-    const { owner: draftOwner, carriedDraft, keepsVisitorForm } = useCreatorDraftOwner('video', userId, handoverNonce);
+    const { owner: draftOwner, carriedDraft, keepsVisitorForm } = draft;
+    // The account whose form this is, which a press goes out under: the page's own, or through a
+    // session that lapsed, the one the form was drawn for.
+    const formAccount = form.owner !== null && form.owner !== VISITOR_DRAFT_OWNER ? form.owner : userId;
     // A page that opened signed out works up to Generate, which asks for an account
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
@@ -1312,9 +1352,7 @@ export default function CreateVideoClient({
     // The owner whose saved draft has been read back. Until then nothing is saved over
     // it, and the catalog does not pick its default model in place of the saved one.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
-    // Whose draft the last read was for, and whether the prompt carried from sign-up has come
-    // back yet: the prompt box's rule (`creator-draft-prompt.ts`).
-    const promptOwnerRef = useRef<string | null>(null);
+    // Whether the prompt carried from sign-up has come back yet: the prompt box's rule (`creator-draft-prompt.ts`).
     const carriedPromptTakenRef = useRef(false);
     const restoredDraftModelRef = useRef(false);
     // A saved draft with a model was read back, a link's model or not: its settings are the creator's.
@@ -1325,8 +1363,6 @@ export default function CreateVideoClient({
     const emptySavedDraftRef = useRef<Partial<VideoCreatorDraft> | null>(null);
     // The owner whose saved files have been read back (`complete`), or given up on.
     const [mediaRestoredFor, setMediaRestoredFor] = useState<{ owner: string; complete: boolean } | null>(null);
-    // Whose saved files the last read was for: the files on the form are theirs.
-    const mediaOwnerRef = useRef<string | null>(null);
     const pendingAdditionalSettingsRef = useRef<VideoCreatorDraft['additionalSettings'] | null>(null);
     const unsavedDraftRef = useRef<{ owner: string; draft: VideoCreatorDraft } | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
@@ -1350,6 +1386,10 @@ export default function CreateVideoClient({
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     // The look, as the page opens, for a run already at work.
     const activeRunLookupRef = useRef<AbortController | null>(null);
+    // Aborted as this creator goes, left or drawn anew for another owner: a check or an answer of its
+    // own still out then shows nothing more and sends no one to sign in. A press already out goes on
+    // under its own account; only another owner's form stops it (`form.replaced`).
+    const unmountSignal = useUnmountSignal();
     const elementInputRef = useRef<HTMLInputElement>(null);
     const referenceVideoInputRef = useRef<HTMLInputElement>(null);
     const referenceAudioInputRef = useRef<HTMLInputElement>(null);
@@ -1532,11 +1572,12 @@ export default function CreateVideoClient({
     };
     // Staged files are saved under the account that added them (or the visitor, until
     // one signs in), so the next account to use this browser does not open them. A
-    // remix keeps none: it restores its source. Nor does a run or a pick finishing for
-    // an owner the page has left since: the form holds the next owner's files then.
+    // remix keeps none: it restores its source. Nor does a form another owner's has replaced: a
+    // press, a pick or a save still out for it would write the earlier owner's files back, after a
+    // sign-out that cleared them too.
     const mediaKey = useCallback((key: string) => (
-        !remixId && draftOwner && mediaOwnerRef.current === draftOwner ? scopedPersistedMediaKey(key, draftOwner) : null
-    ), [remixId, draftOwner]);
+        !remixId && draftOwner && !form.replaced.aborted ? scopedPersistedMediaKey(key, draftOwner) : null
+    ), [form.replaced, remixId, draftOwner]);
     const persistVideoElements = useCallback(async (nextElements: VideoElementDraft[]) => {
         const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoElements);
         if (!key) {
@@ -2241,6 +2282,20 @@ export default function CreateVideoClient({
     const enhanceFrameUploadCacheRef = useRef<Map<File, { url: string; at: number }>>(new Map());
     const ENHANCE_FRAME_CACHE_TTL_MS = 10 * 60 * 1000;
 
+    /**
+     * The uploads of a Prepare or of an Enhance's frames: for the form's account, and stopped if
+     * another owner's form takes this one's place. None while the browser holds another account's
+     * session (signed in from another tab, before the page has heard): nothing of this form goes up
+     * under it.
+     */
+    const prepareUploads = async (): Promise<TemporaryMediaUploadOptions | null> => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session && formAccount && session.user.id !== formAccount) return null;
+        // The form's account even while the browser holds no session: one that lands before the
+        // upload reads it is refused there.
+        return { userId: formAccount ?? session?.user.id, signal: form.replaced };
+    };
+
     const resolveEnhancerFrameUrl = async (file: File | null, url: string | null): Promise<string | null> => {
         if (url && url.startsWith('https://')) return url;
         if (!file) return null;
@@ -2248,7 +2303,10 @@ export default function CreateVideoClient({
         if (cached && Date.now() - cached.at < ENHANCE_FRAME_CACHE_TTL_MS) {
             return cached.url;
         }
-        const upload = await uploadMediaToTemporaryStorage(file);
+        const uploads = await prepareUploads();
+        // Under another account's session the frame stays out of the Enhance.
+        if (!uploads) return null;
+        const upload = await uploadMediaToTemporaryStorage(file, uploads);
         enhanceFrameUploadCacheRef.current.set(file, { url: upload.signedUrl, at: Date.now() });
         return upload.signedUrl;
     };
@@ -2752,12 +2810,6 @@ export default function CreateVideoClient({
         if (remixId || !draftOwner) {
             return;
         }
-        if (!keepsVisitorForm && isAnotherDraftOwner(mediaOwnerRef.current, draftOwner)) {
-            // The pictures, clips and tracks are another owner's: not this one's to see, send or
-            // save. What is saved for them stays theirs, and the new owner's own come back below.
-            takeMediaOffForm();
-        }
-        mediaOwnerRef.current = draftOwner;
 
         let isMounted = true;
         const key = (name: string) => scopedPersistedMediaKey(name, draftOwner);
@@ -2910,16 +2962,6 @@ export default function CreateVideoClient({
         // Words typed on the page win over the saved prompt, typed before the page's script ran
         // included, except over the one carried from sign-up (`creator-draft-prompt.ts`).
         const openingPrompt = prefillPrompt ?? '';
-        if (!keepsVisitorForm && isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
-            // The words are another owner's, the shots' and the enhancer's notes on them too: not
-            // this one's to see, nor to save.
-            promptRef.current = openingPrompt;
-            setPrompt(openingPrompt);
-            setMultiPrompts(openingShots());
-            setPromptQualityWarnings([]);
-            setMultiPromptQualityWarnings({});
-        }
-        promptOwnerRef.current = draftOwner;
         // The catalog waits for the draft, so a store that never answers must not hold
         // it: past this the page goes on without the draft, and a late one is ignored.
         let settled = false;
@@ -3051,10 +3093,11 @@ export default function CreateVideoClient({
         return () => window.clearTimeout(timer);
     }, [draftRestoredFor, flushTextDraft, remixId, textDraft, draftOwner]);
 
-    // An edit made in the last half second is not lost when the page goes.
+    // An edit made in the last half second is not lost when the page goes. A form another owner's
+    // has replaced keeps it unsaved: its owner may have just signed out.
     useEffect(() => () => {
-        void flushTextDraft();
-    }, [flushTextDraft]);
+        if (!form.replaced.aborted) void flushTextDraft();
+    }, [flushTextDraft, form.replaced]);
 
     /** Saves the form now, for a reload or a sign-in round trip about to leave the page. */
     const saveTextDraftNow = async () => {
@@ -3218,13 +3261,13 @@ export default function CreateVideoClient({
         durationSeconds,
     });
     /**
-     * Picked files' seeds once each length is read, or none when the page's owner changed
-     * meanwhile: the files were the earlier owner's, so they go with that owner's form, unsaved.
+     * Picked files' seeds once each length is read, or none when another owner's form took this
+     * one's place meanwhile: the files go with the form they were picked on, unsaved. A page that is
+     * only left keeps them, saved for its owner's next visit.
      */
     const readPickSeeds = async <Seed extends { previewUrl: string }>(read: Promise<Seed[]>): Promise<Seed[] | null> => {
-        const pickedFor = mediaOwnerRef.current;
         const seeds = await read;
-        if (mediaOwnerRef.current === pickedFor) return seeds;
+        if (!form.replaced.aborted) return seeds;
         seeds.forEach((seed) => revokeObjectUrl(seed.previewUrl));
         return null;
     };
@@ -3362,31 +3405,6 @@ export default function CreateVideoClient({
         if (key) {
             await removePersistedMedia(key);
         }
-    };
-
-    /**
-     * Empties the form of its media: the frames, every picture, clip and track, the Omni IDs
-     * pasted for a run and the names of files refused. Nothing saved is touched. For an owner
-     * change, where all of it was the earlier owner's.
-     */
-    const takeMediaOffForm = () => {
-        setFrame('start', null);
-        setFrame('end', null);
-        [...elementsRef.current, ...referenceVideosRef.current, ...referenceAudiosRef.current, ...klingVideoElementsRef.current]
-            .forEach((item) => revokeObjectUrl(item.previewUrl));
-        klingSubjectsRef.current.forEach((subject) => subject.images.forEach((image) => revokeObjectUrl(image.previewUrl)));
-        commitElements([]);
-        commitReferenceVideos([]);
-        commitReferenceAudios([]);
-        commitKlingVideoElements([]);
-        klingSubjectsRef.current = [];
-        setKlingSubjects([]);
-        setPreparedAudioIds([]);
-        setCharacterIds([]);
-        setPreparedAudioIdDraft('');
-        setCharacterIdDraft('');
-        setPickNotice(null);
-        setUploadPreview(null);
     };
 
     const handleRemoveElement = async (elementId: string) => {
@@ -3892,6 +3910,9 @@ export default function CreateVideoClient({
         if (!session) {
             throw new Error('Please log in to prepare Seedance assets.');
         }
+        // Not under a session another account has taken since (signed in from another tab, before
+        // the page has heard): the asset would be that account's.
+        if (formAccount && session.user.id !== formAccount) throw new UploadCancelledError();
 
         const response = assetId
             ? await fetch(`/api/seedance-assets?assetId=${encodeURIComponent(assetId)}`, {
@@ -3926,12 +3947,12 @@ export default function CreateVideoClient({
         });
     };
 
-    const ensureUploadedElement = async (element: VideoElementDraft): Promise<VideoElementDraft> => {
+    const ensureUploadedElement = async (element: VideoElementDraft, press: TemporaryMediaUploadOptions): Promise<VideoElementDraft> => {
         if (!element.file) {
             return element;
         }
 
-        const staged = await stageReferenceFile(element.file, element.staged);
+        const staged = await stageReferenceFile(element.file, element.staged, press);
         return {
             ...element,
             providerUrl: staged.signedUrl,
@@ -3947,13 +3968,14 @@ export default function CreateVideoClient({
 
     const ensureUploadedReference = async (
         reference: SeedanceMediaReferenceDraft,
-        assetType: SeedanceAssetKind
+        assetType: SeedanceAssetKind,
+        press: TemporaryMediaUploadOptions,
     ): Promise<SeedanceMediaReferenceDraft> => {
         if (!reference.file) {
             return reference;
         }
 
-        const staged = await stageReferenceFile(reference.file, reference.staged);
+        const staged = await stageReferenceFile(reference.file, reference.staged, press);
         return {
             ...reference,
             providerUrl: staged.signedUrl,
@@ -3968,13 +3990,14 @@ export default function CreateVideoClient({
     };
 
     const ensureUploadedKlingVideoElement = async (
-        element: KlingVideoElementDraft
+        element: KlingVideoElementDraft,
+        press: TemporaryMediaUploadOptions,
     ): Promise<KlingVideoElementDraft> => {
         if (!element.file) {
             return element;
         }
 
-        const staged = await stageReferenceFile(element.file, element.staged);
+        const staged = await stageReferenceFile(element.file, element.staged, press);
         return {
             ...element,
             providerUrl: staged.signedUrl,
@@ -4043,6 +4066,7 @@ export default function CreateVideoClient({
         return nextReferences.find((reference) => reference.id === referenceId) ?? null;
     };
 
+
     const prepareElementSeedanceAsset = async (elementId: string) => {
         // Preparing uploads the file, which takes an account.
         if (isVisitor) {
@@ -4053,7 +4077,9 @@ export default function CreateVideoClient({
         setActiveSeedanceAssetKey(activeKey);
 
         try {
-            const uploadedElement = await updateElementAsset(elementId, (element) => ensureUploadedElement(element));
+            const uploads = await prepareUploads();
+            if (!uploads) return;
+            const uploadedElement = await updateElementAsset(elementId, (element) => ensureUploadedElement(element, uploads));
             // Gone, or replaced while it uploaded: the card has nothing of its own to prepare yet.
             if (!uploadedElement) return;
 
@@ -4101,8 +4127,10 @@ export default function CreateVideoClient({
         setActiveSeedanceAssetKey(activeKey);
 
         try {
+            const uploads = await prepareUploads();
+            if (!uploads) return;
             if (kind === 'video') {
-                const uploadedReference = await updateReferenceVideoAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Video'));
+                const uploadedReference = await updateReferenceVideoAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Video', uploads));
                 // Gone, or replaced while it uploaded.
                 if (!uploadedReference) return;
 
@@ -4118,7 +4146,7 @@ export default function CreateVideoClient({
                 return;
             }
 
-            const uploadedReference = await updateReferenceAudioAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Audio'));
+            const uploadedReference = await updateReferenceAudioAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Audio', uploads));
             if (!uploadedReference) return;
 
             const sourceUrl = uploadedReference.storagePath || uploadedReference.providerUrl;
@@ -4354,7 +4382,9 @@ export default function CreateVideoClient({
      * Sends a saved start under its own key, and follows the run it answers with. With
      * `reveal`, the result canvas comes into view once the start is confirmed: a refusal is
      * said in the column's bar and must stay in view, and a run picked up on load leaves the
-     * page where it is.
+     * page where it is. It goes only under the session of the account it is for: one another
+     * account has taken since (signed in from another tab, before the page has heard) sends
+     * nothing, and a start being checked again stays, to be checked under its own.
      */
     const sendStartAndFollow = async (
         attempt: PendingWebStart,
@@ -4365,15 +4395,38 @@ export default function CreateVideoClient({
         let started: WebGenerationStartResponse;
         try {
             const { data: { session: activeSession } } = await supabase.auth.getSession();
+            if (attempt.userId && activeSession && activeSession.user.id !== attempt.userId) {
+                setGenerationTiming(null);
+                return;
+            }
+            // Kept before it is sent: with no answer, the next press and the next visit
+            // replay this key and body instead of paying for a second run.
+            savePendingWebStart(attempt);
             started = await requestWebGenerationStart(attempt.body as CatalogGenerationRequestPayload, {
                 accessToken: activeSession?.access_token ?? null,
                 idempotencyKey: attempt.idempotencyKey,
             });
         } catch (startError) {
+            if (unmountSignal.current.aborted) {
+                // The page went while the start was out. A refusal settles it, so the next visit does
+                // not send it again; an answer that may yet mean it started stays kept, to be checked.
+                if (!isAmbiguousWebStartFailure(startError)) clearPendingWebStart('video', attempt.idempotencyKey);
+                return;
+            }
             await handleStartFailure(startError, attempt);
             return;
         }
 
+        if (unmountSignal.current.aborted) {
+            // The page went while the start was out: it was left, or another owner's form took its
+            // place. The run is the server's and the start has done its work. The balance is read
+            // again for whoever holds the session now, rather than set to the one this start
+            // answered, and nothing here follows the run.
+            clearPendingWebStart('video', attempt.idempotencyKey);
+            announceGenerationStarted();
+            window.dispatchEvent(new Event('credits_updated'));
+            return;
+        }
         // The answer names the run: the attempt has done its work.
         clearPendingWebStart('video');
         setUnconfirmedStart(null);
@@ -4569,7 +4622,9 @@ export default function CreateVideoClient({
         activeRunLookupRef.current = lookup;
         const resumePendingGeneration = async () => {
             const { data: { session } } = await supabase.auth.getSession();
-            if (!session) return;
+            // Another account's session the page has not heard of yet picks up nothing: the creator
+            // is drawn anew for that account once it has.
+            if (!session || (formAccount && session.user.id !== formAccount)) return;
 
             // A start this tab sent and never heard back from goes first. Replayed under
             // its own key, it answers with the run it started, or starts it once.
@@ -4832,10 +4887,22 @@ export default function CreateVideoClient({
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
             setGenerationTiming(null);
+            // A page that has gone sends no one to sign in.
+            if (unmountSignal.current.aborted) return;
             await saveTextDraftNow();
             router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
             return;
         }
+        // The press is the form's account's: under a session another account has taken since
+        // (signed in from another tab, before the page has heard), nothing goes up or out.
+        if (formAccount && activeSession.user.id !== formAccount) {
+            activeGenerationRequestKeyRef.current = null;
+            setIsGenerating(false);
+            setGenerationTiming(null);
+            return;
+        }
+        // A page that is only left goes on with its press; another owner's form in its place stops it.
+        const press: TemporaryMediaUploadOptions = { userId: activeSession.user.id, signal: form.replaced };
 
         // A prepared Seedance asset goes as its id beside the file's own link: the server
         // measures the link and gives the provider the id. One still processing, or one
@@ -4869,7 +4936,7 @@ export default function CreateVideoClient({
                     estimatedTotalMs,
                 }));
 
-                const preparedElements = await Promise.all(imageReferenceInputs.map((input) => ensureUploadedElement(input.element)));
+                const preparedElements = await Promise.all(imageReferenceInputs.map((input) => ensureUploadedElement(input.element, press)));
                 commitElements(withStagedUploads(elementsRef.current, preparedElements));
                 preparedElements.forEach((preparedElement, index) => {
                     const imageUrl = preparedElement.providerUrl || preparedElement.previewUrl;
@@ -4895,7 +4962,7 @@ export default function CreateVideoClient({
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const preparedReferences = await Promise.all(referenceVideoInputs.map((input) => ensureUploadedReference(input.reference, 'Video')));
+                const preparedReferences = await Promise.all(referenceVideoInputs.map((input) => ensureUploadedReference(input.reference, 'Video', press)));
                 commitReferenceVideos(withStagedUploads(referenceVideosRef.current, preparedReferences));
                 preparedReferences.forEach((preparedReference, index) => {
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
@@ -4922,7 +4989,7 @@ export default function CreateVideoClient({
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const preparedReferences = await Promise.all(referenceAudioInputs.map((input) => ensureUploadedReference(input.reference, 'Audio')));
+                const preparedReferences = await Promise.all(referenceAudioInputs.map((input) => ensureUploadedReference(input.reference, 'Audio', press)));
                 commitReferenceAudios(withStagedUploads(referenceAudiosRef.current, preparedReferences));
                 preparedReferences.forEach((preparedReference, index) => {
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
@@ -4951,7 +5018,7 @@ export default function CreateVideoClient({
                 }));
 
                 const uploadedKlingElements = await Promise.all(videoElementInputs.map(async ({ element }) => {
-                    const preparedElement = await ensureUploadedKlingVideoElement(element);
+                    const preparedElement = await ensureUploadedKlingVideoElement(element, press);
                     const sourceUrl = preparedElement.providerUrl || preparedElement.previewUrl;
                     if (!sourceUrl) {
                         throw new Error(`Missing media for ${element.displayName}`);
@@ -4991,7 +5058,7 @@ export default function CreateVideoClient({
                     let staged = image.staged ?? null;
                     // A picture of the creator's own is staged; a remix's is the file the run kept.
                     if (image.file) {
-                        staged = await stageReferenceFile(image.file, image.staged);
+                        staged = await stageReferenceFile(image.file, image.staged, press);
                         remoteUrl = staged.signedUrl;
                         storagePath = staged.storagePath;
                     }
@@ -5008,7 +5075,7 @@ export default function CreateVideoClient({
                     });
                 }
                 // Keep the uploaded URLs so a retry does not re-upload the set: on the subjects the
-                // form holds now, as each list above, which an owner change meanwhile has emptied.
+                // form holds now, as each list above.
                 commitKlingSubjects(klingSubjectsRef.current.map((subject) => ({
                     ...subject,
                     images: subject.images.map((image) => uploadedImages.get(image) ?? image),
@@ -5028,6 +5095,7 @@ export default function CreateVideoClient({
                     const staged = await stageReferenceFile(
                         startImageFile,
                         startFrameStaged?.file === startImageFile ? startFrameStaged.staged : null,
+                        press,
                     );
                     setStartFrameStaged({ file: startImageFile, staged });
                     startUrl = staged.signedUrl;
@@ -5062,6 +5130,7 @@ export default function CreateVideoClient({
                     const staged = await stageReferenceFile(
                         endImageFile,
                         endFrameStaged?.file === endImageFile ? endFrameStaged.staged : null,
+                        press,
                     );
                     setEndFrameStaged({ file: endImageFile, staged });
                     endUrl = staged.signedUrl;
@@ -5121,11 +5190,12 @@ export default function CreateVideoClient({
                 createdAt: new Date().toISOString(),
                 userId: activeSession.user.id,
             };
-            // Kept before it is sent: with no answer, the next press and the next visit
-            // replay this key and body instead of paying for a second run.
-            savePendingWebStart(attempt);
         } catch (prepareError) {
-            setError(prepareError instanceof Error ? prepareError.message : 'Something went wrong');
+            // An upload the press gave up, for the creator going or for another account's
+            // session, is no failure of the creator's to show.
+            if (!isUploadCancelledError(prepareError)) {
+                setError(prepareError instanceof Error ? prepareError.message : 'Something went wrong');
+            }
             setGenerationTiming(null);
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
@@ -5144,6 +5214,18 @@ export default function CreateVideoClient({
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
         }
+    };
+
+    /**
+     * The balance a paid Enhance answers with. One that answers after the page went (it was left, or
+     * another owner's form took its place) is read again for whoever holds the session instead.
+     */
+    const reportEnhanceBalance = (credits: number) => {
+        if (unmountSignal.current.aborted) {
+            window.dispatchEvent(new Event('credits_updated'));
+            return;
+        }
+        updateCredits(credits);
     };
 
     // The creator's own choice to stop waiting, priced on its button: the unanswered
@@ -5745,22 +5827,16 @@ export default function CreateVideoClient({
                                 ) : null}
 
                                 <EnhancePromptButton
-                                    // A press for the owner before an account switch is theirs: the button is drawn anew for the next
-                                    // owner, and its answer dropped whichever callbacks it comes back through (`creator-draft-prompt.ts`).
-                                    key={draftOwner}
                                     variant="toolbar"
                                     leading={<CreatorTemplatesTile />}
                                     prompt={prompt}
                                     onEnhanced={(text, result) => {
-                                        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;
                                         setPrompt(text);
                                         setPromptQualityWarnings(result?.warnings ?? []);
                                         setActiveMentionQuery(null);
                                         requestAnimationFrame(() => updateMentionState(text));
                                     }}
-                                    onCreditsUpdate={(credits) => {
-                                        if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
-                                    }}
+                                    onCreditsUpdate={reportEnhanceBalance}
                                     medium="video"
                                     selectedModel={selectedModel}
                                     helperText={
@@ -5791,20 +5867,15 @@ export default function CreateVideoClient({
                                             ) : null}
                                         </div>
                                         <EnhancePromptButton
-                                            // Drawn anew for the next owner, as the prompt's button is.
-                                            key={draftOwner}
                                             prompt={shot.prompt}
                                             onEnhanced={(text, result) => {
-                                                if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;
                                                 updateShot(shot.id, 'prompt', text);
                                                 setMultiPromptQualityWarnings((current) => ({
                                                     ...current,
                                                     [shot.id]: result?.warnings ?? [],
                                                 }));
                                             }}
-                                            onCreditsUpdate={(credits) => {
-                                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
-                                            }}
+                                            onCreditsUpdate={reportEnhanceBalance}
                                             medium="video"
                                             selectedModel={selectedModel}
                                             context={buildShotPromptQualityContext(shot, index)}
@@ -6418,7 +6489,9 @@ export default function CreateVideoClient({
                                                             <div className="flex flex-wrap gap-2">
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => void item.onPrepare().catch((prepareError) => setError(prepareError instanceof Error ? prepareError.message : 'Failed to prepare Seedance asset'))}
+                                                                    onClick={() => void item.onPrepare().catch((prepareError) => {
+                                                                        if (!isUploadCancelledError(prepareError)) setError(prepareError instanceof Error ? prepareError.message : 'Failed to prepare Seedance asset');
+                                                                    })}
                                                                     disabled={isBusy}
                                                                     className={`${CREATOR_REFERENCE_CHIP_CLASS} gap-1.5`}
                                                                 >
@@ -6428,7 +6501,9 @@ export default function CreateVideoClient({
                                                                 {item.asset.assetId ? (
                                                                     <button
                                                                         type="button"
-                                                                        onClick={() => void item.onRefresh().catch((refreshError) => setError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh Seedance asset'))}
+                                                                        onClick={() => void item.onRefresh().catch((refreshError) => {
+                                                                            if (!isUploadCancelledError(refreshError)) setError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh Seedance asset');
+                                                                        })}
                                                                         disabled={isBusy}
                                                                         className={CREATOR_REFERENCE_CHIP_CLASS}
                                                                     >

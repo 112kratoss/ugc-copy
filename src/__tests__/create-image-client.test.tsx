@@ -88,7 +88,7 @@ const useDeploymentRefreshMock = vi.hoisted(() => vi.fn((enabled: boolean) => {
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 const authState = vi.hoisted(() => ({
   credits: 10_000 as number | null,
-  session: { access_token: 'test-token', user: { id: 'user-1' } },
+  session: { access_token: 'test-token', user: { id: 'user-1' } } as { access_token: string; user: { id: string } } | null,
   updateCredits: vi.fn(),
 }));
 const getSessionMock = vi.hoisted(() => vi.fn());
@@ -246,6 +246,7 @@ beforeEach(() => {
   useDeploymentRefreshMock.mockClear();
   routerMock.push.mockClear();
   authState.credits = 10_000;
+  authState.session = { access_token: 'test-token', user: { id: 'user-1' } };
   authState.updateCredits.mockClear();
   getSessionMock.mockReset();
   getSessionMock.mockResolvedValue(SIGNED_IN_SESSION);
@@ -760,7 +761,7 @@ const HARBOUR_REMIX: RemixSourceBundle = {
   restoreIssues: [],
 };
 
-type StartReply = { status: number; body: unknown } | Error | 'hang';
+type StartReply = { status: number; body: unknown } | Error | 'hang' | Promise<Response>;
 
 function startedReply(overrides: Record<string, unknown> = {}): StartReply {
   return {
@@ -790,7 +791,8 @@ function jsonResponse(status: number, body: unknown) {
 function installFetch({ starts = [], publishDetails = null, remixBundle = null, activeRun = null, activeRunAnswer = null }: {
   starts?: StartReply[];
   publishDetails?: unknown;
-  remixBundle?: RemixSourceBundle | null;
+  /** The remix source, or what it answers each reader by their Authorization header. */
+  remixBundle?: RemixSourceBundle | ((authorization: string | undefined) => RemixSourceBundle) | null;
   activeRun?: Record<string, unknown> | null;
   /** Answers the look in place of `activeRun`, when the test resolves it. */
   activeRunAnswer?: Promise<Response> | null;
@@ -802,12 +804,15 @@ function installFetch({ starts = [], publishDetails = null, remixBundle = null, 
       const reply = replies.shift();
       if (!reply) throw new Error('No start reply left');
       if (reply === 'hang') return new Promise<Response>(() => undefined);
+      if (reply instanceof Promise) return reply;
       if (reply instanceof Error) throw reply;
       return jsonResponse(reply.status, reply.body);
     }
     if (url.startsWith('/api/generations?')) return jsonResponse(200, publishDetails ?? { generations: [] });
     if (url === '/api/generations/active?tool=image') return activeRunAnswer ?? jsonResponse(200, { run: activeRun });
-    if (url.startsWith('/api/remix-source?') && remixBundle) return jsonResponse(200, remixBundle);
+    if (url.startsWith('/api/remix-source?') && remixBundle) {
+      return jsonResponse(200, typeof remixBundle === 'function' ? remixBundle(authorizationOf(init)) : remixBundle);
+    }
     throw new Error(`Unexpected fetch: ${url}`);
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -846,6 +851,11 @@ function runAtWork(overrides: Record<string, unknown> = {}) {
 
 function startKey(call: unknown[]) {
   return ((call[1] as RequestInit).headers as Record<string, string>)['Idempotency-Key'];
+}
+
+/** The session a request went under, as its Authorization header names it. */
+function authorizationOf(init: RequestInit | undefined) {
+  return (init?.headers as Record<string, string> | undefined)?.Authorization;
 }
 
 function startBody(call: unknown[]) {
@@ -1666,9 +1676,10 @@ describe('CreateImageClient generation pipeline', () => {
         expect(screen.queryByAltText('Asha’s harbour')).not.toBeInTheDocument();
         expect(screen.queryByText(/asha-notes\.txt/)).not.toBeInTheDocument();
 
-        // What Ben adds is saved alone under him, and his run sends only that.
+        // What Ben adds is saved alone under him, and his run, under his session, sends only that.
         pickPictures(new File(['ben'], 'lighthouse.png', { type: 'image/png' }));
         await waitFor(() => expect(picturesSavedFor('user-2')).toContain('lighthouse.png'));
+        getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-user-2', user: { id: 'user-2' } } } });
         typePrompt('A lighthouse at dawn');
         pressGenerate();
         await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
@@ -1795,6 +1806,351 @@ describe('CreateImageClient generation pipeline', () => {
     });
   });
 
+  // The run follows the form: when another account takes the page (from another tab, or after a
+  // sign-out), the earlier account's unanswered start, a press of theirs still under way, their
+  // result and their remix's pictures go with their form, and nothing is sent under the next.
+  describe('when another account takes the page', () => {
+    const page = () => <CreateImageClient prefill={{}} />;
+    const START_UNCONFIRMED = 'We couldn’t confirm your generation started. Check again — that can’t start a second run.';
+    const sessionOf = (userId: string) => ({ access_token: `token-${userId}`, user: { id: userId } });
+    /** Another account signs in from another tab: the browser's auth client has its session, then the page. */
+    function signInAs(userId: string, redraw?: () => void) {
+      authClientSignsInAs(userId);
+      authState.session = sessionOf(userId);
+      draftOwnerOverride.current = { owner: userId, carriedDraft: false, keepsVisitorForm: false };
+      redraw?.();
+    }
+    /** The browser's auth client holds another account's session while the page still checks it. */
+    function authClientSignsInAs(userId: string) {
+      getSessionMock.mockResolvedValue({ data: { session: sessionOf(userId) } });
+    }
+    /** The account signs out in another tab: a page that opened signed in keeps its form, owned by no one. */
+    function signOutHere(redraw: () => void) {
+      getSessionMock.mockResolvedValue({ data: { session: null } });
+      authState.session = null;
+      draftOwnerOverride.current = { owner: null, carriedDraft: false, keepsVisitorForm: false };
+      redraw();
+    }
+    function keepAshasPicture() {
+      getPersistedImageElementRecordsMock.mockImplementation(async (key: string) => (key === 'create-image:elements:user-1'
+        ? [{ id: 'asha-1', displayName: 'Asha’s harbour', file: new File(['harbour'], 'harbour.png', { type: 'image/png' }) }]
+        : []));
+    }
+    /** Asha's press, held in its upload until the test lets it finish. */
+    function holdUpload() {
+      let finish: () => void = () => undefined;
+      uploadMediaToTemporaryStorageMock.mockImplementationOnce((file: File) => new Promise((resolve) => {
+        finish = () => resolve({ signedUrl: `https://signed.example.com/uploads/${file.name}`, storagePath: `uploads/user-1/${file.name}` });
+      }));
+      return async () => {
+        await act(async () => finish());
+        await settleDraftRead();
+      };
+    }
+
+    // Each creator is drawn for one owner and stops what it started as it goes: development's
+    // Strict Mode mounts it twice, and the second mount's presses go on.
+    it('still sends a press on a page that development’s Strict Mode mounts twice', async () => {
+      const fetchMock = installFetch({ starts: [startedReply()] });
+      render(<StrictMode><CreateImageClient prefill={{}} /></StrictMode>);
+      await settleDraftRead();
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+      expect(await findResult()).toBeInTheDocument();
+      expect(startCalls(fetchMock)).toHaveLength(1);
+      expect(authState.updateCredits).toHaveBeenCalledWith(9_992);
+    });
+
+    it('reads the balance again for whoever holds the session when a start answers after the page was left', async () => {
+      const answer = heldAnswer();
+      const fetchMock = installFetch({ starts: [answer.promise] });
+      const view = render(page());
+      await settleDraftRead();
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+      const balanceEvents: Event[] = [];
+      const listen = (event: Event) => balanceEvents.push(event);
+      window.addEventListener('credits_updated', listen);
+
+      view.unmount();
+      const started = startedReply() as { status: number; body: unknown };
+      await act(async () => answer.answer(jsonResponse(started.status, started.body)));
+      window.removeEventListener('credits_updated', listen);
+
+      // Not set to the balance this start answered with, which may not be the session's any more.
+      expect(authState.updateCredits).not.toHaveBeenCalled();
+      expect(balanceEvents.some((event) => !(event instanceof CustomEvent))).toBe(true);
+      // Nothing on the page follows the run, and the next visit does not send its start again.
+      expect(fetchGenerationStatusWithRetryMock).not.toHaveBeenCalled();
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+    });
+
+    it('drops the earlier account’s unanswered start, and the next account’s press sends its own run', async () => {
+      const fetchMock = installFetch({ starts: [new TypeError('Failed to fetch'), startedReply()] });
+      signInAs('user-1');
+      const view = render(page());
+      await settleDraftRead();
+      typePrompt('Asha’s harbour at dusk');
+      pressGenerate();
+      expect(await screen.findByText(START_UNCONFIRMED)).toBeInTheDocument();
+
+      signInAs('user-2', () => view.rerender(page()));
+      await settleDraftRead();
+      expect(screen.queryByText(START_UNCONFIRMED)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+
+      typePrompt('Ben’s glasshouse at dawn');
+      pressGenerate();
+      expect(await findResult()).toBeInTheDocument();
+      const [ashas, bens] = startCalls(fetchMock);
+      expect(startBody(bens).prompt).toBe('Ben’s glasshouse at dawn');
+      expect(startKey(bens)).not.toBe(startKey(ashas));
+      expect(authorizationOf(bens[1] as RequestInit)).toBe('Bearer token-user-2');
+    });
+
+    it('checks no start again under a session another account has taken, while the page still checks it', async () => {
+      const fetchMock = installFetch({ starts: [new TypeError('Failed to fetch')] });
+      signInAs('user-1');
+      render(page());
+      await settleDraftRead();
+      typePrompt('Asha’s harbour at dusk');
+      pressGenerate();
+      expect(await screen.findByText(START_UNCONFIRMED)).toBeInTheDocument();
+
+      authClientSignsInAs('user-2');
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+      await settleDraftRead();
+
+      expect(startCalls(fetchMock)).toHaveLength(1);
+      // Still Asha's, to check under her session.
+      expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+    });
+
+    it.each([
+      ['once the page knows', true],
+      ['while the page still checks the session', false],
+    ])('sends nothing for a press still uploading when another account signs in, %s', async (_when, pageKnows) => {
+      const fetchMock = installFetch({ starts: [startedReply()] });
+      keepAshasPicture();
+      signInAs('user-1');
+      const view = render(page());
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      const finishUpload = holdUpload();
+      typePrompt('Asha’s harbour at dusk');
+      pressGenerate();
+      await waitFor(() => expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalled());
+
+      if (pageKnows) signInAs('user-2', () => view.rerender(page()));
+      else authClientSignsInAs('user-2');
+      await settleDraftRead();
+      await finishUpload();
+
+      expect(startCalls(fetchMock)).toEqual([]);
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+      expect(authState.updateCredits).not.toHaveBeenCalled();
+      // Uploaded for Asha alone: under another account's session the upload refuses to go.
+      expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'harbour.png' }),
+        expect.objectContaining({ userId: 'user-1' }),
+      );
+    });
+
+    it('uploads and sends nothing for a press made after another account took the session, before the page heard', async () => {
+      const fetchMock = installFetch({ starts: [startedReply()] });
+      keepAshasPicture();
+      signInAs('user-1');
+      render(page());
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      typePrompt('Asha’s harbour at dusk');
+
+      authClientSignsInAs('user-2');
+      pressGenerate();
+      await settleDraftRead();
+
+      expect(uploadMediaToTemporaryStorageMock).not.toHaveBeenCalled();
+      expect(startCalls(fetchMock)).toEqual([]);
+    });
+
+    it('takes the earlier account’s result, its caption and its Post form off the canvas', async () => {
+      installFetch({
+        starts: [startedReply()],
+        publishDetails: { generations: [{ id: 'gen-new', title: 'Harbour study', paywallPrefill: null }] },
+      });
+      signInAs('user-1');
+      const view = render(page());
+      await settleDraftRead();
+      typePrompt('Asha’s harbour at dusk');
+      pressGenerate();
+      expect(await findResult()).toBeInTheDocument();
+      expect(screen.getByText('Asha’s harbour at dusk', { selector: 'p' })).toBeInTheDocument();
+      expect(await screen.findByRole('form', { name: 'Post it to the feed' })).toBeInTheDocument();
+
+      signInAs('user-2', () => view.rerender(page()));
+      await settleDraftRead();
+
+      expect(screen.queryByRole('button', { name: 'Preview generated image 1' })).not.toBeInTheDocument();
+      expect(screen.queryByText('Asha’s harbour at dusk')).not.toBeInTheDocument();
+      expect(screen.queryByRole('form', { name: 'Post it to the feed' })).not.toBeInTheDocument();
+    });
+
+    it('takes the earlier account’s failed run off the canvas', async () => {
+      fetchGenerationStatusWithRetryMock.mockResolvedValue({ status: 'failed', error: 'The provider could not render Asha’s harbour' });
+      installFetch({ starts: [startedReply()] });
+      signInAs('user-1');
+      const view = render(page());
+      await settleDraftRead();
+      typePrompt('Asha’s harbour at dusk');
+      pressGenerate();
+      expect(await screen.findByRole('alert')).toHaveTextContent('The provider could not render Asha’s harbour');
+
+      signInAs('user-2', () => view.rerender(page()));
+      await settleDraftRead();
+
+      expect(screen.queryByText(/could not render Asha’s harbour/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'It didn’t finish' })).not.toBeInTheDocument();
+    });
+
+    it('takes the server’s refusal of the earlier account’s start off the page', async () => {
+      installFetch({ starts: [{ status: 402, body: { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 8 credits.' } }] });
+      signInAs('user-1');
+      const view = render(page());
+      await settleDraftRead();
+      typePrompt('Asha’s harbour at dusk');
+      pressGenerate();
+      expect(await screen.findByText('Insufficient credits. This action costs 8 credits.')).toBeInTheDocument();
+
+      signInAs('user-2', () => view.rerender(page()));
+      await settleDraftRead();
+
+      expect(screen.queryByText('Insufficient credits. This action costs 8 credits.')).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /Top Up Credits/ })).not.toBeInTheDocument();
+    });
+
+    it('uploads and sends nothing for a press on a page signed out in another tab, once another account took the session', async () => {
+      const fetchMock = installFetch({ starts: [startedReply()] });
+      keepAshasPicture();
+      signInAs('user-1');
+      const view = render(page());
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      typePrompt('Asha’s harbour at dusk');
+
+      // Asha signs out in another tab: the page keeps her form, owned by no one. Ben then signs in
+      // there, and the browser has his session before the page does.
+      signOutHere(() => view.rerender(page()));
+      authClientSignsInAs('user-2');
+      pressGenerate();
+      await settleDraftRead();
+
+      expect(uploadMediaToTemporaryStorageMock).not.toHaveBeenCalled();
+      expect(startCalls(fetchMock)).toEqual([]);
+    });
+
+    it('forgets a start refused after the page was left, so the next visit does not send it again', async () => {
+      const answer = heldAnswer();
+      const fetchMock = installFetch({ starts: [answer.promise] });
+      const view = render(page());
+      await settleDraftRead();
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+
+      view.unmount();
+      await act(async () => answer.answer(jsonResponse(402, { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 8 credits.' })));
+
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+    });
+
+    it('still sends a press whose page was left while its pictures went up, under its own account', async () => {
+      const fetchMock = installFetch({ starts: [startedReply()] });
+      keepAshasPicture();
+      signInAs('user-1');
+      const view = render(page());
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      const finishUpload = holdUpload();
+      typePrompt('Asha’s harbour at dusk');
+      pressGenerate();
+      await waitFor(() => expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalled());
+
+      view.unmount();
+      await finishUpload();
+
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+      expect(authorizationOf(startCalls(fetchMock)[0][1] as RequestInit)).toBe('Bearer token-user-1');
+    });
+
+    it('writes nothing back for the earlier account when its sign-out gives the page back to the visitor', async () => {
+      installFetch();
+      keepAshasPicture();
+      // A visitor's page that Asha's session reaches in place.
+      authState.session = null;
+      getSessionMock.mockResolvedValue({ data: { session: null } });
+      draftOwnerOverride.current = { owner: 'visitor', carriedDraft: false, keepsVisitorForm: false };
+      const view = render(page());
+      await settleDraftRead();
+      signInAs('user-1', () => view.rerender(page()));
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      await settleDraftRead();
+      typePrompt('Asha’s harbour at dusk');
+
+      // She signs out from the shell, which clears what this browser keeps for her first.
+      const picturesWritten = setPersistedImageElementRecordsMock.mock.calls.length;
+      const draftsSaved = saveCreatorDraftMock.mock.calls.length;
+      authState.session = null;
+      getSessionMock.mockResolvedValue({ data: { session: null } });
+      draftOwnerOverride.current = { owner: 'visitor', carriedDraft: false, keepsVisitorForm: false };
+      view.rerender(page());
+      await settleDraftRead();
+
+      expect(setPersistedImageElementRecordsMock.mock.calls.slice(picturesWritten).map(([key]) => key)).not.toContain('create-image:elements:user-1');
+      expect(saveCreatorDraftMock.mock.calls.slice(draftsSaved).map(([, owner]) => owner)).not.toContain('user-1');
+    });
+
+    it('reads the balance again when a paid Enhance answers after the page was left', async () => {
+      installFetch();
+      const view = render(page());
+      await settleDraftRead();
+      const pressed = enhanceButton.props!;
+      const balanceEvents: Event[] = [];
+      const listen = (event: Event) => balanceEvents.push(event);
+      window.addEventListener('credits_updated', listen);
+
+      view.unmount();
+      act(() => pressed.onCreditsUpdate(41));
+      window.removeEventListener('credits_updated', listen);
+
+      // Not set to the balance the answer brings, which need not be the session's any more.
+      expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
+      expect(balanceEvents.some((event) => !(event instanceof CustomEvent))).toBe(true);
+    });
+
+    it('drops the earlier account’s remix pictures and its own, and reads the remix again for the next', async () => {
+      const remixPage = () => <CreateImageClient prefill={{ remixId: 'gen-1' }} />;
+      // A remix gives a run's own pictures to the account that made it; another reads the post alone.
+      const fetchMock = installFetch({
+        remixBundle: (authorization) => (authorization === 'Bearer token-user-1' ? HARBOUR_REMIX : { ...HARBOUR_REMIX, inputs: {} }),
+      });
+      signInAs('user-1');
+      const view = render(remixPage());
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][multiple]')!, {
+        target: { files: [new File(['selfie'], 'selfie.png', { type: 'image/png' })] },
+      });
+      expect(await screen.findByAltText('Element 3')).toBeInTheDocument();
+
+      signInAs('user-2', () => view.rerender(remixPage()));
+      await waitFor(() => expect(fetchMock.mock.calls
+        .filter(([url]) => String(url).startsWith('/api/remix-source?'))
+        .map(([, init]) => authorizationOf(init as RequestInit))).toEqual(['Bearer token-user-1', 'Bearer token-user-2']));
+      await settleDraftRead();
+
+      expect(screen.queryByAltText('Hero shot')).not.toBeInTheDocument();
+      expect(screen.queryByAltText('Umbrella')).not.toBeInTheDocument();
+      expect(screen.queryByAltText('Element 3')).not.toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk');
+    });
+  });
+
   it('keeps staged media under the signed-in account and purges the unscoped stores once', async () => {
     getPersistedImageElementRecordsMock.mockResolvedValue([{ id: 'restored-1', displayName: 'Restored product', file: restoredFile }]);
     const view = render(<CreateImageClient prefill={{}} />);
@@ -1834,7 +2190,8 @@ describe('CreateImageClient generation pipeline', () => {
       await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(2));
 
       expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalledTimes(1);
-      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledWith('uploads/user-1/restored-element.png');
+      // Signed again for the account that pressed, as its upload would have gone up.
+      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledWith('uploads/user-1/restored-element.png', expect.objectContaining({ userId: 'user-1' }));
       const [first, second] = startCalls(fetchMock).map(startBody);
       expect(first.inputs[0]).toMatchObject({
         url: 'https://signed.example.com/uploads/restored-element.png',
