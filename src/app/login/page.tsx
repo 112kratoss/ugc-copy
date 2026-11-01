@@ -1,6 +1,10 @@
 import LoginClient from '@/app/login/LoginClient';
 import { getSafeAuthNextPath } from '@/lib/auth-onboarding';
 
+// The sign-in form posts to this page when Enter is pressed before its script has run, and
+// Vercel answers a post to a prerendered page itself, with an empty 405.
+export const dynamic = 'force-dynamic';
+
 interface LoginPageProps {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }

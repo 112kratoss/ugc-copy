@@ -8,14 +8,17 @@ import { expect, test, type Page, type Request } from '@playwright/test';
  * has run nothing stops Enter in a field from submitting the form the browser's own way. A
  * form with no method submits that way as a GET, which writes every named field into the
  * URL: /login put the password in the address bar, the history and any log that keeps query
- * strings. Each form now posts to its own address, which the server answers with the same
- * page; the address keeps its query, so /login still returns the visitor where they came
- * from.
+ * strings. /login now posts to its own address, which renders on every request, so the server
+ * answers with the same page and the address keeps its query: the visitor still goes back
+ * where they came from. /contact is prerendered, and Vercel answers a post to it itself, with
+ * an empty 405 that this dev server cannot show; its fields carry no names instead, so its GET
+ * sends nothing.
  *
  * The page's own chunk is held until Enter has been pressed, as in
  * creator-prompt-before-script.spec.ts, so the press always lands on the server's HTML.
  * /admin/login draws its form only where admin access is configured, which this run's env
- * cannot be; src/__tests__/form-submit-method.test.ts holds every form's method in the code.
+ * cannot be; src/__tests__/form-submit-method.test.ts holds every form's names and method in
+ * the code.
  */
 
 const COLD_PAGE = { timeout: 45_000 };
@@ -27,6 +30,8 @@ type ServerDrawnForm = {
   typed: Record<string, string>;
   /** The field Enter is pressed in. */
   enterIn: string;
+  /** How the browser sends it: a post to its own address, or a GET with no named field. */
+  method: 'POST' | 'GET';
 };
 
 const FORMS: ServerDrawnForm[] = [
@@ -37,6 +42,7 @@ const FORMS: ServerDrawnForm[] = [
       'login-password': 'typed-before-the-script-5150',
     },
     enterIn: 'login-password',
+    method: 'POST',
   },
   {
     // The subject keeps the value the server drew.
@@ -47,6 +53,7 @@ const FORMS: ServerDrawnForm[] = [
       message: 'Typed before the page could answer',
     },
     enterIn: 'email',
+    method: 'GET',
   },
 ];
 
@@ -121,17 +128,25 @@ for (const form of FORMS) {
     for (const value of Object.values(form.typed)) {
       expect(carries(submitted.url(), value), `${submitted.method()} ${submitted.url()} carries "${value}"`).toBe(false);
     }
-    expect(submitted.method()).toBe('POST');
-    expect(submitted.url()).toBe(new URL(form.path, page.url()).href);
-    // The server answers the post with the same page, which replaces the one it came from.
+    expect(submitted.method()).toBe(form.method);
+    const sent = new URL(submitted.url());
+    if (form.method === 'POST') {
+      // The address keeps its query.
+      expect(sent.href).toBe(new URL(form.path, page.url()).href);
+    } else {
+      // No field has a name, so there is nothing to send.
+      expect(sent.pathname).toBe(pathname);
+      expect([...sent.searchParams.keys()]).toEqual([]);
+    }
+    // The server answers with the same page, which replaces the one the form was on.
     expect((await submitted.response())?.status()).toBe(200);
     await expect.poll(
       () => page.evaluate(() => !('submittedFrom' in window)).catch(() => false),
-      { ...COLD_PAGE, message: 'the answer to the post replaces the page' },
+      { ...COLD_PAGE, message: 'the answer replaces the page' },
     ).toBe(true);
     await expect(page.locator(`#${form.enterIn}`)).toBeVisible();
 
-    await expect(page).toHaveURL(new URL(form.path, page.url()).href);
+    await expect(page).toHaveURL(submitted.url());
     for (const address of [...addresses, page.url()]) {
       for (const value of Object.values(form.typed)) {
         expect(carries(address, value), `${address} carries "${value}"`).toBe(false);

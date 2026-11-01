@@ -63,10 +63,12 @@ export function ContactForm() {
     );
   }
 
-  // A post, not the default GET: Enter pressed before the page's script has run submits the
-  // form the browser's own way, and a GET wrote the name, email and message into the address.
+  // No field has a name: Enter pressed before the page's script has run submits the form the
+  // browser's own way, and a GET of named fields wrote the name, email and message into the
+  // address. A post is no way out here: Vercel answers a post to this prerendered page itself,
+  // with an empty 405. With nothing named, the GET sends nothing and the page loads again.
   return (
-    <form method="post" onSubmit={handleSubmit} className="space-y-6">
+    <form onSubmit={handleSubmit} className="space-y-6">
       <div>
         <label htmlFor="name" className="mb-2 block text-sm font-bold">
           Your Name
@@ -74,7 +76,6 @@ export function ContactForm() {
         <input
           type="text"
           id="name"
-          name="name"
           required
           autoComplete="name"
           value={formData.name}
@@ -91,7 +92,6 @@ export function ContactForm() {
         <input
           type="email"
           id="email"
-          name="email"
           required
           autoComplete="email"
           value={formData.email}
@@ -107,7 +107,6 @@ export function ContactForm() {
         </label>
         <select
           id="subject"
-          name="subject"
           value={formData.subject}
           onChange={(event) => setFormData({ ...formData, subject: event.target.value })}
           className="ui-focus-ring min-h-12 w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 outline-none transition focus:border-[var(--ui-focus)]"
@@ -126,7 +125,6 @@ export function ContactForm() {
         </label>
         <textarea
           id="message"
-          name="message"
           required
           rows={5}
           value={formData.message}

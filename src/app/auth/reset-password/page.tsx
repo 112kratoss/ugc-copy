@@ -162,7 +162,7 @@ function ResetPasswordContent() {
               Password updated. Continuing…
             </div>
           ) : (
-            <form method="post" onSubmit={handleSubmit} className="mt-6 space-y-4">
+            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
               <div>
                 <label className="mb-1.5 block text-sm font-bold text-[var(--ui-text-secondary)]" htmlFor="new-password">
                   New password
@@ -171,7 +171,6 @@ function ResetPasswordContent() {
                   <input
                     id="new-password"
                     ref={passwordRef}
-                    name="new-password"
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(event) => {
@@ -218,7 +217,6 @@ function ResetPasswordContent() {
                 <input
                   id="confirm-password"
                   ref={confirmPasswordRef}
-                  name="confirm-password"
                   type={showPassword ? 'text' : 'password'}
                   value={confirmPassword}
                   onChange={(event) => {
