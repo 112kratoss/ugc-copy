@@ -251,6 +251,9 @@ vi.mock('@/lib/media', async (importOriginal) => ({
   uploadPickedMedia: vi.fn(),
 }));
 
+// A picked track's length is read by an expo-video player, whose native core does not resolve under vitest.
+vi.mock('@/lib/media-file-length', () => ({ readMediaFileLength: vi.fn() }));
+
 vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
@@ -281,6 +284,7 @@ import { MediaCreationScreen } from '../components/media-creation-screen';
 import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-prompt';
 import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '../lib/media';
+import { readMediaFileLength } from '../lib/media-file-length';
 import { UploadCancelledError } from '../lib/upload-file';
 import { createPublishedDefaultsCatalog, createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel, seedance2MiniAtRelease, seedance2MiniModel, veo31Model } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
@@ -718,6 +722,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.mocked(pickMedia).mockReset();
     vi.mocked(pickMediaList).mockReset();
     vi.mocked(uploadPickedMedia).mockReset();
+    // A track whose length the phone cannot read, unless a case says otherwise.
+    vi.mocked(readMediaFileLength).mockReset().mockResolvedValue(null);
   });
 
   it('routes to consumer templates from the prompt toolbar without authoring controls', () => {
@@ -7721,6 +7727,82 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       });
     });
 
+    // DocumentPicker gives a track no length, so every track reached the draft with none, and the
+    // draft's check, which holds a track under its slot's shortest only once its length is known
+    // (Seedance 2's 2 seconds, release slot-min-durations-20261031), never held one: the start refused
+    // it at Generate, while the web held it before. The phone reads a picked track's length now.
+    describe('tracks', () => {
+      /** Seedance 2 as the release publishes it: tracks of 2 seconds and up. */
+      const seedanceWithTrackMinimum = () => {
+        const model = paritySeedanceVideo();
+        for (const slot of (model.inputModes ?? []).flatMap((mode) => mode.slots)) {
+          if (slot.key === 'audioReferences') slot.minDurationSeconds = 2;
+        }
+        return model;
+      };
+      const openSeedance = async () => {
+        catalogState.catalog = parityCatalog([seedanceWithTrackMinimum()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-2',
+          catalogRevision: 'parity-rev',
+          prompt: 'A dancer moves to the beat',
+          references: [stagedMedia('hero')],
+        } }));
+        vi.mocked(pickAudioDocument).mockResolvedValue({ uri: 'file:///cache/beat.mp3', name: 'beat.mp3', mimeType: 'audio/mpeg', size: 1024 } as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('beat.mp3', { mimeType: 'audio/mpeg', kind: 'audio' }));
+        const sheets = captureActionSheets();
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        const pickTrack = () => {
+          renderer.act(() => { labelled(tree.root, 'Add References').props.onPress(); });
+          return sheets.at(-1)!.actions.find((action) => action.label === 'Audio')!.onPress?.();
+        };
+        return { tree, pickTrack };
+      };
+      const storedTracks = () => storedDrafts().video.referenceAudios as Array<{ storagePath: string; durationSeconds: number | null }>;
+      const shortTrack = 'Seedance 2 reference audio must be at least 2 seconds long. Reference Audio runs 1.5 seconds.';
+
+      it('are read for their length on the phone, and one under its slot’s shortest holds the run in the start’s words', async () => {
+        vi.mocked(readMediaFileLength).mockResolvedValue(1.5);
+        const { tree, pickTrack } = await openSeedance();
+        await renderer.act(async () => { await pickTrack(); });
+        await settle();
+
+        expect(readMediaFileLength).toHaveBeenCalledWith('file:///cache/beat.mp3');
+        expect(storedTracks()).toEqual([expect.objectContaining({ storagePath: 'uploads/user-123/beat.mp3', durationSeconds: 1.5 })]);
+        expect(blocker(tree)).toBe(shortTrack);
+        expect(findPressableByLabelPrefix(tree.root, 'Generate').props.disabled).toBe(true);
+      });
+
+      it('go with a length the slot takes, and one the phone cannot read is left to the start', async () => {
+        vi.mocked(readMediaFileLength).mockResolvedValueOnce(4.2).mockResolvedValueOnce(null);
+        const { tree, pickTrack } = await openSeedance();
+        await renderer.act(async () => { await pickTrack(); });
+        await settle();
+        await renderer.act(async () => { await pickTrack(); });
+        await settle();
+
+        expect(storedTracks().map((track) => track.durationSeconds)).toEqual([4.2, null]);
+        expect(text(tree)).not.toContain('reference audio must be at least');
+        expect(findPressableByLabelPrefix(tree.root, 'Generate ·').props.disabled).toBe(false);
+      });
+
+      it('upload while their length is read, so the read adds no wait before the bytes start', async () => {
+        let answer!: (seconds: number | null) => void;
+        vi.mocked(readMediaFileLength).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+        const { pickTrack } = await openSeedance();
+        await renderer.act(async () => {
+          void pickTrack();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(uploadPickedMedia).toHaveBeenCalledTimes(1);
+        expect(storedTracks()).toEqual([]);
+        await renderer.act(async () => { answer(1.5); });
+        await settle();
+        expect(storedTracks()).toEqual([expect.objectContaining({ durationSeconds: 1.5 })]);
+      });
+    });
+
     describe('clips', () => {
       /** An upload that runs until it is cancelled, as a large clip on mobile data does. */
       const uploadUntilCancelled = () => {
@@ -8071,6 +8153,43 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference videos', 'How should they move?']);
         expect(text(tree)).not.toContain('Closed reference');
         expect(blocker(tree)).toBe('Add reference images and reference videos.');
+      });
+
+      // The panel and the parameter sheet showed the clip's length rounded up to whole seconds, the
+      // length a run is priced on: with Kling 2.6's 3 s minimum published, a 2.16 s clip read "3s"
+      // beside "… runs 2.1 seconds". They read the clip's own length now, as the web's motion page
+      // does, and the chip keeps the run's whole seconds.
+      describe('the clip’s length', () => {
+        const withClip = (durationSeconds: number, duration: number) => onMotionModel('kling-2.6', {
+          characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+          referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds }),
+          duration,
+        });
+        const sourceDuration = (tree: renderer.ReactTestRenderer) => {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+          const sheet = tree.root.findByProps({ testID: 'creator-parameter-sheet' });
+          return collectText(sheet.findAllByProps({ testID: 'read-only-parameter-value' })[0]).join(' · ');
+        };
+
+        it('reads a Kling 2.6 clip under its 3s minimum to the tenth, says so, and names it as the start does', async () => {
+          withClip(2.16, 3);
+          const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+          expect(slotText(tree, 'motion-required-inputs')).toContain('Detected motion length · 2.1s, under the 3s minimum');
+          expect(text(tree)).not.toContain('Detected motion length · 3s');
+          expect(blocker(tree)).toBe('Kling 2.6 reference video must be at least 3 seconds long. The reference video runs 2.1 seconds.');
+          expect(sourceDuration(tree)).toBe('2.1s from motion video · Fixed for this model');
+        });
+
+        it('reads a longer clip to the tenth, while the chip keeps the run’s whole seconds', async () => {
+          withClip(4.34, 5);
+          const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+          expect(slotText(tree, 'motion-required-inputs')).toContain('Detected motion length · 4.3s');
+          expect(text(tree)).not.toContain('under the 3s minimum');
+          expect(findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.accessibilityLabel).toContain('720P · 5s');
+          expect(sourceDuration(tree)).toBe('4.3s from motion video · Fixed for this model');
+        });
       });
     });
 

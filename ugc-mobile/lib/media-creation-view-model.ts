@@ -14,6 +14,7 @@ import type {
   VideoMultiPromptInput,
 } from './types';
 import { nameSaysNothing } from './media-file-names';
+import { heldLengthNote, lengthHeldUnderMinimum, lengthReading } from './model-catalog/protocol';
 import { readSeedanceAssetCollections, type SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 
 export const IMAGE_MODELS = {
@@ -1527,6 +1528,34 @@ export function getVideoElementSupport(model: VideoModelId, options: { mode?: st
 export function getMotionDuration(draft: MotionCreationDraft) {
   const sourceDuration = draft.referenceVideo?.durationSeconds ?? draft.duration;
   return Math.max(0, Math.ceil(sourceDuration || 0));
+}
+
+/**
+ * A motion clip's length as the composer shows it, or null with no clip: the clip's own, read as
+ * both creators read a length (`lengthReading`: to the tenth, down under its slot's shortest as the
+ * start's refusal gives it, up over its longest), and, where its run is held for being short, the
+ * note that says so (`heldLengthNote`: "2.1s, under the 3s minimum"). A clip whose length the phone
+ * could not read shows the run's seconds, as before. A run is priced on whole seconds
+ * (`getMotionDuration`), which the chip and the quote keep; shown here, they read a 2.16 s clip as
+ * "3s" beside the held line's "… runs 2.1 seconds".
+ */
+export function motionClipLengthReading(
+  draft: MotionCreationDraft,
+  slot: { minDurationSeconds?: number; maxDurationSeconds?: number } | null | undefined,
+  defaultMaxSeconds: number,
+): { reading: string; heldNote: string | null } | null {
+  if (!draft.referenceVideo) return null;
+  const seconds = draft.referenceVideo.durationSeconds;
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+    const runSeconds = getMotionDuration(draft);
+    return runSeconds > 0 ? { reading: `${runSeconds}s`, heldNote: null } : null;
+  }
+  const minimum = slot?.minDurationSeconds;
+  const limits = { minDurationSeconds: minimum, maxDurationSeconds: slot?.maxDurationSeconds ?? defaultMaxSeconds };
+  return {
+    reading: `${lengthReading(seconds, limits)}s`,
+    heldNote: minimum !== undefined && lengthHeldUnderMinimum(seconds, minimum) ? heldLengthNote(seconds, minimum) : null,
+  };
 }
 
 function inspectVideoPromptQuality(draft: VideoCreationDraft): PromptEnhancementWarning[] {

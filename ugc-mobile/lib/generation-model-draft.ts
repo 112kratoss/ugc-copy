@@ -45,6 +45,7 @@ import {
   catalogRunWithShownCost,
   catalogSettingsAtControlDefaults,
   modeGatedSettingValues,
+  MOTION_CLIP_NAME,
   MOTION_INPUTS_FALLBACK_SLOTS,
   SUBJECT_IMAGES_PER_NAME,
   SUBJECT_IMAGES_SLOT_KEY,
@@ -939,9 +940,10 @@ function validateCatalogV2Inputs(
       // Shorter than the provider takes (a Kling 3.0 video element under 3 seconds): the start
       // refused it, before any hold, only once Generate was pressed. Said in the start's words,
       // naming the clip by its handle where it has one: the app calls every clip it picks
-      // "Reference Video", and the handle is what tells two of them apart.
+      // "Reference Video", and the handle is what tells two of them apart. A motion run's one
+      // clip is named as the start and the web's motion page name it, not "Reference Motion".
       const tooShort = catalogInputTooShort(model.displayName, slot, {
-        label: asset.handle || asset.displayName || asset.fileName || '',
+        label: runDraft.tool === 'motion' ? MOTION_CLIP_NAME : asset.handle || asset.displayName || asset.fileName || '',
         durationSeconds: asset.durationSeconds,
       });
       if (tooShort) errors.push(tooShort);

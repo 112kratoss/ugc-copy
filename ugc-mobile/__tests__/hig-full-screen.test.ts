@@ -229,6 +229,9 @@ describe('S6 — no player holds the audio session while it is silent', () => {
     // The launch sting: a silent clip played once over the splash, so music
     // already playing as the app opens carries on.
     'components/launch-splash.tsx',
+    // A picked track's length. Its player is muted, never played, and let go
+    // once the length is read.
+    'lib/media-file-length.ts',
   ];
 
   it.each(playerFiles)('%s declares a mixing mode for every player it creates', (name) => {

@@ -119,7 +119,7 @@ import {
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   createSubjectDraft,
-  getMotionDuration,
+  motionClipLengthReading,
   nameUnnamedReferences,
   placeName,
   REMIX_RESTORE_WARNING_MESSAGE,
@@ -141,6 +141,7 @@ import {
   withCreatorClipHandle,
 } from '@/lib/media-creation-view-model';
 import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '@/lib/media';
+import { readMediaFileLength } from '@/lib/media-file-length';
 import { listFilesInSentence, readableFileName } from '@/lib/media-file-names';
 import { isUploadCancelledError, runWeightedUploadQueue, type WeightedUploadQueueResult } from '@/lib/upload-file';
 import { invalidateProfileCreations } from '@/lib/profile-media-query';
@@ -2175,6 +2176,10 @@ function IdentityCreationScreen({
     try {
       const picked = await pickAudioDocument();
       if (!picked) return;
+      // DocumentPicker gives no length, so the phone reads it while the track uploads: without one,
+      // the draft's check could not hold a track under its slot's shortest (Seedance 2's 2 seconds),
+      // and the start refused it at Generate. A length the phone cannot read is left to the start.
+      const length = readMediaFileLength(picked.uri);
       const result = await uploadPicks('reference-audio', [{
         uri: picked.uri,
         fileName: picked.name,
@@ -2187,7 +2192,7 @@ function IdentityCreationScreen({
         setMessage(uploadFailureMessage(result.failures, 0));
         return;
       }
-      const media = createMediaDraftFromUpload(uploaded, { displayName: 'Reference Audio' });
+      const media = createMediaDraftFromUpload({ ...uploaded, durationSeconds: await length }, { displayName: 'Reference Audio' });
       setVideoDraft((draft) => normalizeCatalogDraft({ ...draft, referenceAudios: [...draft.referenceAudios, media] }));
       revealInRail(media.id);
     } catch (error) {
@@ -2974,6 +2979,14 @@ function IdentityCreationScreen({
     const activeGenerationStatus = generationTool === activeTool ? status : null;
     const activeOutputUrl = generationTool === activeTool ? outputUrl : null;
     const parameterSummary = creatorParameterSummary(activeTool === 'video' ? videoDraft : motionDraft, selectedCreatorModel, currentOpening);
+    // The motion clip's own length for the sheet's Source duration, read as the composer reads it.
+    const motionClipLength = activeTool === 'motion'
+      ? motionClipLengthReading(
+        motionDraft,
+        catalogInputSlot(selectedCreatorModel, motionDraft, catalogMotionDraftSlotKeys(motionDraft, selectedCreatorModel).video),
+        MOTION_CLIP_DEFAULT_MAX_SECONDS,
+      )
+      : null;
     const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
@@ -3171,7 +3184,7 @@ function IdentityCreationScreen({
           model={selectedCreatorModel}
           draft={currentDraft}
           hiddenControlKeys={activeTool === 'video' ? videoSettingsHiddenControlKeys(videoDraft) : ['duration']}
-          sourceDurationSeconds={activeTool === 'motion' && motionDraft.referenceVideo ? getMotionDuration(motionDraft) : null}
+          sourceLength={motionClipLength?.reading ?? null}
           quoteStatus={creatorQuoteStatus}
           awaitingInputs={motionInputsMissing}
           cost={activeQuote.cost}
@@ -5193,7 +5206,6 @@ function MotionCreatorComposer({
   }, [promptFocusRequest]);
   const [selectedRole, setSelectedRole] = useState<'character' | 'motion' | null>(null);
   const selectedMedia = selectedRole === 'character' ? draft.characterImage : selectedRole === 'motion' ? draft.referenceVideo : null;
-  const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
   // The lines under the slots, found by what the slots are called (`catalogMotionDraftSlotLabels`):
   // the draft's checks open a line about a slot with its label, as the slot itself is titled. A line
   // goes under the slot whose label it opens with, the longer label where both do, so a line about
@@ -5211,6 +5223,9 @@ function MotionCreatorComposer({
   const slotKeys = catalogMotionDraftSlotKeys(draft, model);
   const characterSlot = catalogInputSlot(model, draft, slotKeys.image);
   const motionSlot = catalogInputSlot(model, draft, slotKeys.video);
+  // The clip's own length, read as the web's motion page reads it, and said to be under the slot's
+  // shortest where the run is held for it; the chip keeps the whole seconds the run is priced on.
+  const clipLength = motionClipLengthReading(draft, motionSlot, MOTION_CLIP_DEFAULT_MAX_SECONDS);
   const supportsCharacter = catalogInputSupported(model, draft, slotKeys.image, true);
   const supportsMotion = catalogInputSupported(model, draft, slotKeys.video, true);
 
@@ -5230,11 +5245,11 @@ function MotionCreatorComposer({
           {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
         </View>
         {/* Drawn only with something to say, so the panel's gap leaves no band under empty slots. */}
-        {characterError || motionError || duration || clipUploading ? (
+        {characterError || motionError || clipLength || clipUploading ? (
           <View style={{ gap: 4 }}>
             {characterError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
             {motionError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{motionError}</Text> : null}
-            {duration ? <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
+            {clipLength ? <Text style={{ color: clipLength.heldNote ? theme.colors.amber : theme.colors.textSecondary, fontSize: 11, fontWeight: '700' }}>{`Detected motion length · ${clipLength.heldNote ?? clipLength.reading}`}</Text> : null}
             {clipUploading ? (
               <>
                 {/* A replacement uploads behind the attached clip, so its progress is said here too. */}
@@ -6091,7 +6106,7 @@ function CreatorParameterSheet({
   blocker,
   retryLabel = 'Retry quote',
   hiddenControlKeys = [],
-  sourceDurationSeconds,
+  sourceLength,
   onClose,
   onRetryQuote,
   onGetCredits,
@@ -6112,7 +6127,8 @@ function CreatorParameterSheet({
   blocker: string | null;
   retryLabel?: string;
   hiddenControlKeys?: readonly string[];
-  sourceDurationSeconds?: number | null;
+  /** A motion run's clip length as read ("2.1s", `motionClipLengthReading`), or null with no clip. */
+  sourceLength?: string | null;
   onClose: () => void;
   onRetryQuote: () => void;
   /** Leaves the sheet for the pricing page; the bar offers the same from its credits blocker. */
@@ -6162,7 +6178,7 @@ function CreatorParameterSheet({
                 <CatalogEssentialControls model={model} draft={draft} onChange={onChange} hiddenControlKeys={hiddenControlKeys} />
                 {draft.tool === 'motion' ? (
                   <OptionRow title="Source duration">
-                    <ReadOnlyParameterValue value={sourceDurationSeconds ? `${sourceDurationSeconds}s from motion video` : 'Add motion video'} />
+                    <ReadOnlyParameterValue value={sourceLength ? `${sourceLength} from motion video` : 'Add motion video'} />
                   </OptionRow>
                 ) : null}
                 <View style={{ height: 1, backgroundColor: theme.colors.border }} />
