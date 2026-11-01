@@ -13,6 +13,7 @@ import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from 
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings } from './fixtures/creator-column-bar';
+import { outsideAct } from './fixtures/outside-act';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
@@ -106,8 +107,15 @@ vi.mock('@/components/AuthProvider', () => ({
   }),
 }));
 
+// What the Enhance button was last given: an answer comes back through what the page gave it when pressed.
+type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void };
+const enhanceButton = vi.hoisted(() => ({ props: null as EnhanceAnswerProps | null }));
+
 vi.mock('@/components/EnhancePromptButton', () => ({
-  default: () => null,
+  default: (props: EnhanceAnswerProps) => {
+    enhanceButton.props = props;
+    return null;
+  },
 }));
 
 vi.mock('@/components/PublicShareButton', () => ({
@@ -1536,6 +1544,64 @@ describe('CreateImageClient generation pipeline', () => {
 
         await act(async () => answer({ prompt: 'The saved prompt', modelId: 'nano-banana-2' }));
         expect(box()).toHaveValue('The saved prompt');
+      });
+
+      it('goes back to the link’s prompt, not to nothing, when another account signs in', async () => {
+        installFetch();
+        const link = { prompt: 'A lighthouse in a storm' };
+        ownDraftAs('user-1');
+        const view = render(<CreateImageClient prefill={link} />);
+        await settleDraftRead();
+        typePrompt('A lighthouse in a storm, seen from the deck');
+
+        ownDraftAs('user-2');
+        view.rerender(<CreateImageClient prefill={link} />);
+        await settleDraftRead();
+        expect(box()).toHaveValue('A lighthouse in a storm');
+      });
+
+      it('takes the next account’s saved prompt though its read answers before the reset is drawn', async () => {
+        installFetch();
+        creatorDraftStore.set('image:user-2', { prompt: 'Ben’s glasshouse at dawn', modelId: 'nano-banana-2' });
+        ownDraftAs('user-1');
+        await outsideAct(async (draw) => {
+          draw(page());
+          await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1'));
+          typePrompt('Asha’s harbour at dusk');
+
+          ownDraftAs('user-2');
+          draw(page());
+          await waitFor(() => expect(box()).toHaveValue('Ben’s glasshouse at dawn'));
+        });
+      });
+
+      it('drops an Enhance answer that comes back after another account signed in', async () => {
+        installFetch();
+        ownDraftAs('user-1');
+        const view = render(page());
+        await settleDraftRead();
+        typePrompt('Asha’s harbour at dusk');
+        const pressedForAsha = enhanceButton.props!;
+
+        ownDraftAs('user-2');
+        view.rerender(page());
+        await settleDraftRead();
+        act(() => {
+          pressedForAsha.onEnhanced('Asha’s harbour at dusk, golden hour, 35mm');
+          pressedForAsha.onCreditsUpdate(41);
+        });
+        expect(box()).toHaveValue('');
+        expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
+        await waitFor(() => expect(promptsSavedFor('user-2')).toContain(''), { timeout: 2_000 });
+        expect(promptsSavedFor('user-2')).not.toContain('Asha’s harbour at dusk, golden hour, 35mm');
+
+        // One pressed for the account on the page lands.
+        act(() => {
+          enhanceButton.props!.onEnhanced('Ben’s glasshouse at dawn');
+          enhanceButton.props!.onCreditsUpdate(12);
+        });
+        expect(box()).toHaveValue('Ben’s glasshouse at dawn');
+        expect(authState.updateCredits).toHaveBeenCalledWith(12);
       });
     });
   });

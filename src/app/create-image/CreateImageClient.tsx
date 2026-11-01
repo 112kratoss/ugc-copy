@@ -2120,8 +2120,13 @@ export default function CreateImageClient({
                             variant="toolbar"
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
-                            onEnhanced={(text) => setPrompt(text)}
-                            onCreditsUpdate={updateCredits}
+                            // An answer to a press made for the owner before an account switch is theirs (`creator-draft-prompt.ts`).
+                            onEnhanced={(text) => {
+                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) setPrompt(text);
+                            }}
+                            onCreditsUpdate={(credits) => {
+                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
+                            }}
                             onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
                             medium="image"
                             selectedModel={selectedModel}

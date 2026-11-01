@@ -12,6 +12,7 @@ import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import { buildGenerationModelCatalog, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
+import { outsideAct } from './fixtures/outside-act';
 // For "references saved on another model": the registry the page reads, the server's
 // catalog and its quote function, and what hands the one to the other in the browser.
 import * as clientModels from '@/lib/client-generation-models';
@@ -5163,6 +5164,95 @@ describe('CreateVideoClient Kling video elements', () => {
         await waitFor(() => expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('A lamp lights on the quay'));
         fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
         expect(promptBox()).toHaveValue(PROMPT);
+      });
+
+      it('brings a carried multi-shot draft back whole over words typed on the way back', async () => {
+        const page = () => <CreateVideoClient prefill={{}} handoverNonce="nonce-1" />;
+        // A multi-shot draft keeps its words in its shots.
+        loadCreatorDraftMock.mockResolvedValue({
+          prompt: '',
+          modelId: 'kling-3.0-video',
+          isMultiShot: true,
+          shots: [{ id: '1', prompt: 'A lamp lights on the quay', duration: 5 }],
+        });
+        ownDraftAs(null);
+        const view = render(page());
+        fireEvent.change(promptBox(), { target: { value: 'A lamp lig' } });
+
+        ownDraftAs('user-1', true);
+        view.rerender(page());
+        await waitFor(() => expect(screen.getByRole('radio', { name: 'Multi-shot' })).toHaveAttribute('aria-checked', 'true'));
+        expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('A lamp lights on the quay');
+      });
+
+      it('goes back to the link’s prompt, not to nothing, when another account signs in', async () => {
+        const link = { prompt: 'A lighthouse in a storm, the beam sweeping the rain' };
+        ownDraftAs('user-1');
+        const view = render(<CreateVideoClient prefill={link} />);
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+        fireEvent.change(promptBox(), { target: { value: `${link.prompt}, seen from the deck` } });
+
+        ownDraftAs('user-2');
+        view.rerender(<CreateVideoClient prefill={link} />);
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(promptBox()).toHaveValue(link.prompt);
+      });
+
+      it('takes the next account’s saved prompt though its read answers before the reset is drawn', async () => {
+        loadCreatorDraftMock.mockImplementation(async (_tool: string, owner: string) => (owner === 'user-2' ? { prompt: 'Ben’s glasshouse at dawn' } : null));
+        ownDraftAs('user-1');
+        await outsideAct(async (draw) => {
+          draw(<CreateVideoClient prefill={{}} />);
+          await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+          fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+          ownDraftAs('user-2');
+          draw(<CreateVideoClient prefill={{}} />);
+          await waitFor(() => expect(promptBox()).toHaveValue('Ben’s glasshouse at dawn'));
+        });
+      });
+
+      it('drops an Enhance answer that comes back after another account signed in, and the notes one left', async () => {
+        type EnhanceAnswer = { onEnhanced: (text: string, result?: unknown) => void; onCreditsUpdate: (credits: number) => void };
+        // An answer comes back through what the page gave the button when it was pressed.
+        const lastEnhanceButton = () => enhanceButtonPropsMock.mock.calls.at(-1)?.[0] as unknown as EnhanceAnswer;
+        const note = { warnings: [{ code: 'camera-move', severity: 'info', message: 'Name the camera move.' }] };
+        ownDraftAs('user-1');
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        // One Enhance came back for Asha with a note; another, and one for a shot, are on their way.
+        act(() => lastEnhanceButton().onEnhanced(`${PROMPT} Golden hour.`, note));
+        expect(screen.getByText('Name the camera move.')).toBeInTheDocument();
+        const pressedForAsha = lastEnhanceButton();
+        fireEvent.click(screen.getByRole('radio', { name: 'Multi-shot' }));
+        fireEvent.change(screen.getByRole('textbox', { name: 'Shot 1 prompt' }), { target: { value: 'A lamp lights on the quay' } });
+        const shotPressedForAsha = lastEnhanceButton();
+
+        ownDraftAs('user-2');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        act(() => {
+          pressedForAsha.onEnhanced(`${PROMPT} Golden hour, 35mm.`, note);
+          pressedForAsha.onCreditsUpdate(41);
+          shotPressedForAsha.onEnhanced('A lamp lights on the quay, one by one.', note);
+          shotPressedForAsha.onCreditsUpdate(39);
+        });
+        expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('');
+        expect(screen.queryByText('Name the camera move.')).toBeNull();
+        expect(mockUpdateCredits).not.toHaveBeenCalledWith(41);
+        expect(mockUpdateCredits).not.toHaveBeenCalledWith(39);
+        fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
+        expect(promptBox()).toHaveValue('');
+        expect(screen.queryByText('Name the camera move.')).toBeNull();
+
+        // One pressed for the account on the page lands.
+        act(() => lastEnhanceButton().onEnhanced('Ben’s glasshouse at dawn'));
+        expect(promptBox()).toHaveValue('Ben’s glasshouse at dawn');
       });
     });
 

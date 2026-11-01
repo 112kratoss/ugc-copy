@@ -13,6 +13,7 @@ import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-de
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting, costShown } from './fixtures/creator-column-bar';
+import { outsideAct } from './fixtures/outside-act';
 
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
@@ -111,8 +112,15 @@ vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => authState,
 }));
 
+// What the Enhance button was last given: an answer comes back through what the page gave it when pressed.
+type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void };
+const enhanceButton = vi.hoisted(() => ({ props: null as EnhanceAnswerProps | null }));
+
 vi.mock('@/components/EnhancePromptButton', () => ({
-  default: () => null,
+  default: (props: EnhanceAnswerProps) => {
+    enhanceButton.props = props;
+    return null;
+  },
 }));
 
 vi.mock('@/components/PublicShareButton', () => ({
@@ -1412,6 +1420,81 @@ describe('CreateMotionClient drafts and media', () => {
 
       await act(async () => answer(savedDraft('The saved prompt')));
       expect(box()).toHaveValue('The saved prompt');
+    });
+
+    it('keeps words typed on the way back over a carried draft that holds only the opening sentence', async () => {
+      const page = () => <CreateMotionClient prefill={{}} handoverNonce="nonce-1" />;
+      savedDrafts.set('motion:user-1', savedDraft(OPENING));
+      ownDraftAs(null);
+      const view = render(page());
+      fireEvent.change(box(), { target: { value: 'Moonwalk to the left, arms loose' } });
+
+      ownDraftAs('user-1', true);
+      view.rerender(page());
+      await waitFor(() => expect(draftMocks.loadCreatorDraft).toHaveBeenCalledWith('motion', 'user-1'));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(box()).toHaveValue('Moonwalk to the left, arms loose');
+    });
+
+    it('goes back to the link’s prompt, not to the stock sentence, when another account signs in', async () => {
+      const link = { prompt: 'Moonwalk to the left, arms loose' };
+      ownDraftAs('user-1');
+      const view = render(<CreateMotionClient prefill={link} />);
+      await waitFor(() => expect(draftMocks.loadCreatorDraft).toHaveBeenCalledWith('motion', 'user-1'));
+      fireEvent.change(box(), { target: { value: `${link.prompt}, then a spin` } });
+
+      ownDraftAs('user-2');
+      view.rerender(<CreateMotionClient prefill={link} />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(box()).toHaveValue(link.prompt);
+    });
+
+    it('takes the next account’s saved prompt though its read answers before the reset is drawn', async () => {
+      savedDrafts.set('motion:user-2', savedDraft('Ben’s backflip off the pier'));
+      ownDraftAs('user-1');
+      await outsideAct(async (draw) => {
+        draw(<CreateMotionClient prefill={{}} />);
+        await waitFor(() => expect(draftMocks.loadCreatorDraft).toHaveBeenCalledWith('motion', 'user-1'));
+        fireEvent.change(box(), { target: { value: 'Asha’s cartwheel across the stage' } });
+
+        ownDraftAs('user-2');
+        draw(<CreateMotionClient prefill={{}} />);
+        await waitFor(() => expect(box()).toHaveValue('Ben’s backflip off the pier'));
+      });
+    });
+
+    it('drops an Enhance answer that comes back after another account signed in', async () => {
+      ownDraftAs('user-1');
+      const view = render(<CreateMotionClient prefill={{}} />);
+      await waitFor(() => expect(draftMocks.loadCreatorDraft).toHaveBeenCalledWith('motion', 'user-1'));
+      fireEvent.change(box(), { target: { value: 'Asha’s cartwheel across the stage' } });
+      const pressedForAsha = enhanceButton.props!;
+
+      ownDraftAs('user-2');
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      act(() => {
+        pressedForAsha.onEnhanced('Asha’s cartwheel across the stage, arms wide');
+        pressedForAsha.onCreditsUpdate(41);
+      });
+      expect(box()).toHaveValue(OPENING);
+      expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
+      await waitFor(() => expect(promptsSavedFor('user-2')).toContain(OPENING), { timeout: 2_000 });
+      expect(promptsSavedFor('user-2')).not.toContain('Asha’s cartwheel across the stage, arms wide');
+
+      // One pressed for the account on the page lands.
+      act(() => {
+        enhanceButton.props!.onEnhanced('Ben’s backflip off the pier');
+        enhanceButton.props!.onCreditsUpdate(12);
+      });
+      expect(box()).toHaveValue('Ben’s backflip off the pier');
+      expect(authState.updateCredits).toHaveBeenCalledWith(12);
     });
   });
 

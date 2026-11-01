@@ -1796,8 +1796,13 @@ export default function CreateMotionClient({
                             variant="toolbar"
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
-                            onEnhanced={handlePromptChange}
-                            onCreditsUpdate={updateCredits}
+                            // An answer to a press made for the owner before an account switch is theirs (`creator-draft-prompt.ts`).
+                            onEnhanced={(text) => {
+                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) handlePromptChange(text);
+                            }}
+                            onCreditsUpdate={(credits) => {
+                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
+                            }}
                             medium="motion"
                             selectedModel={selectedModel}
                             context={{

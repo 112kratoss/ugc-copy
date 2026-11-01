@@ -33,6 +33,16 @@ describe('the prompt box against a saved draft read back (owner, 2026-11-01)', (
     expect(keepsPromptOverSavedDraft({ ...typedOnReturn, carried: false, savedPrompt: 'A corgi astronaut on the moon, cinematic' })).toBe(true);
   });
 
+  it('counts as the carried draft’s words a multi-shot draft’s shots, and never what the page opens on', () => {
+    const typedOnReturn = { boxPrompt: 'A lamp lig', openingPrompt: '', savedPrompt: '', carried: true };
+    expect(keepsPromptOverSavedDraft({ ...typedOnReturn, savedShotPrompts: ['', 'A lamp lights on the quay'] })).toBe(false);
+    expect(keepsPromptOverSavedDraft({ ...typedOnReturn, savedShotPrompts: ['', ' \n'] })).toBe(true);
+    // Motion's stock sentence, saved untouched, is nobody's words.
+    const motionReturn = { boxPrompt: 'Moonwalk to the left, arms loose', openingPrompt: MOTION_OPENING, carried: true };
+    expect(keepsPromptOverSavedDraft({ ...motionReturn, savedPrompt: MOTION_OPENING })).toBe(true);
+    expect(keepsPromptOverSavedDraft({ ...motionReturn, savedPrompt: 'Moonwalk to the left, arms loose and slow' })).toBe(false);
+  });
+
   it('calls a read for any other owner a change, and the same owner read again none', () => {
     expect(isAnotherDraftOwner(null, 'user-1')).toBe(false);
     expect(isAnotherDraftOwner('user-1', 'user-1')).toBe(false);
@@ -41,5 +51,7 @@ describe('the prompt box against a saved draft read back (owner, 2026-11-01)', (
     // account's when it signs out.
     expect(isAnotherDraftOwner('visitor', 'user-1')).toBe(true);
     expect(isAnotherDraftOwner('user-1', 'visitor')).toBe(true);
+    // An Enhance pressed while a sign-up's hand-over was on its way was asked for nobody else.
+    expect(isAnotherDraftOwner('user-1', null)).toBe(false);
   });
 });

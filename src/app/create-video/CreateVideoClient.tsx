@@ -2896,10 +2896,13 @@ export default function CreateVideoClient({
         // included, except over the one carried from sign-up (`creator-draft-prompt.ts`).
         const openingPrompt = prefillPrompt ?? '';
         if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
-            // The words are another owner's, the shots' too: not this one's to see, nor to save.
+            // The words are another owner's, the shots' and the enhancer's notes on them too: not
+            // this one's to see, nor to save.
             promptRef.current = openingPrompt;
             setPrompt(openingPrompt);
             setMultiPrompts(openingShots());
+            setPromptQualityWarnings([]);
+            setMultiPromptQualityWarnings({});
         }
         promptOwnerRef.current = draftOwner;
         // The catalog waits for the draft, so a store that never answers must not hold
@@ -2924,6 +2927,7 @@ export default function CreateVideoClient({
                     boxPrompt: promptRef.current,
                     openingPrompt,
                     savedPrompt: draft.prompt,
+                    savedShotPrompts: draft.isMultiShot ? draft.shots?.map((shot) => shot.prompt) : undefined,
                     carried,
                 });
                 if (draft.prompt !== undefined && !prefillPrompt && !keepsTypedPrompt) setPrompt(draft.prompt);
@@ -5688,13 +5692,17 @@ export default function CreateVideoClient({
                                     variant="toolbar"
                                     leading={<CreatorTemplatesTile />}
                                     prompt={prompt}
+                                    // An answer to a press made for the owner before an account switch is theirs (`creator-draft-prompt.ts`).
                                     onEnhanced={(text, result) => {
+                                        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;
                                         setPrompt(text);
                                         setPromptQualityWarnings(result?.warnings ?? []);
                                         setActiveMentionQuery(null);
                                         requestAnimationFrame(() => updateMentionState(text));
                                     }}
-                                    onCreditsUpdate={updateCredits}
+                                    onCreditsUpdate={(credits) => {
+                                        if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
+                                    }}
                                     medium="video"
                                     selectedModel={selectedModel}
                                     helperText={
@@ -5727,13 +5735,16 @@ export default function CreateVideoClient({
                                         <EnhancePromptButton
                                             prompt={shot.prompt}
                                             onEnhanced={(text, result) => {
+                                                if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;
                                                 updateShot(shot.id, 'prompt', text);
                                                 setMultiPromptQualityWarnings((current) => ({
                                                     ...current,
                                                     [shot.id]: result?.warnings ?? [],
                                                 }));
                                             }}
-                                            onCreditsUpdate={updateCredits}
+                                            onCreditsUpdate={(credits) => {
+                                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
+                                            }}
                                             medium="video"
                                             selectedModel={selectedModel}
                                             context={buildShotPromptQualityContext(shot, index)}
