@@ -1601,21 +1601,24 @@ describe('CreateMotionClient drafts and media', () => {
 
     it('keeps the visitor’s picture, clip and words when the sign-up sheet’s hand-over gives up', async () => {
       const page = () => <CreateMotionClient prefill={{}} handoverNonce="nonce-1" />;
-      // The page opened before its session came, on the visitor's files and words.
+      // The page opened before its session came, on the visitor's files and words. The account the
+      // visitor signs up with has an older picture of its own saved.
       keepFiles('visitor', { image: characterImage(), clip: motionClip() });
+      keepFiles('user-1', { image: new File(['old'], 'old-hero.png', { type: 'image/png' }) });
       ownDraftAs('visitor');
       const view = render(page());
       expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
       fireEvent.change(box(), { target: { value: 'A slow spin with both arms wide' } });
 
-      // The move to the account the visitor signed up with does not answer in time, so the
-      // page goes on with the account, which has nothing saved yet.
+      // The move to that account does not answer in time, so the page goes on with the account.
       ownDraftAs(null);
       view.rerender(page());
       ownDraftAs('user-1', false, true);
       view.rerender(page());
       await readFilesOf('user-1');
+      // The form stays as the visitor left it, with no older picture of the account's over it.
       expect(imageShown()).toBe(true);
+      expect(vi.mocked(URL.createObjectURL).mock.calls.map(([file]) => (file as File).name)).not.toContain('old-hero.png');
       expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
       expect(box()).toHaveValue('A slow spin with both arms wide');
     });

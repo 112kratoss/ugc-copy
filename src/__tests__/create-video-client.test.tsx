@@ -5445,21 +5445,29 @@ describe('CreateVideoClient Kling video elements', () => {
 
       it('keeps the visitor’s frames and words when the sign-up sheet’s hand-over gives up', async () => {
         const page = () => <CreateVideoClient prefill={{}} handoverNonce="nonce-1" />;
-        // The page opened before its session came, on the visitor's start image and words.
-        keepMedia({ visitor: { start: image('corgi') } });
+        // The page opened before its session came, on the visitor's start image and words. The
+        // account the visitor signs up with has an older start image and clip of its own saved.
+        keepMedia({
+          visitor: { start: image('corgi') },
+          'user-1': {
+            start: image('mountain'),
+            clips: [{ id: 'old-clip', displayName: 'Old ridge', durationSeconds: 5, file: new File(['ridge'], 'ridge.mp4', { type: 'video/mp4' }) }],
+          },
+        });
         ownDraftAs('visitor');
         const view = render(page());
         await waitFor(() => expect(shownFile('Start image')).toBe('corgi.png'));
         fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
-        // The move to the account the visitor signed up with does not answer in time, so the
-        // page goes on with the account, which has nothing saved yet.
+        // The move to that account does not answer in time, so the page goes on with the account.
         ownDraftAs(null);
         view.rerender(page());
         ownDraftAs('user-1', false, true);
         view.rerender(page());
         await readMediaOf('user-1');
+        // The form stays as the visitor left it, with nothing older of the account's over it.
         expect(shownFile('Start image')).toBe('corgi.png');
+        expect(screen.queryAllByText('Old ridge')).toEqual([]);
         expect(promptBox()).toHaveValue(PROMPT);
       });
 

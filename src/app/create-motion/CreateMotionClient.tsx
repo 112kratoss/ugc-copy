@@ -747,6 +747,12 @@ export default function CreateMotionClient({
             if (cancelled) return;
             const carried = carriedDraft && !carriedPromptTakenRef.current;
             if (carried) carriedPromptTakenRef.current = true;
+            if (keepsVisitorForm) {
+                // A form the sign-up's hand-over kept stays as it is, with nothing older of the
+                // account's over it.
+                setDraftRestoredFor(draftOwner);
+                return;
+            }
             if (draft) applySavedDraft(draft, carried);
             if (savedImageFile) {
                 setCharacterImageFile(savedImageFile);

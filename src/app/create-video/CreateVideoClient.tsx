@@ -2785,6 +2785,12 @@ export default function CreateVideoClient({
 	                ]);
 
                 if (!isMounted) return;
+                if (keepsVisitorForm) {
+                    // A form the sign-up's hand-over kept stays as it is, with nothing older of the
+                    // account's over it.
+                    setMediaRestoredFor({ owner: draftOwner, complete: true });
+                    return;
+                }
 
                 if (savedStartImage) {
                     setStartImageFile(savedStartImage);
@@ -2926,7 +2932,8 @@ export default function CreateVideoClient({
                 if (cancelled) return;
                 const carried = carriedDraft && !carriedPromptTakenRef.current;
                 if (carried) carriedPromptTakenRef.current = true;
-                if (settled || !stored) return;
+                // A form the sign-up's hand-over kept stays as it is, with no older draft of the account's over it.
+                if (settled || !stored || keepsVisitorForm) return;
                 const draft = readVideoCreatorDraft(stored);
                 emptySavedDraftRef.current = draft.modelId && !prefillModel && !draft.prompt?.trim()
                     && !draft.shots?.some((shot) => shot.prompt.trim())

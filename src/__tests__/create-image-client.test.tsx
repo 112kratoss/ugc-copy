@@ -1742,21 +1742,24 @@ describe('CreateImageClient generation pipeline', () => {
 
       it('keeps the visitor’s pictures and words when the sign-up sheet’s hand-over gives up', async () => {
         installFetch();
-        // The page opened before its session came, on the visitor's pictures and words.
-        keepPictures({ visitor: [picture('Corgi astronaut', 'corgi')] });
+        // The page opened before its session came, on the visitor's pictures and words. The account
+        // the visitor signs up with has older pictures of its own saved.
+        keepPictures({ visitor: [picture('Corgi astronaut', 'corgi')], 'user-1': [picture('Old mountain', 'mountain')] });
         ownDraftAs('visitor');
         const view = render(page());
         expect(await screen.findByAltText('Corgi astronaut')).toBeInTheDocument();
         typePrompt('A corgi astronaut on the moon, cinematic');
 
-        // The move to the account the visitor signed up with does not answer in time, so the
-        // page goes on with the account, which has nothing saved yet.
+        // The move to that account does not answer in time, so the page goes on with the account.
         ownDraftAs(null);
         view.rerender(page());
         ownDraftAs('user-1', false, true);
         view.rerender(page());
-        await readPicturesOf('user-1');
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1'));
+        await settleDraftRead();
+        // The form stays as the visitor left it, with no older picture of the account's over it.
         expect(screen.getByAltText('Corgi astronaut')).toBeInTheDocument();
+        expect(screen.queryByAltText('Old mountain')).not.toBeInTheDocument();
         expect(box()).toHaveValue('A corgi astronaut on the moon, cinematic');
       });
 

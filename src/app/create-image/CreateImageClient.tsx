@@ -552,7 +552,8 @@ export default function CreateImageClient({
                 if (cancelled) return;
                 const carried = carriedDraft && !carriedPromptTakenRef.current;
                 if (carried) carriedPromptTakenRef.current = true;
-                if (!draft) return;
+                // A form the sign-up's hand-over kept stays as it is, with no older draft of the account's over it.
+                if (!draft || keepsVisitorForm) return;
                 if (
                     !prefillPrompt
                     && typeof draft.prompt === 'string'
@@ -804,7 +805,8 @@ export default function CreateImageClient({
         }
         restoredPersistedMediaForUserRef.current = draftOwner;
 
-        void loadPersistedElements();
+        // A form the sign-up's hand-over kept stays as it is, with no older picture of the account's over it.
+        if (!keepsVisitorForm) void loadPersistedElements();
     }, [commitElements, keepsVisitorForm, loadPersistedElements, draftOwner, remixId]);
 
     useEffect(() => {

@@ -115,10 +115,10 @@ describe('whose draft a creator keeps', () => {
     expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true });
   });
 
-  it('hands the page over once, to the first account: a later one signs in as on any other page', async () => {
+  it('hands the page over once, to the first account: a later one signs in as on any other page, that account again included', async () => {
     const useCreatorDraftOwner = await loadHook();
     mocks.hasVisitorDraftHandover.mockReturnValue(true);
-    mocks.adoptVisitorDraft.mockResolvedValue(false);
+    mocks.adoptVisitorDraft.mockRejectedValue(new Error('storage refused'));
     const { result, rerender } = renderHook(({ userId }) => useCreatorDraftOwner('image', userId, 'nonce-2468'), {
       initialProps: { userId: null as string | null },
     });
@@ -132,7 +132,36 @@ describe('whose draft a creator keeps', () => {
     expect(result.current).toEqual({ owner: 'visitor', carriedDraft: false, keepsVisitorForm: false });
     rerender({ userId: 'user-2' });
     expect(result.current).toEqual({ owner: 'user-2', carriedDraft: false, keepsVisitorForm: false });
+    // Nor is what a visitor added here after that account left: it signs back in to its own.
+    rerender({ userId: null });
+    rerender({ userId: 'user-1' });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: false });
     expect(mocks.adoptVisitorDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps nothing of the visitor’s form where the hand-over found nothing to move', async () => {
+    const useCreatorDraftOwner = await loadHook();
+    mocks.hasVisitorDraftHandover.mockReturnValue(true);
+    // The mark was spent already, by another tab that moved the draft.
+    mocks.adoptVisitorDraft.mockResolvedValue(false);
+    const { result } = renderHook(() => useCreatorDraftOwner('video', 'user-1', 'nonce-1357'));
+    await waitFor(() => expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: false }));
+  });
+
+  it('keeps the visitor’s form through a session that lapses and comes back', async () => {
+    const useCreatorDraftOwner = await loadHook();
+    mocks.hasVisitorDraftHandover.mockReturnValue(true);
+    mocks.adoptVisitorDraft.mockRejectedValue(new Error('storage refused'));
+    // Back from sign-up with the session already there: the page opened signed in.
+    const { result, rerender } = renderHook(({ userId }) => useCreatorDraftOwner('motion', userId, 'nonce-8642'), {
+      initialProps: { userId: 'user-1' as string | null },
+    });
+    await waitFor(() => expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true }));
+
+    rerender({ userId: null });
+    expect(result.current).toEqual({ owner: null, carriedDraft: false, keepsVisitorForm: false });
+    rerender({ userId: 'user-1' });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true });
   });
 
   it('goes on without a hand-over that never answers', async () => {
