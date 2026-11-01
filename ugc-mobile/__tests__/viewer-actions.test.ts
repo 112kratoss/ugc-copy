@@ -684,7 +684,7 @@ describe("a remix source's title", () => {
   const titleOf = (overrides: Partial<ImmersivePreviewItem>) => getRemixSourceContext(railItem(overrides)).title;
 
   it("is the post's own title", () => {
-    expect(titleOf({ title: 'Kung fu cats', recreatePrompt: 'Two cats sparring on a rooftop' })).toBe('Kung fu cats');
+    expect(titleOf({ title: 'Rooftop sparring', recreatePrompt: 'Two cats sparring on a rooftop' })).toBe('Rooftop sparring');
   });
 
   // The server names a post nobody named "Untitled Creation" (src/lib/showcase-feed.ts),

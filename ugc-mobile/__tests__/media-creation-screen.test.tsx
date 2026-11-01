@@ -8747,7 +8747,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         .map((node) => node.props.url as string);
       const kungFuCats = {
         id: 'post-9',
-        title: 'Kung fu cats',
+        title: 'Rooftop sparring',
         prompt: 'Two cats sparring on a rooftop',
         body: '',
         mediaUrl: 'https://cdn.example.com/post-9/original.png',
@@ -8772,7 +8772,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         remixCount: 0,
         commentCount: 0,
         createdAt: '2026-11-01T09:00:00.000Z',
-        creator: { id: 'creator-9', username: 'fluffy', name: 'Fluffy', avatar: null },
+        creator: { id: 'creator-9', username: 'whiskers', name: 'Whiskers', avatar: null },
         generationId: 'gen-9',
         asset: null,
         canRemix: true,
@@ -8787,7 +8787,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         authState.api.getShowcasePost.mockResolvedValue({ success: true, item: kungFuCats });
         const tree = await open(idsOnly());
 
-        expect(collectText(row(tree))).toEqual(['Kung fu cats', 'By @fluffy']);
+        expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
         expect(poster(tree)).toEqual(['https://cdn.example.com/post-9/poster.webp']);
         expect(authState.api.getShowcasePost).toHaveBeenCalledTimes(1);
         expect(authState.api.getShowcasePost).toHaveBeenCalledWith('post-9');
@@ -8797,7 +8797,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         authState.api.getShowcasePost.mockResolvedValue({ success: true, item: { ...kungFuCats, title: 'Untitled Creation' } });
         const tree = await open(idsOnly());
 
-        expect(collectText(row(tree))).toEqual(['Two cats sparring on a rooftop', 'By @fluffy']);
+        expect(collectText(row(tree))).toEqual(['Two cats sparring on a rooftop', 'By @whiskers']);
       });
 
       it('draws the row a link brings from its first frame, and never reads the post', async () => {
@@ -8806,11 +8806,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           tree = renderer.create(
             <MediaCreationScreen
               initialTool="image"
-              remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Kung fu cats', creatorLabel: '@fluffy', thumbnailUrl: 'https://cdn.example.com/post-9/poster.webp' }}
+              remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Rooftop sparring', creatorLabel: '@whiskers', thumbnailUrl: 'https://cdn.example.com/post-9/poster.webp' }}
             />,
           );
         });
-        expect(collectText(row(tree))).toEqual(['Kung fu cats', 'By @fluffy']);
+        expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
         expect(poster(tree)).toEqual(['https://cdn.example.com/post-9/poster.webp']);
 
         await settle();
@@ -8862,7 +8862,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       const brought = () => (
         <MediaCreationScreen
           initialTool="image"
-          remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Kung fu cats', creatorLabel: '@fluffy', thumbnailUrl: 'https://cdn.example.com/post-9/poster.webp' }}
+          remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Rooftop sparring', creatorLabel: '@whiskers', thumbnailUrl: 'https://cdn.example.com/post-9/poster.webp' }}
         />
       );
 
@@ -8874,7 +8874,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         renderer.act(() => { image.props.onError?.({ error: 'HTTP 404' }); });
 
         expect(poster(tree)).toEqual([]);
-        expect(collectText(row(tree))).toEqual(['Kung fu cats', 'By @fluffy']);
+        expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
       });
 
       // A disabled query still reports the shared entry's state, so the post page reading the
@@ -8885,7 +8885,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(brought());
 
         expect(row(tree).findAllByType(SkeletonBone)).toHaveLength(0);
-        expect(collectText(row(tree))).toEqual(['Kung fu cats', 'By @fluffy']);
+        expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
         expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
       });
 

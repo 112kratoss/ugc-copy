@@ -10,14 +10,14 @@ describe('a placeholder title', () => {
     expect(isPlaceholderTitle(title)).toBe(true);
   });
 
-  it.each(['Kung fu cats', 'Untitled recipe for a summer drink', 'Untitled #4', '', '   '])('"%s" is not', (title) => {
+  it.each(['Rooftop sparring', 'Untitled recipe for a summer drink', 'Untitled #4', '', '   '])('"%s" is not', (title) => {
     expect(isPlaceholderTitle(title)).toBe(false);
   });
 });
 
 describe("a post's name", () => {
   it('is the first of its words that is no placeholder', () => {
-    expect(postName(['Kung fu cats', 'Two cats sparring'], 'video')).toBe('Kung fu cats');
+    expect(postName(['Rooftop sparring', 'Two cats sparring'], 'video')).toBe('Rooftop sparring');
     expect(postName(['Untitled Creation', '  ', 'Two cats sparring'], 'video')).toBe('Two cats sparring');
     expect(postName([null, undefined, 'Community post', 'Untitled Note'], 'image')).toBe('Image creation');
   });
