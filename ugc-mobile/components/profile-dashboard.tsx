@@ -489,10 +489,12 @@ export function ProfileDashboard({
   // failed runs wait under their own chip.
   const guestHasCreations = allCreationCards.length > 0 || renderingCreations.length > 0;
   // Each tab's chips and empty state read only that tab's scopes, and its chips
-  // set only its own: Posts can never be handed Failed. Saved has no chips.
+  // set only its own: Posts can never be handed Failed. Saved has no chips. The
+  // empty state names the tab shown, narrowed rather than retyped, so it cannot
+  // describe another one, and a tab added later must be given its own case.
   const tabScope: ProfileMediaTabScope = activeTab === 'Creations'
-    ? ['Creations', creationsScope]
-    : activeTab === 'Posts' ? ['Posts', postsScope] : ['Saved'];
+    ? [activeTab, creationsScope]
+    : activeTab === 'Posts' ? [activeTab, postsScope] : [activeTab];
   const scopeControl = activeTab === 'Creations' ? (
     <ProfileMediaScopeControl
       label="Filter creations"

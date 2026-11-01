@@ -2286,6 +2286,61 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(chipGroups()).toEqual([]);
     });
 
+    // The dashboard picks each tab's empty state and chosen chip itself, so a
+    // value wired to the wrong tab type-checks; these read what each tab draws.
+    it('names an empty Posts or Saved tab after itself, under each Posts chip', () => {
+      queryState.ownerPosts = [];
+      queryState.savedItems = [];
+      const tree = renderDashboard('Posts');
+      const shows = (title: string) => tree.root.findAllByProps({ children: title }).length > 0;
+
+      expect(shows('No posts yet')).toBe(true);
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (0)').props.onPress(); });
+      expect(shows('No archived posts')).toBe(true);
+      expect(shows('No archived creations')).toBe(false);
+
+      const savedTab = tree.root.find((node) => (
+        String(node.type) === 'pressable' && node.props.accessibilityRole === 'tab' && node.props.accessibilityLabel === 'Saved'
+      ));
+      renderer.act(() => { savedTab.props.onPress(); });
+      expect(shows('No saved media yet')).toBe(true);
+      expect(shows('No posts yet')).toBe(false);
+    });
+
+    it("checks the chosen chip on each tab, and each tab's choice stays its own", () => {
+      queryState.ownerPosts = [
+        {
+          id: 'ready-post', title: 'Ready media post', createdAt: '2026-06-10T00:00:00Z', visibility: 'public',
+          mediaUrl: 'ready-post.png', mediaKind: 'image', body: 'Post body', category: 'image', postFormat: 'media',
+          mediaItems: [{ id: 'ready-post-media', url: 'ready-post.png', previewUrl: 'ready-post.preview.webp', mediaKind: 'image', gridReady: true }],
+        },
+        {
+          id: 'archived-post', title: 'Archived post', createdAt: '2026-06-10T00:00:00Z', visibility: 'public',
+          mediaUrl: 'archived-post.png', mediaKind: 'image', body: 'Archived body', category: 'image', postFormat: 'media',
+          archivedAt: '2026-06-11T00:00:00Z',
+        },
+      ];
+      const tree = renderDashboard();
+      // What VoiceOver reads as checked, with the highlight that goes with it.
+      const chosenChips = () => tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && node.props.accessibilityRole === 'radio' && node.props.accessibilityState?.checked
+      )).map((node) => [node.props.accessibilityLabel, node.props.accessibilityState.selected]);
+
+      expect(chosenChips()).toEqual([['Active (1)', true]]);
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+      expect(chosenChips()).toEqual([['Failed (2)', true]]);
+
+      renderer.act(() => { tabSegment(tree, 'Posts').props.onPress(); });
+      expect(chosenChips()).toEqual([['Active (1)', true]]);
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (1)').props.onPress(); });
+      expect(chosenChips()).toEqual([['Archived (1)', true]]);
+
+      renderer.act(() => { tabSegment(tree, 'Creations').props.onPress(); });
+      expect(chosenChips()).toEqual([['Failed (2)', true]]);
+      renderer.act(() => { tabSegment(tree, 'Posts').props.onPress(); });
+      expect(chosenChips()).toEqual([['Archived (1)', true]]);
+    });
+
     it('stays on Failed, empty, once its last run is cleared, and its chip goes when another is chosen', () => {
       const tree = renderDashboard();
       renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
