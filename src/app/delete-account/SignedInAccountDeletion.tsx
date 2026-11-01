@@ -491,7 +491,6 @@ export default function SignedInAccountDeletion() {
               </label>
               <input
                 id="delete-account-password"
-                name="current-password"
                 type="password"
                 autoComplete="current-password"
                 value={password}
@@ -526,7 +525,6 @@ export default function SignedInAccountDeletion() {
           </label>
           <input
             id="delete-account-confirmation"
-            name="delete-confirmation"
             value={confirmation}
             onChange={(event) => setConfirmation(event.target.value)}
             disabled={isWorking}

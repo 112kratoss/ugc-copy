@@ -54,7 +54,10 @@ export function AdminLoginForm() {
         Restricted to Magicbooklet operators.
       </Text>
 
-      <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
+      {/* A post, not the default GET: Enter pressed before the page's script has run submits
+          the form the browser's own way, and a GET wrote the password into the address. The
+          page renders on every request (page.tsx), so the server answers with it. */}
+      <form method="post" onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
           <label htmlFor="admin-username">
             <Text as="span" variant="label">Username</Text>

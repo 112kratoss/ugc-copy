@@ -171,7 +171,6 @@ function ResetPasswordContent() {
                   <input
                     id="new-password"
                     ref={passwordRef}
-                    name="new-password"
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(event) => {
@@ -218,7 +217,6 @@ function ResetPasswordContent() {
                 <input
                   id="confirm-password"
                   ref={confirmPasswordRef}
-                  name="confirm-password"
                   type={showPassword ? 'text' : 'password'}
                   value={confirmPassword}
                   onChange={(event) => {
