@@ -16,9 +16,10 @@
  * - When the page's owner changes (another account, a sign-out, a visitor signing in from another
  *   tab), the box goes back to the page's opening prompt at once and then takes the new owner's
  *   saved one: one owner's words are never shown to another, nor saved under them. Only the
- *   sheet's hand-over moves a visitor's work into an account (`creator-visitor-draft.ts`). An
- *   Enhance answer still on its way is the earlier owner's too: its words, its notes and the
- *   balance it reports are dropped.
+ *   sheet's hand-over moves a visitor's work into an account (`creator-visitor-draft.ts`), and
+ *   where its move gave up or failed the page keeps the visitor's form as it is
+ *   (`keepsVisitorForm`), words, pictures and clips. An Enhance answer still on its way is the
+ *   earlier owner's too: its words, its notes and the balance it reports are dropped.
  */
 
 /** The box holds words typed on the page: something, and not what the page opened on. */

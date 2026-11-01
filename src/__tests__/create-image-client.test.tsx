@@ -71,7 +71,7 @@ const saveCreatorDraftMock = vi.hoisted(() => vi.fn(async (tool: string, userId:
 }));
 // Whose draft the page keeps, where a test moves it as `useCreatorDraftOwner` would: a sign-up's
 // hand-over finishing, a session from another tab, another account. Null leaves the hook's own answer.
-const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean } | null }));
+const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean; keepsVisitorForm: boolean } | null }));
 const uploadMediaToTemporaryStorageMock = vi.hoisted(() => vi.fn(async (file: File) => ({
   signedUrl: `https://signed.example.com/uploads/${file.name}`,
   storagePath: `uploads/user-1/${file.name}`,
@@ -1453,8 +1453,9 @@ describe('CreateImageClient generation pipeline', () => {
       const CARRIED = 'A corgi astronaut on the moon, cinematic';
       const page = () => <CreateImageClient prefill={{}} handoverNonce="nonce-1" />;
       const box = () => screen.getByPlaceholderText(PROMPT_PLACEHOLDER);
-      function ownDraftAs(owner: string | null, carriedDraft = false) {
-        draftOwnerOverride.current = { owner, carriedDraft };
+      // keepsVisitorForm: the sign-up sheet's hand-over led here and its move gave up or failed.
+      function ownDraftAs(owner: string | null, carriedDraft = false, keepsVisitorForm = false) {
+        draftOwnerOverride.current = { owner, carriedDraft, keepsVisitorForm };
       }
       const promptsSavedFor = (owner: string) => saveCreatorDraftMock.mock.calls
         .filter(([, savedFor]) => savedFor === owner)
@@ -1619,6 +1620,177 @@ describe('CreateImageClient generation pipeline', () => {
         });
         expect(box()).toHaveValue('Ben’s glasshouse at dawn');
         expect(authState.updateCredits).toHaveBeenCalledWith(12);
+      });
+
+      // The pictures follow the same rule: one owner's are never shown to another, nor sent or
+      // saved under them. Only the sheet's hand-over moves a visitor's into an account.
+      const picture = (displayName: string, name: string): PersistedImageElementRecord => ({
+        id: `saved-${name}`,
+        displayName,
+        file: new File([name], `${name}.png`, { type: 'image/png' }),
+      });
+      /** What the browser keeps for each owner. */
+      function keepPictures(byOwner: Record<string, PersistedImageElementRecord[]>) {
+        getPersistedImageElementRecordsMock.mockImplementation(async (key: string) => (
+          byOwner[key.slice('create-image:elements:'.length)] ?? []
+        ));
+      }
+      async function readPicturesOf(owner: string) {
+        await waitFor(() => expect(getPersistedImageElementRecordsMock).toHaveBeenCalledWith(`create-image:elements:${owner}`));
+        await settleDraftRead();
+      }
+      const picturesSavedFor = (owner: string) => setPersistedImageElementRecordsMock.mock.calls
+        .filter(([key]) => key === `create-image:elements:${owner}`)
+        .flatMap(([, records]) => records.map((record) => record.file.name));
+
+      it('never keeps one account’s pictures for another, nor sends or saves them under it', async () => {
+        const fetchMock = installFetch({ starts: [startedReply()] });
+        keepPictures({ 'user-1': [picture('Asha’s harbour', 'harbour')] });
+        ownDraftAs('user-1');
+        const view = render(page());
+        const pickPictures = (file: File) => fireEvent.change(
+          view.container.querySelector<HTMLInputElement>('input[type="file"][multiple]')!,
+          { target: { files: [file] } },
+        );
+        expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+        // A file of hers the page refused, by its name.
+        pickPictures(new File(['notes'], 'asha-notes.txt', { type: 'text/plain' }));
+        expect(await screen.findByText(/asha-notes\.txt/)).toBeInTheDocument();
+
+        // Asha signs out in another tab and Ben, who has no pictures saved, signs in.
+        ownDraftAs(null);
+        view.rerender(page());
+        ownDraftAs('user-2');
+        view.rerender(page());
+        await readPicturesOf('user-2');
+        expect(screen.queryByAltText('Asha’s harbour')).not.toBeInTheDocument();
+        expect(screen.queryByText(/asha-notes\.txt/)).not.toBeInTheDocument();
+
+        // What Ben adds is saved alone under him, and his run sends only that.
+        pickPictures(new File(['ben'], 'lighthouse.png', { type: 'image/png' }));
+        await waitFor(() => expect(picturesSavedFor('user-2')).toContain('lighthouse.png'));
+        typePrompt('A lighthouse at dawn');
+        pressGenerate();
+        await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+        expect(startBody(startCalls(fetchMock)[0]).inputs.map((sent) => String(sent.storagePath).split('/').at(-1)))
+          .toEqual(['lighthouse.png']);
+
+        // Back to Asha: her picture, and none of Ben's.
+        ownDraftAs('user-1');
+        view.rerender(page());
+        expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+        expect(screen.queryByAltText('Element 1')).not.toBeInTheDocument();
+        view.unmount();
+        expect(picturesSavedFor('user-2')).not.toContain('harbour.png');
+        expect(picturesSavedFor('user-1')).not.toContain('lighthouse.png');
+      });
+
+      it('drops the earlier owner’s pictures when their read answers after the owner changed', async () => {
+        installFetch();
+        let answerAsha: (records: PersistedImageElementRecord[]) => void = () => undefined;
+        getPersistedImageElementRecordsMock.mockImplementation((key: string) => (
+          key === 'create-image:elements:user-1'
+            ? new Promise((resolve) => { answerAsha = resolve; })
+            : Promise.resolve([])
+        ));
+        ownDraftAs('user-1');
+        const view = render(page());
+        await waitFor(() => expect(getPersistedImageElementRecordsMock).toHaveBeenCalledWith('create-image:elements:user-1'));
+
+        // Ben signs in from another tab while Asha's pictures are still being read.
+        ownDraftAs('user-2');
+        view.rerender(page());
+        await readPicturesOf('user-2');
+        await act(async () => answerAsha([picture('Asha’s harbour', 'harbour')]));
+        await settleDraftRead();
+        expect(screen.queryByAltText('Asha’s harbour')).not.toBeInTheDocument();
+      });
+
+      it('leaves a visitor’s pictures behind when an account signs in without the sign-up sheet', async () => {
+        installFetch();
+        keepPictures({ visitor: [picture('Neon koi', 'koi')] });
+        ownDraftAs('visitor');
+        const view = render(page());
+        expect(await screen.findByAltText('Neon koi')).toBeInTheDocument();
+
+        // Signed in from another tab: the account, which has no pictures saved, opens on none.
+        ownDraftAs('user-1');
+        view.rerender(page());
+        await readPicturesOf('user-1');
+        expect(screen.queryByAltText('Neon koi')).not.toBeInTheDocument();
+        view.unmount();
+        expect(picturesSavedFor('user-1')).not.toContain('koi.png');
+      });
+
+      it('keeps the pictures the sign-up sheet’s hand-over carried', async () => {
+        installFetch();
+        // The page opened before its session came, on the visitor's pictures.
+        keepPictures({ visitor: [picture('Corgi astronaut', 'corgi')] });
+        ownDraftAs('visitor');
+        const view = render(page());
+        expect(await screen.findByAltText('Corgi astronaut')).toBeInTheDocument();
+
+        // The hand-over moves them to the account the visitor signed up with.
+        ownDraftAs(null);
+        view.rerender(page());
+        keepPictures({ 'user-1': [picture('Corgi astronaut', 'corgi')] });
+        ownDraftAs('user-1', true);
+        view.rerender(page());
+        await readPicturesOf('user-1');
+        expect(screen.getByAltText('Corgi astronaut')).toBeInTheDocument();
+      });
+
+      it('keeps the visitor’s pictures and words when the sign-up sheet’s hand-over gives up', async () => {
+        installFetch();
+        // The page opened before its session came, on the visitor's pictures and words. The account
+        // the visitor signs up with has older pictures of its own saved.
+        keepPictures({ visitor: [picture('Corgi astronaut', 'corgi')], 'user-1': [picture('Old mountain', 'mountain')] });
+        ownDraftAs('visitor');
+        const view = render(page());
+        expect(await screen.findByAltText('Corgi astronaut')).toBeInTheDocument();
+        typePrompt('A corgi astronaut on the moon, cinematic');
+
+        // The move to that account does not answer in time, so the page goes on with the account.
+        ownDraftAs(null);
+        view.rerender(page());
+        ownDraftAs('user-1', false, true);
+        view.rerender(page());
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1'));
+        await settleDraftRead();
+        // The form stays as the visitor left it, with no older picture of the account's over it.
+        expect(screen.getByAltText('Corgi astronaut')).toBeInTheDocument();
+        expect(screen.queryByAltText('Old mountain')).not.toBeInTheDocument();
+        expect(box()).toHaveValue('A corgi astronaut on the moon, cinematic');
+      });
+
+      it('writes nothing under the earlier owner when their run’s upload ends after the owner changed', async () => {
+        installFetch({ starts: [startedReply()] });
+        keepPictures({ 'user-1': [picture('Asha’s harbour', 'harbour')] });
+        ownDraftAs('user-1');
+        const view = render(page());
+        expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+        // Asha's run uploads her picture.
+        let finishUpload: () => void = () => undefined;
+        uploadMediaToTemporaryStorageMock.mockImplementationOnce((file: File) => new Promise((resolve) => {
+          finishUpload = () => resolve({
+            signedUrl: `https://signed.example.com/uploads/${file.name}`,
+            storagePath: `uploads/user-1/${file.name}`,
+          });
+        }));
+        typePrompt('A harbour at dusk');
+        pressGenerate();
+        await waitFor(() => expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalled());
+
+        // Ben, who has no pictures saved, signs in from another tab meanwhile.
+        ownDraftAs('user-2');
+        view.rerender(page());
+        await readPicturesOf('user-2');
+        const pictureWrites = setPersistedImageElementRecordsMock.mock.calls.length;
+        await act(async () => finishUpload());
+        await settleDraftRead();
+
+        // An empty list written under Asha would have removed her saved pictures.
+        expect(setPersistedImageElementRecordsMock.mock.calls.slice(pictureWrites).map(([key]) => key)).toEqual([]);
       });
     });
   });

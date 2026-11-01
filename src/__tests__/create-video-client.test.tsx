@@ -49,7 +49,7 @@ const saveCreatorDraftMock = vi.hoisted(() => vi.fn(async (_tool: string, _userI
 }));
 // Whose draft the page keeps, where a test moves it as `useCreatorDraftOwner` would: a sign-up's
 // hand-over finishing, another account. Null leaves the hook's own answer.
-const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean } | null }));
+const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean; keepsVisitorForm: boolean } | null }));
 const purgeLegacyPersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
 const setPersistedFileMock = vi.hoisted(() => vi.fn(async (_key: string, _file: File): Promise<void> => {
   void _key;
@@ -5116,8 +5116,9 @@ describe('CreateVideoClient Kling video elements', () => {
 
     // The prompt box's rule when a draft is read back after the page opened (owner, 2026-11-01).
     describe('read back after the page opened', () => {
-      function ownDraftAs(owner: string | null, carriedDraft = false) {
-        draftOwnerOverride.current = { owner, carriedDraft };
+      // keepsVisitorForm: the sign-up sheet's hand-over led here and its move gave up or failed.
+      function ownDraftAs(owner: string | null, carriedDraft = false, keepsVisitorForm = false) {
+        draftOwnerOverride.current = { owner, carriedDraft, keepsVisitorForm };
       }
       const draftsSavedFor = (owner: string) => saveCreatorDraftMock.mock.calls
         .filter(([, savedFor]) => savedFor === owner)
@@ -5281,6 +5282,272 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
         act(() => lastEnhanceButton().onEnhanced('Cleo’s glasshouse at dawn'));
         expect(promptBox()).toHaveValue('Cleo’s glasshouse at dawn');
+      });
+
+      // The pictures and clips follow the same rule: one owner's are never shown to another, nor
+      // sent or saved under them. Only the sheet's hand-over moves a visitor's into an account.
+      type KeptMedia = {
+        start?: File;
+        end?: File;
+        pictures?: PersistedImageElementRecord[];
+        clips?: PersistedMediaRecord[];
+        tracks?: PersistedMediaRecord[];
+        klingClips?: PersistedMediaRecord[];
+      };
+      /** What the browser keeps for each owner. */
+      function keepMedia(byOwner: Record<string, KeptMedia>) {
+        const keptFor = (key: string) => byOwner[key.slice(key.lastIndexOf(':') + 1)] ?? {};
+        getPersistedFileMock.mockImplementation(async (key: string) => (
+          (key.startsWith('create-video:start-image:') ? keptFor(key).start : key.startsWith('create-video:end-image:') ? keptFor(key).end : null) ?? null
+        ));
+        getPersistedImageElementRecordsMock.mockImplementation(async (key: string) => keptFor(key).pictures ?? []);
+        getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
+          (key.startsWith('create-video:reference-videos:') ? keptFor(key).clips
+            : key.startsWith('create-video:reference-audios:') ? keptFor(key).tracks
+              : keptFor(key).klingClips) ?? []
+        ));
+      }
+      async function readMediaOf(owner: string) {
+        await waitFor(() => expect(getPersistedFileMock).toHaveBeenCalledWith(`create-video:start-image:${owner}`));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      }
+      const image = (name: string) => new File([name], `${name}.png`, { type: 'image/png' });
+      const shownFile = (alt: string) => screen.queryByAltText(alt)?.getAttribute('src')?.match(/^blob:(.+):\d+$/)?.[1] ?? null;
+
+      it('never keeps one account’s frames for another, nor sends or saves them under it', async () => {
+        keepMedia({ 'user-1': { start: image('harbour'), end: image('quay') } });
+        ownDraftAs('user-1');
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(shownFile('Start image')).toBe('harbour.png'));
+        expect(shownFile('End image')).toBe('quay.png');
+        // A file of hers the page refused, by its name.
+        fireEvent.change(view.container.querySelector<HTMLInputElement>('#video-start-frame-input')!, {
+          target: { files: [new File(['notes'], 'asha-notes.txt', { type: 'text/plain' })] },
+        });
+        expect(await screen.findByText(/asha-notes\.txt/)).toBeInTheDocument();
+
+        // Asha signs out in another tab and Ben, who has nothing saved, signs in.
+        ownDraftAs(null);
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        ownDraftAs('user-2');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await readMediaOf('user-2');
+        expect(shownFile('Start image')).toBeNull();
+        expect(shownFile('End image')).toBeNull();
+        expect(screen.queryByText(/asha-notes\.txt/)).toBeNull();
+
+        // Ben's start image is saved under him, and his run sends only that.
+        fireEvent.change(view.container.querySelector<HTMLInputElement>('#video-start-frame-input')!, {
+          target: { files: [image('lighthouse')] },
+        });
+        await waitFor(() => expect(setPersistedFileMock).toHaveBeenCalledWith('create-video:start-image:user-2', expect.objectContaining({ name: 'lighthouse.png' })));
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(postedRun().inputs.map((input: { url: string }) => input.url.split('/').at(-1))).toEqual(['lighthouse.png']);
+
+        // Back to Asha: her frames, and not Ben's.
+        ownDraftAs('user-1');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(shownFile('Start image')).toBe('harbour.png'));
+        expect(shownFile('End image')).toBe('quay.png');
+        expect(setPersistedFileMock.mock.calls.map(([key, file]) => `${key} ${file.name}`))
+          .toEqual(['create-video:start-image:user-2 lighthouse.png']);
+      });
+
+      it('never keeps one account’s pictures, clips or tracks for another, nor saves them under it', async () => {
+        keepMedia({
+          'user-1': {
+            pictures: [{ id: 'asha-picture', displayName: 'Asha’s lantern', file: image('lantern') }],
+            clips: [{ id: 'asha-clip', displayName: 'Asha’s tide', durationSeconds: 5, file: new File(['tide'], 'tide.mp4', { type: 'video/mp4' }) }],
+            tracks: [{ id: 'asha-track', displayName: 'Asha’s hum', durationSeconds: 6, file: new File(['hum'], 'hum.mp3', { type: 'audio/mpeg' }) }],
+          },
+        });
+        // Each is named on its card and in the prepared assets' list, and the picture in its name field.
+        const ashasShown = () => ['Asha’s lantern', 'Asha’s tide', 'Asha’s hum'].filter((name) => (
+          screen.queryAllByText(name).length > 0 || screen.queryAllByDisplayValue(name).length > 0
+        ));
+        const page = () => <CreateVideoClient prefill={{ model: 'seedance-2-5' }} />;
+        ownDraftAs('user-1');
+        const view = render(page());
+        await waitFor(() => expect(ashasShown()).toEqual(['Asha’s lantern', 'Asha’s tide', 'Asha’s hum']));
+
+        // Ben signs in from another tab; he has nothing saved.
+        ownDraftAs('user-2');
+        view.rerender(page());
+        await readMediaOf('user-2');
+        expect(ashasShown()).toEqual([]);
+
+        // A picture Ben adds is saved alone under him.
+        fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]')!, {
+          target: { files: [image('lighthouse')] },
+        });
+        await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenCalledWith('create-video:elements:user-2', expect.any(Array)));
+        view.unmount();
+        const savedUnder = (owner: string) => [
+          ...setPersistedImageElementRecordsMock.mock.calls,
+          ...setPersistedMediaRecordsMock.mock.calls,
+        ].filter(([key]) => key.endsWith(`:${owner}`)).flatMap(([, records]) => records.map((record) => record.file.name));
+        expect(savedUnder('user-2')).toEqual(['lighthouse.png']);
+      });
+
+      it('never keeps the Omni IDs one account pasted for another', async () => {
+        const page = () => <CreateVideoClient prefill={{ model: 'gemini-omni-video' }} />;
+        ownDraftAs('user-1');
+        const view = render(page());
+        const voiceField = await screen.findByRole('textbox', { name: 'Gemini Omni audio ID' });
+        fireEvent.change(voiceField, { target: { value: 'asha-voice-01' } });
+        fireEvent.keyDown(voiceField, { key: 'Enter' });
+        fireEvent.change(screen.getByRole('textbox', { name: 'Gemini Omni character ID' }), { target: { value: 'asha-char' } });
+        expect(screen.getByText('asha-voice-01')).toBeInTheDocument();
+
+        // Ben signs in from another tab.
+        ownDraftAs('user-2');
+        view.rerender(page());
+        await readMediaOf('user-2');
+        expect(screen.queryByText('asha-voice-01')).toBeNull();
+        expect(screen.getByRole('textbox', { name: 'Gemini Omni character ID' })).toHaveValue('');
+      });
+
+      it('leaves a visitor’s clips behind when an account signs in without the sign-up sheet', async () => {
+        keepMedia({
+          visitor: { klingClips: [{ id: 'koi-clip', displayName: 'Koi pond', handle: '@koi_pond', durationSeconds: 4, file: new File(['koi'], 'koi.mp4', { type: 'video/mp4' }) }] },
+        });
+        ownDraftAs('visitor');
+        const view = render(<CreateVideoClient prefill={{}} />);
+        expect(await screen.findByDisplayValue('Koi pond')).toBeInTheDocument();
+
+        // Signed in from another tab: the account, which has nothing saved, opens on nothing.
+        ownDraftAs('user-1');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await readMediaOf('user-1');
+        expect(screen.queryByDisplayValue('Koi pond')).toBeNull();
+      });
+
+      it('keeps the frames the sign-up sheet’s hand-over carried', async () => {
+        // The page opened before its session came, on the visitor's start image.
+        keepMedia({ visitor: { start: image('corgi') } });
+        ownDraftAs('visitor');
+        const view = render(<CreateVideoClient prefill={{}} handoverNonce="nonce-1" />);
+        await waitFor(() => expect(shownFile('Start image')).toBe('corgi.png'));
+
+        // The hand-over moves it to the account the visitor signed up with.
+        ownDraftAs(null);
+        view.rerender(<CreateVideoClient prefill={{}} handoverNonce="nonce-1" />);
+        keepMedia({ 'user-1': { start: image('corgi') } });
+        ownDraftAs('user-1', true);
+        view.rerender(<CreateVideoClient prefill={{}} handoverNonce="nonce-1" />);
+        await readMediaOf('user-1');
+        expect(shownFile('Start image')).toBe('corgi.png');
+      });
+
+      it('keeps the visitor’s frames and words when the sign-up sheet’s hand-over gives up', async () => {
+        const page = () => <CreateVideoClient prefill={{}} handoverNonce="nonce-1" />;
+        // The page opened before its session came, on the visitor's start image and words. The
+        // account the visitor signs up with has an older start image and clip of its own saved.
+        keepMedia({
+          visitor: { start: image('corgi') },
+          'user-1': {
+            start: image('mountain'),
+            clips: [{ id: 'old-clip', displayName: 'Old ridge', durationSeconds: 5, file: new File(['ridge'], 'ridge.mp4', { type: 'video/mp4' }) }],
+          },
+        });
+        ownDraftAs('visitor');
+        const view = render(page());
+        await waitFor(() => expect(shownFile('Start image')).toBe('corgi.png'));
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+        // The move to that account does not answer in time, so the page goes on with the account.
+        ownDraftAs(null);
+        view.rerender(page());
+        ownDraftAs('user-1', false, true);
+        view.rerender(page());
+        await readMediaOf('user-1');
+        // The form stays as the visitor left it, with nothing older of the account's over it.
+        expect(shownFile('Start image')).toBe('corgi.png');
+        expect(screen.queryAllByText('Old ridge')).toEqual([]);
+        expect(promptBox()).toHaveValue(PROMPT);
+      });
+
+      it('drops a clip whose length is still being read when the owner changes, and saves nothing under either', async () => {
+        keepMedia({
+          'user-1': { clips: [{ id: 'asha-clip', displayName: 'Asha’s tide', durationSeconds: 5, file: new File(['tide'], 'tide.mp4', { type: 'video/mp4' }) }] },
+        });
+        const page = () => <CreateVideoClient prefill={{ model: 'seedance-2-5' }} />;
+        ownDraftAs('user-1');
+        const view = render(page());
+        await waitFor(() => expect(screen.queryAllByText('Asha’s tide').length).toBeGreaterThan(0));
+        // Asha picks a clip whose length is slow to read.
+        let readLength: (seconds: number) => void = () => undefined;
+        readDurationMock.mockImplementation((source: File | string) => (
+          typeof source !== 'string' && source.name === 'wave.mp4'
+            ? new Promise<number>((resolve) => { readLength = resolve; })
+            : Promise.resolve(4.2)
+        ));
+        fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="video/*"]')!, {
+          target: { files: [new File(['wave'], 'wave.mp4', { type: 'video/mp4' })] },
+        });
+        await waitFor(() => expect(readDurationMock).toHaveBeenCalledWith(expect.objectContaining({ name: 'wave.mp4' })));
+
+        // Ben, who has nothing saved, signs in from another tab before it is read.
+        ownDraftAs('user-2');
+        view.rerender(page());
+        await readMediaOf('user-2');
+        const clipWrites = setPersistedMediaRecordsMock.mock.calls.length;
+        await act(async () => readLength(4));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        // The clip went with Asha's form: it is not on Ben's, and nothing replaced her saved clips.
+        expect(screen.queryAllByText('Video reference 2')).toEqual([]);
+        expect(setPersistedMediaRecordsMock.mock.calls.slice(clipWrites).map(([key]) => key)).toEqual([]);
+      });
+
+      it('keeps the earlier owner’s named subjects off the form, and their saved ones as they were, when a run’s upload ends after the owner changed', async () => {
+        getPersistedSubjectRecordsMock.mockImplementation(async (key: string) => (key.endsWith(':user-1') ? [{
+          id: 'asha-subject',
+          displayName: 'Asha in red',
+          images: [
+            { id: 'asha-front', file: image('asha-front') },
+            { id: 'asha-side', file: image('asha-side') },
+          ],
+        }] : []));
+        const page = () => <CreateVideoClient prefill={{ model: 'kling-o3' }} />;
+        ownDraftAs('user-1');
+        const view = render(page());
+        expect(await screen.findByDisplayValue('Asha in red')).toBeInTheDocument();
+        await readMediaOf('user-1');
+        // Asha's run uploads her subject's pictures.
+        let finishUpload: () => void = () => undefined;
+        temporaryUploadMock.mockImplementationOnce((file: File) => new Promise((resolve) => {
+          finishUpload = () => resolve({
+            signedUrl: `https://signed.example.com/uploads/user-1/${file.name}`,
+            storagePath: `uploads/user-1/${file.name}`,
+          });
+        }));
+        fireEvent.change(screen.getByPlaceholderText(/^Describe the Kling O3 scene/), {
+          target: { value: '@asha_in_red twirls in a bright studio, slow push in, soft daylight.' },
+        });
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(temporaryUploadMock).toHaveBeenCalled());
+
+        // Ben, who has no subjects, signs in from another tab meanwhile.
+        ownDraftAs('user-2');
+        view.rerender(page());
+        await readMediaOf('user-2');
+        expect(screen.queryByDisplayValue('Asha in red')).toBeNull();
+        const subjectWrites = setPersistedSubjectRecordsMock.mock.calls.length;
+        await act(async () => finishUpload());
+        await waitFor(() => expect(temporaryUploadMock).toHaveBeenCalledTimes(2));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(screen.queryByDisplayValue('Asha in red')).toBeNull();
+        expect(setPersistedSubjectRecordsMock.mock.calls.slice(subjectWrites).map(([key]) => key)).toEqual([]);
       });
     });
 

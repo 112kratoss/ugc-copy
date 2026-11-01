@@ -74,7 +74,7 @@ const persistedMediaMocks = vi.hoisted(() => ({
 const savedDrafts = vi.hoisted(() => new Map<string, unknown>());
 // Whose draft the page keeps, where a test moves it as `useCreatorDraftOwner` would: a sign-up's
 // hand-over finishing, another account. Null leaves the hook's own answer.
-const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean } | null }));
+const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean; keepsVisitorForm: boolean } | null }));
 const draftMocks = vi.hoisted(() => ({
   loadCreatorDraft: vi.fn(async (tool: string, userId: string) => savedDrafts.get(`${tool}:${userId}`) ?? null),
   saveCreatorDraft: vi.fn(async (tool: string, userId: string, draft: unknown) => {
@@ -1359,8 +1359,9 @@ describe('CreateMotionClient drafts and media', () => {
   describe('read back after the page opened', () => {
     const OPENING = "No distortion, the character's movements are consistent with the video.";
     const box = () => screen.getByPlaceholderText(/Describe the kind of movement/);
-    function ownDraftAs(owner: string | null, carriedDraft = false) {
-      draftOwnerOverride.current = { owner, carriedDraft };
+    // keepsVisitorForm: the sign-up sheet's hand-over led here and its move gave up or failed.
+    function ownDraftAs(owner: string | null, carriedDraft = false, keepsVisitorForm = false) {
+      draftOwnerOverride.current = { owner, carriedDraft, keepsVisitorForm };
     }
     const promptsSavedFor = (owner: string) => draftMocks.saveCreatorDraft.mock.calls
       .filter(([, savedFor]) => savedFor === owner)
@@ -1512,6 +1513,114 @@ describe('CreateMotionClient drafts and media', () => {
       });
       expect(box()).toHaveValue('Ben’s backflip off the pier');
       expect(authState.updateCredits).toHaveBeenCalledWith(12);
+    });
+
+    // The picture and clip follow the same rule: one owner's are never shown to another, nor sent
+    // or saved under them. Only the sheet's hand-over moves a visitor's into an account.
+    const keepFiles = (owner: string, files: { image?: File; clip?: File }) => {
+      if (files.image) persistedFiles.set(`create-motion:character-image:${owner}`, files.image);
+      if (files.clip) persistedFiles.set(`create-motion:reference-video:${owner}`, files.clip);
+    };
+    async function readFilesOf(owner: string) {
+      await waitFor(() => expect(persistedMediaMocks.getPersistedFile).toHaveBeenCalledWith(`create-motion:reference-video:${owner}`));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    const imageShown = () => screen.queryByText('Add the character image') === null;
+    const clipShown = () => screen.queryByText('Add the motion clip') === null;
+    const lengthsSavedFor = (owner: string) => draftMocks.saveCreatorDraft.mock.calls
+      .filter(([, savedFor]) => savedFor === owner)
+      .map(([, , draft]) => (draft as { duration: number }).duration);
+
+    it('never keeps one account’s picture and clip for another, nor sends them or saves their length under it', async () => {
+      keepFiles('user-1', { image: characterImage(), clip: motionClip() });
+      ownDraftAs('user-1');
+      const view = render(<CreateMotionClient prefill={{}} />);
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(imageShown()).toBe(true);
+
+      // Asha signs out in another tab and Ben, who has nothing saved, signs in.
+      ownDraftAs(null);
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      ownDraftAs('user-2');
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      await readFilesOf('user-2');
+      expect(imageShown()).toBe(false);
+      expect(clipShown()).toBe(false);
+      await waitFor(() => expect(lengthsSavedFor('user-2').length).toBeGreaterThan(0), { timeout: 2_000 });
+      expect(lengthsSavedFor('user-2').every((seconds) => seconds === 0)).toBe(true);
+
+      // A clip of Ben's own is not enough to start: the run would not take Asha's picture.
+      pickFile(view.container, 'motion-reference-video-input', new File(['spin'], 'spin.mp4', { type: 'video/mp4' }));
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(generateButton()).toBeDisabled();
+      expect(persistedMediaMocks.setPersistedFile.mock.calls.map(([key, file]) => `${key} ${file.name}`))
+        .toEqual(['create-motion:reference-video:user-2 spin.mp4']);
+
+      // Back to Asha: her picture and clip, not Ben's.
+      ownDraftAs('user-1');
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      await waitFor(() => expect(imageShown() && clipShown()).toBe(true));
+      expect(vi.mocked(URL.createObjectURL).mock.calls.slice(-2).map(([file]) => (file as File).name))
+        .toEqual(['hero.png', 'dance.mp4']);
+    });
+
+    it('leaves a visitor’s picture behind when an account signs in without the sign-up sheet', async () => {
+      keepFiles('visitor', { image: characterImage() });
+      ownDraftAs('visitor');
+      const view = render(<CreateMotionClient prefill={{}} />);
+      await waitFor(() => expect(imageShown()).toBe(true));
+
+      // Signed in from another tab: the account, which has nothing saved, opens on nothing.
+      ownDraftAs('user-1');
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      await readFilesOf('user-1');
+      expect(imageShown()).toBe(false);
+    });
+
+    it('keeps the picture and clip the sign-up sheet’s hand-over carried', async () => {
+      const page = () => <CreateMotionClient prefill={{}} handoverNonce="nonce-1" />;
+      // The page opened before its session came, on the visitor's files.
+      keepFiles('visitor', { image: characterImage(), clip: motionClip() });
+      ownDraftAs('visitor');
+      const view = render(page());
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+
+      // The hand-over moves them to the account the visitor signed up with.
+      ownDraftAs(null);
+      view.rerender(page());
+      persistedFiles.clear();
+      keepFiles('user-1', { image: characterImage(), clip: motionClip() });
+      ownDraftAs('user-1', true);
+      view.rerender(page());
+      await readFilesOf('user-1');
+      expect(imageShown()).toBe(true);
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+    });
+
+    it('keeps the visitor’s picture, clip and words when the sign-up sheet’s hand-over gives up', async () => {
+      const page = () => <CreateMotionClient prefill={{}} handoverNonce="nonce-1" />;
+      // The page opened before its session came, on the visitor's files and words. The account the
+      // visitor signs up with has an older picture of its own saved.
+      keepFiles('visitor', { image: characterImage(), clip: motionClip() });
+      keepFiles('user-1', { image: new File(['old'], 'old-hero.png', { type: 'image/png' }) });
+      ownDraftAs('visitor');
+      const view = render(page());
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      fireEvent.change(box(), { target: { value: 'A slow spin with both arms wide' } });
+
+      // The move to that account does not answer in time, so the page goes on with the account.
+      ownDraftAs(null);
+      view.rerender(page());
+      ownDraftAs('user-1', false, true);
+      view.rerender(page());
+      await readFilesOf('user-1');
+      // The form stays as the visitor left it, with no older picture of the account's over it.
+      expect(imageShown()).toBe(true);
+      expect(vi.mocked(URL.createObjectURL).mock.calls.map(([file]) => (file as File).name)).not.toContain('old-hero.png');
+      expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(box()).toHaveValue('A slow spin with both arms wide');
     });
   });
 

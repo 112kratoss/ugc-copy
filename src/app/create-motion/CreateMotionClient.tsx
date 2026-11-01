@@ -258,7 +258,7 @@ export default function CreateMotionClient({
     const userId = session?.user?.id ?? null;
     // The visitor's draft until someone signs in, then the account's, which takes
     // the visitor's when sign-up was opened here.
-    const { owner: draftOwner, carriedDraft } = useCreatorDraftOwner('motion', userId, handoverNonce);
+    const { owner: draftOwner, carriedDraft, keepsVisitorForm } = useCreatorDraftOwner('motion', userId, handoverNonce);
     // A page that opened signed out works up to Generate, which asks for an account
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
@@ -535,19 +535,28 @@ export default function CreateMotionClient({
         if (file) await processVideoFile(file);
     };
 
-    const handleClearImage = async () => {
+    // Each slot emptied on the form only: what is saved for the owner is the caller's to remove.
+    const takeImageOffForm = () => {
         setCharacterImageFile(null); setCharacterImage(null);
         setCharacterImageDescriptor(null);
         setImagePickError(null);
+    };
+
+    const takeVideoOffForm = () => {
+        setReferenceVideoFile(null); setReferenceVideo(null);
+        setReferenceVideoDescriptor(null);
+        setDuration(0); setVideoError(null); setVideoPickError(null);
+        measuredClipFloorRef.current = null;
+    };
+
+    const handleClearImage = async () => {
+        takeImageOffForm();
         const persistedKey = getPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionCharacterImage);
         if (persistedKey) await removePersistedMedia(persistedKey);
     };
 
     const handleClearVideo = async () => {
-        setReferenceVideoFile(null); setReferenceVideo(null);
-        setReferenceVideoDescriptor(null);
-        setDuration(0); setVideoError(null); setVideoPickError(null);
-        measuredClipFloorRef.current = null;
+        takeVideoOffForm();
         const persistedKey = getPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
         if (persistedKey) await removePersistedMedia(persistedKey);
     };
@@ -717,11 +726,16 @@ export default function CreateMotionClient({
     useEffect(() => {
         if (remixId || !draftOwner) return;
         let cancelled = false;
-        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
+        if (!keepsVisitorForm && isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
             // The words are another owner's: not this one's to see, nor to save.
             const openingPrompt = prefillPrompt ?? MOTION_OPENING_PROMPT;
             promptRef.current = openingPrompt;
             setPrompt(openingPrompt);
+            // The picture and clip too, and the clip's length: what is saved for them stays
+            // theirs, and the new owner's own come back below.
+            takeImageOffForm();
+            takeVideoOffForm();
+            setUploadPreview(null);
         }
         promptOwnerRef.current = draftOwner;
         void (async () => {
@@ -733,6 +747,12 @@ export default function CreateMotionClient({
             if (cancelled) return;
             const carried = carriedDraft && !carriedPromptTakenRef.current;
             if (carried) carriedPromptTakenRef.current = true;
+            if (keepsVisitorForm) {
+                // A form the sign-up's hand-over kept stays as it is, with nothing older of the
+                // account's over it.
+                setDraftRestoredFor(draftOwner);
+                return;
+            }
             if (draft) applySavedDraft(draft, carried);
             if (savedImageFile) {
                 setCharacterImageFile(savedImageFile);
@@ -753,7 +773,7 @@ export default function CreateMotionClient({
         };
         // Once per owner: applySavedDraft and the opening prompt read this page's prefill, which does not change.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remixId, draftOwner, carriedDraft]);
+    }, [remixId, draftOwner, carriedDraft, keepsVisitorForm]);
 
     // Prompt, model and settings per owner, a moment after each edit. A remix
     // page saves none: it restores from its source.

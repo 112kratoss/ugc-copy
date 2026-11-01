@@ -1219,7 +1219,7 @@ export default function CreateVideoClient({
     const userId = session?.user?.id ?? null;
     // The visitor's draft until someone signs in, then the account's, which takes
     // the visitor's when sign-up was opened here.
-    const { owner: draftOwner, carriedDraft } = useCreatorDraftOwner('video', userId, handoverNonce);
+    const { owner: draftOwner, carriedDraft, keepsVisitorForm } = useCreatorDraftOwner('video', userId, handoverNonce);
     // A page that opened signed out works up to Generate, which asks for an account
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
@@ -1325,6 +1325,8 @@ export default function CreateVideoClient({
     const emptySavedDraftRef = useRef<Partial<VideoCreatorDraft> | null>(null);
     // The owner whose saved files have been read back (`complete`), or given up on.
     const [mediaRestoredFor, setMediaRestoredFor] = useState<{ owner: string; complete: boolean } | null>(null);
+    // Whose saved files the last read was for: the files on the form are theirs.
+    const mediaOwnerRef = useRef<string | null>(null);
     const pendingAdditionalSettingsRef = useRef<VideoCreatorDraft['additionalSettings'] | null>(null);
     const unsavedDraftRef = useRef<{ owner: string; draft: VideoCreatorDraft } | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
@@ -1530,9 +1532,10 @@ export default function CreateVideoClient({
     };
     // Staged files are saved under the account that added them (or the visitor, until
     // one signs in), so the next account to use this browser does not open them. A
-    // remix keeps none: it restores its source.
+    // remix keeps none: it restores its source. Nor does a run or a pick finishing for
+    // an owner the page has left since: the form holds the next owner's files then.
     const mediaKey = useCallback((key: string) => (
-        !remixId && draftOwner ? scopedPersistedMediaKey(key, draftOwner) : null
+        !remixId && draftOwner && mediaOwnerRef.current === draftOwner ? scopedPersistedMediaKey(key, draftOwner) : null
     ), [remixId, draftOwner]);
     const persistVideoElements = useCallback(async (nextElements: VideoElementDraft[]) => {
         const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoElements);
@@ -2749,6 +2752,12 @@ export default function CreateVideoClient({
         if (remixId || !draftOwner) {
             return;
         }
+        if (!keepsVisitorForm && isAnotherDraftOwner(mediaOwnerRef.current, draftOwner)) {
+            // The pictures, clips and tracks are another owner's: not this one's to see, send or
+            // save. What is saved for them stays theirs, and the new owner's own come back below.
+            takeMediaOffForm();
+        }
+        mediaOwnerRef.current = draftOwner;
 
         let isMounted = true;
         const key = (name: string) => scopedPersistedMediaKey(name, draftOwner);
@@ -2776,6 +2785,12 @@ export default function CreateVideoClient({
 	                ]);
 
                 if (!isMounted) return;
+                if (keepsVisitorForm) {
+                    // A form the sign-up's hand-over kept stays as it is, with nothing older of the
+                    // account's over it.
+                    setMediaRestoredFor({ owner: draftOwner, complete: true });
+                    return;
+                }
 
                 if (savedStartImage) {
                     setStartImageFile(savedStartImage);
@@ -2895,7 +2910,7 @@ export default function CreateVideoClient({
         // Words typed on the page win over the saved prompt, typed before the page's script ran
         // included, except over the one carried from sign-up (`creator-draft-prompt.ts`).
         const openingPrompt = prefillPrompt ?? '';
-        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
+        if (!keepsVisitorForm && isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
             // The words are another owner's, the shots' and the enhancer's notes on them too: not
             // this one's to see, nor to save.
             promptRef.current = openingPrompt;
@@ -2917,7 +2932,8 @@ export default function CreateVideoClient({
                 if (cancelled) return;
                 const carried = carriedDraft && !carriedPromptTakenRef.current;
                 if (carried) carriedPromptTakenRef.current = true;
-                if (settled || !stored) return;
+                // A form the sign-up's hand-over kept stays as it is, with no older draft of the account's over it.
+                if (settled || !stored || keepsVisitorForm) return;
                 const draft = readVideoCreatorDraft(stored);
                 emptySavedDraftRef.current = draft.modelId && !prefillModel && !draft.prompt?.trim()
                     && !draft.shots?.some((shot) => shot.prompt.trim())
@@ -2971,7 +2987,7 @@ export default function CreateVideoClient({
             cancelled = true;
             window.clearTimeout(giveUp);
         };
-    }, [remixId, draftOwner, carriedDraft, prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration]);
+    }, [remixId, draftOwner, carriedDraft, keepsVisitorForm, prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration]);
 
     // A model's extra settings can be set only once its descriptor is here.
     useEffect(() => {
@@ -3201,6 +3217,17 @@ export default function CreateVideoClient({
         source: 'upload' as const,
         durationSeconds,
     });
+    /**
+     * Picked files' seeds once each length is read, or none when the page's owner changed
+     * meanwhile: the files were the earlier owner's, so they go with that owner's form, unsaved.
+     */
+    const readPickSeeds = async <Seed extends { previewUrl: string }>(read: Promise<Seed[]>): Promise<Seed[] | null> => {
+        const pickedFor = mediaOwnerRef.current;
+        const seeds = await read;
+        if (mediaOwnerRef.current === pickedFor) return seeds;
+        seeds.forEach((seed) => revokeObjectUrl(seed.previewUrl));
+        return null;
+    };
 
     const processReferenceVideoFiles = async (files: FileList | File[]) => {
         const { accepted: validFiles, refusal } = screenPickedFiles(Array.from(files), 'video');
@@ -3212,12 +3239,13 @@ export default function CreateVideoClient({
         ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
 
-        const seeds = await Promise.all(filesToAdd.map(async (file, index) => uploadedMediaSeed(
+        const seeds = await readPickSeeds(Promise.all(filesToAdd.map(async (file, index) => uploadedMediaSeed(
             'video',
             file,
             `Video reference ${referenceVideosRef.current.length + index + 1}`,
             await readVideoDurationSeconds(file),
-        )));
+        ))));
+        if (!seeds) return;
 
         const nextReferences = [...referenceVideosRef.current, ...hydrateSeedanceMediaReferences('Video', seeds)];
         commitReferenceVideos(nextReferences);
@@ -3242,13 +3270,14 @@ export default function CreateVideoClient({
         ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
 
-        const seeds = await Promise.all(filesToAdd.map(async (file, index) => ({
+        const seeds = await readPickSeeds(Promise.all(filesToAdd.map(async (file, index) => ({
             displayName: `Video element ${klingVideoElementsRef.current.length + index + 1}`,
             file,
             previewUrl: URL.createObjectURL(file),
             source: 'upload' as const,
             durationSeconds: await readVideoDurationSeconds(file),
-        })));
+        }))));
+        if (!seeds) return;
 
         const nextElements = hydrateKlingVideoElements([...klingVideoElementsRef.current, ...seeds]);
         commitKlingVideoElements(nextElements);
@@ -3265,12 +3294,13 @@ export default function CreateVideoClient({
         ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
 
-        const seeds = await Promise.all(filesToAdd.map(async (file, index) => uploadedMediaSeed(
+        const seeds = await readPickSeeds(Promise.all(filesToAdd.map(async (file, index) => uploadedMediaSeed(
             'audio',
             file,
             `Audio reference ${referenceAudiosRef.current.length + index + 1}`,
             await readVideoDurationSeconds(file),
-        )));
+        ))));
+        if (!seeds) return;
 
         const nextReferences = [...referenceAudiosRef.current, ...hydrateSeedanceMediaReferences('Audio', seeds)];
         commitReferenceAudios(nextReferences);
@@ -3332,6 +3362,31 @@ export default function CreateVideoClient({
         if (key) {
             await removePersistedMedia(key);
         }
+    };
+
+    /**
+     * Empties the form of its media: the frames, every picture, clip and track, the Omni IDs
+     * pasted for a run and the names of files refused. Nothing saved is touched. For an owner
+     * change, where all of it was the earlier owner's.
+     */
+    const takeMediaOffForm = () => {
+        setFrame('start', null);
+        setFrame('end', null);
+        [...elementsRef.current, ...referenceVideosRef.current, ...referenceAudiosRef.current, ...klingVideoElementsRef.current]
+            .forEach((item) => revokeObjectUrl(item.previewUrl));
+        klingSubjectsRef.current.forEach((subject) => subject.images.forEach((image) => revokeObjectUrl(image.previewUrl)));
+        commitElements([]);
+        commitReferenceVideos([]);
+        commitReferenceAudios([]);
+        commitKlingVideoElements([]);
+        klingSubjectsRef.current = [];
+        setKlingSubjects([]);
+        setPreparedAudioIds([]);
+        setCharacterIds([]);
+        setPreparedAudioIdDraft('');
+        setCharacterIdDraft('');
+        setPickNotice(null);
+        setUploadPreview(null);
     };
 
     const handleRemoveElement = async (elementId: string) => {
@@ -4952,8 +5007,9 @@ export default function CreateVideoClient({
                         sourceGenerationId: null,
                     });
                 }
-                // Keep the uploaded URLs so a retry does not re-upload the set.
-                commitKlingSubjects(klingSubjects.map((subject) => ({
+                // Keep the uploaded URLs so a retry does not re-upload the set: on the subjects the
+                // form holds now, as each list above, which an owner change meanwhile has emptied.
+                commitKlingSubjects(klingSubjectsRef.current.map((subject) => ({
                     ...subject,
                     images: subject.images.map((image) => uploadedImages.get(image) ?? image),
                 })));
