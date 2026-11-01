@@ -327,6 +327,26 @@ export function getOwnerCreationScopeCounts(
   };
 }
 
+/**
+ * The server's total for the scope a Profile tab shows, counted by the rules the
+ * lists apply, or null when it sends none (an older server, a count that
+ * failed). Paging reads it to know when a scope smaller than a screenful is
+ * whole.
+ */
+export function getProfileScopeTotal(
+  totals: ProfileStatsResponse | null | undefined,
+  ...[tab, scope]: ProfileMediaTabScope
+): number | null {
+  const total = tab === 'Saved'
+    ? totals?.saved
+    : tab === 'Posts'
+      ? scope === 'archived' ? totals?.archivedPosts : totals?.posts
+      : scope === 'failed'
+        ? totals?.failedCreations
+        : scope === 'archived' ? totals?.archivedCreations : totals?.creations;
+  return typeof total === 'number' && Number.isFinite(total) ? total : null;
+}
+
 /** Under the Wallet card's figure: the payout balance, not the lifetime earnings Your Sales tracks. */
 export const WALLET_AVAILABLE_CAPTION = 'Available to withdraw';
 /** Under the Wallet card's dash when the payout state could not be read. */

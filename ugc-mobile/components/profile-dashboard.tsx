@@ -42,7 +42,7 @@ import { useAppForeground } from '@/lib/app-foreground';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { isClaimedProfileUsername } from '@/lib/edit-profile-form';
-import { canRequestNextFeedPage } from '@/lib/feed-pagination';
+import { nextFeedPageRequestDelay } from '@/lib/feed-pagination';
 import { getGenerationKind, getGenerationLabel } from '@/lib/generation-media';
 import { haptic } from '@/lib/haptics';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
@@ -57,6 +57,7 @@ import {
   generationToProfileMediaCard,
   getOwnerCreationScopeCounts,
   getOwnerPostScopeCounts,
+  getProfileScopeTotal,
   getProfileCreationsScopeOptions,
   getProfileMediaEmptyBody,
   getProfileMediaEmptyTitle,
@@ -126,6 +127,12 @@ const PROFILE_MEDIA_SWIPE_AXIS_RATIO = 1.25;
 // Three rows rise into place when a tab's media lands; later rows mount plain.
 const PROFILE_GALLERY_REVEAL_COUNT = PROFILE_GALLERY_COLUMNS * 3;
 
+// Drops the page request the gate put off until its cooldown ends.
+function cancelAskAgain(timer: { current: ReturnType<typeof setTimeout> | null }) {
+  if (timer.current) clearTimeout(timer.current);
+  timer.current = null;
+}
+
 export function ProfileDashboard({
   initialTab = DEFAULT_PROFILE_MEDIA_TAB,
   highlightedPostId = null,
@@ -169,6 +176,11 @@ export function ProfileDashboard({
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
+  // The request the gate put off until its cooldown ends, and the latest
+  // `requestNextPage` for it to ask with.
+  const askAgainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestNextPageRef = useRef<() => void>(() => undefined);
+  const nextPageFailedRef = useRef(false);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
@@ -240,6 +252,7 @@ export function ProfileDashboard({
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = null;
+    cancelAskAgain(askAgainTimerRef);
   }, [activeTab, creationsScope, creationsUserId]);
 
   useEffect(() => {
@@ -390,6 +403,13 @@ export function ProfileDashboard({
     savedLoaded: Boolean(savedQuery.data),
   });
   const tabCards = activeTab === 'Saved' ? savedCards : activeTab === 'Creations' ? creationCards : postCards;
+  // Each tab's chips and empty state read only that tab's scopes, and its chips
+  // set only its own: Posts can never be handed Failed. Saved has no chips. The
+  // empty state names the tab shown, narrowed rather than retyped, so it cannot
+  // describe another one, and a tab added later must be given its own case.
+  const tabScope: ProfileMediaTabScope = activeTab === 'Creations'
+    ? [activeTab, creationsScope]
+    : activeTab === 'Posts' ? [activeTab, postsScope] : [activeTab];
   const signedOutPreviewCards = FALLBACK_PROFILE_MEDIA.filter((card) => (
     activeTab === 'Saved'
       ? card.label === 'Saved'
@@ -413,9 +433,24 @@ export function ProfileDashboard({
   const activePageCount = activeTabPaging.data?.pages.length ?? 0;
   const mediaError = activeIsFetchNextPageError ? null : activeTabPaging.error;
 
+  // A scope the server counts below a screenful is whole once that many have
+  // loaded: Archived is the library's pages filtered, so a short Archived scope
+  // read every page of a large library to show what its chip already said.
+  const scopeTotal = getProfileScopeTotal(profile?.stats, ...tabScope);
+  const scopeIsWhole = scopeTotal !== null && scopeTotal < PROFILE_MEDIA_MIN_FILL_COUNT && tabCards.length >= scopeTotal;
+  // A whole scope asks for no page, so a page that failed for the tab's other
+  // scope (they share a query) offers it no Retry: one would ask for nothing.
+  const scopeNextPageFailed = activeIsFetchNextPageError && !scopeIsWhole;
+
+  // The shown tab's next page, asked for only while Profile is in front. A page
+  // that lands inside the gate's cooldown is refused at the very render that
+  // brings it, whether the fill or the end of the list asked, and no render
+  // comes when the cooldown ends: the request is asked again then by a timer.
   const requestNextPage = useCallback(() => {
+    cancelAskAgain(askAgainTimerRef);
+    if (!isFocused || scopeIsWhole) return;
     const now = Date.now();
-    if (!canRequestNextFeedPage({
+    const wait = nextFeedPageRequestDelay({
       cooldownMs: PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
       hasNextPage: activeHasNextPage,
       isBusy: activeMediaIsFetching,
@@ -424,7 +459,15 @@ export function ProfileDashboard({
       lastRequestedPageCount: lastLoadMorePageCountRef.current,
       now,
       pageCount: activePageCount,
-    })) return;
+    });
+    if (wait === null) return;
+    if (wait > 0) {
+      askAgainTimerRef.current = setTimeout(() => {
+        askAgainTimerRef.current = null;
+        requestNextPageRef.current();
+      }, wait);
+      return;
+    }
 
     loadingMoreRef.current = true;
     lastLoadMoreAtRef.current = now;
@@ -446,15 +489,29 @@ export function ProfileDashboard({
     activePageCount,
     activeTab,
     creationsQuery,
+    isFocused,
     postsQuery,
     savedQuery,
+    scopeIsWhole,
   ]);
+  useEffect(() => {
+    requestNextPageRef.current = requestNextPage;
+  }, [requestNextPage]);
+  useEffect(() => () => cancelAskAgain(askAgainTimerRef), []);
 
   const retryNextPage = useCallback(() => {
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     requestNextPage();
   }, [requestNextPage]);
+
+  // A failed page keeps the page latch shut, so only the footer's Retry asks for
+  // it again. A refresh of the first page that clears the error takes the footer
+  // away, and the latch opens with it, or a short grid would stop with no way on.
+  useEffect(() => {
+    if (nextPageFailedRef.current && !activeIsFetchNextPageError) lastLoadMorePageCountRef.current = null;
+    nextPageFailedRef.current = activeIsFetchNextPageError;
+  }, [activeIsFetchNextPageError]);
 
   // A page that yields few renderable tiles can leave the grid too short to scroll, so
   // onEndReached would never fire again. Top it up until the grid can carry itself.
@@ -487,6 +544,7 @@ export function ProfileDashboard({
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = null;
+    cancelAskAgain(askAgainTimerRef);
 
     if (activeTab === 'Saved') {
       queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(
@@ -550,13 +608,6 @@ export function ProfileDashboard({
   // Said once the guest has something to keep, so it never names an empty grid;
   // failed runs wait under their own chip.
   const guestHasCreations = allCreationCards.length > 0 || renderingCreations.length > 0;
-  // Each tab's chips and empty state read only that tab's scopes, and its chips
-  // set only its own: Posts can never be handed Failed. Saved has no chips. The
-  // empty state names the tab shown, narrowed rather than retyped, so it cannot
-  // describe another one, and a tab added later must be given its own case.
-  const tabScope: ProfileMediaTabScope = activeTab === 'Creations'
-    ? [activeTab, creationsScope]
-    : activeTab === 'Posts' ? [activeTab, postsScope] : [activeTab];
   const scopeControl = activeTab === 'Creations' ? (
     <ProfileMediaScopeControl
       label="Filter creations"
@@ -652,7 +703,7 @@ export function ProfileDashboard({
       horizontalPadding={horizontalPadding}
       highlightedPostId={highlightedPostId}
       justPublishedPostId={justPublishedPostId}
-      isFetchNextPageError={activeIsFetchNextPageError}
+      isFetchNextPageError={scopeNextPageFailed}
       isFetchingNextPage={activeIsFetchingNextPage}
       isLoading={isMediaLoading}
       isRefreshing={pullRefreshing}

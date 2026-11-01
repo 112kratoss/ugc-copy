@@ -378,7 +378,7 @@ vi.mock('@tanstack/react-query', () => ({
 import { ProfileDashboard } from '../components/profile-dashboard';
 import { resetMediaZoomTransitions } from '../lib/media-zoom-transition';
 import { DEFAULT_PROFILE_MEDIA_TAB, PROFILE_MEDIA_TABS } from '../lib/profile-view-model';
-import { PROFILE_MEDIA_MIN_FILL_COUNT } from '../lib/profile-media-query';
+import { PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS, PROFILE_MEDIA_MIN_FILL_COUNT } from '../lib/profile-media-query';
 
 // A tile's open holds every other tile off until the screen it opened can be
 // touched (`beginTileOpen`), and that state is module-wide: each test starts
@@ -403,6 +403,19 @@ function findPressableByText(root: renderer.ReactTestInstance, text: string) {
 
 function findViewByTestId(root: renderer.ReactTestInstance, testID: string) {
   return root.findAll((node) => String(node.type) === 'view' && node.props.testID === testID);
+}
+
+function tabSegment(tree: renderer.ReactTestRenderer, tab: 'Creations' | 'Posts') {
+  return tree.root.find((node) => (
+    String(node.type) === 'pressable' && node.props.accessibilityRole === 'tab' && node.props.accessibilityLabel === tab
+  ));
+}
+
+// Finished pictures: as many grid tiles.
+function readyRuns(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `ready-${index}`, status: 'succeeded', output_url: `ready-${index}.jpg`, preview_url: `ready-${index}.webp`, category: 'image', title: `Ready ${index}`, created_at: '2026-10-13T09:00:00Z',
+  }));
 }
 
 /**
@@ -1301,6 +1314,188 @@ describe('ProfileDashboard media tiles routing', () => {
     }
   });
 
+  // The page gate refuses a request inside its cooldown, and a page that lands
+  // inside it is refused at the very render that brings it. Nothing renders when
+  // the cooldown ends, so paging stopped until a refocus or a stale refetch
+  // rendered the screen: the fill of a short scope (Archived, Failed, a sparse
+  // Active grid), and the end of a full grid whose next page added little.
+  describe('a page that lands inside the load-more cooldown', () => {
+    const cooldown = PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS;
+    const trees: renderer.ReactTestRenderer[] = [];
+    const act = (work: () => void) => renderer.act(async () => { work(); });
+    const askedFor = () => queryState.fetchNextGenerations.mock.calls.length;
+    const archivedRuns = (count: number) => readyRuns(count).map((run) => ({
+      ...run, id: `archived-${run.id}`, archived_at: '2026-10-13T10:00:00Z',
+    }));
+    const listOf = (tree: renderer.ReactTestRenderer) => tree.root.find((node) => String(node.type) === 'flash-list');
+    const show = (tree: renderer.ReactTestRenderer) => act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+    const mount = async () => {
+      let tree!: renderer.ReactTestRenderer;
+      await act(() => { tree = renderer.create(<ProfileDashboard initialTab="Creations" />); });
+      trees.push(tree);
+      return tree;
+    };
+    // A Creations grid on `firstPage` with a page after it. Page two is asked
+    // for, by the fill or, for a full grid, at the end of the list, and lands
+    // halfway through the cooldown with nothing to draw.
+    const landInsideTheCooldown = async (firstPage: Array<Record<string, unknown>> = []) => {
+      queryState.generationsHasNextPage = true;
+      queryState.generationPages = [{ generations: firstPage }];
+      const tree = await mount();
+      if (askedFor() === 0) await act(() => { listOf(tree).props.onEndReached(); });
+      expect(askedFor()).toBe(1);
+      await act(() => { vi.advanceTimersByTime(cooldown / 2); });
+      queryState.generationPages = [{ generations: firstPage }, { generations: [] }];
+      await show(tree);
+      return tree;
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      renderer.act(() => { trees.splice(0).forEach((tree) => tree.unmount()); });
+      vi.useRealTimers();
+      navigationState.focused = true;
+      queryState.generationsHasNextPage = false;
+      queryState.generationPages = null;
+      queryState.generationsIsFetchNextPageError = false;
+      queryState.ownerPostsHasNextPage = false;
+    });
+
+    it('has the fill ask for the next page as the cooldown ends', async () => {
+      await landInsideTheCooldown();
+      expect(askedFor()).toBe(1);
+
+      await act(() => { vi.advanceTimersByTime(cooldown / 2 - 1); });
+      expect(askedFor()).toBe(1);
+      await act(() => { vi.advanceTimersByTime(1); });
+      expect(askedFor()).toBe(2);
+    });
+
+    it('asks at the end of a full grid too, whose end the list reached again as the page landed', async () => {
+      const tree = await landInsideTheCooldown(readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT));
+      await act(() => { listOf(tree).props.onEndReached(); });
+      expect(askedFor()).toBe(1);
+
+      await act(() => { vi.advanceTimersByTime(cooldown / 2); });
+      expect(askedFor()).toBe(2);
+    });
+
+    it.each([
+      ['no page is left', (tree: renderer.ReactTestRenderer) => {
+        queryState.generationsHasNextPage = false;
+        tree.update(<ProfileDashboard initialTab="Creations" />);
+      }],
+      ['Profile is covered', (tree: renderer.ReactTestRenderer) => {
+        navigationState.focused = false;
+        tree.update(<ProfileDashboard initialTab="Creations" />);
+      }],
+      ['another tab is shown', (tree: renderer.ReactTestRenderer) => { tabSegment(tree, 'Posts').props.onPress(); }],
+      ['Profile has gone', (tree: renderer.ReactTestRenderer) => { tree.unmount(); }],
+    ])('asks nothing more once %s', async (_, change) => {
+      const tree = await landInsideTheCooldown();
+      await act(() => { change(tree); });
+      await act(() => { vi.advanceTimersByTime(cooldown * 2); });
+
+      expect(askedFor()).toBe(1);
+    });
+
+    it('takes the fill up again once Profile is back in front', async () => {
+      const tree = await landInsideTheCooldown();
+      navigationState.focused = false;
+      await show(tree);
+      await act(() => { vi.advanceTimersByTime(cooldown * 2); });
+      expect(askedFor()).toBe(1);
+
+      navigationState.focused = true;
+      await show(tree);
+      expect(askedFor()).toBe(2);
+    });
+
+    // Archived is the library's own pages filtered, so a short Archived scope in
+    // a large library read every page of it to show what the chip already said.
+    it.each([0, 2])('reads no page for an Archived scope the server counts as %i, once that many have loaded', async (archived) => {
+      queryState.profileData = {
+        ...queryState.profileData!,
+        stats: { creations: PROFILE_MEDIA_MIN_FILL_COUNT, failedCreations: 0, archivedCreations: archived, posts: 0, archivedPosts: 0, saved: 0 },
+      } as never;
+      queryState.generationsHasNextPage = true;
+      queryState.generationPages = [{ generations: [...readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT), ...archivedRuns(archived)] }];
+      const tree = await mount();
+      expect(askedFor()).toBe(0);
+
+      await act(() => { findPressableByText(tree.root, `Archived (${archived})`).props.onPress(); });
+      await act(() => { listOf(tree).props.onEndReached(); });
+      await act(() => { vi.advanceTimersByTime(cooldown * 2); });
+
+      expect(askedFor()).toBe(0);
+    });
+
+    // Active and Archived read one query, so its failed page showed under both,
+    // and a Retry under a whole scope asked for nothing.
+    it('offers no Retry under a whole scope for a page the other scope failed to read', async () => {
+      queryState.profileData = {
+        ...queryState.profileData!,
+        stats: { creations: 30, failedCreations: 0, archivedCreations: 2, posts: 0, archivedPosts: 0, saved: 0 },
+      } as never;
+      queryState.generationsHasNextPage = true;
+      queryState.generationsIsFetchNextPageError = true;
+      queryState.generationPages = [{ generations: [...readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT), ...archivedRuns(2)] }];
+      const tree = await mount();
+      const retries = () => tree.root.findAllByProps({ accessibilityLabel: "Couldn't load more. Retry" });
+      expect(retries().length).toBeGreaterThan(0);
+
+      await act(() => { findPressableByText(tree.root, 'Archived (2)').props.onPress(); });
+
+      expect(retries()).toHaveLength(0);
+    });
+
+    // The new tab's own fill does not run over a full grid, so a request put
+    // off for the old tab would have asked for a page of the new one.
+    it('drops the request it put off when another tab is shown, full and with pages of its own', async () => {
+      queryState.ownerPosts = Array.from({ length: PROFILE_MEDIA_MIN_FILL_COUNT }, (_, index) => ({
+        id: `post-${index}`,
+        title: `Post ${index}`,
+        createdAt: '2026-06-10T00:00:00Z',
+        visibility: 'public',
+        mediaUrl: `post-${index}.png`,
+        mediaKind: 'image',
+        mediaItems: [{ id: `post-${index}-media`, url: `post-${index}.png`, previewUrl: `post-${index}.webp`, mediaKind: 'image', gridReady: true }],
+        category: 'image',
+      }));
+      queryState.ownerPostsHasNextPage = true;
+      const tree = await landInsideTheCooldown(readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT));
+      await act(() => { listOf(tree).props.onEndReached(); });
+
+      await act(() => { tabSegment(tree, 'Posts').props.onPress(); });
+      await act(() => { vi.advanceTimersByTime(cooldown * 2); });
+
+      expect(askedFor()).toBe(1);
+      expect(queryState.fetchNextOwnerPosts).not.toHaveBeenCalled();
+    });
+
+    // A failed page keeps the page latch shut, so only the footer's Retry asks
+    // for it again. A refresh of the first page that clears the error took the
+    // footer away and left the latch shut: a short grid with no way on.
+    it('asks again once a refresh clears the error a failed page left, which took the Retry away', async () => {
+      queryState.generationsHasNextPage = true;
+      queryState.generationPages = [{ generations: [] }];
+      const tree = await mount();
+      queryState.generationsIsFetchNextPageError = true;
+      await show(tree);
+      await act(() => { vi.advanceTimersByTime(cooldown * 2); });
+      expect(askedFor()).toBe(1);
+      expect(tree.root.findAllByProps({ accessibilityLabel: "Couldn't load more. Retry" }).length).toBeGreaterThan(0);
+
+      queryState.generationsIsFetchNextPageError = false;
+      await show(tree);
+
+      expect(askedFor()).toBe(2);
+    });
+  });
+
   it('shows a footer loader only while another page is in flight', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -2186,18 +2381,11 @@ describe('ProfileDashboard media tiles routing', () => {
       && typeof node.props.children === 'string'
       && /^(Rendering|Failed) \(/.test(node.props.children)
     )).map((node) => node.props.children);
-    const readyRuns = (count: number) => Array.from({ length: count }, (_, index) => ({
-      id: `ready-${index}`, status: 'succeeded', output_url: `ready-${index}.jpg`, preview_url: `ready-${index}.webp`, category: 'image', title: `Ready ${index}`, created_at: '2026-10-13T09:00:00Z',
-    }));
     const failedRuns = (count: number) => Array.from({ length: count }, (_, index) => ({
       id: `failed-${index}`, status: 'failed', output_url: null, category: 'image', title: `Failure ${index}`, created_at: '2026-10-13T08:00:00Z',
     }));
     // The profile every test here starts from: no totals, so the chips count what has loaded.
     const profileWithoutTotals = () => ({ id: 'user-123', username: 'luna-dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' });
-
-    const tabSegment = (tree: renderer.ReactTestRenderer, tab: 'Creations' | 'Posts') => tree.root.find((node) => (
-      String(node.type) === 'pressable' && node.props.accessibilityRole === 'tab' && node.props.accessibilityLabel === tab
-    ));
 
     beforeEach(() => {
       queryState.generations = runs();
@@ -2556,7 +2744,8 @@ describe('ProfileDashboard media tiles routing', () => {
       vi.useFakeTimers();
       queryState.generationsHasNextPage = true;
       queryState.generationPages = [{ generations: readyRuns(3) }];
-      queryState.profileData = { ...profileWithoutTotals(), stats: { creations: 3, failedCreations: 2, archivedCreations: 0, posts: 0, archivedPosts: 0, saved: 0 } } as never;
+      // Totals past what has loaded: neither scope is whole yet.
+      queryState.profileData = { ...profileWithoutTotals(), stats: { creations: 30, failedCreations: 5, archivedCreations: 0, posts: 0, archivedPosts: 0, saved: 0 } } as never;
       queryState.failedPages = [{ generations: failedRuns(2), pagination: { limit: 24, hasMore: true, nextCursor: '24' } }];
       queryState.failedHasNextPage = true;
       const tree = renderDashboard();
@@ -2564,7 +2753,7 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
 
       renderer.act(() => { vi.advanceTimersByTime(1_000); });
-      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (5)').props.onPress(); });
 
       expect(queryState.fetchNextFailed).toHaveBeenCalledTimes(1);
       renderer.act(() => { tree.unmount(); });
