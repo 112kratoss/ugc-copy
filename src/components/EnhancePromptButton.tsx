@@ -77,8 +77,8 @@ export default function EnhancePromptButton({
     const [warnings, setWarnings] = useState<PromptEnhancementResult['warnings']>(undefined);
     const [level, setLevel] = useState<PromptEnhancementLevel>('cinematic');
     const [undoState, setUndoState] = useState<{ previous: string; enhanced: string } | null>(null);
-    // An answer that came back after the prompt was typed over, kept beside the person's words.
-    const [offer, setOffer] = useState<PromptEnhancementResult | null>(null);
+    // An answer that came back after the prompt was typed over, kept beside the words it found there.
+    const [offer, setOffer] = useState<{ result: PromptEnhancementResult; kept: string } | null>(null);
     const loadingLabel = label === 'Polish' ? 'Polishing...' : 'Enhancing...';
     // The prompt and the parent's callbacks as they are now. The box stays open while
     // the enhancer works, so an answer is applied only to the words it was asked about,
@@ -88,11 +88,21 @@ export default function EnhancePromptButton({
     useLayoutEffect(() => {
         latest.current = { prompt, onEnhanced, onResult, onCreditsUpdate };
     });
+    // A button gone with its shot or its node has no words for a late answer to go in,
+    // and its last callbacks would still write back the shot list as it stood then.
+    const mounted = useRef(false);
+    useLayoutEffect(() => {
+        mounted.current = true;
+        return () => {
+            mounted.current = false;
+        };
+    }, []);
 
     const canEnhance = prompt.trim().length > 0 && !isEnhancing && !disabled;
     // The undo chip only makes sense while the textbox still holds the enhancement.
     const canUndo = undoState !== null && undoState.enhanced === prompt && !isEnhancing;
-    const canUseOffer = offer !== null && offer.enhancedPrompt !== prompt && !isEnhancing;
+    // The offer stands while the words it found stand: written on or over, they are no longer what it was offered beside.
+    const canUseOffer = offer !== null && offer.kept === prompt && offer.result.enhancedPrompt !== prompt && !isEnhancing;
 
     const applyEnhancement = (result: PromptEnhancementResult, previous: string) => {
         setUndoState({ previous, enhanced: result.enhancedPrompt });
@@ -131,13 +141,15 @@ export default function EnhancePromptButton({
                 context: { ...requestContext, enhancementLevel: level },
             });
 
-            if (latest.current.prompt === sentPrompt) {
-                applyEnhancement(result, sentPrompt);
-            } else {
-                setOffer(result);
-            }
             if (result.remainingCredits !== undefined) {
                 latest.current.onCreditsUpdate(result.remainingCredits);
+            }
+            if (!mounted.current) return;
+            const current = latest.current.prompt;
+            if (current === sentPrompt) {
+                applyEnhancement(result, sentPrompt);
+            } else {
+                setOffer({ result, kept: current });
             }
         } catch (err) {
             console.error('Enhance prompt error:', err);
@@ -157,7 +169,7 @@ export default function EnhancePromptButton({
     // Undo then goes back to the words typed meanwhile, not to the ones sent.
     const handleUseOffer = () => {
         if (!canUseOffer || !offer) return;
-        applyEnhancement(offer, prompt);
+        applyEnhancement(offer.result, prompt);
         setOffer(null);
     };
 

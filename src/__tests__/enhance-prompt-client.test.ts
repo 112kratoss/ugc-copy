@@ -190,4 +190,15 @@ describe('one press, one key', () => {
     expect((error as Error).message).toBe(errors.refunded.response.error);
     expect(asks).toHaveLength(1);
   });
+
+  it.each([
+    { status: 402, response: { error: 'Insufficient credits', required: 2 } },
+    { status: 429, response: { error: 'Too many prompt enhancements. Try again shortly.', code: 'RATE_LIMITED' } },
+    { status: 502, response: { error: 'Prompt enhancement failed. Your credits have been refunded.', remainingCredits: 40 } },
+  ])('asks no more after a $status', async (answered) => {
+    const asks = stubAsks([refusal(answered), answer('Never asked for')]);
+
+    await expect(requestPromptEnhancement(poster)).rejects.toBeInstanceOf(PromptEnhancementError);
+    expect(asks).toHaveLength(1);
+  });
 });

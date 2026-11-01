@@ -274,6 +274,7 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
 }));
 
 import { AppState, PanResponder } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { normalizeCreationDraftForCatalog } from '../lib/generation-model-draft';
 import { MediaCreationScreen } from '../components/media-creation-screen';
@@ -8340,6 +8341,58 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           renderer.act(() => { labelled(tree.root, 'Edit shot 1').props.onPress(); });
           expect(shotPrompt(tree)).toBe('A door opens');
         });
+
+        // The offer sits with the words it was offered beside, as the shot's notes do.
+        it('offers a shot its answer beside that shot only', async () => {
+          const answer = answerLater();
+          const tree = await openStory();
+
+          await pressAndLook(labelled(tree.root, 'Enhance shot 2 · 2 credits'));
+          renderer.act(() => { tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.onChangeText('She runs in'); });
+          await settle();
+          await answer({ enhancedPrompt: 'She walks in slowly, lit from the hall.' });
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
+
+          renderer.act(() => { labelled(tree.root, 'Edit shot 1').props.onPress(); });
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+          expect(text(tree)).not.toContain('Your edits were kept.');
+          renderer.act(() => { labelled(tree.root, 'Edit shot 2').props.onPress(); });
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
+        });
+
+        it('lets an answer go whose shot was removed during the wait', async () => {
+          const answer = answerLater();
+          const tree = await openStory();
+
+          await pressAndLook(labelled(tree.root, 'Enhance shot 2 · 2 credits'));
+          renderer.act(() => { labelled(tree.root, 'Remove shot 2').props.onPress(); });
+          await settle();
+          vi.mocked(Haptics.notificationAsync).mockClear();
+          await answer({ enhancedPrompt: 'She walks in slowly, lit from the hall.', remainingCredits: 900 });
+
+          expect(hasLabel(tree.root, 'Edit shot 2')).toBe(false);
+          expect(shotPrompt(tree)).toBe('A door opens');
+          expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+          expect(authState.updateCredits).toHaveBeenCalledWith(900);
+          // Nothing was put anywhere, so nothing says it was.
+          expect(Haptics.notificationAsync).not.toHaveBeenCalledWith('success');
+        });
+      });
+
+      it('offers a late answer only while the words it was offered beside stand', async () => {
+        const answer = answerLater();
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        await typePrompt(tree, 'A bottle on oak');
+        await answer({ enhancedPrompt: 'A bottle on linen, morning light.' });
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(true);
+
+        // Written on, or over with something else: the answer no longer belongs beside it.
+        await typePrompt(tree, 'A white hare');
+        expect(hasLabel(tree.root, 'Use enhanced prompt')).toBe(false);
+        expect(text(tree)).not.toContain('Your edits were kept.');
       });
 
       // The prompt box stays open while the enhancer works, for up to 45 s, so an answer

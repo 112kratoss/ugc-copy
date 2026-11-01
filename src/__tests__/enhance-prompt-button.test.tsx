@@ -137,5 +137,37 @@ describe('EnhancePromptButton', () => {
       expect(drawnAtPress).not.toHaveBeenCalled();
       expect(drawnLatest).toHaveBeenCalledWith('A red fox at dawn, rim light.', expect.anything());
     });
+
+    // A shot's button goes with its shot (keyed by its id), the workflow editor's with its
+    // node, and their last callbacks would write back the shot list as it stood then.
+    it('lets an answer go whose button has gone', async () => {
+      const answer = answerLater();
+      const onEnhanced = vi.fn();
+      const onCreditsUpdate = vi.fn();
+      const view = render(<EnhancePromptButton prompt="A red fox" onEnhanced={onEnhanced} {...shared} onCreditsUpdate={onCreditsUpdate} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+      view.unmount();
+      await answer({ enhancedPrompt: 'A red fox at dawn, rim light.', remainingCredits: 40 });
+
+      expect(onEnhanced).not.toHaveBeenCalled();
+      expect(onCreditsUpdate).toHaveBeenCalledWith(40);
+    });
+
+    it('offers the answer only while the words it was offered beside stand', async () => {
+      const answer = answerLater();
+      const onEnhanced = vi.fn();
+      const view = render(<EnhancePromptButton prompt="A red fox" onEnhanced={onEnhanced} {...shared} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+      view.rerender(<EnhancePromptButton prompt="A red fox in snow" onEnhanced={onEnhanced} {...shared} />);
+      await answer({ enhancedPrompt: 'A red fox at dawn, rim light.' });
+      expect(screen.getByRole('button', { name: 'Use enhanced' })).toBeInTheDocument();
+
+      // Written on, or over with something else: the answer no longer belongs beside it.
+      view.rerender(<EnhancePromptButton prompt="A white hare" onEnhanced={onEnhanced} {...shared} />);
+      expect(screen.queryByRole('button', { name: 'Use enhanced' })).toBeNull();
+      expect(screen.queryByText('Your edits were kept.')).toBeNull();
+    });
   });
 });

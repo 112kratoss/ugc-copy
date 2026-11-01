@@ -751,6 +751,17 @@ describe('mobile api client caching', () => {
       });
       expect(asks).toHaveLength(1);
     });
+
+    it.each([
+      { status: 402, response: { error: 'Insufficient credits', required: 2 } },
+      { status: 429, response: { error: 'Too many prompt enhancements. Try again shortly.', code: 'RATE_LIMITED' } },
+      { status: 502, response: { error: 'Prompt enhancement failed. Your credits have been refunded.', remainingCredits: 40 } },
+    ])('asks no more after a $status', async (answered) => {
+      const { api, asks } = stubAsks([refusal(answered), jsonResponse({ enhancedPrompt: 'Never asked for' })]);
+
+      expect(await api.enhancePrompt(poster).catch((error: unknown) => error)).toMatchObject({ name: 'ApiError', status: answered.status });
+      expect(asks).toHaveLength(1);
+    });
   });
 
   it('times out a media-link response that sends headers but stalls while sending its body', async () => {
