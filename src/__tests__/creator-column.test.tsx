@@ -729,6 +729,13 @@ describe('the bar\'s action', () => {
     expect(screen.queryByRole('link', { name: 'Top Up Credits' })).toBeNull();
     expect(screen.getByRole('button', { name: /Generating/ })).toBeDisabled();
   });
+
+  // A remix keeps no draft, so its top-up tells Pricing the way back to it.
+  it('leads the top-up where the page says', () => {
+    const toRemix = `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-1&remixPost=post-1')}`;
+    render(<CreatorBarAction {...ready} showTopUp topUpHref={toRemix} />);
+    expect(screen.getByRole('link', { name: 'Top Up Credits' })).toHaveAttribute('href', toRemix);
+  });
 });
 
 describe('the top-up notice', () => {

@@ -21,7 +21,7 @@ export default async function Pricing({
         <PricingClient
             initialCountryCode={headerStore.get('x-vercel-ip-country')}
             referralProgram={referralProgram}
-            // A recipe's "Buy credits" says where it was (B-F8); only a path on this site is taken back.
+            // A recipe's "Buy credits" and a remix's Top up say where they were (B-F8); only a path on this site is taken back.
             returnTo={resolvePricingReturnTo(params.returnTo)}
         />
     );

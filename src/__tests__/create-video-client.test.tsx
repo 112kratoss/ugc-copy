@@ -7816,7 +7816,9 @@ describe('CreateVideoClient Kling video elements', () => {
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
         expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
-        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing');
+        // A remix keeps no draft: Pricing is told the remix, and offers it back once the credits are in.
+        expect(await screen.findByRole('link', { name: /Top Up Credits/ }))
+          .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-1&remixPost=post-1')}`);
         const status = document.querySelector('[data-creator-bar-status]');
         expect(status).toHaveTextContent('Not enough credits');
         expect(status).toHaveTextContent('This run costs 140 credits but you only have 22.');

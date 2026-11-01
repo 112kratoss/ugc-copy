@@ -9,7 +9,8 @@ import { expect, test, type BrowserContext, type Page, type Request } from '@pla
  * - on a phone a bar holds Publish at the window's foot while the form's own is out of view,
  *   and sends the same post, and gives way to the column's bar, Generate's, at the page's end;
  * - Generate waits while a publish is sent: a new run would take the form away mid-request;
- * - a remix credits its original with Follow, and never promises an alert at publish.
+ * - a remix credits its original with Follow, and never promises an alert at publish; once
+ *   posted, its top-up tells Pricing the remix to come back to.
  *
  * Offline the quotes, the start, the run's status, the creation's details, the profile, the
  * follow state and the publish are answered here; the client signs in with a made-up session (as
@@ -348,7 +349,7 @@ test('Generate waits while a publish is sent, and is back once it is posted', as
   await expect(generate).toBeEnabled();
 });
 
-test('a remix credits its original with Follow, and says the alert went when the remix finished', async ({ page, context }) => {
+test('a remix credits its original with Follow, says the alert went when it finished, and once posted tops up back to it', async ({ page, context }) => {
   await signIn(context);
   const answers: Answers = { creationTitle: '', publishes: [], profileSaves: [] };
   await answerApi(page, answers);
@@ -375,4 +376,10 @@ test('a remix credits its original with Follow, and says the alert went when the
   await expect(form).toContainText('@fluffy was told when your remix finished.');
   await form.getByRole('button', { name: 'Follow @fluffy' }).click();
   await expect(form.getByRole('button', { name: 'Following @fluffy' })).toHaveAttribute('aria-pressed', 'true');
+
+  // A remix keeps no draft, so Posted's top-up tells Pricing the remix, as the bar's does (2026-11-02).
+  await form.getByRole('button', { name: 'Publish to the feed' }).click();
+  await expect(canvas(page).getByRole('heading', { name: 'Posted to the feed' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'top up', exact: true }))
+    .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-cats&remixPost=post-cats')}`);
 });

@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { Button, Surface, Text, getAccentClasses } from "@/components/DesignSystem";
 import { JsonLd } from "@/components/JsonLd";
 import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/pricing";
+import { pricingReturnLabel } from "@/lib/pricing-return";
 import {
     clearRazorpayCheckoutIntentKey,
     getOrCreateRazorpayCheckoutIntentKey,
@@ -36,9 +37,10 @@ interface PricingClientProps {
     initialCountryCode?: string | null;
     referralProgram?: PricingReferralProgram | null;
     /**
-     * The recipe the buyer came from to top up ("Buy credits" on a recipe),
-     * already checked to be a path on this site: the back link and the
-     * settled payment lead back to it ("Back to the recipe", B-F8).
+     * The page the buyer came from to top up ("Buy credits" on a recipe, Top
+     * up on a remix), already checked to be a path on this site: the back link
+     * and the settled payment lead back to it, named by where it goes ("Back
+     * to the recipe", B-F8; "Back to your remix").
      */
     returnTo?: string | null;
 }
@@ -444,6 +446,7 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
     };
 
     const checkoutConfirming = checkoutStatus?.kind === 'confirming';
+    const returnLabel = returnTo ? pricingReturnLabel(returnTo) : null;
     const inviteeBonus = referralProgram
         ? `${percentFormatter.format(referralProgram.inviteeFirstPurchasePercent)}% bonus credits`
         : 'bonus credits';
@@ -477,7 +480,7 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
                     className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8"
                 >
                     <ArrowLeft className="w-4 h-4" />
-                    {returnTo ? 'Back to the recipe' : 'Back to Home'}
+                    {returnLabel ?? 'Back to Home'}
                 </Link>
 
                 <div className="ui-enter mb-12 mt-6 text-center">
@@ -686,11 +689,11 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
                                             : CHECKOUT_STATUS_COPY[checkoutStatus.kind]}
                                         {checkoutStatus.kind === 'settled' ? (
                                             // The buyer now stays on this page, so the way on to spending the
-                                            // credits is offered here: the recipe they came to buy, if any.
+                                            // credits is offered here: the recipe or the remix they came from, if any.
                                             <>
                                                 {' '}
                                                 <Link href={returnTo ?? '/create'} className="font-bold text-[var(--ui-primary)] underline-offset-2 hover:underline">
-                                                    {returnTo ? 'Back to the recipe' : 'Start creating'}
+                                                    {returnLabel ?? 'Start creating'}
                                                 </Link>
                                             </>
                                         ) : null}

@@ -66,6 +66,7 @@ import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
+import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
@@ -1590,12 +1591,15 @@ function MotionCreator({
         </div>
     ) : null;
 
+    // A remix keeps no draft: its top-ups tell Pricing the remix, to bring the creator back to it.
+    const topUpHref = remixId ? buildRemixTopUpHref('motion', remixId, remixPostId) : undefined;
     // Generate checks an unanswered start first, so Check again is the same press.
     const barAction = (
         <CreatorBarAction
             awaitingCheck={isAwaitingStartCheck}
             onCheckAgain={() => void handleGenerate()}
             showTopUp={showTopUp}
+            topUpHref={topUpHref}
             isGenerating={isGenerating}
             // A visitor's press needs no price: it checks the form, then asks for an account.
             disabled={!canGenerate || (!isVisitor && quotePending) || canvasPublish.inFlight}
@@ -1659,6 +1663,7 @@ function MotionCreator({
                     balance={userCredits}
                     runCost={runCost ?? estimatedCost}
                     onMakeAnother={() => promptInputRef.current?.focus()}
+                    topUpHref={topUpHref}
                 />
             ) : null}
         />

@@ -2418,6 +2418,18 @@ describe('CreateImageClient generation pipeline', () => {
       window.removeEventListener('credits_updated', creditsUpdated);
     });
 
+    // A remix keeps no draft: its top-up tells Pricing the remix, which offers it back once the credits are in.
+    it('sends a remix short of its price to Pricing with the way back to it', async () => {
+      authState.credits = 6;
+      installFetch({ remixBundle: HARBOUR_REMIX });
+      render(<CreateImageClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk'));
+
+      expect(await screen.findByRole('link', { name: /Top Up Credits/ }))
+        .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-image?remix=gen-1&remixPost=post-1')}`);
+      expect(screen.queryByRole('button', { name: /^Generate · / })).not.toBeInTheDocument();
+    });
+
     it('puts the creator back in the prompt when the prompt is refused', async () => {
       installFetch({ starts: [{ status: 422, body: { code: 'prompt_blocked', error: 'Magicbooklet can’t create this. No credits were used.' } }] });
       render(<CreateImageClient prefill={{}} />);

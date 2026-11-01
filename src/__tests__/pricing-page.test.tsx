@@ -430,6 +430,22 @@ describe('pricing page checkout', () => {
     expect(screen.queryByRole('link', { name: 'Start creating' })).toBeNull();
   });
 
+  // A remix keeps no draft: its Top up tells Pricing the remix, and a settled payment leads back to it.
+  it('leads a settled payment back to the remix the creator came from', async () => {
+    verifyResponses.push(async () => json({ success: true }));
+    const handler = await openSheetForStarter('/create-video?remix=gen-1&remixPost=post-1');
+
+    await act(async () => {
+      await handler(payment);
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent('Payment successful! Credits added to your account. Back to your remix');
+    expect(screen.getAllByRole('link', { name: 'Back to your remix' }).map((link) => link.getAttribute('href')))
+      .toEqual(['/create-video?remix=gen-1&remixPost=post-1', '/create-video?remix=gen-1&remixPost=post-1']);
+    expect(screen.queryByRole('link', { name: 'Back to the recipe' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Start creating' })).toBeNull();
+  });
+
   it('confirms a settled payment inline with a token read after the sheet, and refreshes the balance', async () => {
     let releaseVerify: (response: Response) => void = () => undefined;
     verifyResponses.push(() => new Promise<Response>((resolve) => { releaseVerify = resolve; }));
@@ -616,7 +632,7 @@ describe('pricing page checkout', () => {
 // B-F8 (2026-10-27): "Buy credits" on a recipe led to Pricing, whose only ways
 // on were "Back to Home" and, after paying, "Start creating"; the buyer had to
 // find the recipe again. Pricing takes the recipe's path and offers it back.
-describe('pricing page sent from a recipe', () => {
+describe('pricing page sent from a recipe or a remix', () => {
   beforeEach(() => {
     vi.resetModules();
     sessionState.session = null;
@@ -657,5 +673,35 @@ describe('pricing page sent from a recipe', () => {
     render(await Pricing({ searchParams: Promise.resolve({ returnTo: 'https://evil.example/showcase' }) }));
     expect(await screen.findByRole('link', { name: 'Back to Home' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Back to the recipe' })).toBeNull();
+  });
+
+  // A remix keeps no draft, so its Top up tells Pricing the remix too (2026-11-02): the way
+  // back is named by where it goes, not "Back to the recipe" for every page.
+  it('offers the way back to a remix, named for it', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" returnTo="/create-image?remix=gen-1&remixPost=post-1" />);
+
+    expect(await screen.findByRole('link', { name: 'Back to your remix' })).toHaveAttribute('href', '/create-image?remix=gen-1&remixPost=post-1');
+    expect(screen.queryByRole('link', { name: 'Back to the recipe' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Back to Home' })).toBeNull();
+  });
+
+  it('names any other way back plainly', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" returnTo="/credits" />);
+
+    expect(await screen.findByRole('link', { name: 'Go back' })).toHaveAttribute('href', '/credits');
+    expect(screen.queryByRole('link', { name: 'Back to the recipe' })).toBeNull();
+  });
+
+  // The address a remix's Top up opens, read as the page reads it: decoded once.
+  it('takes the remix from its Top up\'s address', async () => {
+    const { default: Pricing } = await import('@/app/pricing/page');
+    const { buildRemixTopUpHref } = await import('@/lib/pricing-return');
+    const topUp = new URL(buildRemixTopUpHref('video', 'gen-1', 'post-1'), 'https://magicbooklet.com');
+    expect(topUp.pathname).toBe('/pricing');
+
+    render(await Pricing({ searchParams: Promise.resolve(Object.fromEntries(topUp.searchParams)) }));
+    expect(await screen.findByRole('link', { name: 'Back to your remix' })).toHaveAttribute('href', '/create-video?remix=gen-1&remixPost=post-1');
   });
 });

@@ -87,6 +87,7 @@ import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
+import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRemixElementSeeds,
     getRemixReferenceCapWarning,
@@ -1942,6 +1943,8 @@ function ImageCreator({
         </div>
     ) : null;
 
+    // A remix keeps no draft: its top-ups tell Pricing the remix, to bring the creator back to it.
+    const topUpHref = remixId ? buildRemixTopUpHref('image', remixId, remixPostId) : undefined;
     const barAction = (
         <CreatorBarAction
             awaitingCheck={isAwaitingStartCheck}
@@ -1949,6 +1952,7 @@ function ImageCreator({
                 if (pendingStart) void replayPendingStart(pendingStart, { reveal: true });
             }}
             showTopUp={showTopUp}
+            topUpHref={topUpHref}
             isGenerating={isGenerating}
             disabled={generateBlocked || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
@@ -2055,6 +2059,7 @@ function ImageCreator({
                     balance={userCredits}
                     runCost={runShape?.cost ?? currentCost}
                     onMakeAnother={() => promptTextareaRef.current?.focus()}
+                    topUpHref={topUpHref}
                 />
             ) : null}
         />
