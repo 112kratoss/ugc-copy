@@ -19,6 +19,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
+import { LaunchSplash } from '@/components/launch-splash';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer } from '@/components/media-zoom';
 import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
@@ -48,6 +49,7 @@ import { readPlaybackDevice, readPlaybackNetwork } from '@/lib/playback-device';
 import { setPlaybackMetricsReporter } from '@/lib/playback-metrics';
 import { hasAppleZoomParam } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
+import { isLaunchSplashCovering, markLaunchRouteSettled } from '@/lib/launch-splash';
 import { isReelBackdropShown, subscribeToReelBackdrop } from '@/lib/reel-backdrop';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
@@ -76,9 +78,10 @@ export const unstable_settings = {
   initialRouteName: '(tabs)',
 };
 
-// The display face arrives from the bundle in a few frames; holding the splash
-// until then means the first screen never swaps fonts in front of the user.
-// FONT_SPLASH_FALLBACK_MS guarantees the splash can never hang on it.
+// The display face arrives from the bundle in a few frames; the launch splash
+// holds the app back until then (see RootLayoutNav), and
+// FONT_SPLASH_FALLBACK_MS guarantees it never hangs on it. The native splash
+// stays up until components/launch-splash.tsx has drawn its own first frame.
 const FONT_SPLASH_FALLBACK_MS = 1200;
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
@@ -204,10 +207,12 @@ function RootLayoutNav() {
     };
   }, []);
 
-  useEffect(() => {
-    if ((!fontsLoaded && !fontError) || !appearanceReady) return;
-    void SplashScreen.hideAsync().catch(() => undefined);
-  }, [appearanceReady, fontError, fontsLoaded]);
+  // The launch splash holds the app back until the faces and the stored
+  // appearance are in, as the native splash used to: the first screen never
+  // swaps fonts or schemes in front of anyone. A face that never arrives holds
+  // it no longer than FONT_SPLASH_FALLBACK_MS.
+  const [fontWaitOver, setFontWaitOver] = useState(false);
+  const shellReady = appearanceReady && (fontsLoaded || Boolean(fontError) || fontWaitOver);
 
   // The screens below render before the faces load. Text drawn by then is in
   // the system face, and on Android stays so until it is drawn again: what is
@@ -217,9 +222,7 @@ function RootLayoutNav() {
   }, [fontsLoaded]);
 
   useEffect(() => {
-    const fallback = setTimeout(() => {
-      void SplashScreen.hideAsync().catch(() => undefined);
-    }, FONT_SPLASH_FALLBACK_MS);
+    const fallback = setTimeout(() => setFontWaitOver(true), FONT_SPLASH_FALLBACK_MS);
     return () => clearTimeout(fallback);
   }, []);
 
@@ -274,7 +277,17 @@ function RootLayoutNav() {
                 }}
               >
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false, animation: reducedMotion ? 'none' : 'fade' }} />
+                {/* A fresh install is sent here under the launch splash, where
+                    a fade would only keep Home drawn beneath it for the fade's
+                    length; read when the route is pushed. */}
+                <Stack.Screen
+                  name="onboarding"
+                  options={() => ({
+                    headerShown: false,
+                    gestureEnabled: false,
+                    animation: reducedMotion ? 'none' : isLaunchSplashCovering() ? 'none' : 'fade',
+                  })}
+                />
                 <Stack.Screen name="update-required" options={{ headerShown: false, gestureEnabled: false, animation: 'none' }} />
                 <Stack.Screen
                   name="auth"
@@ -393,6 +406,10 @@ function RootLayoutNav() {
                   <MediaZoomFlightLayer renderPost={renderZoomPost} />
                 </ThemeScope>
                 <ZoomPostPreparer />
+                {/* Last, so above everything: the clip that continues the
+                    native splash, covering the app until its first screen is
+                    decided (lib/launch-splash.ts). */}
+                <LaunchSplash shellReady={shellReady} />
               </View>
               </GestureHandlerRootView>
             </ThemeProvider>
@@ -461,17 +478,19 @@ function StartupCoordinator() {
   }, [pathname, versionCheckStatus]);
 
   useEffect(() => {
+    if (!isHydrated || isLoading) return;
     if (
-      !isHydrated ||
-      isLoading ||
-      user ||
-      !storageAvailable ||
-      versionCheckStatus === 'redirecting'
-    ) return;
-    if (pathname !== '/') return;
-    if (state.status === 'not_started' || state.status === 'in_progress') {
+      !user &&
+      storageAvailable &&
+      versionCheckStatus !== 'redirecting' &&
+      pathname === '/' &&
+      (state.status === 'not_started' || state.status === 'in_progress')
+    ) {
       router.replace('/onboarding' as never);
     }
+    // Either way the first screen is decided now, and the launch splash may
+    // leave once its clip has played.
+    markLaunchRouteSettled();
   }, [isHydrated, isLoading, pathname, state.status, storageAvailable, user, versionCheckStatus]);
 
   if ((!isHydrated || isLoading) && pathname === '/') {

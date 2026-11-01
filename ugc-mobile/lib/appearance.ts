@@ -78,6 +78,12 @@ let preference: AppearancePreference = 'system';
 let systemScheme: ColorScheme = readSystemScheme();
 let resolvedScheme: ColorScheme = resolveColorScheme(preference, systemScheme, available);
 let hydration: Promise<void> | null = null;
+// A choice reaches the native layer only once the launch splash has taken over
+// from the native one (components/launch-splash.tsx). Applied any earlier it
+// redraws the native splash in that scheme mid-launch: a light phone's splash
+// snapped black under an app set to Dark. The JavaScript scheme resolves at
+// once either way, so the app beneath the launch splash is drawn in the choice.
+let nativeHeld = true;
 let nativeSubscriptions: Array<{ remove: () => void }> = [];
 const listeners = new Set<() => void>();
 
@@ -166,9 +172,9 @@ export function getAppearancePreference() {
 }
 
 /**
- * Restores the stored choice. The root layout holds the splash on this beside
- * the fonts, so an app set to Light on a dark phone draws its first frame
- * light. A read that fails keeps following the phone.
+ * Restores the stored choice. The launch splash holds the app back on this
+ * beside the fonts, so an app set to Light on a dark phone draws its first
+ * frame light. A read that fails keeps following the phone.
  */
 export function hydrateAppearancePreference() {
   if (hydration) return hydration;
@@ -176,11 +182,18 @@ export function hydrateAppearancePreference() {
     .then((raw) => {
       if (!available || !isAppearancePreference(raw) || raw === preference) return;
       preference = raw;
-      applyNativePreference(raw);
+      if (!nativeHeld) applyNativePreference(raw);
       recompute(true);
     })
     .catch(() => undefined);
   return hydration;
+}
+
+/** Called once the native splash is down: the choice reaches the keyboard, alerts and system chrome. */
+export function releaseNativeAppearance() {
+  if (!nativeHeld) return;
+  nativeHeld = false;
+  if (preference !== 'system') applyNativePreference(preference);
 }
 
 /**
@@ -192,7 +205,7 @@ export function hydrateAppearancePreference() {
 export function setAppearancePreference(next: AppearancePreference) {
   if (!available || next === preference) return;
   preference = next;
-  applyNativePreference(next);
+  if (!nativeHeld) applyNativePreference(next);
   recompute(true);
   void AsyncStorage.setItem(STORAGE_KEY, next).catch(() => undefined);
 }
@@ -205,11 +218,17 @@ export function useAppearancePreference() {
   return useSyncExternalStore(subscribeColorScheme, getAppearancePreference, getAppearancePreference);
 }
 
-/** Test seam: the module holds process state, so a suite has to be able to reset it. */
-export function resetAppearanceForTests(next: { preference?: AppearancePreference; systemScheme?: ColorScheme } = {}) {
+/**
+ * Test seam: the module holds process state, so a suite has to be able to reset
+ * it. The native layer starts released unless a suite asks for a launch.
+ */
+export function resetAppearanceForTests(
+  next: { preference?: AppearancePreference; systemScheme?: ColorScheme; nativeHeld?: boolean } = {},
+) {
   stopNativeSubscriptions();
   listeners.clear();
   hydration = null;
+  nativeHeld = next.nativeHeld ?? false;
   preference = next.preference ?? 'system';
   systemScheme = next.systemScheme ?? readSystemScheme();
   resolvedScheme = resolveColorScheme(preference, systemScheme, available);
