@@ -136,6 +136,7 @@ import {
   getDefaultResourceDraft,
   MAX_MADE_WITH_ROWS,
 } from '@/lib/post-new-view-model';
+import { homeModelLabel } from '@/lib/home-feed-view-model';
 import {
   COMPOSER_UNDO_WINDOW_MS,
   describeComposerUndo,
@@ -4479,6 +4480,9 @@ function GeneratedProofCard({ item }: { item: GenerationListItem }) {
   const previewUrl = getGenerationPreviewImageUrl(item);
   const mediaKind = getPublishGenerationMediaKind(item);
   const visualUrl = item.media?.previewUrl ?? (mediaKind === 'video' ? previewUrl : mediaUrl);
+  // By the name its post shows, as its Made with row names it: none where the
+  // catalog names none (a template result's model is its author's).
+  const modelName = homeModelLabel(item.model);
 
   return (
     <View
@@ -4501,7 +4505,7 @@ function GeneratedProofCard({ item }: { item: GenerationListItem }) {
             {getPublishGenerationTitle(item)}
           </AppText>
           <AppText variant="caption" color="muted" numberOfLines={2}>
-            {`Created in Magicbooklet with ${item.model || 'your latest model'}.`}
+            {`Created in Magicbooklet${modelName ? ` with ${modelName}` : ''}.`}
           </AppText>
         </View>
         <View style={{ flexShrink: 0, alignItems: 'flex-end', gap: appTheme.spacing.compact }}>

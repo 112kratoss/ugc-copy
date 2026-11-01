@@ -82,6 +82,7 @@ import {
 import { formatRecipeMoneyLine } from '@/lib/recipe-money-line';
 import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
 import { buildGenerationPostSourceTools } from '@/lib/generation-post-source-tools';
+import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
 import {
   resolveSignedUploadUrl,
   uploadFileToSignedUrl,
@@ -1013,6 +1014,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     mediaCardLeftsRef.current = nextLefts;
   }, [mediaPreviewItems]);
   const hasGeneratedProof = Boolean(prefilledGeneration);
+  // The creation's model by the name its post prints, as its Made with row
+  // names it; none where that name is missing (a template result's model is
+  // its author's, and an edit's seed knows only the app).
+  const generatedModelName = getPostModelDisplayName(prefilledGeneration?.model);
   const [generationLoadAttempt, setGenerationLoadAttempt] = useState(0);
   const [linkedPostRedirectId, setLinkedPostRedirectId] = useState<string | null>(null);
   // "From this creation", as the app offers it: only once the creation itself
@@ -3103,7 +3108,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                               {prefilledGeneration?.title || 'magicbooklet creation'}
                             </div>
                             <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-300">
-                              Created in magicbooklet with {prefilledGeneration?.model || 'your latest model'}.
+                              Created in magicbooklet{generatedModelName ? ` with ${generatedModelName}` : ''}.
                             </p>
                           </div>
                           <div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-50">

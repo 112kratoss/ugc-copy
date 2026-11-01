@@ -4177,6 +4177,8 @@ describe('NewPostClient', () => {
       await waitFor(() => (
         expect(screen.getByRole('button', { name: /^made with/i })).toHaveTextContent('magicbooklet · Nano Banana Pro')
       ));
+      // The creation's card above it names the model the same way.
+      expect(screen.getByText('Created in magicbooklet with Nano Banana Pro.')).toBeInTheDocument();
     });
 
     // /api/generations names a template result's model `template-workflow`:
@@ -4203,6 +4205,8 @@ describe('NewPostClient', () => {
       expect(madeWith).toHaveTextContent('magicbooklet');
       expect(madeWith).not.toHaveTextContent('·');
       expect(madeWith).not.toHaveTextContent('template-workflow');
+      expect(screen.getByText('Created in magicbooklet.')).toBeInTheDocument();
+      expect(screen.queryByText(/template-workflow/)).not.toBeInTheDocument();
     });
 
     it('opens Made with when the server refuses a tool in it', async () => {

@@ -1542,12 +1542,16 @@ describe('mobile external post composer', () => {
       generationState.item = { ...generationItem, model: 'nano-banana-pro' };
       const tree = await renderScreen();
       expect(madeWithSummary(tree)).toBe('Magicbooklet · Nano Banana Pro');
+      // The creation's card above it names the model the same way.
+      expect(collectText(tree.root)).toContain('Created in Magicbooklet with Nano Banana Pro.');
     });
 
     it('names no model for a template result', async () => {
       generationState.item = { ...generationItem, model: 'template-workflow' };
       const tree = await renderScreen();
       expect(madeWithSummary(tree)).toBe('Magicbooklet');
+      expect(collectText(tree.root)).toContain('Created in Magicbooklet.');
+      expect(collectText(tree.root).join('\n')).not.toContain('template-workflow');
     });
 
     it('names a newer model the app’s first tables left out', async () => {

@@ -231,6 +231,12 @@ know. A mobile release is needed only for:
 
 New optional keys are fine.
 
+One thing reaches phones only with an OTA, though the model works without it: its name in the app.
+The app names models from `MODEL_DISPLAY_NAMES` (`ugc-mobile/lib/model-display-names.ts`), so until an
+OTA carries the new line, installed apps leave the model unnamed (never its id) on feed cards, in Details
+and in the composer's Made with, while the web and the stored Made with row name it. Ship the line with the
+next OTA, and say in the hand-off that the name arrives with it.
+
 The first of those is also a web change: both creators render only what the shared lists in
 `ugc-mobile/lib/model-catalog/protocol.ts` name (`CLIENT_RENDERED_CONTROL_TYPES`,
 `CLIENT_RENDERED_INPUT_MODE_KEYS`, `CLIENT_RENDERED_INPUT_SLOT_KINDS`, `CLIENT_RENDERED_INPUT_SLOT_ROLES`,
