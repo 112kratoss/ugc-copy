@@ -1325,6 +1325,8 @@ export default function CreateVideoClient({
     const emptySavedDraftRef = useRef<Partial<VideoCreatorDraft> | null>(null);
     // The owner whose saved files have been read back (`complete`), or given up on.
     const [mediaRestoredFor, setMediaRestoredFor] = useState<{ owner: string; complete: boolean } | null>(null);
+    // Whose saved files the last read was for: the files on the form are theirs.
+    const mediaOwnerRef = useRef<string | null>(null);
     const pendingAdditionalSettingsRef = useRef<VideoCreatorDraft['additionalSettings'] | null>(null);
     const unsavedDraftRef = useRef<{ owner: string; draft: VideoCreatorDraft } | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
@@ -2749,6 +2751,12 @@ export default function CreateVideoClient({
         if (remixId || !draftOwner) {
             return;
         }
+        if (isAnotherDraftOwner(mediaOwnerRef.current, draftOwner)) {
+            // The pictures, clips and tracks are another owner's: not this one's to see, send or
+            // save. What is saved for them stays theirs, and the new owner's own come back below.
+            takeMediaOffForm();
+        }
+        mediaOwnerRef.current = draftOwner;
 
         let isMounted = true;
         const key = (name: string) => scopedPersistedMediaKey(name, draftOwner);
@@ -3332,6 +3340,31 @@ export default function CreateVideoClient({
         if (key) {
             await removePersistedMedia(key);
         }
+    };
+
+    /**
+     * Empties the form of its media: the frames, every picture, clip and track, the Omni IDs
+     * pasted for a run and the names of files refused. Nothing saved is touched. For an owner
+     * change, where all of it was the earlier owner's.
+     */
+    const takeMediaOffForm = () => {
+        setFrame('start', null);
+        setFrame('end', null);
+        [...elementsRef.current, ...referenceVideosRef.current, ...referenceAudiosRef.current, ...klingVideoElementsRef.current]
+            .forEach((item) => revokeObjectUrl(item.previewUrl));
+        klingSubjectsRef.current.forEach((subject) => subject.images.forEach((image) => revokeObjectUrl(image.previewUrl)));
+        commitElements([]);
+        commitReferenceVideos([]);
+        commitReferenceAudios([]);
+        commitKlingVideoElements([]);
+        klingSubjectsRef.current = [];
+        setKlingSubjects([]);
+        setPreparedAudioIds([]);
+        setCharacterIds([]);
+        setPreparedAudioIdDraft('');
+        setCharacterIdDraft('');
+        setPickNotice(null);
+        setUploadPreview(null);
     };
 
     const handleRemoveElement = async (elementId: string) => {

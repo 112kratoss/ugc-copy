@@ -769,6 +769,8 @@ export default function CreateImageClient({
             const savedElementRecords = await getPersistedImageElementRecords(
                 scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createImageElements, draftOwner)
             );
+            // Read for an owner the page has left since: the form is another owner's now.
+            if (restoredPersistedMediaForUserRef.current !== draftOwner) return;
             if (savedElementRecords.length === 0) return;
 
             commitElements(hydrateImageElements(
@@ -789,10 +791,19 @@ export default function CreateImageClient({
 
     useEffect(() => {
         if (!draftOwner || restoredPersistedMediaForUserRef.current === draftOwner) return;
+        if (!remixId && isAnotherDraftOwner(restoredPersistedMediaForUserRef.current, draftOwner)) {
+            // The pictures are another owner's, the names of those refused too: not this one's to
+            // see, send or save. What is saved for them stays theirs, and the new owner's own come
+            // back below.
+            elementRefs.current.forEach((element) => revokePreviewUrl(element.previewUrl));
+            setUploadPreview(null);
+            setElementPickNotice(null);
+            commitElements([]);
+        }
         restoredPersistedMediaForUserRef.current = draftOwner;
 
         void loadPersistedElements();
-    }, [loadPersistedElements, draftOwner]);
+    }, [commitElements, loadPersistedElements, draftOwner, remixId]);
 
     useEffect(() => {
         if (remixId) return;

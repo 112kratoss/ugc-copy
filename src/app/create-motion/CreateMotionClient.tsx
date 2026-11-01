@@ -535,19 +535,28 @@ export default function CreateMotionClient({
         if (file) await processVideoFile(file);
     };
 
-    const handleClearImage = async () => {
+    // Each slot emptied on the form only: what is saved for the owner is the caller's to remove.
+    const takeImageOffForm = () => {
         setCharacterImageFile(null); setCharacterImage(null);
         setCharacterImageDescriptor(null);
         setImagePickError(null);
+    };
+
+    const takeVideoOffForm = () => {
+        setReferenceVideoFile(null); setReferenceVideo(null);
+        setReferenceVideoDescriptor(null);
+        setDuration(0); setVideoError(null); setVideoPickError(null);
+        measuredClipFloorRef.current = null;
+    };
+
+    const handleClearImage = async () => {
+        takeImageOffForm();
         const persistedKey = getPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionCharacterImage);
         if (persistedKey) await removePersistedMedia(persistedKey);
     };
 
     const handleClearVideo = async () => {
-        setReferenceVideoFile(null); setReferenceVideo(null);
-        setReferenceVideoDescriptor(null);
-        setDuration(0); setVideoError(null); setVideoPickError(null);
-        measuredClipFloorRef.current = null;
+        takeVideoOffForm();
         const persistedKey = getPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
         if (persistedKey) await removePersistedMedia(persistedKey);
     };
@@ -722,6 +731,11 @@ export default function CreateMotionClient({
             const openingPrompt = prefillPrompt ?? MOTION_OPENING_PROMPT;
             promptRef.current = openingPrompt;
             setPrompt(openingPrompt);
+            // The picture and clip too, and the clip's length: what is saved for them stays
+            // theirs, and the new owner's own come back below.
+            takeImageOffForm();
+            takeVideoOffForm();
+            setUploadPreview(null);
         }
         promptOwnerRef.current = draftOwner;
         void (async () => {
