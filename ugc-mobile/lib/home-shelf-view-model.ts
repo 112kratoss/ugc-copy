@@ -58,10 +58,16 @@ export function readHomeShelfItems(response: HomeShelfResponse | null | undefine
  * Where a guest's "Make this" lands once they have signed in: this remix's
  * editor (the web's create link, as the app's route, as the web's own card
  * carries it through sign-in), or the post when the card has no such link.
+ *
+ * Ids only, never the source row's words: a sign-in's `returnTo` comes back
+ * decoded once more than it was encoded (expo-router's `useLocalSearchParams`
+ * decodes what the URL parse already decoded), so a title with &, # or + would
+ * arrive cut and one with a backslash would send the guest Home instead. The
+ * creator draws its plain row after sign-in.
  */
 export function homeShelfGuestReturnTo(creation: HomeShelfCreation): string {
   const href = creation.makeHref
-    ? getNativeRemixCreateHref({ redirectTo: creation.makeHref, recreateTool: creation.tool })
+    ? getNativeRemixCreateHref({ redirectTo: creation.makeHref, recreateTool: creation.tool, context: null })
     : null;
   return href?.includes('remix=') ? href : `/post/${creation.post.id}`;
 }

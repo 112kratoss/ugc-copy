@@ -71,6 +71,8 @@ describe('homeShelfGuestReturnTo', () => {
   it("brings a guest back to this remix's editor after sign-in, as the web's card does", () => {
     const [video, , motion] = creations;
 
+    // Ids only: the sign-in hands its returnTo back decoded twice, so no
+    // title or creator may ride in it.
     expect(homeShelfGuestReturnTo(video)).toBe('/create/video?remix=generation-1&remixPost=post-1');
     expect(homeShelfGuestReturnTo(motion)).toMatch(/^\/create\/motion\?remix=[^&]+&remixPost=post-3$/);
   });

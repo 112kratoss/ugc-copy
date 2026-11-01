@@ -417,11 +417,13 @@ describe('immersive viewer actions', () => {
       redirectTo: '/create-video?remix=gen-1&remixPost=post-1',
       recreateTool: 'image',
       prompt: 'Fallback prompt',
+      context: null,
     })).toBe('/create/video?remix=gen-1&remixPost=post-1');
 
     expect(getNativeRemixCreateHref({
       redirectTo: 'https://magicbooklet.test/create-motion?remix=gen-2',
       recreateTool: 'image',
+      context: null,
     })).toBe('/create/motion?remix=gen-2');
   });
 
@@ -443,11 +445,13 @@ describe('immersive viewer actions', () => {
       redirectTo: '/create-image?post=post-1',
       recreateTool: 'image',
       prompt: 'A glossy product photo',
+      context: null,
     })).toBe('/create/image?prompt=A%20glossy%20product%20photo');
 
     expect(getNativeRemixCreateHref({
       recreateTool: 'video',
       prompt: '',
+      context: null,
     })).toBeNull();
   });
 });

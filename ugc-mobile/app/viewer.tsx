@@ -73,7 +73,7 @@ import {
 } from '@/lib/immersive-slide-pages';
 import { getReelFollowAttribution, getReelFollowTarget } from '@/lib/reel-overlay-view-model';
 import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
-import { startShowcaseRemix } from '@/lib/remix-start';
+import { showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useCreatorFollow } from '@/lib/use-creator-follow';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -145,7 +145,7 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
-import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRemixSourceThumbnailUrl, getViewerShareIntent, getViewerShareSourceSurface, isViewerOwnGeneration } from '@/lib/viewer-actions';
+import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRemixSourceContext, getViewerShareIntent, getViewerShareSourceSurface, isViewerOwnGeneration } from '@/lib/viewer-actions';
 import {
   changePostVisibility,
   pickPostVisibility,
@@ -976,7 +976,7 @@ function ImmersivePreviewViewer() {
       return;
     }
 
-    const context = { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel, thumbnailUrl: getRemixSourceThumbnailUrl(item) };
+    const context = getRemixSourceContext(item);
     const openCreateTool = () => {
       const fallbackHref = getNativeRemixCreateHref({
         generationId: item.sourceType !== 'showcase' ? item.generationId : null,
@@ -1027,12 +1027,7 @@ function ImmersivePreviewViewer() {
       if (source === 'showcase-feed') {
         recordViewerFeedEvent(item, 'remix_start');
       }
-      const nativeHref = getNativeRemixCreateHref({
-        redirectTo: response.redirectTo,
-        recreateTool: item.recreateTool,
-        prompt: response.prefill?.prompt ?? item.recreatePrompt,
-        context,
-      });
+      const nativeHref = showcaseRemixCreateHref(item, response);
       if (nativeHref) {
         router.push(nativeHref as never);
         return;
