@@ -147,10 +147,10 @@ describe('marketplace search indexes public text migration', () => {
     expect(getCreatorDisplayName({ displayName: '  ', username: ' maya ' })).toBe('maya');
     expect(getCreatorDisplayName({ displayName: null, username: null })).toBe('Creator');
     // The post's title and caption, trimmed. A post with no title is shown under
-    // a fallback the document does not hold (the header says why). The caption
-    // is read as public reads show it since 20261101042650, whose test holds
-    // that rule.
-    expect(serverSource).toContain("title: row.title?.trim() || deriveTitleFromBody(body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),");
+    // a fallback the document does not hold (the header says why). Under a paid
+    // recipe the card shows the caption as public reads show it since
+    // 20261101042650, whose test holds that rule.
+    expect(serverSource).toContain("title: row.title?.trim() || deriveTitleFromBody(row.body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),");
     expect(serverSource).toContain("body: row.body?.trim() || '',");
   });
 

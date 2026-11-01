@@ -245,6 +245,16 @@ interface PostResourceBundleSellerSummary {
   avatar: string | null;
 }
 
+/**
+ * A post read for its recipe: as stored, which every quality check judges
+ * (the database's listing gate, the publish and promotion checks, both seller
+ * pages), and as public reads show it when its recipe is paid.
+ */
+interface LinkedPostRead {
+  post: PostResourceBundleLinkedPost;
+  underPaidRecipe: PostResourceBundleLinkedPost;
+}
+
 interface PostResourceBundleLinkedPost {
   id: string;
   generationId: string | null;
@@ -1463,15 +1473,10 @@ async function loadLinkedPostMap(
   scope: LinkedPostScope = 'public',
   includeMediaPreviews = false,
   throwOnReadError = false,
-  // The access mode of each post's recipe. A post with one is read as the feed
-  // and the post page show it (sanitizePublicPostContent): under a paid
-  // recipe, a body that is the saved generation setup it sells is blank, and an
-  // untitled post is not named after it.
-  recipeAccessModes: ReadonlyMap<string, string> = new Map(),
-) {
+): Promise<Map<string, LinkedPostRead>> {
   const uniquePostIds = Array.from(new Set(postIds.filter(Boolean)));
   if (uniquePostIds.length === 0) {
-    return new Map<string, PostResourceBundleLinkedPost>();
+    return new Map<string, LinkedPostRead>();
   }
 
   const adminSupabase = createServiceClient();
@@ -1661,21 +1666,13 @@ async function loadLinkedPostMap(
     rows.map(async (row) => {
       const coverMedia = mediaItemsMap.get(row.id)?.[0] ?? null;
       const mediaUrl = coverMedia?.url ?? await resolvePostMediaUrl(adminSupabase, row);
-      const recipeAccessMode = recipeAccessModes.get(row.id);
-      const { body } = sanitizePublicPostContent({
-        body: row.body?.trim() || '',
-        description: '',
-        prompt: '',
-        hasRecipe: recipeAccessMode !== undefined,
-        isPaidRecipe: recipeAccessMode === 'paid',
-      });
 
-      return {
+      const post: PostResourceBundleLinkedPost = {
         id: row.id,
         generationId: row.generation_id,
-        title: row.title?.trim() || deriveTitleFromBody(body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),
+        title: row.title?.trim() || deriveTitleFromBody(row.body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),
         category: row.category,
-        body,
+        body: row.body?.trim() || '',
         postFormat: row.post_format,
         visibility: row.visibility,
         archivedAt: row.archived_at,
@@ -1692,10 +1689,31 @@ async function loadLinkedPostMap(
         remixCount: row.remix_count ?? 0,
         shareVisitCount: row.share_visit_count ?? 0,
       };
+      // Under a paid recipe the feed and the post page show no caption that is
+      // the saved generation setup the recipe sells (sanitizePublicPostContent),
+      // so the post is not named after it either.
+      const { body: bodyUnderPaidRecipe } = sanitizePublicPostContent({
+        body: post.body,
+        description: '',
+        prompt: '',
+        hasRecipe: true,
+        isPaidRecipe: true,
+      });
+
+      return {
+        post,
+        underPaidRecipe: bodyUnderPaidRecipe === post.body
+          ? post
+          : {
+              ...post,
+              title: row.title?.trim() || deriveTitleFromBody(bodyUnderPaidRecipe) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),
+              body: bodyUnderPaidRecipe,
+            },
+      };
     })
   );
 
-  return new Map(linkedPosts.map((row) => [row.id, row]));
+  return new Map(linkedPosts.map((read) => [read.post.id, read]));
 }
 
 /**
@@ -1731,7 +1749,19 @@ function withCreationReferenceCounts(
   return { ...item, resourceKinds: lockedPreview.resourceKinds, lockedPreview };
 }
 
-async function hydrateBundleRows(
+type HydratedRecipe = {
+  item: MarketplaceResourceListItem;
+  // Its post as stored, which the listing's quality checks judge, as the
+  // database's listing gate and every publish check do. item.post is the
+  // post as its reader is shown it.
+  storedPost: PostResourceBundleLinkedPost | null;
+};
+
+async function hydrateBundleRows(...args: Parameters<typeof hydrateRecipes>): Promise<MarketplaceResourceListItem[]> {
+  return (await hydrateRecipes(...args)).map(({ item }) => item);
+}
+
+async function hydrateRecipes(
   rows: BundleRow[],
   countryCode?: string | null,
   scope: LinkedPostScope = 'public',
@@ -1756,7 +1786,7 @@ async function hydrateBundleRows(
     // falls back to the purchased version), and a listing drops the row.
     throwOnPostReadError?: boolean;
   } = {},
-): Promise<MarketplaceResourceListItem[]> {
+): Promise<HydratedRecipe[]> {
   const { postScope = scope, allowNsfw = false, creationReferencesFor, throwOnPostReadError = false } = options;
   if (scope === 'public' && !allowNsfw) {
     const nsfwIds = await loadNsfwPostIds(createServiceClient(), rows.map((row) => row.post_id));
@@ -1765,16 +1795,7 @@ async function hydrateBundleRows(
   const storedResourcesByBundleId = new Map(rows.map((row) => [row.id, normalizeResources(row)]));
   const [profilesMap, postMap, contentUpdatedAtMap, creationReferenceCounts] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
-    // Every read of a recipe, its owner's included, shows its post as the feed
-    // shows it to everyone: what the marketplace lists, searches and judges
-    // (its quality gate, the seller's "what keeps it off sale") is that post.
-    loadLinkedPostMap(
-      rows.map((row) => row.post_id),
-      postScope,
-      includeMediaPreviews,
-      throwOnPostReadError,
-      new Map(rows.map((row) => [row.post_id, row.access_mode])),
-    ),
+    loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews, throwOnPostReadError),
     loadLatestContentRevisionTimes(rows.map((row) => row.id)),
     creationReferencesFor
       ? countListedRecipeReferences(
@@ -1787,7 +1808,10 @@ async function hydrateBundleRows(
 
   return Promise.all(
     rows.map(async (row) => {
-      const post = postMap.get(row.post_id) ?? null;
+      const read = postMap.get(row.post_id) ?? null;
+      // As the feed and the post page show it, to everyone but its owner,
+      // whose own pages show it as stored.
+      const post = (scope !== 'owner' && row.access_mode === 'paid' ? read?.underPaidRecipe : read?.post) ?? null;
       // A creation post's published recipe includes its Remix, whatever its
       // stored switch says (2026-10-27): reported as such on every read, so its
       // kinds, chips and remix gate agree.
@@ -1814,7 +1838,7 @@ async function hydrateBundleRows(
         },
       });
 
-      return withCreationReferenceCounts({
+      const item = withCreationReferenceCounts({
         id: row.id,
         postId: row.post_id,
         legacyAssetId: row.legacy_asset_id,
@@ -1837,6 +1861,8 @@ async function hydrateBundleRows(
         remixCapability: remix.capability,
         remixTarget: remix.target,
       }, creationReferenceCounts.get(row.post_id));
+
+      return { item, storedPost: read?.post ?? null };
     })
   );
 }
@@ -2308,9 +2334,9 @@ async function getMarketplaceResourceListFallback(options: {
     // Filtered on what each recipe stores, as the RPC's SQL filters: what an
     // unlock adds from the creation's inputs (B3) is a best-effort read,
     // counted below for the page served alone.
-    const hydratedItems = await hydrateBundleRows(rows, countryCode, 'public', true);
+    const hydratedRecipes = await hydrateRecipes(rows, countryCode, 'public', true);
     for (const row of rows) rowsByBundleId.set(row.id, row);
-    matchingItems.push(...hydratedItems.filter((item) => {
+    matchingItems.push(...hydratedRecipes.filter(({ item, storedPost }) => {
       if (!item.post) {
         return false;
       }
@@ -2326,12 +2352,12 @@ async function getMarketplaceResourceListFallback(options: {
         accessMode: item.accessMode,
         priceUsdCents: item.priceUsdCents,
         resourceKinds: item.resourceKinds,
-        post: item.post,
+        post: storedPost ?? item.post,
         seller: item.seller,
       });
 
       return quality.eligible && matchesResource && matchesTool && matchesQuery;
-    }));
+    }).map(({ item }) => item));
   }
 
   const pageItems = matchingItems.slice(offset, offset + limit);
@@ -2425,23 +2451,27 @@ async function getMarketplaceResourceListBase(
   // Checked below on what each recipe stores, as the RPC's SQL filtered it:
   // what an unlock adds from the creation's inputs (B3) is a best-effort read,
   // counted after for the recipes the page serves alone.
-  const hydratedItems = await hydrateBundleRows(rows, null, 'public', true);
-  // Walked by raw row, not by hydrated item: hydration drops an NSFW bundle
-  // before this loop, and a dropped row still occupies its raw position. Left
-  // out of the count, nextOffset fell short by one per hidden row and the next
-  // page re-read (and repeated) the rows after it.
-  const hydratedById = new Map(hydratedItems.map((item) => [item.id, item]));
+  const hydratedRecipes = await hydrateRecipes(rows, null, 'public', true);
+  // Walked by raw row, not by hydrated item: hydration drops a row whose post
+  // was hidden or labelled NSFW after the list read it, and a dropped row still
+  // occupies its raw position. Left out of the count, nextOffset fell short by
+  // one per hidden row and the next page re-read (and repeated) the rows after
+  // it.
+  const hydratedById = new Map(hydratedRecipes.map((recipe) => [recipe.item.id, recipe]));
   const pageItems: MarketplaceResourceListItem[] = [];
   const pageRows: BundleRow[] = [];
   let consumedRowCount = 0;
 
   for (const row of rows) {
-    const item = hydratedById.get(row.id);
+    const hydrated = hydratedById.get(row.id);
+    const item = hydrated?.item;
     if (!item?.post) {
       consumedRowCount += 1;
       continue;
     }
 
+    // Judged on the post as stored, as the database's listing gate judged it;
+    // matched on the post as shown, as its search document holds it.
     const quality = assessMarketplaceListingQuality({
       title: item.title,
       summary: item.summary,
@@ -2449,7 +2479,7 @@ async function getMarketplaceResourceListBase(
       accessMode: item.accessMode,
       priceUsdCents: item.priceUsdCents,
       resourceKinds: item.resourceKinds,
-      post: item.post,
+      post: hydrated?.storedPost ?? item.post,
       seller: item.seller,
     });
 
@@ -3010,7 +3040,7 @@ async function loadSellerRecipeCandidates(
     const posts = await loadLinkedPostMap(postIds, 'owner', true, true);
 
     return postIds.flatMap((postId) => {
-      const post = posts.get(postId);
+      const post = posts.get(postId)?.post;
       return post
         ? [{
             postId,

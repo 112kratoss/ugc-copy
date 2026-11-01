@@ -1954,7 +1954,7 @@ describe('post resource bundle server access', () => {
       expect((await getMarketplaceResourceList({ q: 'public recipe post' })).items).toHaveLength(1);
     });
 
-    it('names an untitled post as the post page names it, not after its setup', async () => {
+    it('does not name an untitled post after its setup', async () => {
       postRow = { ...(postRow as Record<string, unknown>), title: null };
       const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
 
@@ -1964,15 +1964,18 @@ describe('post resource bundle server access', () => {
       expect((await getMarketplaceResourceList({ q: 'saved generation setup' })).items).toEqual([]);
     });
 
-    it('is not listed when its post shows nothing else, as the database leaves it out', async () => {
+    // Every quality check judges the post as stored: the database's listing
+    // gate, the publish and promotion checks and both seller pages.
+    it('is listed on its post as stored when the post shows nothing else, and shown without it', async () => {
       postRow = { ...(postRow as Record<string, unknown>), title: null, post_format: 'text', category: 'text', generation_id: null };
       const { getMarketplaceResourceList, getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
 
-      expect((await getMarketplaceResourceList()).items).toEqual([]);
-      // Its seller is told why, on the post as buyers see it.
+      const page = await getMarketplaceResourceList();
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]?.post).toMatchObject({ title: 'Untitled note', body: '' });
       const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
-      expect(listing?.post?.body).toBe('');
-      expect(listing?.quality.issues.map((issue) => issue.code)).toContain('missing_public_proof');
+      expect(listing?.post?.body).toBe(SETUP_CAPTION);
+      expect(listing?.quality.eligible).toBe(true);
     });
 
     it('is shown without it on the post’s own recipe read', async () => {

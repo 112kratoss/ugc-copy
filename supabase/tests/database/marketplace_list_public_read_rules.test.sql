@@ -1,11 +1,10 @@
--- The marketplace list applies two rules the feed, the post page and search
--- already apply:
+-- The marketplace list applies two rules public reads already apply:
 --   - a paid recipe's post shows no body whose first line is "Saved
 --     generation setup" (sanitizePublicPostContent and
---     isGeneratedRecipeSetupText, src/lib/post-public-content.ts). The search
---     document does not hold that body, and the listing's quality gate does
---     not count it as the post's public proof, as the app's check (which
---     reads the post as shown) does not;
+--     isGeneratedRecipeSetupText, src/lib/post-public-content.ts), so the
+--     recipe's search document does not hold that body. Whether the recipe is
+--     listed is still judged on its post as stored, as every quality check
+--     judges it;
 --   - a recipe on an NSFW-labelled post is not listed, as search_public_posts
 --     leaves the post out, so a page never holds a row the app then drops.
 
@@ -14,7 +13,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(41);
+select plan(39);
 
 create function pg_temp.finds(p_query text, p_bundle_id uuid)
 returns boolean
@@ -55,8 +54,10 @@ $$;
 --   …025 paid, on a picture with an ordinary caption;
 --   …026 free, on an NSFW-labelled post, the newest recipe;
 --   …027 free, on a post labelled NSFW below.
--- Posts …031–…042 carry the heading's spellings, each under a paid recipe
--- (…051–…062) and each with a word of its own after the heading.
+-- Then one picture per spelling of the heading (…031–…043), each under a paid
+-- recipe (…051–…063) and each with a word of its own after the heading.
+-- src/__tests__/marketplace-list-public-read-rules-migration.test.ts reads the
+-- spellings below and runs the app's rule on the same bodies.
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at)
 values ('0000f5e1-0000-4000-9000-000000000001'::uuid, 'f5e1-public-read-rules@example.invalid',
@@ -106,31 +107,57 @@ insert into public.posts (
    'Caption for the cobalt fern study.',
    'showcase/f5e1-017.png', 'Nano Banana', 'nano-banana', now(), now());
 
+-- Each spelling: its suffix, the caption, the word after the heading, whether
+-- a paid recipe's post shows the caption (isGeneratedRecipeSetupText false) or
+-- drops it, and what it shows.
+create temporary table spellings (
+  suffix text primary key,
+  body text not null,
+  word text not null,
+  dropped boolean not null,
+  label text not null
+) on commit drop;
+
+insert into spellings (suffix, body, word, dropped, label) values
+  ('31', E'\n\n  Saved Generation Setup  \r\nModel: Nano Banana 2\r\nGrade: alderwisp', 'alderwisp', true,
+   'blank lines, spaces, capitals and CRLF around the heading'),
+  ('32', E'\u00a0Saved generation setup\nGrade: brackenhue', 'brackenhue', true,
+   'a no-break space before the heading'),
+  ('33', E'\ufeffSaved generation setup\nGrade: cindermoth', 'cindermoth', true,
+   'a byte-order mark before the heading'),
+  ('34', E'Saved generation setup\u3000\nGrade: duskwillow', 'duskwillow', true,
+   'an ideographic space after the heading'),
+  ('35', E'SAVED GENERATION SETUP\t\nGrade: emberquill', 'emberquill', true,
+   'the heading in capitals with a tab after it'),
+  ('36', E'Saved generation setup\u2028\nGrade: larchember', 'larchember', true,
+   'a line separator ending the heading''s line'),
+  ('37', E'Saved generation setup:\nGrade: fernlantern', 'fernlantern', false,
+   'the heading with a colon'),
+  ('38', E'My caption first\nSaved generation setup\nGrade: gorsefrost', 'gorsefrost', false,
+   'the heading on the second line'),
+  ('39', E'Saved generation setup\rGrade: hollowmere', 'hollowmere', false,
+   'a lone CR after the heading, which is not a line break'),
+  ('40', E'Saved generation setup\u2028Grade: ivorythorn', 'ivorythorn', false,
+   'a line separator inside the first line, which is not a line break'),
+  ('41', E'Saved generation setup\u0085Grade: junipercoil', 'junipercoil', false,
+   'a next-line character, which is not white space to the app'),
+  ('42', E'Saved  generation setup\nGrade: kestrelpine', 'kestrelpine', false,
+   'two spaces inside the heading'),
+  ('43', E'SAVED GENERAT\u0130ON SETUP\nGrade: lindenmoth', 'lindenmoth', false,
+   'a dotted capital I, which toLowerCase never makes a plain i');
+
 insert into public.posts (
   id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
   title, body, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
 )
 select
-  ('0000f5e1-0000-4000-9000-0000000000' || variant.suffix)::uuid,
+  ('0000f5e1-0000-4000-9000-0000000000' || spellings.suffix)::uuid,
   '0000f5e1-0000-4000-9000-000000000001'::uuid,
   'public', 'image', 'magicbooklet', 'media', 'visible', false,
-  'Spelling fixture ' || variant.suffix,
-  variant.body,
-  'showcase/f5e1-' || variant.suffix || '.png', 'Nano Banana', 'nano-banana', now(), now()
-from (values
-  ('31', E'\n\n  Saved Generation Setup  \r\nModel: Nano Banana 2\r\nGrade: alderwisp'),
-  ('32', E' Saved generation setup\nGrade: brackenhue'),
-  ('33', E'﻿Saved generation setup\nGrade: cindermoth'),
-  ('34', E'Saved generation setup　\nGrade: duskwillow'),
-  ('35', E'SAVED GENERATION SETUP\t\nGrade: emberquill'),
-  ('36', E'Saved generation setup \nGrade: larchember'),
-  ('37', E'Saved generation setup:\nGrade: fernlantern'),
-  ('38', E'My caption first\nSaved generation setup\nGrade: gorsefrost'),
-  ('39', E'Saved generation setup\rGrade: hollowmere'),
-  ('40', E'Saved generation setup Grade: ivorythorn'),
-  ('41', E'Saved generation setup\u0085Grade: junipercoil'),
-  ('42', E'Saved  generation setup\nGrade: kestrelpine')
-) as variant(suffix, body);
+  'Spelling fixture ' || spellings.suffix,
+  spellings.body,
+  'showcase/f5e1-' || spellings.suffix || '.png', 'Nano Banana', 'nano-banana', now(), now()
+from spellings;
 
 insert into public.post_resource_bundles (
   id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
@@ -150,26 +177,19 @@ select
   '[]'::jsonb,
   case recipe.access_mode when 'paid' then 300 else 0 end, 0, 0,
   now() - recipe.age, now()
-from (values
-  ('21', '11', 'paid', 'Harbour lights recipe', interval '20 minutes'),
-  ('22', '12', 'paid', 'Tamarisk notes recipe', interval '20 minutes'),
-  ('23', '13', 'free', 'Saltmarsh notes recipe', interval '20 minutes'),
-  ('24', '14', 'free', 'Marrow light recipe', interval '20 minutes'),
-  ('25', '15', 'paid', 'Larkspur ridge recipe', interval '20 minutes'),
-  ('26', '16', 'free', 'Nightjar moss recipe', interval '1 minute'),
-  ('27', '17', 'free', 'Cobalt fern recipe', interval '2 minutes'),
-  ('51', '31', 'paid', 'Spelling recipe 31', interval '30 minutes'),
-  ('52', '32', 'paid', 'Spelling recipe 32', interval '30 minutes'),
-  ('53', '33', 'paid', 'Spelling recipe 33', interval '30 minutes'),
-  ('54', '34', 'paid', 'Spelling recipe 34', interval '30 minutes'),
-  ('55', '35', 'paid', 'Spelling recipe 35', interval '30 minutes'),
-  ('56', '36', 'paid', 'Spelling recipe 36', interval '30 minutes'),
-  ('57', '37', 'paid', 'Spelling recipe 37', interval '30 minutes'),
-  ('58', '38', 'paid', 'Spelling recipe 38', interval '30 minutes'),
-  ('59', '39', 'paid', 'Spelling recipe 39', interval '30 minutes'),
-  ('60', '40', 'paid', 'Spelling recipe 40', interval '30 minutes'),
-  ('61', '41', 'paid', 'Spelling recipe 41', interval '30 minutes'),
-  ('62', '42', 'paid', 'Spelling recipe 42', interval '30 minutes')
+from (
+  values
+    ('21', '11', 'paid', 'Harbour lights recipe', interval '20 minutes'),
+    ('22', '12', 'paid', 'Tamarisk notes recipe', interval '20 minutes'),
+    ('23', '13', 'free', 'Saltmarsh notes recipe', interval '20 minutes'),
+    ('24', '14', 'free', 'Marrow light recipe', interval '20 minutes'),
+    ('25', '15', 'paid', 'Larkspur ridge recipe', interval '20 minutes'),
+    ('26', '16', 'free', 'Nightjar moss recipe', interval '1 minute'),
+    ('27', '17', 'free', 'Cobalt fern recipe', interval '2 minutes')
+  union all
+  select (spellings.suffix::int + 20)::text, spellings.suffix, 'paid',
+         'Spelling recipe ' || spellings.suffix, interval '30 minutes'
+  from spellings
 ) as recipe(bundle_suffix, post_suffix, access_mode, title, age);
 
 -- ─── Listed, so a miss below is the rule under test ─────────────────────────
@@ -196,14 +216,14 @@ select ok(pg_temp.finds('larkspur ridge at noon.', '0000f5e1-0000-4000-9000-0000
 select ok(pg_temp.finds('marrowlight amber', '0000f5e1-0000-4000-9000-000000000024'::uuid),
   'a free recipe''s setup caption still finds it, as public reads show it');
 
--- The setup is all an untitled text post shows of itself: under a paid recipe
--- nobody sees it, so the post has no public proof and the recipe is not listed.
-select ok(not pg_temp.listable('0000f5e1-0000-4000-9000-000000000022'::uuid),
-  'a paid recipe whose post shows nothing but its setup caption is not listed');
-select ok(pg_temp.listable('0000f5e1-0000-4000-9000-000000000023'::uuid),
-  'under a free recipe the same post is listed');
+-- Listed or not on the post as stored, as the publish and promotion checks
+-- judge it: an untitled text post whose only text is its setup still counts.
+select ok(pg_temp.listable('0000f5e1-0000-4000-9000-000000000022'::uuid),
+  'a paid recipe whose post shows nothing but its setup caption is listed on its post as stored');
+select ok(not pg_temp.finds('tamarisk teal', '0000f5e1-0000-4000-9000-000000000022'::uuid),
+  'but a word of the caption does not find it');
 select ok(pg_temp.finds('saltmarsh silver', '0000f5e1-0000-4000-9000-000000000023'::uuid),
-  'and its caption finds it');
+  'under a free recipe the same kind of caption finds it');
 
 -- Made paid, then free again.
 update public.post_resource_bundles
@@ -214,62 +234,29 @@ select is(position('marrowlight' in pg_temp.document('0000f5e1-0000-4000-9000-00
   'a recipe made paid drops its post''s setup caption from its document');
 select ok(not pg_temp.finds('marrowlight amber', '0000f5e1-0000-4000-9000-000000000024'::uuid),
   'and a word of it no longer finds the recipe');
-
-update public.post_resource_bundles
-set access_mode = 'paid', price_usd_cents = 300
-where id = '0000f5e1-0000-4000-9000-000000000023'::uuid;
-
-select ok(not pg_temp.listable('0000f5e1-0000-4000-9000-000000000023'::uuid),
-  'a recipe made paid leaves the list when its post shows nothing but its setup caption');
+select ok(pg_temp.listable('0000f5e1-0000-4000-9000-000000000024'::uuid),
+  'and the recipe stays listed');
 
 update public.post_resource_bundles
 set access_mode = 'free', price_usd_cents = 0
-where id in ('0000f5e1-0000-4000-9000-000000000023'::uuid, '0000f5e1-0000-4000-9000-000000000024'::uuid);
+where id = '0000f5e1-0000-4000-9000-000000000024'::uuid;
 
 select ok(pg_temp.finds('marrowlight amber', '0000f5e1-0000-4000-9000-000000000024'::uuid),
   'made free again, its setup caption finds it');
-select ok(pg_temp.listable('0000f5e1-0000-4000-9000-000000000023'::uuid),
-  'made free again, the text post''s recipe is listed');
-
--- The post's own edit: an ordinary caption is public proof under a paid recipe.
-update public.posts
-set body = 'An ordinary caption long enough to read as the post itself.'
-where id = '0000f5e1-0000-4000-9000-000000000012'::uuid;
-
-select ok(pg_temp.listable('0000f5e1-0000-4000-9000-000000000022'::uuid),
-  'a paid recipe is listed once its post''s caption is not its setup');
 
 -- ─── The heading as isGeneratedRecipeSetupText reads it ──────────────────────
 --
 -- The first line of the text with \r\n read as \n and both ends trimmed of what
 -- String.prototype.trim removes, itself trimmed and lower-cased, is exactly the
--- heading. src/__tests__/marketplace-list-public-read-rules-migration.test.ts
--- runs the app's function on these same bodies.
+-- heading. One case per spelling.
 
-select is(position('alderwisp' in pg_temp.document('0000f5e1-0000-4000-9000-000000000051'::uuid)), 0,
-  'blank lines, spaces, capitals and \r\n around the heading: dropped');
-select is(position('brackenhue' in pg_temp.document('0000f5e1-0000-4000-9000-000000000052'::uuid)), 0,
-  'a no-break space before the heading: dropped');
-select is(position('cindermoth' in pg_temp.document('0000f5e1-0000-4000-9000-000000000053'::uuid)), 0,
-  'a byte-order mark before the heading: dropped');
-select is(position('duskwillow' in pg_temp.document('0000f5e1-0000-4000-9000-000000000054'::uuid)), 0,
-  'an ideographic space after the heading: dropped');
-select is(position('emberquill' in pg_temp.document('0000f5e1-0000-4000-9000-000000000055'::uuid)), 0,
-  'the heading in capitals with a tab after it: dropped');
-select is(position('larchember' in pg_temp.document('0000f5e1-0000-4000-9000-000000000056'::uuid)), 0,
-  'a line separator ending the heading''s line: dropped');
-select ok(position('fernlantern' in pg_temp.document('0000f5e1-0000-4000-9000-000000000057'::uuid)) > 0,
-  'the heading with a colon: kept');
-select ok(position('gorsefrost' in pg_temp.document('0000f5e1-0000-4000-9000-000000000058'::uuid)) > 0,
-  'the heading on the second line: kept');
-select ok(position('hollowmere' in pg_temp.document('0000f5e1-0000-4000-9000-000000000059'::uuid)) > 0,
-  'a lone \r after the heading is not a line break: kept');
-select ok(position('ivorythorn' in pg_temp.document('0000f5e1-0000-4000-9000-000000000060'::uuid)) > 0,
-  'a line separator inside the first line is not a line break: kept');
-select ok(position('junipercoil' in pg_temp.document('0000f5e1-0000-4000-9000-000000000061'::uuid)) > 0,
-  'a next-line character is not whitespace to the app: kept');
-select ok(position('kestrelpine' in pg_temp.document('0000f5e1-0000-4000-9000-000000000062'::uuid)) > 0,
-  'two spaces inside the heading: kept');
+select is(
+  position(spellings.word in pg_temp.document(('0000f5e1-0000-4000-9000-0000000000' || (spellings.suffix::int + 20))::uuid)) = 0,
+  spellings.dropped,
+  spellings.label || case when spellings.dropped then ': dropped' else ': kept' end
+)
+from spellings
+order by spellings.suffix;
 
 -- ─── NSFW-labelled posts ─────────────────────────────────────────────────────
 
@@ -303,7 +290,7 @@ select ok(pg_temp.finds(null, '0000f5e1-0000-4000-9000-000000000027'::uuid),
   'removing the label lists it again');
 
 -- An NSFW post's recipe stays its owner's: the label leaves the recipe itself
--- alone, so the creator and its buyers keep reading it on its own pages.
+-- alone, so the creator and its buyers keep reading it on their own pages.
 select is(
   (select status from public.post_resource_bundles where id = '0000f5e1-0000-4000-9000-000000000026'::uuid),
   'published',
@@ -314,15 +301,7 @@ select is(
 
 update public.marketplace_bundle_listings
 set listable = true
-where bundle_id in ('0000f5e1-0000-4000-9000-000000000026'::uuid, '0000f5e1-0000-4000-9000-000000000022'::uuid);
-
-update public.posts
-set body = E'Saved generation setup\nModel: Nano Banana 2\nGrade: tamarisk teal'
-where id = '0000f5e1-0000-4000-9000-000000000012'::uuid;
-
-update public.marketplace_bundle_listings
-set listable = true
-where bundle_id = '0000f5e1-0000-4000-9000-000000000022'::uuid;
+where bundle_id = '0000f5e1-0000-4000-9000-000000000026'::uuid;
 
 update public.marketplace_bundle_search_documents
 set search_text = 'stale quillfeather'
@@ -333,8 +312,6 @@ select public.refresh_marketplace_bundle_search_documents(null);
 
 select ok(not pg_temp.listable('0000f5e1-0000-4000-9000-000000000026'::uuid),
   'a full refresh takes an NSFW post''s recipe off the list');
-select ok(not pg_temp.listable('0000f5e1-0000-4000-9000-000000000022'::uuid),
-  'a full refresh judges a paid recipe''s post as it is shown');
 select is(position('quillfeather' in pg_temp.document('0000f5e1-0000-4000-9000-000000000021'::uuid)), 0,
   'a full refresh projects a paid recipe''s document without its setup caption');
 select ok(position('harbour lights at dusk' in pg_temp.document('0000f5e1-0000-4000-9000-000000000021'::uuid)) > 0,

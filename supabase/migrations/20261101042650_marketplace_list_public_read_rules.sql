@@ -1,21 +1,18 @@
--- The marketplace list and its search apply two rules the feed, the post page
--- and post search already apply.
+-- The marketplace list and its search apply two rules public reads already
+-- apply.
 --
 -- 1. A paid recipe's post shows no caption that is the saved generation setup
 --    the recipe sells: a body whose first line is "Saved generation setup"
 --    (sanitizePublicPostContent and isGeneratedRecipeSetupText in
---    src/lib/post-public-content.ts). The app now reads every recipe's post
---    that way (loadLinkedPostMap in src/lib/post-resource-bundles-server.ts),
---    for the card, the search check and the quality check. Here:
---      - public.recipe_post_public_body is that rule, its one copy in the
---        database;
---      - the search document holds the post's caption only as the card shows
---        it, so the recipe trigger now follows access_mode;
---      - the listing's quality gate judges the post's public proof on that
---        caption, as the app's check does. A paid recipe whose post shows
---        nothing but its setup is not listed, and its seller's dashboard says
---        why. The listing trigger already follows access_mode and the post's
---        body.
+--    src/lib/post-public-content.ts), as the feed and the post page show it.
+--    The app now shows a recipe's post that way to everyone but its owner
+--    (loadLinkedPostMap and hydrateRecipes in
+--    src/lib/post-resource-bundles-server.ts), and matches searches on it.
+--    Here public.recipe_post_public_body is the same rule, and the search
+--    document holds the caption through it, so the recipe trigger now follows
+--    access_mode. Whether a recipe is listed is still judged on its post as
+--    stored, as every other quality check judges it: the publish and
+--    promotion checks, both seller pages, and the app's re-check of a page.
 -- 2. A recipe on an NSFW-labelled post is not listable. The list is the same
 --    for every viewer, and the app left these recipes out only after the list
 --    function had paged them, so a page could hold rows nobody was shown.
@@ -26,16 +23,16 @@
 --    buyers read it on their own pages, behind the owner, reveal and purchase
 --    checks.
 --
--- Each function is re-created as it was but for the lines above:
--- refresh_marketplace_bundle_listings as 20260809210000 made it, and
--- refresh_marketplace_bundle_search_documents as 20261031100330 made it.
+-- Each function and trigger is re-created as the migration before this one
+-- left it but for the lines above;
 -- src/__tests__/marketplace-list-public-read-rules-migration.test.ts holds each
 -- to that, and the rule to the app's.
 --
--- Every listing and document is re-projected at the end. Production on
--- 2026-11-01 (read-only counts): 17 recipes, 12 listed; one post with a setup
--- caption, under a free recipe; no NSFW-labelled post. Neither rule changes a
--- row there.
+-- Only the rows these rules can change are re-projected at the end: listings
+-- of recipes on NSFW-labelled posts, and documents of paid recipes. Production
+-- on 2026-11-01 (read-only counts): 17 recipes, 12 listed; one post with a
+-- setup caption, under a free recipe; no NSFW-labelled post. Neither rule
+-- changes a row there.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
@@ -62,7 +59,10 @@ LOCK TABLE public.post_resource_bundles IN SHARE ROW EXCLUSIVE MODE;
 -- and trims and lower-cases that line. It trims what String.prototype.trim
 -- removes: JavaScript's white space and line terminators, not only spaces. A
 -- lone \r or a line separator inside the line does not end it, as
--- split('\n') does not.
+-- split('\n') does not. The line is lower-cased under the C collation, which
+-- maps A to Z only: toLowerCase turns U+0130 into i and a combining dot, never
+-- the plain i a libc lower() gives it, so no other letter can spell the
+-- heading.
 CREATE OR REPLACE FUNCTION public.recipe_post_public_body(p_body text, p_access_mode text)
 RETURNS text
 LANGUAGE sql
@@ -72,13 +72,13 @@ SET search_path = ''
 AS $function$
   SELECT CASE
     WHEN p_access_mode = 'paid'
-      AND lower(btrim(split_part(btrim(replace(p_body, E'\r\n', E'\n'), trim_set.chars), E'\n', 1), trim_set.chars))
+      AND lower(btrim(split_part(btrim(replace(p_body, E'\r\n', E'\n'), trim_set.chars), E'\n', 1), trim_set.chars) COLLATE pg_catalog."C")
         = 'saved generation setup'
     THEN NULL
     ELSE p_body
   END
   FROM (
-    SELECT E' \t\n\u000b\f\r                 　﻿'::text AS chars
+    SELECT E' \t\n\u000b\f\r\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'::text AS chars
   ) AS trim_set;
 $function$;
 
@@ -181,9 +181,8 @@ CREATE OR REPLACE TRIGGER post_resource_bundles_refresh_marketplace_search_updat
 
 -- ─── The listing ─────────────────────────────────────────────────────────────
 --
--- As 20260809210000 made it, but for two lines of `listable`: a recipe on an
--- NSFW-labelled post is not listable, and the quality gate reads the post's
--- caption as public reads show it.
+-- As 20260809210000 made it, but for one line of `listable`: a recipe on an
+-- NSFW-labelled post is not listable.
 CREATE OR REPLACE FUNCTION public.refresh_marketplace_bundle_listings(
   p_bundle_ids uuid[] DEFAULT NULL
 )
@@ -253,7 +252,7 @@ AS $function$
         bundles.price_usd_cents,
         bundles.access_mode,
         posts.title,
-        public.recipe_post_public_body(posts.body, bundles.access_mode),
+        posts.body,
         posts.visibility,
         posts.archived_at,
         posts.review_status,
@@ -346,9 +345,19 @@ CREATE OR REPLACE TRIGGER posts_refresh_marketplace_listing
   )
   EXECUTE FUNCTION public.trg_refresh_marketplace_listing_for_post();
 
--- Re-project every listing and document. Only the rows whose values change are
--- written.
-SELECT public.refresh_marketplace_bundle_listings(NULL);
-SELECT public.refresh_marketplace_bundle_search_documents(NULL);
+-- Re-project the rows these rules can change: the listings of recipes on
+-- NSFW-labelled posts and the documents of paid recipes. Only the rows whose
+-- values change are written.
+SELECT public.refresh_marketplace_bundle_listings(ARRAY(
+  SELECT bundles.id
+  FROM public.post_resource_bundles AS bundles
+  JOIN public.posts AS posts ON posts.id = bundles.post_id
+  WHERE posts.is_nsfw
+));
+SELECT public.refresh_marketplace_bundle_search_documents(ARRAY(
+  SELECT bundles.id
+  FROM public.post_resource_bundles AS bundles
+  WHERE bundles.access_mode = 'paid'
+));
 
 COMMIT;
