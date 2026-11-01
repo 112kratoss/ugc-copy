@@ -1,18 +1,14 @@
 import { themes, type ColorScheme } from './theme';
 
 /**
- * The launch sting: a 1.5 s clip that takes over from the native splash the
- * moment JavaScript runs (components/launch-splash.tsx). A launch screen cannot
- * play video — iOS draws a static storyboard and Android 12 allows only a short
- * animated icon — so the clip is an overlay on the same ground, in the same
- * square, starting on the same picture: its first frame and its last half
- * second are splash-icon.png exactly, and the hand-over cannot be seen. The
+ * The launch sting: a clip of a little over a second that takes over from the
+ * native splash the moment JavaScript runs (components/launch-splash.tsx). A
+ * launch screen cannot play video — iOS draws a static storyboard and Android
+ * 12 allows only a short animated icon — so the clip is an overlay on the same
+ * ground, in the same square, starting on the same picture: its first frame and
+ * its last are splash-icon.png exactly, and the hand-over cannot be seen. The
  * clips come from scripts/make-splash-sting.mjs; run it again whenever the
  * splash image or a splash colour changes.
- *
- * The overlay also covers the app until its first screen is decided. That used
- * to happen in the open: a fresh install drew Home for about 0.65 s before
- * onboarding faded in over it.
  *
  * Pure on purpose, like the view-model modules: no React Native here, so the
  * rules are tested without rendering.
@@ -37,19 +33,23 @@ export function launchSplashIconSize(platform: string, screen: { width: number; 
   return platform === 'android' ? ANDROID_SPLASH_ICON_DP : Math.min(screen.width, screen.height);
 }
 
-/** waiting: the still is up, nothing played yet. skipped: Reduce Motion, no clip, or the clip failed to start. */
+/** waiting: the still is up, nothing played yet. skipped: Reduce Motion, or a clip that failed or gave out. */
 export type LaunchClip = 'waiting' | 'playing' | 'ended' | 'skipped';
 
 /** The native splash comes down this long after mount even if the still never reports itself drawn. */
 export const LAUNCH_STILL_FALLBACK_MS = 1_000;
-/** How long the clip may take to draw its first frame before the still stands in for it. */
-export const LAUNCH_CLIP_START_TIMEOUT_MS = 1_200;
+/**
+ * A clip still playing this long after it was asked to gives way to the still
+ * it ends on: it never started, it stalled, or the app was put away mid-clip
+ * (expo-video pauses a player in the background and never resumes it).
+ */
+export const LAUNCH_CLIP_DEADLINE_MS = 2_500;
 /** The overlay never outstays this, whatever is still loading underneath it. */
 export const LAUNCH_SPLASH_MAX_MS = 6_000;
 
 export type LaunchRevealInput = {
   clip: LaunchClip;
-  /** StartupCoordinator has decided the first screen (and replaced to it if it had to). */
+  /** StartupCoordinator's first screen is on screen: nothing had to move, or its redirect has landed. */
   routeSettled: boolean;
   /** Fonts and the stored appearance are in, as the native splash used to wait for. */
   shellReady: boolean;
@@ -83,7 +83,7 @@ export function isLaunchRouteSettled() {
   return routeSettled;
 }
 
-/** Called by StartupCoordinator once the first screen is decided. */
+/** Called by StartupCoordinator once the first screen is on screen. */
 export function markLaunchRouteSettled() {
   if (routeSettled) return;
   routeSettled = true;
@@ -91,9 +91,9 @@ export function markLaunchRouteSettled() {
 }
 
 /**
- * Whether the launch overlay is still over the app. The onboarding route reads
- * it when a fresh install is sent there: under the overlay its fade would only
- * hold Home on screen beneath it, so it arrives without one.
+ * Whether the launch splash is still over the app. Once it has gone it stays
+ * gone for the runtime: a root remounted after an error, or an activity made
+ * again in a live process, does not play it a second time.
  */
 export function isLaunchSplashCovering() {
   return covering;

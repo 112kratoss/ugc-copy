@@ -14,22 +14,29 @@ function progress(entries: [StartupMilestone, string][]) {
   return { passed: new Map(entries) };
 }
 
+const lifted: [StartupMilestone, string] = ['launch-splash-lifted', '/'];
+
 describe('isStartupInteractive', () => {
   it('is never interactive before the session is restored', () => {
     // Home is still covered by StartupCoordinator, even with a feed in hand
     // (a persisted page can arrive before auth does).
-    expect(isStartupInteractive(progress([['home-content', '/']]))).toBe(false);
+    expect(isStartupInteractive(progress([lifted, ['home-content', '/']]))).toBe(false);
     expect(isStartupInteractive(progress([]))).toBe(false);
   });
 
+  it('is never interactive while the launch splash still covers the app', () => {
+    expect(isStartupInteractive(progress([['shell-ready', '/'], ['home-content', '/']]))).toBe(false);
+    expect(isStartupInteractive(progress([['shell-ready', '/post/7f3a']]))).toBe(false);
+  });
+
   it('holds a home launch until the feed settles, on posts or on a state to act on', () => {
-    expect(isStartupInteractive(progress([['shell-ready', '/']]))).toBe(false);
-    expect(isStartupInteractive(progress([['shell-ready', '/'], ['home-content', '/']]))).toBe(true);
-    expect(isStartupInteractive(progress([['shell-ready', '/'], ['home-empty-or-error', '/']]))).toBe(true);
+    expect(isStartupInteractive(progress([lifted, ['shell-ready', '/']]))).toBe(false);
+    expect(isStartupInteractive(progress([lifted, ['shell-ready', '/'], ['home-content', '/']]))).toBe(true);
+    expect(isStartupInteractive(progress([lifted, ['shell-ready', '/'], ['home-empty-or-error', '/']]))).toBe(true);
   });
 
   it('ends a launch that landed on another screen with the shell', () => {
-    expect(isStartupInteractive(progress([['shell-ready', '/post/7f3a']]))).toBe(true);
+    expect(isStartupInteractive(progress([lifted, ['shell-ready', '/post/7f3a']]))).toBe(true);
   });
 });
 
@@ -40,6 +47,7 @@ describe('reportStartupMilestone', () => {
   });
 
   it('marks a home launch when its feed settles, attributed to the route it landed on', () => {
+    reportStartupMilestone({ milestone: 'launch-splash-lifted', pathname: '/' });
     reportStartupMilestone({ milestone: 'shell-ready', pathname: '/' });
     expect(appMetrics.markInteractive).not.toHaveBeenCalled();
 
@@ -50,7 +58,20 @@ describe('reportStartupMilestone', () => {
     });
   });
 
+  it('marks it when the launch splash lifts, if everything else came first', () => {
+    reportStartupMilestone({ milestone: 'shell-ready', pathname: '/' });
+    reportStartupMilestone({ milestone: 'home-content', pathname: '/' });
+    expect(appMetrics.markInteractive).not.toHaveBeenCalled();
+
+    reportStartupMilestone({ milestone: 'launch-splash-lifted', pathname: '/' });
+    expect(appMetrics.markInteractive).toHaveBeenCalledExactlyOnceWith({
+      routeName: '/',
+      params: { completedBy: 'launch-splash-lifted' },
+    });
+  });
+
   it('does not depend on the order milestones arrive in', () => {
+    reportStartupMilestone({ milestone: 'launch-splash-lifted', pathname: '/' });
     reportStartupMilestone({ milestone: 'home-content', pathname: '/' });
     expect(appMetrics.markInteractive).not.toHaveBeenCalled();
 
@@ -62,6 +83,7 @@ describe('reportStartupMilestone', () => {
   });
 
   it('carries where the home feed came from, even when its posts arrive before the shell', () => {
+    reportStartupMilestone({ milestone: 'launch-splash-lifted', pathname: '/' });
     reportStartupMilestone({ milestone: 'home-content', pathname: '/', details: { feedSource: 'persisted' } });
     reportStartupMilestone({ milestone: 'shell-ready', pathname: '/' });
 
@@ -72,6 +94,7 @@ describe('reportStartupMilestone', () => {
   });
 
   it('marks a launch once, however many milestones follow', () => {
+    reportStartupMilestone({ milestone: 'launch-splash-lifted', pathname: '/showcase/12' });
     reportStartupMilestone({ milestone: 'shell-ready', pathname: '/showcase/12' });
     reportStartupMilestone({ milestone: 'home-content', pathname: '/' });
 
@@ -85,6 +108,7 @@ describe('reportStartupMilestone', () => {
     // StartupCoordinator re-reports as the pathname changes, and the onboarding
     // redirect lands right after hydration — while home, which never gets to
     // settle its feed, is torn down.
+    reportStartupMilestone({ milestone: 'launch-splash-lifted', pathname: '/onboarding' });
     reportStartupMilestone({ milestone: 'shell-ready', pathname: '/' });
     reportStartupMilestone({ milestone: 'shell-ready', pathname: '/onboarding' });
 
@@ -97,6 +121,7 @@ describe('reportStartupMilestone', () => {
     });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
+    reportStartupMilestone({ milestone: 'launch-splash-lifted', pathname: '/help' });
     expect(() => reportStartupMilestone({ milestone: 'shell-ready', pathname: '/help' })).not.toThrow();
     expect(warn).toHaveBeenCalledOnce();
     warn.mockRestore();

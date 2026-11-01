@@ -1,15 +1,18 @@
 import { Image } from 'expo-image';
+import { usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { Animated, Easing, Platform, StyleSheet, useColorScheme, useWindowDimensions, View } from 'react-native';
+import { Animated, Appearance, Easing, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { releaseNativeAppearance } from '@/lib/appearance';
+import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import {
   endLaunchSplash,
   isLaunchRouteSettled,
-  LAUNCH_CLIP_START_TIMEOUT_MS,
+  isLaunchSplashCovering,
+  LAUNCH_CLIP_DEADLINE_MS,
   LAUNCH_SPLASH_MAX_MS,
   LAUNCH_STILL_FALLBACK_MS,
   launchSplashGround,
@@ -18,61 +21,104 @@ import {
   subscribeLaunchSplash,
   type LaunchClip,
 } from '@/lib/launch-splash';
-import { useReducedMotion } from '@/lib/motion';
+import { useReducedMotionAnswer } from '@/lib/motion';
+import { reportStartupMilestone } from '@/lib/startup-interactive';
+import { useNavigationBarSurface } from '@/lib/system-bars';
+import type { ColorScheme } from '@/lib/theme';
 
 import splashIcon from '../assets/images/splash-icon.png';
 import stingDark from '../assets/video/splash-sting-dark.mp4';
 import stingLight from '../assets/video/splash-sting-light.mp4';
 
 const FADE_OUT_MS = 220;
+/** An answer to "is Reduce Motion on?" slower than this is taken as no. */
+const MOTION_READ_FALLBACK_MS = 500;
+
+function hideNativeSplash() {
+  void SplashScreen.hideAsync().catch(() => undefined);
+}
 
 /**
- * Then, with the native splash gone, a stored Appearance choice may reach the
- * native layer: any earlier, it redraws the native splash in that scheme.
+ * The phone's scheme, read once: the native splash is drawn in it, and a choice
+ * under Settings → Appearance reaches the native layer only as this overlay
+ * leaves (lib/appearance.ts), so nothing can move it before then.
  */
-function hideNativeSplash() {
-  void SplashScreen.hideAsync().catch(() => undefined).finally(releaseNativeAppearance);
+function readPhoneScheme(): ColorScheme {
+  return Appearance.getColorScheme() === 'dark' ? 'dark' : 'light';
+}
+
+type MotionPreference = 'unknown' | 'full' | 'reduced';
+
+/**
+ * Reduce Motion as an answer, not a stand-in: `useReducedMotion()` reads "no"
+ * until the platform replies, and a still already in the image cache can be
+ * drawn before it does, which would start the clip for someone who asked for
+ * none. No reply in MOTION_READ_FALLBACK_MS is taken as no.
+ */
+function useLaunchMotion(): MotionPreference {
+  const answer = useReducedMotionAnswer();
+  const [gaveUp, setGaveUp] = useState(false);
+  useEffect(() => {
+    if (answer !== null) return;
+    const fallback = setTimeout(() => setGaveUp(true), MOTION_READ_FALLBACK_MS);
+    return () => clearTimeout(fallback);
+  }, [answer]);
+  if (answer === null) return gaveUp ? 'full' : 'unknown';
+  return answer ? 'reduced' : 'full';
 }
 
 /**
  * The launch sting over the app's first moments (lib/launch-splash.ts has the
- * rules). Drawn last in the root layout, so it sits above every screen.
+ * rules). Rendered last in the root layout, outside the app's own views, so it
+ * sits above everything, StartupCoordinator's cover included.
  */
 export function LaunchSplash({ shellReady }: { shellReady: boolean }) {
-  return Platform.OS === 'ios' || Platform.OS === 'android'
-    ? <LaunchSting shellReady={shellReady} />
-    : <NoLaunchSting />;
+  const covering = useSyncExternalStore(subscribeLaunchSplash, isLaunchSplashCovering, isLaunchSplashCovering);
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') return <NoLaunchSting />;
+  // Unmounted once it has gone, which releases its player: a hardware decoder
+  // held for the session would be one the feed's previews cannot have.
+  return covering ? <LaunchSting shellReady={shellReady} /> : null;
 }
 
 /** Elsewhere there is no native splash to continue: let go at once. */
 function NoLaunchSting() {
+  const pathname = usePathname();
   useEffect(() => {
     hideNativeSplash();
+    releaseNativeAppearance();
+    reportStartupMilestone({ milestone: 'launch-splash-lifted', pathname });
     endLaunchSplash();
-  }, []);
+  }, [pathname]);
   return null;
 }
 
+/**
+ * The overlay's say over the status bar and Android's navigation bar, in its
+ * own scheme rather than the app's. Each goes to the claim mounted last, so
+ * this mounts a commit after the root's, and again for every route the app
+ * moves to beneath it (it is keyed on the path), after that screen's claims.
+ */
+function LaunchSystemBars({ scheme }: { scheme: ColorScheme }) {
+  useNavigationBarSurface(scheme);
+  return <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />;
+}
+
 function LaunchSting({ shellReady }: { shellReady: boolean }) {
-  // The native splash is drawn in the window's scheme: the phone's, since a
-  // choice under Settings → Appearance waits for it to go (lib/appearance.ts).
-  // The overlay follows the same reading until it takes over, and then holds
-  // it: from there the choice belongs to the app beneath, which the overlay
-  // fades into.
-  const nativeScheme = useColorScheme() === 'dark' ? 'dark' : 'light';
-  const [heldScheme, setHeldScheme] = useState<'light' | 'dark' | null>(null);
-  const scheme = heldScheme ?? nativeScheme;
-  const [opacity] = useState(() => new Animated.Value(1));
-  const reducedMotion = useReducedMotion();
+  const [scheme] = useState(readPhoneScheme);
+  const [opacity] = useState(() => new Animated.Value(1, { useNativeDriver: true }));
+  const motion = useLaunchMotion();
+  const pathname = usePathname();
   const iconSize = launchSplashIconSize(Platform.OS, useWindowDimensions());
   const routeSettled = useSyncExternalStore(subscribeLaunchSplash, isLaunchRouteSettled, isLaunchRouteSettled);
   const [stillDrawn, setStillDrawn] = useState(false);
   const [clip, setClip] = useState<LaunchClip>('waiting');
-  const [clipDrawn, setClipDrawn] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
-  const [gone, setGone] = useState(false);
+  const [barsClaimed, setBarsClaimed] = useState(false);
+  const reveal = shouldRevealApp({ clip, routeSettled, shellReady, timedOut });
 
-  const player = useVideoPlayer(scheme === 'dark' ? stingDark : stingLight, (instance) => {
+  // Under Reduce Motion the clip's player is let go as soon as that is known.
+  const source = motion === 'reduced' ? null : scheme === 'dark' ? stingDark : stingLight;
+  const player = useVideoPlayer(source, (instance) => {
     instance.loop = false;
     instance.muted = true;
     instance.volume = 0;
@@ -83,39 +129,44 @@ function LaunchSting({ shellReady }: { shellReady: boolean }) {
     instance.audioMixingMode = 'auto';
   });
 
+  useEffect(() => {
+    setBarsClaimed(true);
+  }, []);
+
   // The native splash comes down once the still has taken its place, pixel for
   // pixel. A still that never reports itself drawn must not hold it up.
   useEffect(() => {
     if (stillDrawn) {
-      setHeldScheme((held) => held ?? nativeScheme);
       hideNativeSplash();
       return;
     }
     const fallback = setTimeout(() => setStillDrawn(true), LAUNCH_STILL_FALLBACK_MS);
     return () => clearTimeout(fallback);
-  }, [nativeScheme, stillDrawn]);
+  }, [stillDrawn]);
 
-  // Then the clip plays over the still, which is its own first frame.
+  // Then the clip plays over the still, which is its own first frame, unless
+  // the overlay is already leaving: timers held back in the background fire
+  // together on return, so the cap can land before the clip has started.
   useEffect(() => {
-    if (!stillDrawn || clip !== 'waiting') return;
-    if (reducedMotion) {
+    if (reveal || !stillDrawn || clip !== 'waiting' || motion === 'unknown') return;
+    if (motion === 'reduced') {
       setClip('skipped');
       return;
     }
     player.play();
     setClip('playing');
-  }, [clip, player, reducedMotion, stillDrawn]);
+  }, [clip, motion, player, reveal, stillDrawn]);
 
-  // A clip that has not drawn its first frame soon after being asked to play
-  // gives way to the still; it must not start late, mid-fade.
+  // A clip that has not finished well after its length gives way to the still
+  // it ends on (LAUNCH_CLIP_DEADLINE_MS says when that happens).
   useEffect(() => {
-    if (clip !== 'playing' || clipDrawn) return;
-    const timer = setTimeout(() => {
+    if (clip !== 'playing') return;
+    const deadline = setTimeout(() => {
       player.pause();
       setClip('skipped');
-    }, LAUNCH_CLIP_START_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [clip, clipDrawn, player]);
+    }, LAUNCH_CLIP_DEADLINE_MS);
+    return () => clearTimeout(deadline);
+  }, [clip, player]);
 
   useEffect(() => {
     const ended = player.addListener('playToEnd', () => setClip('ended'));
@@ -133,23 +184,24 @@ function LaunchSting({ shellReady }: { shellReady: boolean }) {
     return () => clearTimeout(timer);
   }, []);
 
-  const reveal = shouldRevealApp({ clip, routeSettled, shellReady, timedOut });
+  const fadeMs = motion === 'reduced' ? 0 : FADE_OUT_MS;
   useEffect(() => {
     if (!reveal) return;
-    hideNativeSplash();
+    // The native splash went long since, so a stored Appearance choice may
+    // reach the native layer now (lib/appearance.ts).
+    releaseNativeAppearance();
     Animated.timing(opacity, {
       toValue: 0,
-      duration: reducedMotion ? 0 : FADE_OUT_MS,
+      duration: fadeMs,
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
-    }).start(() => setGone(true));
-  }, [opacity, reducedMotion, reveal]);
-
-  useEffect(() => {
-    if (gone) endLaunchSplash();
-  }, [gone]);
-
-  if (gone) return null;
+    }).start(() => {
+      reportStartupMilestone({ milestone: 'launch-splash-lifted', pathname });
+      endLaunchSplash();
+    });
+    // `pathname` only labels the milestone; the fade must not restart for it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fadeMs, opacity, reveal]);
 
   return (
     <Animated.View
@@ -158,7 +210,7 @@ function LaunchSting({ shellReady }: { shellReady: boolean }) {
       pointerEvents={reveal ? 'none' : 'auto'}
       style={[StyleSheet.absoluteFill, styles.overlay, { backgroundColor: launchSplashGround(scheme), opacity }]}
     >
-      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+      {barsClaimed ? <LaunchSystemBars key={pathname} scheme={scheme} /> : null}
       {/* Centred on the whole screen, as the native splash centres it: the
           root view reaches under the system bars on both platforms. */}
       <View style={{ width: iconSize, height: iconSize }}>
@@ -169,23 +221,14 @@ function LaunchSting({ shellReady }: { shellReady: boolean }) {
           onDisplay={() => setStillDrawn(true)}
           style={StyleSheet.absoluteFill}
         />
-        {/* Gone once the clip is: its last half-second is the still beneath
-            it, and on Android a video surface does not fade with its parent
-            — left in, it flashed black over the app as the overlay faded. */}
-        {clip === 'waiting' || clip === 'playing' ? (
+        {/* Only while the clip runs and the overlay stays: its ends are the
+            still beneath it, and on Android a video surface does not fade
+            with its parent — left in, it flashed black over the app. */}
+        {(clip === 'waiting' || clip === 'playing') && !reveal ? (
           <VideoView
+            {...FEED_VIDEO_VIEW_PROPS}
             player={player}
             contentFit="contain"
-            nativeControls={false}
-            allowsPictureInPicture={false}
-            startsPictureInPictureAutomatically={false}
-            allowsVideoFrameAnalysis={false}
-            fullscreenOptions={{ enable: false }}
-            // Android: a texture view keeps the still visible until the first
-            // frame, where a surface view and ExoPlayer's shutter draw black.
-            surfaceType="textureView"
-            useExoShutter={false}
-            onFirstFrameRender={() => setClipDrawn(true)}
             pointerEvents="none"
             style={[StyleSheet.absoluteFill, styles.clip]}
           />

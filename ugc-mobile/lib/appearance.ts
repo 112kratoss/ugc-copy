@@ -78,11 +78,13 @@ let preference: AppearancePreference = 'system';
 let systemScheme: ColorScheme = readSystemScheme();
 let resolvedScheme: ColorScheme = resolveColorScheme(preference, systemScheme, available);
 let hydration: Promise<void> | null = null;
-// A choice reaches the native layer only once the launch splash has taken over
-// from the native one (components/launch-splash.tsx). Applied any earlier it
-// redraws the native splash in that scheme mid-launch: a light phone's splash
-// snapped black under an app set to Dark. The JavaScript scheme resolves at
-// once either way, so the app beneath the launch splash is drawn in the choice.
+// A choice reaches the native layer only as the launch splash leaves
+// (components/launch-splash.tsx). Applied any earlier it redraws the native
+// splash in that scheme mid-launch: a light phone's splash snapped black under
+// an app set to Dark. `hideAsync()` settles when the hide is asked for, not
+// when the splash has gone, so the overlay's exit is the moment that is safe.
+// The JavaScript scheme resolves at once either way, so the app beneath the
+// launch splash is drawn in the choice.
 let nativeHeld = true;
 let nativeSubscriptions: Array<{ remove: () => void }> = [];
 const listeners = new Set<() => void>();
@@ -106,7 +108,7 @@ function recompute(preferenceChanged = false) {
  * dark: there the app must not move at all.
  */
 function applyNativePreference(next: AppearancePreference) {
-  if (!available) return;
+  if (!available || nativeHeld) return;
   try {
     Appearance.setColorScheme(next === 'system' ? 'unspecified' : next);
   } catch {
@@ -182,14 +184,17 @@ export function hydrateAppearancePreference() {
     .then((raw) => {
       if (!available || !isAppearancePreference(raw) || raw === preference) return;
       preference = raw;
-      if (!nativeHeld) applyNativePreference(raw);
+      applyNativePreference(raw);
       recompute(true);
     })
     .catch(() => undefined);
   return hydration;
 }
 
-/** Called once the native splash is down: the choice reaches the keyboard, alerts and system chrome. */
+/**
+ * Called as the launch splash leaves, long after the native splash went: the
+ * choice reaches the keyboard, alerts and system chrome.
+ */
 export function releaseNativeAppearance() {
   if (!nativeHeld) return;
   nativeHeld = false;
@@ -205,7 +210,7 @@ export function releaseNativeAppearance() {
 export function setAppearancePreference(next: AppearancePreference) {
   if (!available || next === preference) return;
   preference = next;
-  if (!nativeHeld) applyNativePreference(next);
+  applyNativePreference(next);
   recompute(true);
   void AsyncStorage.setItem(STORAGE_KEY, next).catch(() => undefined);
 }

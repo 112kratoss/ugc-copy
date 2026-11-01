@@ -102,6 +102,34 @@ describe('motion hooks', () => {
     });
   });
 
+  it.each([true, false])(
+    'answers null until the platform has replied, then its answer (%s), even one equal to the stand-in',
+    async (reduced) => {
+      // A fresh store: the answer is process state.
+      vi.resetModules();
+      const { useReducedMotionAnswer } = await import('../lib/motion');
+      nativeState.reduceMotion = reduced;
+      const seen: Array<boolean | null> = [];
+      function AnswerProbe() {
+        seen.push(useReducedMotionAnswer());
+        return null;
+      }
+
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<AnswerProbe />);
+      });
+      expect(seen[0]).toBeNull();
+
+      await renderer.act(async () => {});
+      expect(seen.at(-1)).toBe(reduced);
+
+      renderer.act(() => {
+        tree!.unmount();
+      });
+    },
+  );
+
   it('shares one native reduced-motion subscription across consumers', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {

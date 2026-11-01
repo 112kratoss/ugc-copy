@@ -138,6 +138,18 @@ describe('video player cache coverage', () => {
     expect(still).toMatch(/finally \{[^}]*player\.release\(\);\s*\}/);
   });
 
+  it("holds the launch sting's uncached player to the two things its exemption rests on", () => {
+    const sting = stripComments(readFileSync(path.join(mobileRoot, 'components/launch-splash.tsx'), 'utf8'));
+    // It never loops, so Android never queues the clip behind itself.
+    expect(sting).toContain('instance.loop = false;');
+    expect(sting).not.toMatch(/\.loop = true/);
+    // And every clip it plays is bundled with the app, read from its own files.
+    const sources = [...sting.matchAll(/^import \w+ from '([^']+\.mp4)';$/gm)].map((match) => match[1]);
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.every((source) => source.startsWith('../assets/video/'))).toBe(true);
+    expect(sting).not.toMatch(/uri:/);
+  });
+
   it('keeps no exemption for a file that no longer makes a player', () => {
     const stale = Object.keys(EXEMPT).filter((file) => !players.some((entry) => entry.file === file));
     expect(stale).toEqual([]);

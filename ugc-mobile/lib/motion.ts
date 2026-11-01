@@ -38,6 +38,9 @@ type ReducedMotionSubscription = { remove?: () => void } | undefined;
 
 const reducedMotionSubscribers = new Set<() => void>();
 let reducedMotionSnapshot = false;
+// Whether the platform has answered yet: until it does, the snapshot's `false`
+// is a stand-in, not an answer.
+let reducedMotionAnswered = false;
 let reducedMotionSubscription: ReducedMotionSubscription;
 let reducedMotionStoreActive = false;
 let reducedMotionReadVersion = 0;
@@ -48,7 +51,9 @@ function createValue(initialValue: number) {
 }
 
 function publishReducedMotion(enabled: boolean) {
-  if (reducedMotionSnapshot === enabled) return;
+  const firstAnswer = !reducedMotionAnswered;
+  reducedMotionAnswered = true;
+  if (reducedMotionSnapshot === enabled && !firstAnswer) return;
 
   reducedMotionSnapshot = enabled;
   reducedMotionSubscribers.forEach((notify) => notify());
@@ -109,6 +114,19 @@ export function useReducedMotion() {
     getReducedMotionSnapshot,
     getReducedMotionSnapshot,
   );
+}
+
+function getReducedMotionAnswer() {
+  return reducedMotionAnswered ? reducedMotionSnapshot : null;
+}
+
+/**
+ * The same preference, or `null` until the platform has answered. For a
+ * decision that cannot be taken back, such as starting the launch clip: a
+ * still drawn from the image cache can come before the answer does.
+ */
+export function useReducedMotionAnswer(): boolean | null {
+  return useSyncExternalStore(subscribeToReducedMotion, getReducedMotionAnswer, getReducedMotionAnswer);
 }
 
 /**

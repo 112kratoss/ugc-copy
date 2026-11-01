@@ -1,10 +1,12 @@
 // Makes the launch sting (components/launch-splash.tsx): the booklet breathes,
 // its star pops with a warm glow and throws a burst of sparkles, the little
 // ring pulses, and everything settles back to the exact splash picture. The
-// first frame and the last half-second are the still splash (splash-icon.png
-// on the splash colour), so the native splash can hand over to the clip, and
-// the clip to the still beneath it, with no visible jump. Needs only Node and
-// ffmpeg. Run it again whenever splash-icon.png or a splash colour changes:
+// first frame and the last are the still splash (splash-icon.png on the splash
+// colour), so the native splash can hand over to the clip, and the clip to the
+// still beneath it, with no visible jump. It ends as soon as the motion does:
+// any longer only holds a still in front of an app that is ready. Needs only
+// Node and ffmpeg. Run it again whenever splash-icon.png or a splash colour
+// changes:
 //
 //   node scripts/make-splash-sting.mjs assets/images/splash-icon.png assets/video/splash-sting-light.mp4 '#fbf8f4'
 //   node scripts/make-splash-sting.mjs assets/images/splash-icon.png assets/video/splash-sting-dark.mp4 '#000000'
@@ -16,7 +18,8 @@ import path from 'node:path';
 const [src, out, bgHex = '#fbf8f4', sizeArg = '960', flag, list] = process.argv.slice(2);
 const S0 = 640;                    // the icon's canvas
 const SIZE = Number(sizeArg);      // output square
-const FPS = 60, DUR = 1.5, N = Math.round(FPS * DUR);
+// The last motion (a sparkle's fade) ends at 1.11 s; the clip ends just after.
+const FPS = 60, DUR = 1.15, N = Math.round(FPS * DUR);
 const TAU = Math.PI * 2;
 const bg = [1, 3, 5].map((k) => parseInt(bgHex.slice(k, k + 2), 16) / 255);
 

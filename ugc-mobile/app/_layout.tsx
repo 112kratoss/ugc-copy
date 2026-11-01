@@ -49,7 +49,7 @@ import { readPlaybackDevice, readPlaybackNetwork } from '@/lib/playback-device';
 import { setPlaybackMetricsReporter } from '@/lib/playback-metrics';
 import { hasAppleZoomParam } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
-import { isLaunchSplashCovering, markLaunchRouteSettled } from '@/lib/launch-splash';
+import { markLaunchRouteSettled } from '@/lib/launch-splash';
 import { isReelBackdropShown, subscribeToReelBackdrop } from '@/lib/reel-backdrop';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
@@ -59,7 +59,14 @@ import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/med
 import { preloadPersistedAccountState } from '@/lib/persisted-account-state';
 import { restorePersistedHomeFeed } from '@/lib/persisted-home-feed';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
-import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
+import {
+  isOnboardingRedirectDue,
+  ONBOARDING_LAUNCH_ENTRY,
+  onboardingAnimation,
+  STARTUP_REDIRECT_FALLBACK_MS,
+  STARTUP_VERSION_CHECK_FALLBACK_MS,
+  type StartupVersionCheckStatus,
+} from '@/lib/startup-readiness';
 import { hydrateAiDataConsent } from '@/lib/ai-data-consent';
 import { hydrateContentPolicy } from '@/lib/content-policy';
 import { hydrateAppearancePreference, useResolvedColorScheme } from '@/lib/appearance';
@@ -84,6 +91,14 @@ export const unstable_settings = {
 // stays up until components/launch-splash.tsx has drawn its own first frame.
 const FONT_SPLASH_FALLBACK_MS = 1200;
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
+// Android fades the native splash out over 400 ms by default, and iOS cuts.
+// The launch splash draws the same picture beneath it and then moves, so the
+// hand-over has to be a cut on both, or the clip plays under a ghost of it.
+try {
+  SplashScreen.setOptions({ duration: 0, fade: false });
+} catch {
+  // A native module without setOptions keeps its own exit.
+}
 
 /** A post's rail, caption and controls, drawn in the window it grows in (`ZoomStill.post`). */
 function renderZoomPost(post: ImmersivePreviewItem) {
@@ -141,8 +156,8 @@ AppState.addEventListener('change', (state) => {
 });
 
 // The saved Settings → Appearance choice is read while the splash is still up
-// (the layout holds the splash on it beside the fonts), so an app set to Light
-// on a dark phone never shows a dark first frame.
+// (the launch splash holds the app back on it beside the fonts), so an app set
+// to Light on a dark phone never shows a dark first frame.
 const appearanceHydration = hydrateAppearancePreference();
 
 // Read at launch, so a person who has already allowed AI data sharing gets no
@@ -222,9 +237,10 @@ function RootLayoutNav() {
   }, [fontsLoaded]);
 
   useEffect(() => {
+    if (fontsLoaded || fontError) return;
     const fallback = setTimeout(() => setFontWaitOver(true), FONT_SPLASH_FALLBACK_MS);
     return () => clearTimeout(fallback);
-  }, []);
+  }, [fontError, fontsLoaded]);
 
   return (
     <ThemeScope scheme={scheme}>
@@ -277,15 +293,15 @@ function RootLayoutNav() {
                 }}
               >
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                {/* A fresh install is sent here under the launch splash, where
-                    a fade would only keep Home drawn beneath it for the fade's
-                    length; read when the route is pushed. */}
+                {/* A fresh install is sent here from home at launch, where a
+                    fade would only show home beneath it: that entry carries
+                    its own param and arrives without one. */}
                 <Stack.Screen
                   name="onboarding"
-                  options={() => ({
+                  options={({ route }) => ({
                     headerShown: false,
                     gestureEnabled: false,
-                    animation: reducedMotion ? 'none' : isLaunchSplashCovering() ? 'none' : 'fade',
+                    animation: reducedMotion ? 'none' : onboardingAnimation(route.params),
                   })}
                 />
                 <Stack.Screen name="update-required" options={{ headerShown: false, gestureEnabled: false, animation: 'none' }} />
@@ -406,14 +422,15 @@ function RootLayoutNav() {
                   <MediaZoomFlightLayer renderPost={renderZoomPost} />
                 </ThemeScope>
                 <ZoomPostPreparer />
-                {/* Last, so above everything: the clip that continues the
-                    native splash, covering the app until its first screen is
-                    decided (lib/launch-splash.ts). */}
-                <LaunchSplash shellReady={shellReady} />
               </View>
               </GestureHandlerRootView>
             </ThemeProvider>
           </SafeAreaProvider>
+          {/* Last, and a sibling of the app rather than inside it, so it is
+              drawn above everything, StartupCoordinator's cover included: the
+              clip that continues the native splash, over the app until its
+              first screen is on screen (lib/launch-splash.ts). */}
+          <LaunchSplash shellReady={shellReady} />
         </OnboardingProvider>
       </AuthProvider>
       </LucideProvider>
@@ -477,23 +494,36 @@ function StartupCoordinator() {
     }
   }, [pathname, versionCheckStatus]);
 
+  const redirectDue = isOnboardingRedirectDue({
+    isHydrated,
+    isAuthLoading: isLoading,
+    hasUser: Boolean(user),
+    storageAvailable,
+    versionCheckStatus,
+    pathname,
+    onboardingStatus: state.status,
+  });
+  // A redirect that has not landed after STARTUP_REDIRECT_FALLBACK_MS stops
+  // holding the cover, so nothing can leave the screen blank.
+  const [redirectStalled, setRedirectStalled] = useState(false);
+  const holdingForRedirect = redirectDue && !redirectStalled;
+
   useEffect(() => {
     if (!isHydrated || isLoading) return;
-    if (
-      !user &&
-      storageAvailable &&
-      versionCheckStatus !== 'redirecting' &&
-      pathname === '/' &&
-      (state.status === 'not_started' || state.status === 'in_progress')
-    ) {
-      router.replace('/onboarding' as never);
+    if (holdingForRedirect) {
+      router.replace({ pathname: '/onboarding', params: { entry: ONBOARDING_LAUNCH_ENTRY } } as never);
+      const fallback = setTimeout(() => setRedirectStalled(true), STARTUP_REDIRECT_FALLBACK_MS);
+      return () => clearTimeout(fallback);
     }
-    // Either way the first screen is decided now, and the launch splash may
-    // leave once its clip has played.
+    // The first screen is on screen now: nothing had to move, or the redirect
+    // has landed (the path has left home). The launch splash may leave once
+    // its clip has played.
     markLaunchRouteSettled();
-  }, [isHydrated, isLoading, pathname, state.status, storageAvailable, user, versionCheckStatus]);
+  }, [holdingForRedirect, isHydrated, isLoading]);
 
-  if ((!isHydrated || isLoading) && pathname === '/') {
+  // Home stays covered until the redirect away from it has landed: dropped any
+  // sooner, home was drawn for a moment before onboarding came over it.
+  if (pathname === '/' && (!isHydrated || isLoading || holdingForRedirect)) {
     return <View pointerEvents="none" style={{ position: 'absolute', inset: 0, zIndex: 100, backgroundColor: theme.colors.background }} />;
   }
   return null;

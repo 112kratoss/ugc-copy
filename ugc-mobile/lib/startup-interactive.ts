@@ -13,6 +13,8 @@ import { AppMetrics } from 'expo-observe';
 export type StartupMilestone =
   /** Auth and onboarding restored: StartupCoordinator lifted its cover. */
   | 'shell-ready'
+  /** The launch splash has gone: nothing covers the app any more (components/launch-splash.tsx). */
+  | 'launch-splash-lifted'
   /** The home feed committed its first page of real posts — not a skeleton. */
   | 'home-content'
   /** The home feed settled with nothing to show: an error or an empty page. */
@@ -39,7 +41,8 @@ export type StartupProgress = {
  * A cold start is interactive once the screen it landed on can be used.
  *
  * Nothing is, before the session is restored: StartupCoordinator covers home
- * until then, and no screen can make an authenticated request. Home is a feed,
+ * until then, and no screen can make an authenticated request. Nor while the
+ * launch splash still covers the app and takes every touch. Home is a feed,
  * so it waits for the first page to settle — on posts, or on an empty or error
  * state the person can act on. Counting those keeps slow and failing networks
  * in the numbers rather than measuring only the launches that went well.
@@ -51,7 +54,7 @@ export type StartupProgress = {
  */
 export function isStartupInteractive({ passed }: StartupProgress): boolean {
   const landedOn = passed.get('shell-ready');
-  if (landedOn === undefined) return false;
+  if (landedOn === undefined || !passed.has('launch-splash-lifted')) return false;
   if (landedOn !== '/') return true;
   return passed.has('home-content') || passed.has('home-empty-or-error');
 }
