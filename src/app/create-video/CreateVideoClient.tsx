@@ -4,7 +4,6 @@ import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
 import { Sparkles, Loader2, X, ImagePlus, Video, Plus, Trash2, Volume2, Play } from 'lucide-react';
@@ -23,7 +22,6 @@ import {
     CreatorCanvasStage,
     CreatorColumnBar,
     CreatorColumnLayout,
-    CreatorFitNotice,
     CreatorInputsCard,
     CreatorLowBalanceNote,
     CreatorLowBalanceNotice,
@@ -47,14 +45,11 @@ import {
     CreatorUploadSlot,
     CreatorVisitorNote,
     CREATOR_VISITOR_CANVAS_HINT,
-    CREATOR_BAR_PRIMARY_CLASS,
-    CREATOR_NOTE_LINK_CLASS,
     aspectRatioMark,
     creatorAddButtonClass,
     creatorCanvasChip,
     creditsWords,
     describeRunFailure,
-    smallestCreditPackLabel,
 } from '@/components/CreatorColumn';
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import { useConfirmation } from '@/components/useConfirmation';
@@ -68,16 +63,11 @@ import { getAccentClasses, IconButton } from '@/components/DesignSystem';
 import { videoRunShortSummary, videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import {
     cheapestCost,
-    fitRemixToBalance,
-    longestLengthWithin,
     referenceKeepWords,
     samePriceForEach,
 } from '../../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
 import {
     fitVideoFormToModel,
-    sameVideoFormSettings,
-    takesSameVideoInputs,
-    videoLengthsBelow,
     videoRunInputTally,
     videoRunOnModel,
     type VideoFormHeld,
@@ -583,27 +573,6 @@ function makeImageInsteadHref(modelId: string, prompt: string): string {
     if (text && text.length <= PROMPT_IN_LINK_MAX) params.set('prompt', text);
     return `/create-image?${params.toString()}`;
 }
-
-/** The run a remix fitted to the balance opened on in its original's place. */
-type RemixFitted = { modelId: VideoModelId; settings: VideoFormSettings; cost: number; sameLength: boolean };
-
-/**
- * A remix fitted to the balance (owner, 2026-10-28): the original it came from and how far
- * the deciding has got. It is decided once, when the original's price first comes in:
- * pricing every model, then (when even the cheapest is short at its length) its shorter
- * lengths, then settled on the run it opened on, or on the original (`fitted` null).
- */
-type RemixFit = { original: { modelId: VideoModelId; settings: VideoFormSettings; cost: number; durationSeconds: number } } & (
-    | { stage: 'pricing' }
-    | {
-        stage: 'shortening';
-        /** The model whose shorter lengths are priced, at its fitted settings. */
-        shortenOn: { modelId: VideoModelId; settings: VideoFormSettings; belowSeconds: number };
-        /** The run to open when no shorter length fits, priced when it was decided. */
-        otherwise: RemixFitted | null;
-    }
-    | { stage: 'settled'; fitted: RemixFitted | null }
-);
 
 function PromptQualityWarnings({ warnings }: { warnings: PromptEnhancementWarning[] }) {
     if (warnings.length === 0) {
@@ -1371,7 +1340,6 @@ function VideoCreator({
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     // Open settings price each of their options; the bar says when they open and close.
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [remixFit, setRemixFit] = useState<RemixFit | null>(null);
     const modelCatalog = useWebGenerationModelCatalog({ kind: 'video', selectedIds: [selectedModel], pickerOpen: isModelDropdownOpen });
     const catalogDescriptor = modelCatalog.catalog?.models.find(item => item.id === selectedModel);
     const refetchModelCatalog = modelCatalog.refetch;
@@ -1976,7 +1944,6 @@ function VideoCreator({
         hasSound: currentSound,
         hasReferenceVideo: hasReferenceVideoForRun,
     });
-    const insufficientCredits = userCredits !== null && estimatedCost !== null && userCredits < estimatedCost;
     // The balance and price a refusal answers, read when it comes: that can be long after
     // the render that sent it (a replay on mount).
     const creditContextRef = useRef({ credits: userCredits, cost: estimatedCost });
@@ -1986,7 +1953,6 @@ function VideoCreator({
     const creditRefusalApplies = creditRefusal !== null
         && creditRefusal.credits === userCredits
         && creditRefusal.cost === estimatedCost;
-    const showTopUp = insufficientCredits || creditRefusalApplies;
 
     // The creator's lists priced (owner, 2026-10-28): every model at this run's settings, every
     // option of the settings, and what a balance short of every video can make instead. Read
@@ -2024,10 +1990,16 @@ function VideoCreator({
     }
     const affordCost = estimatedCost
         ?? (quoteState.status === 'pending' && lastCost?.modelId === selectedModel ? lastCost.cost : null);
-    // Every model is priced while the list is open, while a remix is fitted to the balance, and
-    // while the balance is short of this run, to tell a balance short of every video.
+    // Top up stands in Generate's place while the balance is short of this run, read from the
+    // held price as well, so a re-priced setting does not swap it out and back.
+    const showTopUp = (userCredits !== null && affordCost !== null && userCredits < affordCost) || creditRefusalApplies;
+    // Every model is priced while the list is open, and while the balance is short of this run,
+    // to tell a balance short of every video. A remix is not weighed against other models: it
+    // stays on its original's model and settings, and a short balance is offered a top-up
+    // (owner, 2026-11-01), never another model, nor an image in Generate's place.
     const balanceShort = !isVisitor && userCredits !== null && affordCost !== null && userCredits < affordCost;
-    const pricesModelList = isModelDropdownOpen || remixFit?.stage === 'pricing' || balanceShort;
+    const weighsOtherRuns = balanceShort && !remixId;
+    const pricesModelList = isModelDropdownOpen || weighsOtherRuns;
     const videoModelIdsKey = videoModelOptions.map((option) => option.id).join(',');
     const ensureModelDetails = modelCatalog.ensureDetails;
     useEffect(() => {
@@ -2075,27 +2047,17 @@ function VideoCreator({
             return run && slotsFilled(run.inputs) !== filled ? run.quoteInput : null;
         });
     }, [settingsOpen, quoteRequest, settingsAxes, modelCatalog.catalog?.revision, runInputs, currentMode, selectedModel, pageForm, formHeld]);
-    // While the balance is short of this run, the image models too, for a balance short of every video.
+    // While the balance is short of this run, the image models too: for a balance short of every
+    // video, and for what Posted offers next ("make an image or top up"), after a remix too.
     const imageRuns = useMemo(() => {
         const revision = modelCatalog.catalog?.revision;
         if (!balanceShort || !revision) return [];
         return Object.keys(IMAGE_MODELS).map((id) => catalogRunQuoteInput({ kind: 'image' as const, modelId: id, catalogRevision: revision, settings: {}, inputs: [] }));
     }, [balanceShort, modelCatalog.catalog?.revision]);
-    // A remix whose cheapest fitting model is short of the balance at its length: its shorter lengths.
-    const shortenRuns = useMemo(() => {
-        const revision = modelCatalog.catalog?.revision;
-        if (remixFit?.stage !== 'shortening' || !revision) return [];
-        const { modelId, settings, belowSeconds } = remixFit.shortenOn;
-        return videoLengthsBelow(modelId, belowSeconds).flatMap((duration) => {
-            const run = videoRunOnModel({ modelId, catalogRevision: revision, settings: { ...settings, duration }, held: formHeld });
-            return run ? [run] : [];
-        });
-    }, [remixFit, modelCatalog.catalog?.revision, formHeld]);
     const priceOf = useQuotePrices([
         ...[...modelRuns.values()].map((run) => run.quoteInput),
         ...variants.values(),
         ...imageRuns,
-        ...shortenRuns.map((run) => run.quoteInput),
     ]);
     // Every model's price is in: each model with details has its answer, and the rest are
     // missing, or will not load (a model whose details failed counts as unpriced).
@@ -2104,16 +2066,6 @@ function VideoCreator({
             || modelCatalog.missingIds.includes(id)
             || (modelRuns.has(id) ? priceOf(modelRuns.get(id)!.quoteInput).status !== 'pending' : Boolean(modelCatalog.error))
     ));
-    // A remix is fitted only on prices that are in: one not to be had now is asked again in
-    // half a minute (`useQuotePrices`), and the remix waits for it rather than settling on its original.
-    // The catalog's default video (Seedance 2 Mini) comes first (owner, 2026-10-28), so its price
-    // is waited for too: a model whose details failed counts as settled for the list, not here.
-    const preferredVideo = modelCatalog.catalog?.defaults.video ?? null;
-    const preferredRun = preferredVideo ? modelRuns.get(preferredVideo) : undefined;
-    const preferredPriced = !preferredVideo || preferredVideo === selectedModel || modelCatalog.missingIds.includes(preferredVideo)
-        || (preferredRun !== undefined && priceOf(preferredRun.quoteInput).status !== 'pending');
-    const remixPricesIn = modelListSettled && preferredPriced
-        && [...modelRuns.values()].every((run) => priceOf(run.quoteInput).status !== 'unavailable');
     const videoCosts = [affordCost, ...[...modelRuns.values()].map((run) => readyCost(priceOf(run.quoteInput)))];
     const videosFrom = cheapestCost(videoCosts);
     // Short of every video (owner, 2026-10-28): an image first, on the image model that costs least.
@@ -2123,7 +2075,7 @@ function VideoCreator({
         const name = (IMAGE_MODELS as Record<string, { displayName?: string } | undefined>)[run.modelId]?.displayName ?? run.modelId;
         return { modelId: run.modelId, name, cost };
     }, null);
-    const shortOfEveryVideo = balanceShort && userCredits !== null && modelListSettled && videosFrom !== null && userCredits < videosFrom;
+    const shortOfEveryVideo = weighsOtherRuns && userCredits !== null && modelListSettled && videosFrom !== null && userCredits < videosFrom;
     const offersImageInstead = shortOfEveryVideo && imageOffer !== null && imageOffer.cost <= (userCredits ?? 0);
     // An option's price in the settings, against the balance: "19", or "23 · +1" past it.
     const optionPrice = optionPricesOf(variants, priceOf, listBalance, isVisitor ? 'the free credits' : 'your balance');
@@ -2478,8 +2430,7 @@ function VideoCreator({
         : null;
 
     // A remix is loaded once: a refreshed session token (Supabase renews it about hourly)
-    // loaded it again and put the original's model and settings back over the creator's, a
-    // remix fitted to the balance included.
+    // loaded it again and put the original's model and settings back over the creator's.
     const loadedRemixRef = useRef<string | null>(null);
     useEffect(() => {
         if (!remixId) return;
@@ -4475,7 +4426,7 @@ function VideoCreator({
     };
 
 
-    // Puts the form on a model with these settings: the creator's pick, or a remix fitted to the balance.
+    // Puts the form on a model with these settings: the creator's pick from the list.
     const switchModel = (modelId: VideoModelId, settings: VideoFormSettings) => {
         const nextModel = VIDEO_MODELS[modelId];
 
@@ -4517,102 +4468,6 @@ function VideoCreator({
         setIsModelDropdownOpen(false);
         setModelSearchQuery('');
     };
-
-    // A remix opens fitted to the balance (owner, 2026-10-28), decided once, when the original's
-    // price first comes in: the original while the balance covers it, else the catalog's default
-    // video when it takes the same inputs and fits, else the cheapest model that does, at the
-    // same length when that fits (`fitRemixToBalance`).
-    const remixReadyToWeigh = Boolean(remixId) && !isRemixLoading && !isVisitor && userCredits !== null
-        && modelSettled && remixFit === null && quoteState.status === 'ready' && estimatedCost !== null;
-    useEffect(() => {
-        if (!remixReadyToWeigh || estimatedCost === null || userCredits === null) return;
-        const original = { modelId: selectedModel, settings: pageForm, cost: estimatedCost, durationSeconds: totalDuration };
-        setRemixFit(estimatedCost <= userCredits ? { original, stage: 'settled', fitted: null } : { original, stage: 'pricing' });
-    // Weighed once, from the render that first has the original's price.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remixReadyToWeigh]);
-    // While it is decided, a creator who moves off the original (picks a model, changes a
-    // setting) has chosen, and a balance that now covers the original needs no fitting:
-    // either settles it where the creator is.
-    const remixLeftAlone = remixFit !== null && remixFit.stage !== 'settled'
-        && selectedModel === remixFit.original.modelId
-        && sameVideoFormSettings(pageForm, remixFit.original.settings)
-        && !(estimatedCost !== null && userCredits !== null && estimatedCost <= userCredits);
-    /** The run on `modelId` the remix opens on, at its listed price; null when it is not priced. */
-    const remixFittedOn = (modelId: string, sameLength: boolean): RemixFitted | null => {
-        const run = modelRuns.get(modelId);
-        const cost = run ? readyCost(priceOf(run.quoteInput)) : null;
-        return run && cost !== null ? { modelId: run.modelId as VideoModelId, settings: run.settings, cost, sameLength } : null;
-    };
-    // While it is decided the page is on the original, so its price now is the original's
-    // (its inputs may have changed since it was weighed).
-    const remixOriginalNow = remixFit ? { ...remixFit.original, cost: affordCost ?? remixFit.original.cost } : null;
-    const settleRemix = (fitted: RemixFitted | null) => {
-        if (!remixOriginalNow) return;
-        if (fitted) switchModel(fitted.modelId, fitted.settings);
-        setRemixFit({ original: remixOriginalNow, stage: 'settled', fitted });
-    };
-    useEffect(() => {
-        if (remixFit?.stage !== 'pricing' || userCredits === null) return;
-        if (!remixLeftAlone) {
-            settleRemix(null);
-            return;
-        }
-        if (!remixPricesIn) return;
-        const originalRun = { inputs: runInputs, settings: remixFit.original.settings };
-        const decision = fitRemixToBalance({
-            original: remixOriginalNow ?? remixFit.original,
-            balance: userCredits,
-            preferredModelId: modelCatalog.catalog?.defaults.video ?? null,
-            candidates: [...modelRuns.values()].map((run) => ({
-                modelId: run.modelId,
-                cost: readyCost(priceOf(run.quoteInput)),
-                durationSeconds: run.durationSeconds,
-                takesInputs: takesSameVideoInputs(originalRun, run),
-            })),
-        });
-        const shortenOn = decision.kind === 'shorten' ? modelRuns.get(decision.modelId) : undefined;
-        if (decision.kind === 'original') {
-            settleRemix(null);
-        } else if (decision.kind === 'fitted') {
-            settleRemix(remixFittedOn(decision.modelId, decision.sameLength));
-        } else if (!shortenOn) {
-            settleRemix(null);
-        } else {
-            setRemixFit({
-                original: remixOriginalNow ?? remixFit.original,
-                stage: 'shortening',
-                shortenOn: { modelId: shortenOn.modelId as VideoModelId, settings: shortenOn.settings, belowSeconds: decision.durationSeconds },
-                otherwise: decision.otherwise ? remixFittedOn(decision.otherwise.modelId, decision.otherwise.sameLength) : null,
-            });
-        }
-    // It decides from the prices as they come in; the switch is this render's.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remixFit, remixLeftAlone, remixPricesIn, userCredits]);
-    useEffect(() => {
-        if (remixFit?.stage !== 'shortening' || userCredits === null) return;
-        if (!remixLeftAlone) {
-            settleRemix(null);
-            return;
-        }
-        const prices = shortenRuns.map((run) => ({ run, price: priceOf(run.quoteInput) }));
-        if (prices.some(({ price }) => price.status === 'pending' || price.status === 'unavailable')) return;
-        const length = longestLengthWithin(
-            prices.map(({ run, price }) => ({ durationSeconds: run.durationSeconds, cost: readyCost(price) })),
-            userCredits,
-            remixFit.shortenOn.belowSeconds,
-        );
-        const chosen = prices.find(({ run }) => run.durationSeconds === length);
-        const cost = chosen ? readyCost(chosen.price) : null;
-        if (chosen && cost !== null) {
-            settleRemix({ modelId: chosen.run.modelId as VideoModelId, settings: chosen.run.settings, cost, sameLength: false });
-            return;
-        }
-        // No shorter length fits: the cheapest model that fits at a length of its own, else the original.
-        settleRemix(remixFit.otherwise);
-    // It decides once every shorter length's price is in.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remixFit, remixLeftAlone, shortenRuns, priceOf, userCredits]);
 
     useEffect(() => {
         // Dropped when the page goes (development's Strict Mode mounts it twice) and at a
@@ -5376,45 +5231,19 @@ function VideoCreator({
     ) : quoteState.status === 'error' ? (
         quoteRetry
     ) : null;
-    // A remix moved back to its original that the balance does not cover: the run it was fitted
-    // to is one press away (owner, 2026-10-28; the artboard "Short").
-    const remixFitted = remixFit?.stage === 'settled' ? remixFit.fitted : null;
-    const onFittedRemix = remixFitted !== null && selectedModel === remixFitted.modelId;
-    const onRemixOriginal = remixFitted !== null && remixFit !== null && selectedModel === remixFit.original.modelId;
-    const offersFittedRemix = onRemixOriginal && balanceShort && !isGenerating && !isAwaitingStartCheck
-        && userCredits !== null && affordCost !== null;
-    const fittedName = remixFitted ? VIDEO_MODELS[remixFitted.modelId]?.displayName ?? remixFitted.modelId : '';
-    const originalName = remixFit ? VIDEO_MODELS[remixFit.original.modelId]?.displayName ?? remixFit.original.modelId : '';
-    // "the same prompt, references and 5s", or "the same prompt and references at 4s".
-    const fittedKeeps = (() => {
-        if (!remixFit || !remixFitted) return '';
-        const things = [currentIsMultiShot ? 'shots' : 'prompt'];
-        if (pageTally.references > 0) things.push('references');
-        else if (pageTally.frames > 0) things.push(pageTally.frames === 1 ? 'frame' : 'frames');
-        const listed = (parts: string[]) => (parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]);
-        return remixFitted.sameLength
-            ? `the same ${listed([...things, `${remixFit.original.durationSeconds}s`])}`
-            : `the same ${listed(things)} at ${remixFitted.settings.duration}s`;
-    })();
     const shortOfEveryVideoShown = offersImageInstead && !isGenerating && !isAwaitingStartCheck;
-    const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating && !offersFittedRemix && !shortOfEveryVideoShown ? (
-        <CreatorTopUpNotice cost={estimatedCost} balance={userCredits} message={creditRefusal?.message ?? null} />
-    ) : null;
-    const fitNotice = offersFittedRemix && remixFitted && userCredits !== null && affordCost !== null ? (
-        <CreatorFitNotice
-            original={{ name: originalName, cost: affordCost }}
-            balance={userCredits}
-            fitted={{ name: fittedName, cost: remixFitted.cost, keeps: fittedKeeps }}
-        />
+    // A remix short of its original lands here too: it says what the original costs, with
+    // Top up in Generate's place, and the run stays the original's (owner, 2026-11-01).
+    const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating && !shortOfEveryVideoShown ? (
+        <CreatorTopUpNotice cost={affordCost} balance={userCredits} message={creditRefusal?.message ?? null} />
     ) : null;
     // A line of its own, so no other status (a pick's notice, an unanswered start) hides why
     // Generate is off. It names the clip as the creator named it, which can be a word no line holds.
     const shortInputLine = shortInputMessage && !isGenerating ? (
         <p className="text-red-400 [overflow-wrap:anywhere]">{shortInputMessage}</p>
     ) : null;
-    const barStatus = fitNotice || topUpNotice || runStatus || shortInputLine ? (
+    const barStatus = topUpNotice || runStatus || shortInputLine ? (
         <div className="space-y-3">
-            {fitNotice}
             {topUpNotice}
             {runStatus}
             {shortInputLine}
@@ -5423,11 +5252,7 @@ function VideoCreator({
 
     // Check again goes through Generate's own path, which checks an unanswered start first.
     // A visitor's press needs no price: it checks the form, then asks for an account.
-    const barAction = offersFittedRemix && remixFitted ? (
-        <button type="button" onClick={() => switchModel(remixFitted.modelId, remixFitted.settings)} className={CREATOR_BAR_PRIMARY_CLASS}>
-            <span className="truncate">Switch back to {fittedName}</span>
-        </button>
-    ) : shortOfEveryVideoShown && imageOffer ? (
+    const barAction = shortOfEveryVideoShown && imageOffer ? (
         <CreatorMakeImageInstead href={makeImageInsteadHref(imageOffer.modelId, prompt)} fromCost={imageOffer.cost} />
     ) : (
         <CreatorBarAction
@@ -5444,20 +5269,6 @@ function VideoCreator({
     );
     const barNote = isVisitor ? (
         <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={notedCost} />
-    ) : offersFittedRemix ? (
-        <div className="flex flex-wrap justify-between gap-x-4 gap-y-1">
-            <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>Top up · {smallestCreditPackLabel()}</Link>
-            <button
-                type="button"
-                onClick={() => {
-                    setIsModelDropdownOpen(true);
-                    modelDropdownRef.current?.scrollIntoView({ block: 'nearest' });
-                }}
-                className={CREATOR_NOTE_LINK_CLASS}
-            >
-                Other models
-            </button>
-        </div>
     ) : shortOfEveryVideoShown && userCredits !== null && videosFrom !== null ? (
         <CreatorLowBalanceNote balance={userCredits} videosFrom={videosFrom} />
     ) : userCredits !== null ? (
@@ -5592,7 +5403,7 @@ function VideoCreator({
                 over={smallestOver}
                 balance={listBalance}
                 isVisitor={isVisitor}
-                offersTopUp={!isVisitor && !offersFittedRemix && !shortOfEveryVideoShown}
+                offersTopUp={!isVisitor && !shortOfEveryVideoShown}
             />
 
             <CatalogAdditionalControls
@@ -5711,7 +5522,7 @@ function VideoCreator({
                             </div>
                         </div>
                         {/* Until the first run this visit: back over the prompt after one, it pushed the field the creator went to. */}
-                        {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="video" balance={listBalance} /> : null}
+                        {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="video" /> : null}
 
                         <AnimatePresence>
                             {remixId && isRemixLoading && (
@@ -5726,25 +5537,8 @@ function VideoCreator({
                             {remixId && !isRemixLoading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
-                                        description={`${remixFit && remixFitted && onFittedRemix
-                                            ? `Fitted to your ${userCredits ?? remixFitted.cost} credits: ${fittedName} instead of ${originalName}, ${remixFitted.sameLength
-                                                ? `at the same ${remixFit.original.durationSeconds}s`
-                                                : `at ${remixFitted.settings.duration}s instead of ${remixFit.original.durationSeconds}s`}. It won’t match the original exactly.`
-                                            : remixFit && onRemixOriginal
-                                                ? `On the original settings: ${originalName} at ${remixFit.original.durationSeconds}s.`
-                                                : `Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
+                                        description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
-                                        action={
-                                            remixFit && onFittedRemix ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => switchModel(remixFit.original.modelId, remixFit.original.settings)}
-                                                    className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                                >
-                                                    Use the original · {remixFit.original.cost} credits
-                                                </button>
-                                            ) : undefined
-                                        }
                                     />
                                 </motion.div>
                             )}
@@ -6548,7 +6342,7 @@ function VideoCreator({
                             ) : null}
                             action={barAction}
                             note={barNote}
-                            stacked={offersFittedRemix || shortOfEveryVideoShown}
+                            stacked={shortOfEveryVideoShown}
                         />
                     </>
                 }
@@ -6609,7 +6403,7 @@ function VideoCreator({
                                 cause={describeRunFailure(runFailure.message, 'video')}
                                 returnedCredits={runFailure.cost}
                                 retryLabel={estimatedCost !== null ? `Try again · ${quoteUi.costLabel}` : 'Try again'}
-                                retryDisabled={quotePending || runHeld || showTopUp || offersFittedRemix || shortOfEveryVideoShown}
+                                retryDisabled={quotePending || runHeld || showTopUp || shortOfEveryVideoShown}
                                 onRetry={() => void handleGenerate()}
                                 retryable={isRetryableProviderFailure(runFailure.message)}
                                 onPickModel={() => setIsModelDropdownOpen(true)}
@@ -6622,7 +6416,6 @@ function VideoCreator({
                             <CreatorEmptyCanvas
                                 source={startPosts}
                                 tool="video"
-                                balance={listBalance}
                                 icon={Video}
                                 title={isVisitor ? 'Try it before you sign up' : 'Your video will appear here'}
                                 hint={`${isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint} Or remix a post below.`}

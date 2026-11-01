@@ -2118,7 +2118,7 @@ function ImageCreator({
                         </div>
                         </div>
                         {/* Until the first run this visit: back over the prompt after one, it pushed the field the creator went to. */}
-                        {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="image" balance={listBalance} /> : null}
+                        {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="image" /> : null}
 
                         <AnimatePresence>
                             {modelNotice ? (
@@ -2458,7 +2458,6 @@ function ImageCreator({
                             <CreatorEmptyCanvas
                                 source={startPosts}
                                 tool="image"
-                                balance={listBalance}
                                 icon={ImageIcon}
                                 title={isVisitor ? 'Try it before you sign up' : 'Your image will appear here'}
                                 hint={`${isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint} Or remix a post below.`}
