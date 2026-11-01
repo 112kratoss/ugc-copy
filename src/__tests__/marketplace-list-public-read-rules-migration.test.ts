@@ -6,7 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { isGeneratedRecipeSetupText, sanitizePublicPostContent } from '@/lib/post-public-content';
 
 const migrationsDirectory = 'supabase/migrations';
-const sql = readFileSync(join(migrationsDirectory, '20261101042650_marketplace_list_public_read_rules.sql'), 'utf8');
+const migrationFile = '20261101042650_marketplace_list_public_read_rules.sql';
+const sql = readFileSync(join(migrationsDirectory, migrationFile), 'utf8');
 // The statements alone: the header names what the functions no longer do.
 const statements = sql.replace(/--.*$/gm, '');
 const serverSource = readFileSync('src/lib/post-resource-bundles-server.ts', 'utf8');
@@ -32,6 +33,23 @@ function triggerDefinition(source: string, name: string) {
   const match = new RegExp(`CREATE (?:OR REPLACE )?TRIGGER ${name}\\b[\\s\\S]*?;`).exec(source);
   expect(match, `${name} is not made`).not.toBeNull();
   return match![0];
+}
+
+/**
+ * The named function or trigger as the last migration before this one left it,
+ * whichever file that is: each redefinition here must carry every earlier one.
+ */
+function previousDefinition(kind: 'FUNCTION' | 'TRIGGER', name: string): string {
+  const pattern = kind === 'FUNCTION'
+    ? new RegExp(`CREATE (?:OR REPLACE )?FUNCTION public\\.${name}\\(`)
+    : new RegExp(`CREATE (?:OR REPLACE )?TRIGGER ${name}\\b`);
+  const earlier = readdirSync(migrationsDirectory)
+    .filter((file) => file.endsWith('.sql') && file < migrationFile)
+    .sort()
+    .filter((file) => pattern.test(readMigration(file)));
+  expect(earlier.length, `${name} is never made before this file`).toBeGreaterThan(0);
+  const source = readMigration(earlier[earlier.length - 1]);
+  return kind === 'FUNCTION' ? functionDefinition(source, name) : triggerDefinition(source, name);
 }
 
 /** The last statement in any migration that makes the named trigger. */
@@ -131,8 +149,8 @@ describe('marketplace list public read rules migration', () => {
     );
   });
 
-  it('projects the search document as 20261031100330 did, but for the post’s caption', () => {
-    const previous = functionDefinition(readMigration('20261031100330_marketplace_search_indexes_public_text.sql'), 'refresh_marketplace_bundle_search_documents');
+  it('projects the search document as the migration before it left it, but for the post’s caption', () => {
+    const previous = previousDefinition('FUNCTION', 'refresh_marketplace_bundle_search_documents');
     const current = functionDefinition(sql, 'refresh_marketplace_bundle_search_documents');
 
     expect(comparable(current)).toBe(comparable(previous).replace(
@@ -153,8 +171,8 @@ describe('marketplace list public read rules migration', () => {
     expect(columnsFollowed(latestTrigger('profiles_refresh_marketplace_search'))).toEqual(columnsRead(projection, 'profiles'));
   });
 
-  it('keeps the listing as 20260809210000 made it, but for the NSFW label and the caption its quality gate reads', () => {
-    const previous = functionDefinition(readMigration('20260809210000_marketplace_bundle_listings.sql'), 'refresh_marketplace_bundle_listings');
+  it('keeps the listing as the migration before it left it, but for the NSFW label and the caption its quality gate reads', () => {
+    const previous = previousDefinition('FUNCTION', 'refresh_marketplace_bundle_listings');
     const current = functionDefinition(sql, 'refresh_marketplace_bundle_listings');
     const gate = "      AND coalesce(posts.review_status, 'visible') <> 'hidden'\n";
 
@@ -166,7 +184,7 @@ describe('marketplace list public read rules migration', () => {
 
   it('recomputes a listing on every post column it reads, the label among them, and on no hot counter', () => {
     const listing = functionDefinition(statements, 'refresh_marketplace_bundle_listings');
-    const previous = triggerDefinition(readMigration('20260809210000_marketplace_bundle_listings.sql'), 'posts_refresh_marketplace_listing');
+    const previous = previousDefinition('TRIGGER', 'posts_refresh_marketplace_listing');
     const current = triggerDefinition(statements, 'posts_refresh_marketplace_listing');
     const last = '    OR OLD.source_tool IS DISTINCT FROM NEW.source_tool\n';
 
