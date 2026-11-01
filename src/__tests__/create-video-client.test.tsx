@@ -7859,6 +7859,15 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(screen.queryByText(/enough for images/)).toBeNull();
         expect(document.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 3');
         expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5');
+
+        // The creator opens the list: every model is priced, and the page learns that the balance
+        // is short of every video. On a remix that still offers the top-up alone.
+        openModelList();
+        expect(await screen.findByRole('group', { name: 'Needs more credits' })).toBeInTheDocument();
+        await act(async () => {});
+        expect(screen.getByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /Make an image instead/ })).toBeNull();
+        expect(screen.queryByText(/enough for images/)).toBeNull();
       });
 
       // Another model is the creator's own choice: the list is priced as for any run once it is opened.
