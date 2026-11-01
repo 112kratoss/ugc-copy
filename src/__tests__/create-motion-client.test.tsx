@@ -112,16 +112,28 @@ vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => authState,
 }));
 
-// What the Enhance button was last given: an answer comes back through what the page gave it when pressed.
+// What the Enhance button was last given, which a button answering through what it had when pressed
+// calls, and the newest callbacks of the mounted button, which one keeping them in a ref calls.
 type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void };
-const enhanceButton = vi.hoisted(() => ({ props: null as EnhanceAnswerProps | null }));
-
-vi.mock('@/components/EnhancePromptButton', () => ({
-  default: (props: EnhanceAnswerProps) => {
-    enhanceButton.props = props;
-    return null;
-  },
+const enhanceButton = vi.hoisted(() => ({
+  props: null as EnhanceAnswerProps | null,
+  mounted: null as { current: EnhanceAnswerProps } | null,
 }));
+
+vi.mock('@/components/EnhancePromptButton', async () => {
+  const { useLayoutEffect, useRef } = await import('react');
+  return {
+    default: function EnhanceButtonStandIn(props: EnhanceAnswerProps) {
+      const newest = useRef(props);
+      useLayoutEffect(() => {
+        newest.current = props;
+        enhanceButton.mounted = newest;
+      });
+      enhanceButton.props = props;
+      return null;
+    },
+  };
+});
 
 vi.mock('@/components/PublicShareButton', () => ({
   default: () => null,
@@ -1473,6 +1485,7 @@ describe('CreateMotionClient drafts and media', () => {
       await waitFor(() => expect(draftMocks.loadCreatorDraft).toHaveBeenCalledWith('motion', 'user-1'));
       fireEvent.change(box(), { target: { value: 'Asha’s cartwheel across the stage' } });
       const pressedForAsha = enhanceButton.props!;
+      const buttonAshaPressed = enhanceButton.mounted!;
 
       ownDraftAs('user-2');
       view.rerender(<CreateMotionClient prefill={{}} />);
@@ -1482,9 +1495,13 @@ describe('CreateMotionClient drafts and media', () => {
       act(() => {
         pressedForAsha.onEnhanced('Asha’s cartwheel across the stage, arms wide');
         pressedForAsha.onCreditsUpdate(41);
+        // A button answering through its newest callbacks is drawn anew for Ben: the one Asha pressed has only hers.
+        buttonAshaPressed.current.onEnhanced('Asha’s cartwheel across the stage, arms wide');
+        buttonAshaPressed.current.onCreditsUpdate(43);
       });
       expect(box()).toHaveValue(OPENING);
       expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
+      expect(authState.updateCredits).not.toHaveBeenCalledWith(43);
       await waitFor(() => expect(promptsSavedFor('user-2')).toContain(OPENING), { timeout: 2_000 });
       expect(promptsSavedFor('user-2')).not.toContain('Asha’s cartwheel across the stage, arms wide');
 

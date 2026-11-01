@@ -107,16 +107,28 @@ vi.mock('@/components/AuthProvider', () => ({
   }),
 }));
 
-// What the Enhance button was last given: an answer comes back through what the page gave it when pressed.
+// What the Enhance button was last given, which a button answering through what it had when pressed
+// calls, and the newest callbacks of the mounted button, which one keeping them in a ref calls.
 type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void };
-const enhanceButton = vi.hoisted(() => ({ props: null as EnhanceAnswerProps | null }));
-
-vi.mock('@/components/EnhancePromptButton', () => ({
-  default: (props: EnhanceAnswerProps) => {
-    enhanceButton.props = props;
-    return null;
-  },
+const enhanceButton = vi.hoisted(() => ({
+  props: null as EnhanceAnswerProps | null,
+  mounted: null as { current: EnhanceAnswerProps } | null,
 }));
+
+vi.mock('@/components/EnhancePromptButton', async () => {
+  const { useLayoutEffect, useRef } = await import('react');
+  return {
+    default: function EnhanceButtonStandIn(props: EnhanceAnswerProps) {
+      const newest = useRef(props);
+      useLayoutEffect(() => {
+        newest.current = props;
+        enhanceButton.mounted = newest;
+      });
+      enhanceButton.props = props;
+      return null;
+    },
+  };
+});
 
 vi.mock('@/components/PublicShareButton', () => ({
   default: () => null,
@@ -1582,6 +1594,7 @@ describe('CreateImageClient generation pipeline', () => {
         await settleDraftRead();
         typePrompt('Asha’s harbour at dusk');
         const pressedForAsha = enhanceButton.props!;
+        const buttonAshaPressed = enhanceButton.mounted!;
 
         ownDraftAs('user-2');
         view.rerender(page());
@@ -1589,9 +1602,13 @@ describe('CreateImageClient generation pipeline', () => {
         act(() => {
           pressedForAsha.onEnhanced('Asha’s harbour at dusk, golden hour, 35mm');
           pressedForAsha.onCreditsUpdate(41);
+          // A button answering through its newest callbacks is drawn anew for Ben: the one Asha pressed has only hers.
+          buttonAshaPressed.current.onEnhanced('Asha’s harbour at dusk, golden hour, 35mm');
+          buttonAshaPressed.current.onCreditsUpdate(43);
         });
         expect(box()).toHaveValue('');
         expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
+        expect(authState.updateCredits).not.toHaveBeenCalledWith(43);
         await waitFor(() => expect(promptsSavedFor('user-2')).toContain(''), { timeout: 2_000 });
         expect(promptsSavedFor('user-2')).not.toContain('Asha’s harbour at dusk, golden hour, 35mm');
 

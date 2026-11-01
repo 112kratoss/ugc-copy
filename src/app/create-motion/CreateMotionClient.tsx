@@ -1793,10 +1793,12 @@ export default function CreateMotionClient({
                         </div>
 
                         <EnhancePromptButton
+                            // A press for the owner before an account switch is theirs: the button is drawn anew for the next
+                            // owner, and its answer dropped whichever callbacks it comes back through (`creator-draft-prompt.ts`).
+                            key={draftOwner}
                             variant="toolbar"
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
-                            // An answer to a press made for the owner before an account switch is theirs (`creator-draft-prompt.ts`).
                             onEnhanced={(text) => {
                                 if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) handlePromptChange(text);
                             }}

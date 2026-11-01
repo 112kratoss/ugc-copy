@@ -5689,10 +5689,12 @@ export default function CreateVideoClient({
                                 ) : null}
 
                                 <EnhancePromptButton
+                                    // A press for the owner before an account switch is theirs: the button is drawn anew for the next
+                                    // owner, and its answer dropped whichever callbacks it comes back through (`creator-draft-prompt.ts`).
+                                    key={draftOwner}
                                     variant="toolbar"
                                     leading={<CreatorTemplatesTile />}
                                     prompt={prompt}
-                                    // An answer to a press made for the owner before an account switch is theirs (`creator-draft-prompt.ts`).
                                     onEnhanced={(text, result) => {
                                         if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;
                                         setPrompt(text);
@@ -5733,6 +5735,8 @@ export default function CreateVideoClient({
                                             ) : null}
                                         </div>
                                         <EnhancePromptButton
+                                            // Drawn anew for the next owner, as the prompt's button is.
+                                            key={draftOwner}
                                             prompt={shot.prompt}
                                             onEnhanced={(text, result) => {
                                                 if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;

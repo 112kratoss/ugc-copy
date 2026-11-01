@@ -92,6 +92,8 @@ const temporaryUploadMock = vi.hoisted(() => vi.fn());
 const enhanceButtonPropsMock = vi.hoisted(() => vi.fn((_props: { prompt: string; context?: EnhancerContext }) => {
   void _props;
 }));
+// The newest callbacks of the Enhance button drawn last, which a button keeping them in a ref answers through.
+const mountedEnhanceButton = vi.hoisted(() => ({ current: null as { current: unknown } | null }));
 const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string): Promise<PersistedImageElementRecord[]> => {
     void _key;
@@ -202,12 +204,20 @@ vi.mock('@/components/AuthProvider', () => ({
   }),
 }));
 
-vi.mock('@/components/EnhancePromptButton', () => ({
-  default: (props: { prompt: string; context?: EnhancerContext }) => {
-    enhanceButtonPropsMock(props);
-    return null;
-  },
-}));
+vi.mock('@/components/EnhancePromptButton', async () => {
+  const { useLayoutEffect, useRef } = await import('react');
+  return {
+    default: function EnhanceButtonStandIn(props: { prompt: string; context?: EnhancerContext }) {
+      const newest = useRef(props);
+      useLayoutEffect(() => {
+        newest.current = props;
+        mountedEnhanceButton.current = newest;
+      });
+      enhanceButtonPropsMock(props);
+      return null;
+    },
+  };
+});
 
 vi.mock('@/components/GenerationResultVideo', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/components/GenerationResultVideo')>();
@@ -5216,43 +5226,61 @@ describe('CreateVideoClient Kling video elements', () => {
 
       it('drops an Enhance answer that comes back after another account signed in, and the notes one left', async () => {
         type EnhanceAnswer = { onEnhanced: (text: string, result?: unknown) => void; onCreditsUpdate: (credits: number) => void };
-        // An answer comes back through what the page gave the button when it was pressed.
+        // An answer comes back through what the page gave the button when it was pressed, or, from a button
+        // keeping its newest callbacks in a ref, through those of the button that was pressed.
         const lastEnhanceButton = () => enhanceButtonPropsMock.mock.calls.at(-1)?.[0] as unknown as EnhanceAnswer;
+        const mountedButton = () => mountedEnhanceButton.current as { current: EnhanceAnswer };
         const note = { warnings: [{ code: 'camera-move', severity: 'info', message: 'Name the camera move.' }] };
+        const settle = () => act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
         ownDraftAs('user-1');
         const view = render(<CreateVideoClient prefill={{}} />);
         await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
         fireEvent.change(promptBox(), { target: { value: PROMPT } });
-        // One Enhance came back for Asha with a note; another, and one for a shot, are on their way.
+        // One Enhance came back for Asha with a note; another is on its way.
         act(() => lastEnhanceButton().onEnhanced(`${PROMPT} Golden hour.`, note));
         expect(screen.getByText('Name the camera move.')).toBeInTheDocument();
         const pressedForAsha = lastEnhanceButton();
-        fireEvent.click(screen.getByRole('radio', { name: 'Multi-shot' }));
-        fireEvent.change(screen.getByRole('textbox', { name: 'Shot 1 prompt' }), { target: { value: 'A lamp lights on the quay' } });
-        const shotPressedForAsha = lastEnhanceButton();
+        const buttonAshaPressed = mountedButton();
 
         ownDraftAs('user-2');
         view.rerender(<CreateVideoClient prefill={{}} />);
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        });
+        await settle();
         act(() => {
           pressedForAsha.onEnhanced(`${PROMPT} Golden hour, 35mm.`, note);
           pressedForAsha.onCreditsUpdate(41);
-          shotPressedForAsha.onEnhanced('A lamp lights on the quay, one by one.', note);
-          shotPressedForAsha.onCreditsUpdate(39);
+          buttonAshaPressed.current.onEnhanced(`${PROMPT} Golden hour, 35mm.`, note);
+          buttonAshaPressed.current.onCreditsUpdate(43);
+        });
+        expect(promptBox()).toHaveValue('');
+        expect(screen.queryByText('Name the camera move.')).toBeNull();
+        expect(mockUpdateCredits).not.toHaveBeenCalledWith(41);
+        expect(mockUpdateCredits).not.toHaveBeenCalledWith(43);
+
+        // A shot's Enhance, pressed for Ben, as Cleo signs in.
+        fireEvent.click(screen.getByRole('radio', { name: 'Multi-shot' }));
+        fireEvent.change(screen.getByRole('textbox', { name: 'Shot 1 prompt' }), { target: { value: 'A lamp lights on the quay' } });
+        const shotPressedForBen = lastEnhanceButton();
+        const shotButtonBenPressed = mountedButton();
+        ownDraftAs('user-3');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await settle();
+        act(() => {
+          shotPressedForBen.onEnhanced('A lamp lights on the quay, one by one.', note);
+          shotPressedForBen.onCreditsUpdate(39);
+          shotButtonBenPressed.current.onEnhanced('A lamp lights on the quay, one by one.', note);
+          shotButtonBenPressed.current.onCreditsUpdate(37);
         });
         expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('');
         expect(screen.queryByText('Name the camera move.')).toBeNull();
-        expect(mockUpdateCredits).not.toHaveBeenCalledWith(41);
         expect(mockUpdateCredits).not.toHaveBeenCalledWith(39);
-        fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
-        expect(promptBox()).toHaveValue('');
-        expect(screen.queryByText('Name the camera move.')).toBeNull();
+        expect(mockUpdateCredits).not.toHaveBeenCalledWith(37);
 
         // One pressed for the account on the page lands.
-        act(() => lastEnhanceButton().onEnhanced('Ben’s glasshouse at dawn'));
-        expect(promptBox()).toHaveValue('Ben’s glasshouse at dawn');
+        fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
+        act(() => lastEnhanceButton().onEnhanced('Cleo’s glasshouse at dawn'));
+        expect(promptBox()).toHaveValue('Cleo’s glasshouse at dawn');
       });
     });
 
