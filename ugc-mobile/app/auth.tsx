@@ -63,7 +63,7 @@ export default function AuthScreen() {
   const theme = useAppTheme();
   // The route's own params: the URL parse has decoded them once, as every caller encoded its
   // return once. expo-router's `useLocalSearchParams` decodes them again, which cut a prompt in a
-  // return at &, # or +, and sent one with a backslash or a line break Home.
+  // return at & or #, turned its + into a space, and sent one with a backslash or a line break Home.
   const { returnTo, mode: requestedMode, notice: requestedNotice } = (useRoute().params ?? {}) as {
     returnTo?: string | string[];
     mode?: string | string[];

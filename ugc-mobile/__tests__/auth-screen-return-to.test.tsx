@@ -101,9 +101,13 @@ import { router } from 'expo-router';
 import AuthScreen from '../app/auth';
 import { completeAuthScreen } from '../lib/auth-navigation';
 
-/** The auth route's params after a caller's `router.push({ pathname: '/auth', params: { returnTo } })`. */
+/** The auth route's params after a caller's `router.push({ pathname: '/auth', params })`. */
+function authRoute(params: Record<string, string>) {
+  return parseQueryParams(resolveHref({ pathname: '/auth', params }), { name: 'auth' }) ?? {};
+}
+
 function authRouteParams(returnTo: string) {
-  return parseQueryParams(resolveHref({ pathname: '/auth', params: { returnTo } }), { name: 'auth' }) ?? {};
+  return authRoute({ returnTo });
 }
 
 /** Everything a decode once too many loses: & and # cut it, + turns to a space, \ and a line break send it Home. */
@@ -116,7 +120,7 @@ const RETURNS: Array<[string, string]> = [
   ],
   [
     'a link written as a form (a space as +), as remix links are',
-    `/create/video?${new URLSearchParams({ remix: 'gen-9', sourceTitle: 'Kung fu & cats', sourceCreator: '@fluffy' })}`,
+    `/create/video?${new URLSearchParams({ remix: 'gen-9', sourceTitle: 'Rooftop sparring & co', sourceCreator: '@whiskers' })}`,
   ],
   [
     'an invite with the path it goes on to',
@@ -156,5 +160,51 @@ describe('the sign-in return', () => {
     const body = hooks.slice(start, hooks.indexOf('\nfunction ', start + 1));
     expect(body).toContain('LocalRouteParamsContext');
     expect(body).toContain('decodeURIComponent(value)');
+  });
+});
+
+describe("the sign-in screen's other params", () => {
+  beforeEach(() => {
+    vi.mocked(router.dismissTo).mockClear();
+    authState.user = null;
+  });
+
+  const render = () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<AuthScreen />); });
+    return tree;
+  };
+  const texts = (tree: renderer.ReactTestRenderer) => tree.root
+    .findAll((node) => node.type === 'text')
+    .flatMap((node) => React.Children.toArray(node.props.children))
+    .filter((child): child is string => typeof child === 'string');
+
+  // The sign-up pushes: the invite, the profile, onboarding and Pricing.
+  it('opens on Sign up when the push asks for it', () => {
+    routeState.params = authRoute({ mode: 'signup', returnTo: '/onboarding' });
+
+    const tree = render();
+
+    expect(tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.accessibilityState).toEqual({ selected: true });
+  });
+
+  // `signInNoticeRoute`, after this device's session ended elsewhere.
+  it('says why a redirect sent the person here', () => {
+    routeState.params = authRoute({ notice: 'signed-out', returnTo: '/create/video' });
+
+    expect(texts(render())).toContain('You were signed out');
+  });
+
+  // A route with an empty query has no params object at all.
+  it('opens on Sign in with no params, and steps aside for someone signed in', async () => {
+    routeState.params = undefined as unknown as Record<string, string>;
+    expect(render().root.findByProps({ accessibilityLabel: 'Switch to sign in' }).props.accessibilityState).toEqual({ selected: true });
+
+    authState.user = { id: 'user-1' };
+    await renderer.act(async () => {
+      renderer.create(<AuthScreen />);
+    });
+
+    expect(router.dismissTo).toHaveBeenCalledWith('/(tabs)');
   });
 });
