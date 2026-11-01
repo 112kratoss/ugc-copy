@@ -383,6 +383,23 @@ export const MOTION_CLIP_NAME = 'The reference video';
  */
 export const CREATOR_LENGTH_READING_SLACK_SECONDS = 0.1;
 /**
+ * Whether a run holds a clip or track of this length in a slot whose shortest is
+ * `minimumSeconds`: short of it by more than the slack above. A length the creator does not know
+ * is never held; the start measures the file.
+ */
+export function lengthHeldUnderMinimum(
+  durationSeconds: number | null | undefined,
+  minimumSeconds: number | undefined,
+): boolean {
+  return (
+    minimumSeconds !== undefined &&
+    typeof durationSeconds === 'number' &&
+    Number.isFinite(durationSeconds) &&
+    durationSeconds > 0 &&
+    durationSeconds < minimumSeconds - CREATOR_LENGTH_READING_SLACK_SECONDS
+  );
+}
+/**
  * Why a run cannot send this clip or track in this slot, or null: its length against the
  * slot's shortest (`minDurationSeconds`, published where the provider refuses shorter, as Kie
  * does a Kling 3.0 video element under 3 seconds), less the slack above. A length the creator
@@ -396,13 +413,7 @@ export function catalogInputTooShort(
 ): string | null {
   const minimum = slot.minDurationSeconds;
   const length = input.durationSeconds;
-  if (
-    minimum === undefined ||
-    typeof length !== 'number' ||
-    !Number.isFinite(length) ||
-    length <= 0 ||
-    length >= minimum - CREATOR_LENGTH_READING_SLACK_SECONDS
-  ) {
+  if (minimum === undefined || typeof length !== 'number' || !lengthHeldUnderMinimum(length, minimum)) {
     return null;
   }
   const what = `${modelName} ${slot.label.toLowerCase()}`;
@@ -410,6 +421,35 @@ export function catalogInputTooShort(
   return label
     ? mediaTooShortMessage(what, minimum, { label, durationSeconds: length })
     : mediaTooShortMessage(what, minimum);
+}
+/**
+ * A clip's or track's length as a creator shows it, in tenths of a second: rounded down under its
+ * slot's shortest, as the start's refusal gives it (a 1.97 s clip under 2 s runs "1.9 seconds" to
+ * it), rounded up over its longest (a 15.04 s clip on a 15 s cap must not read 15.0), and to the
+ * nearest tenth otherwise. Rounded one way throughout, a length reads as on the wrong side of one
+ * limit or the other. Both creators read a length so: the web's cards and motion page, and the
+ * app's motion composer.
+ */
+export function lengthReading(
+  durationSeconds: number,
+  limits: { minDurationSeconds?: number | null; maxDurationSeconds?: number | null } | null | undefined,
+): string {
+  const { minDurationSeconds, maxDurationSeconds } = limits ?? {};
+  if (typeof minDurationSeconds === 'number' && durationSeconds < minDurationSeconds) {
+    return lengthInTenthsRoundedDown(durationSeconds).toFixed(1);
+  }
+  if (typeof maxDurationSeconds === 'number' && durationSeconds > maxDurationSeconds) {
+    return (Math.ceil(durationSeconds * 10) / 10).toFixed(1);
+  }
+  return durationSeconds.toFixed(1);
+}
+/**
+ * What a creator shows as the length of a clip or track its run holds for being too short
+ * (`catalogInputTooShort`): its reading, which under the minimum is the length the held line gives,
+ * and the shortest the slot takes.
+ */
+export function heldLengthNote(durationSeconds: number, minimumSeconds: number, noun?: 'clip' | 'track'): string {
+  return `${lengthReading(durationSeconds, { minDurationSeconds: minimumSeconds })}s${noun ? ` ${noun}` : ''}, under the ${minimumSeconds}s minimum`;
 }
 /** One input a run sends, as far as its price reads it. */
 export type CatalogRunInputFact = {

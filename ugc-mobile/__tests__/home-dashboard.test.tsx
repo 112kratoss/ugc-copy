@@ -513,11 +513,31 @@ function cardAt(tree: renderer.ReactTestRenderer, index: number) {
       onAssetPress: () => void;
       onFeedbackOpen: () => void;
       onOpen: (zoom: null) => void;
+      onRemix: () => void;
       onShare: () => void;
     }>;
   }>;
   return cell.props.children.props;
 }
+
+/** The creator route the screen pushed, and the params that route reads. */
+function pushedCreatorRoute() {
+  expect(routerState.push).toHaveBeenCalledTimes(1);
+  const url = new URL(routerState.push.mock.calls[0][0] as string, 'https://magicbooklet.test');
+  return { pathname: url.pathname, params: Object.fromEntries(url.searchParams) };
+}
+
+/** Where a remix of `shelfPost('post-1')` opens: the server's link, and the row naming the post. */
+const POST_1_REMIX_ROUTE = {
+  pathname: '/create/video',
+  params: {
+    remix: 'generation-1',
+    remixPost: 'post-1',
+    sourceTitle: 'Post post-1',
+    sourceCreator: '@creatorpost-1',
+    sourceThumbnail: 'https://cdn.example.com/post-1.preview.webp',
+  },
+};
 
 /** FlashList reporting these cards at one viewability config's threshold. */
 function reportViewable(tree: renderer.ReactTestRenderer, config: unknown, indexes: number[]) {
@@ -1340,10 +1360,66 @@ describe('Home screen', () => {
 
     expect(authState.api.remixShowcasePost).toHaveBeenCalledWith('post-1');
     expect(authState.api.unlockFreeBundle).not.toHaveBeenCalled();
-    expect(routerState.push).toHaveBeenCalledTimes(1);
+    expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
     expect(authState.api.recordShowcaseFeedEvent).not.toHaveBeenCalled();
 
     renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  // A card's Remix names its post in the creator's row above the prompt
+  // (poster, title, creator), as the reel's Remix does. Until 2026-11-01 the
+  // card sent none of them and the creator read "Source creation".
+  // Where the server's link cannot be mapped, Home falls back as the reel does
+  // (one shared builder): the post's own tool, Motion for a motion post, and
+  // the server's prompt, still under the row naming the post.
+  it("falls back to the post's own tool and the server's prompt, as the reel does", async () => {
+    authState.api.remixShowcasePost.mockImplementationOnce(() => Promise.resolve({
+      success: true,
+      redirectTo: '/somewhere-else',
+      prefill: { prompt: 'A paper boat at dusk', settings: {} },
+    }));
+    queryState.pages = [page([{
+      ...shelfPost('post-1'),
+      creationMode: 'motion',
+      recommendation: { deliveryId: 'delivery-remix', position: 0, algorithmVersion: 'for-you-rules-v4' },
+    }])];
+    const { tree } = renderHome();
+
+    await renderer.act(async () => {
+      cardAt(tree, 0).onRemix();
+      await settlePromises();
+    });
+
+    expect(pushedCreatorRoute()).toEqual({
+      pathname: '/create/motion',
+      params: {
+        prompt: 'A paper boat at dusk',
+        remixPost: 'post-1',
+        sourceTitle: 'Post post-1',
+        sourceCreator: '@creatorpost-1',
+        sourceThumbnail: 'https://cdn.example.com/post-1.preview.webp',
+      },
+    });
+
+    renderer.act(() => tree.unmount());
+  });
+
+  it("names the card's post in the creator its Remix opens", async () => {
+    queryState.pages = [page([{
+      ...shelfPost('post-1'),
+      recommendation: { deliveryId: 'delivery-remix', position: 0, algorithmVersion: 'for-you-rules-v4' },
+    }])];
+    const { tree } = renderHome();
+
+    await renderer.act(async () => {
+      cardAt(tree, 0).onRemix();
+      await settlePromises();
+    });
+
+    expect(authState.api.remixShowcasePost).toHaveBeenCalledWith('post-1');
+    expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
+
     renderer.act(() => tree.unmount());
   });
 

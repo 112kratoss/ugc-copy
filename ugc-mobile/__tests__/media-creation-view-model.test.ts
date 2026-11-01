@@ -14,9 +14,11 @@ import {
   getCreationReadiness,
   getCreationSectionOrder,
   getCreationSectionSummary,
+  getMotionDuration,
   getVideoElementSupport,
   getVisibleGenerationCheckMessages,
   hydrateCreationDraftFromRemixSource,
+  motionClipLengthReading,
   nameUnnamedReferences,
   renameMediaDraft,
   replaceMediaDraftMedia,
@@ -1173,5 +1175,58 @@ describe('clip handles', () => {
     });
 
     expect(withCreatorClipHandle(draft, { ...draft.referenceVideos[0], displayName: 'Jump' }).handle).toBe('@jump');
+  });
+});
+
+// The motion composer showed its clip's length rounded up to whole seconds, the length a run is
+// priced on. With Kling 2.6's 3 s minimum published (release slot-min-durations-20261031), a
+// 2.16 s clip read "Detected motion length · 3s" beside the held line "… runs 2.1 seconds". It
+// reads the clip's own length now, as the web's motion page does (`lengthReading`), and says when
+// the run is held for it; the chip and the quote keep the whole seconds.
+describe('a motion clip’s length as the composer shows it', () => {
+  const kling26Clip = { minDurationSeconds: 3, maxDurationSeconds: 30 };
+  const withClip = (durationSeconds: number | null, duration = 5) => ({
+    ...createDefaultCreationDraft('motion'),
+    duration,
+    referenceVideo: createMediaDraftFromUpload(
+      {
+        signedUrl: 'https://cdn.example.com/moves.mp4',
+        storagePath: 'uploads/user/moves.mp4',
+        mimeType: 'video/mp4',
+        fileName: 'moves.mp4',
+        kind: 'video',
+        durationSeconds,
+      },
+      { displayName: 'Reference Motion' },
+    ),
+  });
+
+  it('reads a clip under the slot’s shortest down to the tenth, as the held line does, and says so', () => {
+    expect(motionClipLengthReading(withClip(2.16, 3), kling26Clip, 30)).toEqual({ reading: '2.1s', heldNote: '2.1s, under the 3s minimum' });
+  });
+
+  it('reads a clip just under the minimum, which the start may still take, down and unheld', () => {
+    expect(motionClipLengthReading(withClip(2.95, 3), kling26Clip, 30)).toEqual({ reading: '2.9s', heldNote: null });
+  });
+
+  it('reads a longer clip to the nearest tenth, while the run keeps its whole seconds', () => {
+    const draft = withClip(4.34, 5);
+
+    expect(motionClipLengthReading(draft, kling26Clip, 30)).toEqual({ reading: '4.3s', heldNote: null });
+    expect(getMotionDuration(draft)).toBe(5);
+  });
+
+  it('reads a clip past the cap up, the slot’s or else the default one', () => {
+    expect(motionClipLengthReading(withClip(30.04, 31), kling26Clip, 30)).toEqual({ reading: '30.1s', heldNote: null });
+    expect(motionClipLengthReading(withClip(10.04, 11), {}, 10)).toEqual({ reading: '10.1s', heldNote: null });
+  });
+
+  it('holds nothing on a slot that publishes no minimum', () => {
+    expect(motionClipLengthReading(withClip(2.16, 3), { maxDurationSeconds: 30 }, 30)).toEqual({ reading: '2.2s', heldNote: null });
+  });
+
+  it('shows the run’s seconds for a clip whose length the phone could not read, and nothing without a clip', () => {
+    expect(motionClipLengthReading(withClip(null, 7), kling26Clip, 30)).toEqual({ reading: '7s', heldNote: null });
+    expect(motionClipLengthReading(createDefaultCreationDraft('motion'), kling26Clip, 30)).toBeNull();
   });
 });

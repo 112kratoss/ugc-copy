@@ -287,12 +287,16 @@ vi.mock('@/lib/use-screen-leaving', () => ({ useScreenLeaving: () => false }));
 vi.mock('@/lib/use-viewer-playback-gate', () => ({ useViewerPlaybackGate: () => ({}) }));
 vi.mock('@/lib/use-stable-signed-url', () => ({ useStableSignedUrl: (url: unknown) => url }));
 vi.mock('@/lib/unlock-cache', () => ({ refreshUnlockedBundleCaches: vi.fn() }));
-vi.mock('@/lib/remix-start', () => ({ startShowcaseRemix: vi.fn() }));
+vi.mock('@/lib/remix-start', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/remix-start')>(),
+  startShowcaseRemix: vi.fn(),
+}));
 
 import ImmersivePreviewViewerScreen from '@/app/viewer';
 import type { FeedUndoNoticeModel } from '@/components/feed-undo-notice';
 import { haptic } from '@/lib/haptics';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { startShowcaseRemix } from '@/lib/remix-start';
 import {
   filterAnonymousSessionShowcaseFeedItems,
   resetAnonymousShowcaseFeedRemovalsForTests,
@@ -649,6 +653,41 @@ describe("the reel's Recreate for a guest", () => {
     await recreateActive();
 
     expect(routerState.push.mock.calls[0][0]).toMatchObject({ pathname: '/auth' });
+  });
+});
+
+// The reel's Remix opens the creator on its post, with the row above the
+// prompt naming it (poster, title, creator). Home's Remix builds the same link
+// through the same `showcaseRemixCreateHref`.
+describe("the reel's Remix", () => {
+  it('names its post in the creator it opens', async () => {
+    vi.mocked(startShowcaseRemix).mockResolvedValueOnce({
+      kind: 'started',
+      response: { success: true, redirectTo: '/create-image?remix=gen-b&remixPost=post-b' },
+      claimedFreeUnlock: false,
+    });
+    seedLane('viewer-1', lanePosts().map((post) => (
+      post.id === 'post-b' ? { ...post, generationId: 'gen-b', canRemix: true } : post
+    )));
+    await renderReel('post-b');
+
+    await act(async () => {
+      (screenState.callbacksFor!(activeItem()).onRecreate as () => void)();
+    });
+    await settle();
+
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+    const url = new URL(routerState.push.mock.calls[0][0] as string, 'https://magicbooklet.test');
+    expect({ pathname: url.pathname, params: Object.fromEntries(url.searchParams) }).toEqual({
+      pathname: '/create/image',
+      params: {
+        remix: 'gen-b',
+        remixPost: 'post-b',
+        sourceTitle: 'Post post-b',
+        sourceCreator: '@luna',
+        sourceThumbnail: 'https://cdn.example.com/post-b.jpg',
+      },
+    });
   });
 });
 

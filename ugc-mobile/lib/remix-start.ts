@@ -1,14 +1,18 @@
 import type { MagicbookletApiClient } from './api-client';
+import type { ImmersivePreviewItem } from './immersive-preview-view-model';
+import { getNativeRemixCreateHref, getRemixSourceContext } from './viewer-actions';
 
 /** The remix endpoint's answer for a post whose remix sits behind an unlock. */
 export const REMIX_UNLOCK_REQUIRED_CODE = 'REMIX_UNLOCK_REQUIRED';
 
 type RemixApi = Pick<MagicbookletApiClient, 'remixShowcasePost' | 'unlockFreeBundle'>;
 
+export type RemixStartResponse = Awaited<ReturnType<RemixApi['remixShowcasePost']>>;
+
 export type RemixStartResult =
   | {
       kind: 'started';
-      response: Awaited<ReturnType<RemixApi['remixShowcasePost']>>;
+      response: RemixStartResponse;
       /** True when this tap also took the post's free unlock, so its caches are stale. */
       claimedFreeUnlock: boolean;
     }
@@ -47,6 +51,21 @@ export async function startShowcaseRemix({
     if (claimFreeUnlock || !isRemixUnlockRequired(error)) throw error;
     return { kind: 'unlock-required' };
   }
+}
+
+/**
+ * The creator a started remix opens: the server's create link as the app's
+ * route (or the post's own tool and prompt when the app cannot map it), with
+ * the row naming the source. `item` is the post as the reel reads it. Home and
+ * the reel both build the link here; Home's own copy once left the row out.
+ */
+export function showcaseRemixCreateHref(item: ImmersivePreviewItem, response: RemixStartResponse) {
+  return getNativeRemixCreateHref({
+    redirectTo: response.redirectTo,
+    recreateTool: item.recreateTool,
+    prompt: response.prefill?.prompt ?? item.recreatePrompt,
+    context: getRemixSourceContext(item),
+  });
 }
 
 function isRemixUnlockRequired(error: unknown) {

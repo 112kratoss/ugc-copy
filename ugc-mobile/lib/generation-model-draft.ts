@@ -45,6 +45,7 @@ import {
   catalogRunWithShownCost,
   catalogSettingsAtControlDefaults,
   modeGatedSettingValues,
+  MOTION_CLIP_NAME,
   MOTION_INPUTS_FALLBACK_SLOTS,
   SUBJECT_IMAGES_PER_NAME,
   SUBJECT_IMAGES_SLOT_KEY,
@@ -881,6 +882,18 @@ function validateCatalogInputLimit(
   if (count > limit.max) errors.push(limitMessage(limit.max));
 }
 
+/**
+ * The length a run reports for an input, which the quote and the caps here judge as given: a clip's
+ * as its picker read the file, and none for a track. The phone reads a track with a player it never
+ * plays (`readMediaFileLength`), whose length for an MP3 runs long by the encoder's padding (an
+ * iPhone read a 1.500 s file as 1.541 s), so a track trimmed to its slot's cap would read past it and
+ * be refused, though the start, which measures every track itself, would take it. The reading still
+ * holds a track for being short (`catalogInputTooShort`), where reading long can only let one through.
+ */
+function reportedLengthSeconds(asset: CatalogDraftInputAsset): number | null {
+  return asset.kind === 'audio' ? null : asset.durationSeconds ?? null;
+}
+
 function catalogInputConstraintValue(
   constraint: CatalogInputConstraint,
   slots: CatalogDraftInputSlots,
@@ -888,7 +901,7 @@ function catalogInputConstraintValue(
   if (constraint.type === 'combined-duration') {
     return constraint.slotKeys.reduce((total, slotKey) => (
       total + (slots[slotKey] ?? []).reduce((slotTotal, asset) => (
-        slotTotal + Math.max(0, asset.durationSeconds ?? 0)
+        slotTotal + Math.max(0, reportedLengthSeconds(asset) ?? 0)
       ), 0)
     ), 0);
   }
@@ -929,19 +942,21 @@ function validateCatalogV2Inputs(
       if (slot.durationMetadata === 'required' && !(typeof asset.durationSeconds === 'number' && asset.durationSeconds >= 0)) {
         errors.push(`${slot.label} requires duration metadata.`);
       }
+      const reportedLength = reportedLengthSeconds(asset);
       if (
         typeof slot.maxDurationSeconds === 'number'
-        && typeof asset.durationSeconds === 'number'
-        && asset.durationSeconds > slot.maxDurationSeconds
+        && typeof reportedLength === 'number'
+        && reportedLength > slot.maxDurationSeconds
       ) {
         errors.push(`${slot.label} inputs must be ${slot.maxDurationSeconds} seconds or shorter.`);
       }
       // Shorter than the provider takes (a Kling 3.0 video element under 3 seconds): the start
       // refused it, before any hold, only once Generate was pressed. Said in the start's words,
       // naming the clip by its handle where it has one: the app calls every clip it picks
-      // "Reference Video", and the handle is what tells two of them apart.
+      // "Reference Video", and the handle is what tells two of them apart. A motion run's one
+      // clip is named as the start and the web's motion page name it, not "Reference Motion".
       const tooShort = catalogInputTooShort(model.displayName, slot, {
-        label: asset.handle || asset.displayName || asset.fileName || '',
+        label: runDraft.tool === 'motion' ? MOTION_CLIP_NAME : asset.handle || asset.displayName || asset.fileName || '',
         durationSeconds: asset.durationSeconds,
       });
       if (tooShort) errors.push(tooShort);
@@ -1219,7 +1234,7 @@ export function buildUnifiedCatalogGenerationRequest(
         storagePath: asset.storagePath ?? null,
         label: asset.displayName ?? asset.fileName ?? null,
         handle: asset.handle ?? null,
-        durationSeconds: asset.durationSeconds ?? null,
+        durationSeconds: reportedLengthSeconds(asset),
         sourceGenerationId: asset.sourceGenerationId ?? null,
       };
     });
