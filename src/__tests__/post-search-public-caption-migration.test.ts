@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const migrationsDirectory = 'supabase/migrations';
-const migrationFile = '20261101101716_post_search_public_caption.sql';
+const migrationFile = '20261101124828_post_search_public_caption.sql';
 // Every migration's statements, comments left out: a header may quote SQL.
 const statementsOf = (file: string) => readFileSync(join(migrationsDirectory, file), 'utf8').replace(/--.*$/gm, '');
 const statements = statementsOf(migrationFile);
