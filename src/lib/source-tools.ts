@@ -559,11 +559,16 @@ function normalizeSourceModelInputWithCatalog(
   }
 ): { label: string | null; slug: string | null } {
   const rawLabel = normalizeOptionalLabel(params.label, MAX_SOURCE_MODEL_LABEL_LENGTH);
-  const rawSlug = slugifySourceTool(normalizeOptionalLabel(params.slug, MAX_SOURCE_MODEL_LABEL_LENGTH));
+  const requestedSlug = normalizeOptionalLabel(params.slug, MAX_SOURCE_MODEL_LABEL_LENGTH)?.toLowerCase() ?? null;
+  const rawSlug = slugifySourceTool(requestedSlug);
   const tool = getSourceToolOptionFromCatalog(catalog, params.toolSlug);
 
   if (tool && rawSlug) {
-    const model = tool.models.find((candidate) => candidate.slug === rawSlug);
+    // A catalog slug keeps its dots (`veo-3.1`, a generation model's id),
+    // and a composer may send it slugified (`veo-3-1`): the slug sent as it
+    // is wins, then the model whose slug slugifies to the same.
+    const model = tool.models.find((candidate) => candidate.slug === requestedSlug)
+      ?? tool.models.find((candidate) => slugifySourceTool(candidate.slug) === rawSlug);
     if (model) {
       return {
         label: model.label,
