@@ -8,6 +8,7 @@ import { summarizeMediaToolError } from '@/lib/media-tool-error';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
+import { queueUnrecordedShowcaseMedia } from '@/lib/unrecorded-showcase-media';
 import { createVideoTeaserFromFile, withVideoInputFile, TEASER_SECONDS } from '@/lib/video-rendition';
 
 const MAX_ATTEMPTS = 3;
@@ -52,6 +53,9 @@ export async function repairPostMediaTeasers(supabase: SupabaseClient) {
   if (claim.error) throw claim.error;
   const row = (claim.data as TeaserClaim[] | null)?.[0];
   if (!row) return empty;
+  // Named only by the update below. Any other exit, or that update matching no
+  // row, leaves the upload named by nothing.
+  let uploadedTeaser: string | null = null;
   try {
     const path = parseCanonicalStorageObjectPath(row.rendition_storage_path, { minimumSegments: 3 });
     // Upload-published posts file media under their own id; creation-published
@@ -74,6 +78,7 @@ export async function repairPostMediaTeasers(supabase: SupabaseClient) {
     const upload = await storage.upload(teaserPath, toStorageUploadBody(teaser.buffer, 'video/mp4'), {
       contentType: 'video/mp4', cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL, upsert: true,
     });
+    uploadedTeaser = teaserPath;
     if (upload.error) throw upload.error;
     const readback = await storage.download(teaserPath, {}, { signal: AbortSignal.timeout(15_000) });
     if (readback.error || !readback.data || !Buffer.from(await readback.data.arrayBuffer()).equals(teaser.buffer)) {
@@ -86,9 +91,12 @@ export async function repairPostMediaTeasers(supabase: SupabaseClient) {
     }).eq('id', row.id).eq('teaser_locked_by', lockedBy)
       .eq('rendition_storage_path', path).is('teaser_storage_path', null).select('id');
     if (updated.error) throw updated.error;
+    // The row is gone (its post deleted or made private), repointed, given a
+    // teaser meanwhile, or no longer this run's.
     if (!updated.data?.length) throw new Error('Teaser source or lease changed before publication.');
     return { attempted: 1, completed: 1, failed: 0 };
   } catch (error) {
+    await queueUnrecordedShowcaseMedia(supabase, [uploadedTeaser]);
     if (await deferMediaRepairCapacity({ supabase, error, kind: 'teaser', id: row.id, lockedBy, source: row.rendition_storage_path })) {
       return { attempted: 1, completed: 0, failed: 1 };
     }

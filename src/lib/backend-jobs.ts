@@ -346,8 +346,9 @@ export const BACKEND_JOB_REGISTRY = [
   defineBackendJob({
     // Hourly is enough: the post update and publish routes delete a public
     // derivative inline the moment its post stops needing it, and this only
-    // retries what they miss. The posts trigger queues every such object in
-    // the post write's own transaction, so none can be missed silently.
+    // retries what they miss. The posts triggers queue every such object in
+    // the post write's own transaction, and the media sweeps queue what they
+    // uploaded that no update recorded, so none is missed silently.
     name: 'showcase-media-revocations',
     route: '/api/cron/showcase-media-revocations',
     schedule: '30 * * * *',

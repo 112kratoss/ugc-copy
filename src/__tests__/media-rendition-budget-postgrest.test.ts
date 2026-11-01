@@ -68,3 +68,35 @@ it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL
   await db.end();vi.restoreAllMocks();vi.unstubAllEnvs();
  }
 });
+// The claim's UPDATE returned rows in the order its join read post_media, which is heap order under a hash join.
+it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL)('runs the queue head first however post_media stores the rows',async()=>{
+ const cfg=JSON.parse(readFileSync(process.env.AUDIT_STORAGE_CONFIG!,'utf8')),url=process.env.SUPABASE_TEST_DB_URL!;
+ expect(['localhost','127.0.0.1']).toContain(new URL(cfg.API_URL).hostname);expect(['localhost','127.0.0.1']).toContain(new URL(url).hostname);
+ vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL',cfg.API_URL);
+ const originalFetch=globalThis.fetch,downloads:string[]=[];
+ vi.spyOn(globalThis,'fetch').mockImplementation(async(input,init)=>{
+  const target=new URL(input instanceof Request?input.url:String(input));if(target.origin!==new URL(cfg.API_URL).origin)throw Error('External calls forbidden');
+  if(target.pathname.includes('/storage/v1/object/'))downloads.push(target.pathname);
+  return originalFetch(input,init);
+ });
+ const db=new Client({connectionString:url,statement_timeout:10000});await db.connect();
+ const admin=createClient(cfg.API_URL,cfg.SERVICE_ROLE_KEY,{auth:{persistSession:false}});
+ const user=randomUUID(),post=randomUUID(),media=[randomUUID(),randomUUID()];
+ try{
+  expect((await db.query("select id from public.post_media where media_kind='video' and rendition_status in('pending','processing','failed') and rendition_attempt_count<3")).rows).toEqual([]);
+  await db.query("insert into auth.users(id,email,aud,role,created_at)values($1,$2,'authenticated','authenticated',now())",[user,user+'@media-budget.invalid']);
+  await db.query("insert into public.posts(id,user_id,visibility,category,source_kind,post_format,showcase_asset_path)values($1,$2,'private','video','manual','media',$3)",[post,user,'posts/'+post+'/first.mp4']);
+  // The newer row is written first, so it sits before the queue head in the heap.
+  for(const i of [1,0])await db.query("insert into public.post_media(id,post_id,storage_path,media_kind,content_type,sort_order,preview_status,rendition_status,rendition_attempt_count,created_at)values($1,$2,$3,'video','video/mp4',$4,'pending','pending',0,now()+make_interval(secs=>$4::integer))",[media[i],post,'posts/'+post+'/'+i+'.mp4',i]);
+  expect(await repairPostMediaRenditions(admin,{batchSize:2,timeBudgetMs:0,lockedBy:'heap-order-'+post})).toEqual({attempted:1,completed:0,failed:1});
+  expect(downloads).toHaveLength(1);expect(downloads[0]).toContain('/0.mp4');
+  expect((await db.query('select rendition_status,rendition_attempt_count,rendition_locked_by from public.post_media where post_id=$1 order by sort_order',[post])).rows).toEqual([
+   {rendition_status:'failed',rendition_attempt_count:1,rendition_locked_by:null},
+   {rendition_status:'pending',rendition_attempt_count:0,rendition_locked_by:null},
+  ]);
+ }finally{
+  await db.query('delete from public.post_media where post_id=$1',[post]);
+  await db.query('delete from public.posts where id=$1',[post]);await db.query('delete from auth.users where id=$1',[user]);
+  await db.end();vi.restoreAllMocks();vi.unstubAllEnvs();
+ }
+});

@@ -91,6 +91,7 @@ export async function createPostMediaRendition({
   existingTeaserPath,
   onInputProbe,
   onTeaserOutcome,
+  onUploaded,
 }: {
   body: Blob;
   contentType: string | null | undefined;
@@ -100,6 +101,12 @@ export async function createPostMediaRendition({
   existingTeaserPath?: string | null;
   onInputProbe?: (probe: VideoProbeResult) => void;
   onTeaserOutcome?: (outcome: PostMediaTeaserOutcome) => void;
+  /**
+   * Told the path of every object the call writes, or tries to: a write whose
+   * reply is lost may still have landed. A caller that records the paths later
+   * hands any it could not record to the revocation queue.
+   */
+  onUploaded?: (path: string) => void;
 }): Promise<PostMediaRenditionOutcome> {
   const resolvedContentType = contentType || body.type;
   if (!isRenditionEligibleVideo(resolvedContentType, storagePath)) {
@@ -133,6 +140,7 @@ export async function createPostMediaRendition({
               contentType: RENDITION_CONTENT_TYPE,
               upsert: true,
             });
+          onUploaded?.(teaserStoragePath);
           if (teaserUpload.error) {
             throw teaserUpload.error;
           }
@@ -160,6 +168,7 @@ export async function createPostMediaRendition({
           contentType: RENDITION_CONTENT_TYPE,
           upsert: true,
         });
+      onUploaded?.(renditionStoragePath);
 
       if (upload.error) {
         throw upload.error;

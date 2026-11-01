@@ -25,6 +25,13 @@ type PostMediaPreviewResult = {
   displayStoragePath: string | null;
 };
 
+/**
+ * Told the path of every object the call writes, or tries to: a write whose
+ * reply is lost may still have landed. A caller that records the paths later
+ * hands any it could not record to the revocation queue.
+ */
+type OnUploaded = (path: string) => void;
+
 export function buildPostMediaPreviewPath(storagePath: string, contentHash: string) {
   const extensionIndex = storagePath.lastIndexOf('.');
   const basePath = extensionIndex > storagePath.lastIndexOf('/')
@@ -38,11 +45,13 @@ export async function createPostMediaImagePreview({
   contentType,
   storagePath,
   supabase,
+  onUploaded,
 }: {
   body: Blob;
   contentType: string | null | undefined;
   storagePath: string;
   supabase: SupabaseClient;
+  onUploaded?: OnUploaded;
 }) {
   const resolvedContentType = contentType || body.type;
   if (!isImageMedia(resolvedContentType, storagePath)) {
@@ -74,6 +83,7 @@ export async function createPostMediaImagePreview({
       contentType: 'image/webp',
       upsert: true,
     });
+  onUploaded?.(previewStoragePath);
 
   if (upload.error) {
     throw upload.error;
@@ -103,6 +113,7 @@ export async function createPostMediaImagePreview({
         contentType: 'image/webp',
         upsert: true,
       });
+    onUploaded?.(displayStoragePath);
     if (displayUpload.error) {
       throw displayUpload.error;
     }
@@ -128,11 +139,13 @@ export async function createPostMediaPreview({
   contentType,
   storagePath,
   supabase,
+  onUploaded,
 }: {
   body: Blob;
   contentType: string | null | undefined;
   storagePath: string;
   supabase: SupabaseClient;
+  onUploaded?: OnUploaded;
 }): Promise<PostMediaPreviewResult | null> {
   const resolvedContentType = contentType || body.type;
 
@@ -142,6 +155,7 @@ export async function createPostMediaPreview({
       contentType: resolvedContentType,
       storagePath,
       supabase,
+      onUploaded,
     });
   }
 
@@ -159,6 +173,7 @@ export async function createPostMediaPreview({
       contentType: 'image/webp',
       upsert: true,
     });
+  onUploaded?.(previewStoragePath);
 
   if (upload.error) {
     throw upload.error;

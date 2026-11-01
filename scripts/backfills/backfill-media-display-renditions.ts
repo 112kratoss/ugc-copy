@@ -7,6 +7,7 @@ import {
 } from '../../src/lib/media-display-rendition';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '../../src/lib/showcase-media-cache';
 import { toStorageUploadBody } from '../../src/lib/storage-upload-body';
+import { queueUnrecordedShowcaseMedia } from '../../src/lib/unrecorded-showcase-media';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,
@@ -85,6 +86,8 @@ async function main() {
   for (const row of rows) {
     const storagePath = row.storage_path;
     if (!storagePath) continue;
+    // Named only by the update below; anything else leaves it to the revocation queue.
+    let uploadedDisplay: string | null = null;
 
     try {
       const download = await supabase.storage.from(bucketForPath(storagePath)).download(storagePath);
@@ -125,19 +128,23 @@ async function main() {
           contentType: 'image/webp',
           upsert: true,
         });
+      uploadedDisplay = displayPath;
       if (upload.error) throw upload.error;
 
       // The object first, the pointer second: a path recorded before its bytes
       // exist would send every viewer to a 404.
-      const { error: updateError } = await supabase
+      const { data: updated, error: updateError } = await supabase
         .from('post_media')
         .update({ display_storage_path: displayPath })
-        .eq('id', row.id);
+        .eq('id', row.id)
+        .select('id');
       if (updateError) throw updateError;
+      if (!updated?.length) throw new Error('the row went before its display was recorded');
 
       built += 1;
       console.log(`  wrote ${displayPath} (${input.byteLength} B -> ${display.body.byteLength} B)`);
     } catch (error) {
+      await queueUnrecordedShowcaseMedia(supabase, [uploadedDisplay]);
       failed += 1;
       console.error(`  FAILED ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
     }

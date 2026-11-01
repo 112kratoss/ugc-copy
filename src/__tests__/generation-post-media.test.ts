@@ -10,16 +10,25 @@ type MediaRow = {
 
 function createAdminClient({
   mediaRows = [],
+  rowsAtDelete,
   deleteError = null,
   removeError = null,
 }: {
   mediaRows?: MediaRow[];
+  /** The rows as the delete finds them, when a sweep recorded on one after the read. */
+  rowsAtDelete?: MediaRow[];
   deleteError?: { message: string } | null;
   removeError?: { message: string } | null;
 } = {}) {
   const deletedIds: string[][] = [];
   const removals: string[][] = [];
+  const queued: unknown[] = [];
   const client = {
+    rpc: async (name: string, args: unknown) => {
+      if (name !== 'queue_unrecorded_showcase_media') throw new Error(`unexpected rpc ${name}`);
+      queued.push(args);
+      return { data: 1, error: null };
+    },
     from(table: string) {
       if (table !== 'post_media') throw new Error(`unexpected table ${table}`);
       return {
@@ -30,10 +39,14 @@ function createAdminClient({
         },
         delete() {
           return {
-            in: async (_column: string, ids: string[]) => {
-              deletedIds.push(ids);
-              return { error: deleteError };
-            },
+            in: (_column: string, ids: string[]) => ({
+              // The deleted rows, as `.select()` answers them.
+              select: async () => {
+                deletedIds.push(ids);
+                if (deleteError) return { data: null, error: deleteError };
+                return { data: (rowsAtDelete ?? mediaRows).filter((row) => ids.includes(row.id)), error: null };
+              },
+            }),
           };
         },
       };
@@ -51,7 +64,7 @@ function createAdminClient({
       },
     },
   };
-  return { client: client as never, deletedIds, removals };
+  return { client: client as never, deletedIds, removals, queued };
 }
 
 describe('removeGenerationShowcaseDerivative', () => {
@@ -117,6 +130,26 @@ describe('removeGenerationShowcaseDerivative', () => {
       'showcase/gen-1/generated_abc.jpg',
       'showcase/gen-1/generated_abc.preview.1234.webp',
     ]]);
+  });
+
+  it('queues what a sweep recorded on a row between the read and the delete, and nothing already removed', async () => {
+    const { removeGenerationShowcaseDerivative } = await import('@/lib/generation-post-media');
+    const row = { id: 'media-row-1', storage_path: 'showcase/gen-1/generated_abc.jpg', preview_storage_path: null };
+    const { client, removals, queued } = createAdminClient({
+      mediaRows: [row],
+      rowsAtDelete: [{ ...row, preview_storage_path: 'showcase/gen-1/generated_abc.preview.late.webp' }],
+    });
+
+    const result = await removeGenerationShowcaseDerivative({
+      adminSupabase: client,
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_abc.jpg',
+      postId: 'post-1',
+    });
+
+    expect(result).toEqual({ removed: true, removedPaths: ['showcase/gen-1/generated_abc.jpg'], removedMediaRows: 1, error: null });
+    expect(removals).toEqual([['showcase/gen-1/generated_abc.jpg']]);
+    expect(queued).toEqual([{ p_paths: ['showcase/gen-1/generated_abc.preview.late.webp'] }]);
   });
 
   it('retains the media inventory when final row cleanup fails after verified removal', async () => {
