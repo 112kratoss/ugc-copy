@@ -55,7 +55,7 @@ import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/Creat
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
-import { useCreatorDraftOwner, useCreatorFormKey, type CreatorDraftOwner } from '@/lib/use-creator-draft-owner';
+import { useCreatorDraftOwner, useCreatorForm, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import { motionSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import StudioModelPicker from '@/components/StudioModelPicker';
@@ -80,7 +80,7 @@ import {
     setPersistedFile,
 } from '@/lib/persisted-media';
 import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
-import { isAnotherDraftOwner, keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
+import { keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
@@ -252,14 +252,15 @@ type CreateMotionClientProps = {
 /**
  * The motion creator, drawn for one owner's form at a time: the visitor's until someone signs in,
  * then the account's, which takes the visitor's when sign-up was opened here. Another account's
- * form is a creator drawn anew (`useCreatorFormKey`): the earlier owner's unanswered start, run,
+ * form is a creator drawn anew (`useCreatorForm`): the earlier owner's unanswered start, run,
  * result and remix go with theirs, and nothing still under way for them is sent under the next.
  */
 export default function CreateMotionClient(props: CreateMotionClientProps) {
     const { session } = useAuth();
     const draft = useCreatorDraftOwner('motion', session?.user?.id ?? null, props.handoverNonce ?? null);
-    const formKey = useCreatorFormKey(draft);
-    return <MotionCreator key={formKey} {...props} draft={draft} />;
+    const form = useCreatorForm(draft);
+    // The sign-up's welcome is the account's the page came back with, the form it opened on.
+    return <MotionCreator key={form.key} {...props} welcome={form.key === 0 ? props.welcome : null} draft={draft} form={form} />;
 }
 
 function MotionCreator({
@@ -270,11 +271,15 @@ function MotionCreator({
     opening = null,
     startPosts = null,
     draft,
-}: CreateMotionClientProps & { draft: CreatorDraftOwner }) {
+    form,
+}: CreateMotionClientProps & { draft: CreatorDraftOwner; form: CreatorForm }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
     const { owner: draftOwner, carriedDraft, keepsVisitorForm } = draft;
+    // The account whose form this is, which a press goes out under: the page's own, or through a
+    // session that lapsed, the one the form was drawn for.
+    const formAccount = form.owner !== null && form.owner !== VISITOR_DRAFT_OWNER ? form.owner : userId;
     // A page that opened signed out works up to Generate, which asks for an account
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
@@ -344,9 +349,7 @@ function MotionCreator({
     // so nothing waits for one there.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
     const isDraftReady = Boolean(prefill.remixId) || (draftOwner !== null && draftRestoredFor === draftOwner);
-    // Whose draft the last read was for, and whether the prompt carried from sign-up has come
-    // back yet: the prompt box's rule (`creator-draft-prompt.ts`).
-    const promptOwnerRef = useRef<string | null>(null);
+    // Whether the prompt carried from sign-up has come back yet: the prompt box's rule (`creator-draft-prompt.ts`).
     const carriedPromptTakenRef = useRef(false);
     // The start sent without an answer. Also in sessionStorage, which a browser
     // can refuse, so a retry from this page still reuses its key.
@@ -489,7 +492,10 @@ function MotionCreator({
 
     // Per account, and never on a remix page: a remix restores its own inputs,
     // and saving them under the ordinary keys replaced the creator's own draft.
-    const getPersistedMediaKey = (key: string) => (draftOwner && !remixId ? scopedPersistedMediaKey(key, draftOwner) : null);
+    // Nothing from a form another owner's has replaced: it would write the earlier owner's files back.
+    const getPersistedMediaKey = (key: string) => (
+        draftOwner && !remixId && !form.replaced.aborted ? scopedPersistedMediaKey(key, draftOwner) : null
+    );
 
     const processImageFile = async (file: File) => {
         const refusal = describeRefusedMotionPick(file, 'image');
@@ -745,18 +751,6 @@ function MotionCreator({
     useEffect(() => {
         if (remixId || !draftOwner) return;
         let cancelled = false;
-        if (!keepsVisitorForm && isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
-            // The words are another owner's: not this one's to see, nor to save.
-            const openingPrompt = prefillPrompt ?? MOTION_OPENING_PROMPT;
-            promptRef.current = openingPrompt;
-            setPrompt(openingPrompt);
-            // The picture and clip too, and the clip's length: what is saved for them stays
-            // theirs, and the new owner's own come back below.
-            takeImageOffForm();
-            takeVideoOffForm();
-            setUploadPreview(null);
-        }
-        promptOwnerRef.current = draftOwner;
         void (async () => {
             const [draft, savedImageFile, savedVideoFile] = await Promise.all([
                 loadCreatorDraft<MotionTextDraft>('motion', draftOwner).catch(() => null),
@@ -790,7 +784,7 @@ function MotionCreator({
         return () => {
             cancelled = true;
         };
-        // Once per owner: applySavedDraft and the opening prompt read this page's prefill, which does not change.
+        // Once per owner: applySavedDraft reads this page's prefill, which does not change.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [remixId, draftOwner, carriedDraft, keepsVisitorForm]);
 
@@ -1055,9 +1049,10 @@ function MotionCreator({
         { reveal = false }: { reveal?: boolean } = {},
     ) => {
         const { data: { session: currentSession } } = await supabase.auth.getSession();
-        if (unmountSignal.current.aborted) return;
         if (!currentSession?.access_token) {
             setGenerationTiming(null);
+            // A page that has gone sends no one to sign in.
+            if (unmountSignal.current.aborted) return;
             await redirectToSignIn();
             return;
         }
@@ -1077,7 +1072,12 @@ function MotionCreator({
                 idempotencyKey: start.idempotencyKey,
             });
         } catch (startError) {
-            if (unmountSignal.current.aborted) return;
+            if (unmountSignal.current.aborted) {
+                // The page went while the start was out. A refusal settles it, so the next visit does
+                // not send it again; an answer that may yet mean it started stays kept, to be checked.
+                if (!isAmbiguousWebStartFailure(startError)) clearPendingWebStart('motion', start.idempotencyKey);
+                return;
+            }
             setGenerationTiming(null);
             if (isAmbiguousWebStartFailure(startError)) {
                 // It may have started. The key stays, so checking again answers
@@ -1090,10 +1090,11 @@ function MotionCreator({
             return;
         }
         if (unmountSignal.current.aborted) {
-            // The creator went while the start was out: the page was left, or another owner's form
-            // took its place. The run is the server's. The balance is read again for whoever holds
-            // the session now, rather than set to the one this start answered, and nothing here
-            // follows the run.
+            // The page went while the start was out: it was left, or another owner's form took its
+            // place. The run is the server's and the start has done its work. The balance is read
+            // again for whoever holds the session now, rather than set to the one this start
+            // answered, and nothing here follows the run.
+            clearPendingWebStart('motion', start.idempotencyKey);
             announceGenerationStarted();
             window.dispatchEvent(new Event('credits_updated'));
             return;
@@ -1156,7 +1157,9 @@ function MotionCreator({
         if (staged && isStagedUploadReusable(file)) {
             try {
                 return { signedUrl: await refreshTemporaryMediaUrl(staged.storagePath, press), storagePath: staged.storagePath };
-            } catch {
+            } catch (refreshError) {
+                // A press given up (another account's session, another owner's form) goes no further.
+                if (isUploadCancelledError(refreshError)) throw refreshError;
                 // The staged copy is gone or could not be signed again: upload the file again.
                 stagedUploadsRef.current.delete(file);
             }
@@ -1180,19 +1183,21 @@ function MotionCreator({
         try {
             // Before any upload: a lapsed session goes to sign-in with this page's params.
             const { data: { session: currentSession } } = await supabase.auth.getSession();
-            if (unmountSignal.current.aborted) return;
             if (!currentSession?.access_token) {
                 setGenerationTiming(null);
+                // A page that has gone sends no one to sign in.
+                if (unmountSignal.current.aborted) return;
                 await redirectToSignIn();
                 return;
             }
-            // The press is the page's account's: under a session another account has taken since
+            // The press is the form's account's: under a session another account has taken since
             // (signed in from another tab, before the page has heard), nothing goes up or out.
-            if (userId && currentSession.user.id !== userId) {
+            if (formAccount && currentSession.user.id !== formAccount) {
                 setGenerationTiming(null);
                 return;
             }
-            const press: TemporaryMediaUploadOptions = { userId: currentSession.user.id, signal: unmountSignal.current };
+            // A page that is only left goes on with its press; another owner's form in its place stops it.
+            const press: TemporaryMediaUploadOptions = { userId: currentSession.user.id, signal: form.replaced };
 
             let imageUrl = characterImage;
             let videoUrl = referenceVideo;
@@ -1320,6 +1325,18 @@ function MotionCreator({
         await startFreshRun();
     };
 
+    /**
+     * The balance a paid Enhance answers with. One that answers after the page went (it was left, or
+     * another owner's form took its place) is read again for whoever holds the session instead.
+     */
+    const reportEnhanceBalance = (credits: number) => {
+        if (unmountSignal.current.aborted) {
+            window.dispatchEvent(new Event('credits_updated'));
+            return;
+        }
+        updateCredits(credits);
+    };
+
     /** The explicit choice to run again while the unconfirmed start may exist. */
     const startNewRunInstead = async () => {
         if (activeGenerationRequestKeyRef.current) return;
@@ -1333,7 +1350,7 @@ function MotionCreator({
         const { data: { session: currentSession } } = await supabase.auth.getSession();
         // Another account's session the page has not heard of yet picks up nothing: the creator
         // is drawn anew for that account once it has.
-        if (!currentSession || (userId && currentSession.user.id !== userId)) return;
+        if (!currentSession || (formAccount && currentSession.user.id !== formAccount)) return;
         // Asked of the server: the browser may not read a run's prompt, cost or model.
         const run = await fetchCreatorActiveRun({ tool: 'motion', accessToken: currentSession.access_token, signal });
 
@@ -1871,18 +1888,11 @@ function MotionCreator({
                         </div>
 
                         <EnhancePromptButton
-                            // A press for the owner before an account switch is theirs: the button is drawn anew for the next
-                            // owner, and its answer dropped whichever callbacks it comes back through (`creator-draft-prompt.ts`).
-                            key={draftOwner}
                             variant="toolbar"
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
-                            onEnhanced={(text) => {
-                                if (!unmountSignal.current.aborted && !isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) handlePromptChange(text);
-                            }}
-                            onCreditsUpdate={(credits) => {
-                                if (!unmountSignal.current.aborted && !isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
-                            }}
+                            onEnhanced={(text) => handlePromptChange(text)}
+                            onCreditsUpdate={reportEnhanceBalance}
                             medium="motion"
                             selectedModel={selectedModel}
                             context={{

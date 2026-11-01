@@ -5354,6 +5354,8 @@ describe('CreateVideoClient Kling video elements', () => {
           target: { files: [image('lighthouse')] },
         });
         await waitFor(() => expect(setPersistedFileMock).toHaveBeenCalledWith('create-video:start-image:user-2', expect.objectContaining({ name: 'lighthouse.png' })));
+        // His press goes out under his own session.
+        authClient.session = { access_token: 'token-user-2', user: { id: 'user-2' } };
         fireEvent.change(promptBox(), { target: { value: PROMPT } });
         fireEvent.click(generateButton());
         await waitFor(() => expect(postedRun()).toBeDefined());
@@ -5584,6 +5586,16 @@ describe('CreateVideoClient Kling video elements', () => {
       function authClientSignsInAs(userId: string) {
         authClient.session = sessionOf(userId);
       }
+      /** The account signs out in another tab: a page that opened signed in keeps its form, owned by no one. */
+      function signOutHere(redraw: () => void) {
+        authClient.session = null;
+        authState.signedIn = false;
+        draftOwnerOverride.current = { owner: null, carriedDraft: false, keepsVisitorForm: false };
+        redraw();
+      }
+      const keepAshasStartImage = () => getPersistedFileMock.mockImplementation(async (key: string) => (
+        key === 'create-video:start-image:user-1' ? new File(['harbour'], 'harbour.png', { type: 'image/png' }) : null
+      ));
       const authorizationOf = (init: RequestInit | undefined) => new Headers(init?.headers).get('Authorization');
       const startsSent = () => fetchMock.mock.calls.filter(([input, init]) => String(input).includes('/api/generations') && init?.method === 'POST');
       async function settle() {
@@ -5698,6 +5710,92 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(temporaryUploadMock).not.toHaveBeenCalled();
         expect(startsSent()).toEqual([]);
+      });
+
+      it('uploads and sends nothing for a press on a page signed out in another tab, once another account took the session', async () => {
+        keepAshasStartImage();
+        signInAs('user-1');
+        const view = render(page());
+        await waitFor(() => expect(screen.getByAltText('Start image')).toBeInTheDocument());
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+        // Asha signs out in another tab: the page keeps her form, owned by no one. Ben then signs in
+        // there, and the browser has his session before the page does.
+        signOutHere(() => view.rerender(page()));
+        authClientSignsInAs('user-2');
+        fireEvent.click(generateButton());
+        await settle();
+
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+        expect(startsSent()).toEqual([]);
+      });
+
+      it('forgets a start refused after the page was left, so the next visit does not send it again', async () => {
+        let answer: (response: Response) => void = () => undefined;
+        answerStarts(() => new Promise<Response>((resolve) => { answer = resolve; }));
+        const view = await pressForAsha();
+        await waitFor(() => expect(startsSent()).toHaveLength(1));
+
+        view.unmount();
+        await act(async () => answer({
+          ok: false,
+          status: 402,
+          json: async () => ({ code: 'insufficient_credits', error: 'Insufficient credits. This action costs 12 credits.' }),
+        } as Response));
+
+        expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+      });
+
+      it('still sends a press whose page was left while its frame went up, under its own account', async () => {
+        keepAshasStartImage();
+        let finishUpload: () => void = () => undefined;
+        temporaryUploadMock.mockImplementationOnce((file: File) => new Promise((resolve) => {
+          finishUpload = () => resolve({ signedUrl: `https://signed.example.com/uploads/user-1/${file.name}`, storagePath: `uploads/user-1/${file.name}` });
+        }));
+        signInAs('user-1');
+        const view = render(page());
+        await waitFor(() => expect(screen.getByAltText('Start image')).toBeInTheDocument());
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(temporaryUploadMock).toHaveBeenCalled());
+
+        view.unmount();
+        await act(async () => finishUpload());
+
+        await waitFor(() => expect(startsSent()).toHaveLength(1));
+        expect(authorizationOf(startsSent()[0][1])).toBe('Bearer token-user-1');
+      });
+
+      it('prepares no Seedance asset under a session another account has taken, while the page still checks it', async () => {
+        getPersistedImageElementRecordsMock.mockImplementation(async (key: string) => (key.endsWith(':user-1')
+          ? [{ id: 'asha-picture', displayName: 'Asha’s lantern', file: new File(['lantern'], 'lantern.png', { type: 'image/png' }) }]
+          : []));
+        signInAs('user-1');
+        render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+        const [prepare] = await screen.findAllByRole('button', { name: 'Prepare asset' });
+
+        authClientSignsInAs('user-2');
+        fireEvent.click(prepare);
+        await settle();
+
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+        expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/seedance-assets'))).toEqual([]);
+      });
+
+      it('greets only the account the page came back from sign-up with', async () => {
+        const welcomePage = () => <CreateVideoClient prefill={{}} welcome={{ referral: null }} />;
+        const welcomeReads = () => fetchMock.mock.calls
+          .filter(([input]) => String(input) === '/api/credits/welcome')
+          .map(([, init]) => authorizationOf(init));
+        signInAs('user-1');
+        const view = render(welcomePage());
+        await waitFor(() => expect(welcomeReads()).toContain('Bearer token-user-1'));
+
+        signInAs('user-2', () => view.rerender(welcomePage()));
+        await settle();
+
+        expect(welcomeReads()).not.toContain('Bearer token-user-2');
+        expect(screen.queryByText(/You’re signed in|You’re in:/)).toBeNull();
       });
 
       it('takes the earlier account’s result, its caption and its Post form off the canvas', async () => {

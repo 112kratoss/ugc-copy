@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { adoptVisitorDraft, hasVisitorDraftHandover, VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import type { CreatorDraftTool } from '@/lib/persisted-media';
@@ -130,14 +130,29 @@ export function nextCreatorFormHolder(holder: CreatorFormHolder, draft: CreatorD
 }
 
 /**
- * The key a creator draws its body under (`nextCreatorFormHolder`). Another owner's form is a new
- * body, so nothing of the earlier owner's stays on the page, and what was still under way for them
- * stops with the body that started it (`useUnmountSignal`).
+ * The form a creator draws its body for (`nextCreatorFormHolder`).
+ * - `key`: the body is drawn under it, so another owner's form is a new body and nothing of the
+ *   earlier owner's stays on the page.
+ * - `owner`: whose form it is, through a lapse too, when the draft has none. A press goes out only
+ *   under that account's session.
+ * - `replaced`: aborted once another owner's form takes this one's place, in the commit that swaps
+ *   them, so the earlier body's work still out (an upload, a save as it unmounts) stops there. A
+ *   page that is only left aborts nothing: what the body started for its owner goes on.
  */
-export function useCreatorFormKey(draft: CreatorDraftOwner): number {
-  const [holder, setHolder] = useState<CreatorFormHolder>(() => ({ owner: draft.owner, key: 0 }));
-  const next = nextCreatorFormHolder(holder, draft);
+export type CreatorForm = { key: number; owner: string | null; replaced: AbortSignal };
+
+export function useCreatorForm(draft: CreatorDraftOwner): CreatorForm {
+  const [held, setHeld] = useState(() => ({ owner: draft.owner, key: 0, replacement: new AbortController() }));
+  const next = nextCreatorFormHolder(held, draft);
   // Moved as the page draws, so the earlier owner's body is never drawn for the next owner.
-  if (next !== holder) setHolder(next);
-  return next.key;
+  if (next !== held) {
+    setHeld({ ...next, replacement: next.key === held.key ? held.replacement : new AbortController() });
+  }
+  // A layout effect, so the earlier body learns it was replaced before its own unmount effects run.
+  const drawn = useRef(held.replacement);
+  useLayoutEffect(() => {
+    if (drawn.current !== held.replacement) drawn.current.abort();
+    drawn.current = held.replacement;
+  }, [held.replacement]);
+  return { key: held.key, owner: held.owner, replaced: held.replacement.signal };
 }

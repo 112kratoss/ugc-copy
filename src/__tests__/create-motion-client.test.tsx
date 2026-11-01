@@ -57,7 +57,7 @@ const authState = vi.hoisted(() => ({
   session: {
     access_token: 'test-token',
     user: { id: 'user-1' },
-  },
+  } as { access_token: string; user: { id: string } } | null,
   updateCredits: vi.fn(),
 }));
 // The browser's auth client: signed in or out, and as whom. It has another account's session before
@@ -1644,7 +1644,15 @@ describe('CreateMotionClient drafts and media', () => {
     }
     /** The browser's auth client holds another account's session while the page still checks it. */
     function authClientSignsInAs(userId: string) {
+      sessionState.signedIn = true;
       sessionState.session = sessionOf(userId);
+    }
+    /** The account signs out in another tab: a page that opened signed in keeps its form, owned by no one. */
+    function signOutHere(redraw: () => void) {
+      sessionState.signedIn = false;
+      authState.session = null;
+      draftOwnerOverride.current = { owner: null, carriedDraft: false, keepsVisitorForm: false };
+      redraw();
     }
     const authorizationOf = (init: RequestInit | undefined) => new Headers(init?.headers).get('Authorization');
     async function settle() {
@@ -1746,6 +1754,49 @@ describe('CreateMotionClient drafts and media', () => {
       expect(startPosts()).toEqual([]);
     });
 
+    it('uploads and sends nothing for a press on a page signed out in another tab, once another account took the session', async () => {
+      signInAs('user-1');
+      const view = render(page());
+      await attachBothInputs(view.container);
+
+      // Asha signs out in another tab: the page keeps her form, owned by no one. Ben then signs in
+      // there, and the browser has his session before the page does.
+      signOutHere(() => view.rerender(page()));
+      authClientSignsInAs('user-2');
+      await pressGenerate();
+      await settle();
+
+      expect(uploadMocks.uploadMediaToTemporaryStorage).not.toHaveBeenCalled();
+      expect(startPosts()).toEqual([]);
+    });
+
+    it('forgets a start refused after the page was left, so the next visit does not send it again', async () => {
+      let answer: (response: Response) => void = () => undefined;
+      startAnswers = [() => new Promise<Response>((resolve) => { answer = resolve; })];
+      const view = await pressForAsha();
+      await waitFor(() => expect(startPosts()).toHaveLength(1));
+
+      view.unmount();
+      await act(async () => answer(jsonResponse({ code: 'insufficient_credits', error: 'Insufficient credits. This action costs 20 credits.' }, 402)));
+
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+    });
+
+    it('still sends a press whose page was left while its picture went up, under its own account', async () => {
+      let finishUpload: () => void = () => undefined;
+      uploadMocks.uploadMediaToTemporaryStorage.mockImplementationOnce((file: File) => new Promise((resolve) => {
+        finishUpload = () => resolve({ signedUrl: `https://storage.example/uploads/${file.name}?token=first`, storagePath: `uploads/user-1/${file.name}` });
+      }));
+      const view = await pressForAsha();
+      await waitFor(() => expect(uploadMocks.uploadMediaToTemporaryStorage).toHaveBeenCalled());
+
+      view.unmount();
+      await act(async () => finishUpload());
+
+      await waitFor(() => expect(startPosts()).toHaveLength(1));
+      expect(authorizationOf(startPosts()[0][1])).toBe('Bearer token-user-1');
+    });
+
     it('takes the earlier account’s result, its caption and its Post form off the canvas', async () => {
       generationLookupBody = { generations: [{ id: 'generation-1', title: 'Rooftop dance', paywallPrefill: null }] };
       const view = await pressForAsha();
@@ -1806,6 +1857,9 @@ describe('CreateMotionClient drafts and media', () => {
         restoreIssues: [],
       };
       const ashasRead = fetchMock.getMockImplementation()!;
+      onTestFinished(() => {
+        fetchMock.mockImplementation(ashasRead);
+      });
       fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
         String(input).startsWith('/api/remix-source?') && authorizationOf(init) !== 'Bearer token-user-1'
           ? jsonResponse({ error: 'Remix source not found' }, 404)

@@ -63,7 +63,7 @@ import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/Creat
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
-import { useCreatorDraftOwner, useCreatorFormKey, type CreatorDraftOwner } from '@/lib/use-creator-draft-owner';
+import { useCreatorDraftOwner, useCreatorForm, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses, IconButton } from '@/components/DesignSystem';
 import { videoRunShortSummary, videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import {
@@ -178,7 +178,7 @@ import {
     setPersistedValue,
 } from '@/lib/persisted-media';
 import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
-import { isAnotherDraftOwner, keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
+import { keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
@@ -1223,14 +1223,15 @@ type CreateVideoClientProps = {
 /**
  * The video creator, drawn for one owner's form at a time: the visitor's until someone signs in,
  * then the account's, which takes the visitor's when sign-up was opened here. Another account's
- * form is a creator drawn anew (`useCreatorFormKey`): the earlier owner's unanswered start, run,
+ * form is a creator drawn anew (`useCreatorForm`): the earlier owner's unanswered start, run,
  * result and remix go with theirs, and nothing still under way for them is sent under the next.
  */
 export default function CreateVideoClient(props: CreateVideoClientProps) {
     const { session } = useAuth();
     const draft = useCreatorDraftOwner('video', session?.user?.id ?? null, props.handoverNonce ?? null);
-    const formKey = useCreatorFormKey(draft);
-    return <VideoCreator key={formKey} {...props} draft={draft} />;
+    const form = useCreatorForm(draft);
+    // The sign-up's welcome is the account's the page came back with, the form it opened on.
+    return <VideoCreator key={form.key} {...props} welcome={form.key === 0 ? props.welcome : null} draft={draft} form={form} />;
 }
 
 function VideoCreator({
@@ -1240,11 +1241,15 @@ function VideoCreator({
     opening = null,
     startPosts = null,
     draft,
-}: CreateVideoClientProps & { draft: CreatorDraftOwner }) {
+    form,
+}: CreateVideoClientProps & { draft: CreatorDraftOwner; form: CreatorForm }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
     const { owner: draftOwner, carriedDraft, keepsVisitorForm } = draft;
+    // The account whose form this is, which a press goes out under: the page's own, or through a
+    // session that lapsed, the one the form was drawn for.
+    const formAccount = form.owner !== null && form.owner !== VISITOR_DRAFT_OWNER ? form.owner : userId;
     // A page that opened signed out works up to Generate, which asks for an account
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
@@ -1337,9 +1342,7 @@ function VideoCreator({
     // The owner whose saved draft has been read back. Until then nothing is saved over
     // it, and the catalog does not pick its default model in place of the saved one.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
-    // Whose draft the last read was for, and whether the prompt carried from sign-up has come
-    // back yet: the prompt box's rule (`creator-draft-prompt.ts`).
-    const promptOwnerRef = useRef<string | null>(null);
+    // Whether the prompt carried from sign-up has come back yet: the prompt box's rule (`creator-draft-prompt.ts`).
     const carriedPromptTakenRef = useRef(false);
     const restoredDraftModelRef = useRef(false);
     // A saved draft with a model was read back, a link's model or not: its settings are the creator's.
@@ -1350,8 +1353,6 @@ function VideoCreator({
     const emptySavedDraftRef = useRef<Partial<VideoCreatorDraft> | null>(null);
     // The owner whose saved files have been read back (`complete`), or given up on.
     const [mediaRestoredFor, setMediaRestoredFor] = useState<{ owner: string; complete: boolean } | null>(null);
-    // Whose saved files the last read was for: the files on the form are theirs.
-    const mediaOwnerRef = useRef<string | null>(null);
     const pendingAdditionalSettingsRef = useRef<VideoCreatorDraft['additionalSettings'] | null>(null);
     const unsavedDraftRef = useRef<{ owner: string; draft: VideoCreatorDraft } | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
@@ -1560,11 +1561,12 @@ function VideoCreator({
     };
     // Staged files are saved under the account that added them (or the visitor, until
     // one signs in), so the next account to use this browser does not open them. A
-    // remix keeps none: it restores its source. Nor does a run or a pick finishing for
-    // an owner the page has left since: the form holds the next owner's files then.
+    // remix keeps none: it restores its source. Nor does a form another owner's has replaced: a
+    // press, a pick or a save still out for it would write the earlier owner's files back, after a
+    // sign-out that cleared them too.
     const mediaKey = useCallback((key: string) => (
-        !remixId && draftOwner && mediaOwnerRef.current === draftOwner ? scopedPersistedMediaKey(key, draftOwner) : null
-    ), [remixId, draftOwner]);
+        !remixId && draftOwner && !form.replaced.aborted ? scopedPersistedMediaKey(key, draftOwner) : null
+    ), [form.replaced, remixId, draftOwner]);
     const persistVideoElements = useCallback(async (nextElements: VideoElementDraft[]) => {
         const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoElements);
         if (!key) {
@@ -2780,12 +2782,6 @@ function VideoCreator({
         if (remixId || !draftOwner) {
             return;
         }
-        if (!keepsVisitorForm && isAnotherDraftOwner(mediaOwnerRef.current, draftOwner)) {
-            // The pictures, clips and tracks are another owner's: not this one's to see, send or
-            // save. What is saved for them stays theirs, and the new owner's own come back below.
-            takeMediaOffForm();
-        }
-        mediaOwnerRef.current = draftOwner;
 
         let isMounted = true;
         const key = (name: string) => scopedPersistedMediaKey(name, draftOwner);
@@ -2938,16 +2934,6 @@ function VideoCreator({
         // Words typed on the page win over the saved prompt, typed before the page's script ran
         // included, except over the one carried from sign-up (`creator-draft-prompt.ts`).
         const openingPrompt = prefillPrompt ?? '';
-        if (!keepsVisitorForm && isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
-            // The words are another owner's, the shots' and the enhancer's notes on them too: not
-            // this one's to see, nor to save.
-            promptRef.current = openingPrompt;
-            setPrompt(openingPrompt);
-            setMultiPrompts(openingShots());
-            setPromptQualityWarnings([]);
-            setMultiPromptQualityWarnings({});
-        }
-        promptOwnerRef.current = draftOwner;
         // The catalog waits for the draft, so a store that never answers must not hold
         // it: past this the page goes on without the draft, and a late one is ignored.
         let settled = false;
@@ -3079,10 +3065,11 @@ function VideoCreator({
         return () => window.clearTimeout(timer);
     }, [draftRestoredFor, flushTextDraft, remixId, textDraft, draftOwner]);
 
-    // An edit made in the last half second is not lost when the page goes.
+    // An edit made in the last half second is not lost when the page goes. A form another owner's
+    // has replaced keeps it unsaved: its owner may have just signed out.
     useEffect(() => () => {
-        void flushTextDraft();
-    }, [flushTextDraft]);
+        if (!form.replaced.aborted) void flushTextDraft();
+    }, [flushTextDraft, form.replaced]);
 
     /** Saves the form now, for a reload or a sign-in round trip about to leave the page. */
     const saveTextDraftNow = async () => {
@@ -3246,14 +3233,13 @@ function VideoCreator({
         durationSeconds,
     });
     /**
-     * Picked files' seeds once each length is read, or none when the page's owner changed
-     * meanwhile, or the creator went with another owner's form drawn in its place: the files were
-     * the earlier owner's, so they go with that owner's form, unsaved.
+     * Picked files' seeds once each length is read, or none when the creator went meanwhile (it was
+     * left, or another owner's form took its place): the files go with the form they were picked on,
+     * unsaved.
      */
     const readPickSeeds = async <Seed extends { previewUrl: string }>(read: Promise<Seed[]>): Promise<Seed[] | null> => {
-        const pickedFor = mediaOwnerRef.current;
         const seeds = await read;
-        if (mediaOwnerRef.current === pickedFor && !unmountSignal.current.aborted) return seeds;
+        if (!unmountSignal.current.aborted) return seeds;
         seeds.forEach((seed) => revokeObjectUrl(seed.previewUrl));
         return null;
     };
@@ -3391,31 +3377,6 @@ function VideoCreator({
         if (key) {
             await removePersistedMedia(key);
         }
-    };
-
-    /**
-     * Empties the form of its media: the frames, every picture, clip and track, the Omni IDs
-     * pasted for a run and the names of files refused. Nothing saved is touched. For an owner
-     * change, where all of it was the earlier owner's.
-     */
-    const takeMediaOffForm = () => {
-        setFrame('start', null);
-        setFrame('end', null);
-        [...elementsRef.current, ...referenceVideosRef.current, ...referenceAudiosRef.current, ...klingVideoElementsRef.current]
-            .forEach((item) => revokeObjectUrl(item.previewUrl));
-        klingSubjectsRef.current.forEach((subject) => subject.images.forEach((image) => revokeObjectUrl(image.previewUrl)));
-        commitElements([]);
-        commitReferenceVideos([]);
-        commitReferenceAudios([]);
-        commitKlingVideoElements([]);
-        klingSubjectsRef.current = [];
-        setKlingSubjects([]);
-        setPreparedAudioIds([]);
-        setCharacterIds([]);
-        setPreparedAudioIdDraft('');
-        setCharacterIdDraft('');
-        setPickNotice(null);
-        setUploadPreview(null);
     };
 
     const handleRemoveElement = async (elementId: string) => {
@@ -3921,6 +3882,9 @@ function VideoCreator({
         if (!session) {
             throw new Error('Please log in to prepare Seedance assets.');
         }
+        // Not under a session another account has taken since (signed in from another tab, before
+        // the page has heard): the asset would be that account's.
+        if (formAccount && session.user.id !== formAccount) throw new UploadCancelledError();
 
         const response = assetId
             ? await fetch(`/api/seedance-assets?assetId=${encodeURIComponent(assetId)}`, {
@@ -4074,6 +4038,17 @@ function VideoCreator({
         return nextReferences.find((reference) => reference.id === referenceId) ?? null;
     };
 
+    /**
+     * The uploads of a Prepare: under the session of the form's account, and stopped if another
+     * owner's form takes this one's place. None while the browser holds another account's session
+     * (signed in from another tab, before the page has heard): nothing of this form goes up under it.
+     */
+    const prepareUploads = async (): Promise<TemporaryMediaUploadOptions | null> => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session && formAccount && session.user.id !== formAccount) return null;
+        return { userId: session?.user.id, signal: form.replaced };
+    };
+
     const prepareElementSeedanceAsset = async (elementId: string) => {
         // Preparing uploads the file, which takes an account.
         if (isVisitor) {
@@ -4084,7 +4059,9 @@ function VideoCreator({
         setActiveSeedanceAssetKey(activeKey);
 
         try {
-            const uploadedElement = await updateElementAsset(elementId, (element) => ensureUploadedElement(element));
+            const uploads = await prepareUploads();
+            if (!uploads) return;
+            const uploadedElement = await updateElementAsset(elementId, (element) => ensureUploadedElement(element, uploads));
             // Gone, or replaced while it uploaded: the card has nothing of its own to prepare yet.
             if (!uploadedElement) return;
 
@@ -4132,8 +4109,10 @@ function VideoCreator({
         setActiveSeedanceAssetKey(activeKey);
 
         try {
+            const uploads = await prepareUploads();
+            if (!uploads) return;
             if (kind === 'video') {
-                const uploadedReference = await updateReferenceVideoAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Video'));
+                const uploadedReference = await updateReferenceVideoAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Video', uploads));
                 // Gone, or replaced while it uploaded.
                 if (!uploadedReference) return;
 
@@ -4149,7 +4128,7 @@ function VideoCreator({
                 return;
             }
 
-            const uploadedReference = await updateReferenceAudioAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Audio'));
+            const uploadedReference = await updateReferenceAudioAsset(referenceId, (reference) => ensureUploadedReference(reference, 'Audio', uploads));
             if (!uploadedReference) return;
 
             const sourceUrl = uploadedReference.storagePath || uploadedReference.providerUrl;
@@ -4398,7 +4377,6 @@ function VideoCreator({
         let started: WebGenerationStartResponse;
         try {
             const { data: { session: activeSession } } = await supabase.auth.getSession();
-            if (unmountSignal.current.aborted) return;
             if (attempt.userId && activeSession && activeSession.user.id !== attempt.userId) {
                 setGenerationTiming(null);
                 return;
@@ -4411,16 +4389,22 @@ function VideoCreator({
                 idempotencyKey: attempt.idempotencyKey,
             });
         } catch (startError) {
-            if (unmountSignal.current.aborted) return;
+            if (unmountSignal.current.aborted) {
+                // The page went while the start was out. A refusal settles it, so the next visit does
+                // not send it again; an answer that may yet mean it started stays kept, to be checked.
+                if (!isAmbiguousWebStartFailure(startError)) clearPendingWebStart('video', attempt.idempotencyKey);
+                return;
+            }
             await handleStartFailure(startError, attempt);
             return;
         }
 
         if (unmountSignal.current.aborted) {
-            // The creator went while the start was out: the page was left, or another owner's form
-            // took its place. The run is the server's. The balance is read again for whoever holds
-            // the session now, rather than set to the one this start answered, and nothing here
-            // follows the run.
+            // The page went while the start was out: it was left, or another owner's form took its
+            // place. The run is the server's and the start has done its work. The balance is read
+            // again for whoever holds the session now, rather than set to the one this start
+            // answered, and nothing here follows the run.
+            clearPendingWebStart('video', attempt.idempotencyKey);
             announceGenerationStarted();
             window.dispatchEvent(new Event('credits_updated'));
             return;
@@ -4622,7 +4606,7 @@ function VideoCreator({
             const { data: { session } } = await supabase.auth.getSession();
             // Another account's session the page has not heard of yet picks up nothing: the creator
             // is drawn anew for that account once it has.
-            if (!session || (userId && session.user.id !== userId)) return;
+            if (!session || (formAccount && session.user.id !== formAccount)) return;
 
             // A start this tab sent and never heard back from goes first. Replayed under
             // its own key, it answers with the run it started, or starts it once.
@@ -4879,26 +4863,28 @@ function VideoCreator({
         }));
 
         const { data: { session: activeSession } } = await supabase.auth.getSession();
-        if (unmountSignal.current.aborted) return;
         if (!activeSession) {
             // The session lapsed since the page opened: back here after signing in, on this
             // page's own link, with the draft saved under the account it belongs to.
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
             setGenerationTiming(null);
+            // A page that has gone sends no one to sign in.
+            if (unmountSignal.current.aborted) return;
             await saveTextDraftNow();
             router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
             return;
         }
-        // The press is the page's account's: under a session another account has taken since
+        // The press is the form's account's: under a session another account has taken since
         // (signed in from another tab, before the page has heard), nothing goes up or out.
-        if (userId && activeSession.user.id !== userId) {
+        if (formAccount && activeSession.user.id !== formAccount) {
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
             setGenerationTiming(null);
             return;
         }
-        const press: TemporaryMediaUploadOptions = { userId: activeSession.user.id, signal: unmountSignal.current };
+        // A page that is only left goes on with its press; another owner's form in its place stops it.
+        const press: TemporaryMediaUploadOptions = { userId: activeSession.user.id, signal: form.replaced };
 
         // A prepared Seedance asset goes as its id beside the file's own link: the server
         // measures the link and gives the provider the id. One still processing, or one
@@ -5214,6 +5200,18 @@ function VideoCreator({
 
     // The creator's own choice to stop waiting, priced on its button: the unanswered
     // start may yet have started, so this can be a second run.
+    /**
+     * The balance a paid Enhance answers with. One that answers after the page went (it was left, or
+     * another owner's form took its place) is read again for whoever holds the session instead.
+     */
+    const reportEnhanceBalance = (credits: number) => {
+        if (unmountSignal.current.aborted) {
+            window.dispatchEvent(new Event('credits_updated'));
+            return;
+        }
+        updateCredits(credits);
+    };
+
     const startNewRunInstead = () => {
         clearPendingWebStart('video');
         setUnconfirmedStart(null);
@@ -5811,22 +5809,16 @@ function VideoCreator({
                                 ) : null}
 
                                 <EnhancePromptButton
-                                    // A press for the owner before an account switch is theirs: the button is drawn anew for the next
-                                    // owner, and its answer dropped whichever callbacks it comes back through (`creator-draft-prompt.ts`).
-                                    key={draftOwner}
                                     variant="toolbar"
                                     leading={<CreatorTemplatesTile />}
                                     prompt={prompt}
                                     onEnhanced={(text, result) => {
-                                        if (unmountSignal.current.aborted || isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;
                                         setPrompt(text);
                                         setPromptQualityWarnings(result?.warnings ?? []);
                                         setActiveMentionQuery(null);
                                         requestAnimationFrame(() => updateMentionState(text));
                                     }}
-                                    onCreditsUpdate={(credits) => {
-                                        if (!unmountSignal.current.aborted && !isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
-                                    }}
+                                    onCreditsUpdate={reportEnhanceBalance}
                                     medium="video"
                                     selectedModel={selectedModel}
                                     helperText={
@@ -5857,20 +5849,15 @@ function VideoCreator({
                                             ) : null}
                                         </div>
                                         <EnhancePromptButton
-                                            // Drawn anew for the next owner, as the prompt's button is.
-                                            key={draftOwner}
                                             prompt={shot.prompt}
                                             onEnhanced={(text, result) => {
-                                                if (unmountSignal.current.aborted || isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;
                                                 updateShot(shot.id, 'prompt', text);
                                                 setMultiPromptQualityWarnings((current) => ({
                                                     ...current,
                                                     [shot.id]: result?.warnings ?? [],
                                                 }));
                                             }}
-                                            onCreditsUpdate={(credits) => {
-                                                if (!unmountSignal.current.aborted && !isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
-                                            }}
+                                            onCreditsUpdate={reportEnhanceBalance}
                                             medium="video"
                                             selectedModel={selectedModel}
                                             context={buildShotPromptQualityContext(shot, index)}
@@ -6484,7 +6471,9 @@ function VideoCreator({
                                                             <div className="flex flex-wrap gap-2">
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => void item.onPrepare().catch((prepareError) => setError(prepareError instanceof Error ? prepareError.message : 'Failed to prepare Seedance asset'))}
+                                                                    onClick={() => void item.onPrepare().catch((prepareError) => {
+                                                                        if (!isUploadCancelledError(prepareError)) setError(prepareError instanceof Error ? prepareError.message : 'Failed to prepare Seedance asset');
+                                                                    })}
                                                                     disabled={isBusy}
                                                                     className={`${CREATOR_REFERENCE_CHIP_CLASS} gap-1.5`}
                                                                 >

@@ -209,18 +209,40 @@ describe('the form a creator holds', () => {
     expect(seen).toEqual(keys);
   });
 
-  it('moves the key in the render that brings the next owner, under Strict Mode too', async () => {
-    const { useCreatorFormKey } = await import('@/lib/use-creator-draft-owner');
-    const { result, rerender } = renderHook(({ draft }) => useCreatorFormKey(draft), {
+  it('moves the key in the render that brings the next owner, and keeps the form’s owner through a lapse, under Strict Mode too', async () => {
+    const { useCreatorForm } = await import('@/lib/use-creator-draft-owner');
+    const { result, rerender } = renderHook(({ draft }) => useCreatorForm(draft), {
       initialProps: { draft: owned('user-1') },
       wrapper: ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>,
     });
-    expect(result.current).toBe(0);
+    expect(result.current).toMatchObject({ key: 0, owner: 'user-1' });
     rerender({ draft: owned(null) });
-    expect(result.current).toBe(0);
+    expect(result.current).toMatchObject({ key: 0, owner: 'user-1' });
     rerender({ draft: owned('user-2') });
-    expect(result.current).toBe(1);
+    expect(result.current).toMatchObject({ key: 1, owner: 'user-2' });
     rerender({ draft: owned('user-2') });
-    expect(result.current).toBe(1);
+    expect(result.current).toMatchObject({ key: 1, owner: 'user-2' });
+  });
+
+  // What the earlier form still has out stops when another owner's takes its place, and goes on
+  // when the page is only left.
+  it('aborts a form’s signal when another owner’s form replaces it, and not when the page is left', async () => {
+    const { useCreatorForm } = await import('@/lib/use-creator-draft-owner');
+    const { result, rerender, unmount } = renderHook(({ draft }) => useCreatorForm(draft), {
+      initialProps: { draft: owned('visitor') },
+    });
+    const visitors = result.current.replaced;
+    // The hand-over that gave up leaves the visitor's form to the account: the same form.
+    rerender({ draft: owned('user-1', true) });
+    expect(result.current.replaced).toBe(visitors);
+    expect(visitors.aborted).toBe(false);
+
+    rerender({ draft: owned('user-2') });
+    expect(visitors.aborted).toBe(true);
+    const bens = result.current.replaced;
+    expect(bens.aborted).toBe(false);
+
+    unmount();
+    expect(bens.aborted).toBe(false);
   });
 });

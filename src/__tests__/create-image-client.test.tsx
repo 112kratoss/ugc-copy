@@ -1676,9 +1676,10 @@ describe('CreateImageClient generation pipeline', () => {
         expect(screen.queryByAltText('Asha’s harbour')).not.toBeInTheDocument();
         expect(screen.queryByText(/asha-notes\.txt/)).not.toBeInTheDocument();
 
-        // What Ben adds is saved alone under him, and his run sends only that.
+        // What Ben adds is saved alone under him, and his run, under his session, sends only that.
         pickPictures(new File(['ben'], 'lighthouse.png', { type: 'image/png' }));
         await waitFor(() => expect(picturesSavedFor('user-2')).toContain('lighthouse.png'));
+        getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-user-2', user: { id: 'user-2' } } } });
         typePrompt('A lighthouse at dawn');
         pressGenerate();
         await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
@@ -1823,6 +1824,13 @@ describe('CreateImageClient generation pipeline', () => {
     function authClientSignsInAs(userId: string) {
       getSessionMock.mockResolvedValue({ data: { session: sessionOf(userId) } });
     }
+    /** The account signs out in another tab: a page that opened signed in keeps its form, owned by no one. */
+    function signOutHere(redraw: () => void) {
+      getSessionMock.mockResolvedValue({ data: { session: null } });
+      authState.session = null;
+      draftOwnerOverride.current = { owner: null, carriedDraft: false, keepsVisitorForm: false };
+      redraw();
+    }
     function keepAshasPicture() {
       getPersistedImageElementRecordsMock.mockImplementation(async (key: string) => (key === 'create-image:elements:user-1'
         ? [{ id: 'asha-1', displayName: 'Asha’s harbour', file: new File(['harbour'], 'harbour.png', { type: 'image/png' }) }]
@@ -1873,8 +1881,9 @@ describe('CreateImageClient generation pipeline', () => {
       // Not set to the balance this start answered with, which may not be the session's any more.
       expect(authState.updateCredits).not.toHaveBeenCalled();
       expect(balanceEvents.some((event) => !(event instanceof CustomEvent))).toBe(true);
-      // Nothing on the page follows the run.
+      // Nothing on the page follows the run, and the next visit does not send its start again.
       expect(fetchGenerationStatusWithRetryMock).not.toHaveBeenCalled();
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
     });
 
     it('drops the earlier account’s unanswered start, and the next account’s press sends its own run', async () => {
@@ -2016,6 +2025,103 @@ describe('CreateImageClient generation pipeline', () => {
 
       expect(screen.queryByText('Insufficient credits. This action costs 8 credits.')).not.toBeInTheDocument();
       expect(screen.queryByRole('link', { name: /Top Up Credits/ })).not.toBeInTheDocument();
+    });
+
+    it('uploads and sends nothing for a press on a page signed out in another tab, once another account took the session', async () => {
+      const fetchMock = installFetch({ starts: [startedReply()] });
+      keepAshasPicture();
+      signInAs('user-1');
+      const view = render(page());
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      typePrompt('Asha’s harbour at dusk');
+
+      // Asha signs out in another tab: the page keeps her form, owned by no one. Ben then signs in
+      // there, and the browser has his session before the page does.
+      signOutHere(() => view.rerender(page()));
+      authClientSignsInAs('user-2');
+      pressGenerate();
+      await settleDraftRead();
+
+      expect(uploadMediaToTemporaryStorageMock).not.toHaveBeenCalled();
+      expect(startCalls(fetchMock)).toEqual([]);
+    });
+
+    it('forgets a start refused after the page was left, so the next visit does not send it again', async () => {
+      const answer = heldAnswer();
+      const fetchMock = installFetch({ starts: [answer.promise] });
+      const view = render(page());
+      await settleDraftRead();
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+
+      view.unmount();
+      await act(async () => answer.answer(jsonResponse(402, { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 8 credits.' })));
+
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+    });
+
+    it('still sends a press whose page was left while its pictures went up, under its own account', async () => {
+      const fetchMock = installFetch({ starts: [startedReply()] });
+      keepAshasPicture();
+      signInAs('user-1');
+      const view = render(page());
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      const finishUpload = holdUpload();
+      typePrompt('Asha’s harbour at dusk');
+      pressGenerate();
+      await waitFor(() => expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalled());
+
+      view.unmount();
+      await finishUpload();
+
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+      expect(authorizationOf(startCalls(fetchMock)[0][1] as RequestInit)).toBe('Bearer token-user-1');
+    });
+
+    it('writes nothing back for the earlier account when its sign-out gives the page back to the visitor', async () => {
+      installFetch();
+      keepAshasPicture();
+      // A visitor's page that Asha's session reaches in place.
+      authState.session = null;
+      getSessionMock.mockResolvedValue({ data: { session: null } });
+      draftOwnerOverride.current = { owner: 'visitor', carriedDraft: false, keepsVisitorForm: false };
+      const view = render(page());
+      await settleDraftRead();
+      signInAs('user-1', () => view.rerender(page()));
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      await settleDraftRead();
+      typePrompt('Asha’s harbour at dusk');
+
+      // She signs out from the shell, which clears what this browser keeps for her first.
+      const picturesWritten = setPersistedImageElementRecordsMock.mock.calls.length;
+      const draftsSaved = saveCreatorDraftMock.mock.calls.length;
+      authState.session = null;
+      getSessionMock.mockResolvedValue({ data: { session: null } });
+      draftOwnerOverride.current = { owner: 'visitor', carriedDraft: false, keepsVisitorForm: false };
+      view.rerender(page());
+      await settleDraftRead();
+
+      expect(setPersistedImageElementRecordsMock.mock.calls.slice(picturesWritten).map(([key]) => key)).not.toContain('create-image:elements:user-1');
+      expect(saveCreatorDraftMock.mock.calls.slice(draftsSaved).map(([, owner]) => owner)).not.toContain('user-1');
+    });
+
+    it('reads the balance again when a paid Enhance answers after the page was left', async () => {
+      installFetch();
+      const view = render(page());
+      await settleDraftRead();
+      const pressed = enhanceButton.props!;
+      const balanceEvents: Event[] = [];
+      const listen = (event: Event) => balanceEvents.push(event);
+      window.addEventListener('credits_updated', listen);
+
+      view.unmount();
+      act(() => pressed.onCreditsUpdate(41));
+      window.removeEventListener('credits_updated', listen);
+
+      // Not set to the balance the answer brings, which need not be the session's any more.
+      expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
+      expect(balanceEvents.some((event) => !(event instanceof CustomEvent))).toBe(true);
     });
 
     it('drops the earlier account’s remix pictures and its own, and reads the remix again for the next', async () => {

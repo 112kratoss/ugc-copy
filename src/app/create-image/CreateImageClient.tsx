@@ -76,7 +76,7 @@ import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/Creat
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
-import { useCreatorDraftOwner, useCreatorFormKey, type CreatorDraftOwner } from '@/lib/use-creator-draft-owner';
+import { useCreatorDraftOwner, useCreatorForm, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
@@ -104,7 +104,7 @@ import {
     type PersistedStagedUpload,
 } from '@/lib/persisted-media';
 import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
-import { isAnotherDraftOwner, keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
+import { keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
 import {
     assignElementHandles,
     createElementHandleReplacementMap,
@@ -295,8 +295,10 @@ async function stageElementFile(
     if (staged && Date.now() - staged.uploadedAt < STAGED_UPLOAD_REUSE_MS) {
         try {
             return { ...staged, signedUrl: await refreshTemporaryMediaUrl(staged.storagePath, press) };
-        } catch {
-            // Gone from storage, or the link could not be renewed: the file goes up again.
+        } catch (refreshError) {
+            // Gone from storage, or the link could not be renewed: the file goes up again. A press
+            // given up (another account's session, another owner's form) goes no further.
+            if (isUploadCancelledError(refreshError)) throw refreshError;
         }
     }
     const upload = await uploadMediaToTemporaryStorage(file, press);
@@ -364,14 +366,15 @@ type CreateImageClientProps = {
 /**
  * The image creator, drawn for one owner's form at a time: the visitor's until someone signs in,
  * then the account's, which takes the visitor's when sign-up was opened here. Another account's
- * form is a creator drawn anew (`useCreatorFormKey`): the earlier owner's unanswered start, run,
+ * form is a creator drawn anew (`useCreatorForm`): the earlier owner's unanswered start, run,
  * result and remix go with theirs, and nothing still under way for them is sent under the next.
  */
 export default function CreateImageClient(props: CreateImageClientProps) {
     const { session } = useAuth();
     const draft = useCreatorDraftOwner('image', session?.user?.id ?? null, props.handoverNonce ?? null);
-    const formKey = useCreatorFormKey(draft);
-    return <ImageCreator key={formKey} {...props} draft={draft} />;
+    const form = useCreatorForm(draft);
+    // The sign-up's welcome is the account's the page came back with, the form it opened on.
+    return <ImageCreator key={form.key} {...props} welcome={form.key === 0 ? props.welcome : null} draft={draft} form={form} />;
 }
 
 function ImageCreator({
@@ -381,11 +384,15 @@ function ImageCreator({
     opening = null,
     startPosts = null,
     draft,
-}: CreateImageClientProps & { draft: CreatorDraftOwner }) {
+    form,
+}: CreateImageClientProps & { draft: CreatorDraftOwner; form: CreatorForm }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
     const userId = session?.user?.id ?? null;
     const { owner: draftOwner, carriedDraft, keepsVisitorForm } = draft;
+    // The account whose form this is, which a press goes out under: the page's own, or through a
+    // session that lapsed, the one the form was drawn for.
+    const formAccount = form.owner !== null && form.owner !== VISITOR_DRAFT_OWNER ? form.owner : userId;
     // A page that opened signed out works up to Generate, which asks for an account
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
@@ -492,9 +499,7 @@ function ImageCreator({
     // The owner whose saved draft has been read back; a remix keeps none.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
     const isDraftRestoreSettled = Boolean(remixId) || (draftOwner !== null && draftRestoredFor === draftOwner);
-    // Whose draft the last read was for, and whether the prompt carried from sign-up has come
-    // back yet: the prompt box's rule (`creator-draft-prompt.ts`).
-    const promptOwnerRef = useRef<string | null>(null);
+    // Whether the prompt carried from sign-up has come back yet: the prompt box's rule (`creator-draft-prompt.ts`).
     const carriedPromptTakenRef = useRef(false);
     const restoredDraftModelRef = useRef(false);
     // Saved settings for a model whose controls have not loaded yet.
@@ -565,12 +570,6 @@ function ImageCreator({
         if (remixId || !draftOwner) return;
         let cancelled = false;
         const openingPrompt = prefillPrompt ?? '';
-        if (!keepsVisitorForm && isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
-            // The words are another owner's: not this one's to see, nor to save.
-            promptRef.current = openingPrompt;
-            setPrompt(openingPrompt);
-        }
-        promptOwnerRef.current = draftOwner;
         void loadCreatorDraft<Partial<ImageCreatorDraft>>('image', draftOwner)
             .then((draft) => {
                 if (cancelled) return;
@@ -620,9 +619,9 @@ function ImageCreator({
     }, []);
 
     const persistUploadedImageElements = useCallback(async (nextElements: ImageElementDraft[]) => {
-        // Only while the form holds this owner's pictures: a run pressed for an owner the page
-        // has left since would write the next owner's under them, or an empty list that removes theirs.
-        if (remixId || !draftOwner || restoredPersistedMediaForUserRef.current !== draftOwner) {
+        // Nothing from a form another owner's has replaced: a press or a save still out for it would
+        // write the earlier owner's pictures back, after a sign-out that cleared them too.
+        if (remixId || !draftOwner || form.replaced.aborted) {
             return;
         }
 
@@ -640,7 +639,7 @@ function ImageCreator({
             scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createImageElements, draftOwner),
             persistableElements
         );
-    }, [remixId, draftOwner]);
+    }, [form.replaced, remixId, draftOwner]);
 
     const commitElements = useCallback((nextElements: ImageElementDraft[]) => {
         elementRefs.current = nextElements;
@@ -796,8 +795,6 @@ function ImageCreator({
             const savedElementRecords = await getPersistedImageElementRecords(
                 scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createImageElements, draftOwner)
             );
-            // Read for an owner the page has left since: the form is another owner's now.
-            if (restoredPersistedMediaForUserRef.current !== draftOwner) return;
             if (savedElementRecords.length === 0) return;
 
             commitElements(hydrateImageElements(
@@ -818,20 +815,11 @@ function ImageCreator({
 
     useEffect(() => {
         if (!draftOwner || restoredPersistedMediaForUserRef.current === draftOwner) return;
-        if (!remixId && !keepsVisitorForm && isAnotherDraftOwner(restoredPersistedMediaForUserRef.current, draftOwner)) {
-            // The pictures are another owner's, the names of those refused too: not this one's to
-            // see, send or save. What is saved for them stays theirs, and the new owner's own come
-            // back below.
-            elementRefs.current.forEach((element) => revokePreviewUrl(element.previewUrl));
-            setUploadPreview(null);
-            setElementPickNotice(null);
-            commitElements([]);
-        }
         restoredPersistedMediaForUserRef.current = draftOwner;
 
         // A form the sign-up's hand-over kept stays as it is, with no older picture of the account's over it.
         if (!keepsVisitorForm) void loadPersistedElements();
-    }, [commitElements, keepsVisitorForm, loadPersistedElements, draftOwner, remixId]);
+    }, [keepsVisitorForm, loadPersistedElements, draftOwner]);
 
     useEffect(() => {
         if (remixId) return;
@@ -851,8 +839,8 @@ function ImageCreator({
         };
     }, [loadPersistedElements, remixId]);
 
-    // Leaving writes with the callback of the last render, so a sign-out that has
-    // just cleared this account's media does not get it written back.
+    // Leaving writes with the callback of the last render: a page that is only left keeps its last
+    // pictures, and a form another owner's has replaced writes none (`persistUploadedImageElements`).
     const persistElementsOnLeaveRef = useRef(persistUploadedImageElements);
     useEffect(() => {
         persistElementsOnLeaveRef.current = persistUploadedImageElements;
@@ -1203,10 +1191,11 @@ function ImageCreator({
         return () => window.clearTimeout(timer);
     }, [getDraftToSave, isDraftRestoreSettled, remixId, draftOwner]);
     useEffect(() => () => {
-        // Leaving inside the wait, through the Top Up link say, still keeps the last edit.
+        // Leaving inside the wait, through the Top Up link say, still keeps the last edit. A form
+        // another owner's has replaced keeps it unsaved: its owner may have just signed out.
         const entry = unsavedDraftRef.current;
-        if (entry) void saveCreatorDraft('image', entry.owner, entry.draft).catch(() => undefined);
-    }, []);
+        if (entry && !form.replaced.aborted) void saveCreatorDraft('image', entry.owner, entry.draft).catch(() => undefined);
+    }, [form.replaced]);
     const saveDraftNow = async () => {
         if (remixId || !draftOwner) return;
         unsavedDraftRef.current = null;
@@ -1452,7 +1441,6 @@ function ImageCreator({
         { reveal }: { reveal: boolean },
     ) => {
         const { data: { session: currentSession } } = await supabase.auth.getSession();
-        if (unmountSignal.current.aborted) return;
         if (start.userId && currentSession && currentSession.user.id !== start.userId) {
             setGenerationTiming(null);
             return;
@@ -1466,7 +1454,12 @@ function ImageCreator({
                 idempotencyKey: start.idempotencyKey,
             });
         } catch (startError) {
-            if (unmountSignal.current.aborted) return;
+            if (unmountSignal.current.aborted) {
+                // The page went while the start was out. A refusal settles it, so the next visit does
+                // not send it again; an answer that may yet mean it started stays kept, to be checked.
+                if (!isAmbiguousWebStartFailure(startError)) clearPendingWebStart('image', start.idempotencyKey);
+                return;
+            }
             setGenerationTiming(null);
             if (isAmbiguousWebStartFailure(startError)) {
                 setPendingStart(start);
@@ -1481,10 +1474,11 @@ function ImageCreator({
             return;
         }
         if (unmountSignal.current.aborted) {
-            // The creator went while the start was out: the page was left, or another owner's form
-            // took its place. The run is the server's. The balance is read again for whoever holds
-            // the session now, rather than set to the one this start answered, and nothing here
-            // follows the run.
+            // The page went while the start was out: it was left, or another owner's form took its
+            // place. The run is the server's and the start has done its work. The balance is read
+            // again for whoever holds the session now, rather than set to the one this start
+            // answered, and nothing here follows the run.
+            clearPendingWebStart('image', start.idempotencyKey);
             announceGenerationStarted();
             window.dispatchEvent(new Event('credits_updated'));
             return;
@@ -1549,7 +1543,7 @@ function ImageCreator({
             const { data: { session } } = await supabase.auth.getSession();
             // Another account's session the page has not heard of yet picks up nothing: the creator
             // is drawn anew for that account once it has.
-            if (!session || (userId && session.user.id !== userId)) return;
+            if (!session || (formAccount && session.user.id !== formAccount)) return;
 
             // A start this tab sent and never heard back about goes first: sending it
             // again finds the run it started, or starts it once.
@@ -1643,8 +1637,8 @@ function ImageCreator({
                 sourceGenerationId: element.sourceGenerationId ?? null,
             };
         }));
-        // The creator went while the files went up: its form is no one's to keep a copy on.
-        if (unmountSignal.current.aborted) throw new UploadCancelledError();
+        // Another owner's form took this one's place while the files went up: nothing is kept of them.
+        if (press.signal?.aborted) throw new UploadCancelledError();
 
         // Every file that went up stays on its element, so the next press sends the
         // staged copy instead of uploading it again, even when another file failed.
@@ -1734,23 +1728,25 @@ function ImageCreator({
         try {
             // Before any upload, which would fail first and hide the way back.
             const { data: { session: currentSession } } = await supabase.auth.getSession();
-            if (unmountSignal.current.aborted) return;
             if (!currentSession) {
-                await saveDraftNow();
                 setGenerationTiming(null);
+                // A page that has gone sends no one to sign in.
+                if (unmountSignal.current.aborted) return;
+                await saveDraftNow();
                 router.push(getLoginPathForThisPage());
                 return;
             }
-            // The press is the page's account's: under a session another account has taken since
+            // The press is the form's account's: under a session another account has taken since
             // (signed in from another tab, before the page has heard), nothing goes up or out.
-            if (userId && currentSession.user.id !== userId) {
+            if (formAccount && currentSession.user.id !== formAccount) {
                 setGenerationTiming(null);
                 return;
             }
 
+            // A page that is only left goes on with its press; another owner's form in its place stops it.
             const inputs = await stageReferenceInputs(runInputs, startedAtMs, estimatedTotalMs, {
                 userId: currentSession.user.id,
-                signal: unmountSignal.current,
+                signal: form.replaced,
             });
 
             setGenerationTiming(createLocalGenerationTiming({
@@ -1789,6 +1785,18 @@ function ImageCreator({
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
         }
+    };
+
+    /**
+     * The balance a paid Enhance answers with. One that answers after the page went (it was left, or
+     * another owner's form took its place) is read again for whoever holds the session instead.
+     */
+    const reportEnhanceBalance = (credits: number) => {
+        if (unmountSignal.current.aborted) {
+            window.dispatchEvent(new Event('credits_updated'));
+            return;
+        }
+        updateCredits(credits);
     };
 
     const handleStartNewRun = () => {
@@ -2192,18 +2200,11 @@ function ImageCreator({
                         ) : null}
 
                         <EnhancePromptButton
-                            // A press for the owner before an account switch is theirs: the button is drawn anew for the next
-                            // owner, and its answer dropped whichever callbacks it comes back through (`creator-draft-prompt.ts`).
-                            key={draftOwner}
                             variant="toolbar"
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
-                            onEnhanced={(text) => {
-                                if (!unmountSignal.current.aborted && !isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) setPrompt(text);
-                            }}
-                            onCreditsUpdate={(credits) => {
-                                if (!unmountSignal.current.aborted && !isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
-                            }}
+                            onEnhanced={setPrompt}
+                            onCreditsUpdate={reportEnhanceBalance}
                             onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
                             medium="image"
                             selectedModel={selectedModel}
