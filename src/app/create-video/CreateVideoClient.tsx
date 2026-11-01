@@ -1229,8 +1229,8 @@ type CreateVideoClientProps = {
  * lapses keeps the account's.
  */
 export default function CreateVideoClient(props: CreateVideoClientProps) {
-    const { session, signedOutUserId } = useAuth();
-    const draft = useCreatorDraftOwner('video', session?.user?.id ?? null, props.handoverNonce ?? null, Boolean(signedOutUserId));
+    const { session, signedOut } = useAuth();
+    const draft = useCreatorDraftOwner('video', session?.user?.id ?? null, props.handoverNonce ?? null, signedOut);
     const form = useCreatorForm(draft);
     // What the server drew for the page's viewer (the sign-up's welcome, the posts to start from, read
     // for them) is theirs: a later account's form is drawn without it.

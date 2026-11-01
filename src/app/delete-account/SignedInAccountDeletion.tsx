@@ -167,9 +167,7 @@ async function signOutHere() {
     const supabase = await getSupabase();
     // A sign-out, as the account menu's: the browser's other tabs do not take it for a lapse.
     await supabase.auth.getSession()
-      .then(({ data: { session } }) => {
-        if (session) markBrowserSignOut(session);
-      })
+      .then(({ data: { session } }) => markBrowserSignOut(session?.access_token))
       .catch(() => undefined);
     const { error } = await supabase.auth.signOut({ scope: 'local' });
     signedOut = !error;

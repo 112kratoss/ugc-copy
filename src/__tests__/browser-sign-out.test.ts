@@ -6,17 +6,9 @@ import {
   markBrowserSignOut,
   wasSignedOutInBrowser,
 } from '@/lib/browser-sign-out';
+import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
 
-/** A token as Supabase signs one: base64url segments, its payload naming the session. */
-function tokenFor(claims: Record<string, unknown>): string {
-  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
-  return `eyJhbGciOiJIUzI1NiJ9.${payload}.signature`;
-}
-
-const sessionOf = (userId: string, sessionId: string | null) => ({
-  access_token: sessionId === null ? 'opaque-token' : tokenFor({ sub: userId, session_id: sessionId }),
-  user: { id: userId },
-});
+const tokenOf = (userId: string, sessionId: string) => unsignedJwt({ sub: userId, session_id: sessionId });
 
 describe('a sign-out made in this browser', () => {
   afterEach(() => {
@@ -26,41 +18,45 @@ describe('a sign-out made in this browser', () => {
 
   it('reads the session a token belongs to, base64url characters included', () => {
     // '?>?' encodes to '-' and '_' in base64url, which plain base64 writes as '+' and '/'.
-    expect(accessTokenSessionId(tokenFor({ session_id: 'session-1', note: '?>?>?>' }))).toBe('session-1');
-    expect(accessTokenSessionId(tokenFor({ sub: 'user-1' }))).toBeNull();
+    expect(accessTokenSessionId(unsignedJwt({ session_id: 'session-1', note: '?>?>?>' }))).toBe('session-1');
+    expect(accessTokenSessionId(unsignedJwt({ sub: 'user-1' }))).toBeNull();
     expect(accessTokenSessionId('not-a-token')).toBeNull();
     expect(accessTokenSessionId('a.%%%.b')).toBeNull();
+    expect(accessTokenSessionId(undefined)).toBeNull();
   });
 
-  it('ended the session it marked, and no other session or account', () => {
-    markBrowserSignOut(sessionOf('user-1', 'session-1'));
+  it('ended the session it marked, and no other session', () => {
+    markBrowserSignOut(tokenOf('user-1', 'session-1'));
 
-    expect(wasSignedOutInBrowser(sessionOf('user-1', 'session-1'))).toBe(true);
-    expect(wasSignedOutInBrowser(sessionOf('user-1', 'session-2'))).toBe(false);
-    expect(wasSignedOutInBrowser(sessionOf('user-2', 'session-1'))).toBe(false);
-    expect(wasSignedOutInBrowser(sessionOf('user-1', null))).toBe(false);
+    expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-1'))).toBe(true);
+    expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-2'))).toBe(false);
+    expect(wasSignedOutInBrowser(tokenOf('user-2', 'session-2'))).toBe(false);
+    expect(wasSignedOutInBrowser('opaque-token')).toBe(false);
+    expect(wasSignedOutInBrowser(undefined)).toBe(false);
   });
 
-  it('matches by account only where neither token names a session', () => {
-    markBrowserSignOut(sessionOf('user-1', null));
+  it('marks nothing for a token that names no session', () => {
+    markBrowserSignOut(tokenOf('user-1', 'session-1'));
+    markBrowserSignOut('opaque-token');
+    markBrowserSignOut(undefined);
 
-    expect(wasSignedOutInBrowser(sessionOf('user-1', null))).toBe(true);
-    expect(wasSignedOutInBrowser(sessionOf('user-1', 'session-1'))).toBe(false);
+    // The earlier mark stands: nothing took its place.
+    expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-1'))).toBe(true);
   });
 
   it('is taken back by a sign-out that failed', () => {
-    markBrowserSignOut(sessionOf('user-1', 'session-1'));
+    markBrowserSignOut(tokenOf('user-1', 'session-1'));
     forgetBrowserSignOut();
 
-    expect(wasSignedOutInBrowser(sessionOf('user-1', 'session-1'))).toBe(false);
+    expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-1'))).toBe(false);
   });
 
   it('reads as no sign-out where the browser refuses its storage', () => {
-    markBrowserSignOut(sessionOf('user-1', 'session-1'));
+    markBrowserSignOut(tokenOf('user-1', 'session-1'));
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new DOMException('The operation is insecure.', 'SecurityError');
     });
 
-    expect(wasSignedOutInBrowser(sessionOf('user-1', 'session-1'))).toBe(false);
+    expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-1'))).toBe(false);
   });
 });

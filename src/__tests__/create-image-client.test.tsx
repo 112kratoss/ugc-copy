@@ -89,8 +89,8 @@ const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 const authState = vi.hoisted(() => ({
   credits: 10_000 as number | null,
   session: { access_token: 'test-token', user: { id: 'user-1' } } as { access_token: string; user: { id: string } } | null,
-  // The account a sign-out made in this browser ended the session of (AuthProvider's `signedOutUserId`).
-  signedOutUserId: null as string | null,
+  // Whether a sign-out made in this browser ended the session (AuthProvider's `signedOut`).
+  signedOut: false,
   updateCredits: vi.fn(),
 }));
 const getSessionMock = vi.hoisted(() => vi.fn());
@@ -105,7 +105,7 @@ vi.mock('@/components/AuthProvider', () => ({
     credits: authState.credits,
     isLoading: false,
     session: authState.session,
-    signedOutUserId: authState.signedOutUserId,
+    signedOut: authState.signedOut,
     updateCredits: authState.updateCredits,
   }),
 }));
@@ -250,7 +250,7 @@ beforeEach(() => {
   routerMock.push.mockClear();
   authState.credits = 10_000;
   authState.session = { access_token: 'test-token', user: { id: 'user-1' } };
-  authState.signedOutUserId = null;
+  authState.signedOut = false;
   authState.updateCredits.mockClear();
   getSessionMock.mockReset();
   getSessionMock.mockResolvedValue(SIGNED_IN_SESSION);
@@ -2123,7 +2123,7 @@ describe('CreateImageClient generation pipeline', () => {
       // Asha signs out in another tab of this browser, which marked it so.
       getSessionMock.mockResolvedValue({ data: { session: null } });
       authState.session = null;
-      authState.signedOutUserId = 'user-1';
+      authState.signedOut = true;
       view.rerender(page());
       await settleDraftRead();
 

@@ -50,11 +50,11 @@ interface AuthContextValue {
      */
     saverNoticeRecord: SaverNoticeRecord | null;
     /**
-     * The account whose session a sign-out made in this browser ended, in this tab or another one
-     * (`markBrowserSignOut`), until a session is held again. Null while one is held, and after a
-     * session that lapsed or was refused: Supabase reports all of them as the same sign-out.
+     * Whether a sign-out made in this browser, in this tab or another one (`markBrowserSignOut`),
+     * ended the session this tab held last. False while a session is held, and after one that
+     * lapsed or was refused: Supabase reports all of them as the same sign-out.
      */
-    signedOutUserId: string | null;
+    signedOut: boolean;
     isLoading: boolean;
     updateCredits: (nextCredits: number | null, options?: CreditUpdateOptions) => void;
     refreshSessionState: () => Promise<void>;
@@ -66,7 +66,7 @@ const anonymousAuthContext: AuthContextValue = {
     credits: null,
     marketplaceSpendableCredits: null,
     saverNoticeRecord: null,
-    signedOutUserId: null,
+    signedOut: false,
     isLoading: false,
     updateCredits: () => undefined,
     refreshSessionState: async () => undefined,
@@ -137,11 +137,6 @@ async function getBrowserSupabase(): Promise<BrowserSupabaseClient> {
     return supabase;
 }
 
-/** The account of the session a sign-out made in this browser ended, if one did. */
-function signedOutHere(held: Session | null): string | null {
-    return held?.user?.id && wasSignedOutInBrowser(held) ? held.user.id : null;
-}
-
 function scheduleIdle(callback: () => void, timeout = 1500) {
     if (typeof window === 'undefined') {
         return undefined;
@@ -191,12 +186,9 @@ export function AuthProvider({
             : null
     ));
     const [readSaverNoticeRecord, setReadSaverNoticeRecord] = useState<SaverNoticeRecord | null>(null);
-    // The session this tab held last, which its ending is read against, and whose sign-out ended it.
-    const heldSessionRef = useRef<Session | null>(session);
-    const [signedOutUserId, setSignedOutUserId] = useState<string | null>(null);
-    useEffect(() => {
-        if (session) heldSessionRef.current = session;
-    }, [session]);
+    // The session this tab held last, which its ending is read against (`signedOut`).
+    const [heldSession, setHeldSession] = useState<Session | null>(session);
+    if (session && session !== heldSession) setHeldSession(session);
     const witnessedAuthCookieRef = useRef(hasAuthCookieHint);
     const authEpochRef = useRef(0);
     const tokenEpochRef = useRef(0);
@@ -226,7 +218,6 @@ export function AuthProvider({
             queuedUserUpdates.clear();
             deferredAuthSyncIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
             deferredAuthSyncIds.clear();
-            setSignedOutUserId(signedOutHere(heldSessionRef.current));
             setSession(null);
             setBalance(UNKNOWN_BALANCE);
             setReadSaverNoticeRecord(null);
@@ -480,7 +471,6 @@ export function AuthProvider({
             return;
         }
         if (!nextSession?.user?.id) {
-            setSignedOutUserId(signedOutHere(heldSessionRef.current));
             setSession(null);
             setBalance(UNKNOWN_BALANCE);
             setIsLoading(false);
@@ -502,7 +492,6 @@ export function AuthProvider({
             return;
         }
         if (verificationError || !verifiedUser || verifiedUser.id !== nextSession.user.id) {
-            setSignedOutUserId(signedOutHere(heldSessionRef.current));
             setSession(null);
             setBalance(UNKNOWN_BALANCE);
             setIsLoading(false);
@@ -555,7 +544,7 @@ export function AuthProvider({
                 // Only ever the account signed in now's, the latest read first.
                 saverNoticeRecord: [readSaverNoticeRecord, pageSaverNoticeRecord]
                     .find((record) => record !== null && record.userId === session?.user?.id) ?? null,
-                signedOutUserId: session ? null : signedOutUserId,
+                signedOut: !session && wasSignedOutInBrowser(heldSession?.access_token),
                 isLoading: resolvedIsLoading,
                 updateCredits,
                 refreshSessionState,

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { markBrowserSignOut } from '@/lib/browser-sign-out';
+import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
 
 const authProviderMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -60,13 +61,13 @@ vi.mock('@/components/useSupabaseAuthCookieHint', () => ({
 }));
 
 function AuthProbe() {
-  const { isLoading, session, credits, marketplaceSpendableCredits, refreshSessionState, signedOutUserId } = useAuth();
+  const { isLoading, session, credits, marketplaceSpendableCredits, refreshSessionState, signedOut } = useAuth();
 
   return (
     <div>
       <span data-testid="loading">{String(isLoading)}</span>
       <span data-testid="session">{session ? 'signed-in' : 'signed-out'}</span>
-      <span data-testid="signed-out">{signedOutUserId ?? 'none'}</span>
+      <span data-testid="signed-out">{String(signedOut)}</span>
       <span data-testid="credits">{credits ?? 'none'}</span>
       <span data-testid="spendable">{marketplaceSpendableCredits ?? 'none'}</span>
       <span data-testid="user-name">{session?.user.user_metadata.display_name ?? 'none'}</span>
@@ -206,10 +207,9 @@ describe('AuthProvider', () => {
   // A sign-out made in another tab of this browser reaches this one as the SIGNED_OUT a lapse also
   // sends; the mark that tab left tells the two apart (owner, 2026-11-01).
   describe('how the session ended', () => {
-    const tokenFor = (sessionId: string) => (
-      `header.${btoa(JSON.stringify({ sub: 'user-1', session_id: sessionId })).replace(/=+$/, '')}.signature`
-    );
-    const sessionWith = (sessionId: string) => ({ ...authenticatedSession, access_token: tokenFor(sessionId) }) as Session;
+    const sessionWith = (sessionId: string) => (
+      { ...authenticatedSession, access_token: unsignedJwt({ sub: 'user-1', session_id: sessionId }) }
+    ) as Session;
 
     async function signedInWith(session: Session) {
       authCookieState.hasHint = true;
@@ -235,11 +235,11 @@ describe('AuthProvider', () => {
       const held = sessionWith('session-1');
       await signedInWith(held);
 
-      markBrowserSignOut(held);
+      markBrowserSignOut(held.access_token);
       act(() => authStateCallback?.('SIGNED_OUT', null));
 
       await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
-      expect(screen.getByTestId('signed-out')).toHaveTextContent('user-1');
+      expect(screen.getByTestId('signed-out')).toHaveTextContent('true');
     });
 
     it('says nothing of the kind for a session that lapsed', async () => {
@@ -248,30 +248,30 @@ describe('AuthProvider', () => {
       act(() => authStateCallback?.('SIGNED_OUT', null));
 
       await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
-      expect(screen.getByTestId('signed-out')).toHaveTextContent('none');
+      expect(screen.getByTestId('signed-out')).toHaveTextContent('false');
     });
 
     it('takes no mark of an earlier session for a later one', async () => {
-      markBrowserSignOut(sessionWith('session-0'));
+      markBrowserSignOut(sessionWith('session-0').access_token);
       await signedInWith(sessionWith('session-1'));
 
       act(() => authStateCallback?.('SIGNED_OUT', null));
 
       await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
-      expect(screen.getByTestId('signed-out')).toHaveTextContent('none');
+      expect(screen.getByTestId('signed-out')).toHaveTextContent('false');
     });
 
     it('says nothing once a session is held again', async () => {
       const held = sessionWith('session-1');
       await signedInWith(held);
-      markBrowserSignOut(held);
+      markBrowserSignOut(held.access_token);
       act(() => authStateCallback?.('SIGNED_OUT', null));
-      await waitFor(() => expect(screen.getByTestId('signed-out')).toHaveTextContent('user-1'));
+      await waitFor(() => expect(screen.getByTestId('signed-out')).toHaveTextContent('true'));
 
       act(() => authStateCallback?.('SIGNED_IN', sessionWith('session-2')));
 
       await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-in'));
-      expect(screen.getByTestId('signed-out')).toHaveTextContent('none');
+      expect(screen.getByTestId('signed-out')).toHaveTextContent('false');
     });
   });
 

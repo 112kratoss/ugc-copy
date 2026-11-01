@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import DeleteAccountPage from '@/app/delete-account/page';
 import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
+import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
 import { siteConfig } from '@/lib/seo';
 
 type TestUser = {
@@ -267,11 +268,12 @@ describe('account deletion page', () => {
     // The browser's other tabs take the ending for a sign-out, not a lapse, and an open creator
     // page there clears (owner, 2026-11-01).
     it('marks its sign-out for the browser’s other tabs before the session ends', async () => {
-        mocks.session = signedInAs(emailUser);
+        const accessToken = unsignedJwt({ sub: emailUser.id, session_id: 'session-1' });
+        mocks.session = { access_token: accessToken, user: emailUser };
         answerRequests({ deletions: [scheduled] });
         let markedAsItEnded = false;
         mocks.signOut.mockImplementation(async () => {
-            markedAsItEnded = wasSignedOutInBrowser(mocks.session as { access_token: string; user: { id: string } });
+            markedAsItEnded = wasSignedOutInBrowser(accessToken);
             mocks.session = null;
             emit('SIGNED_OUT');
             return { error: null };

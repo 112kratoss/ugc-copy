@@ -7,6 +7,7 @@ import FeedbackViewport from '@/components/FeedbackViewport';
 import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
 import { resetFeedbackState } from '@/components/feedback-state';
 import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
+import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
 
 const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -46,7 +47,7 @@ function clickWithoutLeaving(link: HTMLElement) {
 }
 
 const authenticatedSession = {
-  access_token: 'verified-access-token',
+  access_token: unsignedJwt({ sub: 'user-1', session_id: 'session-1' }),
   refresh_token: 'refresh-token',
   expires_in: 3600,
   token_type: 'bearer',
@@ -131,7 +132,7 @@ describe('AppShellAccount', () => {
     expect(await screen.findByText('1295 credits')).toBeInTheDocument();
     expect(mocks.select).toHaveBeenCalledWith('display_name, avatar_url, credits');
     await waitFor(() => expect(mocks.eq).toHaveBeenCalledWith('id', 'user-1'));
-    expect(mocks.getUser).toHaveBeenCalledWith('verified-access-token');
+    expect(mocks.getUser).toHaveBeenCalledWith(authenticatedSession.access_token);
     expect(mocks.getSession).not.toHaveBeenCalled();
     expect(mocks.maybeSingle).toHaveBeenCalledTimes(1);
   });
@@ -516,7 +517,7 @@ describe('AppShellAccount', () => {
     it('marks the sign-out for the browser’s other tabs before the session ends', async () => {
       let markedAsItEnded = false;
       mocks.signOut.mockImplementation(async () => {
-        markedAsItEnded = wasSignedOutInBrowser(authenticatedSession);
+        markedAsItEnded = wasSignedOutInBrowser(authenticatedSession.access_token);
         return { error: null };
       });
       await openAccountMenu();
@@ -619,7 +620,7 @@ describe('AppShellAccount', () => {
         await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
         const retire = fetchMock.mock.calls.find(([url]) => url === '/api/mobile/notifications/unregister');
         expect(retire?.[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ scope: 'account' }) });
-        expect(new Headers(retire?.[1]?.headers).get('Authorization')).toBe('Bearer verified-access-token');
+        expect(new Headers(retire?.[1]?.headers).get('Authorization')).toBe(`Bearer ${authenticatedSession.access_token}`);
         expect(order.indexOf('retire')).toBeLessThan(order.indexOf('signOut'));
       } finally {
         vi.unstubAllGlobals();
@@ -629,7 +630,7 @@ describe('AppShellAccount', () => {
     it('marks the sign-out for the browser’s other tabs before the session ends everywhere', async () => {
       let markedAsItEnded = false;
       mocks.signOut.mockImplementation(async () => {
-        markedAsItEnded = wasSignedOutInBrowser(authenticatedSession);
+        markedAsItEnded = wasSignedOutInBrowser(authenticatedSession.access_token);
         return { error: null };
       });
       const dialog = await chooseSignOutEverywhere();
@@ -647,7 +648,7 @@ describe('AppShellAccount', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
 
       expect(await screen.findByText(SIGN_OUT_EVERYWHERE_FAILED)).toBeInTheDocument();
-      expect(wasSignedOutInBrowser(authenticatedSession)).toBe(false);
+      expect(wasSignedOutInBrowser(authenticatedSession.access_token)).toBe(false);
     });
 
     it('does nothing when the person cancels', async () => {

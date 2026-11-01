@@ -386,7 +386,7 @@ export default function AppShellAccount({
     }
     // The browser's other tabs take the ending for a sign-out, not a lapse, and
     // an open creator page there clears (owner, 2026-11-01).
-    if (session) markBrowserSignOut(session);
+    markBrowserSignOut(session?.access_token);
     // This browser only. The default (global) also ends the account's session
     // on the person's phone, which then has every request refused. The logout
     // call gives up after 10 s (src/lib/supabase.ts).
@@ -447,7 +447,7 @@ export default function AppShellAccount({
     setIsSigningOutEverywhere(true);
     const userId = session?.user?.id;
     await retireAccountPushTokens();
-    if (session) markBrowserSignOut(session);
+    markBrowserSignOut(session?.access_token);
     const { error } = await supabase.auth.signOut({ scope: 'global' })
       .catch((thrown: unknown) => ({ error: thrown }));
     if (error) {

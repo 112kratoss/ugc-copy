@@ -33,7 +33,10 @@ function moveOnce(tool: CreatorDraftTool, userId: string, nonce: string): Promis
 }
 
 export type CreatorDraftOwner = {
-  /** Whose draft the page reads and saves; null while it waits for a hand-over, or once a signed-in page has lost its session. */
+  /**
+   * Whose draft the page reads and saves; null while it waits for a hand-over, or once a signed-in
+   * page's session has lapsed (a sign-out made in this browser makes it the visitor's).
+   */
   owner: string | null;
   /** The visitor's draft was moved to this account on the way back from sign-up. */
   carriedDraft: boolean;
@@ -69,6 +72,9 @@ export function useCreatorDraftOwner(
   signedOut = false,
 ): CreatorDraftOwner {
   const [openedSignedIn] = useState(() => userId !== null);
+  // The page is the visitor's whenever no account holds it: it opened signed out, or a sign-out
+  // made in this browser ended its account's session.
+  const visitorPage = !openedSignedIn || signedOut;
   // Read once, as the page opens: the nonce is in this page's own address.
   const [awaitsHandover] = useState(() => typeof window !== 'undefined' && hasVisitorDraftHandover(tool, handoverNonce));
   const [moved, setMoved] = useState<{ userId: string; answer: MoveAnswer | 'gave-up' } | null>(null);
@@ -76,7 +82,7 @@ export function useCreatorDraftOwner(
   // back to the visitor, a sign-out included. A session that lapses on a page that opened
   // signed in has not.
   const [handOverLeft, setHandOverLeft] = useState(false);
-  if (moved && !handOverLeft && userId !== moved.userId && (userId !== null || !openedSignedIn || signedOut)) {
+  if (moved && !handOverLeft && userId !== moved.userId && (userId !== null || visitorPage)) {
     setHandOverLeft(true);
   }
 
@@ -103,7 +109,7 @@ export function useCreatorDraftOwner(
     };
   }, [awaitsHandover, handoverNonce, moved, tool, userId]);
 
-  if (!userId) return { owner: openedSignedIn && !signedOut ? null : VISITOR_DRAFT_OWNER, carriedDraft: false, keepsVisitorForm: false };
+  if (!userId) return { owner: visitorPage ? VISITOR_DRAFT_OWNER : null, carriedDraft: false, keepsVisitorForm: false };
   if (!awaitsHandover || (moved && moved.userId !== userId)) return { owner: userId, carriedDraft: false, keepsVisitorForm: false };
   if (!moved) return { owner: null, carriedDraft: false, keepsVisitorForm: false };
   return {
@@ -120,8 +126,9 @@ export type CreatorFormHolder = { owner: string | null; key: number };
 /**
  * Whose form the creator holds once the draft is `draft.owner`'s. It keeps the same form, under
  * the same key:
- * - while the draft has no owner: a hand-over on its way, or a session that lapsed or signed out
- *   on a page that opened signed in, whose form waits for its account as it always has;
+ * - while the draft has no owner: a hand-over on its way, or a session that lapsed on a page that
+ *   opened signed in, whose form waits for its account as it always has (a sign-out made in this
+ *   browser gives the draft to the visitor, so the form is replaced);
  * - for the page's first owner, learned after it opened (a hand-over that answered);
  * - for the account a hand-over that gave up or failed leaves the visitor's form to
  *   (`keepsVisitorForm`).
