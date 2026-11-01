@@ -104,6 +104,7 @@ import {
     type PersistedStagedUpload,
 } from '@/lib/persisted-media';
 import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
+import { isAnotherDraftOwner, keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
 import {
     assignElementHandles,
     createElementHandleReplacementMap,
@@ -467,6 +468,10 @@ export default function CreateImageClient({
     // The owner whose saved draft has been read back; a remix keeps none.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
     const isDraftRestoreSettled = Boolean(remixId) || (draftOwner !== null && draftRestoredFor === draftOwner);
+    // Whose draft the last read was for, and whether the prompt carried from sign-up has come
+    // back yet: the prompt box's rule (`creator-draft-prompt.ts`).
+    const promptOwnerRef = useRef<string | null>(null);
+    const carriedPromptTakenRef = useRef(false);
     const restoredDraftModelRef = useRef(false);
     // Saved settings for a model whose controls have not loaded yet.
     const pendingDraftSettingsRef = useRef<{ modelId: string; values: Record<string, CatalogPrimitive> } | null>(null);
@@ -530,18 +535,28 @@ export default function CreateImageClient({
     }, [isDraftRestoreSettled, modelCatalog.catalog, modelCatalog.isCheckingRevision, selectedModel, prefillModel, remixId]);
 
     // A route's own prompt, model or frame wins over the saved one, and a model's
-    // settings come back only with that model.
+    // settings come back only with that model. The prompt box keeps words typed on the page
+    // over the saved prompt, except over the one carried from sign-up (`creator-draft-prompt.ts`).
     useEffect(() => {
         if (remixId || !draftOwner) return;
         let cancelled = false;
-        const promptWhenRestoreStarted = promptRef.current;
+        const openingPrompt = prefillPrompt ?? '';
+        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
+            // The words are another owner's: not this one's to see, nor to save.
+            promptRef.current = openingPrompt;
+            setPrompt(openingPrompt);
+        }
+        promptOwnerRef.current = draftOwner;
         void loadCreatorDraft<Partial<ImageCreatorDraft>>('image', draftOwner)
             .then((draft) => {
-                if (cancelled || !draft) return;
+                if (cancelled) return;
+                const carried = carriedDraft && !carriedPromptTakenRef.current;
+                if (carried) carriedPromptTakenRef.current = true;
+                if (!draft) return;
                 if (
                     !prefillPrompt
                     && typeof draft.prompt === 'string'
-                    && !hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRestoreStarted)
+                    && !keepsPromptOverSavedDraft({ boxPrompt: promptRef.current, openingPrompt, savedPrompt: draft.prompt, carried })
                 ) {
                     setPrompt(draft.prompt);
                 }
@@ -572,7 +587,7 @@ export default function CreateImageClient({
         return () => {
             cancelled = true;
         };
-    }, [prefillAspectRatio, prefillModel, prefillPrompt, remixId, draftOwner]);
+    }, [carriedDraft, prefillAspectRatio, prefillModel, prefillPrompt, remixId, draftOwner]);
 
     useEffect(() => {
         // What the creators saved before media was kept per account belonged to no one in particular.
@@ -2102,11 +2117,18 @@ export default function CreateImageClient({
                         ) : null}
 
                         <EnhancePromptButton
+                            // A press for the owner before an account switch is theirs: the button is drawn anew for the next
+                            // owner, and its answer dropped whichever callbacks it comes back through (`creator-draft-prompt.ts`).
+                            key={draftOwner}
                             variant="toolbar"
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
-                            onEnhanced={(text) => setPrompt(text)}
-                            onCreditsUpdate={updateCredits}
+                            onEnhanced={(text) => {
+                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) setPrompt(text);
+                            }}
+                            onCreditsUpdate={(credits) => {
+                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
+                            }}
                             onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
                             medium="image"
                             selectedModel={selectedModel}

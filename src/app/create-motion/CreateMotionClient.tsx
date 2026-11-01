@@ -80,6 +80,7 @@ import {
     setPersistedFile,
 } from '@/lib/persisted-media';
 import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
+import { isAnotherDraftOwner, keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
@@ -169,6 +170,8 @@ const MAX_REFERENCE_VIDEO_BYTES = 100 * 1024 * 1024;
  */
 const STAGED_UPLOAD_REUSE_MS = (RECLAIM_AFTER_HOURS - 8) * 60 * 60 * 1000;
 const MOTION_DRAFT_SAVE_DELAY_MS = 500;
+/** What the prompt box opens on without a link's prompt: Kling's stabilizer sentence. */
+const MOTION_OPENING_PROMPT = "No distortion, the character's movements are consistent with the video.";
 const MOTION_INPUTS_HINT = 'Add a character image and a motion clip to see the cost.';
 const UNCONFIRMED_START_MESSAGE = 'We couldn’t confirm your generation started. Check again — that can’t start a second run.';
 
@@ -313,7 +316,7 @@ export default function CreateMotionClient({
         quality: mode,
         referenceSeconds: referenceVideo || referenceVideoFile ? duration : null,
     });
-    const [prompt, setPrompt] = useState<string>("No distortion, the character's movements are consistent with the video.");
+    const [prompt, setPrompt] = useState<string>(MOTION_OPENING_PROMPT);
     const [imagePickError, setImagePickError] = useState<string | null>(null);
     const [videoPickError, setVideoPickError] = useState<string | null>(null);
     const [unconfirmedStart, setUnconfirmedStart] = useState(false);
@@ -322,13 +325,16 @@ export default function CreateMotionClient({
     // so nothing waits for one there.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
     const isDraftReady = Boolean(prefill.remixId) || (draftOwner !== null && draftRestoredFor === draftOwner);
+    // Whose draft the last read was for, and whether the prompt carried from sign-up has come
+    // back yet: the prompt box's rule (`creator-draft-prompt.ts`).
+    const promptOwnerRef = useRef<string | null>(null);
+    const carriedPromptTakenRef = useRef(false);
     // The start sent without an answer. Also in sessionStorage, which a browser
     // can refuse, so a retry from this page still reuses its key.
     const pendingStartRef = useRef<PendingWebStart | null>(null);
     // By File: a picked file is uploaded once and then sent again by its staged path.
     const stagedUploadsRef = useRef(new WeakMap<File, StagedMotionUpload>());
     const promptInputRef = useRef<HTMLTextAreaElement>(null);
-    const promptEditedRef = useRef(false);
     const restoredDraftModelRef = useRef(false);
     // The longest length known for the attached clip, so a reread of the same
     // clip keeps what the server measured for it.
@@ -374,12 +380,16 @@ export default function CreateMotionClient({
     useEffect(() => {
         if (remixId) return;
         // A route prefill intentionally seeds the editable form once it is available.
-        if (prefillPrompt) setPrompt(prefillPrompt);
+        if (prefillPrompt) {
+            // At once, not after the render: a saved draft's read answering first must find the link's
+            // prompt in the box, which is what the page opened on, not words typed over it.
+            promptRef.current = prefillPrompt;
+            setPrompt(prefillPrompt);
+        }
         if (prefillModel) setSelectedModel(prefillModel as ModelId);
     }, [prefillPrompt, prefillModel, remixId]);
 
     const handlePromptChange = (value: string) => {
-        promptEditedRef.current = true;
         setPrompt(value);
     };
 
@@ -676,11 +686,21 @@ export default function CreateMotionClient({
     }, []);
 
     // A reload of the link the draft was edited under brings the edits back; a
-    // different link keeps the prompt and model it carries.
-    const applySavedDraft = (draft: MotionTextDraft) => {
+    // different link keeps the prompt and model it carries. Words typed on the page win
+    // over the saved prompt, except over the one carried from sign-up (`creator-draft-prompt.ts`).
+    const applySavedDraft = (draft: MotionTextDraft, carried: boolean) => {
         const savedLink = draft.linkPrefill ?? { prompt: null, model: null };
         const continuesLink = savedLink.prompt === prefillPrompt && savedLink.model === prefillModel;
-        if (typeof draft.prompt === 'string' && (continuesLink || !prefillPrompt) && !promptEditedRef.current) {
+        if (
+            typeof draft.prompt === 'string'
+            && (continuesLink || !prefillPrompt)
+            && !keepsPromptOverSavedDraft({
+                boxPrompt: promptRef.current,
+                openingPrompt: prefillPrompt ?? MOTION_OPENING_PROMPT,
+                savedPrompt: draft.prompt,
+                carried,
+            })
+        ) {
             setPrompt(draft.prompt);
         }
         if (typeof draft.modelId === 'string' && draft.modelId && (continuesLink || !prefillModel)) {
@@ -697,6 +717,13 @@ export default function CreateMotionClient({
     useEffect(() => {
         if (remixId || !draftOwner) return;
         let cancelled = false;
+        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
+            // The words are another owner's: not this one's to see, nor to save.
+            const openingPrompt = prefillPrompt ?? MOTION_OPENING_PROMPT;
+            promptRef.current = openingPrompt;
+            setPrompt(openingPrompt);
+        }
+        promptOwnerRef.current = draftOwner;
         void (async () => {
             const [draft, savedImageFile, savedVideoFile] = await Promise.all([
                 loadCreatorDraft<MotionTextDraft>('motion', draftOwner).catch(() => null),
@@ -704,7 +731,9 @@ export default function CreateMotionClient({
                 getPersistedFile(scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo, draftOwner)).catch(() => null),
             ]);
             if (cancelled) return;
-            if (draft) applySavedDraft(draft);
+            const carried = carriedDraft && !carriedPromptTakenRef.current;
+            if (carried) carriedPromptTakenRef.current = true;
+            if (draft) applySavedDraft(draft, carried);
             if (savedImageFile) {
                 setCharacterImageFile(savedImageFile);
                 setCharacterImage(URL.createObjectURL(savedImageFile));
@@ -722,9 +751,9 @@ export default function CreateMotionClient({
         return () => {
             cancelled = true;
         };
-        // Once per owner: applySavedDraft reads this page's prefill, which does not change.
+        // Once per owner: applySavedDraft and the opening prompt read this page's prefill, which does not change.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [remixId, draftOwner]);
+    }, [remixId, draftOwner, carriedDraft]);
 
     // Prompt, model and settings per owner, a moment after each edit. A remix
     // page saves none: it restores from its source.
@@ -1764,11 +1793,18 @@ export default function CreateMotionClient({
                         </div>
 
                         <EnhancePromptButton
+                            // A press for the owner before an account switch is theirs: the button is drawn anew for the next
+                            // owner, and its answer dropped whichever callbacks it comes back through (`creator-draft-prompt.ts`).
+                            key={draftOwner}
                             variant="toolbar"
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
-                            onEnhanced={handlePromptChange}
-                            onCreditsUpdate={updateCredits}
+                            onEnhanced={(text) => {
+                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) handlePromptChange(text);
+                            }}
+                            onCreditsUpdate={(credits) => {
+                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
+                            }}
                             medium="motion"
                             selectedModel={selectedModel}
                             context={{

@@ -13,6 +13,7 @@ import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from 
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings } from './fixtures/creator-column-bar';
+import { outsideAct } from './fixtures/outside-act';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
@@ -68,6 +69,9 @@ const loadCreatorDraftMock = vi.hoisted(() => vi.fn(
 const saveCreatorDraftMock = vi.hoisted(() => vi.fn(async (tool: string, userId: string, draft: unknown) => {
   creatorDraftStore.set(`${tool}:${userId}`, draft);
 }));
+// Whose draft the page keeps, where a test moves it as `useCreatorDraftOwner` would: a sign-up's
+// hand-over finishing, a session from another tab, another account. Null leaves the hook's own answer.
+const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean } | null }));
 const uploadMediaToTemporaryStorageMock = vi.hoisted(() => vi.fn(async (file: File) => ({
   signedUrl: `https://signed.example.com/uploads/${file.name}`,
   storagePath: `uploads/user-1/${file.name}`,
@@ -103,9 +107,28 @@ vi.mock('@/components/AuthProvider', () => ({
   }),
 }));
 
-vi.mock('@/components/EnhancePromptButton', () => ({
-  default: () => null,
+// What the Enhance button was last given, which a button answering through what it had when pressed
+// calls, and the newest callbacks of the mounted button, which one keeping them in a ref calls.
+type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void };
+const enhanceButton = vi.hoisted(() => ({
+  props: null as EnhanceAnswerProps | null,
+  mounted: null as { current: EnhanceAnswerProps } | null,
 }));
+
+vi.mock('@/components/EnhancePromptButton', async () => {
+  const { useLayoutEffect, useRef } = await import('react');
+  return {
+    default: function EnhanceButtonStandIn(props: EnhanceAnswerProps) {
+      const newest = useRef(props);
+      useLayoutEffect(() => {
+        newest.current = props;
+        enhanceButton.mounted = newest;
+      });
+      enhanceButton.props = props;
+      return null;
+    },
+  };
+});
 
 vi.mock('@/components/PublicShareButton', () => ({
   default: () => null,
@@ -135,6 +158,17 @@ vi.mock('@/lib/persisted-creator-draft', () => ({
   loadCreatorDraft: loadCreatorDraftMock,
   saveCreatorDraft: saveCreatorDraftMock,
 }));
+
+vi.mock('@/lib/use-creator-draft-owner', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/use-creator-draft-owner')>();
+  return {
+    ...actual,
+    useCreatorDraftOwner: (...args: Parameters<typeof actual.useCreatorDraftOwner>) => {
+      const answer = actual.useCreatorDraftOwner(...args);
+      return draftOwnerOverride.current ?? answer;
+    },
+  };
+});
 
 vi.mock('@/lib/temporary-media-upload', async () => {
   const actual = await vi.importActual<typeof import('@/lib/temporary-media-upload')>('@/lib/temporary-media-upload');
@@ -198,6 +232,7 @@ const SIGNED_IN_SESSION = { data: { session: { access_token: 'test-token', user:
 
 beforeEach(() => {
   creatorDraftStore.clear();
+  draftOwnerOverride.current = null;
   quoteStandIn.reset(8);
   priceListStandIn.reset();
   loadCreatorDraftMock.mockClear();
@@ -1411,6 +1446,180 @@ describe('CreateImageClient generation pipeline', () => {
       expect(picker).toHaveTextContent('Imagen 4');
       expect(frameShown()).toBe('16:9');
       expect(screen.queryByText(/Your previous image model is no longer available/)).not.toBeInTheDocument();
+    });
+
+    // The prompt box's rule when a draft is read back after the page opened (owner, 2026-11-01).
+    describe('read back after the page opened', () => {
+      const CARRIED = 'A corgi astronaut on the moon, cinematic';
+      const page = () => <CreateImageClient prefill={{}} handoverNonce="nonce-1" />;
+      const box = () => screen.getByPlaceholderText(PROMPT_PLACEHOLDER);
+      function ownDraftAs(owner: string | null, carriedDraft = false) {
+        draftOwnerOverride.current = { owner, carriedDraft };
+      }
+      const promptsSavedFor = (owner: string) => saveCreatorDraftMock.mock.calls
+        .filter(([, savedFor]) => savedFor === owner)
+        .map(([, , draft]) => (draft as { prompt: string }).prompt);
+
+      it('brings the prompt carried from sign-up back over words typed while it was on its way, once', async () => {
+        installFetch();
+        // The visitor's draft, moved to the account by the hand-over.
+        creatorDraftStore.set('image:user-1', { prompt: CARRIED, modelId: 'nano-banana-2' });
+        ownDraftAs(null);
+        const view = render(page());
+        // Typed on the way back, before the move was done: as the visitor retypes into an empty box.
+        typePrompt('A corgi astr');
+        await settleDraftRead();
+        expect(loadCreatorDraftMock).not.toHaveBeenCalled();
+
+        ownDraftAs('user-1', true);
+        view.rerender(page());
+        await waitFor(() => expect(box()).toHaveValue(CARRIED));
+
+        // A session that lapses and comes back reads the account's draft again: that is the
+        // creator's own save now, and the newer words stay.
+        typePrompt('A corgi astronaut on Mars');
+        ownDraftAs(null);
+        view.rerender(page());
+        ownDraftAs('user-1', true);
+        view.rerender(page());
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledTimes(2));
+        await settleDraftRead();
+        expect(box()).toHaveValue('A corgi astronaut on Mars');
+      });
+
+      it('keeps words typed on the way back when the move carried no draft', async () => {
+        installFetch();
+        creatorDraftStore.set('image:user-1', { prompt: 'An older prompt of the account', modelId: 'nano-banana-2' });
+        ownDraftAs(null);
+        const view = render(page());
+        typePrompt('A corgi astronaut');
+
+        ownDraftAs('user-1', false);
+        view.rerender(page());
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1'));
+        await settleDraftRead();
+        expect(box()).toHaveValue('A corgi astronaut');
+      });
+
+      it('never keeps one account’s words for another, nor saves them under it', async () => {
+        installFetch();
+        ownDraftAs('user-1');
+        const view = render(page());
+        await settleDraftRead();
+        typePrompt('Asha’s harbour at dusk');
+        await waitFor(() => expect(promptsSavedFor('user-1')).toContain('Asha’s harbour at dusk'), { timeout: 2_000 });
+
+        // Asha signs out in another tab and Ben, who has no draft, signs in.
+        ownDraftAs(null);
+        view.rerender(page());
+        ownDraftAs('user-2');
+        view.rerender(page());
+        expect(box()).toHaveValue('');
+        await waitFor(() => expect(promptsSavedFor('user-2')).toContain(''), { timeout: 2_000 });
+
+        // Straight to Cleo, who has one, and back to Asha: each sees their own.
+        creatorDraftStore.set('image:user-3', { prompt: 'Cleo’s lighthouse', modelId: 'nano-banana-2' });
+        ownDraftAs('user-3');
+        view.rerender(page());
+        await waitFor(() => expect(box()).toHaveValue('Cleo’s lighthouse'));
+        ownDraftAs('user-1');
+        view.rerender(page());
+        await waitFor(() => expect(box()).toHaveValue('Asha’s harbour at dusk'));
+        expect(promptsSavedFor('user-2').every((prompt) => prompt === '')).toBe(true);
+        expect(promptsSavedFor('user-3')).not.toContain('Asha’s harbour at dusk');
+      });
+
+      it('leaves a visitor’s words behind when an account signs in without the sign-up sheet', async () => {
+        installFetch();
+        ownDraftAs('visitor');
+        const view = render(page());
+        await settleDraftRead();
+        typePrompt('Neon koi pond, top-down');
+        await waitFor(() => expect(promptsSavedFor('visitor')).toContain('Neon koi pond, top-down'), { timeout: 2_000 });
+
+        // Signed in from another tab: the account, which has no draft, opens on nothing.
+        ownDraftAs('user-1');
+        view.rerender(page());
+        expect(box()).toHaveValue('');
+        await waitFor(() => expect(promptsSavedFor('user-1')).toContain(''), { timeout: 2_000 });
+        expect(promptsSavedFor('user-1')).not.toContain('Neon koi pond, top-down');
+      });
+
+      it('fills a box emptied before the saved draft came back', async () => {
+        installFetch();
+        let answer: (draft: unknown) => void = () => undefined;
+        loadCreatorDraftMock.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+        render(page());
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1'));
+        typePrompt('A first thought');
+        typePrompt('');
+
+        await act(async () => answer({ prompt: 'The saved prompt', modelId: 'nano-banana-2' }));
+        expect(box()).toHaveValue('The saved prompt');
+      });
+
+      it('goes back to the link’s prompt, not to nothing, when another account signs in', async () => {
+        installFetch();
+        const link = { prompt: 'A lighthouse in a storm' };
+        ownDraftAs('user-1');
+        const view = render(<CreateImageClient prefill={link} />);
+        await settleDraftRead();
+        typePrompt('A lighthouse in a storm, seen from the deck');
+
+        ownDraftAs('user-2');
+        view.rerender(<CreateImageClient prefill={link} />);
+        await settleDraftRead();
+        expect(box()).toHaveValue('A lighthouse in a storm');
+      });
+
+      it('takes the next account’s saved prompt though its read answers before the reset is drawn', async () => {
+        installFetch();
+        creatorDraftStore.set('image:user-2', { prompt: 'Ben’s glasshouse at dawn', modelId: 'nano-banana-2' });
+        ownDraftAs('user-1');
+        await outsideAct(async (draw) => {
+          draw(page());
+          await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1'));
+          typePrompt('Asha’s harbour at dusk');
+
+          ownDraftAs('user-2');
+          draw(page());
+          await waitFor(() => expect(box()).toHaveValue('Ben’s glasshouse at dawn'));
+        });
+      });
+
+      it('drops an Enhance answer that comes back after another account signed in', async () => {
+        installFetch();
+        ownDraftAs('user-1');
+        const view = render(page());
+        await settleDraftRead();
+        typePrompt('Asha’s harbour at dusk');
+        const pressedForAsha = enhanceButton.props!;
+        const buttonAshaPressed = enhanceButton.mounted!;
+
+        ownDraftAs('user-2');
+        view.rerender(page());
+        await settleDraftRead();
+        act(() => {
+          pressedForAsha.onEnhanced('Asha’s harbour at dusk, golden hour, 35mm');
+          pressedForAsha.onCreditsUpdate(41);
+          // A button answering through its newest callbacks is drawn anew for Ben: the one Asha pressed has only hers.
+          buttonAshaPressed.current.onEnhanced('Asha’s harbour at dusk, golden hour, 35mm');
+          buttonAshaPressed.current.onCreditsUpdate(43);
+        });
+        expect(box()).toHaveValue('');
+        expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
+        expect(authState.updateCredits).not.toHaveBeenCalledWith(43);
+        await waitFor(() => expect(promptsSavedFor('user-2')).toContain(''), { timeout: 2_000 });
+        expect(promptsSavedFor('user-2')).not.toContain('Asha’s harbour at dusk, golden hour, 35mm');
+
+        // One pressed for the account on the page lands.
+        act(() => {
+          enhanceButton.props!.onEnhanced('Ben’s glasshouse at dawn');
+          enhanceButton.props!.onCreditsUpdate(12);
+        });
+        expect(box()).toHaveValue('Ben’s glasshouse at dawn');
+        expect(authState.updateCredits).toHaveBeenCalledWith(12);
+      });
     });
   });
 

@@ -12,6 +12,7 @@ import type { CreatorStartPost } from '@/lib/creator-start-posts';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import { buildGenerationModelCatalog, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
+import { outsideAct } from './fixtures/outside-act';
 // For "references saved on another model": the registry the page reads, the server's
 // catalog and its quote function, and what hands the one to the other in the browser.
 import * as clientModels from '@/lib/client-generation-models';
@@ -46,6 +47,9 @@ const saveCreatorDraftMock = vi.hoisted(() => vi.fn(async (_tool: string, _userI
   void _userId;
   void _draft;
 }));
+// Whose draft the page keeps, where a test moves it as `useCreatorDraftOwner` would: a sign-up's
+// hand-over finishing, another account. Null leaves the hook's own answer.
+const draftOwnerOverride = vi.hoisted(() => ({ current: null as { owner: string | null; carriedDraft: boolean } | null }));
 const purgeLegacyPersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
 const setPersistedFileMock = vi.hoisted(() => vi.fn(async (_key: string, _file: File): Promise<void> => {
   void _key;
@@ -88,6 +92,8 @@ const temporaryUploadMock = vi.hoisted(() => vi.fn());
 const enhanceButtonPropsMock = vi.hoisted(() => vi.fn((_props: { prompt: string; context?: EnhancerContext }) => {
   void _props;
 }));
+// The newest callbacks of the Enhance button drawn last, which a button keeping them in a ref answers through.
+const mountedEnhanceButton = vi.hoisted(() => ({ current: null as { current: unknown } | null }));
 const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string): Promise<PersistedImageElementRecord[]> => {
     void _key;
@@ -157,6 +163,17 @@ vi.mock('@/lib/persisted-creator-draft', () => ({
   saveCreatorDraft: saveCreatorDraftMock,
 }));
 
+vi.mock('@/lib/use-creator-draft-owner', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/use-creator-draft-owner')>();
+  return {
+    ...actual,
+    useCreatorDraftOwner: (...args: Parameters<typeof actual.useCreatorDraftOwner>) => {
+      const answer = actual.useCreatorDraftOwner(...args);
+      return draftOwnerOverride.current ?? answer;
+    },
+  };
+});
+
 vi.mock('@/lib/video-metadata-probe', () => ({
   readVideoDurationSeconds: readDurationMock,
 }));
@@ -187,12 +204,20 @@ vi.mock('@/components/AuthProvider', () => ({
   }),
 }));
 
-vi.mock('@/components/EnhancePromptButton', () => ({
-  default: (props: { prompt: string; context?: EnhancerContext }) => {
-    enhanceButtonPropsMock(props);
-    return null;
-  },
-}));
+vi.mock('@/components/EnhancePromptButton', async () => {
+  const { useLayoutEffect, useRef } = await import('react');
+  return {
+    default: function EnhanceButtonStandIn(props: { prompt: string; context?: EnhancerContext }) {
+      const newest = useRef(props);
+      useLayoutEffect(() => {
+        newest.current = props;
+        mountedEnhanceButton.current = newest;
+      });
+      enhanceButtonPropsMock(props);
+      return null;
+    },
+  };
+});
 
 vi.mock('@/components/GenerationResultVideo', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/components/GenerationResultVideo')>();
@@ -496,6 +521,7 @@ describe('CreateVideoClient Kling video elements', () => {
     loadCreatorDraftMock.mockReset();
     loadCreatorDraftMock.mockResolvedValue(null);
     saveCreatorDraftMock.mockClear();
+    draftOwnerOverride.current = null;
     purgeLegacyPersistedMediaMock.mockClear();
     setPersistedFileMock.mockClear();
     getPersistedValueMock.mockReset();
@@ -5086,6 +5112,176 @@ describe('CreateVideoClient Kling video elements', () => {
         }
         view.unmount();
       }
+    });
+
+    // The prompt box's rule when a draft is read back after the page opened (owner, 2026-11-01).
+    describe('read back after the page opened', () => {
+      function ownDraftAs(owner: string | null, carriedDraft = false) {
+        draftOwnerOverride.current = { owner, carriedDraft };
+      }
+      const draftsSavedFor = (owner: string) => saveCreatorDraftMock.mock.calls
+        .filter(([, savedFor]) => savedFor === owner)
+        .map(([, , draft]) => draft as { prompt: string; shots: Array<{ prompt: string }> });
+
+      it('brings the prompt carried from sign-up back over words typed while it was on its way, once', async () => {
+        const carried = 'A corgi astronaut on the moon, cinematic';
+        const page = () => <CreateVideoClient prefill={{}} handoverNonce="nonce-1" />;
+        // The visitor's draft, moved to the account by the hand-over.
+        loadCreatorDraftMock.mockResolvedValue({ prompt: carried });
+        ownDraftAs(null);
+        const view = render(page());
+        fireEvent.change(promptBox(), { target: { value: 'A corgi astr' } });
+        expect(loadCreatorDraftMock).not.toHaveBeenCalled();
+
+        ownDraftAs('user-1', true);
+        view.rerender(page());
+        await waitFor(() => expect(promptBox()).toHaveValue(carried));
+
+        // A session that lapses and comes back reads the account's draft again: that is the
+        // creator's own save now, and the newer words stay.
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        ownDraftAs(null);
+        view.rerender(page());
+        ownDraftAs('user-1', true);
+        view.rerender(page());
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledTimes(2));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(promptBox()).toHaveValue(PROMPT);
+      });
+
+      it('never keeps one account’s words for another, the shots’ included, nor saves them under it', async () => {
+        loadCreatorDraftMock.mockImplementation(async (_tool: string, owner: string) => draftsSavedFor(owner).at(-1) ?? null);
+        ownDraftAs('user-1');
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(screen.getByRole('radio', { name: 'Multi-shot' }));
+        fireEvent.change(screen.getByRole('textbox', { name: 'Shot 1 prompt' }), { target: { value: 'A lamp lights on the quay' } });
+        await waitFor(() => expect(draftsSavedFor('user-1').at(-1)?.shots[0]?.prompt).toBe('A lamp lights on the quay'), { timeout: 2_000 });
+
+        // Another account signs in on this page from another tab; it has no draft.
+        ownDraftAs('user-2');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('');
+        await waitFor(() => expect(draftsSavedFor('user-2').length).toBeGreaterThan(0), { timeout: 2_000 });
+        expect(draftsSavedFor('user-2').every((draft) => draft.prompt === '' && draft.shots.every((shot) => shot.prompt === ''))).toBe(true);
+
+        // Back to the first account: its own words come back.
+        ownDraftAs('user-1');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('A lamp lights on the quay'));
+        fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
+        expect(promptBox()).toHaveValue(PROMPT);
+      });
+
+      it('brings a carried multi-shot draft back whole over words typed on the way back', async () => {
+        const page = () => <CreateVideoClient prefill={{}} handoverNonce="nonce-1" />;
+        // A multi-shot draft keeps its words in its shots.
+        loadCreatorDraftMock.mockResolvedValue({
+          prompt: '',
+          modelId: 'kling-3.0-video',
+          isMultiShot: true,
+          shots: [{ id: '1', prompt: 'A lamp lights on the quay', duration: 5 }],
+        });
+        ownDraftAs(null);
+        const view = render(page());
+        fireEvent.change(promptBox(), { target: { value: 'A lamp lig' } });
+
+        ownDraftAs('user-1', true);
+        view.rerender(page());
+        await waitFor(() => expect(screen.getByRole('radio', { name: 'Multi-shot' })).toHaveAttribute('aria-checked', 'true'));
+        expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('A lamp lights on the quay');
+      });
+
+      it('goes back to the link’s prompt, not to nothing, when another account signs in', async () => {
+        const link = { prompt: 'A lighthouse in a storm, the beam sweeping the rain' };
+        ownDraftAs('user-1');
+        const view = render(<CreateVideoClient prefill={link} />);
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+        fireEvent.change(promptBox(), { target: { value: `${link.prompt}, seen from the deck` } });
+
+        ownDraftAs('user-2');
+        view.rerender(<CreateVideoClient prefill={link} />);
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(promptBox()).toHaveValue(link.prompt);
+      });
+
+      it('takes the next account’s saved prompt though its read answers before the reset is drawn', async () => {
+        loadCreatorDraftMock.mockImplementation(async (_tool: string, owner: string) => (owner === 'user-2' ? { prompt: 'Ben’s glasshouse at dawn' } : null));
+        ownDraftAs('user-1');
+        await outsideAct(async (draw) => {
+          draw(<CreateVideoClient prefill={{}} />);
+          await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+          fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+          ownDraftAs('user-2');
+          draw(<CreateVideoClient prefill={{}} />);
+          await waitFor(() => expect(promptBox()).toHaveValue('Ben’s glasshouse at dawn'));
+        });
+      });
+
+      it('drops an Enhance answer that comes back after another account signed in, and the notes one left', async () => {
+        type EnhanceAnswer = { onEnhanced: (text: string, result?: unknown) => void; onCreditsUpdate: (credits: number) => void };
+        // An answer comes back through what the page gave the button when it was pressed, or, from a button
+        // keeping its newest callbacks in a ref, through those of the button that was pressed.
+        const lastEnhanceButton = () => enhanceButtonPropsMock.mock.calls.at(-1)?.[0] as unknown as EnhanceAnswer;
+        const mountedButton = () => mountedEnhanceButton.current as { current: EnhanceAnswer };
+        const note = { warnings: [{ code: 'camera-move', severity: 'info', message: 'Name the camera move.' }] };
+        const settle = () => act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        ownDraftAs('user-1');
+        const view = render(<CreateVideoClient prefill={{}} />);
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        // One Enhance came back for Asha with a note; another is on its way.
+        act(() => lastEnhanceButton().onEnhanced(`${PROMPT} Golden hour.`, note));
+        expect(screen.getByText('Name the camera move.')).toBeInTheDocument();
+        const pressedForAsha = lastEnhanceButton();
+        const buttonAshaPressed = mountedButton();
+
+        ownDraftAs('user-2');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await settle();
+        act(() => {
+          pressedForAsha.onEnhanced(`${PROMPT} Golden hour, 35mm.`, note);
+          pressedForAsha.onCreditsUpdate(41);
+          buttonAshaPressed.current.onEnhanced(`${PROMPT} Golden hour, 35mm.`, note);
+          buttonAshaPressed.current.onCreditsUpdate(43);
+        });
+        expect(promptBox()).toHaveValue('');
+        expect(screen.queryByText('Name the camera move.')).toBeNull();
+        expect(mockUpdateCredits).not.toHaveBeenCalledWith(41);
+        expect(mockUpdateCredits).not.toHaveBeenCalledWith(43);
+
+        // A shot's Enhance, pressed for Ben, as Cleo signs in.
+        fireEvent.click(screen.getByRole('radio', { name: 'Multi-shot' }));
+        fireEvent.change(screen.getByRole('textbox', { name: 'Shot 1 prompt' }), { target: { value: 'A lamp lights on the quay' } });
+        const shotPressedForBen = lastEnhanceButton();
+        const shotButtonBenPressed = mountedButton();
+        ownDraftAs('user-3');
+        view.rerender(<CreateVideoClient prefill={{}} />);
+        await settle();
+        act(() => {
+          shotPressedForBen.onEnhanced('A lamp lights on the quay, one by one.', note);
+          shotPressedForBen.onCreditsUpdate(39);
+          shotButtonBenPressed.current.onEnhanced('A lamp lights on the quay, one by one.', note);
+          shotButtonBenPressed.current.onCreditsUpdate(37);
+        });
+        expect(screen.getByRole('textbox', { name: 'Shot 1 prompt' })).toHaveValue('');
+        expect(screen.queryByText('Name the camera move.')).toBeNull();
+        expect(mockUpdateCredits).not.toHaveBeenCalledWith(39);
+        expect(mockUpdateCredits).not.toHaveBeenCalledWith(37);
+
+        // One pressed for the account on the page lands.
+        fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
+        act(() => lastEnhanceButton().onEnhanced('Cleo’s glasshouse at dawn'));
+        expect(promptBox()).toHaveValue('Cleo’s glasshouse at dawn');
+      });
     });
 
     it('keeps the key of a start that got no answer, and Check again sends that key and body once more', async () => {

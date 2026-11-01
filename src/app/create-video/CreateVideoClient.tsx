@@ -178,6 +178,7 @@ import {
     setPersistedValue,
 } from '@/lib/persisted-media';
 import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
+import { isAnotherDraftOwner, keepsPromptOverSavedDraft } from '@/lib/creator-draft-prompt';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
@@ -244,6 +245,11 @@ interface MultiShot {
     id: string;
     prompt: string;
     duration: number;
+}
+
+/** The shots the page opens on, and puts back when another owner's words are in them. */
+function openingShots(): MultiShot[] {
+    return [{ id: '1', prompt: '', duration: 5 }];
 }
 
 const KLING_VIDEO_ELEMENT_LIMIT = 3;
@@ -1239,9 +1245,7 @@ export default function CreateVideoClient({
         promptRef.current = prompt;
     }, [prompt]);
     const [singleDuration, setSingleDuration] = useState<number>(drawnForm.duration);
-    const [multiPrompts, setMultiPrompts] = useState<MultiShot[]>([
-        { id: '1', prompt: '', duration: 5 },
-    ]);
+    const [multiPrompts, setMultiPrompts] = useState<MultiShot[]>(openingShots);
     const [elements, setElements] = useState<VideoElementDraft[]>([]);
     const [referenceVideos, setReferenceVideos] = useState<SeedanceMediaReferenceDraft[]>([]);
     const [referenceAudios, setReferenceAudios] = useState<SeedanceMediaReferenceDraft[]>([]);
@@ -1308,6 +1312,10 @@ export default function CreateVideoClient({
     // The owner whose saved draft has been read back. Until then nothing is saved over
     // it, and the catalog does not pick its default model in place of the saved one.
     const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
+    // Whose draft the last read was for, and whether the prompt carried from sign-up has come
+    // back yet: the prompt box's rule (`creator-draft-prompt.ts`).
+    const promptOwnerRef = useRef<string | null>(null);
+    const carriedPromptTakenRef = useRef(false);
     const restoredDraftModelRef = useRef(false);
     // A saved draft with a model was read back, a link's model or not: its settings are the creator's.
     const restoredDraftSettingsRef = useRef(false);
@@ -2884,9 +2892,19 @@ export default function CreateVideoClient({
     useEffect(() => {
         if (remixId || !draftOwner) return;
         let cancelled = false;
-        // A prompt typed while the draft is read is the newer one, as is one typed before the page's
-        // script ran when the read starts as the page mounts (a sign-up's hand-over starts it later).
-        const promptWhenRestoreStarted = promptRef.current;
+        // Words typed on the page win over the saved prompt, typed before the page's script ran
+        // included, except over the one carried from sign-up (`creator-draft-prompt.ts`).
+        const openingPrompt = prefillPrompt ?? '';
+        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) {
+            // The words are another owner's, the shots' and the enhancer's notes on them too: not
+            // this one's to see, nor to save.
+            promptRef.current = openingPrompt;
+            setPrompt(openingPrompt);
+            setMultiPrompts(openingShots());
+            setPromptQualityWarnings([]);
+            setMultiPromptQualityWarnings({});
+        }
+        promptOwnerRef.current = draftOwner;
         // The catalog waits for the draft, so a store that never answers must not hold
         // it: past this the page goes on without the draft, and a late one is ignored.
         let settled = false;
@@ -2896,13 +2914,22 @@ export default function CreateVideoClient({
         }, 3000);
         void loadCreatorDraft<unknown>('video', draftOwner)
             .then((stored) => {
-                if (cancelled || settled || !stored) return;
+                if (cancelled) return;
+                const carried = carriedDraft && !carriedPromptTakenRef.current;
+                if (carried) carriedPromptTakenRef.current = true;
+                if (settled || !stored) return;
                 const draft = readVideoCreatorDraft(stored);
                 emptySavedDraftRef.current = draft.modelId && !prefillModel && !draft.prompt?.trim()
                     && !draft.shots?.some((shot) => shot.prompt.trim())
                     ? draft
                     : null;
-                const keepsTypedPrompt = !prefillPrompt && hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRestoreStarted);
+                const keepsTypedPrompt = !prefillPrompt && keepsPromptOverSavedDraft({
+                    boxPrompt: promptRef.current,
+                    openingPrompt,
+                    savedPrompt: draft.prompt,
+                    savedShotPrompts: draft.isMultiShot ? draft.shots?.map((shot) => shot.prompt) : undefined,
+                    carried,
+                });
                 if (draft.prompt !== undefined && !prefillPrompt && !keepsTypedPrompt) setPrompt(draft.prompt);
                 if (draft.modelId) {
                     restoredDraftSettingsRef.current = true;
@@ -2944,7 +2971,7 @@ export default function CreateVideoClient({
             cancelled = true;
             window.clearTimeout(giveUp);
         };
-    }, [remixId, draftOwner, prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration]);
+    }, [remixId, draftOwner, carriedDraft, prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration]);
 
     // A model's extra settings can be set only once its descriptor is here.
     useEffect(() => {
@@ -5662,16 +5689,22 @@ export default function CreateVideoClient({
                                 ) : null}
 
                                 <EnhancePromptButton
+                                    // A press for the owner before an account switch is theirs: the button is drawn anew for the next
+                                    // owner, and its answer dropped whichever callbacks it comes back through (`creator-draft-prompt.ts`).
+                                    key={draftOwner}
                                     variant="toolbar"
                                     leading={<CreatorTemplatesTile />}
                                     prompt={prompt}
                                     onEnhanced={(text, result) => {
+                                        if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;
                                         setPrompt(text);
                                         setPromptQualityWarnings(result?.warnings ?? []);
                                         setActiveMentionQuery(null);
                                         requestAnimationFrame(() => updateMentionState(text));
                                     }}
-                                    onCreditsUpdate={updateCredits}
+                                    onCreditsUpdate={(credits) => {
+                                        if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
+                                    }}
                                     medium="video"
                                     selectedModel={selectedModel}
                                     helperText={
@@ -5702,15 +5735,20 @@ export default function CreateVideoClient({
                                             ) : null}
                                         </div>
                                         <EnhancePromptButton
+                                            // Drawn anew for the next owner, as the prompt's button is.
+                                            key={draftOwner}
                                             prompt={shot.prompt}
                                             onEnhanced={(text, result) => {
+                                                if (isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) return;
                                                 updateShot(shot.id, 'prompt', text);
                                                 setMultiPromptQualityWarnings((current) => ({
                                                     ...current,
                                                     [shot.id]: result?.warnings ?? [],
                                                 }));
                                             }}
-                                            onCreditsUpdate={updateCredits}
+                                            onCreditsUpdate={(credits) => {
+                                                if (!isAnotherDraftOwner(promptOwnerRef.current, draftOwner)) updateCredits(credits);
+                                            }}
                                             medium="video"
                                             selectedModel={selectedModel}
                                             context={buildShotPromptQualityContext(shot, index)}
