@@ -1924,6 +1924,80 @@ describe('post resource bundle server access', () => {
     });
   });
 
+  // The feed and the post page show no body of a paid recipe's post that is
+  // the saved generation setup it sells (sanitizePublicPostContent). The
+  // marketplace drew that body on the card, sent it to search and matched
+  // queries on it.
+  describe('a paid recipe whose post’s caption is its saved generation setup', () => {
+    const SETUP_CAPTION = 'Saved generation setup\nModel: Nano Banana 2\nLight: quillfeather glow over the water';
+
+    beforeEach(() => {
+      bundleRow = { ...(bundleRow as BundleRow), access_mode: 'paid', price_usd_cents: 300 };
+      postRow = { ...(postRow as Record<string, unknown>), body: SETUP_CAPTION };
+    });
+
+    it('is listed without it', async () => {
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      const page = await getMarketplaceResourceList();
+
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]?.post?.body).toBe('');
+      expect(page.items[0]?.post?.title).toBe('Public recipe post');
+      expect(JSON.stringify(page)).not.toContain('quillfeather');
+    });
+
+    it('is not found by its words, and still by what the card shows', async () => {
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      expect((await getMarketplaceResourceList({ q: 'quillfeather glow' })).items).toEqual([]);
+      expect((await getMarketplaceResourceList({ q: 'public recipe post' })).items).toHaveLength(1);
+    });
+
+    it('does not name an untitled post after its setup', async () => {
+      postRow = { ...(postRow as Record<string, unknown>), title: null };
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      const [tile] = (await getMarketplaceResourceList()).items;
+
+      expect(tile?.post?.title).toBe('Untitled creation');
+      expect((await getMarketplaceResourceList({ q: 'saved generation setup' })).items).toEqual([]);
+    });
+
+    // Every quality check judges the post as stored: the database's listing
+    // gate, the publish and promotion checks and both seller pages.
+    it('is listed on its post as stored when the post shows nothing else, and shown without it', async () => {
+      postRow = { ...(postRow as Record<string, unknown>), title: null, post_format: 'text', category: 'text', generation_id: null };
+      const { getMarketplaceResourceList, getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+
+      const page = await getMarketplaceResourceList();
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]?.post).toMatchObject({ title: 'Untitled note', body: '' });
+      const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
+      expect(listing?.post?.body).toBe(SETUP_CAPTION);
+      expect(listing?.quality.eligible).toBe(true);
+    });
+
+    it('is shown without it on the post’s own recipe read', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+      expect(detail?.post?.body).toBe('');
+      expect(JSON.stringify(detail)).not.toContain('quillfeather');
+    });
+
+    it('keeps it under a free recipe, as the feed does', async () => {
+      bundleRow = { ...(bundleRow as BundleRow), access_mode: 'free', price_usd_cents: 0 };
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      const page = await getMarketplaceResourceList({ q: 'quillfeather glow' });
+
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]?.post?.body).toBe(SETUP_CAPTION);
+    });
+  });
+
   it('refuses to attach references from a generation the post creator does not own', async () => {
     bundleRow = {
       ...(bundleRow as BundleRow),
