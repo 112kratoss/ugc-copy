@@ -19,8 +19,9 @@
 -- A tile can also show Files that an unlock adds from a creation's shared
 -- inputs: counted after the list, for the page it serves, on a recipe whose
 -- stored switch is on. They are not stored, so no filter lists a recipe for
--- them, as before this file and as the app's own fallback filters (at most 4
--- listed recipes in production on 2026-11-01).
+-- them, as before this file and as the app's own fallback filters (6 of the
+-- 12 listed recipes' tiles in production on 2026-11-01, read from the live
+-- list).
 -- The marketplace serves what the list returns without checking the kind
 -- again. In production on 2026-11-01 (read-only count: 17 recipes, every one
 -- with items, 12 listed), the workflow filter listed 10 recipes whose cards
