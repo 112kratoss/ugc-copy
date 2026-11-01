@@ -828,7 +828,8 @@ function motionClipRefusal(picked: { fileName?: string | null; fileSize?: number
  *
  * The source goes by its ids, never its row's words: a sign-in's returnTo comes back decoded once
  * more than it was encoded, so a title with &, # or + arrived cut and one with a backslash sent
- * the person Home. The row reads the post again (`RemixSourceRow`).
+ * the person Home. The row reads the post again (`RemixSourceRow`). `prompt` still goes as text, as
+ * a prompt-only Recreate has nowhere else to come back from, and meets the same decoding.
  */
 function creatorReturnPath({ insideTab, tool, guided, initialPrompt, remixSource }: {
   insideTab: boolean;

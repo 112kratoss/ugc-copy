@@ -2,7 +2,7 @@ import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
 import { MODEL_DISPLAY_NAMES } from './model-display-names';
-import { isPlaceholderTitle } from './placeholder-title';
+import { postName } from './placeholder-title';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
@@ -320,17 +320,14 @@ function resolveHomePreviewKind(
 }
 
 function homeCardTitle(item: ShowcaseFeedItem, previewKind: HomeFeedCard['previewKind']) {
-  const title = item.title?.trim();
-  if (title && !isPlaceholderTitle(title)) return title;
-
   const fallback = previewKind === 'media' ? item.prompt : item.body || item.prompt;
-  const clean = fallback?.trim();
-  if (clean && !isPlaceholderTitle(clean)) return clean;
-
-  if (item.creationMode === 'motion') return 'Motion creation';
-  if (item.mediaKind === 'video' || item.category === 'video') return 'Video creation';
-  if (previewKind === 'text') return 'Creator note';
-  return 'Image creation';
+  return postName(
+    [item.title, fallback],
+    item.creationMode === 'motion' ? 'motion'
+      : item.mediaKind === 'video' || item.category === 'video' ? 'video'
+      : previewKind === 'text' ? 'text'
+      : 'image',
+  );
 }
 
 function homeCardBody(item: ShowcaseFeedItem, previewKind: HomeFeedCard['previewKind']) {

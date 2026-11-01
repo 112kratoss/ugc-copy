@@ -211,4 +211,18 @@ describe('showcasePostRemixSourceContext', () => {
     expect(showcasePostRemixSourceContext(untitled).title).toBe('A dancer on a rooftop');
     expect(showcasePostRemixSourceContext(untitled).title).toBe(showcaseToHomeFeedCard(untitled).title);
   });
+
+  // The row and the Home card name a post through one ladder (`postName`); these are the
+  // shapes an untitled post arrives in (the server titles any post with a body from its body).
+  it.each([
+    ['an image with a prompt', { creationMode: null, category: 'image', mediaKind: 'image', prompt: 'A red bicycle' }, 'A red bicycle'],
+    ['an image whose prompt is hidden', { creationMode: null, category: 'image', mediaKind: 'image', prompt: '' }, 'Image creation'],
+    ['a video whose prompt is hidden', { creationMode: null, category: 'video', mediaKind: 'video', prompt: '' }, 'Video creation'],
+    ['a video upload filed as an image', { creationMode: null, category: 'image', mediaKind: 'video', prompt: '' }, 'Video creation'],
+    ['a motion run whose prompt is hidden', { creationMode: 'motion', category: 'video', mediaKind: 'video', prompt: '' }, 'Motion creation'],
+  ] as const)('names %s as its Home card does', (_shape, fields, expected) => {
+    const post = { ...motionPost(), ...fields, title: 'Untitled Creation' } as ShowcaseFeedItem;
+    expect(showcasePostRemixSourceContext(post).title).toBe(expected);
+    expect(showcaseToHomeFeedCard(post).title).toBe(expected);
+  });
 });

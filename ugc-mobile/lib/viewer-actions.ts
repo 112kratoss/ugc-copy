@@ -2,7 +2,8 @@ import { hexWithAlpha } from './eased-fade';
 import { canHideFeedCreator, isOwnFeedPost } from './feed-feedback-menu';
 import { hideCreatorLabelFromCardLabel } from './hide-creator-label';
 import type { ImmersivePreviewItem, PreviewViewerSource } from './immersive-preview-view-model';
-import { isPlaceholderTitle } from './placeholder-title';
+import { postName } from './placeholder-title';
+import { getShowcaseMediaPreviewUrl } from './showcase-media';
 import { appTheme, type ThemeColors } from './theme';
 import type { CreatorToolId, GenerationShareSourceSurface } from './types';
 
@@ -447,25 +448,29 @@ export function getDeleteCreationConfirmation(item: Pick<ImmersivePreviewItem, '
 /**
  * The picture a remix's creator shows of its source, 40pt across: the media's
  * poster, or none. Never the full-size original, which a picture without a
- * poster once sent (1.2 MB on average, up to about 8 MB), and never a video file.
+ * poster once sent (1.2 MB on average, up to about 8 MB): a creation with no
+ * preview yet names its own output as one (`getGenerationMediaItemsList`), as
+ * the server does for a legacy creation-backed post. Never a video file.
  */
 export function getRemixSourceThumbnailUrl(item: Pick<ImmersivePreviewItem, 'mediaItems'>) {
-  return item.mediaItems?.[0]?.previewUrl ?? null;
+  const cover = item.mediaItems?.[0];
+  const poster = cover ? getShowcaseMediaPreviewUrl(cover) : null;
+  return poster && poster !== cover?.url ? poster : null;
 }
 
 /**
- * The row's title, as a Home card names its post (`homeCardTitle`): the post's
- * own title, its prompt in place of a name nobody gave it ("Untitled
- * Creation"), or the kind of creation when it has no words of its own.
+ * The row's title, through the ladder a Home card names its post with
+ * (`postName`): the post's own title, its prompt in place of a name nobody
+ * gave it ("Untitled Creation"), or the kind of creation.
  */
-function getRemixSourceTitle(item: Pick<ImmersivePreviewItem, 'title' | 'recreatePrompt' | 'recreateTool' | 'previewKind'>) {
-  for (const candidate of [item.title, item.recreatePrompt]) {
-    const words = candidate?.trim();
-    if (words && !isPlaceholderTitle(words)) return words;
-  }
-  if (item.previewKind === 'text') return 'Creator note';
-  if (item.recreateTool === 'motion') return 'Motion creation';
-  return item.recreateTool === 'video' ? 'Video creation' : 'Image creation';
+function getRemixSourceTitle(item: Pick<ImmersivePreviewItem, 'title' | 'recreatePrompt' | 'recreateTool' | 'mediaKind' | 'previewKind'>) {
+  return postName(
+    [item.title, item.recreatePrompt],
+    item.recreateTool === 'motion' ? 'motion'
+      : item.recreateTool === 'video' || item.mediaKind === 'video' ? 'video'
+      : item.previewKind === 'text' ? 'text'
+      : 'image',
+  );
 }
 
 /**
@@ -475,7 +480,7 @@ function getRemixSourceTitle(item: Pick<ImmersivePreviewItem, 'title' | 'recreat
  * whichever Remix opened it.
  */
 export function getRemixSourceContext(
-  item: Pick<ImmersivePreviewItem, 'showcasePostId' | 'title' | 'recreatePrompt' | 'recreateTool' | 'previewKind' | 'creatorLabel' | 'mediaItems'>,
+  item: Pick<ImmersivePreviewItem, 'showcasePostId' | 'title' | 'recreatePrompt' | 'recreateTool' | 'mediaKind' | 'previewKind' | 'creatorLabel' | 'mediaItems'>,
 ): RemixSourceContext {
   return {
     postId: item.showcasePostId,

@@ -1,7 +1,7 @@
 // Define React Native development global
 (global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -84,6 +84,9 @@ const nativeAlertState = vi.hoisted(() => ({
 const keyboardState = vi.hoisted(() => ({
   dismiss: vi.fn(),
 }));
+
+// The phone's text size (Settings → Display → Text Size); 1 unless a case sets it.
+const windowState = vi.hoisted(() => ({ fontScale: 1 }));
 
 // Android's back key, as the screen's own surfaces claim it.
 const backHandlerState = vi.hoisted(() => ({
@@ -186,7 +189,7 @@ vi.mock('react-native', () => ({
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: (props: MockProps) => React.createElement('textinput', props),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
-  useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+  useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: windowState.fontScale }),
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
@@ -578,7 +581,8 @@ beforeEach(() => {
   // A remix whose link names its post by id alone reads it for its row. Unless a
   // case says otherwise the post cannot be read, so the row stays the plain one.
   testQueryClient.removeQueries({ queryKey: ['showcase-post'] });
-  authState.api.getShowcasePost.mockReset().mockRejectedValue(new Error('Post not found'));
+  authState.api.getShowcasePost.mockReset().mockRejectedValue(new ApiError('Post not found.', 404));
+  windowState.fontScale = 1;
 });
 
 function collectText(root: renderer.ReactTestInstance) {
@@ -8822,11 +8826,46 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(row(tree).findAllByType(SkeletonBone)).toHaveLength(3);
         expect(collectText(row(tree))).toEqual([]);
 
-        refuse(new Error('Post not found'));
+        refuse(new ApiError('Post not found.', 404));
         await settle();
         expect(row(tree).findAllByType(SkeletonBone)).toHaveLength(0);
         expect(collectText(row(tree))).toEqual(['Source creation', 'Make your own version']);
         expect(poster(tree)).toEqual([]);
+      });
+
+      // The app retries a failed read once and refetches what has none on every return to the
+      // foreground (app/_layout.tsx), which turned the plain row back into bones each time.
+      it('reads a post that is gone once, and stays plain when the app comes back to the foreground', async () => {
+        const tree = await open(idsOnly());
+        await renderer.act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+
+        renderer.act(() => {
+          focusManager.setFocused(false);
+          focusManager.setFocused(true);
+        });
+        await settle();
+
+        expect(authState.api.getShowcasePost).toHaveBeenCalledTimes(1);
+        expect(row(tree).findAllByType(SkeletonBone)).toHaveLength(0);
+        expect(collectText(row(tree))).toEqual(['Source creation', 'Make your own version']);
+        focusManager.setFocused(undefined);
+      });
+
+      // Any app or page can open the app's link, and encoding leaves '..' a dot segment.
+      it.each(['..', '.', '../profile', 'post 9'])('never reads a post id that is not one, such as "%s"', async (postId) => {
+        const tree = await open(<MediaCreationScreen initialTool="image" remixSource={{ generationId: 'gen-9', postId }} />);
+
+        expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
+        expect(collectText(row(tree))).toEqual(['Source creation', 'Make your own version']);
+      });
+
+      it('sizes the bones to the phone\'s text size, so the row does not grow when the post lands', async () => {
+        windowState.fontScale = 1.5;
+        authState.api.getShowcasePost.mockReturnValue(new Promise(() => {}));
+        const tree = await open(idsOnly());
+
+        const lineBoxes = row(tree).findAllByType(SkeletonBone).slice(1).map((bone) => bone.parent!.props.style.height);
+        expect(lineBoxes).toEqual([21 * 1.5, 17 * 1.5]);
       });
     });
 
