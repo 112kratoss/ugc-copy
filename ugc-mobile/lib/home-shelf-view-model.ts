@@ -63,7 +63,7 @@ export function readHomeShelfItems(response: HomeShelfResponse | null | undefine
  * decoded once more than it was encoded (expo-router's `useLocalSearchParams`
  * decodes what the URL parse already decoded), so a title with &, # or + would
  * arrive cut and one with a backslash would send the guest Home instead. The
- * creator draws its plain row after sign-in.
+ * creator reads the post for its row after sign-in (`RemixSourceRow`).
  */
 export function homeShelfGuestReturnTo(creation: HomeShelfCreation): string {
   const href = creation.makeHref

@@ -1,5 +1,6 @@
 import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
+import { postName } from './placeholder-title';
 import { resourceKindLabel } from './post-resource-bundle-view-model';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { isTextOnlyShowcasePost } from './showcase-display';
@@ -109,27 +110,14 @@ export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCa
 }
 
 function cardTitle(item: ShowcaseFeedItem) {
-  const title = item.title?.trim();
-  if (title && !isPlaceholderTitle(title)) return title;
-
   const textPost = item.category === 'text' || item.postFormat === 'text';
-  const contentCandidates = textPost
-    ? [item.body, item.prompt]
-    : [item.prompt, item.body];
-
-  for (const candidate of contentCandidates) {
-    const clean = candidate?.trim();
-    if (clean && !isPlaceholderTitle(clean)) return clean;
-  }
-
-  if (item.creationMode === 'motion') return 'Motion creation';
-  if (item.mediaKind === 'video' || item.category === 'video') return 'Video creation';
-  if (textPost) return 'Creator note';
-  return 'Image creation';
-}
-
-function isPlaceholderTitle(value: string) {
-  return /^(untitled(?: creation)?|community post)$/i.test(value.trim());
+  return postName(
+    [item.title, ...(textPost ? [item.body, item.prompt] : [item.prompt, item.body])],
+    item.creationMode === 'motion' ? 'motion'
+      : item.mediaKind === 'video' || item.category === 'video' ? 'video'
+      : textPost ? 'text'
+      : 'image',
+  );
 }
 
 export function getShowcaseMediaHeight(

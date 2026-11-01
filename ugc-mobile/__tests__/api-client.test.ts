@@ -973,6 +973,16 @@ describe('mobile api client caching', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  // The creator reads a remix's post by the id its link carries (`remixPost`), and any
+  // app or page can open the app's link. The id stays one path segment of the post read.
+  it('reads a post by an id that stays one path segment', async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ success: true }));
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token-1', fetcher: fetcher as unknown as typeof fetch });
+
+    await api.getShowcasePost('../../profile?x=1');
+    expect(String(fetcher.mock.calls[0][0])).toBe('https://magicbooklet.test/api/showcase/posts/..%2F..%2Fprofile%3Fx%3D1');
+  });
+
   it('loads authenticated remix source bundles with post context', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       generation: {

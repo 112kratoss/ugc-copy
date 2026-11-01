@@ -1,4 +1,5 @@
 import type { ImmersivePreviewItem } from './immersive-preview-view-model';
+import { isPlaceholderTitle } from './placeholder-title';
 import type { CreatorFollowAttribution } from './types';
 
 export interface ReelCaption {
@@ -17,16 +18,14 @@ function normalize(value: string) {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-/** Names the publish flow hands to posts nobody named. Not worth a line. */
-const PLACEHOLDER_TITLES = new Set(['untitled creation', 'untitled', 'community post']);
-
+/** A name handed to a post nobody named (`isPlaceholderTitle`) is not worth a line. */
 export function buildReelCaption(item: Pick<ImmersivePreviewItem, 'title' | 'displayText'>): ReelCaption {
   const rawTitle = item.title.trim();
-  const title = PLACEHOLDER_TITLES.has(normalize(rawTitle)) ? '' : rawTitle;
+  const title = isPlaceholderTitle(rawTitle) ? '' : rawTitle;
   const caption = item.displayText.trim();
   return {
     title,
-    caption: normalize(caption) === normalize(rawTitle) || PLACEHOLDER_TITLES.has(normalize(caption)) ? '' : caption,
+    caption: normalize(caption) === normalize(rawTitle) || isPlaceholderTitle(caption) ? '' : caption,
   };
 }
 

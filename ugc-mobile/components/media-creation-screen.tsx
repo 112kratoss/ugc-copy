@@ -25,6 +25,7 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { MediaPreview, StableMediaImage } from '@/components/media-preview';
 import { Overlay } from '@/components/overlay-host';
 import { PushOfferCard } from '@/components/push-offer-card';
+import { RemixSourceRow, type RemixSourceSeed } from '@/components/remix-source-row';
 import {
   AppText,
   ChoiceChip,
@@ -824,13 +825,18 @@ function motionClipRefusal(picked: { fileName?: string | null; fileSize?: number
  * Where sign-in returns to: this creator with the params it was opened with, so the screen still
  * under the sign-in is the one shown again. A return without them was a different route, which
  * opened a creator without the remix or the prompt. Inside the Create tab, the tab itself.
+ *
+ * The source goes by its ids, never its row's words: a sign-in's returnTo comes back decoded once
+ * more than it was encoded, so a title with &, # or + arrived cut and one with a backslash sent
+ * the person Home. The row reads the post again (`RemixSourceRow`). `prompt` still goes as text, as
+ * a prompt-only Recreate has nowhere else to come back from, and meets the same decoding.
  */
 function creatorReturnPath({ insideTab, tool, guided, initialPrompt, remixSource }: {
   insideTab: boolean;
   tool: CreatorToolId;
   guided: boolean;
   initialPrompt?: string | null;
-  remixSource?: MediaCreationScreenProps['remixSource'];
+  remixSource?: RemixSourceSeed;
 }) {
   const params: Array<[string, string | null | undefined]> = insideTab
     ? [['tool', tool], ['guided', guided ? '1' : null]]
@@ -839,9 +845,6 @@ function creatorReturnPath({ insideTab, tool, guided, initialPrompt, remixSource
         ['remixPost', remixSource?.postId],
         ['prompt', initialPrompt],
         ['guided', guided ? '1' : null],
-        ['sourceTitle', remixSource?.title],
-        ['sourceCreator', remixSource?.creatorLabel],
-        ['sourceThumbnail', remixSource?.thumbnailUrl],
       ];
   const query = params
     .flatMap(([key, value]) => (value && value.trim() ? [`${encodeURIComponent(key)}=${encodeURIComponent(value)}`] : []))
@@ -935,13 +938,7 @@ type MediaCreationScreenProps = {
   initialTool?: CreatorToolId;
   insideTab?: boolean;
   initialPrompt?: string | null;
-  remixSource?: {
-    generationId?: string | null;
-    postId?: string | null;
-    title?: string | null;
-    creatorLabel?: string | null;
-    thumbnailUrl?: string | null;
-  };
+  remixSource?: RemixSourceSeed;
   guided?: boolean;
   onClose?: () => void;
   registerBeforeClose?: (guard: (() => Promise<boolean>) | null) => void;
@@ -3045,15 +3042,7 @@ function IdentityCreationScreen({
             remix={Boolean(remixSource)}
           />
           {whatsNewStrip}
-          {remixSource ? (
-            <View accessibilityLabel="Remix source post" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              {remixSource.thumbnailUrl ? <StableMediaImage url={remixSource.thumbnailUrl} cacheKey={`remix-source:${remixSource.postId ?? remixSource.generationId}`} style={{ width: 40, height: 40, borderRadius: 10 }} /> : null}
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{remixSource.title || 'Source creation'}</Text>
-                <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{remixSource.creatorLabel ? `By ${remixSource.creatorLabel}` : 'Make your own version'}</Text>
-              </View>
-            </View>
-          ) : null}
+          {remixSource ? <RemixSourceRow source={remixSource} /> : null}
 
           {guided ? (
             <>
@@ -3330,15 +3319,7 @@ function IdentityCreationScreen({
             remix={Boolean(remixSource)}
           />
           {whatsNewStrip}
-          {remixSource ? (
-            <View accessibilityLabel="Remix source post" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              {remixSource.thumbnailUrl ? <StableMediaImage url={remixSource.thumbnailUrl} cacheKey={`remix-source:${remixSource.postId ?? remixSource.generationId}`} style={{ width: 40, height: 40, borderRadius: 10 }} /> : null}
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{remixSource.title || 'Source creation'}</Text>
-                <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{remixSource.creatorLabel ? `By ${remixSource.creatorLabel}` : 'Make your own version'}</Text>
-              </View>
-            </View>
-          ) : null}
+          {remixSource ? <RemixSourceRow source={remixSource} /> : null}
 
           {guided ? (
             <>

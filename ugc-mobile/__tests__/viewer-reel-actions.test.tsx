@@ -666,8 +666,13 @@ describe("the reel's Remix", () => {
       response: { success: true, redirectTo: '/create-image?remix=gen-b&remixPost=post-b' },
       claimedFreeUnlock: false,
     });
+    // The row's picture is the post's poster, never its full-size original.
+    const poster = {
+      id: 'post-b:media', url: 'https://cdn.example.com/post-b.jpg', previewUrl: 'https://cdn.example.com/post-b-poster.webp',
+      mediaKind: 'image' as const, contentType: null, originalName: null, width: null, height: null, durationSeconds: null, sortOrder: 0,
+    };
     seedLane('viewer-1', lanePosts().map((post) => (
-      post.id === 'post-b' ? { ...post, generationId: 'gen-b', canRemix: true } : post
+      post.id === 'post-b' ? { ...post, generationId: 'gen-b', canRemix: true, mediaItems: [poster] } : post
     )));
     await renderReel('post-b');
 
@@ -685,7 +690,7 @@ describe("the reel's Remix", () => {
         remixPost: 'post-b',
         sourceTitle: 'Post post-b',
         sourceCreator: '@luna',
-        sourceThumbnail: 'https://cdn.example.com/post-b.jpg',
+        sourceThumbnail: 'https://cdn.example.com/post-b-poster.webp',
       },
     });
   });
