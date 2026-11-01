@@ -8,6 +8,7 @@ import {
   readCachedImmersiveSourceData,
   readCachedImmersiveSourceSnapshot,
 } from '../lib/immersive-preview-source-data';
+import { profileFailedGenerationsQueryKey } from '../lib/profile-media-query';
 import { SHOWCASE_FEED_PAGE_SIZE } from '../lib/showcase-feed-query';
 import type { CreatorProfileResponse, GenerationListItem, ShowcaseFeedItem } from '../lib/types';
 
@@ -475,5 +476,28 @@ describe('immersive preview source data', () => {
     queryClient.setQueryData(['generations', 'user-1'], { generations: [generation('gen-1')] });
 
     expect(readCachedImmersiveSourceSnapshot(queryClient, 'home-creations', 'user-1', 'elsewhere')).toBeUndefined();
+  });
+
+  it("opens a failure the library has not reached from the Failed scope's own pages, and only that one", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['profile-generations', 'user-1'], {
+      pages: [{ generations: [generation('gen-1')] }],
+      pageParams: [null],
+    });
+    queryClient.setQueryData(profileFailedGenerationsQueryKey('user-1'), {
+      pages: [{
+        generations: [
+          generation('failed-40', { status: 'failed', output_url: null }),
+          generation('failed-41', { status: 'failed', output_url: null }),
+        ],
+      }],
+      pageParams: [null],
+    });
+
+    const data = readCachedImmersiveSourceData(queryClient, 'studio-creations', 'user-1', 'failed-40');
+
+    expect(data?.generations?.map((item) => item.id)).toEqual(['gen-1', 'failed-40', 'failed-41']);
+    // The library rule keeps the other failure out of the reel the status page sits in.
+    expect(buildViewerItems('studio-creations', data!, owner, 'failed-40').map((item) => item.id)).toEqual(['gen-1', 'failed-40']);
   });
 });

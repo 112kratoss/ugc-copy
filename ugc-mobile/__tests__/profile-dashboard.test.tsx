@@ -228,6 +228,7 @@ const queryState = vi.hoisted(() => ({
   failedPages: null as Array<Record<string, unknown>> | null,
   failedHasNextPage: false,
   failedIsLoading: false,
+  failedIsStale: false,
   fetchNextFailed: vi.fn(() => Promise.resolve()),
   refetchFailed: vi.fn(() => Promise.resolve()),
   invalidateQueries: vi.fn(() => Promise.resolve()),
@@ -315,7 +316,7 @@ vi.mock('@tanstack/react-query', () => ({
         isFetched: Boolean(queryState.failedPages),
         isFetching: false,
         isLoading: queryState.failedIsLoading,
-        isStale: false,
+        isStale: queryState.failedIsStale,
         refetch: queryState.refetchFailed,
       };
     }
@@ -904,6 +905,7 @@ describe('ProfileDashboard media tiles routing', () => {
     queryState.failedPages = null;
     queryState.failedHasNextPage = false;
     queryState.failedIsLoading = false;
+    queryState.failedIsStale = false;
     queryState.fetchNextFailed.mockClear();
     queryState.refetchFailed.mockClear();
     queryState.invalidateQueries.mockClear();
@@ -2449,18 +2451,73 @@ describe('ProfileDashboard media tiles routing', () => {
       renderer.act(() => { tree.unmount(); });
     });
 
-    it('collapses and reads its own pages again on a pull, and the totals with them', () => {
+    it('collapses and reads its own pages again on a pull, and the totals with them', async () => {
       queryState.failedPages = [{ generations: failedRuns(2) }];
       const tree = renderDashboard();
       renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
       queryState.setQueryData.mockClear();
 
-      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Refresh Creations' }).props.onPress(); });
+      authState.api.listGenerations.mockImplementation(async () => ({ generations: [], pagination: { limit: 24, hasMore: false, nextCursor: null } }));
+      try {
+        await renderer.act(async () => { tree.root.findByProps({ accessibilityLabel: 'Refresh Creations' }).props.onPress(); });
 
-      expect(queryState.setQueryData.mock.calls.map(([key]) => key)).toEqual([['profile-failed-generations', 'user-123']]);
-      expect(queryState.refetchFailed).toHaveBeenCalledTimes(1);
-      expect(queryState.refetchGenerations).not.toHaveBeenCalled();
-      expect(queryState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['profile', 'user-123'] });
+        // Its own pages collapse to the first and are read again; the library's
+        // first page is merged for the Rendering strip above the list, never
+        // refetched page by page.
+        expect(queryState.setQueryData.mock.calls.map(([key]) => key)).toEqual([
+          ['profile-failed-generations', 'user-123'],
+          ['profile-generations', 'user-123'],
+        ]);
+        expect(queryState.refetchFailed).toHaveBeenCalledTimes(1);
+        expect(queryState.refetchGenerations).not.toHaveBeenCalled();
+        expect(queryState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['profile', 'user-123'] });
+      } finally {
+        authState.api.listGenerations.mockReset();
+      }
+    });
+
+    it("reads the library's first page with its own when it revalidates, so a run tried again shows on the strip", async () => {
+      queryState.failedPages = [{ generations: failedRuns(2) }];
+      queryState.failedIsStale = true;
+      queryState.getQueryData.mockImplementation(() => ({ pages: queryState.failedPages, pageParams: [null] }));
+      authState.api.listGenerations.mockImplementation(async () => ({ generations: [], pagination: { limit: 24, hasMore: false, nextCursor: null } }));
+      try {
+        const tree = renderDashboard();
+        queryState.setQueryData.mockClear();
+
+        // Back from a creator where a failed run was tried again: both lists are stale.
+        await renderer.act(async () => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+
+        // Each first page is merged into its own cache.
+        expect(queryState.setQueryData.mock.calls.map(([key]) => key)).toEqual(expect.arrayContaining([
+          ['profile-generations', 'user-123'],
+          ['profile-failed-generations', 'user-123'],
+        ]));
+        expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { limit: 24, status: 'failed' });
+      } finally {
+        authState.api.listGenerations.mockReset();
+      }
+    });
+
+    it('keeps its query on once opened, which a stale query turned back on would read again page by page', () => {
+      const tree = renderDashboard();
+      expect(queryState.failedQuery?.enabled).toBe(false);
+
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+      renderer.act(() => { findPressableByText(tree.root, 'Active (1)').props.onPress(); });
+      expect(queryState.failedQuery?.enabled).toBe(true);
+      renderer.act(() => { tabSegment(tree, 'Posts').props.onPress(); });
+      expect(queryState.failedQuery?.enabled).toBe(true);
+
+      // Another library has not opened its Failed scope.
+      const signedIn = authState.user;
+      try {
+        authState.user = { id: 'user-456', email: 'other@example.com' };
+        renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+        expect(queryState.failedQuery).toMatchObject({ queryKey: ['profile-failed-generations', 'user-456'], enabled: false });
+      } finally {
+        authState.user = signedIn;
+      }
     });
 
     it('reads the totals again, and its own first page, when a run leaves the Rendering strip', async () => {

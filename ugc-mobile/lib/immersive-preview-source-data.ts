@@ -2,6 +2,7 @@ import type { InfiniteData, QueryClient, QueryKey } from '@tanstack/react-query'
 
 import { selectCreationLibraryItems } from '@/lib/creation-library';
 import { dedupeInFlight } from '@/lib/in-flight';
+import { profileFailedGenerationsQueryKey } from '@/lib/profile-media-query';
 import {
   buildImmersiveGenerationItems,
   buildImmersiveOwnerPostItems,
@@ -337,12 +338,14 @@ function cachedShowcaseItems(
 /**
  * `profile-generations` is paginated; `generations` stays single-page. Owner
  * posts are not merged in: generation viewers load linked-post details as
- * separate enrichment.
+ * separate enrichment. The Failed scope's pages come last: a failure past the
+ * library's loaded pages opens from them at once, and the library rule keeps
+ * every other failure out of the reel.
  */
 function cachedGenerations(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceSnapshot | undefined {
   return mergeCachedEntities(
     queryClient,
-    [['profile-generations', userId], ['generations', userId]],
+    [['profile-generations', userId], ['generations', userId], profileFailedGenerationsQueryKey(userId)],
     (data) => readCachedPages(data as CachedPages<GenerationListResponse> | undefined)
       .flatMap((page) => page.generations ?? []),
     (generations) => ({ generations })

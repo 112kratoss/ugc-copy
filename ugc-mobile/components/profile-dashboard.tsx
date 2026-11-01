@@ -156,6 +156,10 @@ export function ProfileDashboard({
   // dialog promises they can be restored from the profile, so they have to be
   // reachable here.
   const [creationsScope, setCreationsScope] = useState<ProfileCreationsScope>('active');
+  // Whether this library's Failed scope has been opened: its query stays on
+  // from then, since an infinite query that goes from off to on while stale
+  // requests every page it holds again.
+  const [failedScopeOpened, setFailedScopeOpened] = useState(false);
   const [postsScope, setPostsScope] = useState<ProfilePostsScope>('active');
   const [backgroundMediaReady, setBackgroundMediaReady] = useState(false);
   const queryClient = useQueryClient();
@@ -189,7 +193,7 @@ export function ProfileDashboard({
   // the Creations tab then pages, refreshes and waits on it while it is shown.
   const failedGenerationsQuery = useInfiniteQuery({
     ...profileFailedGenerationsQueryOptions(api, creationsUserId),
-    enabled: Boolean(creationsUserId && activeTab === 'Creations' && creationsScope === 'failed'),
+    enabled: Boolean(creationsUserId && failedScopeOpened),
   });
   const creationsQuery = creationsScope === 'failed' ? failedGenerationsQuery : generationsQuery;
 
@@ -222,6 +226,7 @@ export function ProfileDashboard({
   // Failed stays while chosen; another library, a fresh guest's included, starts on Active.
   useEffect(() => {
     setCreationsScope('active');
+    setFailedScopeOpened(false);
   }, [creationsUserId]);
 
   // The Failed scope pages a query of its own, whose page count the last request's says nothing about.
@@ -243,7 +248,13 @@ export function ProfileDashboard({
   // page the reader had loaded (audit C7).
   const refreshMediaHead = useCallback(
     (library: string) => (library === 'Failed'
-      ? refreshProfileFailedCreationsHead({ api, queryClient, userId: creationsUserId })
+      // The library's first page as well as the scope's own: the Rendering
+      // strip over Failed reads the library, so a run tried again from a
+      // failure shows there, and its refresh brings it here if it fails again.
+      ? Promise.all([
+        refreshProfileLibraryHead({ api, queryClient, userId: creationsUserId, library: 'Creations' }),
+        refreshProfileFailedCreationsHead({ api, queryClient, userId: creationsUserId }),
+      ])
       : refreshProfileLibraryHead({
         api,
         queryClient,
@@ -451,8 +462,10 @@ export function ProfileDashboard({
   }, []);
   // Posts have no Failed scope; its chip shows only over Creations.
   const handleScopeChange = useCallback((scope: ProfileCreationsScope) => {
-    if (activeTab === 'Creations') setCreationsScope(scope);
-    else if (scope !== 'failed') setPostsScope(scope);
+    if (activeTab === 'Creations') {
+      setCreationsScope(scope);
+      if (scope === 'failed') setFailedScopeOpened(true);
+    } else if (scope !== 'failed') setPostsScope(scope);
   }, [activeTab]);
   const handleMediaSwipe = useCallback((direction: ProfileMediaSwipeDirection) => {
     setActiveTab((currentTab) => getProfileMediaSwipeTarget(currentTab, direction));
@@ -486,6 +499,8 @@ export function ProfileDashboard({
       );
       // The scope chips' totals ride on the profile: a pull reads them again with the runs.
       void invalidateProfileStats(queryClient, user?.id);
+      // Over Failed the library's first page is merged too, for the Rendering strip.
+      if (creationsScope === 'failed') void refreshMediaHead('Creations').catch(() => undefined);
       void creationsQuery.refetch().finally(() => setPullRefreshing(false));
       return;
     }
