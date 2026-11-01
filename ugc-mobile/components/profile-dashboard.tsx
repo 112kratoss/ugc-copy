@@ -42,7 +42,7 @@ import { useAppForeground } from '@/lib/app-foreground';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { isClaimedProfileUsername } from '@/lib/edit-profile-form';
-import { canRequestNextFeedPage } from '@/lib/feed-pagination';
+import { canRequestNextFeedPage, nextFeedPageRequestDelay } from '@/lib/feed-pagination';
 import { getGenerationKind, getGenerationLabel } from '@/lib/generation-media';
 import { haptic } from '@/lib/haptics';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
@@ -413,32 +413,35 @@ export function ProfileDashboard({
   const activePageCount = activeTabPaging.data?.pages.length ?? 0;
   const mediaError = activeIsFetchNextPageError ? null : activeTabPaging.error;
 
-  const requestNextPage = useCallback(() => {
-    const now = Date.now();
-    if (!canRequestNextFeedPage({
+  // Null once it has asked, or when a render will ask again; otherwise how long
+  // until the gate could let it through (`nextFeedPageRequestDelay`).
+  const requestNextPage = useCallback((): number | null => {
+    const gate = {
       cooldownMs: PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
       hasNextPage: activeHasNextPage,
       isBusy: activeMediaIsFetching,
       isRequestInFlight: loadingMoreRef.current,
       lastRequestedAt: lastLoadMoreAtRef.current,
       lastRequestedPageCount: lastLoadMorePageCountRef.current,
-      now,
+      now: Date.now(),
       pageCount: activePageCount,
-    })) return;
+    };
+    if (!canRequestNextFeedPage(gate)) return nextFeedPageRequestDelay(gate);
 
     loadingMoreRef.current = true;
-    lastLoadMoreAtRef.current = now;
+    lastLoadMoreAtRef.current = gate.now;
     lastLoadMorePageCountRef.current = activePageCount;
 
     if (activeTab === 'Saved') {
       void savedQuery.fetchNextPage().finally(() => { loadingMoreRef.current = false; });
-      return;
+      return null;
     }
     if (activeTab === 'Creations') {
       void creationsQuery.fetchNextPage().finally(() => { loadingMoreRef.current = false; });
-      return;
+      return null;
     }
     void postsQuery.fetchNextPage().finally(() => { loadingMoreRef.current = false; });
+    return null;
   }, [
     activeHasNextPage,
     activeIsFetchingNextPage,
@@ -458,9 +461,17 @@ export function ProfileDashboard({
 
   // A page that yields few renderable tiles can leave the grid too short to scroll, so
   // onEndReached would never fire again. Top it up until the grid can carry itself.
+  // A page that lands inside the cooldown is refused at the render that brings
+  // it, and no render comes when the cooldown ends, so the fill asks again then.
   useEffect(() => {
     if (isMediaLoading || tabCards.length >= PROFILE_MEDIA_MIN_FILL_COUNT) return;
-    requestNextPage();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const fill = () => {
+      const wait = requestNextPage();
+      if (wait !== null) timer = setTimeout(fill, wait);
+    };
+    fill();
+    return () => clearTimeout(timer);
   }, [isMediaLoading, requestNextPage, tabCards.length]);
 
   const handleMediaTabChange = useCallback((tab: ProfileMediaTab) => {

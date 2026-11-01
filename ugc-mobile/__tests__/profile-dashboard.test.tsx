@@ -1301,6 +1301,84 @@ describe('ProfileDashboard media tiles routing', () => {
     }
   });
 
+  // The gate refuses a request inside the cooldown, and a page that lands inside
+  // it is refused at the very render that brings it. Nothing renders again when
+  // the cooldown runs out, so a short scope (Archived, Failed, a sparse Active
+  // grid) stopped paging until a refocus or a stale refetch rendered it.
+  it('asks again once the cooldown has passed for a page that landed inside it with no new tiles', async () => {
+    vi.useFakeTimers();
+    let tree: renderer.ReactTestRenderer | undefined;
+    try {
+      queryState.generationsHasNextPage = true;
+      queryState.generationPages = [{ generations: [] }];
+      await renderer.act(async () => {
+        tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+      });
+      expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
+
+      // Page two lands 400 ms after it was asked for, with nothing to draw.
+      await renderer.act(async () => { vi.advanceTimersByTime(400); });
+      queryState.generationPages = [{ generations: [] }, { generations: [] }];
+      await renderer.act(async () => {
+        tree!.update(<ProfileDashboard initialTab="Creations" />);
+      });
+      expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
+
+      // No render follows, and page three is asked for as the cooldown ends.
+      await renderer.act(async () => { vi.advanceTimersByTime(399); });
+      expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
+      await renderer.act(async () => { vi.advanceTimersByTime(1); });
+      expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(2);
+    } finally {
+      renderer.act(() => { tree?.unmount(); });
+      vi.useRealTimers();
+    }
+  });
+
+  it('asks nothing more once no page is left, once the grid is full, or once it has gone', async () => {
+    vi.useFakeTimers();
+    const trees: renderer.ReactTestRenderer[] = [];
+    // A page lands inside the cooldown with nothing to draw, then `change` happens before it ends.
+    const landInsideTheCooldown = async (change: (tree: renderer.ReactTestRenderer) => void) => {
+      queryState.generationsHasNextPage = true;
+      queryState.generationPages = [{ generations: [] }];
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => {
+        tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+      });
+      trees.push(tree);
+      await renderer.act(async () => { vi.advanceTimersByTime(400); });
+      queryState.generationPages = [{ generations: [] }, { generations: [] }];
+      await renderer.act(async () => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+      queryState.fetchNextGenerations.mockClear();
+      await renderer.act(async () => { change(tree); });
+      await renderer.act(async () => { vi.advanceTimersByTime(2_000); });
+      return queryState.fetchNextGenerations.mock.calls.length;
+    };
+    const readyCreations = Array.from({ length: PROFILE_MEDIA_MIN_FILL_COUNT }, (_, index) => ({
+      id: `ready-${index}`,
+      status: 'succeeded',
+      output_url: `ready-${index}.jpg`,
+      preview_url: `ready-${index}.webp`,
+      category: 'image',
+      title: `Ready ${index}`,
+    }));
+    try {
+      expect(await landInsideTheCooldown((tree) => {
+        queryState.generationsHasNextPage = false;
+        tree.update(<ProfileDashboard initialTab="Creations" />);
+      })).toBe(0);
+      expect(await landInsideTheCooldown((tree) => {
+        queryState.generationPages = [{ generations: [] }, { generations: readyCreations }];
+        tree.update(<ProfileDashboard initialTab="Creations" />);
+      })).toBe(0);
+      expect(await landInsideTheCooldown((tree) => { tree.unmount(); })).toBe(0);
+    } finally {
+      renderer.act(() => { trees.forEach((tree) => tree.unmount()); });
+      vi.useRealTimers();
+    }
+  });
+
   it('shows a footer loader only while another page is in flight', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {

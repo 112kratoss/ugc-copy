@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { canRequestNextFeedPage, type FeedPaginationGate } from '../lib/feed-pagination';
+import { canRequestNextFeedPage, nextFeedPageRequestDelay, type FeedPaginationGate } from '../lib/feed-pagination';
 
 const READY_GATE: FeedPaginationGate = {
   cooldownMs: 800,
@@ -49,5 +49,37 @@ describe('feed pagination gate', () => {
       lastRequestedPageCount: null,
       now: 2_000,
     })).toBe(true);
+  });
+});
+
+describe('feed pagination wait', () => {
+  // Page two was asked for at 1,000, with one page loaded, and has just landed.
+  const LANDED_GATE: FeedPaginationGate = {
+    ...READY_GATE,
+    lastRequestedAt: 1_000,
+    lastRequestedPageCount: 1,
+    now: 1_400,
+    pageCount: 2,
+  };
+
+  it('waits out the rest of the cooldown for a page that landed inside it', () => {
+    expect(canRequestNextFeedPage(LANDED_GATE)).toBe(false);
+    expect(nextFeedPageRequestDelay(LANDED_GATE)).toBe(400);
+    expect(nextFeedPageRequestDelay({ ...LANDED_GATE, isRequestInFlight: true })).toBe(400);
+  });
+
+  it('waits another cooldown for a request that has landed but not settled', () => {
+    expect(nextFeedPageRequestDelay({ ...LANDED_GATE, isRequestInFlight: true, now: 2_500 })).toBe(800);
+  });
+
+  it('has nothing to wait for once the request would pass', () => {
+    expect(canRequestNextFeedPage({ ...LANDED_GATE, now: 1_800 })).toBe(true);
+    expect(nextFeedPageRequestDelay({ ...LANDED_GATE, now: 1_800 })).toBeNull();
+  });
+
+  it('leaves to a render what renders again as it changes', () => {
+    expect(nextFeedPageRequestDelay({ ...LANDED_GATE, hasNextPage: false })).toBeNull();
+    expect(nextFeedPageRequestDelay({ ...LANDED_GATE, isBusy: true })).toBeNull();
+    expect(nextFeedPageRequestDelay({ ...LANDED_GATE, isRequestInFlight: true, pageCount: 1 })).toBeNull();
   });
 });
