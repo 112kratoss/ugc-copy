@@ -189,7 +189,7 @@ vi.mock('@/lib/use-deployment-refresh', async (importOriginal) => ({
 
 // Signed in as user-1 with 10,000 credits, unless a test signs out to use the page as a
 // visitor or sets a balance of its own.
-const authState = vi.hoisted(() => ({ signedIn: true, credits: 10_000, token: 'test-token', userId: 'user-1' }));
+const authState = vi.hoisted(() => ({ signedIn: true, signedOut: false, credits: 10_000, token: 'test-token', userId: 'user-1' }));
 // The session the browser's auth client holds, which it has before the page does when another
 // account signs in from another tab.
 const authClient = vi.hoisted(() => ({
@@ -206,6 +206,8 @@ vi.mock('@/components/AuthProvider', () => ({
         user: { id: authState.userId },
       }
       : null,
+    // Whether a sign-out made in this browser ended the session (AuthProvider's `signedOut`).
+    signedOut: !authState.signedIn && authState.signedOut,
     updateCredits: mockUpdateCredits,
   }),
 }));
@@ -511,6 +513,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
   beforeEach(() => {
     authState.signedIn = true;
+    authState.signedOut = false;
     authState.credits = 10_000;
     authState.token = 'test-token';
     authState.userId = 'user-1';
@@ -5613,7 +5616,7 @@ describe('CreateVideoClient Kling video elements', () => {
       function authClientSignsInAs(userId: string) {
         authClient.session = sessionOf(userId);
       }
-      /** The account signs out in another tab: a page that opened signed in keeps its form, owned by no one. */
+      /** The session ends with no mark of a sign-out (a lapse): a page that opened signed in keeps its form, owned by no one. */
       function signOutHere(redraw: () => void) {
         authClient.session = null;
         authState.signedIn = false;
@@ -5746,7 +5749,7 @@ describe('CreateVideoClient Kling video elements', () => {
         await waitFor(() => expect(screen.getByAltText('Start image')).toBeInTheDocument());
         fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
-        // Asha signs out in another tab: the page keeps her form, owned by no one. Ben then signs in
+        // Asha's session ends with no mark of a sign-out (a lapse): the page keeps her form, owned by no one. Ben then signs in
         // there, and the browser has his session before the page does.
         signOutHere(() => view.rerender(page()));
         authClientSignsInAs('user-2');
@@ -5914,7 +5917,7 @@ describe('CreateVideoClient Kling video elements', () => {
         const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
         const [prepare] = await screen.findAllByRole('button', { name: 'Prepare asset' });
 
-        // Asha signs out in another tab; the page keeps her form, and her Prepare names her to its
+        // Asha's session lapses; the page keeps her form, and her Prepare names her to its
         // upload, which then goes up under no other account's session that lands meanwhile.
         signOutHere(() => view.rerender(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />));
         fireEvent.click(prepare);
@@ -6666,7 +6669,7 @@ describe('CreateVideoClient Kling video elements', () => {
         await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
         fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
-        // Signed out from the account menu, or in another tab: the page stays open.
+        // The session lapses, or ends with no mark of a sign-out: the page stays open.
         authState.signedIn = false;
         view.rerender(<CreateVideoClient prefill={{}} />);
         // Not a visitor's page: no sheet that would promise a form nothing saves any more.
@@ -6682,6 +6685,24 @@ describe('CreateVideoClient Kling video elements', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // Owner, 2026-11-01, "Yes, clear it": a sign-out made in this browser clears the page, and the
+    // page is the visitor's after it.
+    it('clears the page when its account signs out in this browser, and leaves it the visitor’s', async () => {
+      const view = render(<CreateVideoClient prefill={{}} visitorWelcomeCredits={25} />);
+      await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1'));
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+      authState.signedIn = false;
+      authState.signedOut = true;
+      view.rerender(<CreateVideoClient prefill={{}} visitorWelcomeCredits={25} />);
+
+      await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'visitor'));
+      expect(promptBox()).toHaveValue('');
+      expect(screen.getByRole('button', { name: 'Sign up to generate' })).toBeInTheDocument();
+      expect(view.container.querySelector('[data-creator-bar-note]')).toHaveTextContent('New accounts get 25 free credits');
+      expect(JSON.stringify(saveCreatorDraftMock.mock.calls.filter(([, owner]) => owner === 'visitor'))).not.toContain(PROMPT);
     });
 
     it('checks a visitor’s form as Generate does before asking for an account', async () => {

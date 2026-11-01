@@ -1,9 +1,16 @@
 'use client';
 
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 
 import { isSessionRefusal } from '@/lib/auth-error-copy';
+import {
+    accessTokenSessionId,
+    browserSignOutSnapshot,
+    subscribeToBrowserSignOuts,
+    wasSessionSignedOutInBrowser,
+    wasSessionSignedOutInThisTab,
+} from '@/lib/browser-sign-out';
 import type { SaverNoticeRecord } from '@/components/saver-notice';
 import {
     getClientE2EAuthState,
@@ -48,6 +55,14 @@ interface AuthContextValue {
      * read. Null while neither has been read for the account signed in.
      */
     saverNoticeRecord: SaverNoticeRecord | null;
+    /**
+     * Whether a sign-out made in this browser, in this tab or another one (`markBrowserSignOut`),
+     * ended the session this tab held last. False while a session is held, and after one that
+     * lapsed or was refused: Supabase reports all of them as the same sign-out.
+     */
+    signedOut: boolean;
+    /** Whether that sign-out was made in this tab, which goes on to the login page of its own accord. */
+    signedOutHere: boolean;
     isLoading: boolean;
     updateCredits: (nextCredits: number | null, options?: CreditUpdateOptions) => void;
     refreshSessionState: () => Promise<void>;
@@ -59,6 +74,8 @@ const anonymousAuthContext: AuthContextValue = {
     credits: null,
     marketplaceSpendableCredits: null,
     saverNoticeRecord: null,
+    signedOut: false,
+    signedOutHere: false,
     isLoading: false,
     updateCredits: () => undefined,
     refreshSessionState: async () => undefined,
@@ -178,6 +195,13 @@ export function AuthProvider({
             : null
     ));
     const [readSaverNoticeRecord, setReadSaverNoticeRecord] = useState<SaverNoticeRecord | null>(null);
+    // The session this tab held last, by its id (no token outlives the session here), which its
+    // ending is read against (`signedOut`), and the browser's sign-out marks, followed as other
+    // tabs write them: a mark that lands after this tab's session has ended still counts.
+    const sessionId = session ? accessTokenSessionId(session.access_token) : null;
+    const [heldSessionId, setHeldSessionId] = useState(sessionId);
+    if (sessionId && sessionId !== heldSessionId) setHeldSessionId(sessionId);
+    const signOutMarks = useSyncExternalStore(subscribeToBrowserSignOuts, browserSignOutSnapshot, () => null);
     const witnessedAuthCookieRef = useRef(hasAuthCookieHint);
     const authEpochRef = useRef(0);
     const tokenEpochRef = useRef(0);
@@ -522,6 +546,7 @@ export function AuthProvider({
         && !hasAuthCookieHint
         ? false
         : isLoading;
+    const signedOut = !session && wasSessionSignedOutInBrowser(heldSessionId, signOutMarks);
 
     return (
         <AuthContext.Provider
@@ -533,6 +558,8 @@ export function AuthProvider({
                 // Only ever the account signed in now's, the latest read first.
                 saverNoticeRecord: [readSaverNoticeRecord, pageSaverNoticeRecord]
                     .find((record) => record !== null && record.userId === session?.user?.id) ?? null,
+                signedOut,
+                signedOutHere: signedOut && wasSessionSignedOutInThisTab(heldSessionId),
                 isLoading: resolvedIsLoading,
                 updateCredits,
                 refreshSessionState,

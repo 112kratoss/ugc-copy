@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { adoptVisitorDraft, hasVisitorDraftHandover, VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
@@ -33,7 +34,10 @@ function moveOnce(tool: CreatorDraftTool, userId: string, nonce: string): Promis
 }
 
 export type CreatorDraftOwner = {
-  /** Whose draft the page reads and saves; null while it waits for a hand-over, or once a signed-in page has lost its session. */
+  /**
+   * Whose draft the page reads and saves; null while it waits for a hand-over, or once a signed-in
+   * page's session has lapsed (a sign-out made in this browser makes it the visitor's).
+   */
   owner: string | null;
   /** The visitor's draft was moved to this account on the way back from sign-up. */
   carriedDraft: boolean;
@@ -58,20 +62,28 @@ export type CreatorDraftOwner = {
  * - A page that opened signed in and then lost its session keeps nothing, so the
  *   account's form never lands in the browser's visitor slot, where the next
  *   person would open it.
+ * - Once a sign-out made in this browser ends the session (`signedOut`, from any of
+ *   its tabs), the page is the visitor's: the account's form leaves it (owner,
+ *   2026-11-01, "Yes, clear it"). A session that lapses keeps it, as above.
  */
 export function useCreatorDraftOwner(
   tool: CreatorDraftTool,
   userId: string | null,
   handoverNonce: string | null,
+  signedOut = false,
 ): CreatorDraftOwner {
   const [openedSignedIn] = useState(() => userId !== null);
+  // The page is the visitor's whenever no account holds it: it opened signed out, or a sign-out
+  // made in this browser ended its account's session.
+  const visitorPage = !openedSignedIn || signedOut;
   // Read once, as the page opens: the nonce is in this page's own address.
   const [awaitsHandover] = useState(() => typeof window !== 'undefined' && hasVisitorDraftHandover(tool, handoverNonce));
   const [moved, setMoved] = useState<{ userId: string; answer: MoveAnswer | 'gave-up' } | null>(null);
   // The hand-over's account has left the page: another account signed in, or the page went
-  // back to the visitor. A session that lapses on a page that opened signed in has not.
+  // back to the visitor, a sign-out included. A session that lapses on a page that opened
+  // signed in has not.
   const [handOverLeft, setHandOverLeft] = useState(false);
-  if (moved && !handOverLeft && userId !== moved.userId && (userId !== null || !openedSignedIn)) {
+  if (moved && !handOverLeft && userId !== moved.userId && (userId !== null || visitorPage)) {
     setHandOverLeft(true);
   }
 
@@ -98,7 +110,7 @@ export function useCreatorDraftOwner(
     };
   }, [awaitsHandover, handoverNonce, moved, tool, userId]);
 
-  if (!userId) return { owner: openedSignedIn ? null : VISITOR_DRAFT_OWNER, carriedDraft: false, keepsVisitorForm: false };
+  if (!userId) return { owner: visitorPage ? VISITOR_DRAFT_OWNER : null, carriedDraft: false, keepsVisitorForm: false };
   if (!awaitsHandover || (moved && moved.userId !== userId)) return { owner: userId, carriedDraft: false, keepsVisitorForm: false };
   if (!moved) return { owner: null, carriedDraft: false, keepsVisitorForm: false };
   return {
@@ -109,23 +121,45 @@ export function useCreatorDraftOwner(
   };
 }
 
+/**
+ * How a creator page takes a sign-out made in this browser (`useAuth().signedOut`; owner,
+ * 2026-11-01, "Yes, clear it"): its form goes to the visitor (`useCreatorDraftOwner`). A remix
+ * takes an account (`RequireAuth`) and is never the visitor's, so that page goes to sign in
+ * instead, back to the remix after, as its link does; in the tab that signed out (`signedOutHere`),
+ * the account menu already takes it to the login page. Returns whether the form goes to the visitor.
+ */
+export function useCreatorSignOut(remix: boolean, signedOut: boolean, signedOutHere = false): boolean {
+  const router = useRouter();
+  const signsInAgain = remix && signedOut && !signedOutHere;
+  useEffect(() => {
+    if (!signsInAgain) return;
+    router.replace(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
+  }, [router, signsInAgain]);
+  return signedOut && !remix;
+}
+
 /** Whose form a creator holds, and the key its body is drawn under while it holds it. */
 export type CreatorFormHolder = { owner: string | null; key: number };
 
 /**
  * Whose form the creator holds once the draft is `draft.owner`'s. It keeps the same form, under
  * the same key:
- * - while the draft has no owner: a hand-over on its way, or a session that lapsed or signed out
- *   on a page that opened signed in, whose form waits for its account as it always has;
- * - for the page's first owner, learned after it opened (a hand-over that answered);
+ * - while the draft has no owner: a hand-over on its way, or a session that lapsed on a page that
+ *   opened signed in, whose form waits for its account as it always has (a sign-out made in this
+ *   browser gives the draft to the visitor, so the form is replaced);
+ * - for the page's first account, learned after it opened (a hand-over that answered);
  * - for the account a hand-over that gave up or failed leaves the visitor's form to
  *   (`keepsVisitorForm`).
  * Any other owner gets a form of their own under a new key: the creator's body is drawn anew, so
- * the earlier owner's form, unanswered start, result and remix go with it.
+ * the earlier owner's form, unanswered start, result and remix go with it. The visitor is always
+ * another owner to a page that opened signed in, a hand-over's included: what its account has
+ * typed or started there is not the visitor's to see or save.
  */
 export function nextCreatorFormHolder(holder: CreatorFormHolder, draft: CreatorDraftOwner): CreatorFormHolder {
   if (draft.owner === null || draft.owner === holder.owner) return holder;
-  if (holder.owner === null || draft.keepsVisitorForm) return { owner: draft.owner, key: holder.key };
+  if ((holder.owner === null && draft.owner !== VISITOR_DRAFT_OWNER) || draft.keepsVisitorForm) {
+    return { owner: draft.owner, key: holder.key };
+  }
   return { owner: draft.owner, key: holder.key + 1 };
 }
 
@@ -151,8 +185,9 @@ export function useCreatorForm(draft: CreatorDraftOwner): CreatorForm {
     owner: draft.owner,
     key: 0,
     replacement: new AbortController(),
-    // The key of the first account's form, once there is one.
-    viewerKey: isAccount(draft.owner) ? 0 : null as number | null,
+    // The key of the first account's form, once there is one: from the start for a page that
+    // opened signed in, a hand-over's waiting with no owner yet included.
+    viewerKey: draft.owner === VISITOR_DRAFT_OWNER ? null : 0 as number | null,
   }));
   const next = nextCreatorFormHolder(held, draft);
   // Moved as the page draws, so the earlier owner's body is never drawn for the next owner.

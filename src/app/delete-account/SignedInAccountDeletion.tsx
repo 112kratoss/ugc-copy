@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 
 import { describeAuthError } from '@/lib/auth-error-copy';
+import { forgetBrowserSignOut, markBrowserSignOut } from '@/lib/browser-sign-out';
 import { siteConfig } from '@/lib/seo';
 import { removeSupabaseAuthCookies } from '@/lib/supabase-auth-cookie';
 
@@ -136,7 +137,7 @@ async function probeDeletion(accessToken: string): Promise<DeletionOutcome> {
   return { kind: 'unconfirmed' };
 }
 
-async function requestDeletion(accessToken: string): Promise<DeletionOutcome> {
+async function sendDeletion(accessToken: string): Promise<DeletionOutcome> {
   let response: Response;
   try {
     response = await fetch('/api/account', {
@@ -156,14 +157,46 @@ async function requestDeletion(accessToken: string): Promise<DeletionOutcome> {
 }
 
 /**
+ * The deletion, told to the browser's other tabs first. It ends every session
+ * of the account as it starts, before it answers, so a tab can hear of the end
+ * (from its own check of the session, or this page's probe) before this page
+ * signs out: marked first, they read it as a sign-out, not a lapse, and an open
+ * creator page there clears (`markBrowserSignOut`). `alsoEnding`: a session
+ * this page held before a fresh sign-in, which a tab may still hold. An answer
+ * that leaves the session as it was takes the marks back; one that cannot say
+ * keeps them, since the account may be on its way out.
+ */
+async function requestDeletion(accessToken: string, alsoEnding: string | null = null): Promise<DeletionOutcome> {
+  markBrowserSignOut(accessToken, alsoEnding);
+  let outcome: DeletionOutcome | null = null;
+  try {
+    outcome = await sendDeletion(accessToken);
+    return outcome;
+  } finally {
+    if (!outcome || outcome.kind === 'refused' || outcome.kind === 'reauthenticate' || outcome.kind === 'apple') {
+      forgetBrowserSignOut(accessToken, alsoEnding);
+    }
+  }
+}
+
+/**
  * Ends this browser's session; the server has already ended the account's
  * others. When the logout call fails, auth-js keeps the session and the
  * sign-in page sends it straight back here, so its cookies go anyway.
+ * `deliberate`: the account leaves this browser (its deletion), which the
+ * other tabs read as a sign-out (`markBrowserSignOut`), so an open creator page
+ * there clears. The sign-in-again link signs out only so the same person can
+ * sign straight back in: the other tabs read that as a lapse, and a creator
+ * page there keeps its form for their return.
  */
-async function signOutHere() {
+async function signOutHere({ deliberate }: { deliberate: boolean }) {
   let signedOut = false;
   try {
     const supabase = await getSupabase();
+    if (deliberate) {
+      const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+      markBrowserSignOut(data.session?.access_token);
+    }
     const { error } = await supabase.auth.signOut({ scope: 'local' });
     signedOut = !error;
   } catch {
@@ -207,7 +240,7 @@ function SignInAgainLink({ children }: { children: ReactNode }) {
     event.preventDefault();
     if (isLeaving) return;
     setIsLeaving(true);
-    await signOutHere();
+    await signOutHere({ deliberate: false });
     router.push(SIGN_IN_AGAIN_PATH);
   };
 
@@ -348,7 +381,7 @@ export default function SignedInAccountDeletion() {
       case 'deleted':
         setStage({ kind: 'done', alreadyDeleted: outcome.kind === 'deleted' });
         if (userId) await clearCreatorDataHere(userId);
-        await signOutHere();
+        await signOutHere({ deliberate: true });
         return;
       case 'reauthenticate':
         setStage({ kind: 'reauthenticate' });
@@ -409,7 +442,8 @@ export default function SignedInAccountDeletion() {
         setError(describePasswordCheckError(signInError));
         return;
       }
-      const outcome = await requestDeletion(data.session.access_token);
+      // A tab that has not taken the new session yet still holds the one this page had.
+      const outcome = await requestDeletion(data.session.access_token, session?.access_token ?? null);
       if (outcome.kind === 'reauthenticate') {
         // Left as it was, the card would look as if nothing had happened.
         setError('Your account was not deleted. The new sign-in was not accepted yet; try again in a moment.');

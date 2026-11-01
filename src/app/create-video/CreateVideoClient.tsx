@@ -58,7 +58,7 @@ import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/Creat
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
-import { useCreatorDraftOwner, useCreatorForm, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
+import { useCreatorDraftOwner, useCreatorForm, useCreatorSignOut, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses, IconButton } from '@/components/DesignSystem';
 import { videoRunShortSummary, videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import {
@@ -1194,10 +1194,13 @@ type CreateVideoClientProps = {
  * then the account's, which takes the visitor's when sign-up was opened here. Another account's
  * form is a creator drawn anew (`useCreatorForm`): the earlier owner's unanswered start, run,
  * result and remix go with theirs, and nothing still under way for them is sent under the next.
+ * A sign-out made in this browser gives the page back to the visitor's form, or sends a remix to
+ * sign in again (`useCreatorSignOut`); a session that lapses keeps the account's.
  */
 export default function CreateVideoClient(props: CreateVideoClientProps) {
-    const { session } = useAuth();
-    const draft = useCreatorDraftOwner('video', session?.user?.id ?? null, props.handoverNonce ?? null);
+    const { session, signedOut, signedOutHere } = useAuth();
+    const formToVisitor = useCreatorSignOut(Boolean(props.prefill.remixId), signedOut, signedOutHere);
+    const draft = useCreatorDraftOwner('video', session?.user?.id ?? null, props.handoverNonce ?? null, formToVisitor);
     const form = useCreatorForm(draft);
     // What the server drew for the page's viewer (the sign-up's welcome, the posts to start from, read
     // for them) is theirs: a later account's form is drawn without it.

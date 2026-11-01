@@ -4,6 +4,8 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import DeleteAccountPage from '@/app/delete-account/page';
+import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
+import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
 import { siteConfig } from '@/lib/seo';
 
 type TestUser = {
@@ -175,6 +177,7 @@ describe('account deletion page', () => {
     afterEach(() => {
         cleanup();
         clearCookies();
+        window.localStorage.clear();
         vi.unstubAllEnvs();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
@@ -260,6 +263,120 @@ describe('account deletion page', () => {
         expect(screen.getByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
         expect(screen.getByRole('link', { name: 'Continue' })).toHaveAttribute('href', '/login');
         expect(screen.queryByRole('region', { name: 'Delete your account now' })).toBeNull();
+    });
+
+    // The browser's other tabs take the ending for a sign-out, not a lapse, and an open creator
+    // page there clears (owner, 2026-11-01).
+    it('marks its sign-out for the browser’s other tabs before the session ends', async () => {
+        const accessToken = unsignedJwt({ sub: emailUser.id, session_id: 'session-1' });
+        mocks.session = { access_token: accessToken, user: emailUser };
+        answerRequests({ deletions: [scheduled] });
+        let markedAsItEnded = false;
+        mocks.signOut.mockImplementation(async () => {
+            markedAsItEnded = wasSignedOutInBrowser(accessToken);
+            mocks.session = null;
+            emit('SIGNED_OUT');
+            return { error: null };
+        });
+        render(<DeleteAccountPage />);
+
+        await confirmDeletion();
+
+        await waitFor(() => expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' }));
+        expect(markedAsItEnded).toBe(true);
+    });
+
+    // The deletion ends every session of the account as it starts, before it answers, and a tab can
+    // hear of that end first: the mark goes before the request.
+    describe('telling the browser’s other tabs', () => {
+        const tokenOf = (user: TestUser, sessionId: string) => unsignedJwt({ sub: user.id, session_id: sessionId });
+
+        it('marks the session before the deletion request ends it', async () => {
+            const accessToken = tokenOf(emailUser, 'session-1');
+            mocks.session = { access_token: accessToken, user: emailUser };
+            const fetchMock = answerRequests({ deletions: [scheduled] });
+            const answer = fetchMock.getMockImplementation()!;
+            let markedAsSent: boolean | null = null;
+            fetchMock.mockImplementation(async (input: string, init?: RequestInit) => {
+                if (input === '/api/account') markedAsSent = wasSignedOutInBrowser(accessToken);
+                return answer(input, init);
+            });
+            render(<DeleteAccountPage />);
+
+            await confirmDeletion();
+
+            expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
+            expect(markedAsSent).toBe(true);
+            expect(wasSignedOutInBrowser(accessToken)).toBe(true);
+        });
+
+        it('has marked the session before the probe of an unclear answer finds it ended', async () => {
+            const accessToken = tokenOf(emailUser, 'session-1');
+            mocks.session = { access_token: accessToken, user: emailUser };
+            answerRequests({ deletions: [{ status: 401, body: { error: 'Unauthorized' } }] });
+            let markedAsProbed: boolean | null = null;
+            mocks.getUser.mockImplementation(async () => {
+                markedAsProbed = wasSignedOutInBrowser(accessToken);
+                // auth-js removes a session it finds gone, and every tab hears of it before this page signs out.
+                mocks.session = null;
+                emit('SIGNED_OUT');
+                return { data: { user: null }, error: sessionMissing };
+            });
+            render(<DeleteAccountPage />);
+
+            await confirmDeletion();
+
+            expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
+            expect(markedAsProbed).toBe(true);
+            expect(wasSignedOutInBrowser(accessToken)).toBe(true);
+        });
+
+        it('marks the new session and the one the page held, for a password re-check', async () => {
+            const heldToken = tokenOf(emailUser, 'session-1');
+            const freshToken = tokenOf(emailUser, 'session-2');
+            mocks.session = { access_token: heldToken, user: emailUser };
+            mocks.signInWithPassword.mockImplementation(async () => {
+                mocks.session = { access_token: freshToken, user: emailUser };
+                emit('SIGNED_IN');
+                return { data: { session: mocks.session, user: emailUser }, error: null };
+            });
+            answerRequests({ deletions: [reauthenticationRequired, scheduled] });
+            render(<DeleteAccountPage />);
+
+            const section = await confirmDeletion();
+            fireEvent.change(await within(section).findByLabelText('Current password'), { target: { value: PASSWORD } });
+            fireEvent.click(within(section).getByRole('button', { name: 'Verify password and delete' }));
+
+            expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
+            expect(wasSignedOutInBrowser(freshToken)).toBe(true);
+            // A tab that had not taken the new session yet still holds the old one.
+            expect(wasSignedOutInBrowser(heldToken)).toBe(true);
+        });
+
+        // The sign-in-again link signs out only so the same person can sign straight back in: the
+        // other tabs read it as a lapse, and a creator page there keeps its form for their return.
+        it('takes the mark back when the deletion asks for a fresh sign-in, and its sign-in-again leaves none', async () => {
+            const accessToken = tokenOf(googleUser, 'session-1');
+            mocks.session = { access_token: accessToken, user: googleUser };
+            answerRequests({ deletions: [reauthenticationRequired] });
+            let markedAsItEnded: boolean | null = null;
+            mocks.signOut.mockImplementation(async () => {
+                markedAsItEnded = wasSignedOutInBrowser(accessToken);
+                mocks.session = null;
+                emit('SIGNED_OUT');
+                return { error: null };
+            });
+            render(<DeleteAccountPage />);
+
+            const section = await confirmDeletion();
+            const signInAgain = await within(section).findByRole('link', { name: 'Sign in again to continue' });
+            expect(wasSignedOutInBrowser(accessToken)).toBe(false);
+
+            fireEvent.click(signInAgain);
+
+            await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login?returnUrl=/delete-account'));
+            expect(markedAsItEnded).toBe(false);
+        });
     });
 
     it('re-checks an email account with its password, then goes on deleting with the new session', async () => {

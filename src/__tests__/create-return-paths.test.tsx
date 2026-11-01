@@ -173,10 +173,11 @@ describe('creator auth return paths', () => {
     expect(state.clientProps.video).toMatchObject({ opening: null });
   });
 
-  it('reads the welcome amount only for a request without a sign-in cookie', async () => {
+  // A sign-out made in this browser gives a signed-in page's form to the visitor, who is told it too.
+  it('reads the welcome amount for a signed-in page as well', async () => {
     state.hasAuthHint = true;
     render(await CreateVideoPage({ searchParams: Promise.resolve({}) }));
-    expect(state.clientProps.video).toMatchObject({ visitorWelcomeCredits: null });
+    expect(state.clientProps.video).toMatchObject({ visitorWelcomeCredits: 25 });
   });
 
   it('passes the post-auth welcome flag, a well-formed invite outcome and the hand-over nonce to the creator', async () => {

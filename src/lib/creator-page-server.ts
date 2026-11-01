@@ -48,19 +48,19 @@ export function readCreatorReturn(params: CreatorSearchParams): CreatorReturn {
   };
 }
 
-// The grant changes only with the program, so the creators' anonymous traffic is
-// answered from the data cache rather than with a query for each page.
+// The grant changes only with the program, so the creators' traffic is answered
+// from the data cache rather than with a query for each page.
 const loadCachedWelcomeCreditAmount = unstable_cache(loadWelcomeCreditAmount, ['creator-visitor-welcome-credits'], {
   revalidate: 300,
 });
 
 /**
- * What a new account starts with, for a request with no sign-in cookie: the
- * creator tells a visitor what signing up gives them. Null for anyone who may
- * be signed in, and while the welcome program is off or cannot be read.
+ * What a new account starts with: the creator tells a visitor what signing up
+ * gives them. Read for a signed-in page too, whose form a sign-out made in this
+ * browser gives to the visitor. Null while the welcome program is off or cannot
+ * be read.
  */
 export async function loadVisitorWelcomeCredits(): Promise<number | null> {
-  if (await requestHasAuthHint()) return null;
   try {
     return await loadCachedWelcomeCreditAmount();
   } catch (error) {

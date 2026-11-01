@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { isSessionRefusal } from '@/lib/auth-error-copy';
+import { markBrowserSignOut } from '@/lib/browser-sign-out';
 import {
   getAuthAvatarUrl,
   getCreatorDisplayName,
@@ -376,6 +377,18 @@ export default function AppShellAccount({
     router.push('/login');
   };
 
+  /**
+   * The access tokens of the sessions a sign-out here ends: the one auth-js
+   * holds, which the call ends, and the one this menu shows, which can trail it
+   * while a newer session is still being checked. The browser's other tabs read
+   * the ending of either as a sign-out, not a lapse, and an open creator page
+   * there clears (owner, 2026-11-01; `markBrowserSignOut`).
+   */
+  const sessionsEnding = async () => {
+    const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+    return [data.session?.access_token, session?.access_token];
+  };
+
   const handleSignOut = async () => {
     if (isSigningOut || isSigningOutEverywhere) return;
     setIsSigningOut(true);
@@ -383,6 +396,7 @@ export default function AppShellAccount({
     if (userId) {
       await clearCreatorDataForSignOut(userId);
     }
+    markBrowserSignOut(...await sessionsEnding());
     // This browser only. The default (global) also ends the account's session
     // on the person's phone, which then has every request refused. The logout
     // call gives up after 10 s (src/lib/supabase.ts).
@@ -443,9 +457,15 @@ export default function AppShellAccount({
     setIsSigningOutEverywhere(true);
     const userId = session?.user?.id;
     await retireAccountPushTokens();
+    markBrowserSignOut(...await sessionsEnding());
     const { error } = await supabase.auth.signOut({ scope: 'global' })
       .catch((thrown: unknown) => ({ error: thrown }));
     if (error) {
+      // The marks stay: an answer cut short (the logout call gives up after
+      // 10 s) may come after the server ended every session, and the end this
+      // browser hears of later is then the sign-out the person asked for. A
+      // session that did stay only has a later lapse read as a sign-out, which
+      // clears an open creator page (its drafts are saved per account).
       setIsSigningOutEverywhere(false);
       pushToast({
         tone: 'error',
